@@ -74,6 +74,23 @@ def filter_codex_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
     return matched
 
 
+def filter_pi_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
+    """Drop Pi sessions whose header cwd doesn't match target_cwd."""
+    matched: list[Path] = []
+    for path in paths:
+        try:
+            with path.open() as f:
+                first_line = f.readline()
+            entry = json.loads(first_line)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if entry.get("type") != "session":
+            continue
+        if entry.get("cwd") == target_cwd:
+            matched.append(path)
+    return matched
+
+
 def normalize_claude_logs(raw_content: str) -> list[dict[str, Any]]:
     """Normalize Claude Code session logs.
 
@@ -155,6 +172,56 @@ def normalize_codex_logs(raw_content: str) -> list[dict[str, Any]]:
     return results
 
 
+# Reverse mapping: Pi tool names -> Claude Code canonical names
+PI_TOOL_MAP: dict[str, str] = {
+    "read": "Read",
+    "write": "Write",
+    "edit": "Edit",
+    "bash": "Bash",
+    "grep": "Grep",
+    "find": "Glob",
+    "ls": "Glob",
+}
+
+
+PI_NATIVE_TOOLS = (set(PI_TOOL_MAP.values()) - {"Bash"}) | {
+    "subagent",
+    "todo",
+    "manage_todo_list",
+}
+
+
+def normalize_pi_logs(raw_content: str) -> list[dict[str, Any]]:
+    """Normalize Pi JSONL session logs.
+
+    Pi session files are JSONL entries. Assistant messages contain tool calls as
+    content blocks: {"type": "toolCall", "name": "read", "arguments": {...}}.
+    """
+    results: list[dict[str, Any]] = []
+    for line in raw_content.strip().split("\n"):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("type") != "message":
+            continue
+        message = entry.get("message", {})
+        if message.get("role") != "assistant":
+            continue
+        for block in message.get("content", []):
+            if block.get("type") != "toolCall":
+                continue
+            name = block.get("name", "")
+            canonical = PI_TOOL_MAP.get(name, name)
+            source = "native" if canonical in PI_NATIVE_TOOLS else "shell"
+            results.append(
+                {"tool": canonical, "args": block.get("arguments", {}), "source": source}
+            )
+    return results
+
+
 # Reverse mapping: Gemini tool names → Claude Code canonical names
 GEMINI_TOOL_MAP: dict[str, str] = {
     "run_shell_command": "Bash",
@@ -225,4 +292,5 @@ NORMALIZERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "claude": normalize_claude_logs,
     "codex": normalize_codex_logs,
     "gemini": normalize_gemini_logs,
+    "pi": normalize_pi_logs,
 }

@@ -1,0 +1,23 @@
+name: pi
+cli: pi
+args:
+  - "-e"
+  - "${SUPERPOWERS_ROOT}"
+required_env:
+  - SUPERPOWERS_ROOT
+hooks:
+  pre_run: []
+  post_run: []
+shutdown: "/quit"
+idle:
+  quiescence_seconds: 5
+  ready_pattern: "."
+busy_pattern: "esc to cancel|Thinking\\.\\.\\.|\\(esc to cancel[^)]*\\)|[⠇⠏⠋⠙⠹⠸⠼⠴⠦⠧⠶⠾⠽⠻⠿]"
+max_busy_seconds: 1800
+startup_timeout: 60
+turn_timeout: 300
+terminal:
+  cols: 200
+  rows: 50
+session_logs:
+  pattern: "~/.pi/agent/sessions/**/*.jsonl"
