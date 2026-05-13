@@ -37,6 +37,16 @@ Superpowers skill compliance benchmark. Python 3.11+, managed with uv.
 - Assertions run in the results dir with `$DRILL_WORKDIR` pointing to the scenario workdir and `bin/` on PATH.
 - Backend YAMLs are fully self-contained — no override/alias system.
 
+## Parent Superpowers Submodule
+
+`superpowers-evals` is consumed by `superpowers` as the `evals` submodule.
+After any PR merges to `main` here, open a follow-up PR against the parent
+`superpowers` repo targeting `dev` that bumps the `evals` submodule pointer
+to the merged `superpowers-evals` commit.
+
+Do not treat a `superpowers-evals` merge as fully propagated until that parent
+submodule bump PR exists.
+
 ## Required env
 
 ```

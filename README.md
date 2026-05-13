@@ -218,5 +218,15 @@ This repo inherits the quality bar of `superpowers`.
   input.
 - Changes to behavior-shaping eval methodology need evidence, not just prose.
 
+## Parent Submodule Bump
+
+`superpowers-evals` is consumed by `superpowers` as the `evals` submodule.
+After any PR merges to `main` in this repository, open a follow-up PR against
+the parent `superpowers` repo targeting `dev` that bumps the `evals` submodule
+pointer to the merged `superpowers-evals` commit.
+
+Do not treat a `superpowers-evals` merge as fully propagated until that parent
+submodule bump PR exists.
+
 Security reporting details live in [SECURITY.md](SECURITY.md). The broader
 design is documented in [docs/design.md](docs/design.md).

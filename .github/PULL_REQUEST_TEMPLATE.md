@@ -41,3 +41,10 @@ Risk notes:
 
 ## Human review
 - [ ] A maintainer has reviewed the complete proposed diff before merge
+
+## Parent submodule follow-up
+<!-- After this PR merges to main, open a follow-up PR against
+     obra/superpowers targeting dev that bumps the evals submodule pointer
+     to the merged superpowers-evals commit. -->
+
+- [ ] If this PR merges to `main`, a parent `superpowers` submodule bump PR into `dev` will be opened
