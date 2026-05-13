@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import time
 
@@ -29,8 +30,8 @@ class TmuxSession:
         )
 
     def launch(self, command: list[str], cwd: str) -> None:
-        cmd_str = " ".join(command)
-        self.send_keys(f"cd {cwd} && {cmd_str}")
+        cmd_str = shlex.join(command)
+        self.send_keys(f"cd {shlex.quote(cwd)} && {cmd_str}")
 
     def send_keys(self, text: str) -> None:
         if text:

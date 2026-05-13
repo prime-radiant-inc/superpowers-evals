@@ -78,6 +78,21 @@ class TestTmuxSession:
         finally:
             session.kill()
 
+    def test_launch_shell_quotes_cwd_and_command_args(self):
+        session = TmuxSession(name="drill-test-launch-quoting")
+
+        with patch.object(session, "send_keys") as send_keys:
+            session.launch(
+                ["python3", "-c", "print('hello; rm -rf nope')"],
+                cwd="/tmp/drill path/with spaces",
+            )
+
+        expected = (
+            "cd '/tmp/drill path/with spaces' && python3 -c "
+            "'print('\"'\"'hello; rm -rf nope'\"'\"')'"
+        )
+        send_keys.assert_called_once_with(expected)
+
     def test_send_special_key(self, tmp_path):
         session = TmuxSession(name="drill-test-special", cols=80, rows=24)
         proof_file = tmp_path / "after-ctrl-c"

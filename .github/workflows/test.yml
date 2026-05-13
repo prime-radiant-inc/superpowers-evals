@@ -1,0 +1,49 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE/repo"
+          cd "$GITHUB_WORKSPACE/repo"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Install uv
+        working-directory: ${{ github.workspace }}/repo
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user uv==0.11.6
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Sync dependencies
+        working-directory: ${{ github.workspace }}/repo
+        run: uv sync --extra dev --locked
+
+      - name: Ruff
+        working-directory: ${{ github.workspace }}/repo
+        run: uv run ruff check
+
+      - name: Type check
+        working-directory: ${{ github.workspace }}/repo
+        run: uv run ty check
+
+      - name: Pytest
+        working-directory: ${{ github.workspace }}/repo
+        run: uv run pytest
