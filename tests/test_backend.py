@@ -44,6 +44,12 @@ class TestLoadBackend:
         assert flash_backend.family == "gemini"
         assert flash_backend.model == "gemini-2.5-flash"
 
+    def test_loads_pi_backend(self, backends_dir):
+        backend = load_backend("pi", backends_dir)
+        assert backend.name == "pi"
+        assert backend.cli == "pi"
+        assert backend.family == "pi"
+
 
 class TestBackendBuildCommand:
     def test_claude_build_command(self, backends_dir, monkeypatch):
@@ -59,6 +65,12 @@ class TestBackendBuildCommand:
         backend = load_backend("codex", backends_dir)
         cmd = backend.build_command("/tmp/workdir")
         assert cmd[0] == "codex"
+
+    def test_pi_build_command_loads_local_superpowers_package(self, backends_dir, monkeypatch):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", "/tmp/superpowers")
+        backend = load_backend("pi", backends_dir)
+        cmd = backend.build_command("/tmp/workdir")
+        assert cmd == ["pi", "-e", "/tmp/superpowers"]
 
 
 class TestBackendEnvValidation:
@@ -124,6 +136,21 @@ class TestBackendFamily:
     def test_codex_backend_family(self, backends_dir):
         backend = load_backend("codex", backends_dir)
         assert backend.family == "codex"
+
+    def test_pi_backend_family(self):
+        backend = Backend(
+            name="pi",
+            cli="pi",
+            args=[],
+            required_env=[],
+            hooks={"pre_run": [], "post_run": []},
+            shutdown="/quit",
+            idle={},
+            startup_timeout=30,
+            terminal={},
+            session_logs={},
+        )
+        assert backend.family == "pi"
 
     def test_variant_name_preserves_family(self):
         backend = Backend(

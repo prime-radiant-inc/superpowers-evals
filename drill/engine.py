@@ -21,6 +21,7 @@ from drill.normalizer import (
     NORMALIZERS,
     collect_new_logs,
     filter_codex_logs_by_cwd,
+    filter_pi_logs_by_cwd,
     snapshot_log_dir,
 )
 from drill.session import TmuxSession
@@ -357,6 +358,11 @@ class Engine:
             # Project name is the workdir basename, lowercased
             project = workdir.resolve().name.lower()
             return Path.home() / ".gemini" / "tmp" / project
+        elif self.backend.family == "pi":
+            # Pi stores sessions under ~/.pi/agent/sessions/<encoded-cwd>/.
+            # Filter by the session header cwd because multiple evals may run
+            # concurrently under the same tree.
+            return Path.home() / ".pi" / "agent" / "sessions"
         pattern = self.backend.session_logs.get("pattern", "")
         if not pattern:
             return None
@@ -373,6 +379,8 @@ class Engine:
         new_files = collect_new_logs(log_dir, snapshot)
         if self.backend.family == "codex":
             new_files = filter_codex_logs_by_cwd(new_files, str(workdir.resolve()))
+        elif self.backend.family == "pi":
+            new_files = filter_pi_logs_by_cwd(new_files, str(workdir.resolve()))
         return new_files
 
     def _normalize_tool_calls(self, new_files: list[Path]) -> list[dict[str, Any]]:

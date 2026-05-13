@@ -16,7 +16,7 @@ Drill has two very different execution modes:
 - **Static/unit checks** are safe for public CI. These run `ruff`, `ty`, and
   `pytest`. They do not call model APIs and do not launch agent CLIs.
 - **Live evals** are trusted-maintainer operations. They can launch Claude
-  Code, Codex CLI, or Gemini CLI in permissive modes and may collect raw
+  Code, Codex CLI, Gemini CLI, or Pi in permissive modes and may collect raw
   transcripts, tool calls, filesystem state, and local session logs.
 
 Public CI must stay on the static/unit side of that line. Do not add API keys,
@@ -29,6 +29,7 @@ Live evals intentionally run the backend under test with broad execution power:
 - Claude backends use `--dangerously-skip-permissions`
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`
 - Gemini uses `--yolo`
+- Pi loads the local Superpowers package with `-e ${SUPERPOWERS_ROOT}`
 
 Those subprocesses can currently inherit the parent shell environment and may
 use the caller's normal home-directory config/log locations. In practice, that
@@ -90,6 +91,7 @@ Live evals require the relevant backend CLI and credentials.
 | Claude | `claude` | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | Codex | `codex` | `OPENAI_API_KEY` |
 | Gemini | `gemini` | local Gemini CLI auth/config |
+| Pi | `pi` | `SUPERPOWERS_ROOT` |
 
 `SUPERPOWERS_ROOT` defaults to the parent directory of this checkout. That is
 correct when Drill is checked out as `superpowers/evals`. In a standalone
@@ -122,6 +124,12 @@ Sweep across backend variants:
 uv run drill run spec-writing-blind-spot \
   --models claude-opus-4-6,claude-opus-4-7 \
   --n 10
+```
+
+Run against Pi, loading the local Superpowers package from `SUPERPOWERS_ROOT`:
+
+```bash
+uv run drill run triggering-writing-plans -b pi
 ```
 
 Compare results:

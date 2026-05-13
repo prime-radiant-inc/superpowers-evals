@@ -71,7 +71,7 @@ class Backend:
     @property
     def family(self) -> str:
         """Normalize backend name to a family for log-dir / normalizer dispatch."""
-        for fam in ("claude", "codex", "gemini"):
+        for fam in ("claude", "codex", "gemini", "pi"):
             if self.name == fam or self.name.startswith(f"{fam}-"):
                 return fam
         return "other"

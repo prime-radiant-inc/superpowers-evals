@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from drill.engine import RunResult, ScenarioConfig, VerifyConfig, snapshot_filesystem
+from drill.engine import Engine, RunResult, ScenarioConfig, VerifyConfig, snapshot_filesystem
 
 
 class TestVerifyConfig:
@@ -136,6 +136,40 @@ class TestEngineAssertionIntegration:
         result.save_verdict(tmp_path)
         assert (tmp_path / "verdict.json").exists()
         assert (tmp_path / "meta.json").exists()
+
+
+class TestEnginePiBackend:
+    def test_resolves_pi_session_log_root(self, tmp_path: Path) -> None:
+        scenario = tmp_path / "scenario.yaml"
+        scenario.write_text("scenario: test-pi\n")
+        backends = tmp_path / "backends"
+        backends.mkdir()
+        (backends / "pi.yaml").write_text(
+            """
+name: pi
+cli: pi
+args: []
+required_env: []
+hooks:
+  pre_run: []
+  post_run: []
+shutdown: /quit
+idle: {}
+startup_timeout: 1
+terminal: {}
+session_logs:
+  pattern: ~/.pi/agent/sessions/**/*.jsonl
+"""
+        )
+        engine = Engine(
+            scenario_path=scenario,
+            backend_name="pi",
+            backends_dir=backends,
+            fixtures_dir=tmp_path,
+            results_dir=tmp_path,
+        )
+
+        assert engine._resolve_log_dir(tmp_path) == Path.home() / ".pi" / "agent" / "sessions"
 
 
 class TestEngineRunParams:

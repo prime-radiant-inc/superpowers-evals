@@ -3,9 +3,11 @@ import json
 from drill.normalizer import (
     collect_new_logs,
     filter_codex_logs_by_cwd,
+    filter_pi_logs_by_cwd,
     normalize_claude_logs,
     normalize_codex_logs,
     normalize_gemini_logs,
+    normalize_pi_logs,
     snapshot_log_dir,
 )
 
@@ -135,6 +137,56 @@ class TestNormalizeCodexLogs:
         assert normalized[0]["source"] == "shell"
         assert normalized[1]["tool"] == "Edit"
         assert normalized[1]["source"] == "native"
+
+
+class TestNormalizePiLogs:
+    def test_filter_by_cwd_keeps_matching_session_headers(self, tmp_path):
+        target = "/tmp/drill-target"
+        match = tmp_path / "match.jsonl"
+        match.write_text(json.dumps({"type": "session", "cwd": target}) + "\n")
+        other = tmp_path / "other.jsonl"
+        other.write_text(json.dumps({"type": "session", "cwd": "/tmp/other"}) + "\n")
+        malformed = tmp_path / "malformed.jsonl"
+        malformed.write_text("not json\n")
+
+        assert filter_pi_logs_by_cwd([match, other, malformed], target) == [match]
+
+    def test_normalizes_assistant_tool_calls_from_session_entries(self):
+        lines = [
+            json.dumps({"type": "session", "cwd": "/tmp/project"}),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "I will inspect this."},
+                            {
+                                "type": "toolCall",
+                                "name": "read",
+                                "arguments": {"path": "README.md"},
+                            },
+                            {
+                                "type": "toolCall",
+                                "name": "bash",
+                                "arguments": {"command": "git status"},
+                            },
+                            {
+                                "type": "toolCall",
+                                "name": "subagent",
+                                "arguments": {"agent": "reviewer"},
+                            },
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        assert normalize_pi_logs("\n".join(lines)) == [
+            {"tool": "Read", "args": {"path": "README.md"}, "source": "native"},
+            {"tool": "Bash", "args": {"command": "git status"}, "source": "shell"},
+            {"tool": "subagent", "args": {"agent": "reviewer"}, "source": "native"},
+        ]
 
 
 class TestNormalizeGeminiLogs:
