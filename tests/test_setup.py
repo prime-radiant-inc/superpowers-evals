@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import call, patch
@@ -11,6 +12,7 @@ from setup_helpers.worktree import (
     add_worktree,
     create_caller_consent_plan,
     detach_head,
+    install_codex_superpowers_plugin_hooks,
     link_gemini_extension,
     symlink_superpowers,
 )
@@ -111,6 +113,44 @@ class TestWorktreeHelpers:
             f"@{fake_sp}/skills/using-superpowers/SKILL.md\n"
             f"@{fake_sp}/skills/using-superpowers/references/gemini-tools.md\n"
         )
+
+    def test_install_codex_superpowers_plugin_hooks_stages_isolated_home(
+        self, work_dir, tmp_path, monkeypatch
+    ):
+        work_dir.mkdir()
+        fake_sp = tmp_path / "superpowers"
+        (fake_sp / ".codex-plugin").mkdir(parents=True)
+        (fake_sp / ".codex-plugin" / "plugin.json").write_text('{"name":"superpowers"}\n')
+        (fake_sp / "hooks").mkdir()
+        (fake_sp / "hooks" / "hooks-codex.json").write_text('{"hooks":{}}\n')
+        (fake_sp / "hooks" / "session-start").write_text("#!/usr/bin/env sh\n")
+        (fake_sp / "hooks" / "run-hook.cmd").write_text("@echo off\n")
+        (fake_sp / "skills" / "using-superpowers").mkdir(parents=True)
+        (fake_sp / "skills" / "using-superpowers" / "SKILL.md").write_text("# Skill\n")
+
+        hook = {
+            "key": "superpowers@debug:hooks/hooks-codex.json:session_start:0:0",
+            "currentHash": "sha256:abc123",
+        }
+        monkeypatch.delenv("DRILL_CODEX_HOME", raising=False)
+
+        with patch("setup_helpers.worktree._read_codex_superpowers_hook", return_value=hook):
+            install_codex_superpowers_plugin_hooks(work_dir, str(fake_sp))
+
+        codex_home = work_dir.parent / f"{work_dir.name}-codex-home"
+        staged_plugin = codex_home / "plugins" / "cache" / "debug" / "superpowers" / "local"
+        assert (staged_plugin / ".codex-plugin" / "plugin.json").exists()
+        assert (staged_plugin / "hooks" / "hooks-codex.json").exists()
+        assert os.environ["DRILL_CODEX_HOME"] == str(codex_home)
+
+        config = (codex_home / "config.toml").read_text()
+        assert "plugin_hooks = true" in config
+        assert '[plugins."superpowers@debug"]' in config
+        assert (
+            '[hooks.state."superpowers@debug:hooks/hooks-codex.json:session_start:0:0"]'
+            in config
+        )
+        assert 'trusted_hash = "sha256:abc123"' in config
 
     def test_create_caller_consent_plan(self, fixtures_dir, work_dir):
         create_base_repo(work_dir, fixtures_dir / "template-repo")

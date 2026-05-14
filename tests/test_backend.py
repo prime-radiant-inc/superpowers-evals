@@ -22,6 +22,13 @@ class TestLoadBackend:
         assert backend.name == "codex"
         assert backend.cli == "codex"
 
+    def test_loads_codex_plugin_hooks_backend(self, backends_dir):
+        backend = load_backend("codex-plugin-hooks", backends_dir)
+        assert backend.name == "codex-plugin-hooks"
+        assert backend.cli == "env"
+        assert backend.family == "codex"
+        assert "install_codex_superpowers_plugin_hooks" in backend.hooks["pre_run"]
+
     def test_unknown_backend_raises(self, backends_dir):
         with pytest.raises(FileNotFoundError):
             load_backend("nonexistent", backends_dir)
@@ -65,6 +72,15 @@ class TestBackendBuildCommand:
         backend = load_backend("codex", backends_dir)
         cmd = backend.build_command("/tmp/workdir")
         assert cmd[0] == "codex"
+
+    def test_codex_plugin_hooks_build_command_uses_isolated_home(
+        self, backends_dir, monkeypatch
+    ):
+        monkeypatch.setenv("DRILL_CODEX_HOME", "/tmp/drill-codex-home")
+        backend = load_backend("codex-plugin-hooks", backends_dir)
+        cmd = backend.build_command("/tmp/workdir")
+        assert cmd[:3] == ["env", "CODEX_HOME=/tmp/drill-codex-home", "codex"]
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
     def test_pi_build_command_loads_local_superpowers_package(self, backends_dir, monkeypatch):
         monkeypatch.setenv("SUPERPOWERS_ROOT", "/tmp/superpowers")

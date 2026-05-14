@@ -132,6 +132,7 @@ class Engine:
     def run(self, *, output_dir: Path | None = None, run_suffix: str = "") -> RunResult:
         start_time = time.time()
         timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        os.environ.pop("DRILL_CODEX_HOME", None)
         self.backend.validate_env()
         workdir = Path(f"/tmp/drill-{self.scenario.scenario}-{timestamp}{run_suffix}")
         self._setup(workdir)
@@ -234,7 +235,11 @@ class Engine:
         helpers = self.scenario.setup.get("helpers", [])
         run_helpers(helpers, workdir, self.fixtures_dir)
         # Backend pre_run hooks after (e.g., codex symlink needs workdir to exist)
-        hooks_needing_superpowers_root = {"symlink_superpowers", "link_gemini_extension"}
+        hooks_needing_superpowers_root = {
+            "install_codex_superpowers_plugin_hooks",
+            "link_gemini_extension",
+            "symlink_superpowers",
+        }
         for hook_name in self.backend.hooks.get("pre_run", []):
             from setup_helpers import HELPER_REGISTRY
 
@@ -352,6 +357,9 @@ class Engine:
             return log_dir
         elif self.backend.family == "codex":
             # Codex stores at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+            codex_home = os.environ.get("DRILL_CODEX_HOME") or os.environ.get("CODEX_HOME")
+            if codex_home:
+                return Path(codex_home) / "sessions"
             return Path.home() / ".codex" / "sessions"
         elif self.backend.family == "gemini":
             # Gemini stores at ~/.gemini/tmp/<project-name>/chats/session-*.json

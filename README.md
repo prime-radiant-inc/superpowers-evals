@@ -132,6 +132,13 @@ Run against Pi, loading the local Superpowers package from `SUPERPOWERS_ROOT`:
 uv run drill run triggering-writing-plans -b pi
 ```
 
+Verify Codex native plugin hooks bootstrap Superpowers from an isolated
+`CODEX_HOME`:
+
+```bash
+uv run drill run codex-native-hooks-bootstrap -b codex-plugin-hooks
+```
+
 Compare results:
 
 ```bash
@@ -161,6 +168,7 @@ Current backend families:
 | `claude-opus-4-6-1m` | Claude Code | opus-4-6, 1M context |
 | `claude-opus-4-7-1m` | Claude Code | opus-4-7, 1M context |
 | `codex` | Codex CLI | local configured model |
+| `codex-plugin-hooks` | Codex CLI with native plugin hooks in isolated `CODEX_HOME` | local configured model |
 | `gemini` | Gemini CLI | auto-gemini-3 |
 | `gemini-2-5-flash` | Gemini CLI | gemini-2.5-flash |
 
@@ -177,6 +185,7 @@ intents, limits, verifier criteria, and deterministic assertions.
 | Review/spec/verification | code review, spec review, targeting, blind spots, verification reflexes |
 | Tool mapping | Codex and Gemini subagent/tool-name mapping |
 | Cost baselines | token cost, tool-result bloat, duplicated artifacts, review fanout |
+| Harness bootstrap | Codex native plugin hook startup behavior |
 
 ## Writing a Scenario
 

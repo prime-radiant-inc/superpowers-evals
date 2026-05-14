@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Verify the Codex native-hooks backend used an isolated trusted plugin hook.
+set -euo pipefail
+
+fail() {
+    echo "FAIL: $*"
+    exit 1
+}
+
+pass() {
+    echo "PASS: Codex native Superpowers hook configured"
+    exit 0
+}
+
+test -n "${DRILL_CODEX_HOME:-}" || fail "DRILL_CODEX_HOME is not set"
+test -n "${DRILL_WORKDIR:-}" || fail "DRILL_WORKDIR is not set"
+
+CONFIG="$DRILL_CODEX_HOME/config.toml"
+PLUGIN="$DRILL_CODEX_HOME/plugins/cache/debug/superpowers/local"
+
+test -f "$CONFIG" || fail "missing Codex config at $CONFIG"
+test -f "$PLUGIN/.codex-plugin/plugin.json" || fail "missing staged Codex plugin manifest"
+test -f "$PLUGIN/hooks/hooks-codex.json" || fail "missing staged Codex hook manifest"
+test ! -e "$DRILL_WORKDIR/.agents/skills/superpowers" || fail "legacy .agents skill symlink exists"
+
+grep -Fq "plugin_hooks = true" "$CONFIG" || fail "plugin_hooks feature not enabled"
+grep -Fq '[plugins."superpowers@debug"]' "$CONFIG" || fail "debug Superpowers plugin not enabled"
+grep -Fq '[hooks.state."superpowers@debug:hooks/hooks-codex.json:session_start:0:0"]' \
+    "$CONFIG" || fail "Superpowers Codex hook trust state missing"
+grep -Eq 'trusted_hash = "sha256:[a-f0-9]+"' "$CONFIG" || fail "trusted hook hash missing"
+
+pass
