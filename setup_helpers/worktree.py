@@ -223,6 +223,10 @@ def _read_codex_superpowers_hook(codex_home: Path, workdir: Path) -> dict[str, s
     finally:
         _terminate_codex_app_server(proc)
 
+    return _select_codex_superpowers_hook(response)
+
+
+def _select_codex_superpowers_hook(response: dict[str, Any]) -> dict[str, str]:
     hooks = [
         hook
         for entry in response.get("result", {}).get("data", [])
@@ -237,8 +241,12 @@ def _read_codex_superpowers_hook(codex_home: Path, workdir: Path) -> dict[str, s
     hook = hooks[0]
     if hook.get("matcher") != "startup|resume|clear":
         raise RuntimeError(f"Unexpected Superpowers Codex hook matcher: {hook.get('matcher')}")
-    if "hooks/run-hook.cmd" not in (hook.get("command") or ""):
-        raise RuntimeError(f"Unexpected Superpowers Codex hook command: {hook.get('command')}")
+    command = hook.get("command") or ""
+    if "hooks/run-hook.cmd" not in command or "session-start-codex" not in command:
+        raise RuntimeError(
+            "Unexpected Superpowers Codex hook command "
+            f"(expected run-hook.cmd session-start-codex): {hook.get('command')}"
+        )
     if hook.get("trustStatus") not in {"untrusted", "trusted"}:
         raise RuntimeError(
             f"Unexpected Superpowers Codex hook trust status: {hook.get('trustStatus')}"
