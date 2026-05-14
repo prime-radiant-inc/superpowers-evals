@@ -9,6 +9,7 @@ from drill.setup import clone_template, run_assertions
 from setup_helpers.base import create_base_repo
 from setup_helpers.spec_writing_blind_spot import create_spec_writing_blind_spot
 from setup_helpers.worktree import (
+    _select_codex_superpowers_hook,
     add_worktree,
     create_caller_consent_plan,
     detach_head,
@@ -164,6 +165,62 @@ class TestWorktreeHelpers:
         assert kwargs["check"] is True
         assert kwargs["env"]["CODEX_HOME"] == str(codex_home)
         assert kwargs["env"]["OPENAI_API_KEY"] == "sk-test"
+
+    def test_select_codex_superpowers_hook_requires_codex_entrypoint(self):
+        response = {
+            "result": {
+                "data": [
+                    {
+                        "hooks": [
+                            {
+                                "pluginId": "superpowers@debug",
+                                "source": "plugin",
+                                "eventName": "sessionStart",
+                                "matcher": "startup|resume|clear",
+                                "command": (
+                                    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex'
+                                ),
+                                "trustStatus": "untrusted",
+                                "key": "superpowers@debug:hooks/hooks-codex.json:session_start:0:0",
+                                "currentHash": "sha256:abc123",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        hook = _select_codex_superpowers_hook(response)
+
+        assert hook == {
+            "key": "superpowers@debug:hooks/hooks-codex.json:session_start:0:0",
+            "currentHash": "sha256:abc123",
+        }
+
+    def test_select_codex_superpowers_hook_rejects_shared_entrypoint(self):
+        response = {
+            "result": {
+                "data": [
+                    {
+                        "hooks": [
+                            {
+                                "pluginId": "superpowers@debug",
+                                "source": "plugin",
+                                "eventName": "sessionStart",
+                                "matcher": "startup|resume|clear",
+                                "command": '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start',
+                                "trustStatus": "untrusted",
+                                "key": "superpowers@debug:hooks/hooks-codex.json:session_start:0:0",
+                                "currentHash": "sha256:abc123",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        with pytest.raises(RuntimeError, match="session-start-codex"):
+            _select_codex_superpowers_hook(response)
 
     def test_create_caller_consent_plan(self, fixtures_dir, work_dir):
         create_base_repo(work_dir, fixtures_dir / "template-repo")
