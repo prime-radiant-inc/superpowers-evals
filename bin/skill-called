@@ -10,6 +10,7 @@ set -euo pipefail
 command -v jq >/dev/null || { echo "jq required"; exit 127; }
 
 SKILL_NAME="$1"
+SKILL_DIR="${SKILL_NAME##*:}"
 FILE="tool_calls.jsonl"
 
 if [ ! -s "$FILE" ]; then
@@ -18,8 +19,18 @@ if [ ! -s "$FILE" ]; then
 fi
 
 COUNT=$(
-    jq -s --arg name "$SKILL_NAME" \
-        '[.[] | select(.tool == "Skill" and (.args.skill // "") == $name)] | length' \
+    jq -s --arg name "$SKILL_NAME" --arg dir "$SKILL_DIR" \
+        '[.[] | select(
+            (.tool == "Skill" and (.args.skill // "") == $name)
+            or (
+                ((.tool // "") | test("^(Bash|Shell|LocalShellCall)$"))
+                and (
+                    ((.args.command // .args.cmd // "") | test(
+                        "(^|[[:space:]'\''\"/])skills/(superpowers/)?" + $dir + "/SKILL[.]md([[:space:]'\''\";]|$)"
+                    ))
+                )
+            )
+        )] | length' \
         "$FILE"
 )
 

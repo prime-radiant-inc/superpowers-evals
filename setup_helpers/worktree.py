@@ -120,6 +120,7 @@ def install_codex_superpowers_plugin_hooks(workdir: Path, superpowers_root: str)
 
     config_path = codex_home / "config.toml"
     _write_codex_plugin_hooks_config(config_path)
+    _login_codex_home_with_api_key(codex_home)
     hook = _read_codex_superpowers_hook(codex_home, workdir)
     _append_codex_trusted_hook(config_path, hook["key"], hook["currentHash"])
     os.environ["DRILL_CODEX_HOME"] = str(codex_home)
@@ -152,6 +153,21 @@ plugin_hooks = true
 [plugins."superpowers@debug"]
 enabled = true
 """
+    )
+
+
+def _login_codex_home_with_api_key(codex_home: Path) -> None:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise OSError("OPENAI_API_KEY is required to log in the isolated Codex home")
+
+    subprocess.run(
+        ["codex", "login", "--with-api-key"],
+        input=f"{api_key}\n",
+        text=True,
+        capture_output=True,
+        check=True,
+        env={**os.environ, "CODEX_HOME": str(codex_home)},
     )
 
 

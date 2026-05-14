@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -48,6 +49,32 @@ class TestToolNotCalled:
         (tmp_path / "tool_calls.jsonl").write_text("")
         result = run_helper("tool-not-called", ["Read"], tmp_path)
         assert result.returncode == 0
+
+
+class TestSkillCalled:
+    def test_native_skill_tool_present(self, tmp_path):
+        (tmp_path / "tool_calls.jsonl").write_text(
+            '{"tool":"Skill","args":{"skill":"superpowers:brainstorming"}}\n'
+        )
+        result = run_helper("skill-called", ["superpowers:brainstorming"], tmp_path)
+        assert result.returncode == 0
+
+    def test_codex_skill_file_read_present(self, tmp_path):
+        command = (
+            "sed -n '1,220p' "
+            "/Users/drewritter/prime-rad/superpowers/skills/brainstorming/SKILL.md"
+        )
+        (tmp_path / "tool_calls.jsonl").write_text(
+            json.dumps({"tool": "Bash", "args": {"command": command}}) + "\n"
+        )
+        result = run_helper("skill-called", ["superpowers:brainstorming"], tmp_path)
+        assert result.returncode == 0
+
+    def test_skill_absent(self, tmp_path):
+        (tmp_path / "tool_calls.jsonl").write_text('{"tool":"Read","args":{}}\n')
+        result = run_helper("skill-called", ["superpowers:brainstorming"], tmp_path)
+        assert result.returncode == 1
+        assert "FAIL" in result.stdout
 
 
 class TestToolCount:

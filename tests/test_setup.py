@@ -132,9 +132,13 @@ class TestWorktreeHelpers:
             "key": "superpowers@debug:hooks/hooks-codex.json:session_start:0:0",
             "currentHash": "sha256:abc123",
         }
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.delenv("DRILL_CODEX_HOME", raising=False)
 
-        with patch("setup_helpers.worktree._read_codex_superpowers_hook", return_value=hook):
+        with (
+            patch("setup_helpers.worktree._read_codex_superpowers_hook", return_value=hook),
+            patch("setup_helpers.worktree.subprocess.run") as run,
+        ):
             install_codex_superpowers_plugin_hooks(work_dir, str(fake_sp))
 
         codex_home = work_dir.parent / f"{work_dir.name}-codex-home"
@@ -151,6 +155,15 @@ class TestWorktreeHelpers:
             in config
         )
         assert 'trusted_hash = "sha256:abc123"' in config
+        run.assert_called_once()
+        args, kwargs = run.call_args
+        assert args == (["codex", "login", "--with-api-key"],)
+        assert kwargs["input"] == "sk-test\n"
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["check"] is True
+        assert kwargs["env"]["CODEX_HOME"] == str(codex_home)
+        assert kwargs["env"]["OPENAI_API_KEY"] == "sk-test"
 
     def test_create_caller_consent_plan(self, fixtures_dir, work_dir):
         create_base_repo(work_dir, fixtures_dir / "template-repo")
