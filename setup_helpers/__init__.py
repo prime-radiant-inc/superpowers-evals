@@ -21,6 +21,7 @@ from setup_helpers.worktree import (
     create_caller_consent_plan,
     detach_head,
     detach_worktree_head,
+    install_codex_superpowers_plugin_hooks,
     link_gemini_extension,
     symlink_superpowers,
 )
@@ -31,6 +32,7 @@ HELPER_REGISTRY = {
     "add_worktree": add_worktree,
     "detach_head": detach_head,
     "symlink_superpowers": symlink_superpowers,
+    "install_codex_superpowers_plugin_hooks": install_codex_superpowers_plugin_hooks,
     "add_existing_worktree": add_existing_worktree,
     "detach_worktree_head": detach_worktree_head,
     "link_gemini_extension": link_gemini_extension,

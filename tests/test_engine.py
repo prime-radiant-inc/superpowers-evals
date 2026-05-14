@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from drill.backend import Backend
 from drill.engine import Engine, RunResult, ScenarioConfig, VerifyConfig, snapshot_filesystem
 
 
@@ -92,6 +93,27 @@ class TestSnapshotFilesystem:
         assert "branch" in data
         assert "worktree_list" in data
         assert "files" in data
+
+
+class TestEngineLogDirs:
+    def test_codex_uses_drill_codex_home_for_session_logs(self, tmp_path, monkeypatch):
+        engine = object.__new__(Engine)
+        engine.backend = Backend(
+            name="codex-plugin-hooks",
+            cli="env",
+            args=[],
+            required_env=[],
+            hooks={"pre_run": []},
+            shutdown="<<KEY:ctrl-d>>",
+            idle={},
+            startup_timeout=30,
+            terminal={},
+            session_logs={},
+        )
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("DRILL_CODEX_HOME", str(codex_home))
+
+        assert engine._resolve_log_dir(tmp_path / "workdir") == codex_home / "sessions"
 
 
 class TestRunResult:
