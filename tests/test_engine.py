@@ -99,7 +99,7 @@ class TestEngineLogDirs:
     def test_codex_uses_drill_codex_home_for_session_logs(self, tmp_path, monkeypatch):
         engine = object.__new__(Engine)
         engine.backend = Backend(
-            name="codex-plugin-hooks",
+            name="codex",
             cli="env",
             args=[],
             required_env=[],

@@ -89,7 +89,7 @@ Live evals require the relevant backend CLI and credentials.
 | Backend family | CLI | Required environment |
 | --- | --- | --- |
 | Claude | `claude` | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
-| Codex | `codex` | `OPENAI_API_KEY` |
+| Codex | `codex` | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 | Gemini | `gemini` | local Gemini CLI auth/config |
 | Pi | `pi` | `SUPERPOWERS_ROOT` |
 
@@ -136,7 +136,7 @@ Verify Codex native plugin hooks bootstrap Superpowers from an isolated
 `CODEX_HOME`:
 
 ```bash
-uv run drill run codex-native-hooks-bootstrap -b codex-plugin-hooks
+uv run drill run codex-native-hooks-bootstrap -b codex
 ```
 
 Compare results:
@@ -167,8 +167,8 @@ Current backend families:
 | `claude-opus-4-7` | Claude Code | opus-4-7 |
 | `claude-opus-4-6-1m` | Claude Code | opus-4-6, 1M context |
 | `claude-opus-4-7-1m` | Claude Code | opus-4-7, 1M context |
-| `codex` | Codex CLI | local configured model |
-| `codex-plugin-hooks` | Codex CLI with native plugin hooks in isolated `CODEX_HOME` | local configured model |
+| `codex` | Codex CLI with native plugin hooks in isolated `CODEX_HOME` | local configured model |
+| `codex-no-hooks` | Codex CLI with legacy `.agents` symlink setup | local configured model |
 | `gemini` | Gemini CLI | auto-gemini-3 |
 | `gemini-2-5-flash` | Gemini CLI | gemini-2.5-flash |
 

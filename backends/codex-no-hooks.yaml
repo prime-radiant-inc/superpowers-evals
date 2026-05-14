@@ -1,15 +1,13 @@
-name: codex-plugin-hooks
-cli: env
+name: codex-no-hooks
+cli: codex
 args:
-  - "CODEX_HOME=${DRILL_CODEX_HOME}"
-  - codex
   - "--dangerously-bypass-approvals-and-sandbox"
 required_env:
   - OPENAI_API_KEY
   - SUPERPOWERS_ROOT
 hooks:
   pre_run:
-    - install_codex_superpowers_plugin_hooks
+    - symlink_superpowers
   post_run: []
 shutdown: "<<KEY:ctrl-d>>"
 idle:
