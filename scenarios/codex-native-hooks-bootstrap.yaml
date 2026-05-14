@@ -2,8 +2,8 @@ scenario: codex-native-hooks-bootstrap
 description: >
   Verifies that Codex native plugin hooks bootstrap Superpowers without the
   legacy .agents symlink workaround. This should be run with the
-  codex-plugin-hooks backend, which stages Superpowers as a Codex plugin in an
-  isolated CODEX_HOME and trusts only that run's SessionStart hook.
+  codex backend, which stages Superpowers as a Codex plugin in an isolated
+  CODEX_HOME and trusts only that run's SessionStart hook.
 user_posture: naive
 
 setup:

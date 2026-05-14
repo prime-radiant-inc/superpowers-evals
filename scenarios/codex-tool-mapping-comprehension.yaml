@@ -1,7 +1,9 @@
 scenario: codex-tool-mapping-comprehension
 description: >
   Measures whether a Codex agent correctly reports the Superpowers Codex
-  mapping for Claude Code Task result collection.
+  mapping for Claude Code Task result collection. This fixture reads the
+  legacy .agents symlink path and should be run with the codex-no-hooks
+  fallback backend.
 user_posture: spec-aware
 
 setup:

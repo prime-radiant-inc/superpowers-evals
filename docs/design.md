@@ -133,15 +133,17 @@ session_logs:
 ```yaml
 # backends/codex.yaml
 name: codex
-cli: codex
+cli: env
 args:
+  - "CODEX_HOME=${DRILL_CODEX_HOME}"
+  - codex
   - "--dangerously-bypass-approvals-and-sandbox"
 required_env:
   - OPENAI_API_KEY
   - SUPERPOWERS_ROOT
 hooks:
   pre_run:
-    - symlink_superpowers   # creates .agents/skills/superpowers symlink in test repo
+    - install_codex_superpowers_plugin_hooks
   post_run: []
 shutdown: "<<KEY:ctrl-d>>"
 idle:
@@ -156,7 +158,10 @@ session_logs:
   match_by: timestamp
 ```
 
-New backends = new YAML file. Backend variants (e.g., `codex-workspace-write.yaml`) are just copies with different args — no inheritance system needed. Scenarios reference backends by name.
+`codex-no-hooks.yaml` keeps the legacy `.agents/skills/superpowers` symlink
+path available as an explicit fallback. New backends = new YAML file. Backend
+variants (e.g., `codex-workspace-write.yaml`) are just copies with different
+args — no inheritance system needed. Scenarios reference backends by name.
 
 ## Scenario Format
 
@@ -230,7 +235,8 @@ Python functions in `setup_helpers/` that modify the cloned repo for specific sc
 - `create_base_repo(workdir)` — Clone template, verify structure
 - `add_worktree(workdir, branch, path)` — Create an existing worktree (for "already inside" scenarios)
 - `detach_head(workdir)` — Simulate Codex App detached HEAD state
-- `symlink_superpowers(workdir)` — Create `.agents/skills/superpowers` symlink (codex pre_run hook)
+- `install_codex_superpowers_plugin_hooks(workdir)` — Stage Superpowers as a Codex plugin in an isolated `CODEX_HOME` and trust that run's hook
+- `symlink_superpowers(workdir)` — Create `.agents/skills/superpowers` symlink (codex-no-hooks fallback pre_run hook)
 
 ### Setup Assertions
 
@@ -243,7 +249,8 @@ Each backend loads superpowers differently. The harness manages this per-run wit
 | Backend | Mechanism | Harness action |
 |---------|-----------|----------------|
 | Claude Code | `--plugin-dir` CLI flag | Pass flag pointing at superpowers checkout |
-| Codex | `.agents/skills/` in repo | Backend pre_run hook creates symlink |
+| Codex | Native plugin hooks in isolated `CODEX_HOME` | Backend pre_run hook stages plugin and trusted hook config |
+| Codex no-hooks fallback | `.agents/skills/` in repo | Backend pre_run hook creates symlink |
 
 This means Drill can test draft skill changes by pointing at a branch checkout of superpowers.
 

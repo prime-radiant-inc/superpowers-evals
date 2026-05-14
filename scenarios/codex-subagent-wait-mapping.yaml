@@ -1,7 +1,9 @@
 scenario: codex-subagent-wait-mapping
 description: >
   Measures whether a Codex agent follows Superpowers' Codex tool mapping
-  when translating Claude Code Task subagent result collection.
+  when translating Claude Code Task subagent result collection. This fixture
+  reads the legacy .agents symlink path and should be run with the
+  codex-no-hooks fallback backend.
 user_posture: spec-aware
 
 setup:
