@@ -225,7 +225,11 @@ See `QUESTIONS.md` for items needing Matt's input. Risks tracked here:
 - **Cost control.** Each Gauntlet-driven run uses two LLMs in tandem (Gauntlet's QA agent + the agent under test). Drill is similar (actor + agent + verifier). Net change probably neutral; flag if it spikes.
 - **Naive vs spec-aware as separate cards** vs same card with a posture flag: chosen separate cards (the wording difference *is* the test, want it author-controlled). Mild duplication is the cost.
 - **Per-target normalizer drift.** When Claude Code or Codex changes its session-log format, normalizers break silently. Mitigation: schema test per normalizer that asserts the common-schema invariants on a recorded fixture log.
-- **Evidence-dir layout coupling.** The harness writes `tool_calls.jsonl` into Gauntlet's evidence dir. If Gauntlet renames or relocates that dir, the harness breaks. Mitigation: harness reads the path from Gauntlet's `result.json` rather than computing it.
+- **Evidence-dir layout coupling.** Gauntlet's `--out <dir>` flag accepts an explicit evidence directory; the harness sets it, so the path coupling is *one-way* (harness → Gauntlet) rather than two-way. Risk surfaces if a future Gauntlet release changes the file layout *inside* `--out` (e.g. renames `result.json`); mitigation is a smoke check at runner startup that verifies `result.json` exists after a known-good `gauntlet run` invocation.
+
+- **Empty-capture vacuity.** `drill/engine.py:169–178` fails a run when `tool_calls.jsonl` is empty (the session likely crashed). Without that guard, an empty-capture scenario would vacuously satisfy any `tool-not-called` assertion. The harness reproduces this with an automatic synthetic assertion: if the scenario declares any tool-related assertions and the captured `tool_calls.jsonl` is empty, the runner inserts a failing `00-non-empty-capture` result before composition. Composer rule (all-must-pass) then dominates correctly.
+
+- **Concurrent-run safety (none in Phase 1).** Two harness runs against the same target share `~/.claude/projects/` — snapshot-and-diff will attribute one run's logs to the other. Phase 1 is explicitly single-run-at-a-time. The runner writes a sentinel lockfile in the session-log dir's parent and refuses to start if one is already present. Document; revisit when sweep-N is built.
 
 ## Citation / prior art
 
