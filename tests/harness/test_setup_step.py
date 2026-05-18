@@ -57,3 +57,16 @@ class TestRunSetup:
         )
         run_setup(scenario_dir, workdir)
         assert marker_path.read_text().strip() == str(workdir)
+
+    def test_env_extra_propagates_to_subprocess(self, tmp_path):
+        scenario_dir = tmp_path / "scenario"
+        scenario_dir.mkdir()
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        marker_path = tmp_path / "captured_extra"
+        _make_executable(
+            scenario_dir / "setup.sh",
+            f'#!/usr/bin/env bash\necho "$HARNESS_REPO_ROOT" > {marker_path}\n',
+        )
+        run_setup(scenario_dir, workdir, env_extra={"HARNESS_REPO_ROOT": "/fake/root"})
+        assert marker_path.read_text().strip() == "/fake/root"

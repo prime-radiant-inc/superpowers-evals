@@ -237,16 +237,17 @@ def run_scenario(
     # 3. Populate .gauntlet/context/ from harness/target_contexts/<target>/
     _populate_context_dir(contexts_dir, target, run_dir)
 
-    # 4. Create temp workdir; export HARNESS_REPO_ROOT so setup.sh can find
-    #    fixtures/template-repo.
+    # 4. Create temp workdir; pass HARNESS_REPO_ROOT to setup.sh via subprocess
+    #    env so setup.sh helpers can find fixtures/template-repo without leaking
+    #    the var into the parent process env.
     workdir = Path(tempfile.mkdtemp(prefix="harness-wd-"))
-    os.environ["HARNESS_REPO_ROOT"] = str(_harness_repo_root())
+    env_extra = {"HARNESS_REPO_ROOT": str(_harness_repo_root())}
     workdir_kept = False
     try:
         with _single_run_lock(tcfg.session_log_dir):
             # 5. Run setup.sh.
             try:
-                run_setup(scenario_dir, workdir)
+                run_setup(scenario_dir, workdir, env_extra=env_extra)
             except SetupError as e:
                 raise RunnerError(f"setup failed: {e}") from e
 

@@ -15,11 +15,15 @@ class SetupError(RuntimeError):
     """Raised when setup.sh exits non-zero."""
 
 
-def run_setup(scenario_dir: Path, workdir: Path) -> None:
+def run_setup(
+    scenario_dir: Path,
+    workdir: Path,
+    env_extra: dict[str, str] | None = None,
+) -> None:
     setup_path = scenario_dir / "setup.sh"
     if not setup_path.exists():
         return
-    env = {**os.environ, "DRILL_WORKDIR": str(workdir)}
+    env = {**os.environ, "DRILL_WORKDIR": str(workdir), **(env_extra or {})}
     proc = subprocess.run(
         [str(setup_path)],
         cwd=workdir,
