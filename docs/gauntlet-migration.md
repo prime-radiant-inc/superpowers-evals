@@ -1,103 +1,74 @@
 # Gauntlet Migration: Replacing Drill
 
-**Date:** 2026-05-14
-**Status:** Spec (draft)
+**Date:** 2026-05-18
+**Status:** Spec (draft, v2)
 **Author:** Auri@15da9a04 (Opus 4.7)
 
 ## Thesis
 
-Drill's purpose — measure whether superpowers skills reliably fire across coding-agent CLIs — is sound. Drill's *implementation* is mostly bespoke infrastructure that duplicates what Gauntlet already does well: drive a tmux-hosted target with an LLM, capture evidence, judge against acceptance criteria, repeat for stats.
+Drill's purpose — measuring whether superpowers skills reliably fire across coding-agent CLIs — is sound. Drill's implementation duplicates infrastructure Gauntlet already provides: tmux-driven target interaction, agent loop, evidence pipeline, multi-trial aggregation. Once Gauntlet's QA agent gained a bash tool, even the role Drill assigned to a separate verifier LLM (judging the agent-under-test's tool log) collapses into Gauntlet's existing agent — the QA agent can read the log directly.
 
-Replace Drill with **Gauntlet plus a thin eval harness.** Gauntlet plays the actor and renders the screen-side verdict. The harness owns the eval-lab-specific concerns Gauntlet shouldn't know about: workdir setup, agent-under-test session-log capture, deterministic assertions, and an optional second-pass verifier with access to the captured tool-call log.
+Replace Drill with **Gauntlet plus a small Python harness.** Gauntlet drives the target, observes both the screen and the agent's session log via bash, and issues the verdict. The harness handles the two things Gauntlet shouldn't know about: per-scenario workdir setup, and post-run deterministic assertions that protect acceptance criteria from LLM-verdict drift.
 
-The boundary is the design. Gauntlet stays a general-purpose QA driver. The harness stays small enough that someone reading `superpowers-evals/` can see the whole eval pipeline at a glance.
+The boundary is the design. Gauntlet stays a general-purpose QA driver. The harness stays small.
 
 ## Why this is worth doing
 
-- **Drill's actor is Gauntlet's agent.** Drill maintains a separate "actor LLM" that takes scenario turn intents and types into the agent CLI. Gauntlet's agent does exactly this — its job is to drive a target through an adapter to satisfy outcome-shaped acceptance criteria. The actor/agent split in Drill is a structural duplication.
-- **Drill's tmux engine is Gauntlet's TUI adapter.** `engine.py` + `session.py` ≈ `src/adapters/tui/adapter.ts`. Both spawn detached tmux at fixed dimensions, send keys, capture pane with ANSI preserved. Two tools, identical mechanics.
-- **Drill's sweep is Gauntlet's run-set.** `sweep.py` runs N trials × M backends with try/except per run and writes a manifest. Gauntlet's `--passes` × `gauntlet batch` produces a run-set with `consistent_pass` / `mixed` / `errored` aggregation. Same shape, different file.
-- **Drill's compare is two `gauntlet run` invocations.** Backend variation in Drill is a YAML file selecting a CLI command. In Gauntlet it's `--target "claude …"` vs `--target "codex …"`. The difference is bookkeeping.
+- Drill's actor loop, tmux engine, sweep, compare, and evidence dir all duplicate Gauntlet features with different file names and a Python accent.
+- Drill's separate verifier LLM existed because its actor had no view of the agent-under-test's session log. Gauntlet's QA agent now has bash; the same evidence is available to it directly.
+- Drill's per-backend busy-pattern detection existed because its actor was a thin Sonnet call without an agentic loop. Gauntlet's QA agent has the loop and can tail the agent's session log to know when the agent is idle. The deterministic signal beats the visual heuristic.
+- Backend variation in Drill is a YAML file selecting a CLI command. In Gauntlet it is `--target claude` vs `--target codex`. The difference is bookkeeping.
 
-What Drill does that Gauntlet doesn't is narrow — three specific things, each easy to keep external (see "Three real gaps" below).
+What remains genuinely Drill-specific is small enough to keep external.
 
-## What Drill does today (the parts that actually matter)
+## What Drill does today
 
 Stripped to essentials, Drill does five things in order:
 
-1. **Mutate a fresh workdir** to a known initial state (clone template, add a worktree, detach HEAD, install plugin hooks).
-2. **Drive a coding-agent CLI in tmux.** Sonnet "actor" reads scenario turn intents, types prompts, waits for backend-specific idle.
-3. **Snapshot evidence:** terminal transcript, post-run filesystem state, and — crucially — the agent-under-test's own session log (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalized per-backend into a common `{tool, args, source}` schema.
-4. **Judge twice:** Sonnet verifier against semantic criteria; shell assertions (`skill-called`, `tool-called`, `tool-before`, `tool-arg-match`) against the normalized log + filesystem.
-5. **Repeat** N × M for stats (sweep, Wilson CIs).
+1. **Mutates a fresh workdir** to a known initial state (clones a template repo, adds a worktree, detaches HEAD, installs plugin hooks).
+2. **Drives a coding-agent CLI in tmux.** A Sonnet "actor" reads scenario turn intents, types prompts, and waits for backend-specific idle patterns.
+3. **Snapshots evidence:** terminal transcript, post-run filesystem state, and the agent-under-test's own session log (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalized per-backend into a common `{tool, args, source}` schema.
+4. **Judges twice:** Sonnet verifier against semantic criteria; shell assertions (`skill-called`, `tool-called`, `tool-before`, `tool-arg-match`) against the normalized log.
+5. **Repeats** N × M for stats (sweep, Wilson CIs).
 
-The load-bearing capability is **(3) + (4) on the agent-under-test's own log.** Without that, the eval can see what tmux rendered but not what skill the agent actually invoked. Distinguishing *the agent claimed to use the skill* from *the agent actually used the skill* is the entire point of a compliance benchmark.
+The load-bearing capability is access to the agent-under-test's own tool log. Distinguishing *the agent claimed to use the skill* from *the agent actually used the skill* is the entire point of a compliance benchmark.
 
 ## What Gauntlet provides natively
 
 | Drill concern | Gauntlet today |
 |---|---|
-| Actor LLM | The Gauntlet agent (it *is* the user simulator) |
+| Actor LLM | The Gauntlet QA agent (it *is* the user simulator) |
 | Tmux + send-keys + capture-pane | TUI adapter, identical mechanics |
-| Verifier criteria (screen-side) | `report_result` + `## Acceptance Criteria` |
+| Verifier evidence (agent tool log) | The QA agent reads it directly via bash |
+| Screen-side verdict | `report_result` + `## Acceptance Criteria` |
+| Wait-vs-respond decisions | The QA agent tails the agent's session log via bash |
 | Sweep × N + stats | `--passes` (1–50) + run-sets (`consistent_pass` / `mixed` / `errored`) |
-| Backend variation | `--target "<cli command>"` |
-| Naive vs spec-aware posture | Two cards (separately authored) |
-| Evidence dir per run | `<.gauntlet>/results/<runId>/` |
+| Backend variation | `--target claude` vs `--target codex` |
+| Naive vs spec-aware posture | Two stories with different prose |
+| Per-target invocation knowledge | `.gauntlet/context/` files the QA agent reads |
+| Evidence dir per run | `<project-dir>/.gauntlet/results/<runId>/` or `--out <dir>` |
 
-Three of Drill's five layers are already there. The actor/agent collapse is a simplification, not a regression — Gauntlet's "the QA agent IS the user" model is cleaner than Drill's separate actor + agent split.
+The bash tool is the pivotal change since Drill's design. It collapses three things Drill kept separate (actor, busy-detector, verifier) into one Gauntlet agent with two observation channels: the screen via the TUI adapter, and any file via bash.
 
-## Three real gaps
+## What the harness still owns
 
-Everything else Drill does that Gauntlet doesn't is dressing. Three things matter, and **all three live outside Gauntlet** in this design:
+Two things:
 
-### 1. Per-scenario workdir setup
+1. **Per-scenario workdir setup.** Gauntlet has read-only `.gauntlet/context/` fixtures. Drill *mutates* a workdir before the agent launches (clones a template, adds a worktree, plants flawed code, etc). The harness owns this: each scenario provides a `setup.sh` that runs against a fresh temp workdir. Non-zero exit aborts the run with a clear "setup invariant violated" error.
 
-Gauntlet has read-only `.gauntlet/context/` fixtures. Drill *mutates* a workdir before agent launch. The harness owns this: each scenario provides a `setup.sh` that runs against a temp workdir (cwd = workdir, with whatever env the harness threads in). Non-zero exit aborts the run with "setup invariant violated" — the same fail-fast Drill has. No Gauntlet change.
+2. **Post-run deterministic assertions for AC regression-testing.** The harness snapshots the agent's session-log directory before launch, diffs after, normalizes per-target into `tool_calls.jsonl`, and runs scenario `assertions/*.sh` against it. These are not a second verifier — the QA agent's verdict over the same evidence is authoritative. The assertions are a frozen check that an acceptance criterion catches what it should catch, independent of any single run's verdict. They surface AC drift when models update.
 
-### 2. Agent-under-test session-log capture and normalization
+Per-target normalizers (Python modules, one per agent CLI) lift `drill/normalizer.py` near-verbatim. The `bin/` assertion helpers port unchanged.
 
-This is the load-bearing one. The harness:
+## The Agent / Verifier collapse
 
-1. Snapshots the agent's session-log directory (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.gemini/sessions/`) immediately before launching Gauntlet.
-2. Runs Gauntlet against the target.
-3. Diffs the directory after, identifies files created during the run, runs a per-target normalizer that maps the native log format into a common JSONL schema.
-4. Writes `tool_calls.jsonl` into Gauntlet's evidence dir.
+Drill had two LLMs (actor + verifier) because its actor could not see the agent-under-test's session log. Gauntlet has one agent because bash gives it the same evidence. An acceptance criterion like *"the agent invoked the writing-plans skill before writing any implementation code"* now belongs in the story card, evaluated by the QA agent reading the agent's own log via bash. No second verifier pass; no external LLM with shared context.
 
-Per-target normalizers are small Python modules (one per agent CLI: Claude Code, Codex, Gemini, Pi). They're lifted from `drill/normalizer.py` near-verbatim. The harness — not Gauntlet — selects the normalizer based on the scenario's declared target type.
+The harness's deterministic assertions are not a verifier substitute. They are a regression test for the acceptance criteria themselves — a guard that survives LLM updates, model swaps, and verdict noise. Composition rule:
 
-### 3. Deterministic post-run assertions
+> A scenario passes iff the Gauntlet verdict is `pass` AND every assertion exits 0.
 
-After Gauntlet finishes, the harness runs every executable in the scenario's `assertions/` directory from the evidence dir, with `$DRILL_WORKDIR` (or rename — see Open Questions) pointing at the mutated workdir and `bin/` on `PATH`. Each assertion exits 0 = pass, non-zero = fail. The harness composes the final verdict: **pass iff Gauntlet AC pass ∧ every assertion exits 0**.
-
-Drill's `bin/` helpers (`skill-called`, `tool-called`, `tool-before`, `tool-arg-match`, `tool-count`, `skill-before-tool-match`, `tool-match-before-tool-match`, `codex-native-hook-configured`) port verbatim. They operate on `tool_calls.jsonl` and don't care which framework collected it.
-
-## The Agent / Verifier question
-
-Drill has separate Agent and Verifier LLMs. Drill's verifier reads the agent-under-test's session log; Gauntlet's verdict-issuing agent doesn't have this evidence in its context.
-
-Five paths considered:
-
-- **A. Extend Gauntlet** with a tool that reads agent-under-test logs mid-run. Rejected: forces Gauntlet to know about session-log locations, normalizer schemas — exactly the harness-specific knowledge we're keeping out.
-- **B. External post-run verifier** that reads `tool_calls.jsonl` + filesystem + Gauntlet verdict + screen transcript. Optional per scenario.
-- **C. Assertions only, no LLM verifier.** Most compliance checks reduce to `skill-called` / `tool-before`. The LLM verifier in Drill exists to catch *workflow* claims ("loaded skill before implementation") that hard assertions can express but awkwardly.
-- **D. Gauntlet agent reads the live session log** mid-run. Rejected: wild scope expansion of Gauntlet; the QA agent doesn't actually need this — its job is screen-side.
-- **E. "Context input" Gauntlet feature** that lets the harness inject log files into the agent's view. Rejected: same as A in different clothes.
-
-**Decision: B as default, C wherever it suffices.**
-
-Reasoning:
-
-1. Honors the Gauntlet-stays-small boundary. Log capture and per-target knowledge live in the harness.
-2. Gauntlet's verdict (screen-side) and the external verifier (log-side) **disagreeing is informative**: an "agent bluffed convincingly on screen but didn't actually invoke the skill" finding is exactly the signal a compliance benchmark wants. Drill currently masks this by giving its single verifier both views.
-3. Most scenarios will pass on `gauntlet AC ∧ assertions` alone — assertions cover the load-bearing claims. The external LLM verifier is opt-in per scenario (drop a `verifier.md` next to the card) for cases where semantic judgment over the tool log matters and assertions can't express it cleanly.
-4. Preserves Drill's confirmation-bias discipline: the external verifier sees evidence (tool log, filesystem, screen) but not the AC prose or scenario narrative.
-
-The combined verdict the harness reports is a tuple, not a flat pass/fail: `{gauntlet: pass|fail|investigate, assertions: pass|fail, verifier: pass|fail|n/a}`. **Composition is fixed: all-must-pass.** A scenario passes iff Gauntlet's verdict is `pass` AND every assertion exits 0 AND (if a verifier is declared) the verifier returns `pass`. No per-scenario composition DSL — that path leads to incomparable scenarios with bespoke pass criteria, which defeats the benchmark.
-
-If a future scenario genuinely needs a different composition (e.g., "screen-side bluffed but logs prove correctness"), add it as a documented exception with the cost spelled out, not as a knob.
-
-**Honest cost note:** This is three judges (Gauntlet AC, deterministic assertions, optional LLM verifier) instead of Drill's two (semantic verifier + assertions). The trade is the disagreement signal — Gauntlet's screen-side verdict diverging from the log-side verifier *is* the finding, not a bug. We accept the per-scenario authoring cost of deciding which judges apply.
+No per-scenario composition DSL. Investigate verdicts compose as fail (clean signal beats fuzzy state for a benchmark).
 
 ## Architecture
 
@@ -106,29 +77,34 @@ If a future scenario genuinely needs a different composition (e.g., "screen-side
 │  superpowers-evals (the harness)                            │
 │                                                             │
 │  scenarios/<name>/                                          │
-│    story.md           Gauntlet card (outcome + AC)          │
+│    story.md           Gauntlet story (outcome + AC)         │
 │    setup.sh           Pre-run workdir mutation              │
-│    assertions/*.sh    Post-run deterministic checks         │
-│    verifier.md        (optional) external LLM verifier      │
+│    assertions/*.sh    Post-run regression checks            │
 │    target.yaml        Which agent CLI + normalizer to use   │
 │                                                             │
 │  harness/  (Python)                                         │
 │    runner.py          Orchestrate a single scenario run     │
-│    normalizers/       One module per agent CLI              │
-│    bin/               skill-called, tool-called, …          │
-│    sweep.py           N × M orchestration (or shell wrap?)  │
+│    normalizers.py     Lifted from drill/normalizer.py       │
+│    target_contexts/   Per-target HOWTO docs (5-line files)  │
+│    cli.py             uv run harness run <scenario>         │
+│                                                             │
+│  bin/                 Assertion helpers (unchanged)         │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
                            │
-                           │ subprocess
+                           │ subprocess: gauntlet run
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  gauntlet (unchanged)                                       │
 │                                                             │
-│    TUI adapter ─── tmux ─── agent CLI under test            │
-│                              (Claude Code / Codex / Gemini) │
-│                                                             │
-│    Agent loop ── report_result ── result.json + evidence/   │
+│  TUI adapter ─── tmux ─── bash ─── agent under test         │
+│                                       (claude / codex / …)  │
+│                                                                          
+│  QA agent loop:                                             │
+│    - read_screen (TUI adapter)                              │
+│    - bash → tail / cat / jq the agent's session log         │
+│    - context: target HOWTO + story + assertions             │
+│    - report_result → verdict                                │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -136,103 +112,91 @@ If a future scenario genuinely needs a different composition (e.g., "screen-side
 ### Per-run flow
 
 ```
-1. LOAD scenario manifest (story.md, setup.sh, assertions/, verifier.md?, target.yaml)
-2. CREATE temp workdir
-3. RUN setup.sh in workdir; abort on non-zero
-4. SNAPSHOT agent-under-test session-log dir (target.yaml says where)
-5. INVOKE gauntlet:
-     gauntlet run scenarios/<name>/story.md \
+1. LOAD scenario (story.md, setup.sh, assertions/, target.yaml)
+2. CREATE per-run dir at /tmp/harness-run-XXX/
+     - this is BOTH the gauntlet --project-dir AND the evidence root
+3. POPULATE /tmp/harness-run-XXX/.gauntlet/context/
+     - copy harness/target_contexts/<target>/* (invocation, log path, shutdown)
+4. CREATE temp workdir at /tmp/harness-wd-XXX/
+5. RUN setup.sh in workdir; abort on non-zero
+6. SNAPSHOT agent-under-test session-log dir (per target.yaml)
+7. INVOKE gauntlet from workdir:
+     cd <workdir> && gauntlet run scenarios/<name>/story.md \
        --adapter tui \
-       --target "<command from target.yaml>" \
-       --out <evidence-dir> \
-       --max-time <from scenario or default> \
+       --target <binary from target.yaml> \
+       --project-dir /tmp/harness-run-XXX \
        --silent
-6. NORMALIZE: diff session-log dir, write tool_calls.jsonl into <evidence-dir>
-7. ASSERT: run assertions/*.sh from <evidence-dir>, $DRILL_WORKDIR=<workdir>
-8. VERIFY (optional): if verifier.md present, run external LLM verifier with
-     evidence as context, write verdict to <evidence-dir>/external-verdict.json
-9. COMPOSE final verdict per scenario's composition rule
-10. WRITE meta.json with everything; cleanup workdir (or keep on failure)
+8. NORMALIZE: diff session-log dir, write tool_calls.jsonl into run dir
+9. ASSERT: run assertions/*.sh from run dir (DRILL_WORKDIR=workdir, bin/ on PATH)
+10. COMPOSE final verdict (gauntlet AND assertions)
+11. WRITE verdict.json; clean up workdir on pass, keep on fail
 ```
 
-### Sweep
-
-Multi-target × multi-trial via `superpowers-evals/harness sweep <scenario> --targets claude,codex --n 10` (or whatever the CLI shape ends up). Or — start with a one-line shell loop and add a real sweep CLI only if the loop gets ugly. (See Open Questions.)
+The QA agent in step 7 reads its `.gauntlet/context/`, learns how to invoke the target binary (typing it into bash), and uses bash plus `read_screen` to drive the agent and observe its log. When ready, it calls `report_result`.
 
 ## What stays in / out of Gauntlet
 
-**In Gauntlet (no changes):** TUI adapter, agent loop, AC verdict, evidence pipeline, run-sets, batch mode, fanout, `--passes`.
+**In Gauntlet (no changes):** TUI adapter, agent loop, AC verdict, evidence pipeline, run-sets, batch mode, fanout, `--passes`, bash tool, context-dir reading.
 
-**In the harness (new code in `superpowers-evals/`):** workdir setup, session-log capture, per-target normalizers, deterministic assertions, optional external LLM verifier, per-scenario target configuration, sweep orchestration, the `bin/` helpers (ported verbatim), per-target token-usage capture (Drill's `token_capture.py` lifts cleanly — reads the same session logs the normalizers do).
+**In the harness (new code in `superpowers-evals/`):** workdir setup, per-target session-log capture and normalization, deterministic assertions, per-target context docs (small), per-scenario target manifests, the lifted `bin/` helpers, the lifted token-usage capture (deferred wiring until first cost-scenario port).
 
-**Not built (yet):** cross-run-set comparison view (Drill's `compare` command). One-off scripts cover this for now; promote if friction warrants.
+**Not in either (yet):** sweep CLI, cross-target comparison view. Shell loops cover Phase 1; promote when friction warrants.
 
 ## Migration phases
 
 ### Phase 1 — Build the harness, prove parity on three scenarios
 
-Goal: prove end-to-end parity with Drill on a *representative* slice. One scenario is not enough — `triggering-writing-plans` exercises only the Claude happy path. To exercise the surfaces that actually break in migration, Phase 1 covers three scenarios chosen to exercise different code paths:
+One scenario is not enough. To exercise the surfaces that actually break in migration, Phase 1 covers three:
 
-1. **`triggering-writing-plans`** (Claude, single turn, single assertion `skill-called superpowers:writing-plans`, single setup helper). Smallest parity test.
-2. **`worktree-already-inside`** (Claude, multi-helper setup, `workdir_override` for the existing-worktree subdir). Exercises non-trivial setup and the workdir-override path.
-3. **One Codex scenario** (e.g., `codex-subagent-wait-mapping` or `codex-tool-mapping-comprehension`). Exercises the Codex normalizer's cwd-filtering logic, which is where the per-target log capture is most likely to break.
+1. **`triggering-writing-plans`** (Claude, single turn, single assertion). Smallest parity test.
+2. **`worktree-already-inside`** (Claude, multi-helper setup, agent starts inside a sibling worktree subdir). Exercises non-trivial setup; the QA agent uses bash + story prose to navigate.
+3. **A Codex scenario, e.g., `codex-subagent-wait-mapping`.** Exercises the Codex normalizer's cwd-filtering logic, the place per-target log capture is most likely to break.
 
 Steps:
 
-1. Build the per-run flow as a Python CLI (`harness/runner.py`). Use Drill's `normalizer.py` near-verbatim for the Claude Code and Codex normalizers. Lift `token_capture.py` alongside.
-2. Port the `bin/` assertion helpers verbatim — they're already framework-agnostic.
-3. Convert all three scenarios. Each becomes `scenarios/<name>/{story.md, setup.sh, assertions/*.sh, target.yaml}`.
-4. Run both the old Drill version and the new harness version against the same backends, compare verdicts and tool-call captures. Document any divergence.
+1. Build the per-run flow as a Python CLI (`harness run <scenario>`).
+2. Lift `drill/normalizer.py` and `drill/token_capture.py` near-verbatim with their tests.
+3. Port `bin/` helpers verbatim — already framework-agnostic.
+4. Convert all three scenarios. Each becomes `scenarios/<name>/{story.md, setup.sh, assertions/*.sh, target.yaml}`.
+5. Run both Drill and the harness against the same backends. Document divergence.
 
-A successful Phase 1 means: harness verdict matches Drill verdict on all three (or any divergence is explained and accepted), `tool_calls.jsonl` is byte-equivalent (or schema-equivalent) between the two, and the assertion `bin/` scripts exit identically.
+Phase 1 passes when: harness verdict matches Drill verdict on all three (or any divergence is explained and accepted in `docs/migration-notes.md`), `tool_calls.jsonl` is byte- or schema-equivalent, and assertion scripts exit identically.
 
 ### Phase 2 — Port scenarios incrementally
 
 Order by leverage and risk:
 
-1. `worktree-creation-from-main`, `worktree-already-inside`, `worktree-codex-app-detached-head` — Drill's original purpose, well-understood, exercise multi-helper setup.
-2. The other `triggering-*` scenarios — exercise the assertion stack.
-3. `code-review-catches-planted-bugs`, `spec-reviewer-catches-planted-flaws` — exercise the optional external verifier.
-4. The `cost-*` scenarios — these may need external-verifier-only runs if cost can't be derived from tool calls.
+1. Remaining worktree scenarios.
+2. Other `triggering-*` scenarios.
+3. `code-review-catches-planted-bugs`, `spec-reviewer-catches-planted-flaws`.
+4. `cost-*` scenarios (these wire the lifted token-usage module).
 
-Each port is mechanical-ish: scenario YAML body → `story.md` (rewritten per `writing-gauntlet-stories`), setup helper → `setup.sh`, verify section → `assertions/*.sh` and optionally `verifier.md`. Where the AC rewrite resists a clean translation, that's a signal the original criterion was testing implementation rather than outcome — flag those for redesign rather than forced translation.
+Each port: scenario YAML body → `story.md` rewritten per the `writing-gauntlet-stories` skill; setup helpers → `setup.sh`; verify section → AC + `assertions/*.sh`. Where an AC rewrite resists clean translation, the original criterion was probably testing implementation rather than outcome — flag for redesign, not forced translation.
 
-**Forcing function for skipped scenarios.** "Hard to translate" is also how implementers ship migrations by quietly dropping the awkward cases. Every scenario that gets skipped, deferred, or materially redesigned must be recorded in `docs/migration-notes.md` with: the original Drill scenario name, the reason it didn't translate cleanly, and what (if anything) replaced it. This file gets reviewed before Phase 3 — any skipped scenario without a justification blocks decommission.
+**Forcing function:** every skipped or materially-redesigned scenario goes in `docs/migration-notes.md` with the reason. Reviewed before Phase 3.
 
 ### Phase 3 — Decommission
 
-When all ported scenarios run green in the harness and CI confirms parity (or accepted divergence is documented), mark `drill/` and Drill's CLI deprecated in `superpowers-evals/README.md`, point at the harness, eventually delete. The repo keeps: scenario sources, normalizers, harness, `bin/`. The Python engine, actor, verifier, sweep, stats — gone.
+Mark Drill deprecated in `README.md`, point at the harness, eventually delete `drill/` and the Python actor/verifier/sweep code. Keep scenarios, normalizers, harness, `bin/`.
 
 ## Non-goals
 
-- **Gauntlet does not become an eval-specific tool.** The TUI adapter sees a subprocess; whether that subprocess happens to be Claude Code is not its concern.
-- **No new Linear/Drill CI on public CI** — same trust boundary as today (live evals stay maintainer-local).
-- **No cross-run-set comparison view in Phase 1.** Two `gauntlet run` invocations + a side-by-side script if needed.
-- **No Docker isolation in Phase 1** — same as Drill's phase 1 scope decision; revisit later.
-- **Not changing Gauntlet at all.** If a feature is genuinely missing (e.g., a way for the harness to pin a specific runId for log correlation), file separately.
+- Gauntlet does not become an eval-specific tool. The TUI adapter sees a subprocess; whether that subprocess is itself an AI agent is not its concern.
+- Live evals stay maintainer-local. Same trust boundary as Drill today.
+- No cross-target comparison view in Phase 1. Two invocations and a diff.
+- No Docker isolation in Phase 1. Revisit with concurrent runs.
+- No Gauntlet changes. If a feature is missing, file separately.
 
-## Risks and open questions
+## Risks
 
-See `QUESTIONS.md` for items needing Matt's input. Risks tracked here:
-
-- **Idle detection (real, not theoretical).** Drill's `_wait_for_ready` (`drill/engine.py:292–344`) does more than `quiescence_seconds + ready_pattern`. It does **busy-aware deadline extension** (`max_busy_seconds: 1800` in `backends/claude.yaml`), spinner+timer normalization so animated frames don't reset the quiescence timer, and a busy-pattern guard that prevents the actor from interrupting subagent work. Gauntlet's QA agent has none of this — it reads the screen and decides. A naive QA agent will interrupt 4-minute thinking blocks because every screen capture differs from the last (animated spinners, ticking timers). The mitigation has two stages, escalating only if the prior stage is empirically insufficient:
-
-  **Stage 1 (try first, no Gauntlet change):** per-target system-prompt augmentation via Gauntlet's `--project-prompt` flag. The harness writes a `harness/target_prompts/<target>.md` that includes target-specific busy patterns and explicit instructions ("Claude Code shows animated spinners with elapsed-time counters when thinking; do not type while these are visible; wait until you see `❯` at the start of a line"). The patterns lift from Drill's backend YAMLs. Phase 1 explicitly tests whether this is sufficient on the worktree scenario, which has long agent-thinking turns.
-
-  **Stage 2 (only if stage 1 proves flaky):** propose a Gauntlet feature — a `wait_for_quiescence` tool exposed by the TUI adapter that takes a regex and a quiescence-seconds parameter, with the busy-pattern normalization Drill does today. The QA agent decides *when* to call it; the deterministic logic owns *how* to detect quiescence. This is a real Gauntlet change, not a harness add — file a separate proposal and don't block migration on it.
-
-  We do **not** silently accept this risk. Phase 1's three-scenario coverage is chosen partly to surface this — `worktree-already-inside` typically involves long agent-think turns where interruption is most likely.
-- **Cost control.** Each Gauntlet-driven run uses two LLMs in tandem (Gauntlet's QA agent + the agent under test). Drill is similar (actor + agent + verifier). Net change probably neutral; flag if it spikes.
-- **Naive vs spec-aware as separate cards** vs same card with a posture flag: chosen separate cards (the wording difference *is* the test, want it author-controlled). Mild duplication is the cost.
-- **Per-target normalizer drift.** When Claude Code or Codex changes its session-log format, normalizers break silently. Mitigation: schema test per normalizer that asserts the common-schema invariants on a recorded fixture log.
-- **Evidence-dir layout coupling.** Gauntlet's `--out <dir>` flag accepts an explicit evidence directory; the harness sets it, so the path coupling is *one-way* (harness → Gauntlet) rather than two-way. Risk surfaces if a future Gauntlet release changes the file layout *inside* `--out` (e.g. renames `result.json`); mitigation is a smoke check at runner startup that verifies `result.json` exists after a known-good `gauntlet run` invocation.
-
-- **Empty-capture vacuity.** `drill/engine.py:169–178` fails a run when `tool_calls.jsonl` is empty (the session likely crashed). Without that guard, an empty-capture scenario would vacuously satisfy any `tool-not-called` assertion. The harness reproduces this with an automatic synthetic assertion: if the scenario declares any tool-related assertions and the captured `tool_calls.jsonl` is empty, the runner inserts a failing `00-non-empty-capture` result before composition. Composer rule (all-must-pass) then dominates correctly.
-
-- **Concurrent-run safety (none in Phase 1).** Two harness runs against the same target share `~/.claude/projects/` — snapshot-and-diff will attribute one run's logs to the other. Phase 1 is explicitly single-run-at-a-time. The runner writes a sentinel lockfile in the session-log dir's parent and refuses to start if one is already present. Document; revisit when sweep-N is built.
+- **Per-target normalizer drift.** When Claude Code or Codex changes its session-log format, normalizers break silently. Mitigation: schema test per normalizer against a recorded fixture log.
+- **Concurrent-run safety.** Multiple harness runs against the same target share `~/.claude/projects/` — snapshot-and-diff cross-contaminates. Phase 1 is single-run-at-a-time, enforced by a lockfile. Revisit when sweep-N is built.
+- **Empty-capture vacuity.** If the agent session crashes before any tool call, `tool_calls.jsonl` is empty and `tool-not-called`-style assertions pass vacuously. Drill guards against this (`drill/engine.py:169–178`); the harness reproduces the guard by injecting a synthetic failed assertion when capture is empty AND the scenario declares any tool-related assertions.
+- **PATH inheritance.** Assertions inherit the caller's PATH plus `bin/`. On a developer laptop this is fine; in CI it isn't. Phase 1 is not a CI workload, so this is a Phase 2+ concern, but documented now.
+- **QA agent skips the log when AC could be checked from screen alone.** Bash is available but the QA agent decides whether to use it. If a story's AC is screen-checkable AND the QA agent is satisfied by screen evidence, it may not consult the log — leaving "agent actually invoked the skill" unverified. Mitigation: write AC that *requires* log evidence ("evidence: a `Skill` tool invocation with `superpowers:writing-plans` in the agent's session log"). The `writing-gauntlet-stories` skill already encourages evidence-demanding ACs; this just applies it to log evidence.
 
 ## Citation / prior art
 
 Drill design: `docs/design.md` (Jesse, 2026-04-07).
-Gauntlet docs: `gauntlet/README.md`, `gauntlet/docs/`.
-Skill: `gauntlet/.claude/skills/writing-gauntlet-stories/SKILL.md` (calibration framing for AC).
+Gauntlet docs: `gauntlet/README.md`, `gauntlet/src/agent/prompts/`.
+Skill: `gauntlet/.claude/skills/writing-gauntlet-stories/SKILL.md`.
