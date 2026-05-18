@@ -193,16 +193,57 @@ def _populate_context_dir(
     contexts_dir: Path,
     target: str,
     run_dir: Path,
+    substitutions: dict[str, str] | None = None,
 ) -> None:
+    """Copy per-target HOWTOs into <run-dir>/.gauntlet/context/.
+
+    `substitutions` maps placeholders (e.g. `$HARNESS_AGENT_CWD`) to literal
+    values. Applied to every text file via plain string replace. This is the
+    harness workaround for tmux stripping arbitrary env vars from new
+    sessions: rather than relying on the QA agent's bash inheriting our env,
+    we burn the resolved values into the HOWTO at runtime so the agent reads
+    a concrete path instead of an env-var reference.
+
+    Phase 2 / upstream: Gauntlet should pass `-e VAR=value` to
+    `tmux new-session` so user env vars actually reach the agent's shell.
+    When that lands, this templating becomes unnecessary.
+    """
     src = contexts_dir / target
     dst = run_dir / ".gauntlet" / "context"
     dst.mkdir(parents=True, exist_ok=True)
-    if src.exists():
-        for entry in src.iterdir():
-            if entry.is_file():
-                shutil.copy2(entry, dst / entry.name)
-            elif entry.is_dir():
-                shutil.copytree(entry, dst / entry.name)
+    subs = substitutions or {}
+    if not src.exists():
+        return
+    for entry in src.iterdir():
+        if entry.is_file():
+            _copy_with_substitutions(entry, dst / entry.name, subs)
+        elif entry.is_dir():
+            _copytree_with_substitutions(entry, dst / entry.name, subs)
+
+
+def _copy_with_substitutions(
+    src: Path, dst: Path, subs: dict[str, str]
+) -> None:
+    try:
+        content = src.read_text()
+    except UnicodeDecodeError:
+        # Non-text fixture file (image, binary). Copy as-is.
+        shutil.copy2(src, dst)
+        return
+    for placeholder, value in subs.items():
+        content = content.replace(placeholder, value)
+    dst.write_text(content)
+
+
+def _copytree_with_substitutions(
+    src: Path, dst: Path, subs: dict[str, str]
+) -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in src.iterdir():
+        if entry.is_file():
+            _copy_with_substitutions(entry, dst / entry.name, subs)
+        elif entry.is_dir():
+            _copytree_with_substitutions(entry, dst / entry.name, subs)
 
 
 def run_scenario(
@@ -234,10 +275,7 @@ def run_scenario(
     run_dir = out_root / f"{scenario_dir.name}-{target}-{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3. Populate .gauntlet/context/ from harness/target_contexts/<target>/
-    _populate_context_dir(contexts_dir, target, run_dir)
-
-    # 4. Create temp workdir; pass HARNESS_REPO_ROOT to setup.sh via subprocess
+    # 3. Create temp workdir; pass HARNESS_REPO_ROOT to setup.sh via subprocess
     #    env so setup.sh helpers can find fixtures/template-repo without leaking
     #    the var into the parent process env.
     workdir = Path(tempfile.mkdtemp(prefix="harness-wd-"))
@@ -245,15 +283,31 @@ def run_scenario(
     workdir_kept = False
     try:
         with _single_run_lock(tcfg.session_log_dir):
-            # 5. Run setup.sh.
+            # 4. Run setup.sh.
             try:
                 run_setup(scenario_dir, workdir, env_extra=env_extra)
             except SetupError as e:
                 raise RunnerError(f"setup failed: {e}") from e
 
-            # 6. Resolve launch cwd (defaults to workdir; setup.sh may
+            # 5. Resolve launch cwd (defaults to workdir; setup.sh may
             #    override via .harness-launch-cwd sentinel).
             launch_cwd = _resolve_launch_cwd(workdir)
+
+            # 6. Populate .gauntlet/context/ with HOWTOs, substituting
+            #    $HARNESS_AGENT_CWD and $SUPERPOWERS_ROOT placeholders with
+            #    resolved absolute paths. tmux strips arbitrary env vars from
+            #    new sessions, so we burn the values into the HOWTO instead
+            #    of relying on env-var inheritance. See _populate_context_dir
+            #    docstring.
+            _populate_context_dir(
+                contexts_dir,
+                target,
+                run_dir,
+                substitutions={
+                    "$HARNESS_AGENT_CWD": str(launch_cwd),
+                    "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
+                },
+            )
 
             # 7. Snapshot session-log dir.
             snap = snapshot_dir(tcfg.session_log_dir, tcfg.session_log_glob)

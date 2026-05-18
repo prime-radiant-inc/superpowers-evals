@@ -1,7 +1,7 @@
 name: claude
 binary: claude
 session_log_dir: ~/.claude/projects
-session_log_glob: "**/session-*.jsonl"
+session_log_glob: "**/*.jsonl"
 normalizer: claude
 required_env:
   - ANTHROPIC_API_KEY

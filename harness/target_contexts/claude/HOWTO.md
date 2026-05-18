@@ -28,16 +28,16 @@ claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model o
 ## Observing what Claude is doing
 
 Claude writes its session log as JSONL files under
-`~/.claude/projects/<derived-path>/session-*.jsonl`. You can `tail` or
-`jq` this file to see what tools Claude has invoked. Useful when the
-screen is mid-render or you want ground truth on tool usage.
+`~/.claude/projects/<derived-path>/<UUID>.jsonl`. The `<derived-path>`
+is the launch cwd with every `/` replaced by `-`. The filename itself
+is a UUIDv4 (e.g. `7206a2c2-95f3-46e9-9bc8-8f6a863fcfc6.jsonl`).
 
-The exact subdirectory under `~/.claude/projects/` is derived from the
-cwd Claude was launched in. After launching, find the newest matching
-file:
+You can `tail` or `jq` this file to see what tools Claude has invoked —
+useful when the screen is mid-render or you want ground truth on tool
+usage. To find the file Claude just wrote:
 
 ```
-find ~/.claude/projects -name 'session-*.jsonl' -mmin -5 -print
+find ~/.claude/projects -name '*.jsonl' -mmin -5 -print
 ```
 
 ## Shutdown

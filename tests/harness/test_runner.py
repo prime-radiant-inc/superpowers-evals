@@ -291,6 +291,52 @@ class TestRunScenario:
         assert (ctx / "HOWTO.md").read_text() == "invoke `claude --foo`"
         assert (ctx / "extra.md").read_text() == "extra context"
 
+    def test_howto_substitutes_harness_agent_cwd_and_superpowers_root(
+        self, tmp_path, monkeypatch
+    ):
+        # tmux strips arbitrary env vars from new sessions, so we burn
+        # resolved values into the HOWTO at runtime instead.
+        monkeypatch.setenv("SUPERPOWERS_ROOT", "/path/to/sp")
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        contexts_dir = tmp_path / "contexts"
+        cd_claude = contexts_dir / "claude"
+        cd_claude.mkdir(parents=True)
+        (cd_claude / "HOWTO.md").write_text(
+            'cd "$HARNESS_AGENT_CWD"\n'
+            'claude --plugin-dir "$SUPERPOWERS_ROOT"\n'
+        )
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        rd = list(out_root.iterdir())[0]
+        ctx_content = (rd / ".gauntlet" / "context" / "HOWTO.md").read_text()
+        # SUPERPOWERS_ROOT resolved from env.
+        assert '--plugin-dir "/path/to/sp"' in ctx_content
+        # HARNESS_AGENT_CWD resolved from the actual launched workdir (which
+        # tempfile.mkdtemp produced under /tmp or platform equivalent).
+        assert "$HARNESS_AGENT_CWD" not in ctx_content
+        # The substituted value points at a real existing directory.
+        cd_line = [
+            ln for ln in ctx_content.splitlines() if ln.startswith("cd ")
+        ][0]
+        resolved = cd_line.split('"')[1]
+        assert Path(resolved).exists()
+
     def test_workdir_kept_on_failure(self, tmp_path):
         targets_dir = tmp_path / "targets"
         scenarios_dir = tmp_path / "scenarios"

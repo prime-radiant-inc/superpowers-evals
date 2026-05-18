@@ -16,6 +16,16 @@ migration. Reviewed before Phase 3 decommission.
   required tooling (jq, git, python) in the harness README before any CI
   integration.
 
+## Phase 1 first-run findings (2026-05-18)
+
+First parity attempt on `triggering-writing-plans` surfaced three real bugs the test suite missed because every test used `tmp_path` (always absolute) and `unittest.mock.patch` for the gauntlet subprocess:
+
+1. **Relative scenario_dir broke setup.sh subprocess** — `subprocess.run([str(p)], cwd=X)` resolves relative `p` against `X`, not the harness's cwd. Fixed: CLI resolves every path to absolute at the boundary. Regression test added in `test_cli.py`.
+2. **Claude session-log glob was stale** — `**/session-*.jsonl` matched nothing because current claude writes `<UUIDv4>.jsonl`. Drill's pattern was outdated. Fixed: glob is now `**/*.jsonl` in `harness/targets/claude.yaml`.
+3. **tmux strips arbitrary env vars from new sessions** — `HARNESS_AGENT_CWD` and `SUPERPOWERS_ROOT` exported by the harness never reached the QA agent's bash. The QA agent ran `cd "$HARNESS_AGENT_CWD"` against an empty value (no-op), so claude launched in gauntlet's scratch dir. Fixed: runner templates HOWTO files at runtime, substituting the placeholders with resolved absolute paths.
+
+The deeper Gauntlet-side fix for #3 is to have the TUI adapter pass `tmux new-session -e VAR=value` for each env var (or accept an allowlist). File upstream when convenient; current harness workaround works without Gauntlet changes.
+
 ## Code-review follow-ups from Phase 1 build
 
 Logged here for Phase 2 attention; none block Phase 1 ship.
