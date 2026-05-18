@@ -15,6 +15,14 @@ Superpowers skill compliance benchmark. Python 3.11+, managed with uv.
 - **compare**: `uv run drill compare <scenario>`
 - **list**: `uv run drill list`
 
+## Harness commands (Drill → Gauntlet migration)
+
+- **run scenario**: `uv run harness run harness/scenarios/<name> --target <name>`
+- **list**: `uv run harness list`
+
+Per-target config: `harness/targets/<name>.yaml`. Per-target HOWTO:
+`harness/target_contexts/<name>/`. Spec: `docs/gauntlet-migration.md`.
+
 ## Architecture
 
 - `drill/engine.py` — Tmux session orchestration. Creates workdir, runs setup helpers, drives actor/agent turns, collects results.

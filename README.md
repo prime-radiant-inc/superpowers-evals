@@ -57,6 +57,28 @@ trusted local environment:
 Results are written under `results/<scenario>/<backend>/<timestamp>/`, which is
 gitignored because those artifacts can contain sensitive transcripts.
 
+## Harness (Drill → Gauntlet migration in progress)
+
+`harness/` is a Python harness that wraps the
+[Gauntlet](../gauntlet) QA framework to reproduce Drill's eval-lab
+capabilities. Gauntlet drives the target (the agent under test) via
+its TUI adapter and reads both the screen and the agent's session log
+via bash. The harness handles per-scenario workdir setup and post-run
+deterministic assertions that regression-test the acceptance criteria.
+
+Phase 1 ports three representative scenarios; Phase 2 ports the rest;
+Phase 3 deletes Drill. See [`docs/gauntlet-migration.md`](docs/gauntlet-migration.md).
+
+Run a harness scenario:
+
+```bash
+uv run harness run harness/scenarios/triggering-writing-plans --target claude
+uv run harness list
+```
+
+Per-target config lives in `harness/targets/<name>.yaml`; per-target
+HOWTO context in `harness/target_contexts/<name>/`.
+
 ## Setup
 
 Install Python dependencies:
