@@ -1,0 +1,9 @@
+name: codex
+binary: codex
+session_log_dir: ~/.codex/sessions
+session_log_glob: "rollout-*.jsonl"
+normalizer: codex
+required_env:
+  - OPENAI_API_KEY
+  - SUPERPOWERS_ROOT
+max_time: 10m
