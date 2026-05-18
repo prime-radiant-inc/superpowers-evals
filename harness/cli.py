@@ -40,7 +40,16 @@ def run(
     bin_dir: Path,
 ) -> None:
     """Run one scenario against one target."""
+    # Resolve every path to absolute at the CLI boundary. subprocess.run
+    # with cwd= resolves relative executable paths against that cwd, not
+    # the harness's cwd — relative paths here would silently misresolve
+    # inside setup.sh and assertion script invocations.
+    scenario_dir = scenario_dir.resolve()
+    targets_dir = targets_dir.resolve()
+    contexts_dir = contexts_dir.resolve()
+    bin_dir = bin_dir.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
+    out_root = out_root.resolve()
     verdict = run_scenario(
         scenario_dir=scenario_dir,
         target=target,
