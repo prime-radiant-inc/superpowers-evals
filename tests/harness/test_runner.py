@@ -1,0 +1,344 @@
+# tests/harness/test_runner.py
+import stat
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+import yaml
+
+from harness.runner import RunnerError, run_scenario
+
+
+def _exec(path: Path, body: str) -> None:
+    path.write_text(body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _make_target(targets_dir: Path, name: str, session_log_dir: Path) -> None:
+    targets_dir.mkdir(parents=True, exist_ok=True)
+    (targets_dir / f"{name}.yaml").write_text(yaml.safe_dump({
+        "name": name,
+        "binary": "echo",  # we never actually run the real CLI in tests
+        "session_log_dir": str(session_log_dir),
+        "session_log_glob": "*.jsonl",
+        "normalizer": "claude",
+        "required_env": [],
+    }))
+
+
+def _make_scenario(
+    scenarios_dir: Path,
+    name: str,
+    *,
+    asserts_pass: bool = True,
+    compat: list[str] | None = None,
+    with_assertion: bool = True,
+) -> Path:
+    sd = scenarios_dir / name
+    sd.mkdir(parents=True)
+    (sd / "story.md").write_text("---\nid: x\ntitle: x\n---\nbody\n")
+    _exec(sd / "setup.sh", "#!/usr/bin/env bash\necho ok > marker\n")
+    if compat is not None:
+        (sd / "scenario.yaml").write_text(yaml.safe_dump({"compatible_targets": compat}))
+    a = sd / "assertions"
+    a.mkdir()
+    if with_assertion:
+        _exec(a / "01-x.sh", f"#!/usr/bin/env bash\nexit {'0' if asserts_pass else '1'}\n")
+    return sd
+
+
+def _stub_gauntlet_pass(*, run_dir, **kwargs):
+    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+    return "pass"
+
+
+def _stub_gauntlet_fail(*, run_dir, **kwargs):
+    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+    return "fail"
+
+
+class TestRunScenario:
+    def test_happy_path(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "session-logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_assertion=False)
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        (contexts_dir / "claude" / "HOWTO.md").write_text("invoke `claude`")
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            verdict = run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        assert verdict.final == "pass"
+        run_dirs = list(out_root.iterdir())
+        assert len(run_dirs) == 1
+        rd = run_dirs[0]
+        assert (rd / "verdict.json").exists()
+        assert (rd / "tool_calls.jsonl").exists()
+        assert (rd / ".gauntlet" / "context" / "HOWTO.md").read_text() == "invoke `claude`"
+
+    def test_assertion_fail_overrides_gauntlet_pass(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", asserts_pass=False)
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            verdict = run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        assert verdict.final == "fail"
+        assert verdict.assertions == "fail"
+
+    def test_setup_failure_aborts_before_gauntlet(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        _exec(sd / "setup.sh", "#!/usr/bin/env bash\nexit 9\n")
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet") as mock_g:
+            with pytest.raises(RunnerError, match="setup"):
+                run_scenario(
+                    scenario_dir=sd,
+                    target="claude",
+                    targets_dir=targets_dir,
+                    contexts_dir=contexts_dir,
+                    out_root=out_root,
+                    bin_dir=bin_dir,
+                )
+            mock_g.assert_not_called()
+
+    def test_incompatible_target_refused(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", compat=["codex"])
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet") as mock_g:
+            with pytest.raises(RunnerError, match="compat"):
+                run_scenario(
+                    scenario_dir=sd,
+                    target="claude",
+                    targets_dir=targets_dir,
+                    contexts_dir=contexts_dir,
+                    out_root=out_root,
+                    bin_dir=bin_dir,
+                )
+            mock_g.assert_not_called()
+
+    def test_empty_capture_synthetic_fires_whenever_assertions_exist(self, tmp_path):
+        # Drill parity (engine.py:169-178): the synthetic fires whenever the
+        # scenario has any assertions at all, not just tool-named ones.
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")  # default assertion 01-x.sh passes
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            verdict = run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        # Capture was empty (no real CLI run); scenario has at least one
+        # assertion; synthetic 00-non-empty-capture fires regardless of name.
+        assert verdict.final == "fail"
+        assert any(d["name"] == "00-non-empty-capture" for d in verdict.assertion_details)
+
+    def test_no_assertions_no_synthetic_even_when_capture_empty(self, tmp_path):
+        # A scenario with zero assertions doesn't get the synthetic — the
+        # guard only fires when something declared assertions to begin with.
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_assertion=False)
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            verdict = run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        assert verdict.final == "pass"
+        assert all(d["name"] != "00-non-empty-capture" for d in verdict.assertion_details)
+
+    def test_launch_cwd_sentinel_threads_through_to_gauntlet(self, tmp_path):
+        # When setup.sh writes .harness-launch-cwd, the runner reads it and
+        # passes that path as launch_cwd to invoke_gauntlet (which exports
+        # HARNESS_AGENT_CWD for the QA agent's bash to use).
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        _exec(
+            sd / "setup.sh",
+            '#!/usr/bin/env bash\nset -e\n'
+            'sib="${DRILL_WORKDIR}-sibling"\nmkdir -p "$sib"\n'
+            'echo "$sib" > "${DRILL_WORKDIR}/.harness-launch-cwd"\n',
+        )
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        captured: dict[str, Path] = {}
+
+        def stub(*, run_dir, launch_cwd, **kwargs):
+            captured["launch_cwd"] = launch_cwd
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return "pass"
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=stub):
+            run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        assert captured["launch_cwd"].name.endswith("-sibling")
+
+    def test_populate_context_dir_copies_target_contexts(self, tmp_path):
+        # Spot-check that target context HOWTOs land in <run-dir>/.gauntlet/context/.
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        contexts_dir = tmp_path / "contexts"
+        cd_claude = contexts_dir / "claude"
+        cd_claude.mkdir(parents=True)
+        (cd_claude / "HOWTO.md").write_text("invoke `claude --foo`")
+        (cd_claude / "extra.md").write_text("extra context")
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        rd = list(out_root.iterdir())[0]
+        ctx = rd / ".gauntlet" / "context"
+        assert (ctx / "HOWTO.md").read_text() == "invoke `claude --foo`"
+        assert (ctx / "extra.md").read_text() == "extra context"
+
+    def test_workdir_kept_on_failure(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", asserts_pass=False)
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            verdict = run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
+        assert verdict.final == "fail"
+        rd = list(out_root.iterdir())[0]
+        wd_path = Path((rd / "workdir-path.txt").read_text().strip())
+        assert wd_path.exists()
+
+    def test_lockfile_blocks_concurrent_runs(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        # Pre-create the lockfile.
+        (session_log_dir.parent / ".harness-run.lock").write_text("pid=999\n")
+
+        with patch("harness.runner.invoke_gauntlet"), pytest.raises(RunnerError, match="lock"):
+            run_scenario(
+                scenario_dir=sd,
+                target="claude",
+                targets_dir=targets_dir,
+                contexts_dir=contexts_dir,
+                out_root=out_root,
+                bin_dir=bin_dir,
+            )
