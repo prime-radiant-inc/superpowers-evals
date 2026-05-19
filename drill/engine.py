@@ -176,6 +176,16 @@ class Engine:
         (output_dir / "session.log").write_text(session_log)
         (output_dir / "filesystem.json").write_text(filesystem_json)
         (output_dir / "tool_calls.jsonl").write_text(tool_calls_jsonl)
+        # Preserve the raw agent session log(s) alongside the verdict so a
+        # post-mortem can inspect exactly what the agent saw — system prompt,
+        # user messages, tool inputs/outputs, assistant text — not just the
+        # normalized tool calls. Sweep wipes the agent-config dir, so without
+        # this copy the source is gone by the time anyone debugs.
+        if new_log_files:
+            raw_dir = output_dir / "raw-session"
+            raw_dir.mkdir(exist_ok=True)
+            for src in new_log_files:
+                shutil.copy(src, raw_dir / src.name)
 
         # Run deterministic assertions
         assertion_results: list[AssertionResult] = []
