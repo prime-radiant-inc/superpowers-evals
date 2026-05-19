@@ -1,6 +1,7 @@
 name: claude
 binary: claude
-session_log_dir: ~/.claude/projects
+agent_config_env: CLAUDE_CONFIG_DIR
+session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"
 session_log_glob: "**/*.jsonl"
 normalizer: claude
 required_env:

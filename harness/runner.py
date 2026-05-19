@@ -31,7 +31,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from harness.assertions import AssertionResult, run_assertions
@@ -43,41 +42,51 @@ from harness.scenario_config import (
     load_scenario_config,
 )
 from harness.setup_step import SetupError, run_setup
-from harness.target_config import load_target_config
+from harness.target_config import TargetConfig, load_target_config
 
-LOCK_FILENAME = ".harness-run.lock"
 LAUNCH_CWD_SENTINEL = ".harness-launch-cwd"
+AGENT_CONFIG_SUBDIR = "agent-config"
 
 
 class RunnerError(RuntimeError):
     """Raised on non-recoverable errors before verdict composition."""
 
 
-@contextmanager
-def _single_run_lock(session_log_dir: Path):
-    """Enforce one-harness-run-at-a-time per session-log root.
+def _seed_agent_config_dir(
+    target: TargetConfig,
+    skeleton_root: Path,
+    dest: Path,
+    workdir: Path,
+) -> None:
+    """Allocate a fresh per-run agent-config dir.
 
-    Refuse loudly if locked. Refuse loudly if the parent dir doesn't exist
-    (silent fallback to $HOME would let a typo'd session_log_dir leak a lock
-    into the user's home directory).
+    If skeleton_root/skeleton-<target>-home/ exists, copy it; otherwise
+    mkdir empty. For claude, then inject hasTrustDialogAccepted for the
+    workdir's canonical path (claude keys per-project trust by
+    process.cwd(), which is symlink-resolved on macOS) so the workspace-
+    trust dialog stays off-screen. The claude skeleton itself carries
+    onboarding / API-key dialog-bypass state (see
+    bin/refresh-skeleton-claude-home).
+
+    Codex's plugin-trust ceremony happens per-scenario via setup.sh, not
+    via a shared skeleton.
     """
-    parent = session_log_dir.parent
-    if not parent.exists():
-        raise RunnerError(
-            f"session_log_dir parent does not exist: {parent}. "
-            "Refusing to fall back to $HOME — fix the target config."
-        )
-    lock_path = parent / LOCK_FILENAME
-    if lock_path.exists():
-        raise RunnerError(
-            f"Another harness run appears active (lock at {lock_path}). "
-            "Remove the lockfile if you're sure no other run is in progress."
-        )
-    try:
-        lock_path.write_text(f"pid={os.getpid()}\nstarted={time.time()}\n")
-        yield
-    finally:
-        lock_path.unlink(missing_ok=True)
+    skeleton = skeleton_root / f"skeleton-{target.name}-home"
+    seeded = skeleton.exists()
+    if seeded:
+        shutil.copytree(skeleton, dest)
+    else:
+        dest.mkdir(parents=True)
+    if target.name == "claude" and seeded:
+        config_path = dest / ".claude.json"
+        config = json.loads(config_path.read_text())
+        config.setdefault("projects", {})[str(workdir.resolve())] = {
+            "hasTrustDialogAccepted": True,
+            "projectOnboardingSeenCount": 1,
+            "hasClaudeMdExternalIncludesApproved": True,
+            "hasClaudeMdExternalIncludesWarningShown": True,
+        }
+        config_path.write_text(json.dumps(config))
 
 
 def _resolve_launch_cwd(workdir: Path) -> Path:
@@ -135,12 +144,19 @@ def invoke_gauntlet(
     launch_cwd: Path,
     run_dir: Path,
     max_time: str | None,
+    extra_env: dict[str, str] | None = None,
 ) -> GauntletStatus:
     """Subprocess-invoke `gauntlet run`. Returns the verdict status string.
 
     Sets HARNESS_AGENT_CWD in the env so the QA agent's bash (which starts
     in <run-dir>/scratch, NOT in our launch_cwd) can `cd` there before
     invoking the target. Per-target HOWTO files instruct the agent to do so.
+
+    extra_env (per-target config-dir vars like CLAUDE_CONFIG_DIR) is also
+    plumbed in. Note that today tmux strips arbitrary env from new sessions
+    (see _populate_context_dir docstring), so the agent reads the value
+    from the substituted HOWTO rather than from inheritance — but the env
+    is set here too for belt-and-suspenders + future Gauntlet `-e` support.
     """
     cmd = [
         "gauntlet", "run", str(story_path),
@@ -154,6 +170,7 @@ def invoke_gauntlet(
     env = {
         **os.environ,
         "HARNESS_AGENT_CWD": str(launch_cwd),
+        **(extra_env or {}),
     }
     # --silent prints runId on stderr; we don't disambiguate by runId in
     # Phase 1 (one invocation per run-dir = at most one runId subdirectory).
@@ -254,6 +271,7 @@ def run_scenario(
     contexts_dir: Path,
     out_root: Path,
     bin_dir: Path,
+    skeleton_root: Path | None = None,
 ) -> FinalVerdict:
     # 1. Parse target + (optional) scenario configs; check compatibility.
     target_path = targets_dir / f"{target}.yaml"
@@ -275,92 +293,102 @@ def run_scenario(
     run_dir = out_root / f"{scenario_dir.name}-{target}-{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3. Create temp workdir; pass HARNESS_REPO_ROOT to setup.sh via subprocess
-    #    env so setup.sh helpers can find fixtures/template-repo without leaking
-    #    the var into the parent process env.
+    # 3. Create temp workdir + per-run agent-config dir. agent_config_dir
+    #    lives inside run_dir so it persists with the rest of the evidence
+    #    on failure; resolved session_log_dir points at its log subpath.
     workdir = Path(tempfile.mkdtemp(prefix="harness-wd-"))
+    agent_config_dir = run_dir / AGENT_CONFIG_SUBDIR
+    _seed_agent_config_dir(
+        tcfg,
+        skeleton_root=skeleton_root or (_harness_repo_root() / "fixtures"),
+        dest=agent_config_dir,
+        workdir=workdir,
+    )
+    session_log_dir = tcfg.resolve_session_log_dir(agent_config_dir)
     env_extra = {"HARNESS_REPO_ROOT": str(_harness_repo_root())}
     workdir_kept = False
     try:
-        with _single_run_lock(tcfg.session_log_dir):
-            # 4. Run setup.sh.
-            try:
-                run_setup(scenario_dir, workdir, env_extra=env_extra)
-            except SetupError as e:
-                raise RunnerError(f"setup failed: {e}") from e
+        # 4. Run setup.sh.
+        try:
+            run_setup(scenario_dir, workdir, env_extra=env_extra)
+        except SetupError as e:
+            raise RunnerError(f"setup failed: {e}") from e
 
-            # 5. Resolve launch cwd (defaults to workdir; setup.sh may
-            #    override via .harness-launch-cwd sentinel).
-            launch_cwd = _resolve_launch_cwd(workdir)
+        # 5. Resolve launch cwd (defaults to workdir; setup.sh may
+        #    override via .harness-launch-cwd sentinel).
+        launch_cwd = _resolve_launch_cwd(workdir)
 
-            # 6. Populate .gauntlet/context/ with HOWTOs, substituting
-            #    $HARNESS_AGENT_CWD and $SUPERPOWERS_ROOT placeholders with
-            #    resolved absolute paths. tmux strips arbitrary env vars from
-            #    new sessions, so we burn the values into the HOWTO instead
-            #    of relying on env-var inheritance. See _populate_context_dir
-            #    docstring.
-            _populate_context_dir(
-                contexts_dir,
-                target,
-                run_dir,
-                substitutions={
-                    "$HARNESS_AGENT_CWD": str(launch_cwd),
-                    "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
-                },
-            )
+        # 6. Populate .gauntlet/context/ with HOWTOs, substituting
+        #    $HARNESS_AGENT_CWD, $SUPERPOWERS_ROOT, and the per-target
+        #    agent-config env var (e.g. $CLAUDE_CONFIG_DIR) with resolved
+        #    absolute paths. tmux strips arbitrary env vars from new
+        #    sessions, so we burn the values into the HOWTO instead of
+        #    relying on env-var inheritance. See _populate_context_dir
+        #    docstring.
+        _populate_context_dir(
+            contexts_dir,
+            target,
+            run_dir,
+            substitutions={
+                "$HARNESS_AGENT_CWD": str(launch_cwd),
+                "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
+                f"${tcfg.agent_config_env}": str(agent_config_dir),
+            },
+        )
 
-            # 7. Snapshot session-log dir.
-            snap = snapshot_dir(tcfg.session_log_dir, tcfg.session_log_glob)
+        # 7. Snapshot session-log dir.
+        snap = snapshot_dir(session_log_dir, tcfg.session_log_glob)
 
-            # 8. Invoke gauntlet.
-            gauntlet_status = invoke_gauntlet(
-                story_path=story_path,
-                target_binary=tcfg.binary,
-                launch_cwd=launch_cwd,
-                run_dir=run_dir,
-                max_time=tcfg.max_time,
-            )
+        # 8. Invoke gauntlet.
+        gauntlet_status = invoke_gauntlet(
+            story_path=story_path,
+            target_binary=tcfg.binary,
+            launch_cwd=launch_cwd,
+            run_dir=run_dir,
+            max_time=tcfg.max_time,
+            extra_env={tcfg.agent_config_env: str(agent_config_dir)},
+        )
 
-            # 9. Capture + normalize logs.
-            tool_calls_path = capture_tool_calls(
-                log_dir=tcfg.session_log_dir,
-                log_glob=tcfg.session_log_glob,
-                snapshot=snap,
-                normalizer=tcfg.normalizer,
-                run_dir=run_dir,
-                workdir=workdir,
-            )
+        # 9. Capture + normalize logs.
+        tool_calls_path = capture_tool_calls(
+            log_dir=session_log_dir,
+            log_glob=tcfg.session_log_glob,
+            snapshot=snap,
+            normalizer=tcfg.normalizer,
+            run_dir=run_dir,
+            workdir=workdir,
+        )
 
-            # 10. Run scenario assertions.
-            results, _ = run_assertions(
-                assertions_dir=scenario_dir / "assertions",
-                run_dir=run_dir,
-                workdir=workdir,
-                bin_dir=bin_dir,
-            )
+        # 10. Run scenario assertions.
+        results, _ = run_assertions(
+            assertions_dir=scenario_dir / "assertions",
+            run_dir=run_dir,
+            workdir=workdir,
+            bin_dir=bin_dir,
+        )
 
-            # 11. Empty-capture parity guard (Drill engine.py:169-178).
-            if _has_any_assertions(scenario_dir / "assertions"):
-                synth = _empty_capture_synthetic(tool_calls_path)
-                if synth is not None:
-                    results = [synth, *results]
+        # 11. Empty-capture parity guard (Drill engine.py:169-178).
+        if _has_any_assertions(scenario_dir / "assertions"):
+            synth = _empty_capture_synthetic(tool_calls_path)
+            if synth is not None:
+                results = [synth, *results]
 
-            # 12. Compose final verdict.
-            verdict = compose(
-                gauntlet_status=gauntlet_status,
-                assertion_results=results,
-            )
+        # 12. Compose final verdict.
+        verdict = compose(
+            gauntlet_status=gauntlet_status,
+            assertion_results=results,
+        )
 
-            # 13. Persist.
-            (run_dir / "verdict.json").write_text(
-                json.dumps(verdict.to_dict(), indent=2)
-            )
+        # 13. Persist.
+        (run_dir / "verdict.json").write_text(
+            json.dumps(verdict.to_dict(), indent=2)
+        )
 
-            # 14. Workdir disposition.
-            if verdict.final != "pass":
-                workdir_kept = True
-                (run_dir / "workdir-path.txt").write_text(str(workdir))
-            return verdict
+        # 14. Workdir disposition.
+        if verdict.final != "pass":
+            workdir_kept = True
+            (run_dir / "workdir-path.txt").write_text(str(workdir))
+        return verdict
     finally:
         if not workdir_kept:
             shutil.rmtree(workdir, ignore_errors=True)

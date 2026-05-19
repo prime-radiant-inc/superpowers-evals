@@ -19,8 +19,12 @@ cd "$HARNESS_AGENT_CWD"
 After `cd`, run:
 
 ```
-codex --dangerously-bypass-approvals-and-sandbox
+CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
 ```
+
+The `CODEX_HOME` value is burned into this HOWTO at runtime — it points
+at a per-run isolated config dir so no user-installed Codex plugins or
+prior sessions affect this run.
 
 For superpowers tool-mapping scenarios that use the legacy `.agents`
 symlink path, the setup step creates `.agents/skills/superpowers/` in
@@ -29,11 +33,12 @@ the workdir before you start.
 ## Observing what Codex is doing
 
 Codex writes rollout logs as JSONL files under
-`~/.codex/sessions/rollout-*.jsonl`. Multiple Codex sessions across all
-projects share this directory. Find the newest file:
+`$CODEX_HOME/sessions/rollout-*.jsonl`. Because this run has its own
+isolated `CODEX_HOME`, anything in there is from this session. Find the
+newest file:
 
 ```
-ls -t ~/.codex/sessions/rollout-*.jsonl | head -1
+ls -t "$CODEX_HOME/sessions"/rollout-*.jsonl | head -1
 ```
 
 `tail` or `jq` it to see Codex's tool invocations.

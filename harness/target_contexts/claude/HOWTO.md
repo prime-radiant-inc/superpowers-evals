@@ -20,24 +20,32 @@ It points at the git repo the setup step prepared.
 After `cd`, run:
 
 ```
-claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus
+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus
 ```
 
-`$SUPERPOWERS_ROOT` is set in the inherited environment.
+The `CLAUDE_CONFIG_DIR` and `SUPERPOWERS_ROOT` values are burned into
+this HOWTO at runtime by the harness — they look like env-var refs but
+the harness has already substituted absolute paths. tmux strips arbitrary
+env from new sessions, which is why we don't rely on inheritance.
+
+`CLAUDE_CONFIG_DIR` points at a per-run isolated `.claude` dir (seeded
+with dialog-bypass state) so no user-installed plugins or projects from
+the host machine affect this run.
 
 ## Observing what Claude is doing
 
 Claude writes its session log as JSONL files under
-`~/.claude/projects/<derived-path>/<UUID>.jsonl`. The `<derived-path>`
-is the launch cwd with every `/` replaced by `-`. The filename itself
-is a UUIDv4 (e.g. `7206a2c2-95f3-46e9-9bc8-8f6a863fcfc6.jsonl`).
+`$CLAUDE_CONFIG_DIR/projects/<derived-path>/<UUID>.jsonl`. The
+`<derived-path>` is the launch cwd with every `/` replaced by `-`. The
+filename itself is a UUIDv4 (e.g.
+`7206a2c2-95f3-46e9-9bc8-8f6a863fcfc6.jsonl`).
 
 You can `tail` or `jq` this file to see what tools Claude has invoked —
 useful when the screen is mid-render or you want ground truth on tool
 usage. To find the file Claude just wrote:
 
 ```
-find ~/.claude/projects -name '*.jsonl' -mmin -5 -print
+find "$CLAUDE_CONFIG_DIR/projects" -name '*.jsonl' -mmin -5 -print
 ```
 
 ## Shutdown

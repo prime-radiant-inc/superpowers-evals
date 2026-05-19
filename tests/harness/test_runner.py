@@ -1,4 +1,5 @@
 # tests/harness/test_runner.py
+import json
 import stat
 from pathlib import Path
 from unittest.mock import patch
@@ -6,7 +7,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from harness.runner import RunnerError, run_scenario
+from harness.runner import RunnerError, _seed_agent_config_dir, run_scenario
+from harness.target_config import TargetConfig
 
 
 def _exec(path: Path, body: str) -> None:
@@ -19,11 +21,70 @@ def _make_target(targets_dir: Path, name: str, session_log_dir: Path) -> None:
     (targets_dir / f"{name}.yaml").write_text(yaml.safe_dump({
         "name": name,
         "binary": "echo",  # we never actually run the real CLI in tests
+        "agent_config_env": "CLAUDE_CONFIG_DIR",
         "session_log_dir": str(session_log_dir),
         "session_log_glob": "*.jsonl",
         "normalizer": "claude",
         "required_env": [],
     }))
+
+
+# Tests pass an empty dir as skeleton_root so _seed_agent_config_dir falls
+# through to mkdir-empty without requiring the production skeleton fixture.
+def _empty_skeleton(tmp_path: Path) -> Path:
+    p = tmp_path / "empty-fixtures"
+    p.mkdir(exist_ok=True)
+    return p
+
+
+def _tcfg(name: str = "claude") -> TargetConfig:
+    return TargetConfig(
+        name=name,
+        binary="echo",
+        agent_config_env="CLAUDE_CONFIG_DIR",
+        session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
+        session_log_glob="*.jsonl",
+        normalizer="claude",
+        required_env=(),
+        max_time=None,
+    )
+
+
+class TestSeedAgentConfigDir:
+    def test_mkdir_empty_when_no_skeleton(self, tmp_path):
+        dest = tmp_path / "agent-config"
+        _seed_agent_config_dir(_tcfg("anything"), tmp_path / "no-fixtures", dest, tmp_path)
+        assert dest.is_dir()
+        assert list(dest.iterdir()) == []
+
+    def test_copies_skeleton_and_injects_workdir_trust_for_claude(self, tmp_path):
+        skel = tmp_path / "skeleton-claude-home"
+        skel.mkdir()
+        (skel / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True}))
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        dest = tmp_path / "agent-config"
+
+        _seed_agent_config_dir(_tcfg("claude"), tmp_path, dest, workdir)
+
+        cfg = json.loads((dest / ".claude.json").read_text())
+        assert cfg["hasCompletedOnboarding"] is True
+        # Per-project trust keyed by canonical (resolved) workdir path.
+        entry = cfg["projects"][str(workdir.resolve())]
+        assert entry["hasTrustDialogAccepted"] is True
+
+    def test_non_claude_target_skips_trust_injection(self, tmp_path):
+        # Codex has its own plugin-trust mechanism (per-scenario setup.sh);
+        # the runner doesn't mutate codex's config.
+        skel = tmp_path / "skeleton-codex-home"
+        skel.mkdir()
+        (skel / "config.toml").write_text("[features]\nplugins = true\n")
+        dest = tmp_path / "agent-config"
+
+        _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "workdir")
+
+        assert (dest / "config.toml").exists()
+        assert not (dest / ".claude.json").exists()
 
 
 def _make_scenario(
@@ -80,6 +141,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "pass"
         run_dirs = list(out_root.iterdir())
@@ -110,6 +172,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "fail"
         assert verdict.assertions == "fail"
@@ -137,6 +200,7 @@ class TestRunScenario:
                     contexts_dir=contexts_dir,
                     out_root=out_root,
                     bin_dir=bin_dir,
+                    skeleton_root=_empty_skeleton(tmp_path),
                 )
             mock_g.assert_not_called()
 
@@ -162,6 +226,7 @@ class TestRunScenario:
                     contexts_dir=contexts_dir,
                     out_root=out_root,
                     bin_dir=bin_dir,
+                    skeleton_root=_empty_skeleton(tmp_path),
                 )
             mock_g.assert_not_called()
 
@@ -188,6 +253,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         # Capture was empty (no real CLI run); scenario has at least one
         # assertion; synthetic 00-non-empty-capture fires regardless of name.
@@ -217,6 +283,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "pass"
         assert all(d["name"] != "00-non-empty-capture" for d in verdict.assertion_details)
@@ -257,6 +324,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         assert captured["launch_cwd"].name.endswith("-sibling")
 
@@ -285,6 +353,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         rd = list(out_root.iterdir())[0]
         ctx = rd / ".gauntlet" / "context"
@@ -322,6 +391,7 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         rd = list(out_root.iterdir())[0]
         ctx_content = (rd / ".gauntlet" / "context" / "HOWTO.md").read_text()
@@ -358,33 +428,10 @@ class TestRunScenario:
                 contexts_dir=contexts_dir,
                 out_root=out_root,
                 bin_dir=bin_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "fail"
         rd = list(out_root.iterdir())[0]
         wd_path = Path((rd / "workdir-path.txt").read_text().strip())
         assert wd_path.exists()
 
-    def test_lockfile_blocks_concurrent_runs(self, tmp_path):
-        targets_dir = tmp_path / "targets"
-        scenarios_dir = tmp_path / "scenarios"
-        session_log_dir = tmp_path / "logs"
-        session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x")
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
-        out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        # Pre-create the lockfile.
-        (session_log_dir.parent / ".harness-run.lock").write_text("pid=999\n")
-
-        with patch("harness.runner.invoke_gauntlet"), pytest.raises(RunnerError, match="lock"):
-            run_scenario(
-                scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
-                out_root=out_root,
-                bin_dir=bin_dir,
-            )

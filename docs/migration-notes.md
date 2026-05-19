@@ -30,12 +30,12 @@ The deeper Gauntlet-side fix for #3 is to have the TUI adapter pass `tmux new-se
 
 Logged here for Phase 2 attention; none block Phase 1 ship.
 
-- **I-2 (Faraday on T10): stale lockfile recovery.** If a harness process
-  is killed mid-run, the lockfile survives and blocks every subsequent run.
-  The lockfile content already includes `pid=…` — adding `os.kill(pid, 0)`
-  to detect a dead PID and self-clean would close this gap, or switching to
-  `fcntl.flock` for OS-released locks. Phase 1 surfaces this with a loud
-  error message instructing the operator to remove the file manually.
+- ~~**I-2 (Faraday on T10): stale lockfile recovery.**~~ **Resolved
+  2026-05-19.** The lockfile was guarding a shared `~/.claude/projects`
+  log root against cross-run snapshot/diff contamination. The
+  CLAUDE_CONFIG_DIR / CODEX_HOME isolation gives each run its own
+  config-dir tree (under `<run-dir>/agent-config/`), so the lock no
+  longer has a target to protect. Dropped along with `_single_run_lock`.
 - **I-3 (Faraday on T10): same-second run dir collision.** `run_dir =
   out_root / f"{scenario}-{target}-{timestamp}"` with second granularity
   and `exist_ok=True`. Two runs within the same second would silently share

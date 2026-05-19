@@ -1,6 +1,7 @@
 name: codex
 binary: codex
-session_log_dir: ~/.codex/sessions
+agent_config_env: CODEX_HOME
+session_log_dir: "${CODEX_HOME}/sessions"
 session_log_glob: "rollout-*.jsonl"
 normalizer: codex
 required_env:
