@@ -23,13 +23,17 @@ PLUGIN="$DRILL_CODEX_HOME/plugins/cache/debug/superpowers/local"
 
 test -f "$CONFIG" || fail "missing Codex config at $CONFIG"
 test -f "$PLUGIN/.codex-plugin/plugin.json" || fail "missing staged Codex plugin manifest"
-test -f "$PLUGIN/hooks/hooks-codex.json" || fail "missing staged Codex hook manifest"
+# Check the run-hook.cmd wrapper, not the hook-config JSON: Superpowers
+# renamed hooks-codex.json to hooks.json; run-hook.cmd is the stable part.
+test -f "$PLUGIN/hooks/run-hook.cmd" || fail "missing staged Codex hook runner"
 test ! -e "$WORKDIR/.agents/skills/superpowers" || fail "legacy .agents skill symlink exists"
 
 grep -Fq "plugin_hooks = true" "$CONFIG" || fail "plugin_hooks feature not enabled"
 grep -Fq '[plugins."superpowers@debug"]' "$CONFIG" || fail "debug Superpowers plugin not enabled"
-grep -Fq '[hooks.state."superpowers@debug:hooks/hooks-codex.json:session_start:0:0"]' \
-    "$CONFIG" || fail "Superpowers Codex hook trust state missing"
+# Match the trust-state key's stable shape — don't pin the config-file
+# segment of the key, which moved from hooks-codex.json to hooks.json.
+grep -Eq 'hooks\.state\."superpowers@debug:[^"]*session_start' "$CONFIG" \
+    || fail "Superpowers Codex hook trust state missing"
 grep -Eq 'trusted_hash = "sha256:[a-f0-9]+"' "$CONFIG" || fail "trusted hook hash missing"
 
 pass
