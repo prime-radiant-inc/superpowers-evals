@@ -239,8 +239,16 @@ def _select_codex_superpowers_hook(response: dict[str, Any]) -> dict[str, str]:
         raise RuntimeError(f"Expected one Superpowers Codex SessionStart hook, found {len(hooks)}")
 
     hook = hooks[0]
-    if hook.get("matcher") != "startup|resume|clear":
-        raise RuntimeError(f"Unexpected Superpowers Codex hook matcher: {hook.get('matcher')}")
+    # The hook must fire on session startup for the bootstrap scenario to
+    # exercise anything. Don't pin the full matcher set — Superpowers
+    # revises which other lifecycle events it hooks (was startup|resume|
+    # clear, later startup|clear|compact); only `startup` is load-bearing.
+    matcher = hook.get("matcher") or ""
+    if "startup" not in matcher.split("|"):
+        raise RuntimeError(
+            f"Superpowers Codex hook does not fire on session startup "
+            f"(matcher: {matcher!r})"
+        )
     command = hook.get("command") or ""
     if "hooks/run-hook.cmd" not in command or "session-start-codex" not in command:
         raise RuntimeError(
