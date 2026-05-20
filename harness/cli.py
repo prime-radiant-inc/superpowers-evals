@@ -1,4 +1,4 @@
-"""click CLI: harness run, harness list."""
+"""click CLI: harness run, list, new, check."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from harness.runner import run_scenario
+from harness.scaffold import ScaffoldError, check_scenario, new_scenario
 
 # TODO(phase-3): when drill is decommissioned, scenarios move to top-level
 # scenarios/ and target_contexts/targets/ may relocate.
@@ -77,3 +78,57 @@ def list_scenarios(scenarios_root: Path) -> None:
     )
     for name in found:
         click.echo(name)
+
+
+@main.command("new")
+@click.argument("name")
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def new(name: str, scenarios_root: Path) -> None:
+    """Scaffold a new scenario skeleton (story.md, setup.sh, preflight.sh)."""
+    try:
+        scenario_dir = new_scenario(scenarios_root, name)
+    except ScaffoldError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"created {scenario_dir}/")
+    click.echo("  story.md, setup.sh, preflight.sh, assertions/ — fill in the TODOs")
+
+
+@main.command("check")
+@click.argument("name", required=False)
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+def check(name: str | None, scenarios_root: Path) -> None:
+    """Validate scenario structure (one scenario, or all if NAME omitted)."""
+    if name:
+        targets = [scenarios_root / name]
+        if not targets[0].is_dir():
+            click.echo(f"error: no scenario {name!r} under {scenarios_root}", err=True)
+            sys.exit(1)
+    else:
+        targets = sorted(
+            d for d in scenarios_root.iterdir()
+            if d.is_dir() and (d / "story.md").exists()
+        )
+
+    failed = 0
+    for scenario_dir in targets:
+        problems = check_scenario(scenario_dir)
+        if problems:
+            failed += 1
+            click.echo(f"FAIL {scenario_dir.name}")
+            for problem in problems:
+                click.echo(f"  - {problem}")
+        else:
+            click.echo(f"ok   {scenario_dir.name}")
+
+    if failed:
+        click.echo(f"\n{failed} scenario(s) failed validation", err=True)
+        sys.exit(1)
