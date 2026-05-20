@@ -26,6 +26,33 @@ First parity attempt on `triggering-writing-plans` surfaced three real bugs the 
 
 The deeper Gauntlet-side fix for #3 is to have the TUI adapter pass `tmux new-session -e VAR=value` for each env var (or accept an allowlist). File upstream when convenient; current harness workaround works without Gauntlet changes.
 
+### #3 root cause resolved (2026-05-20)
+
+The "tmux strips env vars" framing in #3 was incomplete. The real
+mechanism: `tmux new-session` attaches to an already-running shared
+tmux server, and the new session inherits the *server's* environment,
+not the calling process's. When the server was started by some
+unrelated process, no per-run var reaches the agent. This bit Drill
+hard once `CLAUDE_CONFIG_DIR` isolation landed (user plugins like
+Bobiverse leaked in; logs written outside Drill's view) and then
+`ANTHROPIC_API_KEY` (agent booted unauthenticated) — same root cause
+in Harness via Gauntlet's TUI adapter.
+
+Fixed properly in both:
+- **Drill** — each `TmuxSession` runs on a private `-L <socket>`
+  server, started by Drill so it inherits Drill's full environment.
+- **Gauntlet** — same change in the TUI adapter (branch
+  `matt/tui-private-tmux-server` in the gauntlet repo). A private
+  server propagates *everything* with no enumeration — strictly better
+  than the `-e VAR=value` allowlist idea above.
+
+Consequence: the HOWTO runtime-templating workaround for
+`$HARNESS_AGENT_CWD` / `$SUPERPOWERS_ROOT` / `$CLAUDE_CONFIG_DIR` is
+now redundant — those vars reach the QA agent's shell by inheritance
+once the Gauntlet branch is merged. The templating is harmless and
+left in place; simplifying it (and the substitution map in
+`runner._populate_context_dir`) is a deferred cleanup, not urgent.
+
 ## Code-review follow-ups from Phase 1 build
 
 Logged here for Phase 2 attention; none block Phase 1 ship.
