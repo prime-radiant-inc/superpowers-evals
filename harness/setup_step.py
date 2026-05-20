@@ -1,7 +1,7 @@
 """Run a scenario's setup.sh against a temp workdir.
 
-DRILL_WORKDIR is exported (matching Drill's convention) so existing helper
-shell scripts continue to work without rename.
+HARNESS_WORKDIR is exported into setup.sh's environment so the script
+(and the setup helpers it invokes) can locate the workdir.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def run_setup(
     setup_path = scenario_dir / "setup.sh"
     if not setup_path.exists():
         return
-    env = {**os.environ, "DRILL_WORKDIR": str(workdir), **(env_extra or {})}
+    env = {**os.environ, "HARNESS_WORKDIR": str(workdir), **(env_extra or {})}
     proc = subprocess.run(
         [str(setup_path)],
         cwd=workdir,

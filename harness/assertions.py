@@ -41,7 +41,7 @@ def run_assertions(
     )
     env = {
         **os.environ,
-        "DRILL_WORKDIR": str(workdir),
+        "HARNESS_WORKDIR": str(workdir),
         "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
     }
     results: list[AssertionResult] = []

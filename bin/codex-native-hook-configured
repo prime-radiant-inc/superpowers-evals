@@ -12,8 +12,11 @@ pass() {
     exit 0
 }
 
+# Shared between Drill and Harness: accept either framework's workdir var.
+WORKDIR="${HARNESS_WORKDIR:-${DRILL_WORKDIR:-}}"
+
 test -n "${DRILL_CODEX_HOME:-}" || fail "DRILL_CODEX_HOME is not set"
-test -n "${DRILL_WORKDIR:-}" || fail "DRILL_WORKDIR is not set"
+test -n "$WORKDIR" || fail "neither HARNESS_WORKDIR nor DRILL_WORKDIR is set"
 
 CONFIG="$DRILL_CODEX_HOME/config.toml"
 PLUGIN="$DRILL_CODEX_HOME/plugins/cache/debug/superpowers/local"
@@ -21,7 +24,7 @@ PLUGIN="$DRILL_CODEX_HOME/plugins/cache/debug/superpowers/local"
 test -f "$CONFIG" || fail "missing Codex config at $CONFIG"
 test -f "$PLUGIN/.codex-plugin/plugin.json" || fail "missing staged Codex plugin manifest"
 test -f "$PLUGIN/hooks/hooks-codex.json" || fail "missing staged Codex hook manifest"
-test ! -e "$DRILL_WORKDIR/.agents/skills/superpowers" || fail "legacy .agents skill symlink exists"
+test ! -e "$WORKDIR/.agents/skills/superpowers" || fail "legacy .agents skill symlink exists"
 
 grep -Fq "plugin_hooks = true" "$CONFIG" || fail "plugin_hooks feature not enabled"
 grep -Fq '[plugins."superpowers@debug"]' "$CONFIG" || fail "debug Superpowers plugin not enabled"

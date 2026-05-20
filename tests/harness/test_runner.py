@@ -301,8 +301,8 @@ class TestRunScenario:
         _exec(
             sd / "setup.sh",
             '#!/usr/bin/env bash\nset -e\n'
-            'sib="${DRILL_WORKDIR}-sibling"\nmkdir -p "$sib"\n'
-            'echo "$sib" > "${DRILL_WORKDIR}/.harness-launch-cwd"\n',
+            'sib="${HARNESS_WORKDIR}-sibling"\nmkdir -p "$sib"\n'
+            'echo "$sib" > "${HARNESS_WORKDIR}/.harness-launch-cwd"\n',
         )
         contexts_dir = tmp_path / "contexts"
         (contexts_dir / "claude").mkdir(parents=True)

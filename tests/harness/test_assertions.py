@@ -73,7 +73,7 @@ class TestRunAssertions:
         a.mkdir()
         wd = tmp_path / "wd"
         _make_executable(a / "01.sh",
-            f'#!/usr/bin/env bash\n[ "$DRILL_WORKDIR" = "{wd}" ]\n')
+            f'#!/usr/bin/env bash\n[ "$HARNESS_WORKDIR" = "{wd}" ]\n')
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         _, all_pass = run_assertions(

@@ -53,7 +53,7 @@ class TestRunSetup:
         marker_path = tmp_path / "captured_workdir"
         _make_executable(
             scenario_dir / "setup.sh",
-            f'#!/usr/bin/env bash\necho "$DRILL_WORKDIR" > {marker_path}\n',
+            f'#!/usr/bin/env bash\necho "$HARNESS_WORKDIR" > {marker_path}\n',
         )
         run_setup(scenario_dir, workdir)
         assert marker_path.read_text().strip() == str(workdir)
