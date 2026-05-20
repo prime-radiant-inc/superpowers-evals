@@ -206,6 +206,46 @@ class TestSeedClaudeHome:
             _seed_claude_home(tmp_path / "missing", tmp_path / "dest", tmp_path)
 
 
+class TestLaunchCommand:
+    def _engine(self, name, cli, args):
+        engine = object.__new__(Engine)
+        engine.backend = Backend(
+            name=name,
+            cli=cli,
+            args=args,
+            required_env=[],
+            hooks={"pre_run": []},
+            shutdown="/exit",
+            idle={},
+            startup_timeout=30,
+            terminal={},
+            session_logs={},
+        )
+        engine.claude_home = None
+        return engine
+
+    def test_claude_command_bakes_in_config_dir(self, tmp_path):
+        # tmux new-session inherits the server's env, not this process's, so
+        # CLAUDE_CONFIG_DIR must travel inside the command string itself.
+        engine = self._engine("claude-opus-4-7", "claude", ["--model", "opus"])
+        engine.claude_home = tmp_path / "ch"
+        cmd = engine._launch_command(tmp_path / "wd")
+        assert cmd[:2] == ["env", f"CLAUDE_CONFIG_DIR={tmp_path / 'ch'}"]
+        assert cmd[2] == "claude"
+
+    def test_claude_command_unwrapped_when_no_home(self, tmp_path):
+        engine = self._engine("claude-opus-4-7", "claude", ["--model", "opus"])
+        engine.claude_home = None
+        cmd = engine._launch_command(tmp_path / "wd")
+        assert cmd[0] == "claude"
+
+    def test_non_claude_command_not_wrapped(self, tmp_path):
+        engine = self._engine("codex", "env", ["CODEX_HOME=/x", "codex"])
+        engine.claude_home = None
+        cmd = engine._launch_command(tmp_path / "wd")
+        assert not any("CLAUDE_CONFIG_DIR" in c for c in cmd)
+
+
 class TestRunResult:
     def test_serializes_to_dir(self, tmp_path):
         result = RunResult(

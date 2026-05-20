@@ -273,10 +273,29 @@ class Engine:
             elif hook:
                 hook(workdir)  # ty: ignore[invalid-argument-type, missing-argument]
 
+    def _launch_command(self, workdir: Path) -> list[str]:
+        """Build the agent launch command.
+
+        For claude-family backends, prepend `env CLAUDE_CONFIG_DIR=…` so the
+        config-dir override travels inside the command string. Relying on
+        tmux env inheritance does not work: `tmux new-session` attaches to
+        an already-running tmux server when one exists, and the new session
+        inherits the *server's* environment — not this process's. The server
+        is usually started by something other than drill, so
+        os.environ[CLAUDE_CONFIG_DIR] never reaches the agent and it falls
+        back to the real ~/.claude (leaking user plugins, writing logs out
+        of drill's view). Codex sidesteps this via the `env` wrapper in its
+        backend yaml; this is the claude-family equivalent.
+        """
+        cmd = self.backend.build_command(str(workdir))
+        if self.backend.family == "claude" and self.claude_home is not None:
+            cmd = ["env", f"CLAUDE_CONFIG_DIR={self.claude_home}", *cmd]
+        return cmd
+
     def _run_session(self, session: TmuxSession, workdir: Path) -> tuple[str, int]:
         session.create()
         try:
-            cmd = self.backend.build_command(str(workdir))
+            cmd = self._launch_command(workdir)
             session.launch(cmd, str(workdir))
             self._wait_for_ready(session, timeout=self.backend.startup_timeout)
             actor = Actor()
