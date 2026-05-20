@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+
+import yaml
 
 from harness.capture import capture_tool_calls, new_files_since, snapshot_dir
 
@@ -21,6 +24,22 @@ class TestSnapshotAndDiff:
         (sub / "session-001.jsonl").write_text("{}\n")
         new = new_files_since(log_dir, "**/session-*.jsonl", snap)
         assert len(new) == 1 and new[0].name == "session-001.jsonl"
+
+    def test_codex_target_glob_matches_date_nested_rollouts(self, tmp_path):
+        # codex nests rollouts under sessions/YYYY/MM/DD/, so codex.yaml's
+        # glob must recurse. A non-recursive glob silently captures nothing.
+        codex_yaml = (
+            Path(__file__).resolve().parents[2] / "harness/targets/codex.yaml"
+        )
+        glob = yaml.safe_load(codex_yaml.read_text())["session_log_glob"]
+        sessions = tmp_path / "sessions"
+        nested = sessions / "2026" / "05" / "20"
+        nested.mkdir(parents=True)
+        snap = snapshot_dir(sessions, glob)
+        rollout = nested / "rollout-2026-05-20T14-33-25-abc.jsonl"
+        rollout.write_text("{}\n")
+        new = new_files_since(sessions, glob, snap)
+        assert [p.name for p in new] == [rollout.name]
 
     def test_missing_dir_returns_empty(self, tmp_path):
         log_dir = tmp_path / "missing"

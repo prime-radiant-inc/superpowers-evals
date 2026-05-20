@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -57,7 +58,12 @@ def filter_codex_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
     other run's rollouts. Each rollout's first line is a `session_meta` event
     that records the cwd the codex CLI was launched in — use it to attribute
     rollouts to the run that produced them.
+
+    Paths are compared after realpath resolution: macOS hands out workdirs
+    under /var/folders/... but codex records the resolved /private/var/...
+    realpath, so raw string equality would drop every rollout.
     """
+    target = os.path.realpath(target_cwd)
     matched: list[Path] = []
     for path in paths:
         try:
@@ -69,7 +75,7 @@ def filter_codex_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
         if entry.get("type") != "session_meta":
             continue
         cwd = entry.get("payload", {}).get("cwd", "")
-        if cwd == target_cwd:
+        if cwd and os.path.realpath(cwd) == target:
             matched.append(path)
     return matched
 

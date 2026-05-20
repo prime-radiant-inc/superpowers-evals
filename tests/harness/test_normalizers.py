@@ -1,4 +1,5 @@
 import json
+import os
 
 from harness.normalizers import (
     collect_new_logs,
@@ -102,6 +103,27 @@ class TestNormalizeCodexLogs:
         empty.write_text("")
         kept = filter_codex_logs_by_cwd([match, other, no_meta, empty], target)
         assert kept == [match]
+
+    def test_filter_by_cwd_resolves_symlinked_paths(self, tmp_path):
+        # The target cwd may be a symlinked path (macOS hands out
+        # /var/folders/... which resolves to /private/var/folders/...)
+        # while codex records the resolved realpath in session_meta.
+        # The filter must compare resolved paths, not raw strings.
+        real = tmp_path / "real-workdir"
+        real.mkdir()
+        link = tmp_path / "linked-workdir"
+        link.symlink_to(real)
+        rollout = tmp_path / "rollout.jsonl"
+        rollout.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "abc", "cwd": os.path.realpath(real)},
+                }
+            )
+            + "\n"
+        )
+        assert filter_codex_logs_by_cwd([rollout], str(link)) == [rollout]
 
     def test_normalizes_function_call_with_payload(self):
         """Test the actual codex rollout format using payload instead of item."""
