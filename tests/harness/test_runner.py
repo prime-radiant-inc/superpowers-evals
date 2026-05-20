@@ -1,6 +1,7 @@
 # tests/harness/test_runner.py
 import json
 import stat
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -74,17 +75,46 @@ class TestSeedAgentConfigDir:
         assert entry["hasTrustDialogAccepted"] is True
 
     def test_non_claude_target_skips_trust_injection(self, tmp_path):
-        # Codex has its own plugin-trust mechanism (per-scenario setup.sh);
-        # the runner doesn't mutate codex's config.
+        # Codex gets no .claude.json trust injection (that is claude-only);
+        # _seed_codex_auth is stubbed here — it has its own tests below.
         skel = tmp_path / "skeleton-codex-home"
         skel.mkdir()
         (skel / "config.toml").write_text("[features]\nplugins = true\n")
         dest = tmp_path / "agent-config"
 
-        _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "workdir")
+        with patch("harness.runner._seed_codex_auth"):
+            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "workdir")
 
         assert (dest / "config.toml").exists()
         assert not (dest / ".claude.json").exists()
+
+    def test_codex_target_seeds_auth_via_codex_login(self, tmp_path, monkeypatch):
+        # Codex's auth picker is gated on auth.json, not on $OPENAI_API_KEY,
+        # so the runner pipes the env key through `codex login --with-api-key`
+        # into the fresh per-run CODEX_HOME.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        dest = tmp_path / "agent-config"
+        with patch("harness.runner.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+        (cmd, *_), kwargs = mock_run.call_args
+        assert cmd == ["codex", "login", "--with-api-key"]
+        assert kwargs["input"] == "sk-test-key"
+        assert kwargs["env"]["CODEX_HOME"] == str(dest)
+
+    def test_codex_seed_raises_on_login_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        dest = tmp_path / "agent-config"
+        with patch("harness.runner.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 1, "", "bad key")
+            with pytest.raises(RunnerError, match="codex login"):
+                _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+
+    def test_codex_seed_raises_without_api_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        dest = tmp_path / "agent-config"
+        with pytest.raises(RunnerError, match="OPENAI_API_KEY"):
+            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
 
 
 def _make_scenario(

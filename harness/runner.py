@@ -52,6 +52,33 @@ class RunnerError(RuntimeError):
     """Raised on non-recoverable errors before verdict composition."""
 
 
+def _seed_codex_auth(codex_home: Path) -> None:
+    """Seed codex auth.json so the agent boots past the sign-in picker.
+
+    Codex gates its TUI auth picker on auth.json, not on $OPENAI_API_KEY:
+    `codex login status` reports "Not logged in" for an env-var-only
+    setup. Piping the key through `codex login --with-api-key` writes a
+    logged-in auth.json into CODEX_HOME. Seeded per-run from the env
+    rather than from a checked-in fixture, so the API key is never
+    persisted outside the environment and the gitignored run dir.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RunnerError("OPENAI_API_KEY not set; cannot seed codex auth")
+    result = subprocess.run(
+        ["codex", "login", "--with-api-key"],
+        input=api_key,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "CODEX_HOME": str(codex_home)},
+    )
+    if result.returncode != 0:
+        raise RunnerError(
+            f"codex login --with-api-key failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+
+
 def _seed_agent_config_dir(
     target: TargetConfig,
     skeleton_root: Path,
@@ -68,10 +95,10 @@ def _seed_agent_config_dir(
     onboarding / API-key dialog-bypass state (see
     bin/refresh-skeleton-claude-home).
 
-    The codex skeleton (when present) carries logged-in auth state so the
-    "Welcome to Codex / Sign in" picker stays off-screen — built by
-    bin/refresh-skeleton-codex-home. Codex's plugin-trust ceremony is
-    separate and still happens per-scenario via setup.sh.
+    For codex, _seed_codex_auth then runs `codex login --with-api-key`
+    against the fresh dir so the agent boots past the "Welcome to Codex /
+    Sign in" picker. Codex's plugin-trust ceremony is separate and still
+    happens per-scenario via setup.sh.
     """
     skeleton = skeleton_root / f"skeleton-{target.name}-home"
     seeded = skeleton.exists()
@@ -89,6 +116,8 @@ def _seed_agent_config_dir(
             "hasClaudeMdExternalIncludesWarningShown": True,
         }
         config_path.write_text(json.dumps(config))
+    if target.name == "codex":
+        _seed_codex_auth(dest)
 
 
 def _resolve_launch_cwd(workdir: Path) -> Path:
