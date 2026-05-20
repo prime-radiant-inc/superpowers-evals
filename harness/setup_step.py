@@ -1,7 +1,13 @@
-"""Run a scenario's setup.sh against a temp workdir.
+"""Run a scenario's setup.sh and preflight.sh against a temp workdir.
 
-HARNESS_WORKDIR is exported into setup.sh's environment so the script
-(and the setup helpers it invokes) can locate the workdir.
+Two pre-agent steps, both optional, both run with HARNESS_WORKDIR
+exported so the script (and any setup helpers it invokes) can locate
+the workdir:
+
+- setup.sh   — builds the fixture (clones the template, plants files…).
+- preflight.sh — verifies the fixture is in the expected state before
+  the agent runs. Separating "build" from "verify" keeps each script
+  doing one job; a failed invariant aborts with a distinct error.
 """
 
 from __future__ import annotations
@@ -15,25 +21,49 @@ class SetupError(RuntimeError):
     """Raised when setup.sh exits non-zero."""
 
 
-def run_setup(
+class PreflightError(RuntimeError):
+    """Raised when preflight.sh exits non-zero (a fixture invariant failed)."""
+
+
+def _run_scenario_script(
     scenario_dir: Path,
+    script_name: str,
     workdir: Path,
-    env_extra: dict[str, str] | None = None,
+    env_extra: dict[str, str] | None,
+    error_cls: type[RuntimeError],
 ) -> None:
-    setup_path = scenario_dir / "setup.sh"
-    if not setup_path.exists():
+    script = scenario_dir / script_name
+    if not script.exists():
         return
     env = {**os.environ, "HARNESS_WORKDIR": str(workdir), **(env_extra or {})}
     proc = subprocess.run(
-        [str(setup_path)],
+        [str(script)],
         cwd=workdir,
         env=env,
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        raise SetupError(
-            f"setup.sh exit {proc.returncode} (in {scenario_dir.name}):\n"
+        raise error_cls(
+            f"{script_name} exit {proc.returncode} (in {scenario_dir.name}):\n"
             f"--- stdout ---\n{proc.stdout}\n"
             f"--- stderr ---\n{proc.stderr}"
         )
+
+
+def run_setup(
+    scenario_dir: Path,
+    workdir: Path,
+    env_extra: dict[str, str] | None = None,
+) -> None:
+    _run_scenario_script(scenario_dir, "setup.sh", workdir, env_extra, SetupError)
+
+
+def run_preflight(
+    scenario_dir: Path,
+    workdir: Path,
+    env_extra: dict[str, str] | None = None,
+) -> None:
+    _run_scenario_script(
+        scenario_dir, "preflight.sh", workdir, env_extra, PreflightError
+    )

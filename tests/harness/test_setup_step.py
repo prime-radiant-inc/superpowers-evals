@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.setup_step import SetupError, run_setup
+from harness.setup_step import PreflightError, SetupError, run_preflight, run_setup
 
 
 def _make_executable(path: Path, body: str) -> None:
@@ -70,3 +70,37 @@ class TestRunSetup:
         )
         run_setup(scenario_dir, workdir, env_extra={"HARNESS_REPO_ROOT": "/fake/root"})
         assert marker_path.read_text().strip() == "/fake/root"
+
+
+class TestRunPreflight:
+    def test_no_preflight_is_fine(self, tmp_path):
+        scenario_dir = tmp_path / "scenario"
+        scenario_dir.mkdir()
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        run_preflight(scenario_dir, workdir)  # should not raise
+
+    def test_zero_exit_succeeds(self, tmp_path):
+        scenario_dir = tmp_path / "scenario"
+        scenario_dir.mkdir()
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        _make_executable(
+            scenario_dir / "preflight.sh",
+            '#!/usr/bin/env bash\nset -e\ntest -d "$HARNESS_WORKDIR"\n',
+        )
+        run_preflight(scenario_dir, workdir)  # invariant holds → no raise
+
+    def test_failed_invariant_raises_preflight_error(self, tmp_path):
+        scenario_dir = tmp_path / "scenario"
+        scenario_dir.mkdir()
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        _make_executable(
+            scenario_dir / "preflight.sh",
+            '#!/usr/bin/env bash\necho "missing the plan" 1>&2\nexit 1\n',
+        )
+        with pytest.raises(PreflightError) as exc:
+            run_preflight(scenario_dir, workdir)
+        assert "preflight.sh" in str(exc.value)
+        assert "missing the plan" in str(exc.value)

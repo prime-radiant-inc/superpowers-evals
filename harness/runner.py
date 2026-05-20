@@ -41,7 +41,7 @@ from harness.scenario_config import (
     check_target_compatibility,
     load_scenario_config,
 )
-from harness.setup_step import SetupError, run_setup
+from harness.setup_step import PreflightError, SetupError, run_preflight, run_setup
 from harness.target_config import TargetConfig, load_target_config
 
 LAUNCH_CWD_SENTINEL = ".harness-launch-cwd"
@@ -308,11 +308,17 @@ def run_scenario(
     env_extra = {"HARNESS_REPO_ROOT": str(_harness_repo_root())}
     workdir_kept = False
     try:
-        # 4. Run setup.sh.
+        # 4. Run setup.sh (build the fixture).
         try:
             run_setup(scenario_dir, workdir, env_extra=env_extra)
         except SetupError as e:
             raise RunnerError(f"setup failed: {e}") from e
+
+        # 4b. Run preflight.sh (verify fixture invariants before the agent).
+        try:
+            run_preflight(scenario_dir, workdir, env_extra=env_extra)
+        except PreflightError as e:
+            raise RunnerError(f"preflight failed: {e}") from e
 
         # 5. Resolve launch cwd (defaults to workdir; setup.sh may
         #    override via .harness-launch-cwd sentinel).

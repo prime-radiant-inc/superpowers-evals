@@ -204,6 +204,33 @@ class TestRunScenario:
                 )
             mock_g.assert_not_called()
 
+    def test_preflight_failure_aborts_before_gauntlet(self, tmp_path):
+        targets_dir = tmp_path / "targets"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_target(targets_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        _exec(sd / "preflight.sh", "#!/usr/bin/env bash\necho 'bad fixture' 1>&2\nexit 1\n")
+        contexts_dir = tmp_path / "contexts"
+        (contexts_dir / "claude").mkdir(parents=True)
+        out_root = tmp_path / "results"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        with patch("harness.runner.invoke_gauntlet") as mock_g:
+            with pytest.raises(RunnerError, match="preflight"):
+                run_scenario(
+                    scenario_dir=sd,
+                    target="claude",
+                    targets_dir=targets_dir,
+                    contexts_dir=contexts_dir,
+                    out_root=out_root,
+                    bin_dir=bin_dir,
+                    skeleton_root=_empty_skeleton(tmp_path),
+                )
+            mock_g.assert_not_called()
+
     def test_incompatible_target_refused(self, tmp_path):
         targets_dir = tmp_path / "targets"
         scenarios_dir = tmp_path / "scenarios"
