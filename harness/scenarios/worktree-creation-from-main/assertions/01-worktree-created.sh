@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# A new worktree should exist: started with 1 (main), expect 2.
+set -euo pipefail
+COUNT=$(cd "$DRILL_WORKDIR" && git worktree list | wc -l | tr -d ' ')
+if [ "$COUNT" = "2" ]; then
+    echo "PASS: 2 worktrees (main + new)"
+    exit 0
+fi
+echo "FAIL: expected 2 worktrees, found $COUNT"
+cd "$DRILL_WORKDIR" && git worktree list
+exit 1
