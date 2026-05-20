@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from harness.scaffold import ScaffoldError, check_scenario, new_scenario
+from harness.scaffold import (
+    ScaffoldError,
+    check_scenario,
+    fix_executable_bits,
+    new_scenario,
+)
 
 
 class TestNewScenario:
@@ -75,3 +80,26 @@ class TestCheckScenario:
         sd = self._valid(tmp_path)
         (sd / "scenario.yaml").write_text("compatible_targets: not-a-list\n")
         assert any("scenario.yaml invalid" in p for p in check_scenario(sd))
+
+
+class TestFixExecutableBits:
+    def test_fixes_non_executable_assertion(self, tmp_path):
+        sd = new_scenario(tmp_path, "demo")
+        a = sd / "assertions" / "01-x.sh"
+        a.write_text("#!/usr/bin/env bash\nexit 0\n")  # written without +x
+        assert not os.access(a, os.X_OK)
+
+        fixed = fix_executable_bits(sd)
+
+        assert "assertions/01-x.sh" in fixed
+        assert os.access(a, os.X_OK)
+        # check now passes; a second fix is a no-op.
+        assert check_scenario(sd) == []
+        assert fix_executable_bits(sd) == []
+
+    def test_fixes_setup_and_preflight(self, tmp_path):
+        sd = new_scenario(tmp_path, "demo")
+        (sd / "setup.sh").chmod(stat.S_IRUSR | stat.S_IWUSR)
+        fixed = fix_executable_bits(sd)
+        assert "setup.sh" in fixed
+        assert os.access(sd / "setup.sh", os.X_OK)

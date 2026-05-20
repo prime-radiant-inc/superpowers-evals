@@ -133,3 +133,28 @@ def check_scenario(scenario_dir: Path) -> list[str]:
                     )
 
     return problems
+
+
+def _scenario_scripts(scenario_dir: Path) -> list[Path]:
+    """Every script the harness execs: setup, preflight, assertions."""
+    scripts = [scenario_dir / "setup.sh", scenario_dir / "preflight.sh"]
+    assertions_dir = scenario_dir / "assertions"
+    if assertions_dir.is_dir():
+        scripts += [p for p in sorted(assertions_dir.iterdir()) if p.is_file()]
+    return [p for p in scripts if p.exists()]
+
+
+def fix_executable_bits(scenario_dir: Path) -> list[str]:
+    """chmod +x any setup/preflight/assertion script missing the bit.
+
+    Returns the scenario-relative paths fixed. A non-executable assertion
+    is silently skipped at runtime; this repairs the common authoring
+    miss — a script written by an editor (or the Write tool) without the
+    executable bit.
+    """
+    fixed: list[str] = []
+    for path in _scenario_scripts(scenario_dir):
+        if not os.access(path, os.X_OK):
+            path.chmod(path.stat().st_mode | 0o111)
+            fixed.append(str(path.relative_to(scenario_dir)))
+    return fixed
