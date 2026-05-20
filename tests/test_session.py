@@ -10,16 +10,35 @@ class TestTmuxSession:
         session = TmuxSession(name="drill-test-create", cols=80, rows=24)
         session.create()
         result = subprocess.run(
-            ["tmux", "has-session", "-t", "drill-test-create"],
+            ["tmux", "-L", session.socket, "has-session", "-t", "drill-test-create"],
             capture_output=True,
         )
         assert result.returncode == 0
         session.kill()
         result = subprocess.run(
-            ["tmux", "has-session", "-t", "drill-test-create"],
+            ["tmux", "-L", session.socket, "has-session", "-t", "drill-test-create"],
             capture_output=True,
         )
         assert result.returncode != 0
+
+    def test_uses_private_socket_not_default_server(self):
+        # The session must live on its own -L socket, never the shared
+        # default server — that is what guarantees it inherits drill's env.
+        session = TmuxSession(name="drill-test-private", cols=80, rows=24)
+        session.create()
+        try:
+            on_private = subprocess.run(
+                ["tmux", "-L", session.socket, "has-session", "-t", "drill-test-private"],
+                capture_output=True,
+            )
+            on_default = subprocess.run(
+                ["tmux", "has-session", "-t", "drill-test-private"],
+                capture_output=True,
+            )
+            assert on_private.returncode == 0
+            assert on_default.returncode != 0
+        finally:
+            session.kill()
 
     def test_send_keys_and_capture(self):
         session = TmuxSession(name="drill-test-keys", cols=80, rows=24)
@@ -41,10 +60,13 @@ class TestTmuxSession:
         ):
             session.send_keys("hello `weird` text")
 
+        sock = session.socket
         assert run.call_args_list == [
             call(
                 [
                     "tmux",
+                    "-L",
+                    sock,
                     "set-buffer",
                     "-b",
                     "drill-test-command-shape-input",
@@ -55,6 +77,8 @@ class TestTmuxSession:
             call(
                 [
                     "tmux",
+                    "-L",
+                    sock,
                     "paste-buffer",
                     "-d",
                     "-b",
@@ -64,7 +88,10 @@ class TestTmuxSession:
                 ],
                 check=True,
             ),
-            call(["tmux", "send-keys", "-t", "drill-test-command-shape", "Enter"], check=True),
+            call(
+                ["tmux", "-L", sock, "send-keys", "-t", "drill-test-command-shape", "Enter"],
+                check=True,
+            ),
         ]
         sleep.assert_called_once_with(0.1)
 
