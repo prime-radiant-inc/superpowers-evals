@@ -6,15 +6,37 @@ migration. Reviewed before Phase 3 decommission.
 ## Phase 1 deferrals
 
 - **Token-cost wiring.** `harness/token_usage.py` is lifted from Drill but
-  the runner doesn't yet call it. The three Phase 1 scenarios don't need
-  cost data. Wire when the first cost-* scenario ports (Phase 2).
-- **`setup.sh` shell-out latency.** Each scenario's `setup.sh` invokes
-  `uv run python -c "..."` to call `setup_helpers/`, costing ~600ms per run.
-  Acceptable for 3-scenario manual Phase 1. Promote to a `setup_helpers run
-  <name>` CLI in Phase 2 when sweep-N runs make it visible.
+  the runner doesn't yet call it. Wire when the first cost-* scenario
+  ports. See "Decision: cost / measurement model" below for the agreed
+  shape.
+- ~~**`setup.sh` shell-out latency.**~~ **Resolved 2026-05-20.** The
+  `setup-helpers run <name>` CLI landed (ergonomics study item #3);
+  `setup.sh` is no longer an inline `uv run python -c` block.
 - **PATH inheritance in assertions.** Phase 1 is not a CI workload. Document
   required tooling (jq, git, python) in the harness README before any CI
   integration.
+
+## Decision: cost / measurement model (2026-05-20)
+
+The cost-* scenarios are the first *quantitative* dimension — "did the
+skill fire" is genuinely binary, "used 47k tokens" is not. Decision,
+so the verdict model does not have to change:
+
+- **The verdict stays binary.** `compose()` remains pass/fail. A cost
+  scenario expresses its budget as an ordinary deterministic assertion
+  — a `tokens-under <N>` style check that reads the measurement and
+  exits 0/1. That fits the existing assertion model with no new
+  composition logic.
+- **The measurement is preserved separately.** When the first cost-*
+  scenario ports, the runner calls `harness/token_usage.py` and writes
+  `token_usage.json` into the run dir alongside `verdict.json` (as
+  Drill did). The verdict answers "within budget?"; the measurement
+  file answers "by how much?" and is what trend analysis reads.
+- No "measurements channel" inside `verdict.json`; keeping the verdict
+  purely binary is worth more than co-locating the number.
+
+This is a decision, not yet code — the `token_usage.py` call is wired
+at cost-* port time.
 
 ## Phase 1 first-run findings (2026-05-18)
 
