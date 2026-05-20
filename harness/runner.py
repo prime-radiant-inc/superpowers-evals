@@ -68,8 +68,10 @@ def _seed_agent_config_dir(
     onboarding / API-key dialog-bypass state (see
     bin/refresh-skeleton-claude-home).
 
-    Codex's plugin-trust ceremony happens per-scenario via setup.sh, not
-    via a shared skeleton.
+    The codex skeleton (when present) carries logged-in auth state so the
+    "Welcome to Codex / Sign in" picker stays off-screen — built by
+    bin/refresh-skeleton-codex-home. Codex's plugin-trust ceremony is
+    separate and still happens per-scenario via setup.sh.
     """
     skeleton = skeleton_root / f"skeleton-{target.name}-home"
     seeded = skeleton.exists()

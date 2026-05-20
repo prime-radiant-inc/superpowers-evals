@@ -10,3 +10,4 @@ build/
 .env
 .claude/
 fixtures/skeleton-claude-home/
+fixtures/skeleton-codex-home/
