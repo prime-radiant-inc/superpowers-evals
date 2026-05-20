@@ -39,7 +39,7 @@ it should send the agent under test, and when it is done.
 _SETUP_TEMPLATE = """\
 #!/usr/bin/env bash
 set -euo pipefail
-setup-helpers run create_base_repo
+uv run setup-helpers run create_base_repo
 """
 
 _PREFLIGHT_TEMPLATE = """\
