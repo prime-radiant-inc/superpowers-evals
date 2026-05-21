@@ -142,6 +142,30 @@ Logged here for Phase 2 attention; none block Phase 1 ship.
   have a test for malformed JSON / unexpected status string. Both raise
   cleanly; tests would lock in current behavior.
 
+## Codex native-hook seeding (2026-05-20)
+
+`codex-native-hooks-bootstrap` needs the per-run CODEX_HOME to carry the
+Superpowers plugin and a trusted SessionStart hook. The drill helper
+`install_codex_superpowers_plugin_hooks` builds its own isolated home and
+exports `DRILL_CODEX_HOME` — neither of which the harness uses.
+
+Resolved by extending the runner's existing codex seeding: after
+`_seed_codex_auth` logs the per-run home in, `_seed_codex_plugin_hooks`
+stages Superpowers into that same home — the codex equivalent of the
+Superpowers access every claude run gets. The install ceremony stays in
+`setup_helpers/worktree.py`; `install_codex_superpowers_plugin_hooks`
+gained an optional `codex_home` arg (omitted = drill's isolated-home
+behavior; given = install into the harness's per-run home, skipping the
+home build, the redundant login, and the `DRILL_CODEX_HOME` export).
+
+Consequences: every codex run now does the install ceremony (a few
+seconds — copy the plugin, `codex app-server hooks/list`, trust the
+hash), and the two symlink-based codex scenarios get the native hook in
+addition to their `.agents` symlink (harmless — their prompts read the
+symlink path explicitly). A ceremony failure now fails all codex runs at
+seed time rather than one scenario — acceptable: a broken Superpowers
+codex hook should fail loud.
+
 ## Skipped scenarios
 
 Drill scenarios deliberately not ported, with the reason.
@@ -157,6 +181,16 @@ Drill scenarios deliberately not ported, with the reason.
   `worktree-codex-detached-head` (+ `-spec-aware`), which synthesize
   the same detached-HEAD condition with setup helpers. No coverage
   lost.
+- **`gemini-subagent-tool-mapping-comprehension`** (deferred 2026-05-20).
+  Needs `harness/targets/gemini.yaml`, which cannot be authored yet. The
+  gemini CLI is not installed on the dev machine, and — the real
+  blocker — the harness requires each target to support a per-run
+  isolated config dir (`agent_config_env`); it is unconfirmed whether
+  the gemini CLI can relocate its config home via an env var (drill ran
+  gemini against the real `~/.gemini`, un-isolated). Revisit when gemini
+  coverage is wanted: install the CLI, determine its config-dir env var,
+  author and verify the target. The normalizer (`normalize_gemini_logs`)
+  and the setup helper (`link_gemini_extension`) already exist.
 
 ## Phase 1 parity outcomes
 

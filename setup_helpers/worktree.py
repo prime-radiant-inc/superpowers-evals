@@ -100,30 +100,43 @@ def symlink_superpowers(workdir: Path, superpowers_root: str) -> None:
     link.symlink_to(target)
 
 
-def install_codex_superpowers_plugin_hooks(workdir: Path, superpowers_root: str) -> None:
-    """Install Superpowers as a trusted Codex plugin hook in an isolated home.
+def install_codex_superpowers_plugin_hooks(
+    workdir: Path,
+    superpowers_root: str,
+    codex_home: Path | None = None,
+) -> None:
+    """Install Superpowers as a trusted Codex plugin hook.
 
-    This is for Drill automation only. User installs still go through Codex's
-    interactive /hooks trust UI.
+    Drill call (codex_home omitted): build an isolated Codex home next to
+    the workdir, log it in, and export DRILL_CODEX_HOME.
+
+    Harness call (codex_home given): install into the runner's per-run
+    CODEX_HOME, which already exists and is already logged in — so the
+    isolated-home build, the login, and the DRILL_CODEX_HOME export are
+    all skipped.
+
+    Either way: stage Superpowers as a plugin and trust its SessionStart
+    hook. User installs still go through Codex's interactive /hooks UI.
     """
-    codex_home = workdir.parent / f"{workdir.name}-codex-home"
-    plugin_root = codex_home / "plugins" / "cache" / "debug" / "superpowers" / "local"
+    drill_owned = codex_home is None
+    if codex_home is None:
+        codex_home = workdir.parent / f"{workdir.name}-codex-home"
+        if codex_home.exists():
+            shutil.rmtree(codex_home)
+        codex_home.mkdir(parents=True, exist_ok=True)
+        _login_codex_home_with_api_key(codex_home)
 
-    if codex_home.exists():
-        shutil.rmtree(codex_home)
+    plugin_root = codex_home / "plugins" / "cache" / "debug" / "superpowers" / "local"
     plugin_root.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(
-        superpowers_root,
-        plugin_root,
-        ignore=_ignore_codex_plugin_copy,
-    )
+    shutil.copytree(superpowers_root, plugin_root, ignore=_ignore_codex_plugin_copy)
 
     config_path = codex_home / "config.toml"
     _write_codex_plugin_hooks_config(config_path)
-    _login_codex_home_with_api_key(codex_home)
     hook = _read_codex_superpowers_hook(codex_home, workdir)
     _append_codex_trusted_hook(config_path, hook["key"], hook["currentHash"])
-    os.environ["DRILL_CODEX_HOME"] = str(codex_home)
+
+    if drill_owned:
+        os.environ["DRILL_CODEX_HOME"] = str(codex_home)
 
 
 def _ignore_codex_plugin_copy(src: str, names: list[str]) -> set[str]:

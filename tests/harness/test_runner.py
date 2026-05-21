@@ -76,13 +76,16 @@ class TestSeedAgentConfigDir:
 
     def test_non_claude_target_skips_trust_injection(self, tmp_path):
         # Codex gets no .claude.json trust injection (that is claude-only);
-        # _seed_codex_auth is stubbed here — it has its own tests below.
+        # codex auth + plugin-hook seeding are stubbed (own tests below).
         skel = tmp_path / "skeleton-codex-home"
         skel.mkdir()
         (skel / "config.toml").write_text("[features]\nplugins = true\n")
         dest = tmp_path / "agent-config"
 
-        with patch("harness.runner._seed_codex_auth"):
+        with (
+            patch("harness.runner._seed_codex_auth"),
+            patch("harness.runner._seed_codex_plugin_hooks"),
+        ):
             _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "workdir")
 
         assert (dest / "config.toml").exists()
@@ -94,7 +97,10 @@ class TestSeedAgentConfigDir:
         # into the fresh per-run CODEX_HOME.
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         dest = tmp_path / "agent-config"
-        with patch("harness.runner.subprocess.run") as mock_run:
+        with (
+            patch("harness.runner.subprocess.run") as mock_run,
+            patch("harness.runner._seed_codex_plugin_hooks"),
+        ):
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
         (cmd, *_), kwargs = mock_run.call_args
@@ -105,7 +111,10 @@ class TestSeedAgentConfigDir:
     def test_codex_seed_raises_on_login_failure(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         dest = tmp_path / "agent-config"
-        with patch("harness.runner.subprocess.run") as mock_run:
+        with (
+            patch("harness.runner.subprocess.run") as mock_run,
+            patch("harness.runner._seed_codex_plugin_hooks"),
+        ):
             mock_run.return_value = subprocess.CompletedProcess([], 1, "", "bad key")
             with pytest.raises(RunnerError, match="codex login"):
                 _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
@@ -113,7 +122,41 @@ class TestSeedAgentConfigDir:
     def test_codex_seed_raises_without_api_key(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         dest = tmp_path / "agent-config"
-        with pytest.raises(RunnerError, match="OPENAI_API_KEY"):
+        with (
+            patch("harness.runner._seed_codex_plugin_hooks"),
+            pytest.raises(RunnerError, match="OPENAI_API_KEY"),
+        ):
+            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+
+    def test_codex_target_installs_plugin_hooks(self, tmp_path, monkeypatch):
+        # The runner stages Superpowers as a trusted plugin hook into the
+        # per-run CODEX_HOME — the codex equivalent of claude's Superpowers
+        # access. The heavy install ceremony is delegated to the shared
+        # setup_helpers function; here we assert the wiring.
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        dest = tmp_path / "agent-config"
+        workdir = tmp_path / "wd"
+        with (
+            patch("harness.runner._seed_codex_auth"),
+            patch(
+                "harness.runner.install_codex_superpowers_plugin_hooks"
+            ) as mock_install,
+        ):
+            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, workdir)
+        (cmd_workdir, cmd_sp), kwargs = mock_install.call_args
+        assert cmd_workdir == workdir
+        assert cmd_sp == str(tmp_path / "sp")
+        assert kwargs["codex_home"] == dest
+
+    def test_codex_plugin_hooks_raise_without_superpowers_root(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        dest = tmp_path / "agent-config"
+        with (
+            patch("harness.runner._seed_codex_auth"),
+            pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"),
+        ):
             _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
 
 

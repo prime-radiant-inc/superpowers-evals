@@ -43,6 +43,7 @@ from harness.scenario_config import (
 )
 from harness.setup_step import PreflightError, SetupError, run_preflight, run_setup
 from harness.target_config import TargetConfig, load_target_config
+from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
 
 LAUNCH_CWD_SENTINEL = ".harness-launch-cwd"
 AGENT_CONFIG_SUBDIR = "agent-config"
@@ -79,6 +80,25 @@ def _seed_codex_auth(codex_home: Path) -> None:
         )
 
 
+def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
+    """Stage Superpowers as a trusted Codex plugin hook in the per-run home.
+
+    The codex home already exists and is logged in (see _seed_codex_auth).
+    This copies Superpowers in as a plugin and trusts its SessionStart hook
+    so the agent boots with Superpowers available — the codex equivalent of
+    the Superpowers access every claude run gets. The install ceremony is
+    the shared setup_helpers function, pointed at the per-run CODEX_HOME.
+    """
+    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    if not superpowers_root:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT not set; cannot install codex plugin hooks"
+        )
+    install_codex_superpowers_plugin_hooks(
+        workdir, superpowers_root, codex_home=codex_home
+    )
+
+
 def _seed_agent_config_dir(
     target: TargetConfig,
     skeleton_root: Path,
@@ -95,10 +115,11 @@ def _seed_agent_config_dir(
     onboarding / API-key dialog-bypass state (see
     bin/refresh-skeleton-claude-home).
 
-    For codex, _seed_codex_auth then runs `codex login --with-api-key`
-    against the fresh dir so the agent boots past the "Welcome to Codex /
-    Sign in" picker. Codex's plugin-trust ceremony is separate and still
-    happens per-scenario via setup.sh.
+    For codex, _seed_codex_auth runs `codex login --with-api-key` against
+    the fresh dir so the agent boots past the "Welcome to Codex / Sign in"
+    picker, then _seed_codex_plugin_hooks stages Superpowers as a trusted
+    plugin hook — the codex equivalent of the Superpowers access every
+    claude run gets.
     """
     skeleton = skeleton_root / f"skeleton-{target.name}-home"
     seeded = skeleton.exists()
@@ -118,6 +139,7 @@ def _seed_agent_config_dir(
         config_path.write_text(json.dumps(config))
     if target.name == "codex":
         _seed_codex_auth(dest)
+        _seed_codex_plugin_hooks(dest, workdir)
 
 
 def _resolve_launch_cwd(workdir: Path) -> Path:
