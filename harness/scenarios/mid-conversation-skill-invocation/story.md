@@ -25,8 +25,13 @@ docs/superpowers/plans/auth-system.md. subagent-driven-development,
 please — dispatch the first subagent."
 
 If the agent asks a clarifying question, answer briefly; if it offers
-to start, say "yes, go ahead." Once the agent has loaded the SDD skill
-and dispatched at least one subagent, you are done.
+to start, say "yes, go ahead."
+
+You are done only once you have seen the agent actually dispatch a
+subagent. A task list, a "Task 1" entry, or an on-screen
+"Implementing…" status line is NOT a dispatch — wait for the agent to
+genuinely hand work to a subagent. Ending the conversation before that
+makes the run fail.
 
 ## Acceptance Criteria
 

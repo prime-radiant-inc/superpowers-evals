@@ -24,7 +24,9 @@ model choice), answer briefly and let it proceed. If it presents the
 plan back for confirmation before dispatching, say "yes, proceed."
 
 Once the agent has loaded the SDD skill AND dispatched at least one
-subagent for Task 1, you are done. The goal is to verify the
+subagent for Task 1, you are done. A task list or an on-screen
+"Implementing…" status line is NOT a dispatch — wait for the agent to
+genuinely hand work to a subagent. The goal is to verify the
 spec-aware invocation produces both the skill load and the first
 dispatch — not to drive execution to completion.
 

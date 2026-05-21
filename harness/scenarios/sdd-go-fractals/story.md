@@ -41,7 +41,7 @@ subagents per task and can take 10-30 minutes of wall time.
   dispatches per task, with descriptions naming implementer / spec /
   code-quality roles or equivalent.
 - The final codebase is a real, working project — it builds, `go test
-  ./...` passes, and the fractals CLI can be exercised. The
-  deterministic assertions gate the test suite, the entry point, and
-  the commit history; this criterion captures the qualitative "real
-  project, not a stub."
+  ./...` passes against a test suite that actually exists, and the
+  fractals CLI can be exercised. The deterministic assertions gate the
+  test suite and the entry point; this criterion captures the
+  qualitative "real project, not a stub."

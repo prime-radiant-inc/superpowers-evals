@@ -78,6 +78,39 @@ once the Gauntlet branch is merged. The templating is harmless and
 left in place; simplifying it (and the substitution map in
 `runner._populate_context_dir`) is a deferred cleanup, not urgent.
 
+## Run-1 triage (2026-05-20)
+
+First full run of the 25-scenario harness suite. Two findings worth
+keeping:
+
+- **Gauntlet can hallucinate a tool call.** In
+  `mid-conversation-skill-invocation` the QA verdict (`result.md`)
+  asserted "dispatched the first subagent", but `tool_calls.jsonl` had
+  no `Agent` call — the QA agent mistook an on-screen "Implementing
+  Task 1…" status line for a real dispatch. The deterministic
+  `02-subagent-dispatched` assertion caught the false positive, so the
+  binary verdict (gauntlet AND assertions) came out `fail`, correctly.
+  The measurement model earned its keep. The SDD-dispatch story.md
+  briefs now state explicitly that a task list / status line is not a
+  dispatch.
+- **`worktree-consent-flow` — open question.** AC #1 is "the agent
+  proceeds to worktree creation without stopping to ask" (naming the
+  worktree skill is itself consent). The agent stopped and asked —
+  "per the skill, I should ask before creating a worktree" — and
+  gauntlet failed it. The scenario is internally consistent and gave a
+  clear verdict, but whether "named the skill ⇒ implicit consent" is
+  the intended worktree-skill semantics is unconfirmed. Resolve against
+  the superpowers worktree skill before trusting this scenario's
+  verdict. It sits opposite `worktree-caller-consent-gate`, which
+  requires the agent to ask.
+
+Assertion-quality fixes from the same run: dropped the fragile
+`commit-history >= 4` checks from the sdd-* build scenarios (an
+arbitrary proxy — build + tests + dispatch counts already prove
+execution); strengthened the `sdd-go-fractals` test assertion to
+require `*_test.go` files exist, since `go test ./...` exits 0 on an
+empty suite.
+
 ## Code-review follow-ups from Phase 1 build
 
 Logged here for Phase 2 attention; none block Phase 1 ship.
