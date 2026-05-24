@@ -11,6 +11,10 @@ def _run(tool: str, *args: str, cwd: Path, sink: Path) -> int:
         cwd=cwd, env={"PATH": f"{BIN}:/usr/bin:/bin", "HARNESS_RECORD_SINK": str(sink)},
         capture_output=True, text=True,
     )
+    # Surface stderr on non-zero so CI failures show the bash error
+    # (helper otherwise swallows it).
+    if proc.returncode != 0 and proc.stderr:
+        print(f"[{tool}] stderr: {proc.stderr}")
     return proc.returncode
 
 def _last_record(sink: Path) -> dict:
