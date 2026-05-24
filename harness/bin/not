@@ -9,13 +9,32 @@ source "$(dirname "$0")/_record"
 
 inner="$1"; shift
 inner_args_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
+inner_path="$(dirname "$0")/$inner"
+
+# Verify the inner tool exists and is executable BEFORE running it. A
+# missing tool (typo: `not file-exits foo` instead of `not file-exists foo`)
+# otherwise exits 127 from the subshell below — which the inversion logic
+# would happily read as "inner failed → invert to pass," silently turning
+# the typo into a passing deterministic check (Codex review R2 P1).
+if [ ! -x "$inner_path" ]; then
+    record_fail "unknown inner tool: $inner (no executable at $inner_path)"
+    exit 1
+fi
 
 # Run with sink unset. Use `|| inner_ec=$?` so the subshell's expected
 # non-zero exit doesn't trigger the inherited ERR trap from _record (bash
 # 5 fires the trap on the subshell before the next line can run).
 inner_ec=0
-( unset HARNESS_RECORD_SINK; "$(dirname "$0")/$inner" "$@" ) >/dev/null 2>&1 \
+( unset HARNESS_RECORD_SINK; "$inner_path" "$@" ) >/dev/null 2>&1 \
     || inner_ec=$?
+
+# Defense in depth: bash-reserved exit codes (126/127/>=128) mean the
+# inner tool itself crashed (jq missing, signal-killed, etc.) — not an
+# intentional check failure. Don't invert those either.
+if [ "$inner_ec" -eq 126 ] || [ "$inner_ec" -eq 127 ] || [ "$inner_ec" -ge 128 ]; then
+    record_fail "inner tool $inner crashed (exit $inner_ec)"
+    exit 1
+fi
 
 if [ "$inner_ec" -eq 0 ]; then
     inverted=false

@@ -33,3 +33,30 @@ def test_not_emits_only_one_record(tmp_path):
     _run("file-exists", "f", cwd=tmp_path, sink=sink)
     lines = sink.read_text().splitlines()
     assert len(lines) == 1
+
+
+# Codex review R2 P1 (2026-05-24): unknown inner tool used to be treated
+# as "inner failed → invert to pass," silently turning a scenario-author
+# typo (`not file-exits foo` instead of `not file-exists foo`) into a
+# passing deterministic check. The fix verifies inner exists+executable
+# upfront and records a `not`-attributed fail when it doesn't.
+
+def test_not_with_typo_inner_fails_with_clear_detail(tmp_path):
+    sink = tmp_path / "s"
+    rc = _run("definitely-not-a-real-check", "arg", cwd=tmp_path, sink=sink)
+    assert rc != 0, "typo'd inner must produce a failing exit"
+    r = _r(sink)
+    # The outer 'not' is what failed — not the (nonexistent) inner.
+    assert r["check"] == "not"
+    assert r["passed"] is False
+    assert r["negated"] is False
+    assert "unknown inner tool" in r["detail"]
+    assert "definitely-not-a-real-check" in r["detail"]
+
+# The companion defense-in-depth path — inner exists but exits in bash's
+# reserved range (126/127/>=128) → fail rather than invert — is harder to
+# test in isolation because `not` resolves inner relative to its own
+# dirname (so we can't drop a synthetic inner into a fake bindir). The
+# code path was manually smoke-tested; if it regresses, the symptom
+# would be a real check tool crashing internally and silently being
+# reported as a passing negation.
