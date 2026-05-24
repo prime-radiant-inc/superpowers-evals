@@ -3,7 +3,7 @@ pre() {
     git-branch main
     file-exists 'plan.md'
     file-exists 'design.md'
-    command-succeeds 'command -v go'
+    requires-tool go
 }
 
 post() {

@@ -15,6 +15,7 @@ from harness.scaffold import (
     fix_executable_bits,
     new_scenario,
 )
+from harness.show import ShowError, ShowMode, render, resolve_target
 
 # TODO(phase-3): when drill is decommissioned, scenarios move to top-level
 # scenarios/ and coding-agent-contexts/coding-agents/ may relocate.
@@ -59,8 +60,12 @@ def run(
         coding_agent_contexts_dir=coding_agent_contexts_dir,
         out_root=out_root,
     )
-    click.echo(f"  run: {run_dir}")
-    click.echo(json.dumps(verdict.to_dict(), indent=2))
+    # Same renderer as `harness show` — consistent UX whether you're
+    # watching a fresh run or re-rendering an old one. verdict.json is
+    # always persisted to run_dir/ so the JSON is one `harness show --json`
+    # or `cat verdict.json` away.
+    color = sys.stdout.isatty()
+    click.echo(render(verdict.to_dict(), run_dir, color=color, mode="full"), nl=False)
     sys.exit({"pass": 0, "fail": 1, "indeterminate": 2}[verdict.final])
 
 
@@ -144,3 +149,66 @@ def check(names: tuple[str, ...], fix: bool, scenarios_root: Path) -> None:
     if failed:
         click.echo(f"\n{failed} scenario(s) failed validation", err=True)
         sys.exit(1)
+
+
+@main.command("show")
+@click.argument("target", required=False)
+@click.option("-q", "--quiet", "mode_quiet", is_flag=True,
+              help="Print only the two-line header (final + reason).")
+@click.option("--json", "mode_json", is_flag=True,
+              help="Print raw verdict.json after resolving target.")
+@click.option("--no-color", "no_color", is_flag=True,
+              help="Disable ANSI color (auto-disabled when stdout isn't a TTY).")
+@click.option(
+    "--results-root",
+    default=_DEFAULT_OUT_ROOT,
+    type=click.Path(path_type=Path),
+    help="Where to look for run-dirs (default: results-harness/).",
+)
+def show(
+    target: str | None,
+    mode_quiet: bool,
+    mode_json: bool,
+    no_color: bool,
+    results_root: Path,
+) -> None:
+    """Render a harness run's verdict.
+
+    TARGET resolution (in order): omitted → newest run-dir under
+    --results-root; path/to/run-dir/ → that dir; path/.../verdict.json →
+    its parent; prefix → newest results-root/<prefix>-* by mtime.
+
+    Always exits 0 on success — this is a display tool, not a verdict
+    carrier. Use `harness run`'s exit code for pass/fail signal. Exits 1
+    on resolution failure, 2 on malformed verdict.json.
+    """
+    if mode_quiet and mode_json:
+        click.echo("error: --quiet and --json are mutually exclusive", err=True)
+        sys.exit(1)
+    mode: ShowMode = "json" if mode_json else "quiet" if mode_quiet else "full"
+
+    try:
+        run_dir = resolve_target(target, results_root=results_root)
+    except ShowError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+
+    verdict_path = run_dir / "verdict.json"
+    try:
+        verdict = json.loads(verdict_path.read_text())
+    except json.JSONDecodeError as e:
+        click.echo(f"error: malformed verdict.json at {verdict_path}: {e}", err=True)
+        sys.exit(2)
+
+    color = not no_color and sys.stdout.isatty()
+    try:
+        click.echo(render(verdict, run_dir, color=color, mode=mode), nl=False)
+    except (KeyError, TypeError) as e:
+        # Schema-deviant verdict (parseable JSON, but missing/wrong fields).
+        # Same exit as malformed JSON — the contract is "either valid against
+        # schema v1 or exit 2"; the cause distinction is in the message.
+        click.echo(
+            f"error: verdict at {verdict_path} doesn't match schema v1: {e}",
+            err=True,
+        )
+        sys.exit(2)

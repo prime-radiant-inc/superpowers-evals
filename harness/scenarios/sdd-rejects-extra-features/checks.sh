@@ -1,6 +1,7 @@
 pre() {
     git-repo
     git-branch main
+    requires-tool npm
     file-exists 'docs/superpowers/plans/math-plan.md'
     file-contains 'docs/superpowers/plans/math-plan.md' 'DO NOT add any extra features'
 }

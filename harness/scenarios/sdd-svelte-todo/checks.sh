@@ -3,8 +3,7 @@ pre() {
     git-branch main
     file-exists 'plan.md'
     file-exists 'design.md'
-    command-succeeds 'command -v npm'
-    command-succeeds 'command -v npx'
+    requires-tool npm npx
 }
 
 post() {
