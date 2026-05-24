@@ -6,9 +6,12 @@ from pathlib import Path
 BIN = Path("harness/bin").resolve()
 
 def _run(*args: str, cwd: Path, sink: Path) -> int:
-    return subprocess.run([str(BIN/"not"), *args], cwd=cwd,
+    proc = subprocess.run([str(BIN/"not"), *args], cwd=cwd,
         env={"PATH": f"{BIN}:/usr/bin:/bin", "HARNESS_RECORD_SINK": str(sink)},
-        capture_output=True, text=True).returncode
+        capture_output=True, text=True)
+    if proc.returncode != 0 and proc.stderr:
+        print(f"[not] stderr: {proc.stderr}")
+    return proc.returncode
 
 def _r(sink): return json.loads(sink.read_text().splitlines()[-1])
 
