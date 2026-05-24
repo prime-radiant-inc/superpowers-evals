@@ -21,37 +21,81 @@ HARNESS_REPO_ROOT for that purpose.
 Single-run-at-a-time only in Phase 1. Multiple harness processes against the
 same target's session-log dir cross-contaminate via snapshot/diff. Enforced
 with a sentinel lockfile that refuses (rather than silently falling back).
+
+checks.sh is required for every scenario. If a scenario is missing checks.sh,
+the runner writes an indeterminate verdict immediately.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
+import secrets
 import shutil
 import subprocess
-import tempfile
-import time
 from pathlib import Path
 
-from harness.assertions import AssertionResult, run_assertions
 from harness.capture import capture_token_usage, capture_tool_calls, snapshot_dir
-from harness.composer import FinalVerdict, GauntletStatus, compose
-from harness.scenario_config import (
-    ScenarioConfigError,
-    check_target_compatibility,
-    load_scenario_config,
-)
-from harness.setup_step import PreflightError, SetupError, run_preflight, run_setup
-from harness.target_config import TargetConfig, load_target_config
+from harness.checks import parse_coding_agents_directive, run_phase
+from harness.coding_agent_config import CodingAgentConfig, load_coding_agent_config
+from harness.composer import FinalVerdict, GauntletLayer, GauntletStatus, RunError, compose
+from harness.setup_step import SetupError, run_setup
 from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
 
 LAUNCH_CWD_SENTINEL = ".harness-launch-cwd"
-AGENT_CONFIG_SUBDIR = "agent-config"
+CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
 
 
 class RunnerError(RuntimeError):
     """Raised on non-recoverable errors before verdict composition."""
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _harness_bin_dir() -> Path:
+    """Return the harness/bin/ directory (where check tools live)."""
+    return Path(__file__).resolve().parent / "bin"
+
+
+def _allocate_run_dir(*, out_root: Path, scenario_name: str, coding_agent: str) -> Path:
+    """Create and return <out_root>/<scenario>-<coding-agent>-<utc>-<nonce>/.
+
+    UTC matches gauntlet.run_id so the two timestamps in a run-dir don't read
+    ~7h apart. The 4-hex nonce sidesteps second-precision collisions when
+    sweep-N support eventually runs the same (scenario, coding-agent) pair
+    concurrently.
+    """
+    timestamp = _dt.datetime.now(_dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    nonce = secrets.token_hex(2)
+    run_dir = out_root / f"{scenario_name}-{coding_agent}-{timestamp}-{nonce}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def _write_indeterminate(
+    run_dir: Path,
+    *,
+    final_reason: str,
+    gauntlet: GauntletLayer | None = None,
+    checks: list | None = None,
+    error: RunError | None = None,
+) -> FinalVerdict:
+    """Build an indeterminate verdict, persist it to verdict.json, and return it."""
+    v = FinalVerdict(
+        final="indeterminate",
+        final_reason=final_reason,
+        gauntlet=gauntlet,
+        checks=checks or [],
+        error=error,
+    )
+    (run_dir / "verdict.json").write_text(json.dumps(v.to_dict(), indent=2))
+    return v
+
+
+# ---------------------------------------------------------------------------
 
 def _seed_codex_auth(codex_home: Path) -> None:
     """Seed codex auth.json so the agent boots past the sign-in picker.
@@ -100,14 +144,14 @@ def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
 
 
 def _seed_agent_config_dir(
-    target: TargetConfig,
+    coding_agent: CodingAgentConfig,
     skeleton_root: Path,
     dest: Path,
     workdir: Path,
 ) -> None:
     """Allocate a fresh per-run agent-config dir.
 
-    If skeleton_root/skeleton-<target>-home/ exists, copy it; otherwise
+    If skeleton_root/skeleton-<coding-agent>-home/ exists, copy it; otherwise
     mkdir empty. For claude, then inject hasTrustDialogAccepted for the
     workdir's canonical path (claude keys per-project trust by
     process.cwd(), which is symlink-resolved on macOS) so the workspace-
@@ -121,13 +165,13 @@ def _seed_agent_config_dir(
     plugin hook — the codex equivalent of the Superpowers access every
     claude run gets.
     """
-    skeleton = skeleton_root / f"skeleton-{target.name}-home"
+    skeleton = skeleton_root / f"skeleton-{coding_agent.name}-home"
     seeded = skeleton.exists()
     if seeded:
         shutil.copytree(skeleton, dest)
     else:
         dest.mkdir(parents=True)
-    if target.name == "claude" and seeded:
+    if coding_agent.name == "claude" and seeded:
         config_path = dest / ".claude.json"
         config = json.loads(config_path.read_text())
         config.setdefault("projects", {})[str(workdir.resolve())] = {
@@ -137,7 +181,7 @@ def _seed_agent_config_dir(
             "hasClaudeMdExternalIncludesWarningShown": True,
         }
         config_path.write_text(json.dumps(config))
-    if target.name == "codex":
+    if coding_agent.name == "codex":
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)
 
@@ -151,23 +195,23 @@ def _resolve_launch_cwd(workdir: Path) -> Path:
     sentinel = workdir / LAUNCH_CWD_SENTINEL
     if not sentinel.exists():
         return workdir
-    target = Path(sentinel.read_text().strip())
-    if not target.exists():
+    resolved_path = Path(sentinel.read_text().strip())
+    if not resolved_path.exists():
         raise RunnerError(
-            f"setup.sh wrote {LAUNCH_CWD_SENTINEL}={target} but that path "
+            f"setup.sh wrote {LAUNCH_CWD_SENTINEL}={resolved_path} but that path "
             "doesn't exist"
         )
-    return target
+    return resolved_path
 
 
 def _gauntlet_status_from_run_dir(run_dir: Path) -> GauntletStatus:
-    """Read gauntlet's verdict from <run-dir>/.gauntlet/results/<runId>/result.json.
+    """Read gauntlet's verdict from <run-dir>/gauntlet-agent/results/<runId>/result.json.
 
     Phase 1 is one gauntlet invocation per run-dir, so there should be exactly
     one runId directory. If we find more (shouldn't happen), use the newest.
     """
     _valid: set[GauntletStatus] = {"pass", "fail", "investigate"}
-    results_root = run_dir / ".gauntlet" / "results"
+    results_root = run_dir / "gauntlet-agent" / "results"
     if not results_root.exists():
         return "investigate"
     candidates = sorted(p for p in results_root.iterdir() if p.is_dir())
@@ -180,6 +224,36 @@ def _gauntlet_status_from_run_dir(run_dir: Path) -> GauntletStatus:
             except (OSError, json.JSONDecodeError):
                 continue
     return "investigate"
+
+
+def _build_gauntlet_layer_from_run_dir(run_dir: Path) -> GauntletLayer | None:
+    """Build a GauntletLayer from the run dir.
+
+    Reads result.json from <run-dir>/gauntlet-agent/results/<runId>/ and
+    populates status, summary, reasoning, and run_id. Returns None if no
+    result file can be found.
+    """
+    results_root = run_dir / "gauntlet-agent" / "results"
+    if not results_root.exists():
+        return None
+    candidates = sorted(p for p in results_root.iterdir() if p.is_dir())
+    for run_id_dir in reversed(candidates):
+        result_path = run_id_dir / "result.json"
+        if result_path.exists():
+            try:
+                data = json.loads(result_path.read_text())
+                _valid: set[GauntletStatus] = {"pass", "fail", "investigate"}
+                raw_status = data.get("status", "investigate")
+                status: GauntletStatus = raw_status if raw_status in _valid else "investigate"
+                return GauntletLayer(
+                    status=status,
+                    summary=data.get("summary", "") or "",
+                    reasoning=data.get("reasoning", "") or "",
+                    run_id=run_id_dir.name,
+                )
+            except (OSError, json.JSONDecodeError):
+                continue
+    return None
 
 
 def _harness_repo_root() -> Path:
@@ -214,8 +288,9 @@ def invoke_gauntlet(
     cmd = [
         "gauntlet", "run", str(story_path),
         "--adapter", "tui",
-        "--target", target_binary,
+        "--target", target_binary,  # Gauntlet's own --target flag; keep this — it's not the Harness's vocabulary.
         "--project-dir", str(run_dir),
+        "--state-dir", "gauntlet-agent",
         "--silent",
     ]
     if max_time:
@@ -231,41 +306,13 @@ def invoke_gauntlet(
     return _gauntlet_status_from_run_dir(run_dir)
 
 
-def _has_any_assertions(assertions_dir: Path) -> bool:
-    """Drill engine.py:169-178 parity: empty-capture guard fires whenever
-    the scenario declares any assertions at all, not just tool-named ones.
-    """
-    if not assertions_dir.exists():
-        return False
-    return any(
-        p.is_file() and os.access(p, os.X_OK)
-        for p in assertions_dir.iterdir()
-    )
-
-
-def _empty_capture_synthetic(tool_calls_path: Path) -> AssertionResult | None:
-    """Drill engine.py:169-178 parity guard."""
-    if not tool_calls_path.exists() or tool_calls_path.stat().st_size == 0:
-        return AssertionResult(
-            name="00-non-empty-capture",
-            exit_code=1,
-            stdout="",
-            stderr=(
-                f"FAIL: {tool_calls_path.name} is empty. The agent session "
-                "either crashed before any tool call, or per-target capture "
-                "missed them. Investigate session-log dir + normalizer config."
-            ),
-        )
-    return None
-
-
 def _populate_context_dir(
     contexts_dir: Path,
-    target: str,
+    coding_agent: str,
     run_dir: Path,
     substitutions: dict[str, str] | None = None,
 ) -> None:
-    """Copy per-target HOWTOs into <run-dir>/.gauntlet/context/.
+    """Copy per-coding-agent HOWTOs into <run-dir>/gauntlet-agent/context/.
 
     `substitutions` maps placeholders (e.g. `$HARNESS_AGENT_CWD`) to literal
     values. Applied to every text file via plain string replace. This is the
@@ -278,8 +325,8 @@ def _populate_context_dir(
     `tmux new-session` so user env vars actually reach the agent's shell.
     When that lands, this templating becomes unnecessary.
     """
-    src = contexts_dir / target
-    dst = run_dir / ".gauntlet" / "context"
+    src = contexts_dir / coding_agent
+    dst = run_dir / "gauntlet-agent" / "context"
     dst.mkdir(parents=True, exist_ok=True)
     subs = substitutions or {}
     if not src.exists():
@@ -316,41 +363,54 @@ def _copytree_with_substitutions(
             _copytree_with_substitutions(entry, dst / entry.name, subs)
 
 
-def run_scenario(
+def _run_scenario_inner(
     *,
+    run_dir: Path,
     scenario_dir: Path,
-    target: str,
-    targets_dir: Path,
-    contexts_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    coding_agent_contexts_dir: Path,
     out_root: Path,
-    bin_dir: Path,
     skeleton_root: Path | None = None,
-) -> FinalVerdict:
-    # 1. Parse target + (optional) scenario configs; check compatibility.
-    target_path = targets_dir / f"{target}.yaml"
-    if not target_path.exists():
-        raise RunnerError(f"unknown target {target!r}: no {target_path}")
-    tcfg = load_target_config(target_path)
-    scfg = load_scenario_config(scenario_dir / "scenario.yaml")
-    try:
-        check_target_compatibility(scfg, target)
-    except ScenarioConfigError as e:
-        raise RunnerError(f"compatibility: {e}") from e
+) -> tuple[Path, FinalVerdict]:
+    """Inner implementation — run_dir is pre-allocated by the wrapper.
+
+    checks.sh is required. If absent, returns an indeterminate verdict immediately.
+    Runs checks.sh pre() before the agent, post() after capture.
+    """
+    # 1. Parse coding-agent config.
+    coding_agent_path = coding_agents_dir / f"{coding_agent}.yaml"
+    if not coding_agent_path.exists():
+        raise RunnerError(f"unknown coding-agent {coding_agent!r}: no {coding_agent_path}")
+    tcfg = load_coding_agent_config(coding_agent_path)
 
     story_path = scenario_dir / "story.md"
     if not story_path.exists():
         raise RunnerError(f"{scenario_dir}: story.md missing")
 
-    # 2. Create per-run dir (doubles as gauntlet --project-dir).
-    timestamp = time.strftime("%Y%m%dT%H%M%S")
-    run_dir = out_root / f"{scenario_dir.name}-{target}-{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # 2. checks.sh is required.
+    checks_sh = scenario_dir / "checks.sh"
+    if not checks_sh.exists():
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason="scenario missing checks.sh",
+            error=RunError(stage="setup", message="checks.sh not found"),
+        )
 
-    # 3. Create temp workdir + per-run agent-config dir. agent_config_dir
-    #    lives inside run_dir so it persists with the rest of the evidence
-    #    on failure; resolved session_log_dir points at its log subpath.
-    workdir = Path(tempfile.mkdtemp(prefix="harness-wd-"))
-    agent_config_dir = run_dir / AGENT_CONFIG_SUBDIR
+    # Coding-Agent gating — read magic comment before any side effect.
+    allowed = parse_coding_agents_directive(checks_sh)
+    if allowed and coding_agent not in allowed:
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=f"requires coding-agents: {', '.join(allowed)}",
+        )
+
+    # 3. Create workdir (inside run_dir) + per-run coding-agent-config dir.
+    #    Both live inside run_dir so they persist with the rest of the
+    #    evidence; resolved session_log_dir points at its log subpath.
+    workdir = run_dir / "coding-agent-workdir"
+    workdir.mkdir()
+    agent_config_dir = run_dir / CODING_AGENT_CONFIG_SUBDIR
     _seed_agent_config_dir(
         tcfg,
         skeleton_root=skeleton_root or (_harness_repo_root() / "fixtures"),
@@ -359,107 +419,181 @@ def run_scenario(
     )
     session_log_dir = tcfg.resolve_session_log_dir(agent_config_dir)
     env_extra = {"HARNESS_REPO_ROOT": str(_harness_repo_root())}
-    workdir_kept = False
-    try:
-        # 4. Run setup.sh (build the fixture).
-        try:
-            run_setup(scenario_dir, workdir, env_extra=env_extra)
-        except SetupError as e:
-            raise RunnerError(f"setup failed: {e}") from e
 
-        # 4b. Run preflight.sh (verify fixture invariants before the agent).
-        try:
-            run_preflight(scenario_dir, workdir, env_extra=env_extra)
-        except PreflightError as e:
-            raise RunnerError(f"preflight failed: {e}") from e
+    # 4. Run setup.sh (build the fixture).
+    # SetupError propagates directly to the run_scenario wrapper, which maps it
+    # to an indeterminate verdict with error.stage="setup".
+    run_setup(scenario_dir, workdir, env_extra=env_extra)
 
-        # 5. Resolve launch cwd (defaults to workdir; setup.sh may
-        #    override via .harness-launch-cwd sentinel).
-        launch_cwd = _resolve_launch_cwd(workdir)
-
-        # 6. Populate .gauntlet/context/ with HOWTOs, substituting
-        #    $HARNESS_AGENT_CWD, $SUPERPOWERS_ROOT, and the per-target
-        #    agent-config env var (e.g. $CLAUDE_CONFIG_DIR) with resolved
-        #    absolute paths. tmux strips arbitrary env vars from new
-        #    sessions, so we burn the values into the HOWTO instead of
-        #    relying on env-var inheritance. See _populate_context_dir
-        #    docstring.
-        _populate_context_dir(
-            contexts_dir,
-            target,
+    # 4b. Run checks.sh pre() — verifies the fixture is in the expected state.
+    pre_records, pre_exit = run_phase(
+        checks_sh=checks_sh,
+        phase="pre",
+        workdir=workdir,
+        harness_bin=_harness_bin_dir(),
+        tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
+        run_dir=run_dir,
+    )
+    if pre_exit != 0:
+        return run_dir, _write_indeterminate(
             run_dir,
-            substitutions={
-                "$HARNESS_AGENT_CWD": str(launch_cwd),
-                "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
-                f"${tcfg.agent_config_env}": str(agent_config_dir),
-            },
+            final_reason=f"checks.sh pre() crashed (exit {pre_exit})",
+            error=RunError(stage="checks", message=f"pre exit {pre_exit}"),
         )
 
-        # 7. Snapshot session-log dir.
-        snap = snapshot_dir(session_log_dir, tcfg.session_log_glob)
+    # 5. Resolve launch cwd (defaults to workdir; setup.sh may
+    #    override via .harness-launch-cwd sentinel).
+    launch_cwd = _resolve_launch_cwd(workdir)
 
-        # 8. Invoke gauntlet.
-        gauntlet_status = invoke_gauntlet(
-            story_path=story_path,
-            target_binary=tcfg.binary,
-            launch_cwd=launch_cwd,
+    # 6. Populate gauntlet-agent/context/ with HOWTOs, substituting
+    #    $HARNESS_AGENT_CWD, $SUPERPOWERS_ROOT, and the per-coding-agent
+    #    agent-config env var (e.g. $CLAUDE_CONFIG_DIR) with resolved
+    #    absolute paths. tmux strips arbitrary env vars from new
+    #    sessions, so we burn the values into the HOWTO instead of
+    #    relying on env-var inheritance. See _populate_context_dir
+    #    docstring.
+    _populate_context_dir(
+        coding_agent_contexts_dir,
+        coding_agent,
+        run_dir,
+        substitutions={
+            "$HARNESS_AGENT_CWD": str(launch_cwd),
+            "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
+            f"${tcfg.agent_config_env}": str(agent_config_dir),
+        },
+    )
+
+    # 7. Snapshot session-log dir.
+    snap = snapshot_dir(session_log_dir, tcfg.session_log_glob)
+
+    # 8. Invoke gauntlet.
+    gauntlet_status = invoke_gauntlet(
+        story_path=story_path,
+        target_binary=tcfg.binary,
+        launch_cwd=launch_cwd,
+        run_dir=run_dir,
+        max_time=tcfg.max_time,
+        extra_env={tcfg.agent_config_env: str(agent_config_dir)},
+    )
+
+    # 9. Capture + normalize logs.
+    capture_tool_calls(
+        log_dir=session_log_dir,
+        log_glob=tcfg.session_log_glob,
+        snapshot=snap,
+        normalizer=tcfg.normalizer,
+        run_dir=run_dir,
+        launch_cwd=launch_cwd,
+    )
+
+    # 9b. Capture token usage — measurement only, written to
+    #     coding-agent-token-usage.json. Does not affect the verdict (see
+    #     docs/migration-notes.md, cost / measurement decision).
+    capture_token_usage(
+        log_dir=session_log_dir,
+        log_glob=tcfg.session_log_glob,
+        snapshot=snap,
+        normalizer=tcfg.normalizer,
+        run_dir=run_dir,
+        launch_cwd=launch_cwd,
+    )
+
+    # 10. Run checks.sh post().
+    post_records, post_exit = run_phase(
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
+        harness_bin=_harness_bin_dir(),
+        tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
+        run_dir=run_dir,
+    )
+    if post_exit != 0:
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=f"checks.sh post() crashed (exit {post_exit})",
+            error=RunError(stage="checks", message=f"post exit {post_exit}"),
+        )
+
+    # 11. Built-in empty-capture check.
+    tcp = run_dir / "coding-agent-tool-calls.jsonl"
+    capture_empty = not tcp.exists() or tcp.stat().st_size == 0
+
+    # 12. Build Gauntlet layer from run dir.
+    gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)
+    if gauntlet_layer is None:
+        # Fallback: synthesise from the status returned by invoke_gauntlet.
+        gauntlet_layer = GauntletLayer(
+            status=gauntlet_status,
+            summary="",
+            reasoning="",
+            run_id=None,
+        )
+
+    verdict = compose(
+        gauntlet=gauntlet_layer,
+        checks=pre_records + post_records,
+        capture_empty=capture_empty,
+        error=None,
+    )
+
+    # 13. Persist.
+    (run_dir / "verdict.json").write_text(
+        json.dumps(verdict.to_dict(), indent=2)
+    )
+
+    return run_dir, verdict
+
+
+def run_scenario(
+    *,
+    scenario_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    coding_agent_contexts_dir: Path,
+    out_root: Path,
+    skeleton_root: Path | None = None,
+) -> tuple[Path, FinalVerdict]:
+    """Run one scenario against one Coding-Agent, always writing verdict.json.
+
+    Allocates run_dir before the try block so that any exception (setup crash,
+    checks failure, Gauntlet/capture error, or unexpected harness crash) can
+    still write a verdict.json into that directory.  No more husk dirs.
+
+    Returns (run_dir, verdict) so callers can log the run directory path.
+    """
+    run_dir = _allocate_run_dir(
+        out_root=out_root,
+        scenario_name=scenario_dir.name,
+        coding_agent=coding_agent,
+    )
+    try:
+        return _run_scenario_inner(
             run_dir=run_dir,
-            max_time=tcfg.max_time,
-            extra_env={tcfg.agent_config_env: str(agent_config_dir)},
+            scenario_dir=scenario_dir,
+            coding_agent=coding_agent,
+            coding_agents_dir=coding_agents_dir,
+            coding_agent_contexts_dir=coding_agent_contexts_dir,
+            out_root=out_root,
+            skeleton_root=skeleton_root,
         )
-
-        # 9. Capture + normalize logs.
-        tool_calls_path = capture_tool_calls(
-            log_dir=session_log_dir,
-            log_glob=tcfg.session_log_glob,
-            snapshot=snap,
-            normalizer=tcfg.normalizer,
-            run_dir=run_dir,
-            launch_cwd=launch_cwd,
+    except SetupError as e:
+        v = _write_indeterminate(
+            run_dir,
+            final_reason=f"setup failed: {e}",
+            error=RunError(stage="setup", message=str(e)[:500]),
         )
-
-        # 9b. Capture token usage — measurement only, written to
-        #     token_usage.json. Does not affect the verdict (see
-        #     docs/migration-notes.md, cost / measurement decision).
-        capture_token_usage(
-            log_dir=session_log_dir,
-            log_glob=tcfg.session_log_glob,
-            snapshot=snap,
-            normalizer=tcfg.normalizer,
-            run_dir=run_dir,
-            launch_cwd=launch_cwd,
+        return run_dir, v
+    except RunnerError as e:
+        v = _write_indeterminate(
+            run_dir,
+            final_reason=f"runner error: {e}",
+            error=RunError(stage="unknown", message=str(e)[:500]),
         )
-
-        # 10. Run scenario assertions.
-        results, _ = run_assertions(
-            assertions_dir=scenario_dir / "assertions",
-            run_dir=run_dir,
-            workdir=workdir,
-            bin_dir=bin_dir,
+        return run_dir, v
+    except Exception as e:  # last-resort: unexpected harness crash
+        v = _write_indeterminate(
+            run_dir,
+            final_reason=f"unexpected harness crash: {e}",
+            error=RunError(stage="unknown", message=str(e)[:500]),
         )
-
-        # 11. Empty-capture parity guard (Drill engine.py:169-178).
-        if _has_any_assertions(scenario_dir / "assertions"):
-            synth = _empty_capture_synthetic(tool_calls_path)
-            if synth is not None:
-                results = [synth, *results]
-
-        # 12. Compose final verdict.
-        verdict = compose(
-            gauntlet_status=gauntlet_status,
-            assertion_results=results,
-        )
-
-        # 13. Persist.
-        (run_dir / "verdict.json").write_text(
-            json.dumps(verdict.to_dict(), indent=2)
-        )
-
-        # 14. Workdir disposition.
-        if verdict.final != "pass":
-            workdir_kept = True
-            (run_dir / "workdir-path.txt").write_text(str(workdir))
-        return verdict
-    finally:
-        if not workdir_kept:
-            shutil.rmtree(workdir, ignore_errors=True)
+        return run_dir, v

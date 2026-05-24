@@ -1,51 +1,125 @@
-"""Combine Gauntlet's screen-side verdict with assertion results.
-
-Fixed all-must-pass: final=pass iff gauntlet=pass AND every assertion exits 0.
-No per-scenario composition rule; see docs/gauntlet-migration.md "The Agent
-/ Verifier collapse".
-"""
-
+"""Compose the three-valued verdict from the Gauntlet-Agent layer and the
+deterministic checks layer."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-from harness.assertions import AssertionResult
+from harness.checks import CheckRecord
 
-GauntletStatus = Literal["pass", "fail", "investigate"]
-AssertionStatus = Literal["pass", "fail"]
-FinalStatus = Literal["pass", "fail"]
+FinalStatus = Literal["pass", "fail", "indeterminate"]
+GauntletStatus = Literal["pass", "fail", "investigate", "errored"]
+TRACE_PRIMITIVES = {
+    "tool-called", "tool-not-called", "tool-count", "tool-before",
+    "tool-arg-match", "tool-match-before-tool-match",
+    "skill-called", "skill-not-called", "skill-before-tool",
+    "skill-before-tool-match",
+}
+
+
+@dataclass(frozen=True)
+class GauntletLayer:
+    status: GauntletStatus
+    summary: str = ""
+    reasoning: str = ""
+    run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunError:
+    stage: Literal["setup", "gauntlet", "capture", "checks", "compose", "unknown"]
+    message: str
 
 
 @dataclass(frozen=True)
 class FinalVerdict:
-    gauntlet: GauntletStatus
-    assertions: AssertionStatus
-    final: FinalStatus
-    assertion_details: list[dict] = field(default_factory=list)
+    schema: int = 1
+    final: FinalStatus = "indeterminate"
+    final_reason: str = ""
+    gauntlet: GauntletLayer | None = None
+    checks: list[CheckRecord] = field(default_factory=list)
+    error: RunError | None = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = {
+            "schema": self.schema,
+            "final": self.final,
+            "final_reason": self.final_reason,
+            "gauntlet": asdict(self.gauntlet) if self.gauntlet else None,
+            "checks": [
+                {
+                    "check": c.check, "args": c.args, "negated": c.negated,
+                    "passed": c.passed, "detail": c.detail, "phase": c.phase,
+                }
+                for c in self.checks
+            ],
+            "error": asdict(self.error) if self.error else None,
+        }
+        return d
+
+
+def _any_trace_check(checks: list[CheckRecord]) -> bool:
+    return any(c.check in TRACE_PRIMITIVES for c in checks)
 
 
 def compose(
     *,
-    gauntlet_status: GauntletStatus,
-    assertion_results: list[AssertionResult],
+    gauntlet: GauntletLayer | None,
+    checks: list[CheckRecord],
+    capture_empty: bool,
+    error: RunError | None,
 ) -> FinalVerdict:
-    assertions: AssertionStatus = (
-        "pass" if all(r.passed for r in assertion_results) else "fail"
-    )
-    final: FinalStatus = (
-        "pass" if gauntlet_status == "pass" and assertions == "pass" else "fail"
-    )
+    # Crash path
+    if error is not None:
+        return FinalVerdict(
+            final="indeterminate",
+            final_reason=f"Harness error ({error.stage}): {error.message}",
+            gauntlet=gauntlet, checks=checks, error=error,
+        )
+    # Pre-check failure
+    failed_pre = [c for c in checks if c.phase == "pre" and not c.passed]
+    if failed_pre:
+        names = ", ".join(c.check for c in failed_pre)
+        return FinalVerdict(
+            final="indeterminate",
+            final_reason=f"pre-check(s) failed: {names}",
+            gauntlet=gauntlet, checks=checks, error=None,
+        )
+    # Gauntlet investigate/errored
+    if gauntlet is None:
+        return FinalVerdict(
+            final="indeterminate",
+            final_reason="no Gauntlet-Agent verdict",
+            gauntlet=None, checks=checks, error=None,
+        )
+    if gauntlet.status in ("investigate", "errored"):
+        return FinalVerdict(
+            final="indeterminate",
+            final_reason=f"Gauntlet-Agent did not complete (status: {gauntlet.status})",
+            gauntlet=gauntlet, checks=checks, error=None,
+        )
+    # Empty trace with trace checks
+    if capture_empty and _any_trace_check(checks):
+        return FinalVerdict(
+            final="indeterminate",
+            final_reason="tool-call capture was empty; trace checks meaningless",
+            gauntlet=gauntlet, checks=checks, error=None,
+        )
+    # Post-check evaluation
+    failed_post = [c for c in checks if c.phase == "post" and not c.passed]
+    if gauntlet.status == "pass" and not failed_post:
+        n = sum(1 for c in checks if c.phase == "post")
+        reason = f"Gauntlet-Agent passed; {n} post-check(s) passed" if n else "Gauntlet-Agent passed; no deterministic checks"
+        return FinalVerdict(
+            final="pass", final_reason=reason,
+            gauntlet=gauntlet, checks=checks, error=None,
+        )
+    reason_bits: list[str] = []
+    if gauntlet.status != "pass":
+        reason_bits.append(f"Gauntlet-Agent reported {gauntlet.status}")
+    if failed_post:
+        reason_bits.append(f"{len(failed_post)} post-check(s) failed")
     return FinalVerdict(
-        gauntlet=gauntlet_status,
-        assertions=assertions,
-        final=final,
-        assertion_details=[
-            {"name": r.name, "exit_code": r.exit_code, "stdout": r.stdout,
-             "stderr": r.stderr}
-            for r in assertion_results
-        ],
+        final="fail", final_reason="; ".join(reason_bits) or "fail",
+        gauntlet=gauntlet, checks=checks, error=None,
     )

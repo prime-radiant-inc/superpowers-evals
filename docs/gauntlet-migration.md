@@ -85,11 +85,11 @@ No per-scenario composition DSL. Investigate verdicts compose as fail (clean sig
 │  harness/  (Python)                                         │
 │    runner.py          Orchestrate a single scenario run     │
 │    normalizers.py     Lifted from drill/normalizer.py       │
-│    targets/           Per-target config (binary, log path,  │
-│                       normalizer, required env). One file   │
-│                       per agent CLI, authored once.         │
-│    target_contexts/   Per-target HOWTO docs (5-line files)  │
-│    cli.py             uv run harness run <scenario> --target <name>  │
+│    coding-agents/     Per-coding-agent config (binary, log  │
+│                       path, normalizer, required env). One  │
+│                       file per agent CLI, authored once.    │
+│    coding-agent-contexts/  Per-coding-agent HOWTO docs      │
+│    cli.py             uv run harness run <scenario> --coding-agent <name>  │
 │                                                             │
 │  bin/                 Assertion helpers (unchanged)         │
 │                                                             │
@@ -115,13 +115,11 @@ No per-scenario composition DSL. Investigate verdicts compose as fail (clean sig
 ### Per-run flow
 
 ```
-1. PARSE harness/targets/<target>.yaml; validate required env vars
-   PARSE optional scenarios/<name>/scenario.yaml; if it declares
-     compatible_targets, refuse to run incompatible combinations
+1. PARSE harness/coding-agents/<coding-agent>.yaml; validate required env vars
 2. CREATE per-run dir at /tmp/harness-run-XXX/
      - this is BOTH the gauntlet --project-dir AND the evidence root
 3. POPULATE /tmp/harness-run-XXX/.gauntlet/context/
-     - copy harness/target_contexts/<target>/* (invocation, log path, shutdown)
+     - copy harness/coding-agent-contexts/<coding-agent>/* (invocation, log path, shutdown)
 4. CREATE temp workdir at /tmp/harness-wd-XXX/
 5. RUN setup.sh in workdir; abort on non-zero
 6. SNAPSHOT agent-under-test session-log dir (per target config)
@@ -137,13 +135,13 @@ No per-scenario composition DSL. Investigate verdicts compose as fail (clean sig
 11. WRITE verdict.json; clean up workdir on pass, keep on fail
 ```
 
-The QA agent in step 7 reads its `.gauntlet/context/`, learns how to invoke the target binary (typing it into bash), and uses bash plus `read_screen` to drive the agent and observe its log. When ready, it calls `report_result`.
+The QA agent in step 7 reads its `.gauntlet/context/`, learns how to invoke the Coding-Agent binary (typing it into bash), and uses bash plus `read_screen` to drive the agent and observe its log. When ready, it calls `report_result`.
 
 ## What stays in / out of Gauntlet
 
 **In Gauntlet (no changes):** TUI adapter, agent loop, AC verdict, evidence pipeline, run-sets, batch mode, fanout, `--passes`, bash tool, context-dir reading.
 
-**In the harness (new code in `superpowers-evals/`):** workdir setup, per-target session-log capture and normalization, deterministic assertions, per-target context docs (small), per-scenario target manifests, the lifted `bin/` helpers, the lifted token-usage capture (deferred wiring until first cost-scenario port).
+**In the harness (new code in `superpowers-evals/`):** workdir setup, per-coding-agent session-log capture and normalization, deterministic assertions, per-coding-agent context docs (small), per-scenario coding-agent manifests, the lifted `bin/` helpers, the lifted token-usage capture (deferred wiring until first cost-scenario port).
 
 **Not in either (yet):** sweep CLI, cross-target comparison view. Shell loops cover Phase 1; promote when friction warrants.
 
@@ -162,8 +160,8 @@ Steps:
 1. Build the per-run flow as a Python CLI (`harness run <scenario>`).
 2. Lift `drill/normalizer.py` and `drill/token_capture.py` near-verbatim with their tests.
 3. Port `bin/` helpers verbatim — already framework-agnostic.
-4. Author `harness/targets/claude.yaml` and `harness/targets/codex.yaml` once.
-5. Convert all three scenarios. Each becomes `scenarios/<name>/{story.md, setup.sh, assertions/*.sh}` plus an optional `scenario.yaml` if the scenario is target-specific (the Codex scenario will be).
+4. Author `harness/coding-agents/claude.yaml` and `harness/coding-agents/codex.yaml` once.
+5. Convert all three scenarios. Each becomes `scenarios/<name>/{story.md, setup.sh, assertions/*.sh}` plus an optional `scenario.yaml` if the scenario is coding-agent-specific (the Codex scenario will be).
 6. Run both Drill and the harness against the same backends. Document divergence.
 
 Phase 1 passes when: harness verdict matches Drill verdict on all three (or any divergence is explained and accepted in `docs/migration-notes.md`), `tool_calls.jsonl` is byte- or schema-equivalent, and assertion scripts exit identically.

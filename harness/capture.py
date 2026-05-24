@@ -59,12 +59,12 @@ def capture_tool_calls(
 ) -> Path:
     """Diff log_dir, filter by cwd if applicable, normalize, write JSONL.
 
-    Always writes tool_calls.jsonl (empty if no new logs) so downstream
-    assertions can rely on the file existing.
+    Always writes coding-agent-tool-calls.jsonl (empty if no new logs) so
+    downstream assertions can rely on the file existing.
     """
     new = _new_session_logs(log_dir, log_glob, snapshot, normalizer, launch_cwd)
     fn = NORMALIZERS[normalizer]
-    out_path = run_dir / "tool_calls.jsonl"
+    out_path = run_dir / "coding-agent-tool-calls.jsonl"
     with out_path.open("w") as f:
         for path in new:
             for row in fn(path.read_text()):
@@ -81,19 +81,20 @@ def capture_token_usage(
     run_dir: Path,
     launch_cwd: Path | None = None,
 ) -> Path | None:
-    """Sum token usage across the run's new session logs; write token_usage.json.
+    """Sum token usage across the run's new session logs; write coding-agent-token-usage.json.
 
-    Measurement only — the pass/fail verdict is unaffected. token_usage.json
-    sits in run_dir alongside verdict.json; a cost scenario reads it from an
-    ordinary deterministic assertion (see docs/migration-notes.md, the cost /
-    measurement decision). Returns the written path, or None when usage can't
-    be captured — a backend token_usage.py does not parse (gemini, pi), or no
-    new session logs were produced — in which case no file is written.
+    Measurement only — the pass/fail verdict is unaffected.
+    coding-agent-token-usage.json sits in run_dir alongside verdict.json; a
+    cost scenario reads it from an ordinary deterministic assertion (see
+    docs/migration-notes.md, the cost / measurement decision). Returns the
+    written path, or None when usage can't be captured — a backend
+    token_usage.py does not parse (gemini, pi), or no new session logs were
+    produced — in which case no file is written.
     """
     new = _new_session_logs(log_dir, log_glob, snapshot, normalizer, launch_cwd)
     usage = capture_tokens(normalizer, new)
     if usage is None:
         return None
-    out_path = run_dir / "token_usage.json"
+    out_path = run_dir / "coding-agent-token-usage.json"
     out_path.write_text(json.dumps(usage, indent=2) + "\n")
     return out_path

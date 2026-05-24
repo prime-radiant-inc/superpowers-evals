@@ -55,7 +55,7 @@ is a deferred follow-up.
 First parity attempt on `triggering-writing-plans` surfaced three real bugs the test suite missed because every test used `tmp_path` (always absolute) and `unittest.mock.patch` for the gauntlet subprocess:
 
 1. **Relative scenario_dir broke setup.sh subprocess** — `subprocess.run([str(p)], cwd=X)` resolves relative `p` against `X`, not the harness's cwd. Fixed: CLI resolves every path to absolute at the boundary. Regression test added in `test_cli.py`.
-2. **Claude session-log glob was stale** — `**/session-*.jsonl` matched nothing because current claude writes `<UUIDv4>.jsonl`. Drill's pattern was outdated. Fixed: glob is now `**/*.jsonl` in `harness/targets/claude.yaml`.
+2. **Claude session-log glob was stale** — `**/session-*.jsonl` matched nothing because current claude writes `<UUIDv4>.jsonl`. Drill's pattern was outdated. Fixed: glob is now `**/*.jsonl` in `harness/coding-agents/claude.yaml`.
 3. **tmux strips arbitrary env vars from new sessions** — `HARNESS_AGENT_CWD` and `SUPERPOWERS_ROOT` exported by the harness never reached the QA agent's bash. The QA agent ran `cd "$HARNESS_AGENT_CWD"` against an empty value (no-op), so claude launched in gauntlet's scratch dir. Fixed: runner templates HOWTO files at runtime, substituting the placeholders with resolved absolute paths.
 
 The deeper Gauntlet-side fix for #3 is to have the TUI adapter pass `tmux new-session -e VAR=value` for each env var (or accept an allowlist). File upstream when convenient; current harness workaround works without Gauntlet changes.
@@ -182,9 +182,9 @@ Drill scenarios deliberately not ported, with the reason.
   the same detached-HEAD condition with setup helpers. No coverage
   lost.
 - **`gemini-subagent-tool-mapping-comprehension`** (deferred 2026-05-20).
-  Needs `harness/targets/gemini.yaml`, which cannot be authored yet. The
+  Needs `harness/coding-agents/gemini.yaml`, which cannot be authored yet. The
   gemini CLI is not installed on the dev machine, and — the real
-  blocker — the harness requires each target to support a per-run
+  blocker — the harness requires each coding-agent to support a per-run
   isolated config dir (`agent_config_env`); it is unconfirmed whether
   the gemini CLI can relocate its config home via an env var (drill ran
   gemini against the real `~/.gemini`, un-isolated). Revisit when gemini

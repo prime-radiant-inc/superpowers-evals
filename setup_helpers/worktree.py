@@ -80,15 +80,20 @@ def detach_head(worktree_path: str) -> None:
         )
 
 
+def _sibling_path(workdir: Path, suffix: str) -> Path:
+    """Return a sibling directory path: <workdir.parent>/<workdir.name>-<suffix>."""
+    return workdir.parent / f"{workdir.name}-{suffix}"
+
+
 def add_existing_worktree(workdir: Path) -> None:
     """Create an existing worktree (for 'already inside' scenarios)."""
-    wt_path = workdir.parent / f"{workdir.name}-existing-worktree"
+    wt_path = _sibling_path(workdir, "existing-worktree")
     add_worktree(workdir, "existing-feature", str(wt_path))
 
 
 def detach_worktree_head(workdir: Path) -> None:
     """Detach HEAD in the existing worktree."""
-    wt_path = workdir.parent / f"{workdir.name}-existing-worktree"
+    wt_path = _sibling_path(workdir, "existing-worktree")
     detach_head(str(wt_path))
 
 
@@ -120,7 +125,7 @@ def install_codex_superpowers_plugin_hooks(
     """
     drill_owned = codex_home is None
     if codex_home is None:
-        codex_home = workdir.parent / f"{workdir.name}-codex-home"
+        codex_home = _sibling_path(workdir, "codex-home")
         if codex_home.exists():
             shutil.rmtree(codex_home)
         codex_home.mkdir(parents=True, exist_ok=True)

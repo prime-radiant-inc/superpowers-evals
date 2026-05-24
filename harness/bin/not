@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# harness/bin/not
+# Usage: not <inner-tool> [args...]
+# Runs the inner tool with HARNESS_RECORD_SINK unset (suppressing its record),
+# captures exit code, emits one negated record on its behalf.
+_RECORD_CHECK=not
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+
+inner="$1"; shift
+inner_args_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
+
+# Run with sink unset
+( unset HARNESS_RECORD_SINK; "$(dirname "$0")/$inner" "$@" ) >/dev/null 2>&1
+inner_ec=$?
+
+if [ "$inner_ec" -eq 0 ]; then
+    inverted=false
+else
+    inverted=true
+fi
+
+record_negated "$inner" "$inner_args_json" "$inverted" ""
+
+# Exit code: 0 if negation passed (inner failed), 1 otherwise.
+if [ "$inverted" = "true" ]; then exit 0; else exit 1; fi

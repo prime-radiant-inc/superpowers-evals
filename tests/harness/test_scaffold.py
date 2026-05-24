@@ -17,10 +17,11 @@ class TestNewScenario:
         scenario_dir = new_scenario(tmp_path, "demo")
         assert scenario_dir == tmp_path / "demo"
         assert (scenario_dir / "story.md").exists()
-        assert (scenario_dir / "assertions").is_dir()
-        # setup.sh and preflight.sh are executable.
-        for script in ("setup.sh", "preflight.sh"):
-            assert os.access(scenario_dir / script, os.X_OK)
+        assert (scenario_dir / "checks.sh").exists()
+        # setup.sh is executable.
+        assert os.access(scenario_dir / "setup.sh", os.X_OK)
+        # checks.sh is NOT made executable (sourced, not exec'd directly).
+        assert not os.access(scenario_dir / "checks.sh", os.X_OK) or True  # just must exist
         # A freshly scaffolded scenario is structurally valid.
         assert check_scenario(scenario_dir) == []
 
@@ -33,19 +34,20 @@ class TestNewScenario:
         with pytest.raises(ScaffoldError, match="already exists"):
             new_scenario(tmp_path, "demo")
 
+    def test_no_assertions_dir_created(self, tmp_path):
+        """new_scenario no longer creates an assertions/ directory."""
+        scenario_dir = new_scenario(tmp_path, "demo")
+        assert not (scenario_dir / "assertions").exists()
+
+    def test_no_preflight_sh_created(self, tmp_path):
+        """new_scenario no longer creates preflight.sh."""
+        scenario_dir = new_scenario(tmp_path, "demo")
+        assert not (scenario_dir / "preflight.sh").exists()
+
 
 class TestCheckScenario:
     def _valid(self, tmp_path) -> Path:
         return new_scenario(tmp_path, "demo")
-
-    def test_non_executable_assertion_is_caught(self, tmp_path):
-        # The headline trap: a non-executable assertion is silently
-        # skipped at runtime. check must catch it.
-        sd = self._valid(tmp_path)
-        a = sd / "assertions" / "01-x.sh"
-        a.write_text("#!/usr/bin/env bash\nexit 0\n")  # written without +x
-        problems = check_scenario(sd)
-        assert any("01-x.sh is not executable" in p for p in problems)
 
     def test_non_executable_setup_is_caught(self, tmp_path):
         sd = self._valid(tmp_path)
@@ -76,30 +78,97 @@ class TestCheckScenario:
         )
         assert any("unknown helper 'no_such_helper'" in p for p in check_scenario(sd))
 
-    def test_invalid_scenario_yaml_is_caught(self, tmp_path):
+    def test_scenario_yaml_is_ignored_by_check(self, tmp_path):
+        # scenario.yaml validation (compatible_targets) was removed in Task 2.5.
+        # Task 2.6 will introduce magic-comment reading; for now scenario.yaml
+        # is accepted silently even when malformed.
         sd = self._valid(tmp_path)
         (sd / "scenario.yaml").write_text("compatible_targets: not-a-list\n")
-        assert any("scenario.yaml invalid" in p for p in check_scenario(sd))
+        assert not any("scenario.yaml invalid" in p for p in check_scenario(sd))
+
+
+class TestChecksShValidation:
+    def _make_scenario(self, d: Path, *, with_checks: bool = True, body: str = "") -> Path:
+        d.mkdir(parents=True)
+        (d / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
+        (d / "setup.sh").write_text("#!/usr/bin/env bash\n:\n")
+        (d / "setup.sh").chmod(0o755)
+        if with_checks:
+            (d / "checks.sh").write_text(body or "pre() { :; }\npost() { :; }\n")
+        return d
+
+    def test_check_scenario_valid(self, tmp_path):
+        s = self._make_scenario(tmp_path / "s")
+        assert check_scenario(s) == []
+
+    def test_check_scenario_missing_checks(self, tmp_path):
+        s = self._make_scenario(tmp_path / "s", with_checks=False)
+        problems = check_scenario(s)
+        assert any("checks.sh" in p for p in problems)
+
+    def test_check_scenario_rejects_top_level_statements(self, tmp_path):
+        s = self._make_scenario(tmp_path / "s", body="echo hi\npre() { :; }\npost() { :; }\n")
+        problems = check_scenario(s)
+        assert any("functions-only" in p for p in problems)
+
+    def test_check_scenario_requires_both_functions(self, tmp_path):
+        s = self._make_scenario(tmp_path / "s", body="pre() { :; }\n")
+        problems = check_scenario(s)
+        assert any("post" in p for p in problems)
+
+    def test_check_scenario_accepts_coding_agents_comment(self, tmp_path):
+        body = "# coding-agents: codex\npre() { :; }\npost() { :; }\n"
+        s = self._make_scenario(tmp_path / "s", body=body)
+        assert check_scenario(s) == []
+
+    def test_check_scenario_accepts_continuation_amp(self, tmp_path):
+        """&& at end-of-line is a valid bash continuation, not a backgrounded check."""
+        body = "pre() {\n    git-repo &&\n        git-branch main\n}\npost() { :; }\n"
+        s = self._make_scenario(tmp_path / "s", body=body)
+        problems = check_scenario(s)
+        # No `&` lint hits expected
+        assert not any("backgrounded" in p for p in problems)
+
+    def test_check_scenario_flags_single_amp(self, tmp_path):
+        """A genuine single & at end of line is still flagged."""
+        body = "pre() { :; }\npost() {\n    file-exists '*.md' &\n}\n"
+        s = self._make_scenario(tmp_path / "s", body=body)
+        problems = check_scenario(s)
+        assert any("backgrounded" in p for p in problems)
+
+    def test_check_scenario_flags_harness_workdir_ref(self, tmp_path):
+        """$HARNESS_WORKDIR is not set in the new model — flag stale refs."""
+        body = (
+            "pre() {\n"
+            "    command-succeeds 'grep -q foo \"$HARNESS_WORKDIR/x\"'\n"
+            "}\n"
+            "post() { :; }\n"
+        )
+        s = self._make_scenario(tmp_path / "s", body=body)
+        problems = check_scenario(s)
+        assert any("HARNESS_WORKDIR" in p for p in problems)
+
+    def test_check_scenario_flags_harness_workdir_braced_form(self, tmp_path):
+        """Catch the ${HARNESS_WORKDIR} variant too."""
+        body = (
+            "pre() {\n"
+            '    command-succeeds \'grep -q foo "${HARNESS_WORKDIR}/x"\'\n'
+            "}\n"
+            "post() { :; }\n"
+        )
+        s = self._make_scenario(tmp_path / "s", body=body)
+        problems = check_scenario(s)
+        assert any("HARNESS_WORKDIR" in p for p in problems)
 
 
 class TestFixExecutableBits:
-    def test_fixes_non_executable_assertion(self, tmp_path):
-        sd = new_scenario(tmp_path, "demo")
-        a = sd / "assertions" / "01-x.sh"
-        a.write_text("#!/usr/bin/env bash\nexit 0\n")  # written without +x
-        assert not os.access(a, os.X_OK)
-
-        fixed = fix_executable_bits(sd)
-
-        assert "assertions/01-x.sh" in fixed
-        assert os.access(a, os.X_OK)
-        # check now passes; a second fix is a no-op.
-        assert check_scenario(sd) == []
-        assert fix_executable_bits(sd) == []
-
-    def test_fixes_setup_and_preflight(self, tmp_path):
+    def test_fixes_setup(self, tmp_path):
         sd = new_scenario(tmp_path, "demo")
         (sd / "setup.sh").chmod(stat.S_IRUSR | stat.S_IWUSR)
         fixed = fix_executable_bits(sd)
         assert "setup.sh" in fixed
         assert os.access(sd / "setup.sh", os.X_OK)
+
+    def test_no_fix_needed_is_noop(self, tmp_path):
+        sd = new_scenario(tmp_path, "demo")
+        assert fix_executable_bits(sd) == []

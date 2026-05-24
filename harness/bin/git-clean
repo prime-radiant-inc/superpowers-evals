@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=git-clean; _RECORD_ARGS=()
+source "$(dirname "$0")/_record"
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    record_pass
+else
+    record_fail "working tree dirty"; exit 1
+fi

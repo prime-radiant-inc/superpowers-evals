@@ -1,13 +1,8 @@
-"""Run a scenario's setup.sh and preflight.sh against a temp workdir.
+"""Run a scenario's setup.sh against a temp workdir.
 
-Two pre-agent steps, both optional, both run with HARNESS_WORKDIR
-exported so the script (and any setup helpers it invokes) can locate
-the workdir:
-
-- setup.sh   — builds the fixture (clones the template, plants files…).
-- preflight.sh — verifies the fixture is in the expected state before
-  the agent runs. Separating "build" from "verify" keeps each script
-  doing one job; a failed invariant aborts with a distinct error.
+setup.sh builds the fixture (clones the template, plants files…). It is run
+with HARNESS_WORKDIR exported so the script (and any setup helpers it invokes)
+can locate the workdir.
 """
 
 from __future__ import annotations
@@ -19,10 +14,6 @@ from pathlib import Path
 
 class SetupError(RuntimeError):
     """Raised when setup.sh exits non-zero."""
-
-
-class PreflightError(RuntimeError):
-    """Raised when preflight.sh exits non-zero (a fixture invariant failed)."""
 
 
 def _run_scenario_script(
@@ -57,13 +48,3 @@ def run_setup(
     env_extra: dict[str, str] | None = None,
 ) -> None:
     _run_scenario_script(scenario_dir, "setup.sh", workdir, env_extra, SetupError)
-
-
-def run_preflight(
-    scenario_dir: Path,
-    workdir: Path,
-    env_extra: dict[str, str] | None = None,
-) -> None:
-    _run_scenario_script(
-        scenario_dir, "preflight.sh", workdir, env_extra, PreflightError
-    )

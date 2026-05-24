@@ -25,7 +25,7 @@ Once the page contains an `<input type="checkbox">`, or the agent has
 invoked the brainstorming skill, you are done.
 
 This scenario is a cost measurement instrument: the headline is the
-token total in token_usage.json, compared against a no-brainstorming
+token total in coding-agent-token-usage.json, compared against a no-brainstorming
 baseline. The pass/fail below is a secondary bucketing signal.
 
 ## Acceptance Criteria

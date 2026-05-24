@@ -39,7 +39,7 @@ class TestSnapshotAndDiff:
         # codex nests rollouts under sessions/YYYY/MM/DD/, so codex.yaml's
         # glob must recurse. A non-recursive glob silently captures nothing.
         codex_yaml = (
-            Path(__file__).resolve().parents[2] / "harness/targets/codex.yaml"
+            Path(__file__).resolve().parents[2] / "harness/coding-agents/codex.yaml"
         )
         glob = yaml.safe_load(codex_yaml.read_text())["session_log_glob"]
         sessions = tmp_path / "sessions"
@@ -79,7 +79,7 @@ class TestCaptureToolCalls:
             normalizer="claude",
             run_dir=run_dir,
         )
-        assert out == run_dir / "tool_calls.jsonl"
+        assert out == run_dir / "coding-agent-tool-calls.jsonl"
         rows = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
         assert len(rows) == 1
         assert rows[0]["tool"] == "Bash"
@@ -162,7 +162,7 @@ class TestCaptureTokenUsage:
             normalizer="claude", run_dir=run_dir,
         )
         assert out is not None
-        assert out == run_dir / "token_usage.json"
+        assert out == run_dir / "coding-agent-token-usage.json"
         usage = json.loads(out.read_text())
         assert usage["total_input"] == 100
         assert usage["total_output"] == 40
@@ -178,7 +178,7 @@ class TestCaptureTokenUsage:
             normalizer="claude", run_dir=run_dir,
         )
         assert out is None
-        assert not (run_dir / "token_usage.json").exists()
+        assert not (run_dir / "coding-agent-token-usage.json").exists()
 
     def test_unparseable_backend_writes_nothing(self, tmp_path):
         # token_usage.py has no gemini parser; capture must no-op cleanly.
@@ -191,4 +191,4 @@ class TestCaptureTokenUsage:
             normalizer="gemini", run_dir=run_dir,
         )
         assert out is None
-        assert not (run_dir / "token_usage.json").exists()
+        assert not (run_dir / "coding-agent-token-usage.json").exists()

@@ -32,6 +32,13 @@ setup-helpers = "setup_helpers.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["drill", "setup_helpers", "harness"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Don't recurse into transient/output directories — live-run artifacts under
+# results-harness/ include their own Python projects which pytest would
+# otherwise try to collect.
+norecursedirs = ["results", "results-harness", ".worktrees", "fixtures"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
