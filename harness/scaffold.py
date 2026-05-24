@@ -1,21 +1,20 @@
 """Scaffold and validate scenario directories.
 
 `new_scenario` stamps a structurally-valid scenario skeleton (story.md,
-setup.sh, preflight.sh, assertions/) with the executable bits already
-set. `check_scenario` validates an existing scenario — most importantly,
-that every setup/preflight/assertion script is executable, since a
-non-executable assertion is silently skipped rather than failing loudly.
+setup.sh, checks.sh) with the executable bit set on setup.sh.
+`check_scenario` validates an existing scenario — checks.sh must exist,
+parse, define pre() and post(), and be functions-only.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
 
-from harness.scenario_config import ScenarioConfigError, load_scenario_config
 from setup_helpers import HELPER_REGISTRY
 
 _STORY_TEMPLATE = """\
@@ -42,12 +41,19 @@ set -euo pipefail
 uv run setup-helpers run create_base_repo
 """
 
-_PREFLIGHT_TEMPLATE = """\
-#!/usr/bin/env bash
-# Fixture invariants — fail loudly if setup didn't leave the expected state.
-set -euo pipefail
-git -C "$HARNESS_WORKDIR" rev-parse --is-inside-work-tree >/dev/null
-test "$(git -C "$HARNESS_WORKDIR" branch --show-current)" = "main"
+_CHECKS_TEMPLATE = """\
+# Deterministic checks for this scenario. Run by the Harness.
+# pre() runs after setup.sh, before the Coding-Agent.
+# post() runs after the Coding-Agent's run is captured.
+
+pre() {
+    git-repo
+    git-branch main
+}
+
+post() {
+    : # TODO: add checks
+}
 """
 
 
@@ -60,18 +66,17 @@ def new_scenario(scenarios_root: Path, name: str) -> Path:
     scenario_dir = scenarios_root / name
     if scenario_dir.exists():
         raise ScaffoldError(f"scenario already exists: {scenario_dir}")
-    (scenario_dir / "assertions").mkdir(parents=True)
+    scenario_dir.mkdir(parents=True)
 
     story = scenario_dir / "story.md"
     story.write_text(_STORY_TEMPLATE.format(name=name))
 
-    for script_name, body in (
-        ("setup.sh", _SETUP_TEMPLATE),
-        ("preflight.sh", _PREFLIGHT_TEMPLATE),
-    ):
-        script = scenario_dir / script_name
-        script.write_text(body)
-        script.chmod(0o755)
+    setup = scenario_dir / "setup.sh"
+    setup.write_text(_SETUP_TEMPLATE)
+    setup.chmod(0o755)
+
+    # checks.sh: sourced via `bash <path>`, not executed directly — no chmod.
+    (scenario_dir / "checks.sh").write_text(_CHECKS_TEMPLATE)
 
     return scenario_dir
 
@@ -87,6 +92,64 @@ def _parse_frontmatter(text: str) -> dict:
     except yaml.YAMLError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _validate_checks_sh(scenario_dir: Path) -> list[str]:
+    """checks.sh exists, parses with bash -n, is functions-only, defines pre/post."""
+    cs = scenario_dir / "checks.sh"
+    problems: list[str] = []
+    if not cs.exists():
+        problems.append("checks.sh missing")
+        return problems
+    proc = subprocess.run(["bash", "-n", str(cs)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        problems.append(f"checks.sh syntax error: {proc.stderr.strip()}")
+        return problems
+    text = cs.read_text()
+    # Functions-only: any non-blank, non-comment line that is not part of a
+    # function definition is a top-level statement and is disallowed.
+    # We track brace depth; function-declaration lines (pre/post) open a scope.
+    # Single-line bodies like `pre() { :; }` are fully contained on one line.
+    in_fn = 0
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        is_fn_decl = bool(re.match(r"^(pre|post)\s*\(\)", s))
+        opens = s.count("{")
+        closes = s.count("}")
+        if is_fn_decl:
+            # Net braces on this line: if opens > closes the body continues.
+            in_fn = max(0, in_fn + opens - closes)
+            continue
+        if s == "{":
+            in_fn += 1
+            continue
+        if s == "}":
+            in_fn = max(0, in_fn - 1)
+            continue
+        if in_fn == 0:
+            problems.append(
+                f"checks.sh must be functions-only (top-level statement: {s[:60]!r})"
+            )
+            break
+    if not re.search(r"^pre\s*\(\)", text, re.M):
+        problems.append("checks.sh missing pre() function")
+    if not re.search(r"^post\s*\(\)", text, re.M):
+        problems.append("checks.sh missing post() function")
+    # Concurrency-unsupported lint: warn on backgrounded check invocations.
+    for i, line in enumerate(text.splitlines(), 1):
+        if re.search(r"(?<!&)&(?!&)\s*(#|$)", line) and not re.match(r"^\s*#", line):
+            problems.append(f"checks.sh:{i}: backgrounded check (`&`) is unsupported")
+    # $HARNESS_WORKDIR is not set in the new model — checks run with cwd=workdir,
+    # so paths are workdir-relative. Catch stale ports from the old format.
+    for i, line in enumerate(text.splitlines(), 1):
+        if re.search(r"\$\{?HARNESS_WORKDIR\b", line):
+            problems.append(
+                f"checks.sh:{i}: $HARNESS_WORKDIR is not available; "
+                "cwd is the workdir — use relative paths"
+            )
+    return problems
 
 
 def check_scenario(scenario_dir: Path) -> list[str]:
@@ -105,25 +168,10 @@ def check_scenario(scenario_dir: Path) -> list[str]:
         if "## Acceptance Criteria" not in text:
             problems.append("story.md missing '## Acceptance Criteria' section")
 
-    for script_name in ("setup.sh", "preflight.sh"):
-        script = scenario_dir / script_name
-        if script.exists() and not os.access(script, os.X_OK):
-            problems.append(f"{script_name} is not executable")
-
-    assertions_dir = scenario_dir / "assertions"
-    if assertions_dir.is_dir():
-        for entry in sorted(assertions_dir.iterdir()):
-            if entry.is_file() and not os.access(entry, os.X_OK):
-                problems.append(f"assertions/{entry.name} is not executable")
-
-    scenario_yaml = scenario_dir / "scenario.yaml"
-    if scenario_yaml.exists():
-        try:
-            load_scenario_config(scenario_yaml)
-        except ScenarioConfigError as e:
-            problems.append(f"scenario.yaml invalid: {e}")
-
     setup = scenario_dir / "setup.sh"
+    if setup.exists() and not os.access(setup, os.X_OK):
+        problems.append("setup.sh is not executable")
+
     if setup.exists():
         for match in re.finditer(r"setup-helpers\s+run\s+(.+)", setup.read_text()):
             for helper in match.group(1).split():
@@ -132,25 +180,21 @@ def check_scenario(scenario_dir: Path) -> list[str]:
                         f"setup.sh references unknown helper '{helper}'"
                     )
 
+    problems.extend(_validate_checks_sh(scenario_dir))
+
     return problems
 
 
 def _scenario_scripts(scenario_dir: Path) -> list[Path]:
-    """Every script the harness execs: setup, preflight, assertions."""
-    scripts = [scenario_dir / "setup.sh", scenario_dir / "preflight.sh"]
-    assertions_dir = scenario_dir / "assertions"
-    if assertions_dir.is_dir():
-        scripts += [p for p in sorted(assertions_dir.iterdir()) if p.is_file()]
+    """Every script the harness execs directly: setup.sh only."""
+    scripts = [scenario_dir / "setup.sh"]
     return [p for p in scripts if p.exists()]
 
 
 def fix_executable_bits(scenario_dir: Path) -> list[str]:
-    """chmod +x any setup/preflight/assertion script missing the bit.
+    """chmod +x setup.sh if missing the bit.
 
-    Returns the scenario-relative paths fixed. A non-executable assertion
-    is silently skipped at runtime; this repairs the common authoring
-    miss — a script written by an editor (or the Write tool) without the
-    executable bit.
+    Returns the scenario-relative paths fixed.
     """
     fixed: list[str] = []
     for path in _scenario_scripts(scenario_dir):

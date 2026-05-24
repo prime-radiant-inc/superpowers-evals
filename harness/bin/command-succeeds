@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=command-succeeds
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+# Run the command via bash -c so the caller can pass a quoted compound command.
+tmpfile=$(mktemp)
+trap 'rm -f "$tmpfile"' EXIT
+if bash -c "$1" >"$tmpfile" 2>&1; then
+    record_pass
+else
+    detail=$(head -c 500 "$tmpfile")
+    record_fail "exit non-zero: $detail"
+    exit 1
+fi

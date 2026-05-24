@@ -1,0 +1,64 @@
+# harness/bin/_record
+# Shared helper sourced by every harness/bin/ check tool.
+#
+# Caller contract (set in the tool at the top, before any logic):
+#   _RECORD_CHECK=<tool-name>      # usually basename "$0"
+#   _RECORD_ARGS=("$@")            # the tool's positional args
+#
+# Then exactly one of:
+#   record_pass [detail]
+#   record_fail [detail]
+#   record_negated <inner-check> <inner-args-json> <passed-bool> [detail]
+#
+# If $HARNESS_RECORD_SINK is unset, all record_* calls are no-ops (this keeps
+# the tools backward-safe for any caller — e.g. Drill — that doesn't set it).
+#
+# An ERR trap emits a fail record before propagating, so a crashing tool never
+# silently drops out of the verdict.
+
+set -E  # inherit ERR trap into functions and command substitutions
+
+_record_emit() {
+    # $1 passed (true|false)
+    # $2 detail (may be empty string)
+    # $3 check-name override (optional; default $_RECORD_CHECK)
+    # $4 args-json override (optional; default JSON-encode $_RECORD_ARGS)
+    # $5 negated (true|false, default false)
+    local passed="$1" detail="$2"
+    local check="${3:-${_RECORD_CHECK:-unknown}}"
+    local args_json="${4:-}"
+    local negated="${5:-false}"
+    [ -z "${HARNESS_RECORD_SINK:-}" ] && return 0
+    if [ -z "$args_json" ]; then
+        if [ "${#_RECORD_ARGS[@]:-0}" -eq 0 ]; then
+            args_json='[]'
+        else
+            args_json=$(printf '%s\n' "${_RECORD_ARGS[@]}" | jq -R . | jq -s -c .)
+        fi
+    fi
+    local detail_json
+    if [ -z "$detail" ]; then
+        detail_json='null'
+    else
+        detail_json=$(printf '%s' "$detail" | jq -Rs -c .)
+    fi
+    jq -nc \
+        --arg check "$check" \
+        --argjson args "$args_json" \
+        --argjson negated "$negated" \
+        --argjson passed "$passed" \
+        --argjson detail "$detail_json" \
+        '{check:$check, args:$args, negated:$negated, passed:$passed, detail:$detail}' \
+        >> "$HARNESS_RECORD_SINK"
+}
+
+record_pass()    { _record_emit true  "${1:-}"; }
+record_fail()    { _record_emit false "${1:-}"; }
+record_negated() { _record_emit "$3"  "${4:-}" "$1" "$2" true; }
+
+_record_err_trap() {
+    local ec=$?
+    _record_emit false "tool error (exit $ec)" >/dev/null 2>&1 || true
+    exit "$ec"
+}
+trap _record_err_trap ERR

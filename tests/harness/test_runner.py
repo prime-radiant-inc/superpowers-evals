@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from harness.coding_agent_config import CodingAgentConfig
 from harness.runner import RunnerError, _seed_agent_config_dir, run_scenario
-from harness.target_config import TargetConfig
 
 
 def _exec(path: Path, body: str) -> None:
@@ -17,9 +17,9 @@ def _exec(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _make_target(targets_dir: Path, name: str, session_log_dir: Path) -> None:
-    targets_dir.mkdir(parents=True, exist_ok=True)
-    (targets_dir / f"{name}.yaml").write_text(yaml.safe_dump({
+def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump({
         "name": name,
         "binary": "echo",  # we never actually run the real CLI in tests
         "agent_config_env": "CLAUDE_CONFIG_DIR",
@@ -38,8 +38,8 @@ def _empty_skeleton(tmp_path: Path) -> Path:
     return p
 
 
-def _tcfg(name: str = "claude") -> TargetConfig:
-    return TargetConfig(
+def _tcfg(name: str = "claude") -> CodingAgentConfig:
+    return CodingAgentConfig(
         name=name,
         binary="echo",
         agent_config_env="CLAUDE_CONFIG_DIR",
@@ -49,6 +49,37 @@ def _tcfg(name: str = "claude") -> TargetConfig:
         required_env=(),
         max_time=None,
     )
+
+
+def _make_scenario(
+    scenarios_dir: Path,
+    name: str,
+    *,
+    checks_pass: bool = True,
+    with_checks: bool = True,
+) -> Path:
+    """Build a scenario using checks.sh (the only supported format)."""
+    sd = scenarios_dir / name
+    sd.mkdir(parents=True)
+    (sd / "story.md").write_text("---\nid: x\ntitle: x\n---\nbody\n")
+    _exec(sd / "setup.sh", "#!/usr/bin/env bash\necho ok > marker\n")
+    if with_checks:
+        # A post() check that passes or fails depending on checks_pass.
+        check_line = "file-exists marker" if checks_pass else "file-exists missing-nonexistent-file"
+        (sd / "checks.sh").write_text(
+            f"pre() {{ :; }}\npost() {{ {check_line}; }}\n"
+        )
+    return sd
+
+
+def _stub_gauntlet_pass(*, run_dir, **kwargs):
+    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+    return "pass"
+
+
+def _stub_gauntlet_fail(*, run_dir, **kwargs):
+    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+    return "fail"
 
 
 class TestSeedAgentConfigDir:
@@ -160,60 +191,28 @@ class TestSeedAgentConfigDir:
             _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
 
 
-def _make_scenario(
-    scenarios_dir: Path,
-    name: str,
-    *,
-    asserts_pass: bool = True,
-    compat: list[str] | None = None,
-    with_assertion: bool = True,
-) -> Path:
-    sd = scenarios_dir / name
-    sd.mkdir(parents=True)
-    (sd / "story.md").write_text("---\nid: x\ntitle: x\n---\nbody\n")
-    _exec(sd / "setup.sh", "#!/usr/bin/env bash\necho ok > marker\n")
-    if compat is not None:
-        (sd / "scenario.yaml").write_text(yaml.safe_dump({"compatible_targets": compat}))
-    a = sd / "assertions"
-    a.mkdir()
-    if with_assertion:
-        _exec(a / "01-x.sh", f"#!/usr/bin/env bash\nexit {'0' if asserts_pass else '1'}\n")
-    return sd
-
-
-def _stub_gauntlet_pass(*, run_dir, **kwargs):
-    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
-    return "pass"
-
-
-def _stub_gauntlet_fail(*, run_dir, **kwargs):
-    (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
-    return "fail"
-
-
 class TestRunScenario:
     def test_happy_path(self, tmp_path):
-        targets_dir = tmp_path / "targets"
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "session-logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x", with_assertion=False)
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
-        (contexts_dir / "claude" / "HOWTO.md").write_text("invoke `claude`")
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        # Add checks.sh manually (with_checks=False skips it; add one that passes trivially)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
+        (coding_agent_contexts_dir / "claude" / "HOWTO.md").write_text("invoke `claude`")
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            verdict = run_scenario(
+            run_dir, verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "pass"
@@ -221,182 +220,106 @@ class TestRunScenario:
         assert len(run_dirs) == 1
         rd = run_dirs[0]
         assert (rd / "verdict.json").exists()
-        assert (rd / "tool_calls.jsonl").exists()
-        assert (rd / ".gauntlet" / "context" / "HOWTO.md").read_text() == "invoke `claude`"
+        assert (rd / "coding-agent-tool-calls.jsonl").exists()
+        assert (rd / "gauntlet-agent" / "context" / "HOWTO.md").read_text() == "invoke `claude`"
 
-    def test_assertion_fail_overrides_gauntlet_pass(self, tmp_path):
-        targets_dir = tmp_path / "targets"
+    def test_check_fail_overrides_gauntlet_pass(self, tmp_path):
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x", asserts_pass=False)
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        # checks.sh post() always fails (file doesn't exist)
+        sd = _make_scenario(scenarios_dir, "x", checks_pass=False)
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            verdict = run_scenario(
+            run_dir, verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         assert verdict.final == "fail"
-        assert verdict.assertions == "fail"
+        # Gauntlet passed but the check failed — at least one post check
+        # should be marked as failed in the verdict.
+        assert any(not c.passed for c in verdict.checks)
 
     def test_setup_failure_aborts_before_gauntlet(self, tmp_path):
-        targets_dir = tmp_path / "targets"
+        # Task 2.8: setup failure no longer propagates as RunnerError — it
+        # returns an indeterminate verdict and still never invokes gauntlet.
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
         sd = _make_scenario(scenarios_dir, "x")
         _exec(sd / "setup.sh", "#!/usr/bin/env bash\nexit 9\n")
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet") as mock_g:
-            with pytest.raises(RunnerError, match="setup"):
-                run_scenario(
-                    scenario_dir=sd,
-                    target="claude",
-                    targets_dir=targets_dir,
-                    contexts_dir=contexts_dir,
-                    out_root=out_root,
-                    bin_dir=bin_dir,
-                    skeleton_root=_empty_skeleton(tmp_path),
-                )
-            mock_g.assert_not_called()
-
-    def test_preflight_failure_aborts_before_gauntlet(self, tmp_path):
-        targets_dir = tmp_path / "targets"
-        scenarios_dir = tmp_path / "scenarios"
-        session_log_dir = tmp_path / "logs"
-        session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x")
-        _exec(sd / "preflight.sh", "#!/usr/bin/env bash\necho 'bad fixture' 1>&2\nexit 1\n")
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
-        out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-
-        with patch("harness.runner.invoke_gauntlet") as mock_g:
-            with pytest.raises(RunnerError, match="preflight"):
-                run_scenario(
-                    scenario_dir=sd,
-                    target="claude",
-                    targets_dir=targets_dir,
-                    contexts_dir=contexts_dir,
-                    out_root=out_root,
-                    bin_dir=bin_dir,
-                    skeleton_root=_empty_skeleton(tmp_path),
-                )
-            mock_g.assert_not_called()
-
-    def test_incompatible_target_refused(self, tmp_path):
-        targets_dir = tmp_path / "targets"
-        scenarios_dir = tmp_path / "scenarios"
-        session_log_dir = tmp_path / "logs"
-        session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x", compat=["codex"])
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
-        out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-
-        with patch("harness.runner.invoke_gauntlet") as mock_g:
-            with pytest.raises(RunnerError, match="compat"):
-                run_scenario(
-                    scenario_dir=sd,
-                    target="claude",
-                    targets_dir=targets_dir,
-                    contexts_dir=contexts_dir,
-                    out_root=out_root,
-                    bin_dir=bin_dir,
-                    skeleton_root=_empty_skeleton(tmp_path),
-                )
-            mock_g.assert_not_called()
-
-    def test_empty_capture_synthetic_fires_whenever_assertions_exist(self, tmp_path):
-        # Drill parity (engine.py:169-178): the synthetic fires whenever the
-        # scenario has any assertions at all, not just tool-named ones.
-        targets_dir = tmp_path / "targets"
-        scenarios_dir = tmp_path / "scenarios"
-        session_log_dir = tmp_path / "logs"
-        session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x")  # default assertion 01-x.sh passes
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
-        out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-
-        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            verdict = run_scenario(
+            run_dir, verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
-        # Capture was empty (no real CLI run); scenario has at least one
-        # assertion; synthetic 00-non-empty-capture fires regardless of name.
-        assert verdict.final == "fail"
-        assert any(d["name"] == "00-non-empty-capture" for d in verdict.assertion_details)
+        mock_g.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+        assert (run_dir / "verdict.json").exists()
 
-    def test_no_assertions_no_synthetic_even_when_capture_empty(self, tmp_path):
-        # A scenario with zero assertions doesn't get the synthetic — the
-        # guard only fires when something declared assertions to begin with.
-        targets_dir = tmp_path / "targets"
+    def test_capture_empty_yields_indeterminate_when_trace_checks_present(self, tmp_path):
+        # The built-in capture-non-empty guard fires when checks reference
+        # trace primitives (tool-called etc.) and capture is empty.
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x", with_assertion=False)
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = scenarios_dir / "x"
+        sd.mkdir(parents=True)
+        (sd / "story.md").write_text("---\nid: x\ntitle: x\n---\nbody\n")
+        _exec(sd / "setup.sh", "#!/usr/bin/env bash\necho ok > marker\n")
+        # post() references tool-called (a trace primitive) — triggers capture-empty guard
+        (sd / "checks.sh").write_text(
+            "pre() { :; }\npost() { tool-called Edit; }\n"
+        )
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            verdict = run_scenario(
+            run_dir, verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
-        assert verdict.final == "pass"
-        assert all(d["name"] != "00-non-empty-capture" for d in verdict.assertion_details)
+        # Capture was empty (no real CLI run) and there's a trace check →
+        # composer returns indeterminate.
+        assert verdict.final == "indeterminate"
 
     def test_launch_cwd_sentinel_threads_through_to_gauntlet(self, tmp_path):
         # When setup.sh writes .harness-launch-cwd, the runner reads it and
         # passes that path as launch_cwd to invoke_gauntlet (which exports
         # HARNESS_AGENT_CWD for the QA agent's bash to use).
-        targets_dir = tmp_path / "targets"
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
         sd = _make_scenario(scenarios_dir, "x")
         _exec(
             sd / "setup.sh",
@@ -404,11 +327,9 @@ class TestRunScenario:
             'sib="${HARNESS_WORKDIR}-sibling"\nmkdir -p "$sib"\n'
             'echo "$sib" > "${HARNESS_WORKDIR}/.harness-launch-cwd"\n',
         )
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
         captured: dict[str, Path] = {}
 
         def stub(*, run_dir, launch_cwd, **kwargs):
@@ -417,46 +338,42 @@ class TestRunScenario:
             return "pass"
 
         with patch("harness.runner.invoke_gauntlet", side_effect=stub):
-            run_scenario(
+            _run_dir, _verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         assert captured["launch_cwd"].name.endswith("-sibling")
 
-    def test_populate_context_dir_copies_target_contexts(self, tmp_path):
-        # Spot-check that target context HOWTOs land in <run-dir>/.gauntlet/context/.
-        targets_dir = tmp_path / "targets"
+    def test_populate_context_dir_copies_coding_agent_contexts(self, tmp_path):
+        # Spot-check that coding-agent context HOWTOs land in <run-dir>/gauntlet-agent/context/.
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
         sd = _make_scenario(scenarios_dir, "x")
-        contexts_dir = tmp_path / "contexts"
-        cd_claude = contexts_dir / "claude"
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        cd_claude = coding_agent_contexts_dir / "claude"
         cd_claude.mkdir(parents=True)
         (cd_claude / "HOWTO.md").write_text("invoke `claude --foo`")
         (cd_claude / "extra.md").write_text("extra context")
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            run_scenario(
+            _run_dir, _verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         rd = list(out_root.iterdir())[0]
-        ctx = rd / ".gauntlet" / "context"
+        ctx = rd / "gauntlet-agent" / "context"
         assert (ctx / "HOWTO.md").read_text() == "invoke `claude --foo`"
         assert (ctx / "extra.md").read_text() == "extra context"
 
@@ -466,35 +383,32 @@ class TestRunScenario:
         # tmux strips arbitrary env vars from new sessions, so we burn
         # resolved values into the HOWTO at runtime instead.
         monkeypatch.setenv("SUPERPOWERS_ROOT", "/path/to/sp")
-        targets_dir = tmp_path / "targets"
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
         sd = _make_scenario(scenarios_dir, "x")
-        contexts_dir = tmp_path / "contexts"
-        cd_claude = contexts_dir / "claude"
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        cd_claude = coding_agent_contexts_dir / "claude"
         cd_claude.mkdir(parents=True)
         (cd_claude / "HOWTO.md").write_text(
             'cd "$HARNESS_AGENT_CWD"\n'
             'claude --plugin-dir "$SUPERPOWERS_ROOT"\n'
         )
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
         with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            run_scenario(
+            _run_dir, _verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         rd = list(out_root.iterdir())[0]
-        ctx_content = (rd / ".gauntlet" / "context" / "HOWTO.md").read_text()
+        ctx_content = (rd / "gauntlet-agent" / "context" / "HOWTO.md").read_text()
         # SUPERPOWERS_ROOT resolved from env.
         assert '--plugin-dir "/path/to/sp"' in ctx_content
         # HARNESS_AGENT_CWD resolved from the actual launched workdir (which
@@ -507,31 +421,37 @@ class TestRunScenario:
         resolved = cd_line.split('"')[1]
         assert Path(resolved).exists()
 
-    def test_workdir_kept_on_failure(self, tmp_path):
-        targets_dir = tmp_path / "targets"
+    def test_workdir_in_run_dir_always_present(self, tmp_path):
+        # The workdir now lives at <run-dir>/coding-agent-workdir/ — always
+        # present inside the run dir, not in /tmp. No workdir-path.txt
+        # pointer is written; the dir is co-located with the rest of the
+        # evidence and survives regardless of pass/fail verdict.
+        coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "logs"
         session_log_dir.mkdir()
-        _make_target(targets_dir, "claude", session_log_dir)
-        sd = _make_scenario(scenarios_dir, "x", asserts_pass=False)
-        contexts_dir = tmp_path / "contexts"
-        (contexts_dir / "claude").mkdir(parents=True)
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        coding_agent_contexts_dir = tmp_path / "contexts"
+        (coding_agent_contexts_dir / "claude").mkdir(parents=True)
         out_root = tmp_path / "results"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
 
-        with patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
-            verdict = run_scenario(
+        from harness.composer import FinalVerdict
+        fake_verdict = FinalVerdict(final="pass")
+
+        with (
+            patch("harness.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+            patch("harness.runner.compose", return_value=fake_verdict),
+        ):
+            _run_dir, verdict = run_scenario(
                 scenario_dir=sd,
-                target="claude",
-                targets_dir=targets_dir,
-                contexts_dir=contexts_dir,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                coding_agent_contexts_dir=coding_agent_contexts_dir,
                 out_root=out_root,
-                bin_dir=bin_dir,
                 skeleton_root=_empty_skeleton(tmp_path),
             )
-        assert verdict.final == "fail"
         rd = list(out_root.iterdir())[0]
-        wd_path = Path((rd / "workdir-path.txt").read_text().strip())
-        assert wd_path.exists()
-
+        assert (rd / "coding-agent-workdir").is_dir()
+        assert not (rd / "workdir-path.txt").exists()

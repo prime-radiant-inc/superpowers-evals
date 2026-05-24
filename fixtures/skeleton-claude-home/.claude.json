@@ -1,0 +1,14 @@
+{
+  "installMethod": "native",
+  "autoUpdates": false,
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "migrationVersion": 13,
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.144",
+  "projects": {},
+  "autoUpdatesProtectedForNative": true,
+  "penguinModeOrgEnabled": false,
+  "officialMarketplaceAutoInstallAttempted": true,
+  "officialMarketplaceAutoInstalled": true
+}

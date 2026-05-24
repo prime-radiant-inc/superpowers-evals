@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=file-exists
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+# Pass iff at least one path matches the glob (handles globs without shopt extglob).
+# Contract: $1 is a glob pattern (workdir-relative). Literal paths
+# containing spaces are not supported (use file-contains for those).
+shopt -s nullglob
+matches=( $1 )
+shopt -u nullglob
+# Filter to only actually-existing paths (handles the case where $1 is a
+# literal filename with no glob chars — nullglob does not suppress it).
+existing=()
+for m in "${matches[@]}"; do
+    [ -e "$m" ] && existing+=("$m")
+done
+if [ "${#existing[@]}" -gt 0 ]; then
+    record_pass
+else
+    record_fail "no path matched: $1"
+    exit 1
+fi

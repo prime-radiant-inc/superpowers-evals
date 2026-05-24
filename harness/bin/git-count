@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=git-count; _RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+dim="$1"; op="$2"; n="$3"
+case "$dim" in
+    worktrees) count=$(git worktree list | wc -l | tr -d ' ') ;;
+    commits)   count=$(git rev-list --count HEAD 2>/dev/null || echo 0) ;;
+    *) record_fail "unknown dimension: $dim"; exit 1 ;;
+esac
+case "$op" in
+    eq)  [ "$count" -eq "$n" ] ;;
+    ne)  [ "$count" -ne "$n" ] ;;
+    gt)  [ "$count" -gt "$n" ] ;;
+    gte) [ "$count" -ge "$n" ] ;;
+    lt)  [ "$count" -lt "$n" ] ;;
+    lte) [ "$count" -le "$n" ] ;;
+    *)   record_fail "unknown op: $op"; exit 1 ;;
+esac && { record_pass; } || { record_fail "$dim count $count not $op $n"; exit 1; }

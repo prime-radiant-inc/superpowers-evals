@@ -9,4 +9,3 @@ build/
 .venv/
 .env
 .claude/
-fixtures/skeleton-claude-home/

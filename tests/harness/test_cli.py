@@ -28,14 +28,15 @@ def test_run_invokes_run_scenario(tmp_path):
     (sd / "story.md").write_text("---\nid: x\n---\n")
     runner = CliRunner()
     with patch("harness.cli.run_scenario") as mock:
-        mock.return_value = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        fake_run_dir = tmp_path / "results" / "x-claude-20260101T000000"
+        fake_verdict = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        mock.return_value = (fake_run_dir, fake_verdict)
         result = runner.invoke(main, [
             "run", str(sd),
-            "--target", "claude",
-            "--targets-dir", str(tmp_path / "t"),
-            "--contexts-dir", str(tmp_path / "c"),
+            "--coding-agent", "claude",
+            "--coding-agents-dir", str(tmp_path / "t"),
+            "--coding-agent-contexts-dir", str(tmp_path / "c"),
             "--out-root", str(tmp_path / "out"),
-            "--bin-dir", str(tmp_path / "bin"),
         ])
         assert result.exit_code == 0
         mock.assert_called_once()
@@ -52,20 +53,21 @@ def test_run_resolves_relative_paths_to_absolute(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     with patch("harness.cli.run_scenario") as mock:
-        mock.return_value = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        fake_run_dir = tmp_path / "results" / "x-claude-20260101T000000"
+        fake_verdict = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        mock.return_value = (fake_run_dir, fake_verdict)
         result = runner.invoke(main, [
             "run", "scenarios/x",  # RELATIVE path
-            "--target", "claude",
-            "--targets-dir", "t",
-            "--contexts-dir", "c",
+            "--coding-agent", "claude",
+            "--coding-agents-dir", "t",
+            "--coding-agent-contexts-dir", "c",
             "--out-root", "out",
-            "--bin-dir", "bin",
         ])
         assert result.exit_code == 0
         call = mock.call_args
         # Every path passed to run_scenario must be absolute.
-        for key in ("scenario_dir", "targets_dir", "contexts_dir",
-                    "out_root", "bin_dir"):
+        for key in ("scenario_dir", "coding_agents_dir", "coding_agent_contexts_dir",
+                    "out_root"):
             value = call.kwargs[key]
             assert isinstance(value, Path)
             assert value.is_absolute(), f"{key} was {value} (not absolute)"

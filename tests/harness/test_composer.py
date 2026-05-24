@@ -1,44 +1,71 @@
-# tests/harness/test_composer.py
-from harness.assertions import AssertionResult
-from harness.composer import compose
+# tests/harness/test_composer.py (replace existing content)
+from harness.checks import CheckRecord
+from harness.composer import GauntletLayer, compose, FinalVerdict
 
 
-class TestCompose:
-    def test_all_pass(self):
-        v = compose(gauntlet_status="pass",
-                    assertion_results=[AssertionResult("a", 0, "", "")])
-        assert v.final == "pass"
-        assert v.gauntlet == "pass"
-        assert v.assertions == "pass"
+def _gl(status="pass", summary="s", reasoning="r", run_id="abc"):
+    return GauntletLayer(status=status, summary=summary, reasoning=reasoning, run_id=run_id)
 
-    def test_gauntlet_fail_dominates(self):
-        v = compose(gauntlet_status="fail",
-                    assertion_results=[AssertionResult("a", 0, "", "")])
-        assert v.final == "fail"
-        assert v.assertions == "pass"
 
-    def test_assertion_fail_dominates(self):
-        v = compose(gauntlet_status="pass", assertion_results=[
-            AssertionResult("a", 0, "", ""),
-            AssertionResult("b", 1, "", "boom"),
-        ])
-        assert v.final == "fail"
-        assert v.assertions == "fail"
+def _ck(name, passed, phase="post", negated=False, detail=None):
+    return CheckRecord(check=name, args=[], negated=negated, passed=passed, detail=detail, phase=phase)
 
-    def test_investigate_is_fail(self):
-        v = compose(gauntlet_status="investigate", assertion_results=[])
-        assert v.gauntlet == "investigate"
-        assert v.final == "fail"
 
-    def test_no_assertions_passes_when_gauntlet_passes(self):
-        v = compose(gauntlet_status="pass", assertion_results=[])
-        assert v.final == "pass"
+def test_all_pass_yields_pass():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("file-exists", True)], capture_empty=False, error=None)
+    assert v.final == "pass" and "passed" in v.final_reason.lower()
 
-    def test_to_dict_serializable(self):
-        v = compose(gauntlet_status="pass",
-                    assertion_results=[AssertionResult("a", 0, "ok", "")])
-        d = v.to_dict()
-        assert d["final"] == "pass"
-        assert d["assertion_details"] == [
-            {"name": "a", "exit_code": 0, "stdout": "ok", "stderr": ""}
-        ]
+
+def test_check_fail_yields_fail():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("file-exists", False, detail="no path")],
+                capture_empty=False, error=None)
+    assert v.final == "fail"
+
+
+def test_gauntlet_fail_yields_fail():
+    v = compose(gauntlet=_gl("fail"), checks=[_ck("file-exists", True)], capture_empty=False, error=None)
+    assert v.final == "fail"
+
+
+def test_gauntlet_investigate_yields_indeterminate():
+    v = compose(gauntlet=_gl("investigate", summary="looped"), checks=[], capture_empty=False, error=None)
+    assert v.final == "indeterminate" and "investigate" in v.final_reason.lower()
+
+
+def test_pre_check_failure_yields_indeterminate():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("git-repo", False, phase="pre")],
+                capture_empty=False, error=None)
+    assert v.final == "indeterminate"
+
+
+def test_capture_empty_with_trace_check_yields_indeterminate():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("tool-called", True)],
+                capture_empty=True, error=None)
+    assert v.final == "indeterminate"
+
+
+def test_capture_empty_without_trace_check_passes():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("file-exists", True)],
+                capture_empty=True, error=None)
+    assert v.final == "pass"
+
+
+def test_error_yields_indeterminate():
+    from harness.composer import RunError
+    v = compose(gauntlet=None, checks=[], capture_empty=False,
+                error=RunError(stage="setup", message="boom"))
+    assert v.final == "indeterminate"
+
+
+def test_zero_checks_passes_iff_gauntlet_passed():
+    assert compose(gauntlet=_gl("pass"), checks=[], capture_empty=False, error=None).final == "pass"
+    assert compose(gauntlet=_gl("fail"), checks=[], capture_empty=False, error=None).final == "fail"
+
+
+def test_to_dict_schema_version():
+    v = compose(gauntlet=_gl("pass"), checks=[_ck("file-exists", True)], capture_empty=False, error=None)
+    d = v.to_dict()
+    assert d["schema"] == 1
+    assert d["final"] in ("pass", "fail", "indeterminate")
+    assert "final_reason" in d
+    assert "checks" in d and "gauntlet" in d and "error" in d

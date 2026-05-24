@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Verify the Codex native-hooks backend used an isolated trusted plugin hook.
+_RECORD_CHECK=codex-native-hook-configured
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+
+# Codex home: prefer explicit CODEX_HOME (set by the runner during the live
+# session), fall back to $HARNESS_RUN_DIR/coding-agent-config (post-run: cwd
+# is the workdir, so the config dir is a sibling and needs an anchor), then
+# cwd-relative for ad-hoc/test invocations.
+if [ -n "${CODEX_HOME:-}" ]; then
+    CODEX_HOME_DIR="$CODEX_HOME"
+elif [ -n "${HARNESS_RUN_DIR:-}" ]; then
+    CODEX_HOME_DIR="$HARNESS_RUN_DIR/coding-agent-config"
+else
+    CODEX_HOME_DIR="coding-agent-config"
+fi
+
+CONFIG="$CODEX_HOME_DIR/config.toml"
+PLUGIN="$CODEX_HOME_DIR/plugins/cache/debug/superpowers/local"
+
+test -f "$CONFIG" || { record_fail "missing Codex config at $CONFIG"; exit 1; }
+test -f "$PLUGIN/.codex-plugin/plugin.json" || { record_fail "missing staged Codex plugin manifest"; exit 1; }
+# Check the run-hook.cmd wrapper, not the hook-config JSON: Superpowers
+# renamed hooks-codex.json to hooks.json; run-hook.cmd is the stable part.
+test -f "$PLUGIN/hooks/run-hook.cmd" || { record_fail "missing staged Codex hook runner"; exit 1; }
+
+grep -Fq "plugin_hooks = true" "$CONFIG" || { record_fail "plugin_hooks feature not enabled"; exit 1; }
+grep -Fq '[plugins."superpowers@debug"]' "$CONFIG" || { record_fail "debug Superpowers plugin not enabled"; exit 1; }
+# Match the trust-state key's stable shape — don't pin the config-file
+# segment of the key, which moved from hooks-codex.json to hooks.json.
+grep -Eq 'hooks\.state\."superpowers@debug:[^"]*session_start' "$CONFIG" \
+    || { record_fail "Superpowers Codex hook trust state missing"; exit 1; }
+grep -Eq 'trusted_hash = "sha256:[a-f0-9]+"' "$CONFIG" || { record_fail "trusted hook hash missing"; exit 1; }
+
+# Note on coverage: the codex hook stages skills under
+# $CODEX_HOME/plugins/cache/.../local/skills/, not into the workdir. The
+# plugin manifest + trust state above are the right evidence; there is
+# no separate workdir-side artifact to verify.
+
+record_pass "Codex native Superpowers hook configured"

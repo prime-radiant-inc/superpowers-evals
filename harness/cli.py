@@ -17,12 +17,11 @@ from harness.scaffold import (
 )
 
 # TODO(phase-3): when drill is decommissioned, scenarios move to top-level
-# scenarios/ and target_contexts/targets/ may relocate.
+# scenarios/ and coding-agent-contexts/coding-agents/ may relocate.
 _DEFAULT_SCENARIOS_ROOT = Path("harness/scenarios")
-_DEFAULT_TARGETS_DIR = Path("harness/targets")
-_DEFAULT_CONTEXTS_DIR = Path("harness/target_contexts")
+_DEFAULT_CODING_AGENTS_DIR = Path("harness/coding-agents")
+_DEFAULT_CODING_AGENT_CONTEXTS_DIR = Path("harness/coding-agent-contexts")
 _DEFAULT_OUT_ROOT = Path("results-harness")
-_DEFAULT_BIN_DIR = Path("bin")
 
 
 @click.group()
@@ -32,40 +31,37 @@ def main() -> None:
 
 @main.command("run")
 @click.argument("scenario_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--target", required=True, help="Target name (matches harness/targets/<name>.yaml)")
-@click.option("--targets-dir", default=_DEFAULT_TARGETS_DIR, type=click.Path(path_type=Path))
-@click.option("--contexts-dir", default=_DEFAULT_CONTEXTS_DIR, type=click.Path(path_type=Path))
+@click.option("--coding-agent", required=True, help="Coding-Agent name (matches harness/coding-agents/<name>.yaml)")
+@click.option("--coding-agents-dir", default=_DEFAULT_CODING_AGENTS_DIR, type=click.Path(path_type=Path))
+@click.option("--coding-agent-contexts-dir", default=_DEFAULT_CODING_AGENT_CONTEXTS_DIR, type=click.Path(path_type=Path))
 @click.option("--out-root", default=_DEFAULT_OUT_ROOT, type=click.Path(path_type=Path))
-@click.option("--bin-dir", default=_DEFAULT_BIN_DIR, type=click.Path(path_type=Path))
 def run(
     scenario_dir: Path,
-    target: str,
-    targets_dir: Path,
-    contexts_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    coding_agent_contexts_dir: Path,
     out_root: Path,
-    bin_dir: Path,
 ) -> None:
-    """Run one scenario against one target."""
+    """Run one scenario against one Coding-Agent."""
     # Resolve every path to absolute at the CLI boundary. subprocess.run
     # with cwd= resolves relative executable paths against that cwd, not
     # the harness's cwd — relative paths here would silently misresolve
-    # inside setup.sh and assertion script invocations.
+    # inside setup.sh invocations.
     scenario_dir = scenario_dir.resolve()
-    targets_dir = targets_dir.resolve()
-    contexts_dir = contexts_dir.resolve()
-    bin_dir = bin_dir.resolve()
+    coding_agents_dir = coding_agents_dir.resolve()
+    coding_agent_contexts_dir = coding_agent_contexts_dir.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     out_root = out_root.resolve()
-    verdict = run_scenario(
+    run_dir, verdict = run_scenario(
         scenario_dir=scenario_dir,
-        target=target,
-        targets_dir=targets_dir,
-        contexts_dir=contexts_dir,
+        coding_agent=coding_agent,
+        coding_agents_dir=coding_agents_dir,
+        coding_agent_contexts_dir=coding_agent_contexts_dir,
         out_root=out_root,
-        bin_dir=bin_dir,
     )
+    click.echo(f"  run: {run_dir}")
     click.echo(json.dumps(verdict.to_dict(), indent=2))
-    sys.exit(0 if verdict.final == "pass" else 1)
+    sys.exit({"pass": 0, "fail": 1, "indeterminate": 2}[verdict.final])
 
 
 @main.command("list")
@@ -93,14 +89,14 @@ def list_scenarios(scenarios_root: Path) -> None:
     type=click.Path(file_okay=False, path_type=Path),
 )
 def new(name: str, scenarios_root: Path) -> None:
-    """Scaffold a new scenario skeleton (story.md, setup.sh, preflight.sh)."""
+    """Scaffold a new scenario skeleton (story.md, setup.sh, checks.sh)."""
     try:
         scenario_dir = new_scenario(scenarios_root, name)
     except ScaffoldError as e:
         click.echo(f"error: {e}", err=True)
         sys.exit(1)
     click.echo(f"created {scenario_dir}/")
-    click.echo("  story.md, setup.sh, preflight.sh, assertions/ — fill in the TODOs")
+    click.echo("  story.md, setup.sh, checks.sh — fill in the TODOs")
 
 
 @main.command("check")

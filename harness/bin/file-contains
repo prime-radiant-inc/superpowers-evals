@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=file-contains
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+path="$1"; pattern="$2"
+if [ ! -f "$path" ]; then
+    record_fail "file not found: $path"; exit 1
+fi
+# Pattern is an extended regex (grep -E). Use \. to match a literal dot, etc.
+if grep -qE -- "$pattern" "$path"; then
+    record_pass
+else
+    record_fail "pattern not found in $path"; exit 1
+fi
