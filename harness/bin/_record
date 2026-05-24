@@ -31,8 +31,9 @@ _record_emit() {
     [ -z "${HARNESS_RECORD_SINK:-}" ] && return 0
     if [ -z "$args_json" ]; then
         # ${#arr[@]:-0} is invalid bash (length-op + default-op can't combine).
-        # Use -v to test array presence, then plain ${#arr[@]} for the count.
-        if [ ! -v _RECORD_ARGS ] || [ "${#_RECORD_ARGS[@]}" -eq 0 ]; then
+        # ${arr+set} is "set" if the array has been assigned (even empty);
+        # this form is portable to bash 3.2 (macOS) — `[ -v ]` is bash 4.2+.
+        if [ -z "${_RECORD_ARGS+set}" ] || [ "${#_RECORD_ARGS[@]}" -eq 0 ]; then
             args_json='[]'
         else
             args_json=$(printf '%s\n' "${_RECORD_ARGS[@]}" | jq -R . | jq -s -c .)

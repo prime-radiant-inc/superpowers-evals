@@ -48,6 +48,49 @@ def test_run_phase_nonzero_exit_signals_crash(tmp_path: Path):
     assert exit_code != 0
 
 
+def test_run_phase_crash_after_record_still_reports_crash(tmp_path: Path):
+    # Regression for Codex review feedback (P1.2): a bash crash that fires
+    # AFTER a successful check tool emits a record used to be masked —
+    # the old logic was `exit_code = 0 if records else proc.returncode`,
+    # so the record's presence hid the crash. The fix: check the
+    # bash-reserved exit-code range (126, 127, ≥128) — those mean bash
+    # itself crashed, not a tool's intentional fail-exit.
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    (workdir / "x.md").write_text("hi")
+    checks_sh = tmp_path / "checks.sh"
+    checks_sh.write_text(
+        "pre() { :; }\n"
+        "post() { file-exists 'x.md'; tools_called_typo; }\n"  # typo'd helper
+    )
+    records, exit_code = run_phase(
+        checks_sh=checks_sh, phase="post", workdir=workdir,
+        harness_bin=Path("harness/bin").resolve(),
+    )
+    # The file-exists record was emitted before the crash. Old code:
+    # exit_code = 0 here. New code: exit_code reflects the 127.
+    assert len(records) >= 1, "file-exists record should still be captured"
+    assert exit_code == 127, (
+        f"command-not-found crash should propagate as 127; got {exit_code}"
+    )
+
+
+def test_run_phase_tool_failure_does_not_look_like_crash(tmp_path: Path):
+    # The companion of the above: a normal tool failure (exit 1) is NOT a
+    # crash. file-exists on a missing path exits 1, but the phase ran to
+    # completion. exit_code must stay 0.
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    checks_sh = tmp_path / "checks.sh"
+    checks_sh.write_text("pre() { :; }\npost() { file-exists 'missing.md'; }\n")
+    records, exit_code = run_phase(
+        checks_sh=checks_sh, phase="post", workdir=workdir,
+        harness_bin=Path("harness/bin").resolve(),
+    )
+    assert exit_code == 0
+    assert len(records) == 1 and not records[0].passed
+
+
 def test_run_phase_exports_harness_run_dir(tmp_path: Path):
     # Checks that need sibling paths (e.g. codex-native-hook-configured
     # looking up coding-agent-config/) rely on HARNESS_RUN_DIR being set,

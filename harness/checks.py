@@ -16,6 +16,7 @@ not run to completion. Pass/fail comes from the records.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -71,10 +72,14 @@ def run_phase(
     """
     with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".jsonl") as f:
         sink = Path(f.name)
+    # Inherit os.environ for PATH and friends — checks like `requires-tool npm`
+    # or `command-succeeds 'go test'` need brew / pyenv / nvm tools that don't
+    # live in /usr/bin or /bin. Prepend harness_bin so the check vocabulary
+    # wins lookups, then layer our own overrides on top.
     env = {
-        "PATH": f"{harness_bin}:/usr/bin:/bin",
+        **os.environ,
+        "PATH": f"{harness_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
         "HARNESS_RECORD_SINK": str(sink),
-        "HOME": str(Path.home()),  # git config, jq cache
     }
     if tool_calls_path is not None:
         env["HARNESS_TOOL_CALLS_PATH"] = str(tool_calls_path)
@@ -95,11 +100,37 @@ def run_phase(
             for line in sink.read_text().splitlines() if line.strip()
             for d in [json.loads(line)]
         ]
-        # The exit code is the crash signal (spec §7): a non-zero exit with no
-        # records means the script did not run to completion. When records were
-        # emitted, the phase ran successfully — individual check failures exit
-        # the tool with 1, but that is normal behaviour, not a crash.
-        exit_code = 0 if records else proc.returncode
+        # The exit code is the crash signal (spec §7). Distinguishing a
+        # *crash* from a *check failure* requires looking at where the exit
+        # code lands:
+        #
+        #   - 0 → phase ran clean to the end. No crash.
+        #   - 126 (not-executable), 127 (command-not-found), >= 128
+        #     (signal-killed) → bash itself crashed mid-phase. Typo'd
+        #     function name (`tools-called` instead of `tool-called`) is the
+        #     common bite; that's exit 127. Treat as crash regardless of
+        #     whether records were emitted before it happened.
+        #   - 1-125 → either a check tool's intentional fail-exit, OR a
+        #     user-written `false` / bad conditional. Treat as completed
+        #     when any records were emitted; treat as crash when none were
+        #     (the script likely failed before any tool ran).
+        #
+        # This is a heuristic — it can miss a crash whose exit happens to
+        # land in 1-125 *and* is followed by no further records (so we
+        # incorrectly assume "tool failed"). Codex flagged a stricter
+        # alternative — change every tool to exit 0 always, drive crash
+        # detection purely off returncode — which is cleaner but a much
+        # larger contract change. The heuristic catches every typo-style
+        # crash (which is what bites in practice) without that surgery.
+        crash_codes = proc.returncode == 126 or proc.returncode == 127 or proc.returncode >= 128
+        if proc.returncode == 0:
+            exit_code = 0
+        elif crash_codes:
+            exit_code = proc.returncode
+        elif records:
+            exit_code = 0
+        else:
+            exit_code = proc.returncode
         return records, exit_code
     finally:
         sink.unlink(missing_ok=True)

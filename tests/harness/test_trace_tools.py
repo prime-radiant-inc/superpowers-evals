@@ -47,3 +47,69 @@ def test_skill_called(tmp_path):
     trace = _trace(parent, {"tool": "Skill", "args": {"skill": "superpowers:foo"}})
     sink = tmp_path/"s"
     assert _run("skill-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink) == 0
+
+
+# Codex review feedback P2 (2026-05-24): the four skill-* tools used to
+# disagree about what counts as "skill invocation". skill-called and
+# skill-not-called matched native Skill calls AND Bash reads of SKILL.md;
+# skill-before-tool and skill-before-tool-match only matched the native
+# form. So a Codex-driven run (which loads skills via Bash) would pass
+# skill-called but fail skill-before-tool against the same trace.
+# These tests pin the convergence — all four use the shared predicate.
+
+def test_skill_called_recognizes_bash_skill_md_read(tmp_path):
+    """Bash-style shell read of SKILL.md counts as invocation."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "cat skills/superpowers/foo/SKILL.md"}},
+    )
+    sink = tmp_path / "s"
+    assert _run(
+        "skill-called", "superpowers:foo",
+        trace=trace, cwd=workdir, sink=sink,
+    ) == 0
+
+
+def test_skill_before_tool_recognizes_bash_skill_md_read(tmp_path):
+    """skill-before-tool must use the same predicate as skill-called.
+
+    Before the unification, this trace would pass `skill-called foo` but
+    fail `skill-before-tool foo Edit` with "Edit fired but Skill never
+    fired" — even though the Bash read of SKILL.md preceded the Edit.
+    """
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "cat skills/superpowers/foo/SKILL.md"}},
+        {"tool": "Edit", "args": {"file_path": "/x"}},
+    )
+    sink = tmp_path / "s"
+    assert _run(
+        "skill-before-tool", "superpowers:foo", "Edit",
+        trace=trace, cwd=workdir, sink=sink,
+    ) == 0, "should pass — Bash skill-read at index 0 precedes Edit at index 1"
+
+
+def test_skill_before_tool_match_recognizes_bash_skill_md_read(tmp_path):
+    """skill-before-tool-match must use the same predicate as skill-called."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "cat skills/superpowers/foo/SKILL.md"}},
+        {"tool": "Bash", "args": {"command": "git commit -m 'x'"}},
+    )
+    sink = tmp_path / "s"
+    assert _run(
+        "skill-before-tool-match", "superpowers:foo", "git[[:space:]]+commit",
+        trace=trace, cwd=workdir, sink=sink,
+    ) == 0, "should pass — Bash skill-read at index 0 precedes git commit at index 1"

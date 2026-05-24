@@ -17,6 +17,7 @@ set -uo pipefail
 command -v jq >/dev/null || { echo "jq required"; exit 127; }
 
 SKILL_NAME="$1"
+SKILL_DIR="${SKILL_NAME##*:}"
 TOOL_NAME="$2"
 FILE="${HARNESS_TOOL_CALLS_PATH:-coding-agent-tool-calls.jsonl}"
 
@@ -25,9 +26,15 @@ if [ ! -s "$FILE" ]; then
     exit 1
 fi
 
+# First index where the skill was invoked, via the shared predicate so
+# this tool counts shell-read SKILL.md files alongside native Skill
+# calls — same rule as skill-called (Codex review P2, 2026-05-24).
 SKILL_IDX=$(
-    jq -s --arg name "$SKILL_NAME" \
-        'to_entries | map(select(.value.tool == "Skill" and (.value.args.skill // "") == $name)) | first | (.key // -1)' \
+    jq -L "$(dirname "$0")" -s \
+        --arg name "$SKILL_NAME" --arg dir "$SKILL_DIR" \
+        'include "_skill_predicate";
+         to_entries | map(select(.value | is_skill_invocation($name; $dir)))
+         | first | (.key // -1)' \
         "$FILE"
 )
 

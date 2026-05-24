@@ -21,19 +21,14 @@ if [ ! -s "$FILE" ]; then
     exit 1
 fi
 
+# Detection uses the shared `is_skill_invocation` predicate (see
+# harness/bin/_skill_predicate.jq) so this and the three sibling skill-*
+# tools recognize the same set of invocation patterns.
 COUNT=$(
-    jq -s --arg name "$SKILL_NAME" --arg dir "$SKILL_DIR" \
-        '[.[] | select(
-            (.tool == "Skill" and (.args.skill // "") == $name)
-            or (
-                ((.tool // "") | test("^(Bash|Shell|LocalShellCall)$"))
-                and (
-                    ((.args.command // .args.cmd // "") | test(
-                        "(^|[[:space:]'\''\"/])skills/(superpowers/)?" + $dir + "/SKILL[.]md([[:space:]'\''\";]|$)"
-                    ))
-                )
-            )
-        )] | length' \
+    jq -L "$(dirname "$0")" -s \
+        --arg name "$SKILL_NAME" --arg dir "$SKILL_DIR" \
+        'include "_skill_predicate";
+         [.[] | select(is_skill_invocation($name; $dir))] | length' \
         "$FILE"
 )
 
