@@ -86,8 +86,11 @@ def test_err_trap_fires_inside_installed_tool(tmp_path: Path):
         'record_pass\n'
     )
     fake_tool.chmod(0o755)
-    proc = subprocess.run([str(fake_tool)], env={**__import__("os").environ, "HARNESS_RECORD_SINK": str(sink)},
-                          capture_output=True, text=True)
+    proc = subprocess.run(
+        [str(fake_tool)],
+        env={**__import__("os").environ, "HARNESS_RECORD_SINK": str(sink)},
+        capture_output=True, text=True,
+    )
     assert proc.returncode != 0
     rs = _records(sink)
     assert len(rs) == 1 and rs[0]["passed"] is False and "tool error" in (rs[0]["detail"] or "")

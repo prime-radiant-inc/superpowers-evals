@@ -288,7 +288,8 @@ def invoke_gauntlet(
     cmd = [
         "gauntlet", "run", str(story_path),
         "--adapter", "tui",
-        "--target", target_binary,  # Gauntlet's own --target flag; keep this — it's not the Harness's vocabulary.
+        # Gauntlet's own --target flag; not the Harness's vocabulary — keep.
+        "--target", target_binary,
         "--project-dir", str(run_dir),
         "--state-dir", "gauntlet-agent",
         "--silent",

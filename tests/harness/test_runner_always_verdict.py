@@ -4,15 +4,15 @@
 A setup.sh that exits non-zero must still produce a verdict.json with
 final=indeterminate and error.stage=setup.  Same for unexpected harness errors.
 """
-from pathlib import Path
 import json
 import stat
+from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
+from harness.composer import FinalVerdict
 from harness.runner import run_scenario
-
 
 # ---------------------------------------------------------------------------
 # Helpers (shared with test_runner_gating pattern)
@@ -40,7 +40,7 @@ def _invoke(
     tmp_path: Path,
     scenario_dir: Path,
     coding_agent: str = "claude",
-) -> tuple[Path, object]:
+) -> tuple[Path, FinalVerdict]:
     """Invoke run_scenario with minimal fixture wiring."""
     coding_agents_dir = tmp_path / "coding-agents"
     session_log_dir = tmp_path / "session-logs"

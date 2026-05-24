@@ -31,11 +31,29 @@ def main() -> None:
 
 
 @main.command("run")
-@click.argument("scenario_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--coding-agent", required=True, help="Coding-Agent name (matches harness/coding-agents/<name>.yaml)")
-@click.option("--coding-agents-dir", default=_DEFAULT_CODING_AGENTS_DIR, type=click.Path(path_type=Path))
-@click.option("--coding-agent-contexts-dir", default=_DEFAULT_CODING_AGENT_CONTEXTS_DIR, type=click.Path(path_type=Path))
-@click.option("--out-root", default=_DEFAULT_OUT_ROOT, type=click.Path(path_type=Path))
+@click.argument(
+    "scenario_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--coding-agent", required=True,
+    help="Coding-Agent name (matches harness/coding-agents/<name>.yaml)",
+)
+@click.option(
+    "--coding-agents-dir",
+    default=_DEFAULT_CODING_AGENTS_DIR,
+    type=click.Path(path_type=Path),
+)
+@click.option(
+    "--coding-agent-contexts-dir",
+    default=_DEFAULT_CODING_AGENT_CONTEXTS_DIR,
+    type=click.Path(path_type=Path),
+)
+@click.option(
+    "--out-root",
+    default=_DEFAULT_OUT_ROOT,
+    type=click.Path(path_type=Path),
+)
 def run(
     scenario_dir: Path,
     coding_agent: str,

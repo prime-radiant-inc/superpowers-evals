@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from harness.coding_agent_config import CodingAgentConfig, CodingAgentConfigError, load_coding_agent_config
+from harness.coding_agent_config import (
+    CodingAgentConfig,
+    CodingAgentConfigError,
+    load_coding_agent_config,
+)
 
 
 def _write(tmp_path: Path, name: str, doc: dict) -> Path:

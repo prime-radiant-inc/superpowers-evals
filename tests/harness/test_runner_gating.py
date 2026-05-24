@@ -6,15 +6,15 @@ BEFORE setup.sh, _seed_agent_config_dir, or any other side effect. A
 mismatched Coding-Agent returns final=indeterminate with a final_reason that
 names the required agents. Compatible agents (or absent directive) proceed.
 """
-from pathlib import Path
 import json
 import stat
+from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
+from harness.composer import FinalVerdict
 from harness.runner import run_scenario
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,7 +54,9 @@ def _scenario(
     return d
 
 
-def _run(tmp_path: Path, scenario_dir: Path, coding_agent: str = "claude") -> object:
+def _run(
+    tmp_path: Path, scenario_dir: Path, coding_agent: str = "claude",
+) -> FinalVerdict:
     """Invoke run_scenario with minimal fixture wiring. Returns the FinalVerdict."""
     coding_agents_dir = tmp_path / "coding-agents"
     session_log_dir = tmp_path / "session-logs"

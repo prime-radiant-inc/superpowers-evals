@@ -1,6 +1,8 @@
 # tests/harness/test_not.py
-import json, subprocess
+import json
+import subprocess
 from pathlib import Path
+
 BIN = Path("harness/bin").resolve()
 
 def _run(*args: str, cwd: Path, sink: Path) -> int:

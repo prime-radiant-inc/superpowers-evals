@@ -109,7 +109,10 @@ def compose(
     failed_post = [c for c in checks if c.phase == "post" and not c.passed]
     if gauntlet.status == "pass" and not failed_post:
         n = sum(1 for c in checks if c.phase == "post")
-        reason = f"Gauntlet-Agent passed; {n} post-check(s) passed" if n else "Gauntlet-Agent passed; no deterministic checks"
+        reason = (
+            f"Gauntlet-Agent passed; {n} post-check(s) passed"
+            if n else "Gauntlet-Agent passed; no deterministic checks"
+        )
         return FinalVerdict(
             final="pass", final_reason=reason,
             gauntlet=gauntlet, checks=checks, error=None,
