@@ -9,3 +9,5 @@ build/
 .venv/
 .env
 .claude/
+.superpowers/
+.clearance-rendered-preview-*/

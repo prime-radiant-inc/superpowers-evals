@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Verify one or more named tools are on PATH. Designed for pre() blocks so
+# env-missing failures land as `final=indeterminate` (Pattern 3 in the
+# triaging-a-failing-eval skill) instead of bubbling up as Pattern 4 broken
+# checks when downstream post-check commands hit "command not found".
+#
+# Usage:
+#   requires-tool go
+#   requires-tool npm npx
+_RECORD_CHECK=requires-tool
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+
+if [ "$#" -lt 1 ]; then
+    record_fail "no tool name(s) provided"
+    exit 1
+fi
+
+missing=()
+for tool in "$@"; do
+    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+    record_pass "all required tools on PATH: $*"
+else
+    record_fail "required tool(s) not on PATH: ${missing[*]}"
+    exit 1
+fi

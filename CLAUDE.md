@@ -73,6 +73,10 @@ Per-coding-agent config: `harness/coding-agents/<name>.yaml`. Per-coding-agent H
 - `harness/bin/` is forked from the top-level `bin/` and is independent; `bin/` is frozen for Drill.
 - Backend YAMLs are fully self-contained — no override/alias system (Drill only).
 
+## Triage
+
+- **Triaging a non-passing harness run**: run `uv run harness show [<target>]` and see [docs/superpowers/skills/triaging-a-failing-eval.md](docs/superpowers/skills/triaging-a-failing-eval.md) for the six-pattern attribution atlas.
+
 ## Required env
 
 ```

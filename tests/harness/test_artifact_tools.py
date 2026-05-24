@@ -73,3 +73,49 @@ def test_command_succeeds_fail(tmp_path: Path):
     r = _last_record(sink)
     assert r["passed"] is False
     assert "exit non-zero" in r["detail"]
+
+
+# ---------- requires-tool ----------------------------------------------
+
+def test_requires_tool_present_passes(tmp_path: Path):
+    # bash is universally available; safe choice for "tool exists" test.
+    sink = tmp_path / "sink"
+    assert _run("requires-tool", "bash", cwd=tmp_path, sink=sink) == 0
+    r = _last_record(sink)
+    assert r["passed"] is True
+
+
+def test_requires_tool_missing_fails_with_named_detail(tmp_path: Path):
+    sink = tmp_path / "sink"
+    # A tool name that won't exist anywhere on PATH.
+    assert _run("requires-tool", "definitely-not-a-real-tool-xyz",
+                cwd=tmp_path, sink=sink) != 0
+    r = _last_record(sink)
+    assert r["passed"] is False
+    assert "definitely-not-a-real-tool-xyz" in r["detail"]
+    assert "not on PATH" in r["detail"]
+
+
+def test_requires_tool_multiple_all_present_passes(tmp_path: Path):
+    sink = tmp_path / "sink"
+    assert _run("requires-tool", "bash", "ls", cwd=tmp_path, sink=sink) == 0
+    assert _last_record(sink)["passed"] is True
+
+
+def test_requires_tool_multiple_one_missing_names_only_missing(tmp_path: Path):
+    sink = tmp_path / "sink"
+    assert _run("requires-tool", "bash", "not-a-tool-xyz",
+                cwd=tmp_path, sink=sink) != 0
+    r = _last_record(sink)
+    assert r["passed"] is False
+    assert "not-a-tool-xyz" in r["detail"]
+    # The detail should name what's missing, not what's present.
+    assert "bash" not in r["detail"]
+
+
+def test_requires_tool_no_args_fails(tmp_path: Path):
+    sink = tmp_path / "sink"
+    assert _run("requires-tool", cwd=tmp_path, sink=sink) != 0
+    r = _last_record(sink)
+    assert r["passed"] is False
+    assert "no tool name" in r["detail"]
