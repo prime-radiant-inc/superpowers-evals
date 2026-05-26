@@ -308,10 +308,14 @@ def test_run_batch_writes_skipped_then_runnable(tmp_path, capsys):
     # 1 skipped (alpha × claude) + 3 runnable = 4 records.
     assert len(records) == 4
 
+    # Spec §4: skipped pairs are written upfront; runnable pairs follow.
+    assert records[0]["scenario"] == "alpha"
+    assert records[0]["coding_agent"] == "claude"
+    assert records[0].get("skipped") == "directive"
+    assert all(r.get("run_id") for r in records[1:])
+
     skipped = [r for r in records if r.get("skipped")]
     assert len(skipped) == 1
-    assert skipped[0]["scenario"] == "alpha"
-    assert skipped[0]["coding_agent"] == "claude"
 
     runnable = [r for r in records if r.get("run_id")]
     assert len(runnable) == 3
