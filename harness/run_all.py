@@ -8,8 +8,11 @@ minimal batch index under results-harness/batches/<id>/.
 
 from __future__ import annotations
 
+import json
+import secrets
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.checks import parse_coding_agents_directive
@@ -160,3 +163,70 @@ def invoke_child(
             error=f"child did not print run-id (exit {completed.returncode})",
         )
     return ChildResult(run_id=run_id, exit_code=completed.returncode, error=None)
+
+
+def _make_batch_id(now: datetime | None = None) -> str:
+    now = now or datetime.now(UTC)
+    stamp = now.strftime("%Y%m%dT%H%M%SZ")
+    nonce = secrets.token_hex(2)  # 4 hex chars, matches per-run convention
+    return f"{stamp}-{nonce}"
+
+
+def allocate_batch_dir(*, out_root: Path) -> Path:
+    """Create results-harness/batches/<id>/ and return its path."""
+    batches_root = out_root / "batches"
+    batches_root.mkdir(parents=True, exist_ok=True)
+    for _ in range(100):
+        candidate = batches_root / _make_batch_id()
+        try:
+            candidate.mkdir(exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue  # nonce collision; try again
+    raise RuntimeError(
+        "could not allocate a unique batch id after 100 attempts "
+        f"(clock or RNG malfunction?) in {batches_root}"
+    )
+
+
+def write_batch_header(
+    *,
+    batch_dir: Path,
+    coding_agents: list[str],
+    jobs: int,
+    started_at: datetime,
+) -> None:
+    """Write batch.json at the start of a batch. `finished_at` is null."""
+    data = {
+        "schema_version": 1,
+        "id": batch_dir.name,
+        "started_at": started_at.isoformat(),
+        "finished_at": None,
+        "coding_agents": coding_agents,
+        "jobs": jobs,
+    }
+    (batch_dir / "batch.json").write_text(json.dumps(data, indent=2))
+
+
+def write_batch_footer(*, batch_dir: Path, finished_at: datetime) -> None:
+    """Update batch.json with `finished_at` when the batch completes."""
+    path = batch_dir / "batch.json"
+    data = json.loads(path.read_text())
+    data["finished_at"] = finished_at.isoformat()
+    path.write_text(json.dumps(data, indent=2))
+
+
+def append_result_record(
+    *,
+    batch_dir: Path,
+    scenario: str,
+    coding_agent: str,
+    run_id: str | None,
+    skipped: str | None,
+) -> None:
+    """Append one record to results.jsonl. Only the main thread should call."""
+    rec: dict = {"scenario": scenario, "coding_agent": coding_agent, "run_id": run_id}
+    if skipped is not None:
+        rec["skipped"] = skipped
+    with (batch_dir / "results.jsonl").open("a") as f:
+        f.write(json.dumps(rec) + "\n")

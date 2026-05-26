@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
 import pytest
 
-from harness.run_all import build_matrix, invoke_child
+from harness.run_all import (
+    allocate_batch_dir,
+    append_result_record,
+    build_matrix,
+    invoke_child,
+    write_batch_footer,
+    write_batch_header,
+)
 
 
 def _scenario(root: Path, name: str, *, directive: str | None = None) -> Path:
@@ -165,3 +174,102 @@ def test_invoke_child_no_run_id_in_stdout_is_error(tmp_path):
     assert result.run_id is None
     assert result.exit_code == 137
     assert result.error is not None and "run-id" in result.error
+
+
+def test_allocate_batch_dir_creates_unique_dir(tmp_path):
+    import re
+
+    out_root = tmp_path / "results-harness"
+    out_root.mkdir()
+
+    batch_dir = allocate_batch_dir(out_root=out_root)
+
+    assert batch_dir.parent == out_root / "batches"
+    assert batch_dir.is_dir()
+    # ID looks like 20260526T180000Z-abcd
+    assert re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{4}", batch_dir.name), batch_dir.name
+
+
+def test_write_batch_header_writes_batch_json(tmp_path):
+    batch_dir = tmp_path / "batches" / "20260526T180000Z-abcd"
+    batch_dir.mkdir(parents=True)
+
+    started_at = datetime(2026, 5, 26, 18, 0, 0, tzinfo=UTC)
+    write_batch_header(
+        batch_dir=batch_dir,
+        coding_agents=["claude", "codex"],
+        jobs=4,
+        started_at=started_at,
+    )
+
+    data = json.loads((batch_dir / "batch.json").read_text())
+    assert data["schema_version"] == 1
+    assert data["id"] == "20260526T180000Z-abcd"
+    assert data["coding_agents"] == ["claude", "codex"]
+    assert data["jobs"] == 4
+    assert data["started_at"] == "2026-05-26T18:00:00+00:00"
+    assert data["finished_at"] is None
+
+
+def test_write_batch_footer_sets_finished_at(tmp_path):
+    batch_dir = tmp_path / "batches" / "20260526T180000Z-abcd"
+    batch_dir.mkdir(parents=True)
+    started_at = datetime(2026, 5, 26, 18, 0, 0, tzinfo=UTC)
+    write_batch_header(
+        batch_dir=batch_dir,
+        coding_agents=["claude"],
+        jobs=1,
+        started_at=started_at,
+    )
+
+    finished_at = datetime(2026, 5, 26, 18, 3, 41, tzinfo=UTC)
+    write_batch_footer(batch_dir=batch_dir, finished_at=finished_at)
+
+    data = json.loads((batch_dir / "batch.json").read_text())
+    assert data["finished_at"] == "2026-05-26T18:03:41+00:00"
+    # Header fields preserved
+    assert data["coding_agents"] == ["claude"]
+
+
+def test_append_result_record_skipped(tmp_path):
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+
+    append_result_record(
+        batch_dir=batch_dir,
+        scenario="foo",
+        coding_agent="codex",
+        run_id=None,
+        skipped="directive",
+    )
+
+    lines = (batch_dir / "results.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec == {
+        "scenario": "foo",
+        "coding_agent": "codex",
+        "run_id": None,
+        "skipped": "directive",
+    }
+
+
+def test_append_result_record_runnable(tmp_path):
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+
+    append_result_record(
+        batch_dir=batch_dir,
+        scenario="foo",
+        coding_agent="claude",
+        run_id="foo-claude-20260526T180001Z-abcd",
+        skipped=None,
+    )
+
+    rec = json.loads((batch_dir / "results.jsonl").read_text().splitlines()[0])
+    assert rec == {
+        "scenario": "foo",
+        "coding_agent": "claude",
+        "run_id": "foo-claude-20260526T180001Z-abcd",
+    }
+    assert "skipped" not in rec
