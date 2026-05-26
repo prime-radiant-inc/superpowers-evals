@@ -1,86 +1,124 @@
-# Drill
+# Superpowers Evals
 
-Superpowers skill compliance benchmark. Python 3.11+, managed with uv.
+Behavioral eval lab for superpowers. Python 3.11+, managed with uv.
+
+The active runner is the Gauntlet-backed **Harness**. Drill is legacy and
+slated for removal; do not write new scenarios against Drill.
 
 ## Canonical Actors
 
 Keep the actors straight; confusing them is the most common triage error.
-These names are used everywhere — docs, CLI output, code, filenames, commit
+These names are used everywhere: docs, CLI output, code, filenames, and commit
 messages.
 
 | Actor | What it is | Where it lives / its files |
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
-| **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the system-under-test and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
-| **Harness** | The Python wrapper. Owns setup, Coding-Agent adaptation, the deterministic checks, and the final verdict. | repo `superpowers-evals/harness/`; `<run>/verdict.json` |
+| **Gauntlet-Agent** | The LLM inside Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream -> `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict -> `result.{json,md}` |
+| **Coding-Agent** | The agent under test. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log -> `<run>/coding-agent-config/...`; files it writes -> `<run>/coding-agent-workdir/` |
+| **Harness** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and final verdict composition. | repo `superpowers-evals/harness/`; `<run>/verdict.json` |
 
-A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
-**Coding-Agent** (subject). Separate models, separate logs, separate token costs.
-Confusing them is the most common triage error.
+A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
+**Coding-Agent** (subject). Separate models, logs, and token costs.
 
 ## Commands
 
 - **install**: `uv sync --extra dev`
 - **test**: `uv run pytest`
-- **test single**: `uv run pytest tests/test_engine.py -x -q`
+- **test single**: `uv run pytest tests/harness/test_runner.py -x -q`
 - **lint**: `uv run ruff check`
 - **format**: `uv run ruff format`
 - **typecheck**: `uv run ty check`
-- **run scenario**: `uv run drill run <scenario> -b <backend>`
-- **sweep**: `uv run drill run <scenario> --models claude-opus-4-6,claude-opus-4-7 --n 10`
-- **compare**: `uv run drill compare <scenario>`
-- **list**: `uv run drill list`
-
-## Harness commands
-
+- **validate scenarios**: `uv run harness check`
 - **run scenario**: `uv run harness run harness/scenarios/<name> --coding-agent <claude|codex>`
-- **list**: `uv run harness list`
-- **scaffold**: `uv run harness new <name>`
-- **validate**: `uv run harness check [<name>]`
-
-Per-coding-agent config: `harness/coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
-`harness/coding-agent-contexts/<name>/`. Spec: `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
+- **list scenarios**: `uv run harness list`
+- **scaffold scenario**: `uv run harness new <name>`
+- **show verdict**: `uv run harness show [<target>]`
 
 ## Architecture
 
 **Harness (active):**
+
 - `harness/runner.py` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict.
-- `harness/checks.py` — sources `checks.sh`, calls `pre()`/`post()` with `HARNESS_RECORD_SINK` set, collects records.
-- `harness/composer.py` — three-valued verdict (`pass | fail | indeterminate`) from Gauntlet-Agent layer + checks layer.
-- `harness/coding_agent_config.py` — per-coding-agent YAML loader (`CodingAgentConfig`).
-- `harness/bin/` — the check-tool vocabulary; `_record` is the shared helper sourced by every tool. Tools: artifact (`file-exists`, `file-contains`, `command-succeeds`), git (`git-repo`, `git-branch`, `git-clean`, `git-count`), trace (`tool-called`, `tool-count`, `tool-before`, `tool-arg-match`, `skill-called`, `skill-before-tool`, and variants), negation (`not`).
-- `harness/scenarios/` — one directory per scenario (`story.md`, `setup.sh`, `checks.sh`).
-- `setup_helpers/*.py` — Repo fixture creators shared by Drill and the Harness.
+- `harness/checks.py` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records.
+- `harness/composer.py` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
+- `harness/coding_agent_config.py` — per-Coding-Agent YAML loader and session-log config.
+- `harness/capture.py` — session-log snapshot/diff, normalized tool-call capture, token capture.
+- `harness/normalizers.py` — Coding-Agent session-log normalizers.
+- `harness/scaffold.py` — `harness new` / `harness check` implementation.
+- `harness/show.py` — verdict renderer for triage.
+- `harness/bin/` — check-tool vocabulary; tools emit one JSON record each.
+- `harness/scenarios/` — active scenarios, one directory each.
+- `setup_helpers/*.py` — fixture creators shared by Harness and legacy Drill.
 
-**Drill (legacy; unchanged):**
-- `drill/engine.py` — Tmux session orchestration. Creates workdir, runs setup helpers, drives actor/agent turns, collects results.
-- `drill/actor.py` — Sonnet 4.6 LLM simulating a user. Reads turn intents from scenario YAML and generates realistic prompts.
-- `drill/verifier.py` — Sonnet 4.6 LLM evaluating session transcript + filesystem against semantic criteria.
-- `drill/sweep.py` — Multi-backend, N-repetition orchestrator.
-- `drill/compare.py` — Loads results, computes pass rates and Wilson CIs, formats comparison tables.
-- `scenarios/*.yaml` — Drill scenario definitions (setup, turns, limits, verify).
-- `backends/*.yaml` — Per-backend CLI config (args, env, idle patterns, shutdown commands).
-- `bin/` — Drill assertion helper scripts (frozen; separate from `harness/bin/`).
+**Drill (legacy; frozen):**
 
-## Conventions
+- `drill/`, `backends/`, top-level `scenarios/`, top-level `bin/`, and
+  `prompts/` remain for legacy-result archaeology and eventual decommissioning.
+- Drill's sweep/compare ergonomics have not yet been replaced in the Harness;
+  decide whether those are still needed before deleting Drill.
 
-- Setup helpers take `workdir: Path` and mutate the filesystem. Register in `setup_helpers/__init__.py`.
-- Harness scenarios use `user_posture: naive` (no skill names) or `spec-aware` (can name skills) in the story.
-- `checks.sh` must contain only `pre()` and `post()` function definitions — no top-level statements, no exec bit.
-- Check tools emit one JSON record per invocation via `harness/bin/_record`; exit 0 = pass, non-zero = fail.
-- The `# coding-agents: <csv>` magic comment at the top of `checks.sh` restricts which Coding-Agents the scenario runs against.
-- `harness/bin/` is forked from the top-level `bin/` and is independent; `bin/` is frozen for Drill.
-- Backend YAMLs are fully self-contained — no override/alias system (Drill only).
+## Scenario Conventions
+
+- A Harness scenario is `harness/scenarios/<name>/{story.md,setup.sh,checks.sh}`.
+- `story.md` briefs the Gauntlet-Agent and includes evidence-demanding ACs.
+- `setup.sh` builds the fixture using `$HARNESS_WORKDIR`; prefer
+  `uv run setup-helpers run <helper>`.
+- `checks.sh` contains only `pre()` and `post()` function definitions.
+- `checks.sh` should not have the executable bit set.
+- Check tools run from the fixture workdir with `harness/bin/` on `PATH`.
+- Post-checks that need sibling run artifacts can use `$HARNESS_RUN_DIR`.
+- Use `# coding-agents: <csv>` to restrict a scenario to specific agents.
+- Use `requires-tool <name>` in `pre()` for local toolchain dependencies.
 
 ## Triage
 
-- **Triaging a non-passing harness run**: run `uv run harness show [<target>]` and see [docs/superpowers/skills/triaging-a-failing-eval.md](docs/superpowers/skills/triaging-a-failing-eval.md) for the six-pattern attribution atlas.
+Triaging a non-passing Harness run starts with:
 
-## Required env
+```
+uv run harness show [<target>]
+```
+
+Then use `docs/superpowers/skills/triaging-a-failing-eval.md` for the
+attribution atlas.
+
+## Safe Checks
+
+These are safe for CI and routine PRs:
+
+```
+uv run ruff check
+uv run ty check
+uv run harness check
+uv run pytest
+```
+
+Live `harness run ...` evals are trusted-maintainer operations only. They
+launch agent CLIs in permissive modes and can capture sensitive transcripts,
+tool calls, filesystem state, and token data. Do not add live evals, API keys,
+or dangerous-mode launches to public CI.
+
+## Required Env For Live Evals
 
 ```
 ANTHROPIC_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 ```
 
-`SUPERPOWERS_ROOT` defaults to the parent of `evals/` (the superpowers repo root). Override only if running drill against a different superpowers checkout.
+When this repo is checked out as `superpowers/evals`, the Harness defaults
+`SUPERPOWERS_ROOT` to the parent `superpowers` checkout. In a standalone
+`superpowers-evals` clone, export it explicitly:
+
+```
+export SUPERPOWERS_ROOT=/path/to/superpowers
+```
+
+## Parent Superpowers Submodule
+
+`superpowers-evals` is consumed by `superpowers` as the `evals` submodule.
+After any PR merges to `main` here, open a follow-up PR against the parent
+`superpowers` repo targeting `dev` that bumps the `evals` submodule pointer to
+the merged `superpowers-evals` commit.
+
+Do not treat a `superpowers-evals` merge as fully propagated until that parent
+submodule bump PR exists.

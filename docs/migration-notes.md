@@ -7,7 +7,7 @@ migration. Reviewed before Phase 3 decommission.
 
 - ~~**Token-cost wiring.**~~ **Resolved 2026-05-20.** The runner now calls
   `harness/token_usage.py` after every run via `capture_token_usage`
-  (`harness/capture.py`), writing `token_usage.json` into the run dir.
+  (`harness/capture.py`), writing `coding-agent-token-usage.json` into the run dir.
   See "Decision: cost / measurement model" below.
 - ~~**`setup.sh` shell-out latency.**~~ **Resolved 2026-05-20.** The
   `setup-helpers run <name>` CLI landed (ergonomics study item #3);
@@ -29,14 +29,14 @@ so the verdict model does not have to change:
   composition logic.
 - **The measurement is preserved separately.** When the first cost-*
   scenario ports, the runner calls `harness/token_usage.py` and writes
-  `token_usage.json` into the run dir alongside `verdict.json` (as
+  `coding-agent-token-usage.json` into the run dir alongside `verdict.json` (as
   Drill did). The verdict answers "within budget?"; the measurement
   file answers "by how much?" and is what trend analysis reads.
 - No "measurements channel" inside `verdict.json`; keeping the verdict
   purely binary is worth more than co-locating the number.
 
 Wired 2026-05-20: `harness/runner.py` step 9b calls `capture_token_usage`
-after every run, so `token_usage.json` lands in the run dir for all
+after every run, so `coding-agent-token-usage.json` lands in the run dir for all
 targets (claude/codex; gemini/pi produce no file — no parser).
 
 Cost-* scenarios ported 2026-05-20: they turned out to be pattern
@@ -45,8 +45,8 @@ duplication, review fan-out) — not token-threshold checks — so the
 anticipated `tokens-under` helper was not needed. Their deterministic
 assertions are claude-shaped pattern gates (skill-not-called, Read/Grep,
 Agent count) and carry no `compatible_targets`, so a codex run still
-produces a valid `token_usage.json` even if the claude-shaped assertion
-misfires. The cross-backend cost comparison reads `token_usage.json`,
+produces a valid `coding-agent-token-usage.json` even if the claude-shaped assertion
+misfires. The cross-backend cost comparison reads `coding-agent-token-usage.json`,
 which is backend-agnostic. Making the assertions themselves target-aware
 is a deferred follow-up.
 
@@ -192,6 +192,28 @@ Drill scenarios deliberately not ported, with the reason.
   author and verify the target. The normalizer (`normalize_gemini_logs`)
   and the setup helper (`link_gemini_extension`) already exist.
 
+## Harness-first cleanup decision (2026-05-26)
+
+The active repo contract is now Harness-first:
+
+- New scenarios go under `harness/scenarios/`, not top-level `scenarios/*.yaml`.
+- `harness/bin/` is the canonical check vocabulary for new work.
+- Top-level `bin/`, `backends/`, `scenarios/`, `prompts/`, and `drill/` are
+  frozen legacy surfaces until Drill is decommissioned.
+- CI should validate scenario structure with `uv run harness check`, but must
+  not run live `harness run ...` evals.
+
+Do not delete Drill until the missing product surface is explicitly decided.
+The known gap is Drill's sweep/compare ergonomics (`--n`, multi-backend
+comparison, Wilson CIs, and cost trend tables). If that surface is still
+needed for regular release evaluation, build the Harness equivalent first. If
+ad hoc shell loops plus `harness show` are enough, Drill can be removed once
+legacy docs and scenarios are archived.
+
 ## Phase 1 parity outcomes
 
-To be filled in by the manual parity runs (Tasks 18–20).
+Superseded by the Harness-first decision above. The original Phase 1 parity
+table was never filled in here, but the scenario ports, Harness structural
+validation, and follow-up run triage now live in the commit history and
+scenario-specific notes. Treat this section as historical rather than a live
+blocker.

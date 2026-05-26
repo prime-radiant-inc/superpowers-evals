@@ -11,6 +11,11 @@ repos:
         entry: uv run ty check
         language: system
         pass_filenames: false
+      - id: harness-check
+        name: harness check
+        entry: uv run harness check
+        language: system
+        pass_filenames: false
       - id: pytest
         name: pytest
         entry: uv run pytest

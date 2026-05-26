@@ -24,6 +24,8 @@ import yaml
 
 from harness.normalizers import NORMALIZERS
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 class CodingAgentConfigError(ValueError):
     """Raised when a coding-agent yaml is invalid or required env is missing."""
@@ -48,7 +50,33 @@ class CodingAgentConfig:
         return Path(substituted).expanduser()
 
 
+def default_superpowers_root(eval_repo_root: Path) -> Path | None:
+    """Infer the parent superpowers checkout for a nested superpowers/evals clone.
+
+    Standalone `superpowers-evals` checkouts cannot safely infer this value:
+    their parent directory is usually a workspace folder, not the superpowers
+    repo. Only default when the checkout is named `evals` and its parent looks
+    like a superpowers checkout.
+    """
+    root = eval_repo_root.resolve()
+    parent = root.parent
+    if root.name == "evals" and (parent / "skills").is_dir():
+        return parent
+    return None
+
+
+def ensure_superpowers_root_default(eval_repo_root: Path = PROJECT_ROOT) -> None:
+    """Set SUPERPOWERS_ROOT for nested checkouts when the caller omitted it."""
+    if os.environ.get("SUPERPOWERS_ROOT"):
+        return
+    default = default_superpowers_root(eval_repo_root)
+    if default is not None:
+        os.environ["SUPERPOWERS_ROOT"] = str(default)
+
+
 def load_coding_agent_config(path: Path) -> CodingAgentConfig:
+    ensure_superpowers_root_default()
+
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
         raise CodingAgentConfigError(f"{path}: top-level must be a mapping")

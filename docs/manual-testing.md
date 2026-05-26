@@ -1,6 +1,9 @@
 # Manual Testing (Codex App)
 
-Some scenarios cannot run automatically because drill has no harness adapter for the target — the Codex App desktop client has no CLI or tmux entry point the way `claude` and `codex` do. These scenarios are marked `manual: true` in their YAML and use a human-in-the-loop protocol.
+Some legacy scenarios cannot run automatically because the Codex App desktop
+client has no CLI or tmux entry point the way `claude` and `codex` do. Those
+cases remain human-in-the-loop; new automated coverage should use Harness
+scenarios whenever a CLI Coding-Agent can represent the behavior.
 
 ## Protocol
 
@@ -84,7 +87,10 @@ Matches the format of the existing `results/worktree-codex-app-detached-head/cod
 - The tester explicitly asks for a manual Codex App run of any scenario
 - An automated test result is inconclusive and we want a human-verified cross-check
 
-Do NOT use this procedure for scenarios drill can run itself (`claude`, `codex`, `gemini` backends) — use `drill run` instead.
+Do NOT use this procedure for scenarios the Harness can run with CLI
+Coding-Agents (`claude`, `codex`, and future CLI-backed agents) — use
+`harness run` instead. Use legacy Drill only for archived-result archaeology or
+explicit Drill decommissioning work.
 
 ## Pitfalls
 

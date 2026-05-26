@@ -1,7 +1,7 @@
 # Triaging a failing harness eval
 
 When `harness run` produces `final: fail` or `final: indeterminate`, this is
-the procedure. The tool that surfaces evidence is `harness show`; the six
+the procedure. The tool that surfaces evidence is `harness show`; the seven
 patterns below are the model you match against.
 
 > **Spec context:** the two-layer verdict is
@@ -16,13 +16,13 @@ patterns below are the model you match against.
 1. Run **`uv run harness show <target>`** to see the verdict (or `harness show`
    alone for the latest run; `harness show <scenario-name>` for the latest
    run of that scenario).
-2. Match the verdict's shape to one of the six **Signature** lines below.
+2. Match the verdict's shape to one of the seven **Signature** lines below.
 3. If you find a match: read **What to look for** and **Suggested next**.
 4. **If two patterns match (almost always Pattern 2 vs Pattern 4):**
    apply the *verify-the-check-before-blaming-the-agent* rubric. Re-run the
    failing check against a known-good fixture. If it passes there, the agent
    is at fault (Pattern 2); if it still fails, the check is broken (Pattern 4).
-5. If no pattern matches: read all six anyway, then escalate to Matt.
+5. If no pattern matches: read all seven anyway, then escalate to Matt.
 
 ---
 

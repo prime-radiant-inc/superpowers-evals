@@ -223,9 +223,9 @@ CLI and shared across scenarios.
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 
-`SUPERPOWERS_ROOT` defaults to the parent directory of this checkout. That is
-correct when `superpowers-evals` is checked out as `superpowers/evals`. In a
-standalone clone, set it explicitly:
+When this repo is checked out as `superpowers/evals`, the Harness defaults
+`SUPERPOWERS_ROOT` to the parent `superpowers` checkout. In a standalone
+`superpowers-evals` clone, set it explicitly:
 
 ```bash
 export SUPERPOWERS_ROOT=/path/to/superpowers
@@ -285,7 +285,8 @@ A `harness run` drives one scenario against one Coding-Agent:
    Coding-Agent.
 
 Setup scripts run with `$HARNESS_WORKDIR` pointing at the fixture workdir.
-Check tools run with `harness/bin/` on `PATH` and `$HARNESS_WORKDIR` set.
+Check tools run from the fixture workdir with `harness/bin/` on `PATH`.
+Post-checks that need sibling run artifacts can use `$HARNESS_RUN_DIR`.
 
 ## Refreshing the Claude Skeleton
 
@@ -320,6 +321,7 @@ These are the checks expected in CI and on routine PRs:
 ```bash
 uv run ruff check
 uv run ty check
+uv run harness check
 uv run pytest
 ```
 
@@ -358,7 +360,7 @@ removal.
 
 Triaging a non-passing run: `uv run harness show [<target>]` and see
 [docs/superpowers/skills/triaging-a-failing-eval.md](docs/superpowers/skills/triaging-a-failing-eval.md)
-for the six-pattern attribution atlas.
+for the attribution atlas.
 
 ## Contribution Rules
 

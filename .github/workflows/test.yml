@@ -44,6 +44,10 @@ jobs:
         working-directory: ${{ github.workspace }}/repo
         run: uv run ty check
 
+      - name: Harness scenario check
+        working-directory: ${{ github.workspace }}/repo
+        run: uv run harness check
+
       - name: Pytest
         working-directory: ${{ github.workspace }}/repo
         run: uv run pytest

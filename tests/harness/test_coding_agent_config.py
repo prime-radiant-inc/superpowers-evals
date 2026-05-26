@@ -1,4 +1,5 @@
 # tests/harness/test_coding_agent_config.py
+import os
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ import yaml
 from harness.coding_agent_config import (
     CodingAgentConfig,
     CodingAgentConfigError,
+    default_superpowers_root,
+    ensure_superpowers_root_default,
     load_coding_agent_config,
 )
 
@@ -15,6 +18,46 @@ def _write(tmp_path: Path, name: str, doc: dict) -> Path:
     p = tmp_path / f"{name}.yaml"
     p.write_text(yaml.safe_dump(doc))
     return p
+
+
+def test_default_superpowers_root_detects_nested_evals_checkout(tmp_path):
+    superpowers = tmp_path / "superpowers"
+    evals = superpowers / "evals"
+    (superpowers / "skills").mkdir(parents=True)
+    evals.mkdir()
+
+    assert default_superpowers_root(evals) == superpowers
+
+
+def test_default_superpowers_root_ignores_standalone_checkout(tmp_path):
+    checkout = tmp_path / "superpowers-evals"
+    checkout.mkdir()
+
+    assert default_superpowers_root(checkout) is None
+
+
+def test_ensure_superpowers_root_default_respects_existing_value(tmp_path, monkeypatch):
+    superpowers = tmp_path / "superpowers"
+    evals = superpowers / "evals"
+    (superpowers / "skills").mkdir(parents=True)
+    evals.mkdir()
+    monkeypatch.setenv("SUPERPOWERS_ROOT", "/custom/superpowers")
+
+    ensure_superpowers_root_default(evals)
+
+    assert os.environ["SUPERPOWERS_ROOT"] == "/custom/superpowers"
+
+
+def test_ensure_superpowers_root_default_sets_nested_value(tmp_path, monkeypatch):
+    superpowers = tmp_path / "superpowers"
+    evals = superpowers / "evals"
+    (superpowers / "skills").mkdir(parents=True)
+    evals.mkdir()
+    monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+
+    ensure_superpowers_root_default(evals)
+
+    assert os.environ["SUPERPOWERS_ROOT"] == str(superpowers)
 
 
 class TestLoadCodingAgentConfig:
