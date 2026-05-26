@@ -46,6 +46,7 @@ def test_run_invokes_run_scenario(tmp_path):
 def test_run_prints_run_id_line(tmp_path, monkeypatch):
     """`harness run` prints `run-id: <id>` as the first stdout line."""
     from click.testing import CliRunner
+
     from harness.cli import main
     from harness.composer import FinalVerdict, GauntletLayer
 
