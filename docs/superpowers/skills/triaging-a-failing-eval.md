@@ -204,6 +204,51 @@ workdir; iterate until the fixture builds cleanly, then re-run the scenario.
 
 ---
 
+## Pattern 7 — Eval misaligned with plugin intent
+
+The Gauntlet-Agent judged the run failed and the deterministic checks
+corroborate — but the demanded behavior presupposes upstream context the
+prompt didn't supply. A correctly-behaving agent could not have reached
+the demanded skill load without skipping a logically necessary step.
+
+**Signature**: `final=fail` · `gauntlet.status=fail` · post-check
+corroborates — i.e., the same surface as Pattern 1. The distinguisher is
+not in the verdict shape; it is in tracing the demanded skill's
+preconditions backwards against the prompt.
+
+**What to look for**:
+- The demanded skill consumes outputs produced by some upstream skill
+  (e.g., an implementation-plan skill consumes design decisions produced
+  by a design/brainstorming skill).
+- The prompt does not carry those outputs. It may *look* like it does —
+  bullet requirements masquerading as a spec, a feature name in place of
+  a design, "we need to build X" with no decisions made — but the
+  substantive content is absent.
+- The agent's trace shows it loaded the upstream skill, often with the
+  demanded skill queued as a downstream task. That's not confusion; it's
+  the skill graph asserting itself.
+
+**Sample** (illustrative): an eval named `triggering-<skillX>` hands the
+agent a short bullet list of feature requirements and demands `skillX` —
+where `skillX`'s own description says it consumes a designed spec. The
+agent loads a design/brainstorming skill instead, with `skillX` queued
+as the terminal step. Judge marks fail; `skill-called <skillX>` fails.
+The agent did the only logically reachable thing; the eval is asking it
+to skip a step the plugin's own design forbids.
+
+**Suggested next**:
+The bug is in the scenario, not the agent — and *not* in the skill's
+trigger description, which is what Pattern 1 would push you to patch.
+Two fixes: either (a) thicken the prompt so the upstream context is
+actually present — turn the bullet list into a real designed spec with
+decisions made — or (b) reframe the scenario and its acceptance
+criterion to match what's reachable from the prompt as written. Do not
+patch skill triggers to paper over a scenario the plugin's own logic
+rejects; that drifts the plugin away from its intent in order to satisfy
+a misaligned test.
+
+---
+
 ## When attribution is ambiguous
 
 The most common ambiguity is Pattern 2 vs Pattern 4 — both produce
@@ -217,6 +262,17 @@ right, or the failing check might be wrong (a broken check can also trip
 the judge's reasoning). When in doubt: verify the check first, then
 believe the judge.
 
-If neither move resolves it: file the run-dir path and the verdict.json in
-a Linear ticket and escalate to Matt. Do not silently invent a seventh
-pattern.
+The third — less common but the most insidious when it happens — is
+Pattern 1 vs Pattern 7. Both share the surface shape (judge=fail, check
+corroborates), but they differ on whether the agent *could* have done
+what the eval demanded. The distinguisher is **verify the prompt**:
+trace the demanded skill's preconditions backwards. If the prompt is
+missing inputs that skill requires, the eval is asking the agent to skip
+a logically necessary step — Pattern 7, and the fix lives in the
+scenario. If the prompt does carry those inputs and the agent still
+loaded a different skill, the agent (or the trigger description it
+matched on) is at fault — Pattern 1.
+
+If none of these moves resolves it: file the run-dir path and the
+verdict.json in a Linear ticket and escalate to Matt. Do not silently
+invent an eighth pattern.
