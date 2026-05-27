@@ -27,7 +27,15 @@ class GauntletLayer:
 
 @dataclass(frozen=True)
 class RunError:
-    stage: Literal["setup", "gauntlet", "capture", "checks", "compose", "unknown"]
+    stage: Literal[
+        "setup",
+        "gauntlet",
+        "capture",
+        "checks",
+        "compose",
+        "qa-agent-misconfigured",
+        "unknown",
+    ]
     message: str
 
 

@@ -36,7 +36,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from harness.capture import capture_token_usage, capture_tool_calls, snapshot_dir
+from harness.capture import (
+    capture_token_usage,
+    capture_tool_calls,
+    detect_misplaced_codex_rollouts,
+    snapshot_dir,
+)
 from harness.checks import parse_coding_agents_directive, run_phase
 from harness.coding_agent_config import CodingAgentConfig, load_coding_agent_config
 from harness.composer import FinalVerdict, GauntletLayer, GauntletStatus, RunError, compose
@@ -522,6 +527,36 @@ def _run_scenario_inner(
     # 11. Built-in empty-capture check.
     tcp = run_dir / "coding-agent-tool-calls.jsonl"
     capture_empty = not tcp.exists() or tcp.stat().st_size == 0
+
+    # 11b. QA-agent-misconfigured short-circuit.
+    #      An empty capture *plus* a codex rollout sitting under run_dir but
+    #      launched in some subdir other than launch_cwd means the QA agent
+    #      skipped `cd $HARNESS_AGENT_CWD` from the codex HOWTO before typing
+    #      `codex`. Surface that as its own indeterminate stage — otherwise
+    #      downstream tool-called checks all report "never called" and the
+    #      real cause stays buried.
+    if capture_empty and tcfg.normalizer == "codex":
+        misplaced = detect_misplaced_codex_rollouts(
+            log_dir=session_log_dir,
+            log_glob=tcfg.session_log_glob,
+            snapshot=snap,
+            run_dir=run_dir,
+            launch_cwd=launch_cwd,
+        )
+        if misplaced:
+            misplaced_rel = [str(p.relative_to(session_log_dir)) for p in misplaced]
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason=(
+                    "QA agent launched codex from the wrong cwd — likely skipped "
+                    "`cd $HARNESS_AGENT_CWD` in the codex HOWTO. See "
+                    f"{misplaced_rel} for the misplaced rollout(s)."
+                ),
+                error=RunError(
+                    stage="qa-agent-misconfigured",
+                    message=f"misplaced codex rollouts: {misplaced_rel}",
+                ),
+            )
 
     # 12. Build Gauntlet layer from run dir.
     gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)

@@ -80,6 +80,42 @@ def filter_codex_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
     return matched
 
 
+def find_misplaced_codex_rollouts(
+    paths: list[Path], *, run_dir: Path, launch_cwd: Path
+) -> list[Path]:
+    """Rollouts whose cwd is inside run_dir but isn't the expected launch_cwd.
+
+    Smoking gun for "QA agent skipped `cd $HARNESS_AGENT_CWD` before launching
+    codex" — the rollout is clearly attributable to this run (it's inside the
+    run dir) but codex booted in the wrong subdirectory, so filter_codex_logs_by_cwd
+    correctly excludes it from the normalized output. The runner uses this to
+    distinguish that QA-agent misconfiguration from a genuine never-launched
+    failure.
+    """
+    run_dir_real = os.path.realpath(run_dir)
+    launch_cwd_real = os.path.realpath(launch_cwd)
+    misplaced: list[Path] = []
+    for path in paths:
+        try:
+            with path.open() as f:
+                first_line = f.readline()
+            entry = json.loads(first_line)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if entry.get("type") != "session_meta":
+            continue
+        cwd = entry.get("payload", {}).get("cwd", "")
+        if not cwd:
+            continue
+        cwd_real = os.path.realpath(cwd)
+        inside_run_dir = (
+            cwd_real == run_dir_real or cwd_real.startswith(run_dir_real + os.sep)
+        )
+        if inside_run_dir and cwd_real != launch_cwd_real:
+            misplaced.append(path)
+    return misplaced
+
+
 def filter_pi_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
     """Drop Pi sessions whose header cwd doesn't match target_cwd.
 
@@ -136,11 +172,22 @@ def normalize_claude_logs(raw_content: str) -> list[dict[str, Any]]:
     return results
 
 
+# Reverse mapping: Codex tool names → Claude Code canonical names.
+# Only spawn_agent aliases to Agent (1:1 with a subagent launch). wait_agent
+# and close_agent are the async-protocol join/teardown calls; aliasing them
+# too would inflate tool-count Agent threefold and break the spec-aware
+# codex-tool-mapping scenarios that grep for the raw codex names directly.
+CODEX_TOOL_MAP: dict[str, str] = {
+    "spawn_agent": "Agent",
+}
+
+
 def normalize_codex_logs(raw_content: str) -> list[dict[str, Any]]:
     """Normalize Codex rollout logs.
 
     Codex logs use: {"type": "response_item", "payload": {"type": "function_call", ...}}
-    Tool calls are "function_call" with name "exec_command" (shell) or other names.
+    Tool calls are "function_call" with name "exec_command" (shell) or other names,
+    plus "custom_tool_call" for patch-style edits.
     """
     results: list[dict[str, Any]] = []
     for line in raw_content.strip().split("\n"):
@@ -174,8 +221,20 @@ def normalize_codex_logs(raw_content: str) -> list[dict[str, Any]]:
             elif name == "apply_patch":
                 results.append({"tool": "Edit", "args": args, "source": "native"})
             else:
-                source = "native" if name in NATIVE_TOOLS else "shell"
-                results.append({"tool": name, "args": args, "source": source})
+                canonical = CODEX_TOOL_MAP.get(name, name)
+                source = "native" if canonical in NATIVE_TOOLS else "shell"
+                results.append({"tool": canonical, "args": args, "source": source})
+        elif payload_type == "custom_tool_call":
+            name = payload.get("name", "")
+            raw_input = payload.get("input", "")
+            if name == "apply_patch":
+                results.append({"tool": "Edit", "args": {"patch": raw_input}, "source": "native"})
+            else:
+                canonical = CODEX_TOOL_MAP.get(name, name)
+                source = "native" if canonical in NATIVE_TOOLS else "shell"
+                results.append(
+                    {"tool": canonical, "args": {"input": raw_input}, "source": source}
+                )
         elif payload_type == "local_shell_call":
             action = payload.get("action", {})
             cmd = action.get("command", [])

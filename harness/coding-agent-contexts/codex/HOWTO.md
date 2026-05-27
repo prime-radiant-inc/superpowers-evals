@@ -3,28 +3,24 @@
 You are driving Codex in a bash shell inside tmux. Codex is itself an
 AI agent; what appears on screen is its work.
 
-## First: cd into the scenario's prepared workdir
+## Launch Codex with one command
 
 Your bash starts in a scratch directory, NOT the workdir the harness
-prepared. Always start with:
+prepared. You MUST cd into the workdir before launching codex, and you
+MUST set CODEX_HOME and the bypass flag. The simplest way to avoid
+skipping any of these is to type **this one line, verbatim** as your
+first action:
 
 ```
-cd "$HARNESS_AGENT_CWD"
+cd "$HARNESS_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
 ```
 
 `HARNESS_AGENT_CWD` is set in the inherited environment by the harness.
-
-## Invocation
-
-After `cd`, run:
-
-```
-CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
-```
-
 The `CODEX_HOME` value is burned into this HOWTO at runtime — it points
 at a per-run isolated config dir so no user-installed Codex plugins or
-prior sessions affect this run.
+prior sessions affect this run. Splitting this into multiple commands,
+or shortening it to a bare `codex`, will cause the harness to discard
+the run as misconfigured.
 
 For superpowers tool-mapping scenarios that use the legacy `.agents`
 symlink path, the setup step creates `.agents/skills/superpowers/` in

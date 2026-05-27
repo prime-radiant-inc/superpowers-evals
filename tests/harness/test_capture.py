@@ -109,7 +109,8 @@ class TestCaptureToolCalls:
             launch_cwd=launch_cwd,
         )
         rows = [json.loads(x) for x in matched.read_text().splitlines() if x.strip()]
-        assert [r["tool"] for r in rows] == ["spawn_agent"]
+        # spawn_agent is aliased to the Claude-canonical Agent by CODEX_TOOL_MAP.
+        assert [r["tool"] for r in rows] == ["Agent"]
 
         # A non-matching launch_cwd drops the rollout entirely.
         dropped = capture_tool_calls(

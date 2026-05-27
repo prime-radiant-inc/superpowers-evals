@@ -9,6 +9,7 @@ from harness.normalizers import (
     NORMALIZERS,
     filter_codex_logs_by_cwd,
     filter_pi_logs_by_cwd,
+    find_misplaced_codex_rollouts,
 )
 from harness.token_usage import capture_tokens
 
@@ -70,6 +71,25 @@ def capture_tool_calls(
             for row in fn(path.read_text()):
                 f.write(json.dumps(row) + "\n")
     return out_path
+
+
+def detect_misplaced_codex_rollouts(
+    *,
+    log_dir: Path,
+    log_glob: str,
+    snapshot: set[str],
+    run_dir: Path,
+    launch_cwd: Path,
+) -> list[Path]:
+    """Codex rollouts inside this run_dir that launched in the wrong cwd.
+
+    Smoking gun for the QA agent skipping `cd $HARNESS_AGENT_CWD` before
+    launching codex — see find_misplaced_codex_rollouts. Returns empty when
+    nothing is misplaced; runner uses a non-empty return to short-circuit to
+    indeterminate with stage="qa-agent-misconfigured".
+    """
+    new = new_files_since(log_dir, log_glob, snapshot)
+    return find_misplaced_codex_rollouts(new, run_dir=run_dir, launch_cwd=launch_cwd)
 
 
 def capture_token_usage(
