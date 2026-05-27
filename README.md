@@ -1,21 +1,20 @@
 # Superpowers Evals
 
-Behavioral eval lab for [superpowers](https://github.com/obra/superpowers). The
-**Harness** drives real coding-agent CLIs (Claude, Codex) through a Gauntlet
-QA agent and grades them against scenario acceptance criteria plus
-deterministic post-checks.
+Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
+**BARF** (Binarily Augmented Retro-Framing — an Iron Man *Civil War* reference)
+drives real coding-agent CLIs (Claude, Codex) through a Gauntlet QA agent and
+grades them against scenario acceptance criteria plus deterministic post-checks.
+
+Code, CLI, paths, and inline prose all use lowercase `barf`; the all-caps form
+appears only in headings and the actor table.
 
 This is not a generic benchmark suite. It is an eval lab for workflow
 compliance: skill triggering, worktree behavior, subagent coordination,
 verification reflexes, review quality, and cost-shaping patterns.
 
-> **Legacy:** Drill — the previous tmux-based runner — is being removed. Its
-> usage notes are parked at [docs/drill-legacy.md](docs/drill-legacy.md) until
-> the code is deleted. New scenarios go through barf.
-
 ## Safety Model
 
-The Harness has two very different execution modes:
+barf has two very different execution modes:
 
 - **Static/unit checks** are safe for public CI. They run `ruff`, `ty`, and
   `pytest`. They do not call model APIs and do not launch agent CLIs.
@@ -34,7 +33,7 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Claude uses `--dangerously-skip-permissions`.
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 
-The Harness seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
+barf seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
 Claude, `CODEX_HOME` for Codex) so the Coding-Agent never sees the host's real
 `~/.claude` / `~/.codex`, installed plugins, or prior sessions. That narrows
 the blast radius but is not a sandbox — the subprocess still inherits the
@@ -98,7 +97,7 @@ messages.
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
 | **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
-| **Harness** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/harness/`; `<run>/verdict.json` |
+| **BARF** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/barf/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
 **Coding-Agent** (subject). Separate models, separate logs, separate token
@@ -144,9 +143,9 @@ after the Coding-Agent's session is captured. The optional
 scenario is valid for; omit it to allow all agents.
 
 Scripts must have **no exec bit** and contain only function definitions.
-Invoke check tools by name — they are on `PATH` via `harness/bin/`.
+Invoke check tools by name — they are on `PATH` via `bin/`.
 
-### Check Vocabulary (`harness/bin/`)
+### Check Vocabulary (`bin/`)
 
 Every tool emits one JSON record per invocation. A non-zero exit means the
 check failed; the record carries a `detail` string explaining why.
@@ -181,7 +180,7 @@ an `ERR` trap so a crashing tool never silently drops out of the verdict.
 
 ## Verdict
 
-The Harness produces a **three-valued verdict** — `pass | fail | indeterminate`:
+barf produces a **three-valued verdict** — `pass | fail | indeterminate`:
 
 - `pass` — Gauntlet-Agent passed **and** every post-check passed.
 - `fail` — Gauntlet-Agent failed, or a post-check failed.
@@ -223,10 +222,13 @@ transcripts.
 ## Coding-Agents
 
 A Coding-Agent is one agent CLI under test. Its config is
-`harness/coding-agents/<name>.yaml`; its companion HOWTO,
-`harness/coding-agent-contexts/<name>/HOWTO.md`, is prose the Gauntlet-Agent
-reads to learn how to launch and observe that CLI. Both are authored once per
-CLI and shared across scenarios.
+`coding-agents/<name>.yaml`; its companion HOWTO,
+`coding-agents/<name>-context/HOWTO.md`, is prose the Gauntlet-Agent reads to
+learn how to launch and observe that CLI. Claude additionally has a home
+skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
+per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run via
+`codex login --with-api-key`). All authored once per agent and shared across
+scenarios.
 
 | Coding-Agent | CLI | Required environment |
 | --- | --- | --- |
@@ -252,7 +254,7 @@ separate, higher-level concept that selects the agent config.
 
 A `barf run` drives one scenario against one Coding-Agent:
 
-1. **Coding-Agent config** — `harness/coding-agents/<name>.yaml` is parsed and
+1. **Coding-Agent config** — `coding-agents/<name>.yaml` is parsed and
    its required env vars validated.
 2. **Run dir** — a per-run directory is created under `results/`. It
    doubles as Gauntlet's `--state-dir` root and the evidence root.
@@ -264,7 +266,7 @@ A `barf run` drives one scenario against one Coding-Agent:
    `coding-agent-workdir/`; the scenario's `setup.sh` builds the fixture.
 5. **Pre-checks** — `checks.sh`'s `pre()` runs against the workdir; a failure
    marks the run `indeterminate` before the Coding-Agent is launched.
-6. **Context** — the per-agent HOWTO (`harness/coding-agent-contexts/<name>/`)
+6. **Context** — the per-agent HOWTO (`coding-agents/<name>-context/`)
    is copied into the run's `gauntlet-agent/context/` so the Gauntlet-Agent
    learns how to launch and observe the Coding-Agent.
 7. **Drive** — `gauntlet run story.md --adapter tui --state-dir gauntlet-agent`
@@ -290,22 +292,22 @@ A `barf run` drives one scenario against one Coding-Agent:
    fixture, add a helper to `setup_helpers/` and register it in
    `setup_helpers/__init__.py`.
 4. Write `checks.sh` with `pre()` and `post()` functions using the
-   `harness/bin/` vocabulary. No exec bit.
+   `bin/` vocabulary. No exec bit.
 5. `uv run barf check <name>` to validate structure, then run it against a
    Coding-Agent.
 
 Setup scripts run with `$BARF_WORKDIR` pointing at the fixture workdir.
-Check tools run from the fixture workdir with `harness/bin/` on `PATH`.
+Check tools run from the fixture workdir with `bin/` on `PATH`.
 Post-checks that need sibling run artifacts can use `$BARF_RUN_DIR`.
 
 ## Refreshing the Claude Skeleton
 
-The dialog-bypass skeleton at `fixtures/skeleton-claude-home/` is committed —
-fresh checkouts, worktrees, and CI runners boot Claude straight to the prompt
-with no per-machine setup. It carries only the ~12 universal dialog-bypass
-flags (`hasCompletedOnboarding`, `installMethod`, migration markers, etc.);
-the refresh script scrubs all per-user, per-machine, and per-key fields before
-writing.
+The dialog-bypass skeleton at `coding-agents/claude-home-skeleton/` is
+committed — fresh checkouts, worktrees, and CI runners boot Claude straight
+to the prompt with no per-machine setup. It carries only the ~12 universal
+dialog-bypass flags (`hasCompletedOnboarding`, `installMethod`, migration
+markers, etc.); the refresh script scrubs all per-user, per-machine, and
+per-key fields before writing.
 
 Refresh only when Claude Code adds new onboarding state (a previously-skipped
 picker reappearing in a tmux attach is the usual symptom):
@@ -316,9 +318,9 @@ picker reappearing in a tmux attach is the usual symptom):
 CLAUDE_CONFIG_DIR=/tmp/claude-source claude
 
 # 2. Rebuild the fixture; commit the diff.
-bin/refresh-skeleton-claude-home --source /tmp/claude-source
-git diff fixtures/skeleton-claude-home/   # sanity-check the scrubbed result
-git commit fixtures/skeleton-claude-home/ -m "harness: refresh Claude skeleton"
+bin/refresh-claude-home-skeleton --source /tmp/claude-source
+git diff coding-agents/claude-home-skeleton/   # sanity-check the scrubbed result
+git commit coding-agents/claude-home-skeleton/ -m "barf: refresh Claude skeleton"
 ```
 
 Codex needs no skeleton — `_seed_codex_auth` provisions a fresh per-run home
@@ -338,8 +340,8 @@ uv run pytest
 ## Project Map
 
 ```text
-harness/                barf CLI and runtime
-  cli.py                `barf run`, `list`, `new`, `check`
+barf/                   barf CLI and runtime
+  cli.py                `barf run`, `list`, `new`, `check`, `show`, `run-all`
   runner.py             per-run orchestration (one scenario, one coding-agent)
   coding_agent_config.py  per-coding-agent YAML loader
   setup_step.py         runs scenario setup.sh
@@ -348,23 +350,24 @@ harness/                barf CLI and runtime
   normalizers.py        per-coding-agent session-log normalization
   composer.py           three-valued verdict from gauntlet + checks layers
   scaffold.py           `barf new` / `barf check`
+  show.py               verdict renderer for triage
+  run_all.py            matrix runner across scenarios × coding-agents
   token_usage.py        per-coding-agent token-usage parsing
-  bin/                  check-tool vocabulary (_record, file-exists, file-contains,
+bin/                    check-tool vocabulary (_record, file-exists, file-contains,
                         command-succeeds, git-repo, git-branch, git-clean, git-count,
                         tool-called, tool-count, tool-before, tool-arg-match,
-                        skill-called, skill-before-tool, not, and more)
-  coding-agents/        per-coding-agent config YAML (claude, codex)
-  coding-agent-contexts/  per-coding-agent HOWTO prose for the Gauntlet-Agent
-  scenarios/            scenarios (one directory each)
-setup_helpers/          scenario fixture builders + `setup-helpers` CLI (shared)
-fixtures/               static repo fixtures + agent-config skeletons (shared)
-docs/                   design notes, migration spec, testing protocols
-tests/                  pytest suite (tests/barf/ covers barf)
+                        skill-called, skill-before-tool, not, worktree-created,
+                        and more); refresh-claude-home-skeleton operator script
+coding-agents/          per-Coding-Agent material:
+  <name>.yaml             CLI config
+  <name>-context/         HOWTO prose for the Gauntlet-Agent
+  <name>-home-skeleton/   seeded into per-run agent-config dir (claude only)
+scenarios/              scenarios (one directory each)
+setup_helpers/          scenario fixture builders + `setup-helpers` CLI
+fixtures/               shared static fixture repos (e.g. template-repo/)
+docs/                   design notes, spec, testing protocols, baselines
+tests/                  pytest suite (tests/barf/ covers the package)
 ```
-
-Drill's tree (`drill/`, `backends/`, `prompts/`, `scenarios/`, top-level `bin/`)
-is documented in [docs/drill-legacy.md](docs/drill-legacy.md) and slated for
-removal.
 
 ## Triage
 
@@ -399,5 +402,4 @@ submodule bump PR exists.
 
 ---
 
-Security reporting → [SECURITY.md](SECURITY.md). Broader design →
-[docs/design.md](docs/design.md).
+Security reporting → [SECURITY.md](SECURITY.md).

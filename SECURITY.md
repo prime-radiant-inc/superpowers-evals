@@ -1,6 +1,6 @@
 # Security Policy
 
-Drill is a security-sensitive eval harness. It can launch real agent CLIs in
+barf is a security-sensitive eval runner. It can launch real agent CLIs in
 permissive modes, collect transcripts, read local session logs, and send run
 artifacts to an LLM verifier.
 
@@ -28,6 +28,6 @@ artifact derived from that run.
 
 ## CI Boundary
 
-Public CI must run only static/unit checks. Live `drill run ...` evals require
+Public CI must run only static/unit checks. Live `barf run ...` evals require
 credentials and permissive agent CLIs, so they belong in trusted local or
 maintainer-controlled environments only.

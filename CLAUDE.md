@@ -2,8 +2,10 @@
 
 Behavioral eval lab for superpowers. Python 3.11+, managed with uv.
 
-The active runner is the Gauntlet-backed **Harness**. Drill is legacy and
-slated for removal; do not write new scenarios against Drill.
+The active runner is the Gauntlet-backed **BARF** (Binarily Augmented
+Retro-Framing — an Iron Man *Civil War* reference). Code, CLI, paths, and
+inline prose all use lowercase `barf`; the all-caps form appears only in
+headings and the actor table.
 
 ## Canonical Actors
 
@@ -16,7 +18,7 @@ messages.
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM inside Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream -> `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict -> `result.{json,md}` |
 | **Coding-Agent** | The agent under test. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log -> `<run>/coding-agent-config/...`; files it writes -> `<run>/coding-agent-workdir/` |
-| **Harness** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and final verdict composition. | repo `superpowers-evals/harness/`; `<run>/verdict.json` |
+| **BARF** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and final verdict composition. | repo `superpowers-evals/barf/`; `<run>/verdict.json` |
 
 A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 **Coding-Agent** (subject). Separate models, logs, and token costs.
@@ -37,31 +39,26 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **run all**: `uv run barf run-all [--coding-agents X,Y] [--jobs N]`
 - **show batch**: `uv run barf show <batch-id>` (matrix view)
 
-Per-coding-agent config: `harness/coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
-`harness/coding-agent-contexts/<name>/`. Spec: `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
+Per-coding-agent config: `coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
+`coding-agents/<name>-context/HOWTO.md`. Per-coding-agent home skeleton (seeded
+into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
+`coding-agents/<name>-home-skeleton/`. Spec:
+`docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 
 ## Architecture
-
-**Harness (active):**
 
 - `barf/runner.py` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict.
 - `barf/checks.py` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records.
 - `barf/composer.py` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
-- `harness/coding_agent_config.py` — per-Coding-Agent YAML loader and session-log config.
-- `harness/capture.py` — session-log snapshot/diff, normalized tool-call capture, token capture.
-- `harness/normalizers.py` — Coding-Agent session-log normalizers.
-- `harness/scaffold.py` — `barf new` / `barf check` implementation.
+- `barf/coding_agent_config.py` — per-Coding-Agent YAML loader and session-log config.
+- `barf/capture.py` — session-log snapshot/diff, normalized tool-call capture, token capture.
+- `barf/normalizers.py` — Coding-Agent session-log normalizers.
+- `barf/scaffold.py` — `barf new` / `barf check` implementation.
 - `barf/show.py` — verdict renderer for triage.
-- `harness/bin/` — check-tool vocabulary; tools emit one JSON record each.
+- `bin/` — check-tool vocabulary; tools emit one JSON record each.
 - `scenarios/` — active scenarios, one directory each.
-- `setup_helpers/*.py` — fixture creators shared by Harness and legacy Drill.
-
-**Drill (legacy; frozen):**
-
-- `drill/`, `backends/`, top-level `scenarios/`, top-level `bin/`, and
-  `prompts/` remain for legacy-result archaeology and eventual decommissioning.
-- Drill's sweep/compare ergonomics have not yet been replaced in barf;
-  decide whether those are still needed before deleting Drill.
+- `coding-agents/` — per-agent YAML, context HOWTOs, and home skeletons (see "Per-coding-agent" above).
+- `setup_helpers/*.py` — fixture creators (shared CLI: `uv run setup-helpers run <helper>`).
 
 ## Scenario Conventions
 
@@ -71,7 +68,7 @@ Per-coding-agent config: `harness/coding-agents/<name>.yaml`. Per-coding-agent H
   `uv run setup-helpers run <helper>`.
 - `checks.sh` contains only `pre()` and `post()` function definitions.
 - `checks.sh` should not have the executable bit set.
-- Check tools run from the fixture workdir with `harness/bin/` on `PATH`.
+- Check tools run from the fixture workdir with `bin/` on `PATH`.
 - Post-checks that need sibling run artifacts can use `$BARF_RUN_DIR`.
 - Use `# coding-agents: <csv>` to restrict a scenario to specific agents.
 - Use `requires-tool <name>` in `pre()` for local toolchain dependencies.
