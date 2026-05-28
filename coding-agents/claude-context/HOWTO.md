@@ -48,12 +48,11 @@ over the screen.
 
 **Use the log, not just `read_screen`, when:**
 
-- Two `read_screen` calls in a row return near-identical content.
-  Claude is probably running a long tool (subagent dispatch, a build,
-  a test command) that produces no parent-screen output. Tail the log
-  to see real activity.
 - You need to verify a specific tool call or Skill load happened.
 - The screen shows a spinner or "running" indicator with no detail.
+
+For waiting on Claude to make progress, do not poll `read_screen` —
+see "Waiting for Claude to work" below.
 
 Find the active session file:
 
@@ -69,6 +68,34 @@ tail -20 <path> | jq -c '{type, name: (.message.content[0].name // .type)}'
 
 If the log keeps growing while the screen stays still, Claude is still
 working — keep watching the log; don't conclude the run is stuck.
+
+## Waiting for Claude to work
+
+When Claude is busy (especially when it dispatches subagents via
+`Agent`, or runs a long bash command), do **not** poll the screen with
+`sleep`. That pattern burns one inference turn per ~25 seconds of real
+time and can drive the agent into a degenerate empty-turn state on
+long-haul runs.
+
+Instead, register the rollout glob once after launch, then block-wait:
+
+```
+watch_logs(glob="$CLAUDE_CONFIG_DIR/projects/**/*.jsonl")
+wake_on_idle_log(idle_ms=60000, timeout_ms=240000)
+```
+
+`wake_on_idle_log` blocks **one inference turn** until any of:
+
+* **idle** — no log activity for `idle_ms` (60s here). Probably a good
+  moment to check in.
+* **new_file** — a new session file appeared (fresh subagent thread or
+  new conversation). Qualitatively new state worth a glance.
+* **timeout** — 240s ceiling. Don't raise this; the model context
+  cache expires past 5 minutes.
+
+One turn per ~4 minutes of real time, vs. one turn per 25s for
+`sleep`-and-poll. Use ad-hoc `bash tail -n` *after* waking if you want
+to see what changed.
 
 ## Shutdown
 
