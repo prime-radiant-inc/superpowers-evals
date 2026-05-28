@@ -160,6 +160,78 @@ def _style(
     return click.style(text, fg=fg, dim=dim, bold=bold)
 
 
+def _fmt_ms(ms: int | None) -> str:
+    if not ms:
+        return "—"
+    s = int(ms) // 1000
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return (f"{h}h {m:02d}m" if h else f"{m}m {sec:02d}s")
+
+
+def _fmt_cost(c) -> str:
+    return f"${c:.2f}" if isinstance(c, (int, float)) else "n/a"
+
+
+def _fmt_tokens(n) -> str:
+    if not isinstance(n, (int, float)) or n == 0:
+        return "—"
+    return f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n/1_000:.0f}K"
+
+
+def _agent_row(label, block, *, color):
+    if not block:
+        return f"  {label:<10} {'—':>10} {'—':>9} {'—':>9}"
+    dur = _fmt_ms(block.get("duration_ms"))
+    tok = _fmt_tokens((block.get('tokens') or {}).get('total'))
+    cost = _fmt_cost(block.get("est_cost_usd"))
+    if block.get("est_cost_usd") is None and block.get("model"):
+        cost = f"n/a ({block['model']})"
+    return f"  {label:<10} {dur:>10} {tok:>9} {cost:>9}"
+
+
+def _short_model(model_id: str | None) -> str:
+    """Friendly short label for a model id (opus/sonnet/haiku/gpt), else raw."""
+    if not isinstance(model_id, str):
+        return "—"
+    m = model_id.lower()
+    for fam in ("opus", "sonnet", "haiku"):
+        if fam in m:
+            return fam
+    if "gpt" in m or "codex" in m:
+        return "gpt"
+    return model_id
+
+
+def _model_subrow(entry: dict) -> str:
+    """Indented per-model line under the Coding row."""
+    label = "  " + _short_model(entry.get("model"))
+    tok = _fmt_tokens((entry.get("tokens") or {}).get("total"))
+    cost = _fmt_cost(entry.get("est_cost_usd"))
+    if entry.get("est_cost_usd") is None and entry.get("model"):
+        cost = "n/a"
+    return f"  {label:<10} {'':>10} {tok:>9} {cost:>9}"
+
+
+def _format_economics_pane(verdict: dict, *, color: bool) -> str:
+    econ = verdict.get("economics")
+    if not econ:
+        return ""
+    sep = _style("─── Economics ────────────────────────────────────",
+                 fg="bright_cyan", bold=True, color=color)
+    header = f"  {'':<10} {'duration':>10} {'tokens':>9} {'est cost':>9}"
+    rows = [_agent_row("Gauntlet", econ.get("gauntlet"), color=color)]
+    coding = econ.get("coding_agent")
+    rows.append(_agent_row("Coding", coding, color=color))
+    # Per-model sub-rows under Coding (PRI-1872): a coding run is multi-model.
+    for entry in (coding or {}).get("models") or []:
+        rows.append(_model_subrow(entry))
+    total = econ.get("total_est_cost_usd")
+    total_str = _fmt_cost(total) if total is not None else ("partial" if econ.get("partial") else "—")
+    rows.append(f"  {'total':<10} {'':>10} {'':>9} {total_str:>9}")
+    return "\n".join([sep, header, *rows]) + "\n"
+
+
 def render(verdict: dict, run_dir: Path, *, color: bool, mode: ShowMode) -> str:
     """Render a verdict per spec §6.
 
@@ -181,9 +253,10 @@ def render(verdict: dict, run_dir: Path, *, color: bool, mode: ShowMode) -> str:
         _format_header(verdict, run_dir, color=color),
         _format_gauntlet_pane(verdict, color=color),
         _format_checks_pane(verdict, color=color),
+        _format_economics_pane(verdict, color=color),
         _FOOTER + "\n",
     ]
-    return "\n".join(parts)
+    return "\n".join(p for p in parts if p)
 
 
 def _label(text: str, *, color: bool) -> str:

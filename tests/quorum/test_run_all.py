@@ -19,6 +19,7 @@ from quorum.run_all import (
     run_batch,
     write_batch_footer,
     write_batch_header,
+    _run_cost,
 )
 
 
@@ -425,3 +426,57 @@ def test_run_batch_event_format_uses_total_denominator_and_skip_verb(
         captured.find(f"[{i}/4] start") for i in (2, 3, 4)
     )
     assert 0 <= skip_pos < first_start_pos, (skip_pos, first_start_pos)
+
+
+def test_run_cost_reads_frozen_total(tmp_path):
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "verdict.json").write_text(json.dumps({
+        "final": "pass",
+        "economics": {"total_est_cost_usd": 2.27, "partial": False},
+    }))
+    assert _run_cost(run_dir) == 2.27
+
+
+def test_run_cost_none_when_no_economics(tmp_path):
+    run_dir = tmp_path / "run-2"
+    run_dir.mkdir()
+    (run_dir / "verdict.json").write_text(json.dumps({"final": "pass"}))
+    assert _run_cost(run_dir) is None
+
+
+def test_run_cost_none_when_no_verdict(tmp_path):
+    run_dir = tmp_path / "run-3"
+    run_dir.mkdir()
+    assert _run_cost(run_dir) is None
+
+
+def test_run_batch_renders_cost_column_and_batch_total(tmp_path, capsys, monkeypatch):
+    """Per-run cost cells and a footer batch total render from frozen economics."""
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "alpha")
+    _agent(agents, "claude")
+    out_root = tmp_path / "results"
+
+    def fake_invoke(*, scenario_dir, coding_agent, coding_agents_dir,
+                    out_root, timeout_seconds=None):
+        run_id = f"{scenario_dir.name}-{coding_agent}-x"
+        rd = out_root / run_id
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / "verdict.json").write_text(json.dumps({
+            "final": "pass",
+            "economics": {"total_est_cost_usd": 2.27, "partial": False},
+        }))
+        return ChildResult(run_id=run_id, exit_code=0, error=None)
+
+    run_batch(
+        scenarios_root=scenarios, coding_agents_dir=agents,
+        out_root=out_root, jobs=1, agent_filter=None,
+        invoke=fake_invoke, use_cursor=False,
+    )
+
+    captured = capsys.readouterr().out
+    assert "$2.27" in captured, captured          # per-run cost cell
+    assert "cost $2.27" in captured, captured      # footer batch total

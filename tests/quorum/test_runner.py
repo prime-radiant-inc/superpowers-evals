@@ -408,6 +408,78 @@ class TestRunScenario:
         resolved = cd_line.split('"')[1]
         assert Path(resolved).exists()
 
+    def test_launch_agent_shim_generated_executable_and_substituted(
+        self, tmp_path, monkeypatch
+    ):
+        # The launch-agent template is copied into the context dir with its
+        # $… tokens resolved and the +x bit preserved, so the QA agent can
+        # invoke it by absolute path. This replaces the fragile
+        # "type cd $QUORUM_AGENT_CWD && <binary> verbatim" HOWTO instruction.
+        monkeypatch.setenv("SUPERPOWERS_ROOT", "/path/to/sp")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        cd_claude = coding_agents_dir / "claude-context"
+        cd_claude.mkdir(parents=True)
+        (cd_claude / "launch-agent").write_text(
+            '#!/usr/bin/env bash\n'
+            'cd "$QUORUM_AGENT_CWD"\n'
+            'exec env CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" echo "$@"\n'
+        )
+        out_root = tmp_path / "results"
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+        rd = list(out_root.iterdir())[0]
+        shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+        assert shim.exists()
+        # +x survived write_text.
+        assert shim.stat().st_mode & stat.S_IXUSR
+        content = shim.read_text()
+        assert content.startswith("#!")
+        # Tokens resolved to literal absolute paths — no env-var refs remain.
+        assert "$QUORUM_AGENT_CWD" not in content
+        assert "$CLAUDE_CONFIG_DIR" not in content
+        cd_line = [ln for ln in content.splitlines() if ln.startswith("cd ")][0]
+        assert Path(cd_line.split('"')[1]).exists()
+
+    def test_howto_references_resolved_launch_agent_path(self, tmp_path):
+        # $QUORUM_LAUNCH_AGENT in a HOWTO resolves to the shim's absolute path,
+        # which lives at <run-dir>/gauntlet-agent/context/launch-agent.
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        cd_claude = coding_agents_dir / "claude-context"
+        cd_claude.mkdir(parents=True)
+        (cd_claude / "HOWTO.md").write_text('run `"$QUORUM_LAUNCH_AGENT"` first\n')
+        out_root = tmp_path / "results"
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+        rd = list(out_root.iterdir())[0]
+        howto = (rd / "gauntlet-agent" / "context" / "HOWTO.md").read_text()
+        assert "$QUORUM_LAUNCH_AGENT" not in howto
+        expected = str(rd / "gauntlet-agent" / "context" / "launch-agent")
+        assert expected in howto
+
     def test_workdir_in_run_dir_always_present(self, tmp_path):
         # The workdir now lives at <run-dir>/coding-agent-workdir/ — always
         # present inside the run dir, not in /tmp. No workdir-path.txt
@@ -510,6 +582,53 @@ class TestRunScenario:
                 skeleton_root=_empty_skeleton(tmp_path),
             )
         assert captured["max_time"] == "10m"
+
+    def test_verdict_carries_economics_when_sources_present(self, tmp_path):
+        # PRI-1872: when the gauntlet result.json and the coding-agent token
+        # usage file both exist in the run dir, run_scenario computes economics
+        # at run time and freezes it into verdict.json.
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        (coding_agents_dir / "claude-context").mkdir(parents=True)
+        out_root = tmp_path / "results"
+
+        def stub(*, run_dir, **kwargs):
+            # Real gauntlet output path (economics reads gauntlet-agent/results).
+            rid = "run-x"
+            gd = run_dir / "gauntlet-agent" / "results" / rid
+            gd.mkdir(parents=True, exist_ok=True)
+            (gd / "result.json").write_text(json.dumps({
+                "runId": rid, "duration_ms": 120000,
+                "usage": {"inputTokens": 100, "outputTokens": 200,
+                          "cacheCreationInputTokens": 0, "cacheReadInputTokens": 1000},
+                "config": {"model": "claude-sonnet-4-6"},
+            }))
+            # Frozen coding-agent token usage.
+            (run_dir / "coding-agent-token-usage.json").write_text(json.dumps({
+                "total_input": 50, "total_cache_create": 0, "total_cache_read": 0,
+                "total_output": 80, "total_tokens": 130, "model": "gpt-5.5",
+                "est_cost_usd": 1.23, "duration_ms": 90000,
+            }))
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return "pass"
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=stub):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+        rd = list(out_root.iterdir())[0]
+        econ = json.loads((rd / "verdict.json").read_text())["economics"]
+        assert isinstance(econ["total_est_cost_usd"], float)
+        assert econ["partial"] is False
 
     def test_malformed_quorum_max_time_yields_indeterminate(self, tmp_path):
         # A malformed override aborts cleanly before gauntlet: run_scenario

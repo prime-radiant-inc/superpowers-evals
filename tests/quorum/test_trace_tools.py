@@ -214,3 +214,91 @@ def test_worktree_created_does_not_false_match_unrelated_git_worktree_commands(t
     )
     sink = tmp_path / "s"
     assert _run("worktree-created", trace=trace, cwd=workdir, sink=sink) != 0
+
+
+# investigated — semantic check that the agent looked at the code via a
+# targeted read or search, for either Claude (native Read/Grep) or Codex
+# (greps via Bash). Replaces the Claude-only inline
+# `jq any(.tool=="Read" or "Grep")` predicate in cost-tool-result-bloat,
+# which false-failed every Codex run (all Codex calls normalize to "Bash").
+
+
+def test_investigated_passes_on_native_Read(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Read", "args": {"file_path": "/x"}})
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
+
+
+def test_investigated_passes_on_native_Grep(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Grep", "args": {"pattern": "foo"}})
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
+
+
+def test_investigated_passes_on_codex_bash_grep(tmp_path):
+    """The whole point: Codex greps via Bash, no native Read/Grep."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "grep -rn calculate src/"}},
+    )
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) == 0
+    rec = _r(sink)
+    assert rec["passed"]
+    assert "Bash" in rec["detail"]
+
+
+def test_investigated_passes_on_codex_bash_rg(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Bash", "args": {"command": "rg --json total src"}})
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
+
+
+def test_investigated_fails_on_full_cat_reads_only(tmp_path):
+    """A `cat`-everything run (the bloat anti-pattern) has no grep/rg and
+    no native Read/Grep — it must not pass."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "cat src/orders.js"}},
+        {"tool": "Bash", "args": {"command": "cat src/users.js"}},
+    )
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) != 0
+    assert not _r(sink)["passed"]
+
+
+def test_investigated_does_not_false_match_grep_substring(tmp_path):
+    """A filename containing 'grep' is not a grep invocation."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Bash", "args": {"command": "cat notes/mangrep-design.md"}},
+    )
+    sink = tmp_path / "s"
+    assert _run("investigated", trace=trace, cwd=workdir, sink=sink) != 0

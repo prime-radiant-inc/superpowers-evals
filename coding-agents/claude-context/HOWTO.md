@@ -3,25 +3,30 @@
 You are driving Claude Code in a bash shell inside tmux. Claude Code is
 itself an AI agent; what appears on screen is its work.
 
-## First: cd into the scenario's prepared workdir
+## Launch Claude with one command
 
 Your bash starts in a scratch directory, NOT the workdir quorum
-prepared. Always start with:
+prepared. quorum has generated a launcher that handles everything — it
+cds into the prepared git repo, sets the per-run isolated
+`CLAUDE_CONFIG_DIR`, and starts Claude with the plugin dir, model, and
+permission flag. Type **this one line, verbatim** as your first action:
 
 ```
-cd "$QUORUM_AGENT_CWD"
+"$QUORUM_LAUNCH_AGENT"
 ```
 
-`QUORUM_AGENT_CWD` is set in the inherited environment by quorum.
-It points at the git repo the setup step prepared.
-
-## Invocation
-
-After `cd`, run:
+That path is burned into this HOWTO at runtime by quorum; it points at a
+generated executable that runs, in effect:
 
 ```
-CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus
+cd <prepared-workdir> && CLAUDE_CONFIG_DIR=<per-run-isolated-dir> claude --dangerously-skip-permissions --plugin-dir <superpowers-root> --model opus
 ```
+
+Because the `cd` and the flags live inside the launcher, you cannot skip
+the cd into the prepared workdir. Do NOT hand-type a bare `claude` or
+reconstruct the line yourself. Just run the one line above. (The
+isolated `CLAUDE_CONFIG_DIR` ensures no user-installed plugins or
+projects from the host machine affect this run.)
 
 The `CLAUDE_CONFIG_DIR` and `SUPERPOWERS_ROOT` values are burned into
 this HOWTO at runtime by quorum — they look like env-var refs but

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for Claude Code (the agent under test).
+#
+# The cd, CLAUDE_CONFIG_DIR, plugin-dir, and flags are baked in here so the QA
+# agent launches Claude with ONE token and cannot skip the `cd` into the
+# prepared workdir. quorum substitutes the $… values below at runtime, so the
+# installed copy contains literal absolute paths (no env inheritance needed —
+# tmux strips env from new sessions).
+#
+# Equivalent manual command (for debugging):
+#   cd "$QUORUM_AGENT_CWD" && CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus
+set -euo pipefail
+cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+exec env CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus "$@"

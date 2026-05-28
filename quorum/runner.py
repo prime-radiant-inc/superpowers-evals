@@ -28,11 +28,13 @@ the runner writes an indeterminate verdict immediately.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as _dt
 import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -45,6 +47,7 @@ from quorum.capture import (
 from quorum.checks import parse_coding_agents_directive, run_phase
 from quorum.coding_agent_config import CodingAgentConfig, load_coding_agent_config
 from quorum.composer import FinalVerdict, GauntletLayer, GauntletStatus, RunError, compose
+from quorum.economics import build_run_economics
 from quorum.setup_step import SetupError, run_setup
 from quorum.story_meta import StoryMetaError, read_quorum_max_time
 from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
@@ -363,6 +366,11 @@ def _copy_with_substitutions(
     for placeholder, value in subs.items():
         content = content.replace(placeholder, value)
     dst.write_text(content)
+    # A shebang'd template (e.g. the launch-agent shim) must stay executable
+    # after substitution — write_text drops the mode. The QA agent invokes
+    # the shim by absolute path, so it needs +x.
+    if content.startswith("#!"):
+        dst.chmod(dst.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _copytree_with_substitutions(
@@ -473,6 +481,13 @@ def _run_scenario_inner(
     #    sessions, so we burn the values into the HOWTO instead of
     #    relying on env-var inheritance. See _populate_context_dir
     #    docstring.
+    # $QUORUM_LAUNCH_AGENT resolves to the generated launcher shim's absolute
+    # path. The shim is the `launch-agent` template in <name>-context/: it
+    # bakes the `cd $QUORUM_AGENT_CWD` + env + flags into one executable so the
+    # QA agent can launch the target with a single token and cannot skip the
+    # cd (the qa-agent-misconfigured failure mode). HOWTOs reference it by this
+    # placeholder; the destination path is deterministic.
+    launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
     _populate_context_dir(
         coding_agents_dir,
         coding_agent,
@@ -480,6 +495,7 @@ def _run_scenario_inner(
         substitutions={
             "$QUORUM_AGENT_CWD": str(launch_cwd),
             "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
+            "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
             f"${tcfg.agent_config_env}": str(agent_config_dir),
         },
     )
@@ -587,6 +603,9 @@ def _run_scenario_inner(
         capture_empty=capture_empty,
         error=None,
     )
+    economics = build_run_economics(run_dir)
+    if economics is not None:
+        verdict = dataclasses.replace(verdict, economics=economics)
 
     # 13. Persist.
     (run_dir / "verdict.json").write_text(

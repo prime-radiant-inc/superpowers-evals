@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for Codex (the agent under test).
+#
+# The cd, CODEX_HOME, and the bypass flag are baked in here so the QA agent
+# launches Codex with ONE token and cannot accidentally skip the `cd` or
+# shorten the command. That skip was the qa-agent-misconfigured failure mode:
+# Codex launched from the scratch dir, rollouts landed off-workdir, and the
+# run was discarded. quorum substitutes the $… values below at runtime, so the
+# installed copy contains literal absolute paths (no env inheritance needed —
+# tmux strips env from new sessions).
+#
+# Equivalent manual command (for debugging):
+#   cd "$QUORUM_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
+set -euo pipefail
+cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+exec env CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox "$@"

@@ -26,6 +26,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from quorum.checks import parse_coding_agents_directive
+from quorum.show import _fmt_cost
 
 
 @dataclass(frozen=True)
@@ -461,6 +462,8 @@ def run_batch(
     # results.jsonl writes (which happen on the main futures-completion
     # thread, but a lock is cheap insurance).
     print_lock = threading.Lock()
+    # Mutable cell so the nested _drain closure can accumulate the batch cost.
+    batch_cost_total = [0.0]
 
     def _worker(
         idx: int, entry: MatrixEntry
@@ -499,6 +502,8 @@ def run_batch(
             glyph = _GLYPH_FOR_FINAL.get(final, "?")
             scn = _truncate(entry.scenario, scn_w)
             duration = _fmt_duration(elapsed)
+            cost = _run_cost(out_root / result.run_id) if result.run_id else None
+            cost_cell = _fmt_cost(cost) if cost is not None else "—"
             # Use Text.assemble() with explicit segments so the literal
             # `[N/M]` prefix is not parsed as Rich markup; the styled
             # glyph is applied via the (text, style) tuple form.
@@ -506,9 +511,11 @@ def run_batch(
                 f"[{idx:0{idx_w}d}/{total}] {'done':<{_STATE_COL_W}}  "
                 f"{scn:<{scn_w}}  {entry.coding_agent:<{agent_w}}  ",
                 (glyph, _STATUS_STYLES.get(final, "")),
-                f"  {duration:>{_DUR_COL_W}}",
+                f"  {duration:>{_DUR_COL_W}}  {cost_cell:>{_COST_COL_W}}",
             )
             with print_lock:
+                if cost is not None:
+                    batch_cost_total[0] += cost
                 console.print(line, markup=False, highlight=False)
                 append_result_record(
                     batch_dir=batch_dir,
@@ -549,6 +556,8 @@ def run_batch(
     summary_line += (
         f" · wall {_fmt_duration((finished_at - started_at).total_seconds())}"
     )
+    if batch_cost_total[0] > 0:
+        summary_line += f" · cost ${batch_cost_total[0]:.2f}"
     console.print(summary_line, markup=False, highlight=False)
     try:
         artifacts_path = batch_dir.relative_to(Path.cwd())
@@ -577,6 +586,14 @@ def _read_verdict(run_dir: Path) -> dict | None:
         return None
 
 
+def _run_cost(run_dir: Path) -> float | None:
+    """Frozen total est cost for a run from its verdict.json economics block."""
+    verdict = _read_verdict(run_dir)
+    if not verdict:
+        return None
+    return (verdict.get("economics") or {}).get("total_est_cost_usd")
+
+
 _GLYPH_FOR_FINAL = {
     "pass":          "✓",
     "fail":          "✗",
@@ -592,6 +609,8 @@ _SCN_COL_MAX = 44
 _STATE_COL_W = 5
 # Duration column: longest is "10m00s" (6) at the current max_time of 10m.
 _DUR_COL_W = 6
+# Cost column: a frozen "$NN.NN" total est cost, or "—" when absent.
+_COST_COL_W = 7
 
 
 def _truncate(s: str, w: int) -> str:

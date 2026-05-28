@@ -6,21 +6,28 @@ AI agent; what appears on screen is its work.
 ## Launch Codex with one command
 
 Your bash starts in a scratch directory, NOT the workdir quorum
-prepared. You MUST cd into the workdir before launching codex, and you
-MUST set CODEX_HOME and the bypass flag. The simplest way to avoid
-skipping any of these is to type **this one line, verbatim** as your
-first action:
+prepared. quorum has generated a launcher that handles everything — it
+cds into the prepared workdir, sets the per-run isolated `CODEX_HOME`,
+and starts codex with the bypass flag. Type **this one line, verbatim**
+as your first action:
 
 ```
-cd "$QUORUM_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
+"$QUORUM_LAUNCH_AGENT"
 ```
 
-`QUORUM_AGENT_CWD` is set in the inherited environment by quorum.
-The `CODEX_HOME` value is burned into this HOWTO at runtime — it points
-at a per-run isolated config dir so no user-installed Codex plugins or
-prior sessions affect this run. Splitting this into multiple commands,
-or shortening it to a bare `codex`, will cause quorum to discard
-the run as misconfigured.
+That path is burned into this HOWTO at runtime by quorum; it points at a
+generated executable that runs, in effect:
+
+```
+cd <prepared-workdir> && CODEX_HOME=<per-run-isolated-dir> codex --dangerously-bypass-approvals-and-sandbox
+```
+
+Because the `cd` and the flags live inside the launcher, you cannot skip
+them. Do NOT hand-type a bare `codex` or reconstruct the `cd … && codex`
+line yourself — launching codex from the scratch dir lands its rollouts
+off-workdir and quorum discards the run as misconfigured. Just run the
+one line above. (The isolated `CODEX_HOME` ensures no user-installed
+Codex plugins or prior sessions affect this run.)
 
 For superpowers tool-mapping scenarios that use the legacy `.agents`
 symlink path, the setup step creates `.agents/skills/superpowers/` in

@@ -6,9 +6,9 @@ pre() {
 }
 
 post() {
-    # Either Read or Grep is acceptable evidence of investigation. The
-    # check primitives self-report records, so OR-ing two tool-called
-    # invocations would pollute the verdict with the losing side's fail.
-    # Inline jq sidesteps that: one command-succeeds record either way.
-    command-succeeds 'jq -se "any(.[]; .tool==\"Read\" or .tool==\"Grep\")" "$QUORUM_TOOL_CALLS_PATH"'
+    # `investigated` passes on a native Read/Grep (Claude) OR a shell
+    # grep/rg (Codex). The previous inline `jq any(.tool=="Read" or
+    # "Grep")` was Claude-only and false-failed every Codex run, since
+    # Codex greps via Bash and emits zero native Read/Grep calls.
+    investigated
 }

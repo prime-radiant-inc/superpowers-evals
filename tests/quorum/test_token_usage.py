@@ -9,12 +9,16 @@ import pytest
 
 from quorum.token_usage import (
     CLAUDE_OPUS_PRICING,
+    CLAUDE_SONNET_PRICING,
     CODEX_GPT55_PRICING,
+    PRICING_ASOF,
     capture_tokens,
     estimate_claude_cost,
     estimate_codex_cost,
+    estimate_cost_with,
     parse_claude_session,
     parse_codex_rollout,
+    pricing_for_model,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -136,6 +140,74 @@ class TestCostEstimation:
         assert cost == pytest.approx(CODEX_GPT55_PRICING["cache_read_per_m"])
 
 
+class TestPricingResolver:
+    def test_opus_id_resolves_to_opus(self):
+        assert pricing_for_model("claude-opus-4-7") is CLAUDE_OPUS_PRICING
+
+    def test_sonnet_id_resolves_to_sonnet(self):
+        assert pricing_for_model("claude-sonnet-4-6") is CLAUDE_SONNET_PRICING
+
+    def test_gpt_id_resolves_to_codex(self):
+        assert pricing_for_model("gpt-5.5") is CODEX_GPT55_PRICING
+
+    def test_unknown_model_returns_none(self):
+        assert pricing_for_model("gemini-3-pro") is None
+        assert pricing_for_model(None) is None
+
+    def test_estimate_cost_with_sonnet(self):
+        usage = {"total_input": 1_000_000, "total_cache_create": 0,
+                 "total_cache_read": 0, "total_output": 0}
+        cost = estimate_cost_with(usage, CLAUDE_SONNET_PRICING)
+        assert cost == CLAUDE_SONNET_PRICING["input_per_m"]
+
+    def test_pricing_asof_is_set(self):
+        assert isinstance(PRICING_ASOF, str) and PRICING_ASOF
+
+
+class TestTimestampSpan:
+    def test_claude_span(self, tmp_path):
+        from quorum.token_usage import parse_claude_session
+        p = tmp_path / "s.jsonl"
+        p.write_text(
+            # attachment: earliest timestamp, NO message dict — must still count
+            json.dumps({"type": "attachment", "timestamp": "2026-05-28T09:59:50.000Z"}) + "\n"
+            + json.dumps({"type": "assistant", "timestamp": "2026-05-28T10:00:00.000Z",
+                          "message": {"role": "assistant", "usage": {"input_tokens": 1}}}) + "\n"
+            + json.dumps({"type": "mode"}) + "\n"  # no timestamp — skipped
+            + json.dumps({"type": "assistant", "timestamp": "2026-05-28T10:05:00.000Z",
+                          "message": {"role": "assistant", "usage": {"output_tokens": 1}}}) + "\n"
+        )
+        u = parse_claude_session(p)
+        # First ts comes from the attachment (no message dict) — proves the
+        # timestamp is tracked before the message guard.
+        assert u["first_ts"] == "2026-05-28T09:59:50.000Z"
+        assert u["last_ts"] == "2026-05-28T10:05:00.000Z"
+
+    def test_codex_span(self, tmp_path):
+        from quorum.token_usage import parse_codex_rollout
+        p = tmp_path / "r.jsonl"
+        p.write_text(
+            json.dumps({"timestamp": "2026-05-28T10:00:00.000Z", "type": "session_meta",
+                        "payload": {"id": "x"}}) + "\n"
+            + json.dumps({"timestamp": "2026-05-28T10:10:00.000Z", "type": "event_msg",
+                          "payload": {"type": "agent_message"}}) + "\n"
+        )
+        u = parse_codex_rollout(p)
+        assert u["first_ts"] == "2026-05-28T10:00:00.000Z"
+        assert u["last_ts"] == "2026-05-28T10:10:00.000Z"
+
+    def test_capture_tokens_duration_ms(self, tmp_path):
+        from quorum.token_usage import capture_tokens
+        p = tmp_path / "r.jsonl"
+        p.write_text(
+            json.dumps({"timestamp": "2026-05-28T10:00:00.000Z", "type": "session_meta", "payload": {"id": "x"}}) + "\n"
+            + json.dumps({"timestamp": "2026-05-28T10:00:30.000Z", "type": "event_msg",
+                          "payload": {"type": "token_count", "info": {"total_token_usage": {"total_tokens": 5}}}}) + "\n"
+        )
+        u = capture_tokens("codex", [p])
+        assert u["duration_ms"] == 30_000
+
+
 class TestCaptureTokens:
     def test_claude_family_returns_full_dict(self):
         result = capture_tokens(
@@ -203,3 +275,94 @@ class TestCaptureTokens:
         assert result["total_input"] == 300
         assert result["total_output"] == 20
         assert result["n_assistant_turns"] == 2
+
+
+class TestPerModelPricing:
+    """A single run is multi-model (main Opus + Sonnet/Haiku subagents).
+    capture_tokens must price each model separately and sum (PRI-1872)."""
+
+    def test_haiku_resolver(self):
+        from quorum.token_usage import pricing_for_model, CLAUDE_HAIKU_PRICING
+        assert pricing_for_model("claude-haiku-4-5-20251001") is CLAUDE_HAIKU_PRICING
+
+    def test_parse_claude_session_splits_by_model(self, tmp_path: Path):
+        from quorum.token_usage import parse_claude_session
+        p = tmp_path / "s.jsonl"
+        rows = [
+            {"type": "assistant", "message": {"model": "claude-opus-4-7",
+             "usage": {"input_tokens": 10, "output_tokens": 100}}},
+            {"type": "assistant", "message": {"model": "claude-sonnet-4-6",
+             "usage": {"input_tokens": 20, "output_tokens": 200}}},
+            {"type": "assistant", "message": {"model": "claude-opus-4-7",
+             "usage": {"input_tokens": 5, "output_tokens": 50}}},
+        ]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        u = parse_claude_session(p)
+        bm = u["by_model"]
+        assert bm["claude-opus-4-7"]["total_input"] == 15
+        assert bm["claude-opus-4-7"]["total_output"] == 150
+        assert bm["claude-opus-4-7"]["n_assistant_turns"] == 2
+        assert bm["claude-sonnet-4-6"]["total_output"] == 200
+
+    def test_capture_tokens_prices_each_model_and_sums(self, tmp_path: Path):
+        from quorum.token_usage import (
+            capture_tokens, estimate_cost_with,
+            CLAUDE_OPUS_PRICING, CLAUDE_SONNET_PRICING,
+        )
+        p = tmp_path / "s.jsonl"
+        rows = [
+            {"type": "assistant", "message": {"model": "claude-opus-4-7",
+             "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+            {"type": "assistant", "message": {"model": "claude-sonnet-4-6",
+             "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+        ]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        u = capture_tokens(backend_family="claude", session_log_files=[p])
+        # Opus input 1M -> $5 ; Sonnet input 1M -> $3 ; total $8 (per-model)
+        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 5.0
+        assert u["models"]["claude-sonnet-4-6"]["est_cost_usd"] == 3.0
+        assert u["est_cost_usd"] == 8.0
+        # NOT the single-model bug (all at Opus rate = $10)
+        assert u["est_cost_usd"] != 10.0
+
+    def test_capture_tokens_unpriced_model_flags_but_still_sums_priced(self, tmp_path: Path):
+        from quorum.token_usage import capture_tokens
+        p = tmp_path / "s.jsonl"
+        rows = [
+            {"type": "assistant", "message": {"model": "claude-opus-4-7",
+             "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+            {"type": "assistant", "message": {"model": "gemini-3-pro",
+             "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+        ]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        u = capture_tokens(backend_family="claude", session_log_files=[p])
+        assert u["models"]["gemini-3-pro"]["est_cost_usd"] is None
+        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 5.0
+        assert u["est_cost_usd"] == 5.0  # only the priced one
+        assert u.get("has_unpriced_model") is True
+
+
+class TestDedupByMessageId:
+    """CC logs one record per content block within an assistant message,
+    repeating the full usage each time. Must count each message.id once,
+    keeping the last (complete) usage. PRI-1872."""
+
+    def test_repeated_message_id_counted_once_last_wins(self, tmp_path: Path):
+        from quorum.token_usage import parse_claude_session
+        p = tmp_path / "s.jsonl"
+        # One logical message (id=A) logged 3x: text block, then two tool_use
+        # blocks. Same cache_read; output grows to the final 217.
+        rows = [
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 1}}},
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 217}}},
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 217}}},
+        ]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        u = parse_claude_session(p)
+        assert u["n_assistant_turns"] == 1                 # one API call, not 3
+        assert u["total_cache_read"] == 6146               # counted once, not 18438
+        assert u["total_cache_create"] == 5076             # once
+        assert u["total_output"] == 217                    # last wins, not 1 or 435
