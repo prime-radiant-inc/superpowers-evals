@@ -415,3 +415,32 @@ def test_render_batch_emits_ansi_when_color_true(tmp_path):
         color=False,
     )
     assert "\x1b[" not in out_plain
+
+
+def test_render_includes_economics_pane():
+    from quorum.show import render
+    verdict = {
+        "final": "pass", "final_reason": "ok",
+        "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
+        "checks": [],
+        "economics": {
+            "pricing_asof": "2026-05",
+            "gauntlet": {"duration_ms": 1885117, "model": "claude-sonnet-4-6",
+                         "tokens": {"total": 7100000}, "est_cost_usd": 0.42},
+            "coding_agent": {"duration_ms": 1443000, "model": "gpt-5.5",
+                             "tokens": {"total": 2300000}, "est_cost_usd": 1.85},
+            "total_est_cost_usd": 2.27, "partial": False,
+        },
+    }
+    out = render(verdict, Path("/tmp/run"), color=False, mode="full")
+    assert "Economics" in out
+    assert "$2.27" in out
+    assert "Gauntlet" in out and "Coding" in out
+
+
+def test_render_economics_absent_is_safe():
+    from quorum.show import render
+    verdict = {"final": "pass", "final_reason": "", "gauntlet": {"status": "pass"},
+               "checks": []}  # no economics key
+    out = render(verdict, Path("/tmp/run"), color=False, mode="full")
+    assert isinstance(out, str)  # no crash
