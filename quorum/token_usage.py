@@ -5,7 +5,12 @@ normalized token-usage dict with cost estimates. Designed to be called from
 the engine after a run completes so each result directory carries reproducible
 per-run cost data.
 
-Pricing constants are list pricing as of 2026-05; update here when rates move.
+Pricing constants are official published list pricing, sourced (not guessed):
+- Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
+- OpenAI:    https://openai.com/api/pricing/
+Verified 2026-05-28 (see PRICING_ASOF). Update from those pages when rates
+move — do NOT eyeball or carry forward old-tier numbers (Opus 4.5+ dropped to
+$5/$25 from the Opus-4.1 $15/$75; a stale constant once inflated cost ~3x).
 """
 
 from __future__ import annotations
@@ -24,24 +29,29 @@ def _track_ts(current_first: str | None, current_last: str | None, ts: Any) -> t
     last = ts if current_last is None or ts > current_last else current_last
     return first, last
 
-# Anthropic Claude Opus 4.x list pricing per 1M tokens (USD).
-# https://www.anthropic.com/pricing
+# Anthropic Claude Opus 4.5/4.6/4.7/4.8 list pricing per 1M tokens (USD).
+# platform.claude.com/docs/en/about-claude/pricing — Opus 4.5+ is $5/$25,
+# NOT the Opus-4.1-and-earlier $15/$75. cache_create uses the 5-minute write
+# rate (1.25x input); cache_read is the cache-hit rate (0.1x input).
 CLAUDE_OPUS_PRICING: dict[str, float] = {
-    "input_per_m": 15.0,
-    "cache_create_per_m": 18.75,  # 5m ephemeral write = 1.25x base input
-    "cache_read_per_m": 1.50,  # cache hit = 0.1x base input
-    "output_per_m": 75.0,
+    "input_per_m": 5.0,
+    "cache_create_per_m": 6.25,   # 5m cache write = 1.25x base input
+    "cache_read_per_m": 0.50,     # cache hit = 0.1x base input
+    "output_per_m": 25.0,
 }
 
-# OpenAI GPT-5.5 list pricing per 1M tokens (USD).
-# Codex/OpenAI does not separately bill cache writes; only cached-input reads.
+# OpenAI GPT-5.5 list pricing per 1M tokens (USD). openai.com/api/pricing
+# Codex runs report model "gpt-5.5". OpenAI bills cached input (read) but not
+# cache writes separately; cache_create stays 0 (see parse_codex_rollout).
+# (Long-context tier >272K tokens is pricier; not modeled — runs here are under
+# the 258K context window.)
 CODEX_GPT55_PRICING: dict[str, float] = {
-    "input_per_m": 1.25,
-    "cache_read_per_m": 0.125,
-    "output_per_m": 10.0,
+    "input_per_m": 5.0,
+    "cache_read_per_m": 0.50,
+    "output_per_m": 30.0,
 }
 
-PRICING_ASOF = "2026-05"
+PRICING_ASOF = "2026-05-28"
 
 # Anthropic Claude Sonnet 4.x list pricing per 1M tokens (USD).
 CLAUDE_SONNET_PRICING: dict[str, float] = {
@@ -112,16 +122,18 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
 
-    total_input = 0
-    total_cache_create = 0
-    total_cache_read = 0
-    total_output = 0
-    n_assistant_turns = 0
     tool_result_total_bytes = 0
     model: str | None = None
     first_ts: str | None = None
     last_ts: str | None = None
-    by_model: dict[str, dict[str, int]] = {}
+    # Dedup by message.id: Claude Code logs ONE record per content block
+    # within an assistant message (a text block, then each tool_use block),
+    # and every record repeats the message's full `usage`. Summing per-record
+    # multi-counts each API call by its block count. Key by message.id and
+    # keep the LAST record's usage — output_tokens grows as the message
+    # streams, so the final record carries the complete usage. PRI-1872.
+    msg_usage: dict[str, dict[str, Any]] = {}
+    anon_turns: list[dict[str, Any]] = []  # assistant records with no id
 
     with path.open() as f:
         for line in f:
@@ -138,28 +150,23 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
                 continue
 
             if rec_type == "assistant":
-                n_assistant_turns += 1
-                m = message.get("model")
-                if model is None and isinstance(m, str):
-                    model = m
-                bucket = by_model.setdefault(
-                    m if isinstance(m, str) else "unknown", _empty_model_bucket()
-                )
-                bucket["n_assistant_turns"] += 1
+                if model is None and isinstance(message.get("model"), str):
+                    model = message.get("model")
                 usage = message.get("usage")
-                if isinstance(usage, dict):
-                    ti = int(usage.get("input_tokens", 0) or 0)
-                    tcc = int(usage.get("cache_creation_input_tokens", 0) or 0)
-                    tcr = int(usage.get("cache_read_input_tokens", 0) or 0)
-                    to = int(usage.get("output_tokens", 0) or 0)
-                    total_input += ti
-                    total_cache_create += tcc
-                    total_cache_read += tcr
-                    total_output += to
-                    bucket["total_input"] += ti
-                    bucket["total_cache_create"] += tcc
-                    bucket["total_cache_read"] += tcr
-                    bucket["total_output"] += to
+                if not isinstance(usage, dict):
+                    usage = {}
+                entry = {
+                    "model": message.get("model") if isinstance(message.get("model"), str) else "unknown",
+                    "total_input": int(usage.get("input_tokens", 0) or 0),
+                    "total_cache_create": int(usage.get("cache_creation_input_tokens", 0) or 0),
+                    "total_cache_read": int(usage.get("cache_read_input_tokens", 0) or 0),
+                    "total_output": int(usage.get("output_tokens", 0) or 0),
+                }
+                mid = message.get("id")
+                if isinstance(mid, str):
+                    msg_usage[mid] = entry  # last write wins (complete usage)
+                else:
+                    anon_turns.append(entry)
 
             elif rec_type == "user":
                 content = message.get("content")
@@ -169,6 +176,22 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
                             tool_result_total_bytes += _byte_len_of_tool_result(
                                 block.get("content")
                             )
+
+    total_input = total_cache_create = total_cache_read = total_output = 0
+    n_assistant_turns = 0
+    by_model: dict[str, dict[str, int]] = {}
+    for entry in (*msg_usage.values(), *anon_turns):
+        total_input += entry["total_input"]
+        total_cache_create += entry["total_cache_create"]
+        total_cache_read += entry["total_cache_read"]
+        total_output += entry["total_output"]
+        n_assistant_turns += 1
+        bucket = by_model.setdefault(entry["model"], _empty_model_bucket())
+        bucket["n_assistant_turns"] += 1
+        bucket["total_input"] += entry["total_input"]
+        bucket["total_cache_create"] += entry["total_cache_create"]
+        bucket["total_cache_read"] += entry["total_cache_read"]
+        bucket["total_output"] += entry["total_output"]
 
     return {
         "total_input": total_input,

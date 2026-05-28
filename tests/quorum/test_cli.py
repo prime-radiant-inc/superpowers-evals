@@ -332,7 +332,7 @@ def test_backfill_economics_single_run(tmp_path):
     assert result.exit_code == 0
     assert "backfilled" in result.output
     verdict = json.loads((rd / "verdict.json").read_text())
-    assert verdict["economics"]["coding_agent"]["est_cost_usd"] == 15.0
+    assert verdict["economics"]["coding_agent"]["est_cost_usd"] == 5.0
 
 
 def test_backfill_economics_all(tmp_path):

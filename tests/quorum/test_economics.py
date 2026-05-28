@@ -119,10 +119,10 @@ def test_backfill_injects_economics_into_existing_verdict(tmp_path):
 
     verdict = json.loads((tmp_path / "verdict.json").read_text())
     econ = verdict["economics"]
-    # Coding cost is per-model: Opus 1M input ($15) + Sonnet 1M input ($3) = $18
-    assert econ["coding_agent"]["est_cost_usd"] == 18.0
+    # Coding cost is per-model: Opus 1M input ($5) + Sonnet 1M input ($3) = $8
+    assert econ["coding_agent"]["est_cost_usd"] == 8.0
     models = {m["model"]: m["est_cost_usd"] for m in econ["coding_agent"]["models"]}
-    assert models["claude-opus-4-7"] == 15.0
+    assert models["claude-opus-4-7"] == 5.0
     assert models["claude-sonnet-4-6"] == 3.0
     # Regenerated sidecar carries the per-model breakdown.
     usage = json.loads((tmp_path / "coding-agent-token-usage.json").read_text())

@@ -318,12 +318,12 @@ class TestPerModelPricing:
         ]
         p.write_text("".join(json.dumps(r) + "\n" for r in rows))
         u = capture_tokens(backend_family="claude", session_log_files=[p])
-        # Opus input 1M -> $15 ; Sonnet input 1M -> $3 ; total $18
-        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 15.0
+        # Opus input 1M -> $5 ; Sonnet input 1M -> $3 ; total $8 (per-model)
+        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 5.0
         assert u["models"]["claude-sonnet-4-6"]["est_cost_usd"] == 3.0
-        assert u["est_cost_usd"] == 18.0
-        # NOT the old single-model bug ($15/M applied to both = $30)
-        assert u["est_cost_usd"] != 30.0
+        assert u["est_cost_usd"] == 8.0
+        # NOT the single-model bug (all at Opus rate = $10)
+        assert u["est_cost_usd"] != 10.0
 
     def test_capture_tokens_unpriced_model_flags_but_still_sums_priced(self, tmp_path: Path):
         from quorum.token_usage import capture_tokens
@@ -337,6 +337,32 @@ class TestPerModelPricing:
         p.write_text("".join(json.dumps(r) + "\n" for r in rows))
         u = capture_tokens(backend_family="claude", session_log_files=[p])
         assert u["models"]["gemini-3-pro"]["est_cost_usd"] is None
-        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 15.0
-        assert u["est_cost_usd"] == 15.0  # only the priced one
+        assert u["models"]["claude-opus-4-7"]["est_cost_usd"] == 5.0
+        assert u["est_cost_usd"] == 5.0  # only the priced one
         assert u.get("has_unpriced_model") is True
+
+
+class TestDedupByMessageId:
+    """CC logs one record per content block within an assistant message,
+    repeating the full usage each time. Must count each message.id once,
+    keeping the last (complete) usage. PRI-1872."""
+
+    def test_repeated_message_id_counted_once_last_wins(self, tmp_path: Path):
+        from quorum.token_usage import parse_claude_session
+        p = tmp_path / "s.jsonl"
+        # One logical message (id=A) logged 3x: text block, then two tool_use
+        # blocks. Same cache_read; output grows to the final 217.
+        rows = [
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 1}}},
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 217}}},
+            {"type": "assistant", "message": {"id": "A", "model": "claude-opus-4-7",
+             "usage": {"cache_read_input_tokens": 6146, "cache_creation_input_tokens": 5076, "output_tokens": 217}}},
+        ]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        u = parse_claude_session(p)
+        assert u["n_assistant_turns"] == 1                 # one API call, not 3
+        assert u["total_cache_read"] == 6146               # counted once, not 18438
+        assert u["total_cache_create"] == 5076             # once
+        assert u["total_output"] == 217                    # last wins, not 1 or 435
