@@ -227,7 +227,11 @@ def _format_economics_pane(verdict: dict, *, color: bool) -> str:
     for entry in (coding or {}).get("models") or []:
         rows.append(_model_subrow(entry))
     total = econ.get("total_est_cost_usd")
-    total_str = _fmt_cost(total) if total is not None else ("partial" if econ.get("partial") else "—")
+    total_str = (
+        _fmt_cost(total)
+        if total is not None
+        else ("partial" if econ.get("partial") else "—")
+    )
     rows.append(f"  {'total':<10} {'':>10} {'':>9} {total_str:>9}")
     return "\n".join([sep, header, *rows]) + "\n"
 
