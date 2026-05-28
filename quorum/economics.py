@@ -11,7 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from quorum.token_usage import PRICING_ASOF, estimate_cost_with, pricing_for_model
+from quorum.token_usage import (
+    PRICING_ASOF,
+    capture_tokens,
+    estimate_cost_with,
+    pricing_for_model,
+)
 
 
 def _read_gauntlet_result(run_dir: Path) -> dict | None:
@@ -120,3 +125,54 @@ def build_run_economics(run_dir: Path) -> dict | None:
         "total_est_cost_usd": total,
         "partial": partial,
     }
+
+
+def _detect_backend_and_logs(run_dir: Path) -> tuple[str | None, list[Path]]:
+    """Detect coding-agent backend + its session-log files from a run dir.
+
+    The per-run isolated agent-config dir tells us which backend ran:
+    Claude writes under `coding-agent-config/projects/`, Codex under
+    `coding-agent-config/sessions/`. All logs there belong to this run
+    (isolated config), so no cross-run cwd filtering is needed.
+    """
+    cfg = run_dir / "coding-agent-config"
+    projects = cfg / "projects"
+    sessions = cfg / "sessions"
+    if projects.is_dir():
+        return "claude", sorted(projects.rglob("*.jsonl"))
+    if sessions.is_dir():
+        return "codex", sorted(sessions.rglob("rollout-*.jsonl"))
+    return None, []
+
+
+def backfill_run_economics(run_dir: Path) -> str:
+    """Recompute economics for an existing run dir and inject it into verdict.json.
+
+    Regenerates `coding-agent-token-usage.json` from the preserved session
+    logs (so it carries the per-model breakdown + corrected cost), then adds
+    an `economics` block to the existing `verdict.json`. Returns a short
+    status string. NOTE: this re-prices at *current* pricing tables — it is a
+    deliberate re-pricing, not a faithful replay of run-time cost.
+    """
+    backend, logs = _detect_backend_and_logs(run_dir)
+    if backend and logs:
+        usage = capture_tokens(backend_family=backend, session_log_files=logs)
+        if usage is not None:
+            (run_dir / "coding-agent-token-usage.json").write_text(
+                json.dumps(usage, indent=2) + "\n"
+            )
+
+    econ = build_run_economics(run_dir)
+
+    vj = run_dir / "verdict.json"
+    if not vj.is_file():
+        return "skipped (no verdict.json)"
+    try:
+        verdict = json.loads(vj.read_text())
+    except (json.JSONDecodeError, OSError):
+        return "skipped (unreadable verdict.json)"
+    verdict["economics"] = econ
+    vj.write_text(json.dumps(verdict, indent=2))
+    if econ is None:
+        return "updated (no economics sources)"
+    return "backfilled"

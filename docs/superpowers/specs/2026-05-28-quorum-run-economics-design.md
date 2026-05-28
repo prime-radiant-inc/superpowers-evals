@@ -125,6 +125,12 @@ total                                      $2.27
 - Session logs present but no timestamped records → `duration_ms = null` for that agent (cost may still be present).
 - Unpriced model → tokens present, cost null, rendered `n/a (model)`.
 
+## Backfill (PRI-1872 follow-on)
+
+Runs that predate this feature have no `economics` in their `verdict.json`, and runs that predate the per-model fix carry a stale single-model cost in `coding-agent-token-usage.json`. Since the raw session logs and `result.json` are preserved per run dir, `quorum backfill-economics [run-dir | --all]` re-derives economics: it detects the backend from the run's isolated `coding-agent-config/` layout (`projects/` → claude, `sessions/` → codex), re-runs `capture_tokens` over the logs (regenerating the per-model sidecar + duration span), and injects an `economics` block into the existing `verdict.json`.
+
+This **re-prices at current pricing tables** — a deliberate re-pricing, not a faithful replay of run-time cost. Acceptable for correcting the multi-model bug (the old numbers were wrong, not "right at old rates"). Runs that never launched an agent (setup/indeterminate failures) report "no economics sources" and are left without an economics block.
+
 ## Non-goals
 
 - Phased (setup / agent-drive / checks) timing breakdown.

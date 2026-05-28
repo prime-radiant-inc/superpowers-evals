@@ -89,3 +89,49 @@ def test_coding_block_carries_per_model_breakdown(tmp_path):
     assert models[0]["est_cost_usd"] == 25.09
     assert models[1]["model"] == "claude-sonnet-4-6"
     assert econ["coding_agent"]["est_cost_usd"] == 31.59
+
+
+def _claude_session(run_dir):
+    d = run_dir / "coding-agent-config" / "projects" / "proj"
+    d.mkdir(parents=True)
+    rows = [
+        {"type": "assistant", "timestamp": "2026-05-28T10:00:00.000Z",
+         "message": {"model": "claude-opus-4-7",
+                     "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+        {"type": "assistant", "timestamp": "2026-05-28T10:01:00.000Z",
+         "message": {"model": "claude-sonnet-4-6",
+                     "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
+    ]
+    (d / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_backfill_injects_economics_into_existing_verdict(tmp_path):
+    from quorum.economics import backfill_run_economics
+    _gauntlet_result(tmp_path)
+    _claude_session(tmp_path)
+    # Existing verdict.json WITHOUT economics (pre-feature run).
+    (tmp_path / "verdict.json").write_text(json.dumps(
+        {"schema": 1, "final": "pass", "final_reason": "ok",
+         "gauntlet": {"status": "pass"}, "checks": [], "error": None}))
+
+    status = backfill_run_economics(tmp_path)
+    assert status == "backfilled"
+
+    verdict = json.loads((tmp_path / "verdict.json").read_text())
+    econ = verdict["economics"]
+    # Coding cost is per-model: Opus 1M input ($15) + Sonnet 1M input ($3) = $18
+    assert econ["coding_agent"]["est_cost_usd"] == 18.0
+    models = {m["model"]: m["est_cost_usd"] for m in econ["coding_agent"]["models"]}
+    assert models["claude-opus-4-7"] == 15.0
+    assert models["claude-sonnet-4-6"] == 3.0
+    # Regenerated sidecar carries the per-model breakdown.
+    usage = json.loads((tmp_path / "coding-agent-token-usage.json").read_text())
+    assert "models" in usage
+    # Original verdict fields preserved.
+    assert verdict["final"] == "pass"
+
+
+def test_backfill_skips_when_no_verdict(tmp_path):
+    from quorum.economics import backfill_run_economics
+    _claude_session(tmp_path)
+    assert backfill_run_economics(tmp_path) == "skipped (no verdict.json)"
