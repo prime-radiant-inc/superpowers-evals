@@ -3,6 +3,7 @@ id: sdd-go-fractals
 title: Agent executes a Go fractals plan end-to-end via subagent-driven-development
 status: ready
 tags: subagent-driven-development
+barf_max_time: 90m
 ---
 
 You have a plan ready (plan.md, with design context in design.md) for
@@ -29,7 +30,7 @@ Once the agent reports the plan is complete — or it has executed every
 task in plan.md — you are done.
 
 Note: this is a long run. Real plan execution dispatches multiple
-subagents per task and can take 10-30 minutes of wall time.
+subagents per task and can take 60-90 minutes of wall time.
 
 ## Acceptance Criteria
 
