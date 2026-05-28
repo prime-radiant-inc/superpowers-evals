@@ -84,3 +84,17 @@ def test_to_dict_schema_version():
     assert d["final"] in ("pass", "fail", "indeterminate")
     assert "final_reason" in d
     assert "checks" in d and "gauntlet" in d and "error" in d
+
+
+def test_finalverdict_serializes_economics():
+    from quorum.composer import FinalVerdict
+    econ = {"pricing_asof": "2026-05", "total_est_cost_usd": 1.5, "partial": False,
+            "gauntlet": None, "coding_agent": None}
+    v = FinalVerdict(final="pass", economics=econ)
+    d = v.to_dict()
+    assert d["economics"] == econ
+
+
+def test_finalverdict_economics_defaults_none():
+    from quorum.composer import FinalVerdict
+    assert FinalVerdict().to_dict()["economics"] is None

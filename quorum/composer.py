@@ -47,6 +47,7 @@ class FinalVerdict:
     gauntlet: GauntletLayer | None = None
     checks: list[CheckRecord] = field(default_factory=list)
     error: RunError | None = None
+    economics: dict | None = None
 
     def to_dict(self) -> dict:
         d = {
@@ -62,6 +63,7 @@ class FinalVerdict:
                 for c in self.checks
             ],
             "error": asdict(self.error) if self.error else None,
+            "economics": self.economics,
         }
         return d
 
