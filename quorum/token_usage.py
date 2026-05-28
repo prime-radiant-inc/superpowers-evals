@@ -11,8 +11,18 @@ Pricing constants are list pricing as of 2026-05; update here when rates move.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+def _track_ts(current_first: str | None, current_last: str | None, ts: Any) -> tuple[str | None, str | None]:
+    """Fold an ISO timestamp into running (first, last). Ignores non-strings."""
+    if not isinstance(ts, str) or not ts:
+        return current_first, current_last
+    first = ts if current_first is None or ts < current_first else current_first
+    last = ts if current_last is None or ts > current_last else current_last
+    return first, last
 
 # Anthropic Claude Opus 4.x list pricing per 1M tokens (USD).
 # https://www.anthropic.com/pricing
@@ -90,6 +100,8 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
     n_assistant_turns = 0
     tool_result_total_bytes = 0
     model: str | None = None
+    first_ts: str | None = None
+    last_ts: str | None = None
 
     with path.open() as f:
         for line in f:
@@ -99,6 +111,7 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            first_ts, last_ts = _track_ts(first_ts, last_ts, rec.get("timestamp"))
             rec_type = rec.get("type")
             message = rec.get("message")
             if not isinstance(message, dict):
@@ -135,6 +148,8 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
         "model": model,
         "n_assistant_turns": n_assistant_turns,
         "tool_result_total_bytes": tool_result_total_bytes,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
     }
 
 
@@ -160,6 +175,8 @@ def parse_codex_rollout(path: Path) -> dict[str, Any] | None:
     n_assistant_turns = 0
     tool_result_total_bytes = 0
     model: str | None = None
+    first_ts: str | None = None
+    last_ts: str | None = None
 
     with path.open() as f:
         for line in f:
@@ -169,6 +186,7 @@ def parse_codex_rollout(path: Path) -> dict[str, Any] | None:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            first_ts, last_ts = _track_ts(first_ts, last_ts, rec.get("timestamp"))
             rec_type = rec.get("type")
             payload = rec.get("payload") or {}
             if not isinstance(payload, dict):
@@ -214,6 +232,8 @@ def parse_codex_rollout(path: Path) -> dict[str, Any] | None:
         "n_assistant_turns": n_assistant_turns,
         "tool_result_total_bytes": tool_result_total_bytes,
         "cache_create_unavailable": True,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
     }
 
 
@@ -270,6 +290,19 @@ def capture_tokens(
         "tool_result_total_bytes": sum(u["tool_result_total_bytes"] for u in valid),
         "model": next((u["model"] for u in valid if u.get("model")), None),
     }
+
+    firsts = [u["first_ts"] for u in valid if u.get("first_ts")]
+    lasts = [u["last_ts"] for u in valid if u.get("last_ts")]
+    first_ts = min(firsts) if firsts else None
+    last_ts = max(lasts) if lasts else None
+    duration_ms = None
+    if first_ts and last_ts:
+        a = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        duration_ms = max(int((b - a).total_seconds() * 1000), 0)
+    summed["first_ts"] = first_ts
+    summed["last_ts"] = last_ts
+    summed["duration_ms"] = duration_ms
 
     if backend_family == "claude":
         summed["est_cost_usd"] = round(estimate_claude_cost(summed), 6)

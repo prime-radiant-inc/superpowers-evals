@@ -164,6 +164,50 @@ class TestPricingResolver:
         assert isinstance(PRICING_ASOF, str) and PRICING_ASOF
 
 
+class TestTimestampSpan:
+    def test_claude_span(self, tmp_path):
+        from quorum.token_usage import parse_claude_session
+        p = tmp_path / "s.jsonl"
+        p.write_text(
+            # attachment: earliest timestamp, NO message dict — must still count
+            json.dumps({"type": "attachment", "timestamp": "2026-05-28T09:59:50.000Z"}) + "\n"
+            + json.dumps({"type": "assistant", "timestamp": "2026-05-28T10:00:00.000Z",
+                          "message": {"role": "assistant", "usage": {"input_tokens": 1}}}) + "\n"
+            + json.dumps({"type": "mode"}) + "\n"  # no timestamp — skipped
+            + json.dumps({"type": "assistant", "timestamp": "2026-05-28T10:05:00.000Z",
+                          "message": {"role": "assistant", "usage": {"output_tokens": 1}}}) + "\n"
+        )
+        u = parse_claude_session(p)
+        # First ts comes from the attachment (no message dict) — proves the
+        # timestamp is tracked before the message guard.
+        assert u["first_ts"] == "2026-05-28T09:59:50.000Z"
+        assert u["last_ts"] == "2026-05-28T10:05:00.000Z"
+
+    def test_codex_span(self, tmp_path):
+        from quorum.token_usage import parse_codex_rollout
+        p = tmp_path / "r.jsonl"
+        p.write_text(
+            json.dumps({"timestamp": "2026-05-28T10:00:00.000Z", "type": "session_meta",
+                        "payload": {"id": "x"}}) + "\n"
+            + json.dumps({"timestamp": "2026-05-28T10:10:00.000Z", "type": "event_msg",
+                          "payload": {"type": "agent_message"}}) + "\n"
+        )
+        u = parse_codex_rollout(p)
+        assert u["first_ts"] == "2026-05-28T10:00:00.000Z"
+        assert u["last_ts"] == "2026-05-28T10:10:00.000Z"
+
+    def test_capture_tokens_duration_ms(self, tmp_path):
+        from quorum.token_usage import capture_tokens
+        p = tmp_path / "r.jsonl"
+        p.write_text(
+            json.dumps({"timestamp": "2026-05-28T10:00:00.000Z", "type": "session_meta", "payload": {"id": "x"}}) + "\n"
+            + json.dumps({"timestamp": "2026-05-28T10:00:30.000Z", "type": "event_msg",
+                          "payload": {"type": "token_count", "info": {"total_token_usage": {"total_tokens": 5}}}}) + "\n"
+        )
+        u = capture_tokens("codex", [p])
+        assert u["duration_ms"] == 30_000
+
+
 class TestCaptureTokens:
     def test_claude_family_returns_full_dict(self):
         result = capture_tokens(
