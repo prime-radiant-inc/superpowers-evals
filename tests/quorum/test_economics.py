@@ -25,8 +25,10 @@ def _coding_usage(run_dir: Path, **over):
 
 
 def test_both_agents_present(tmp_path):
-    _gauntlet_result(tmp_path); _coding_usage(tmp_path)
+    _gauntlet_result(tmp_path)
+    _coding_usage(tmp_path)
     econ = build_run_economics(tmp_path)
+    assert econ is not None
     assert econ["gauntlet"]["duration_ms"] == 120000
     assert econ["gauntlet"]["est_cost_usd"] is not None
     assert econ["coding_agent"]["duration_ms"] == 90000
@@ -40,6 +42,7 @@ def test_both_agents_present(tmp_path):
 def test_missing_coding_usage_is_partial(tmp_path):
     _gauntlet_result(tmp_path)
     econ = build_run_economics(tmp_path)
+    assert econ is not None
     assert econ["coding_agent"] is None
     assert econ["partial"] is True
     assert econ["total_est_cost_usd"] is None
@@ -48,13 +51,16 @@ def test_missing_coding_usage_is_partial(tmp_path):
 def test_missing_gauntlet_result_is_partial(tmp_path):
     _coding_usage(tmp_path)
     econ = build_run_economics(tmp_path)
+    assert econ is not None
     assert econ["gauntlet"] is None
     assert econ["partial"] is True
 
 
 def test_unpriced_gauntlet_model_yields_null_cost(tmp_path):
-    _gauntlet_result(tmp_path, model="gemini-3-pro"); _coding_usage(tmp_path)
+    _gauntlet_result(tmp_path, model="gemini-3-pro")
+    _coding_usage(tmp_path)
     econ = build_run_economics(tmp_path)
+    assert econ is not None
     assert econ["gauntlet"]["est_cost_usd"] is None
     assert econ["gauntlet"]["tokens"]["total"] > 0
     # total is null because one side is unpriced
@@ -82,6 +88,7 @@ def test_coding_block_carries_per_model_breakdown(tmp_path):
         },
     }))
     econ = build_run_economics(tmp_path)
+    assert econ is not None
     models = econ["coding_agent"]["models"]
     assert len(models) == 2
     # sorted by cost desc → opus first

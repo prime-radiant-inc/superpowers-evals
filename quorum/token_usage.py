@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 
-def _track_ts(current_first: str | None, current_last: str | None, ts: Any) -> tuple[str | None, str | None]:
+def _track_ts(
+    current_first: str | None, current_last: str | None, ts: Any
+) -> tuple[str | None, str | None]:
     """Fold an ISO timestamp into running (first, last). Ignores non-strings."""
     if not isinstance(ts, str) or not ts:
         return current_first, current_last
@@ -155,8 +157,9 @@ def parse_claude_session(path: Path) -> dict[str, Any] | None:
                 usage = message.get("usage")
                 if not isinstance(usage, dict):
                     usage = {}
+                model = message.get("model")
                 entry = {
-                    "model": message.get("model") if isinstance(message.get("model"), str) else "unknown",
+                    "model": model if isinstance(model, str) else "unknown",
                     "total_input": int(usage.get("input_tokens", 0) or 0),
                     "total_cache_create": int(usage.get("cache_creation_input_tokens", 0) or 0),
                     "total_cache_read": int(usage.get("cache_read_input_tokens", 0) or 0),

@@ -277,7 +277,9 @@ def backfill_economics(target: Path | None, do_all: bool, results_root: Path) ->
             click.echo(f"no run-dirs with verdict.json under {results_root}")
             return
     else:
-        run_dirs = [Path(target)]
+        # The guard above guarantees target is set when do_all is False.
+        assert target is not None
+        run_dirs = [target]
 
     n_ok = 0
     for rd in run_dirs:

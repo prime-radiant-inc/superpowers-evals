@@ -12,6 +12,7 @@ import pytest
 
 from quorum.run_all import (
     ChildResult,
+    _run_cost,
     allocate_batch_dir,
     append_result_record,
     build_matrix,
@@ -19,7 +20,6 @@ from quorum.run_all import (
     run_batch,
     write_batch_footer,
     write_batch_header,
-    _run_cost,
 )
 
 
