@@ -356,14 +356,21 @@ artifact scenario could pass without proving Quorum captured the agent at all.
 Diffing the host's real `~/.gemini` is not required in v1; absence of isolated
 transcripts is enough to fail closed.
 
-## Scenario rollout
+## Scenario rollout and triage
 
 Adding `coding-agents/antigravity.yaml` changes `run-all` discovery because
 `run-all` enumerates every YAML target. Existing ungated scenarios were written
 when only Claude and Codex were runnable by default, and some stories or checks
 still carry Claude/Codex-specific assumptions.
 
-The implementation must include a scenario compatibility rollout:
+That is useful information, not something to hide. Antigravity is a live
+trusted-maintainer target, not public CI. Once the target exists,
+`quorum run-all --coding-agents antigravity` should attempt every scenario that
+is not explicitly gated away by `# coding-agents:`. The goal of the first sweep
+is to learn what works, what fails because Superpowers/Antigravity behavior is
+wrong, and what fails because the scenario still assumes Claude or Codex.
+
+The implementation must include a scenario rollout and triage path:
 
 - Add a new Antigravity bootstrap scenario that proves Superpowers installs
   under the isolated `.gemini/config/plugins/superpowers`, produces a non-empty
@@ -376,21 +383,20 @@ The implementation must include a scenario compatibility rollout:
   bootstrapped naturally.
 - Do not use `codex-native-hooks-bootstrap` as the Antigravity smoke; it is
   Codex-gated and checks Codex hook state.
-- Add an explicit Antigravity scenario allowlist, for example
-  `coding-agents/antigravity-scenarios.txt`, and enforce it through a shared
-  runner gating helper used by both direct `quorum run` and `run-all`. For
-  Claude and Codex, absent `# coding-agents:` keeps its existing "all supported
-  agents" meaning. For Antigravity, a scenario must pass both the existing
-  directive gate and the Antigravity allowlist until the suite is audited.
-- Direct `quorum run <scenario> --coding-agent antigravity` should return an
-  indeterminate "scenario not audited for Antigravity" verdict when the
-  scenario is not allowlisted, unless a future explicit maintainer override is
-  designed and documented.
-- Add a unit test against the matrix/gating helper proving the Antigravity
-  runnable set equals the allowlist and that unaudited scenarios are excluded
-  from both direct run and run-all.
-- Opt Antigravity into scenarios only after the story/check wording is portable
-  and the scenario has passed a maintainer live run.
+- Keep the existing directive semantics: absent `# coding-agents:` means the
+  scenario is attempted for Antigravity too; explicit directives still exclude
+  Antigravity when they do not name it.
+- Add a triage label path for Antigravity sweep results. This can start as a
+  documented `docs/baselines/...` report convention rather than a new verdict
+  enum. Each non-passing Antigravity result should be classified as:
+  `product-fail` when Antigravity/Superpowers behavior failed;
+  `scenario-port-needed` when the story/check assumes Claude or Codex;
+  or `harness-fail` when install, auth, capture, normalization, or isolation
+  failed.
+- Do not convert broad sweep failures into compatibility gates by default.
+  If a scenario is obviously nonsensical for Antigravity, add an explicit
+  `# coding-agents:` directive with a note in the triage report; otherwise let
+  it run so we learn the real behavior.
 - Initial live acceptance should use this named matrix:
   `antigravity-superpowers-bootstrap`;
   `triggering-test-driven-development` after its story evidence wording is made
@@ -404,8 +410,8 @@ The implementation must include a scenario compatibility rollout:
   `EnterWorktree` or shell `git worktree add`.
 
 This rollout does not require every existing scenario to pass in the first
-patch. It does require the repository to avoid accidentally treating every
-ungated scenario as Antigravity-compatible.
+patch. It does require the repository to distinguish a product failure from a
+scenario-porting failure during triage.
 
 ## Gauntlet-Agent HOWTO
 
@@ -493,10 +499,12 @@ Static tests should cover the parity layer without launching `agy`:
   info/exclude`, no real-config provisioning transcripts before snapshot,
   missing-transcript indeterminate behavior, zero-normalized-row diagnostics,
   and auth preflight failures.
-- Scenario rollout tests or checks ensure Antigravity is not accidentally
-  included in all ungated scenarios before compatibility has been audited:
-  direct `quorum run` and `run-all` must both respect the same Antigravity
-  allowlist.
+- Scenario rollout docs/tests preserve existing directive semantics: ungated
+  scenarios are attempted for Antigravity, while explicit `# coding-agents:`
+  directives still exclude it when omitted.
+- Add or document a triage-report convention for broad Antigravity sweeps that
+  classifies non-passing runs as `product-fail`, `scenario-port-needed`, or
+  `harness-fail`.
 
 Trusted-maintainer live smoke, documented but not part of CI:
 
@@ -525,7 +533,8 @@ The bootstrap scenario is required acceptance for v1, not an optional follow-up.
   parity, runner provisioning, auth diagnostics, git metadata exclusion, and
   setup/install behavior.
 - The repository has an Antigravity scenario rollout plan: a bootstrap scenario,
-  a small representative live matrix, and an enforced allowlist that prevents
-  accidental direct-run or run-all sweeps across unaudited scenarios.
+  a small representative live matrix, broad `run-all --coding-agents
+  antigravity` sweeps, and a triage report convention that separates product
+  failures from scenario-porting and harness failures.
 - README documents the target, safety model, hidden `--gemini_dir` dependency,
   and live-smoke procedure.
