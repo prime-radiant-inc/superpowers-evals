@@ -25,9 +25,8 @@ Do not mention TDD, tests-first, or any superpowers concept.
 ## Acceptance Criteria
 
 - The agent under test loaded the `superpowers:test-driven-development`
-  skill before writing implementation code. Evidence: a `Skill` tool
-  invocation naming `superpowers:test-driven-development` appears in
-  the agent's session log under
-  `$CLAUDE_CONFIG_DIR/projects/.../*.jsonl`, OR an equivalent shell
-  invocation reading the skill's SKILL.md. Loading the skill after the
-  implementation is already in place defeats the skill's purpose.
+  skill before writing implementation code. Evidence comes from Quorum's
+  normalized `coding-agent-tool-calls.jsonl`: a native `Skill` invocation,
+  a shell read of the skill's `SKILL.md`, or a normalized `Read` of the
+  skill's `SKILL.md` appears before any `Edit` or `Write`. Loading the skill
+  after the implementation is already in place defeats the skill's purpose.

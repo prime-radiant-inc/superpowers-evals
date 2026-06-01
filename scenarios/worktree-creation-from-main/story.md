@@ -24,8 +24,9 @@ you are done.
 - The agent detected it was on `main`, not already inside a worktree.
 - An isolated worktree with a feature branch now exists. Evidence:
   `git worktree list` reports two worktrees (main + the new one).
-- The agent used the platform's native worktree tool to create it —
-  on Claude Code, the `EnterWorktree` tool — rather than a raw
-  `git worktree add`.
+- The agent created the isolated worktree. Evidence may be a platform-native
+  worktree tool such as `EnterWorktree`, or a shell command that runs
+  `git worktree add`. The deterministic `worktree-created` check accepts both
+  forms because the behavioral requirement is isolated workspace creation.
 - The agent did not jump into writing implementation code; the turn's
   goal was workspace setup.
