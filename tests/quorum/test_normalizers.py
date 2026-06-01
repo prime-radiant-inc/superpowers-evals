@@ -495,7 +495,7 @@ class TestNormalizeAntigravityLogs:
         assert rows[3]["args"]["file_path"] == "src/app.py"
         assert all("raw_args" in r["args"] for r in rows)
 
-    def test_normalizes_documented_aliases_and_find_wildcard(self):
+    def test_normalizes_documented_aliases_and_preserves_unknown_find_tools(self):
         raw = json.dumps(
             {
                 "tool_calls": [
@@ -525,12 +525,14 @@ class TestNormalizeAntigravityLogs:
             "Grep",
             "Glob",
             "Glob",
-            "Glob",
+            "find_symbol",
             "Glob",
             "WebSearch",
             "WebFetch",
         ]
-        assert all(r["source"] == "native" for r in rows)
+        assert all(r["source"] == "native" for r in rows[:6])
+        assert rows[6]["source"] == "shell"
+        assert all(r["source"] == "native" for r in rows[7:])
         assert rows[6]["args"]["raw_args"] == {"symbol": "validate"}
 
     def test_preserves_unknown_tools_and_non_launch_manage_subagents(self):

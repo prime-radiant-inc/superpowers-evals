@@ -396,9 +396,6 @@ def _first_arg(args: dict[str, Any], keys: tuple[str, ...]) -> Any:
 
 
 def _canonical_antigravity_tool_name(name: str) -> str:
-    # Antigravity's implementation plan treats find_* as one Glob-family wildcard.
-    if name.startswith("find_"):
-        return "Glob"
     return ANTIGRAVITY_TOOL_MAP.get(name, name)
 
 
