@@ -149,6 +149,93 @@ def test_skill_before_tool_match_recognizes_bash_skill_md_read(tmp_path):
     ), "should pass — Bash skill-read at index 0 precedes git commit at index 1"
 
 
+def test_skill_called_recognizes_antigravity_read_skill_md(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Read",
+            "args": {
+                "file_path": (
+                    "/tmp/run/.gemini/config/plugins/superpowers/skills/brainstorming/SKILL.md"
+                ),
+                "is_skill_file": True,
+            },
+        },
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-called",
+            "superpowers:brainstorming",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
+def test_skill_before_tool_recognizes_antigravity_read_skill_md(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Read",
+            "args": {
+                "file_path": "/tmp/run/skills/superpowers/test-driven-development/SKILL.md",
+            },
+        },
+        {"tool": "Edit", "args": {"file_path": "src/app.py"}},
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-before-tool",
+            "superpowers:test-driven-development",
+            "Edit",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
+def test_skill_called_rejects_antigravity_read_of_other_skill(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Read",
+            "args": {
+                "file_path": "/tmp/run/skills/writing-plans/SKILL.md",
+                "is_skill_file": True,
+            },
+        },
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-called",
+            "superpowers:brainstorming",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        != 0
+    )
+
+
 # worktree-created — semantic check that passes for either Claude
 # (native EnterWorktree tool) or Codex (shells out to `git worktree add`).
 # Replaces `tool-called EnterWorktree`, which was Claude-only and

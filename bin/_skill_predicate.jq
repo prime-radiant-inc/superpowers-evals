@@ -17,6 +17,8 @@
 #      Bash / Shell / LocalShellCall with a command containing
 #      "skills/<superpowers/>?<dir>/SKILL.md", optionally bounded by
 #      whitespace, slashes, or quote characters.
+#   3. Antigravity normalized Read calls on
+#      ".../skills/<superpowers/>?<dir>/SKILL.md".
 #
 # Arguments:
 #   $name → full colon-prefixed skill name (e.g. "superpowers:brainstorming")
@@ -32,6 +34,14 @@ def is_skill_invocation($name; $dir):
         and (
             ((.args.command // .args.cmd // "") | test(
                 "(^|[[:space:]'\\''\"/])skills/(superpowers/)?" + $dir + "/SKILL[.]md([[:space:]'\\''\";]|$)"
+            ))
+        )
+    )
+    or (
+        (.tool == "Read")
+        and (
+            (((.args.file_path // .args.path // "") | tostring) | test(
+                "(^|/)skills/(superpowers/)?" + $dir + "/SKILL[.]md$"
             ))
         )
     );
