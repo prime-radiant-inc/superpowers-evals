@@ -37,6 +37,24 @@ def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path
     }))
 
 
+def _make_antigravity_agent(
+    coding_agents_dir: Path,
+    session_log_dir: Path,
+    normalizer: str = "antigravity",
+) -> None:
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "antigravity.yaml").write_text(yaml.safe_dump({
+        "name": "antigravity",
+        "binary": "echo",
+        "agent_config_env": "ANTIGRAVITY_CONFIG_DIR",
+        "session_log_dir": str(session_log_dir),
+        "session_log_glob": "*.jsonl",
+        "normalizer": normalizer,
+        "required_env": [],
+    }))
+    (coding_agents_dir / "antigravity-context").mkdir(parents=True, exist_ok=True)
+
+
 # Tests pass an empty dir as skeleton_root so _seed_agent_config_dir falls
 # through to mkdir-empty without requiring the production skeleton fixture.
 def _empty_skeleton(tmp_path: Path) -> Path:
@@ -652,6 +670,80 @@ class TestRunScenario:
         assert verdict.error is not None
         assert verdict.error.stage == "setup"
         assert (run_dir / "verdict.json").exists()
+
+    def test_antigravity_missing_transcript_is_indeterminate_even_without_trace_checks(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_antigravity_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        out_root = tmp_path / "results"
+
+        with (
+            patch("quorum.runner._seed_antigravity_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="antigravity",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "no Antigravity transcript" in verdict.final_reason
+        assert verdict.gauntlet is not None
+        assert verdict.gauntlet.status == "pass"
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+
+    def test_antigravity_zero_normalized_rows_is_distinct_from_missing_transcript(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_antigravity_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        out_root = tmp_path / "results"
+
+        def gauntlet_with_non_tool_log(*, run_dir, **kwargs):
+            (session_log_dir / "session.jsonl").write_text(
+                '{"type":"assistant","text":"hello"}\n'
+            )
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_antigravity_config"),
+            patch(
+                "quorum.runner.invoke_gauntlet",
+                side_effect=gauntlet_with_non_tool_log,
+            ),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="antigravity",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "normalized to zero tool-call rows" in verdict.final_reason
+        assert verdict.gauntlet is not None
+        assert verdict.gauntlet.status == "pass"
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
 
     def test_populate_context_dir_copies_coding_agent_contexts(self, tmp_path):
         # Spot-check that coding-agent context HOWTOs land in <run-dir>/gauntlet-agent/context/.

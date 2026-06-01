@@ -709,7 +709,54 @@ def _run_scenario_inner(
         launch_cwd=launch_cwd,
     )
 
-    # 10. Run checks.sh post().
+    # 10. Build Gauntlet layer from run dir before capture short-circuits or
+    # post-checks, so early indeterminate verdicts still preserve QA context.
+    gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)
+    if gauntlet_layer is None:
+        # Fallback: synthesise from the status returned by invoke_gauntlet.
+        gauntlet_layer = GauntletLayer(
+            status=gauntlet_status,
+            summary="",
+            reasoning="",
+            run_id=None,
+        )
+
+    if tcfg.normalizer == "antigravity" and not capture_result.source_logs:
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=(
+                "no Antigravity transcript appeared under isolated "
+                f"{session_log_dir}; cannot evaluate this run"
+            ),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(
+                stage="capture",
+                message="no Antigravity transcript captured",
+            ),
+        )
+
+    if (
+        tcfg.normalizer == "antigravity"
+        and capture_result.source_logs
+        and capture_result.row_count == 0
+    ):
+        rel = [str(p.relative_to(session_log_dir)) for p in capture_result.source_logs]
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=(
+                "Antigravity transcript(s) normalized to zero tool-call rows: "
+                + ", ".join(rel)
+            ),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(
+                stage="capture",
+                message="Antigravity capture normalized to zero rows",
+            ),
+        )
+
+    # 11. Run checks.sh post().
     post_records, post_exit = run_phase(
         checks_sh=checks_sh,
         phase="post",
@@ -725,10 +772,10 @@ def _run_scenario_inner(
             error=RunError(stage="checks", message=f"post exit {post_exit}"),
         )
 
-    # 11. Built-in empty-capture check.
+    # 12. Built-in empty-capture check.
     capture_empty = capture_result.row_count == 0
 
-    # 11b. QA-agent-misconfigured short-circuit.
+    # 12b. QA-agent-misconfigured short-circuit.
     #      An empty capture *plus* a codex rollout sitting under run_dir but
     #      launched in some subdir other than launch_cwd means the QA agent
     #      skipped `cd $QUORUM_AGENT_CWD` from the codex HOWTO before typing
@@ -757,17 +804,6 @@ def _run_scenario_inner(
                     message=f"misplaced codex rollouts: {misplaced_rel}",
                 ),
             )
-
-    # 12. Build Gauntlet layer from run dir.
-    gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)
-    if gauntlet_layer is None:
-        # Fallback: synthesise from the status returned by invoke_gauntlet.
-        gauntlet_layer = GauntletLayer(
-            status=gauntlet_status,
-            summary="",
-            reasoning="",
-            run_id=None,
-        )
 
     verdict = compose(
         gauntlet=gauntlet_layer,
