@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=antigravity-plugin-installed
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+
+if [ -z "${QUORUM_RUN_DIR:-}" ]; then
+    record_fail "QUORUM_RUN_DIR is not set"
+    exit 1
+fi
+
+PLUGIN_ROOT="$QUORUM_RUN_DIR/coding-agent-config/.gemini/config/plugins/superpowers"
+missing=()
+for rel in \
+    "plugin.json" \
+    "hooks.json" \
+    "skills/using-superpowers/SKILL.md"
+do
+    if [ ! -f "$PLUGIN_ROOT/$rel" ]; then
+        missing+=("$rel")
+    fi
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+    record_pass "Superpowers plugin installed at $PLUGIN_ROOT"
+else
+    detail=""
+    for rel in "${missing[@]}"; do
+        if [ -z "$detail" ]; then
+            detail="$rel"
+        else
+            detail="$detail, $rel"
+        fi
+    done
+    record_fail "missing Antigravity Superpowers plugin files: $detail"
+    exit 1
+fi

@@ -236,6 +236,77 @@ def test_skill_called_rejects_antigravity_read_of_other_skill(tmp_path):
     )
 
 
+def test_antigravity_plugin_installed_passes_when_required_files_exist(tmp_path):
+    run_dir = tmp_path / "run"
+    workdir = run_dir / "coding-agent-workdir"
+    workdir.mkdir(parents=True)
+    plugin_root = (
+        run_dir
+        / "coding-agent-config"
+        / ".gemini"
+        / "config"
+        / "plugins"
+        / "superpowers"
+    )
+    (plugin_root / "skills" / "using-superpowers").mkdir(parents=True)
+    (plugin_root / "plugin.json").write_text("{}")
+    (plugin_root / "hooks.json").write_text("{}")
+    (plugin_root / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+    sink = tmp_path / "s"
+
+    result = subprocess.run(
+        [str(BIN / "antigravity-plugin-installed")],
+        cwd=workdir,
+        env={
+            "PATH": f"{BIN}:/usr/bin:/bin",
+            "QUORUM_RECORD_SINK": str(sink),
+            "QUORUM_RUN_DIR": str(run_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert len(sink.read_text().splitlines()) == 1
+    assert _r(sink)["passed"]
+
+
+def test_antigravity_plugin_installed_fails_when_skill_missing(tmp_path):
+    run_dir = tmp_path / "run"
+    workdir = run_dir / "coding-agent-workdir"
+    workdir.mkdir(parents=True)
+    plugin_root = (
+        run_dir
+        / "coding-agent-config"
+        / ".gemini"
+        / "config"
+        / "plugins"
+        / "superpowers"
+    )
+    plugin_root.mkdir(parents=True)
+    (plugin_root / "plugin.json").write_text("{}")
+    (plugin_root / "hooks.json").write_text("{}")
+    sink = tmp_path / "s"
+
+    result = subprocess.run(
+        [str(BIN / "antigravity-plugin-installed")],
+        cwd=workdir,
+        env={
+            "PATH": f"{BIN}:/usr/bin:/bin",
+            "QUORUM_RECORD_SINK": str(sink),
+            "QUORUM_RUN_DIR": str(run_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert len(sink.read_text().splitlines()) == 1
+    rec = _r(sink)
+    assert not rec["passed"]
+    assert "using-superpowers" in rec["detail"]
+
+
 # worktree-created — semantic check that passes for either Claude
 # (native EnterWorktree tool) or Codex (shells out to `git worktree add`).
 # Replaces `tool-called EnterWorktree`, which was Claude-only and
