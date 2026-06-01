@@ -1,0 +1,9 @@
+name: antigravity
+binary: agy
+agent_config_env: ANTIGRAVITY_CONFIG_DIR
+session_log_dir: "${ANTIGRAVITY_CONFIG_DIR}/.gemini/antigravity-cli/brain"
+session_log_glob: "**/transcript.jsonl"
+normalizer: antigravity
+required_env:
+  - SUPERPOWERS_ROOT
+max_time: 10m

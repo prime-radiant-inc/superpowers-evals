@@ -60,6 +60,21 @@ def test_ensure_superpowers_root_default_sets_nested_value(tmp_path, monkeypatch
     assert os.environ["SUPERPOWERS_ROOT"] == str(superpowers)
 
 
+def test_antigravity_config_loads_when_superpowers_root_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    cfg = load_coding_agent_config(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "antigravity.yaml"
+    )
+
+    assert cfg.name == "antigravity"
+    assert cfg.binary == "agy"
+    assert cfg.agent_config_env == "ANTIGRAVITY_CONFIG_DIR"
+    assert cfg.normalizer == "antigravity"
+    assert cfg.resolve_session_log_dir(tmp_path / "cfg") == (
+        tmp_path / "cfg" / ".gemini" / "antigravity-cli" / "brain"
+    )
+
+
 class TestLoadCodingAgentConfig:
     def test_minimal_valid(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")

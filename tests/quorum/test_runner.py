@@ -1,5 +1,6 @@
 # tests/quorum/test_runner.py
 import json
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -81,6 +82,56 @@ def _stub_gauntlet_pass(*, run_dir, **kwargs):
 def _stub_gauntlet_fail(*, run_dir, **kwargs):
     (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
     return "fail"
+
+
+def test_antigravity_launch_agent_is_interactive_and_substituted(tmp_path):
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "antigravity.yaml").write_text(yaml.safe_dump({
+        "name": "antigravity",
+        "binary": "agy",
+        "agent_config_env": "ANTIGRAVITY_CONFIG_DIR",
+        "session_log_dir": (
+            "${ANTIGRAVITY_CONFIG_DIR}/.gemini/antigravity-cli/brain"
+        ),
+        "session_log_glob": "**/transcript.jsonl",
+        "normalizer": "antigravity",
+        "required_env": [],
+    }))
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    cd_antigravity = coding_agents_dir / "antigravity-context"
+    cd_antigravity.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2]
+        / "coding-agents"
+        / "antigravity-context"
+        / "launch-agent",
+        cd_antigravity / "launch-agent",
+    )
+    out_root = tmp_path / "results"
+
+    with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="antigravity",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+    rd = list(out_root.iterdir())[0]
+    shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+    assert shim.exists()
+    assert shim.stat().st_mode & stat.S_IXUSR
+    content = shim.read_text()
+    assert "$QUORUM_AGENT_CWD" not in content
+    assert "$ANTIGRAVITY_CONFIG_DIR" not in content
+    assert "AGY_CLI_DISABLE_AUTO_UPDATE=true" in content
+    assert "--gemini_dir=" in content
+    assert "--dangerously-skip-permissions" in content
+    assert "--log-file" in content
+    assert "--print" not in content
 
 
 class TestSeedAgentConfigDir:
