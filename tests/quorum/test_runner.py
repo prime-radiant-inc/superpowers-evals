@@ -15,6 +15,7 @@ from quorum.runner import (
     _exclude_antigravity_project_marker,
     _seed_agent_config_dir,
     _seed_antigravity_config,
+    _write_antigravity_settings,
     run_scenario,
 )
 
@@ -170,9 +171,88 @@ def test_antigravity_launch_agent_is_interactive_and_substituted(tmp_path):
     assert "$ANTIGRAVITY_CONFIG_DIR" not in content
     assert "AGY_CLI_DISABLE_AUTO_UPDATE=true" in content
     assert "--gemini_dir=" in content
+    assert "--add-dir=" in content
     assert "--dangerously-skip-permissions" in content
     assert "--log-file" in content
     assert "--print" not in content
+
+
+def test_antigravity_launch_uses_visible_alias_for_hidden_cwd(tmp_path, monkeypatch):
+    hidden_root = tmp_path / ".hidden"
+    visible_root = tmp_path / "visible-workspaces"
+    monkeypatch.setenv("QUORUM_ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT", str(visible_root))
+
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    session_log_dir = tmp_path / "logs"
+    session_log_dir.mkdir()
+    _make_antigravity_agent(coding_agents_dir, session_log_dir, normalizer="claude")
+    (coding_agents_dir / "antigravity-context" / "HOWTO.md").write_text(
+        'launch from "$QUORUM_AGENT_CWD"\n'
+    )
+    (coding_agents_dir / "antigravity-context" / "launch-agent").write_text(
+        '#!/usr/bin/env bash\ncd "$QUORUM_AGENT_CWD"\n'
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    out_root = hidden_root / "results"
+    captured: dict[str, Path] = {}
+
+    def fake_invoke(*, launch_cwd, run_dir, **_kwargs):
+        captured["launch_cwd"] = launch_cwd
+        (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+        return "pass"
+
+    with (
+        patch("quorum.runner._seed_antigravity_config"),
+        patch("quorum.runner.invoke_gauntlet", side_effect=fake_invoke),
+    ):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="antigravity",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = next(out_root.iterdir())
+    workdir = rd / "coding-agent-workdir"
+    launch_cwd = captured["launch_cwd"]
+    assert launch_cwd.is_symlink()
+    assert launch_cwd.resolve() == workdir.resolve()
+    assert str(launch_cwd).startswith(str(visible_root))
+
+    record = json.loads((rd / "antigravity-visible-launch-cwd.json").read_text())
+    assert record["launch_cwd"] == str(workdir)
+    assert record["visible_launch_cwd"] == str(launch_cwd)
+
+    howto = (rd / "gauntlet-agent" / "context" / "HOWTO.md").read_text()
+    shim = (rd / "gauntlet-agent" / "context" / "launch-agent").read_text()
+    assert str(launch_cwd) in howto
+    assert str(launch_cwd) in shim
+
+    settings = json.loads(
+        (rd / "coding-agent-config" / ".gemini" / "antigravity-cli" / "settings.json")
+        .read_text()
+    )
+    assert str(launch_cwd) in settings["trustedWorkspaces"]
+    assert str(workdir.resolve()) in settings["trustedWorkspaces"]
+
+
+def test_antigravity_settings_trusts_symlink_alias_and_target(tmp_path):
+    cfg = tmp_path / "cfg"
+    target = tmp_path / "target-workdir"
+    target.mkdir()
+    alias = tmp_path / "visible-workdir"
+    alias.symlink_to(target, target_is_directory=True)
+
+    _write_antigravity_settings(cfg, alias)
+
+    settings = json.loads(
+        (cfg / ".gemini" / "antigravity-cli" / "settings.json").read_text()
+    )
+    assert str(alias) in settings["trustedWorkspaces"]
+    assert str(target.resolve()) in settings["trustedWorkspaces"]
 
 
 class TestSeedAgentConfigDir:
@@ -286,13 +366,13 @@ class TestSeedAgentConfigDir:
     def test_antigravity_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
         with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
-            _seed_antigravity_config(tmp_path / "cfg")
+            _seed_antigravity_config(tmp_path / "cfg", tmp_path / "wd")
 
     def test_antigravity_target_seeds_config(self, tmp_path):
         dest = tmp_path / "agent-config"
         with patch("quorum.runner._seed_antigravity_config") as mock_seed:
             _seed_agent_config_dir(_antigravity_tcfg(), tmp_path, dest, tmp_path / "wd")
-        mock_seed.assert_called_once_with(dest)
+        mock_seed.assert_called_once_with(dest, tmp_path / "wd")
 
     def test_antigravity_seed_runs_auth_preflight_then_plugin_install(
         self, tmp_path, monkeypatch
@@ -343,9 +423,57 @@ class TestSeedAgentConfigDir:
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with patch("quorum.runner.subprocess.run", side_effect=fake_run) as mock_run:
-            _seed_antigravity_config(cfg)
+            _seed_antigravity_config(cfg, tmp_path / "wd")
 
         assert mock_run.call_count == 2
+
+    def test_antigravity_seed_writes_always_proceed_settings(
+        self, tmp_path, monkeypatch
+    ):
+        sp = tmp_path / "superpowers"
+        sp.mkdir()
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/agy")
+        cfg = tmp_path / "cfg"
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+
+        def fake_run(cmd, **_kwargs):
+            gemini_arg = next(part for part in cmd if part.startswith("--gemini_dir="))
+            gemini_dir = Path(gemini_arg.split("=", 1)[1])
+            if "--print" in cmd:
+                transcript_dir = (
+                    gemini_dir
+                    / "antigravity-cli"
+                    / "brain"
+                    / "session"
+                    / ".system_generated"
+                    / "logs"
+                )
+                transcript_dir.mkdir(parents=True)
+                (transcript_dir / "transcript.jsonl").write_text(
+                    '{"tool_calls":[]}\n'
+                )
+                return subprocess.CompletedProcess(cmd, 0, "OK\n", "")
+            root = cfg / ".gemini" / "config" / "plugins" / "superpowers"
+            (root / "skills" / "using-superpowers").mkdir(parents=True)
+            (root / "plugin.json").write_text("{}")
+            (root / "hooks.json").write_text("{}")
+            (root / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_antigravity_config(cfg, workdir)
+
+        settings = json.loads(
+            (cfg / ".gemini" / "antigravity-cli" / "settings.json").read_text()
+        )
+        assert settings["toolPermission"] == "always-proceed"
+        assert settings["artifactReviewPolicy"] == "always-proceed"
+        assert str(workdir.resolve()) in settings["trustedWorkspaces"]
+        assert "command(*)" in settings["permissions"]["allow"]
+        assert "write_file(*)" in settings["permissions"]["allow"]
+        assert settings["permissions"]["ask"] == []
 
     def test_antigravity_seed_fails_when_auth_preflight_has_no_transcript(
         self, tmp_path, monkeypatch
@@ -362,7 +490,7 @@ class TestSeedAgentConfigDir:
             ),
             pytest.raises(RunnerError, match="produced no transcript"),
         ):
-            _seed_antigravity_config(tmp_path / "cfg")
+            _seed_antigravity_config(tmp_path / "cfg", tmp_path / "wd")
 
     def test_antigravity_seed_fails_when_install_creates_real_config_transcript(
         self, tmp_path, monkeypatch
@@ -415,7 +543,7 @@ class TestSeedAgentConfigDir:
                 match="provisioning unexpectedly wrote transcripts",
             ),
         ):
-            _seed_antigravity_config(cfg)
+            _seed_antigravity_config(cfg, tmp_path / "wd")
 
 
 class TestAntigravityProjectMarkerExclusion:

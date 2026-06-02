@@ -28,5 +28,7 @@ Do not mention TDD, tests-first, or any superpowers concept.
   skill before writing implementation code. Evidence comes from Quorum's
   normalized `coding-agent-tool-calls.jsonl`: a native `Skill` invocation,
   a shell read of the skill's `SKILL.md`, or a normalized `Read` of the
-  skill's `SKILL.md` appears before any `Edit` or `Write`. Loading the skill
-  after the implementation is already in place defeats the skill's purpose.
+  skill's `SKILL.md` appears before any implementation-file `Edit` or `Write`.
+  Harness/private artifacts and `docs/superpowers` design specs do not count
+  as implementation code. Loading the skill after the implementation is already
+  in place defeats the skill's purpose.

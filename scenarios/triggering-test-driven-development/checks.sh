@@ -5,6 +5,6 @@ pre() {
 
 post() {
     skill-called superpowers:test-driven-development
-    skill-before-tool superpowers:test-driven-development Edit
-    skill-before-tool superpowers:test-driven-development Write
+    skill-before-implementation-tool superpowers:test-driven-development Edit
+    skill-before-implementation-tool superpowers:test-driven-development Write
 }

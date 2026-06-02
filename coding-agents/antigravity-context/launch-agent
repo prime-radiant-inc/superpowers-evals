@@ -4,10 +4,12 @@
 # The cd, ANTIGRAVITY_CONFIG_DIR, hidden --gemini_dir, auto-update disable,
 # and dangerous-mode flag are baked in here so the QA agent starts agy from the
 # prepared workdir with one command. quorum substitutes the $... values below
-# at runtime; the installed copy contains literal absolute paths.
+# at runtime; the installed copy contains literal absolute paths. When the
+# real workdir path contains a hidden component, $QUORUM_AGENT_CWD may be a
+# visible symlink to that workdir so Antigravity accepts it as a workspace.
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && ANTIGRAVITY_CONFIG_DIR="$ANTIGRAVITY_CONFIG_DIR" AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir="$ANTIGRAVITY_CONFIG_DIR/.gemini" --dangerously-skip-permissions --log-file "$ANTIGRAVITY_CONFIG_DIR/agy.log"
+#   cd "$QUORUM_AGENT_CWD" && ANTIGRAVITY_CONFIG_DIR="$ANTIGRAVITY_CONFIG_DIR" AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir="$ANTIGRAVITY_CONFIG_DIR/.gemini" --add-dir="$QUORUM_AGENT_CWD" --dangerously-skip-permissions --log-file "$ANTIGRAVITY_CONFIG_DIR/agy.log"
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 exec env \
@@ -15,6 +17,7 @@ exec env \
   AGY_CLI_DISABLE_AUTO_UPDATE=true \
   agy \
     --gemini_dir="$ANTIGRAVITY_CONFIG_DIR/.gemini" \
+    --add-dir="$QUORUM_AGENT_CWD" \
     --dangerously-skip-permissions \
     --log-file "$ANTIGRAVITY_CONFIG_DIR/agy.log" \
     "$@"

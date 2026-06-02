@@ -454,7 +454,7 @@ class TestNormalizeAntigravityLogs:
                     },
                     {
                         "name": "run_command",
-                        "args": {"CommandLine": '"pytest -q"'},
+                        "args": {"CommandLine": '"pytest -q"', "Cwd": '"/tmp/run"'},
                     },
                     {
                         "name": "list_dir",
@@ -472,7 +472,31 @@ class TestNormalizeAntigravityLogs:
         )
         assert rows[0]["args"]["raw_args"]["AbsolutePath"].startswith('"')
         assert rows[1]["args"]["command"] == "pytest -q"
+        assert rows[1]["args"]["cwd"] == "/tmp/run"
         assert rows[2]["args"]["path"] == "/tmp/run/src"
+
+    def test_normalizes_antigravity_write_and_edit_target_paths(self):
+        raw = json.dumps(
+            {
+                "tool_calls": [
+                    {
+                        "name": "write_to_file",
+                        "args": {"TargetFile": '"/tmp/run/coding-agent-workdir/src/app.js"'},
+                    },
+                    {
+                        "name": "replace_file_content",
+                        "args": {"TargetFile": '"/tmp/run/coding-agent-workdir/src/app.js"'},
+                    },
+                ]
+            }
+        )
+
+        rows = normalize_antigravity_logs(raw)
+
+        assert [r["tool"] for r in rows] == ["Write", "Edit"]
+        assert rows[0]["args"]["file_path"] == "/tmp/run/coding-agent-workdir/src/app.js"
+        assert rows[1]["args"]["file_path"] == "/tmp/run/coding-agent-workdir/src/app.js"
+        assert rows[0]["args"]["raw_args"]["TargetFile"].startswith('"')
 
     def test_normalizes_nested_planner_response_tool_calls(self):
         raw = json.dumps(

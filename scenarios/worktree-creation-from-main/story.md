@@ -29,4 +29,5 @@ you are done.
   `git worktree add`. The deterministic `worktree-created` check accepts both
   forms because the behavioral requirement is isolated workspace creation.
 - The agent did not jump into writing implementation code; the turn's
-  goal was workspace setup.
+  goal was workspace setup. Workspace setup writes such as `.gitignore` do
+  not count as implementation code.

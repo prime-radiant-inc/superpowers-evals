@@ -62,6 +62,8 @@ from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
 
 LAUNCH_CWD_SENTINEL = ".quorum-launch-cwd"
 CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
+ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV = "QUORUM_ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT"
+ANTIGRAVITY_VISIBLE_LAUNCH_RECORD = "antigravity-visible-launch-cwd.json"
 
 
 class RunnerError(RuntimeError):
@@ -229,7 +231,41 @@ def _run_antigravity_auth_preflight() -> None:
             )
 
 
-def _seed_antigravity_config(antigravity_config_dir: Path) -> None:
+def _write_antigravity_settings(
+    antigravity_config_dir: Path,
+    workdir: Path,
+) -> None:
+    """Persist no-prompt settings for the isolated Antigravity run."""
+    settings_path = (
+        antigravity_config_dir / ".gemini" / "antigravity-cli" / "settings.json"
+    )
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+
+    trusted = settings.setdefault("trustedWorkspaces", [])
+    for trusted_workspace in (str(workdir), str(workdir.resolve())):
+        if trusted_workspace not in trusted:
+            trusted.append(trusted_workspace)
+
+    settings["toolPermission"] = "always-proceed"
+    settings["artifactReviewPolicy"] = "always-proceed"
+    settings["permissions"] = {
+        "allow": [
+            "command(*)",
+            "unsandboxed(*)",
+            "read_file(*)",
+            "write_file(*)",
+            "read_url(*)",
+            "execute_url(*)",
+            "mcp(*)",
+        ],
+        "ask": [],
+        "deny": [],
+    }
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2))
+
+
+def _seed_antigravity_config(antigravity_config_dir: Path, workdir: Path) -> None:
     """Install Superpowers into an isolated Antigravity .gemini tree."""
     superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
@@ -283,6 +319,8 @@ def _seed_antigravity_config(antigravity_config_dir: Path) -> None:
             stage="setup",
         )
 
+    _write_antigravity_settings(antigravity_config_dir, workdir)
+
     transcripts = _antigravity_transcripts(antigravity_config_dir)
     if transcripts:
         rel = [str(p.relative_to(antigravity_config_dir)) for p in transcripts]
@@ -335,7 +373,7 @@ def _seed_agent_config_dir(
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)
     if coding_agent.name == "antigravity":
-        _seed_antigravity_config(dest)
+        _seed_antigravity_config(dest, workdir)
 
 
 def _exclude_antigravity_project_marker(launch_cwd: Path) -> None:
@@ -382,6 +420,62 @@ def _resolve_launch_cwd(workdir: Path) -> Path:
             "doesn't exist"
         )
     return resolved_path
+
+
+def _path_has_hidden_component(path: Path) -> bool:
+    return any(part.startswith(".") and part not in {".", ".."} for part in path.parts)
+
+
+def _prepare_antigravity_launch_cwd(launch_cwd: Path, run_dir: Path) -> Path:
+    """Return an Antigravity-safe launch cwd.
+
+    Antigravity rejects `--add-dir` workspaces whose path contains hidden
+    components. Quorum runs often live under `.codex/`, so expose the same
+    directory through a visible temp symlink while leaving the real run evidence
+    co-located under run_dir.
+    """
+    if not _path_has_hidden_component(launch_cwd):
+        return launch_cwd
+
+    configured_root = os.environ.get(ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV)
+    visible_root = (
+        Path(configured_root)
+        if configured_root
+        else Path(tempfile.gettempdir()) / "quorum-antigravity-workspaces"
+    )
+    visible_root = visible_root.expanduser()
+    if not visible_root.is_absolute():
+        visible_root = visible_root.resolve()
+    if _path_has_hidden_component(visible_root):
+        raise RunnerError(
+            f"{ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV}={visible_root} contains a "
+            "hidden path component; Antigravity would reject it as a workspace",
+            stage="setup",
+        )
+
+    alias_parent = visible_root / run_dir.name
+    alias_parent.mkdir(parents=True, exist_ok=True)
+    alias = alias_parent / (launch_cwd.name or "workspace")
+    if alias.exists() or alias.is_symlink():
+        if alias.is_symlink() and alias.resolve() == launch_cwd.resolve():
+            return alias
+        raise RunnerError(
+            f"cannot prepare Antigravity visible launch cwd; {alias} already exists",
+            stage="setup",
+        )
+
+    alias.symlink_to(launch_cwd.resolve(), target_is_directory=True)
+    (run_dir / ANTIGRAVITY_VISIBLE_LAUNCH_RECORD).write_text(
+        json.dumps(
+            {
+                "launch_cwd": str(launch_cwd),
+                "visible_launch_cwd": str(alias),
+                "reason": "Antigravity rejects --add-dir paths with hidden components",
+            },
+            indent=2,
+        )
+    )
+    return alias
 
 
 def _gauntlet_status_from_run_dir(run_dir: Path) -> GauntletStatus:
@@ -646,6 +740,8 @@ def _run_scenario_inner(
     launch_cwd = _resolve_launch_cwd(workdir)
     if tcfg.name == "antigravity":
         _exclude_antigravity_project_marker(launch_cwd)
+        launch_cwd = _prepare_antigravity_launch_cwd(launch_cwd, run_dir)
+        _write_antigravity_settings(agent_config_dir, launch_cwd)
 
     # 6. Populate gauntlet-agent/context/ with HOWTOs, substituting
     #    $QUORUM_AGENT_CWD, $SUPERPOWERS_ROOT, and the per-coding-agent

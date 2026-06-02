@@ -8,9 +8,11 @@ Antigravity is itself an AI agent; what appears on screen is its work.
 Your bash starts in a scratch directory, NOT the workdir quorum prepared.
 quorum has generated a launcher that handles everything: it cds into the
 prepared workdir, sets the per-run isolated `ANTIGRAVITY_CONFIG_DIR`,
-disables auto-update, points `agy` at the isolated `.gemini` directory, and
-starts Antigravity with dangerous permissions. Type this one line, verbatim,
-as your first action:
+disables auto-update, points `agy` at the isolated `.gemini` directory,
+starts Antigravity with dangerous permissions, and registers the prepared
+workdir as an Antigravity workspace via `--add-dir`. When the real result path
+contains a hidden directory, quorum substitutes a visible symlink that points
+at the same workdir. Type this one line, verbatim, as your first action:
 
 ```
 "$QUORUM_LAUNCH_AGENT"
@@ -20,7 +22,7 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && ANTIGRAVITY_CONFIG_DIR=<per-run-isolated-dir> AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir=<per-run-isolated-dir>/.gemini --dangerously-skip-permissions --log-file <per-run-isolated-dir>/agy.log
+cd <prepared-workdir-or-visible-alias> && ANTIGRAVITY_CONFIG_DIR=<per-run-isolated-dir> AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir=<per-run-isolated-dir>/.gemini --add-dir=<prepared-workdir-or-visible-alias> --dangerously-skip-permissions --log-file <per-run-isolated-dir>/agy.log
 ```
 
 Because the `cd`, isolated config directory, `.gemini` path, auto-update

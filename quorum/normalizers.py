@@ -443,6 +443,9 @@ def _normalize_antigravity_args(name: str, raw_args: Any) -> dict[str, Any]:
         command = _first_arg(raw_args, ("CommandLine", "command"))
         if command is not _MISSING:
             args["command"] = _antigravity_canonical_value(command)
+        cwd = _first_arg(raw_args, ("Cwd", "cwd", "WorkingDirectory", "working_directory"))
+        if cwd is not _MISSING:
+            args["cwd"] = _antigravity_canonical_value(cwd)
     elif name == "view_file":
         file_path = _first_arg(
             raw_args, ("AbsolutePath", "Path", "path", "file_path", "filePath")
@@ -463,6 +466,27 @@ def _normalize_antigravity_args(name: str, raw_args: Any) -> dict[str, Any]:
         path = _first_arg(raw_args, ("DirectoryPath", "directory_path", "path"))
         if path is not _MISSING:
             args["path"] = _antigravity_canonical_value(path)
+    elif name in {
+        "write_to_file",
+        "create_file",
+        "replace_file_content",
+        "multi_replace_file_content",
+        "edit_file",
+    }:
+        file_path = _first_arg(
+            raw_args,
+            (
+                "TargetFile",
+                "target_file",
+                "TargetPath",
+                "Path",
+                "path",
+                "file_path",
+                "filePath",
+            ),
+        )
+        if file_path is not _MISSING:
+            args["file_path"] = _antigravity_canonical_value(file_path)
 
     return args
 

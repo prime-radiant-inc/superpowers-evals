@@ -208,6 +208,86 @@ def test_skill_before_tool_recognizes_antigravity_read_skill_md(tmp_path):
     )
 
 
+def test_skill_before_implementation_tool_ignores_antigravity_artifacts(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Write",
+            "args": {
+                "file_path": (
+                    str(parent)
+                    + "/coding-agent-config/.gemini/antigravity-cli/brain/tasks.md"
+                )
+            },
+        },
+        {
+            "tool": "Write",
+            "args": {
+                "file_path": (
+                    str(workdir)
+                    + "/docs/superpowers/specs/2026-06-01-email-validation-design.md"
+                )
+            },
+        },
+        {
+            "tool": "Read",
+            "args": {
+                "file_path": "/tmp/run/skills/superpowers/test-driven-development/SKILL.md",
+            },
+        },
+        {"tool": "Write", "args": {"file_path": str(workdir) + "/src/utils.test.js"}},
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-before-implementation-tool",
+            "superpowers:test-driven-development",
+            "Write",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+    assert _r(sink)["passed"]
+
+
+def test_skill_before_implementation_tool_fails_for_early_code_write(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Write", "args": {"file_path": str(workdir) + "/src/utils.js"}},
+        {
+            "tool": "Read",
+            "args": {
+                "file_path": "/tmp/run/skills/superpowers/test-driven-development/SKILL.md",
+            },
+        },
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-before-implementation-tool",
+            "superpowers:test-driven-development",
+            "Write",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        != 0
+    )
+    rec = _r(sink)
+    assert not rec["passed"]
+    assert "implementation Write" in rec["detail"]
+
+
 def test_skill_called_rejects_antigravity_read_of_other_skill(tmp_path):
     parent = tmp_path / "rundir"
     parent.mkdir()
@@ -372,6 +452,57 @@ def test_worktree_created_does_not_false_match_unrelated_git_worktree_commands(t
     )
     sink = tmp_path / "s"
     assert _run("worktree-created", trace=trace, cwd=workdir, sink=sink) != 0
+
+
+def test_implementation_tool_not_called_ignores_gitignore_setup_write(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Write", "args": {"file_path": str(workdir) + "/.gitignore"}},
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "implementation-tool-not-called",
+            "Write",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+    assert _r(sink)["passed"]
+
+
+def test_implementation_tool_not_called_fails_for_worktree_code_write(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Write",
+            "args": {"file_path": str(workdir) + "/.worktrees/login-feature/src/auth.js"},
+        },
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "implementation-tool-not-called",
+            "Write",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        != 0
+    )
+    rec = _r(sink)
+    assert not rec["passed"]
+    assert "implementation Write called" in rec["detail"]
 
 
 # investigated — semantic check that the agent looked at the code via a
