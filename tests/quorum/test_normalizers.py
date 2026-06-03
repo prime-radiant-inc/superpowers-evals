@@ -385,6 +385,126 @@ class TestNormalizePiLogs:
             {"tool": "subagent", "args": {"agent": "reviewer"}, "source": "native"},
         ]
 
+    def test_normalizes_live_style_pi_session_with_model_and_tool_result_rows(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "session",
+                    "version": 3,
+                    "id": "session-1",
+                    "cwd": "/tmp/project",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "model_change",
+                    "provider": "openai-codex",
+                    "modelId": "gpt-5.5",
+                }
+            ),
+            json.dumps({"type": "thinking_level_change", "thinkingLevel": "medium"}),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "id": "call-read",
+                                "name": "read",
+                                "arguments": {"path": "README.md"},
+                            }
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "id": "call-write",
+                                "name": "write",
+                                "arguments": {"path": "out.md", "content": "ok"},
+                            },
+                            {
+                                "type": "toolCall",
+                                "id": "call-edit",
+                                "name": "edit",
+                                "arguments": {
+                                    "path": "out.md",
+                                    "oldString": "ok",
+                                    "newString": "done",
+                                },
+                            },
+                            {
+                                "type": "toolCall",
+                                "id": "call-bash",
+                                "name": "bash",
+                                "arguments": {"command": "git status --short"},
+                            },
+                            {
+                                "type": "toolCall",
+                                "id": "call-find",
+                                "name": "find",
+                                "arguments": {"path": ".", "pattern": "*.md"},
+                            },
+                            {
+                                "type": "toolCall",
+                                "id": "call-ls",
+                                "name": "ls",
+                                "arguments": {"path": "."},
+                            },
+                            {
+                                "type": "toolCall",
+                                "id": "call-custom",
+                                "name": "custom_tool",
+                                "arguments": {"x": 1},
+                            },
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "toolResult",
+                        "toolCallId": "call-read",
+                        "toolName": "read",
+                        "content": [{"type": "text", "text": "README"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "done"}],
+                    },
+                }
+            ),
+        ]
+
+        assert normalize_pi_logs("\n".join(lines)) == [
+            {"tool": "Read", "args": {"path": "README.md"}, "source": "native"},
+            {"tool": "Write", "args": {"path": "out.md", "content": "ok"}, "source": "native"},
+            {
+                "tool": "Edit",
+                "args": {"path": "out.md", "oldString": "ok", "newString": "done"},
+                "source": "native",
+            },
+            {"tool": "Bash", "args": {"command": "git status --short"}, "source": "shell"},
+            {"tool": "Glob", "args": {"path": ".", "pattern": "*.md"}, "source": "native"},
+            {"tool": "Glob", "args": {"path": "."}, "source": "native"},
+            {"tool": "custom_tool", "args": {"x": 1}, "source": "shell"},
+        ]
+
 
 class TestNormalizeGeminiLogs:
     def test_normalizes_jsonl_tool_calls(self):

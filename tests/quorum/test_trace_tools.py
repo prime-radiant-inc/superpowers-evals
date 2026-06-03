@@ -253,6 +253,83 @@ def test_skill_before_tool_recognizes_antigravity_read_skill_md(tmp_path):
     )
 
 
+def test_skill_called_recognizes_pi_read_skill_md(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Read",
+            "args": {
+                "path": "/tmp/run/superpowers/skills/brainstorming/SKILL.md",
+            },
+        },
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-called",
+            "superpowers:brainstorming",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
+def test_tool_arg_match_can_pin_pi_superpowers_skill_path(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    skill_path = "/tmp/run/superpowers/skills/brainstorming/SKILL.md"
+    trace = _trace(parent, {"tool": "Read", "args": {"path": skill_path}})
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "tool-arg-match",
+            "Read",
+            f'.path == "{skill_path}"',
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
+def test_skill_before_tool_recognizes_pi_read_skill_md(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {
+            "tool": "Read",
+            "args": {
+                "path": "/tmp/run/superpowers/skills/brainstorming/SKILL.md",
+            },
+        },
+        {"tool": "Write", "args": {"path": "PI_SUPERPOWERS_OK.md"}},
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-before-tool",
+            "superpowers:brainstorming",
+            "Write",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
 def test_skill_before_implementation_tool_ignores_antigravity_artifacts(tmp_path):
     parent = tmp_path / "rundir"
     parent.mkdir()
