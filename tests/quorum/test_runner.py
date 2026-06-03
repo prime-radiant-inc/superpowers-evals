@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -561,7 +562,10 @@ def test_kimi_launch_agent_is_interactive_and_substituted(tmp_path):
             "quorum.runner._seed_kimi_config",
             return_value=AgentRuntime(
                 env_file=tmp_path / "secret" / "kimi-runtime.env",
-                substitutions={"$KIMI_ENV_FILE": str(tmp_path / "secret" / "kimi-runtime.env")},
+                substitutions={
+                    "$KIMI_ENV_FILE": str(tmp_path / "secret" / "kimi-runtime.env"),
+                    "$KIMI_BINARY": "kimi",
+                },
                 cleanup_dirs=(tmp_path / "secret",),
             ),
         ),
@@ -587,9 +591,67 @@ def test_kimi_launch_agent_is_interactive_and_substituted(tmp_path):
     assert str(tmp_path / "secret" / "kimi-runtime.env") in content
     assert "trap cleanup_kimi_env EXIT HUP INT TERM" in content
     assert "unset KIMI_ENV_FILE" in content
-    assert "exec kimi --yolo" in content
+    assert "$KIMI_BINARY" not in content
+    assert "--yolo" in content
     assert "--skills-dir" not in content
     assert "--auto" not in content
+
+
+def test_kimi_launch_agent_uses_configured_binary(tmp_path, monkeypatch):
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    custom_kimi = tmp_path / "custom tools" / "kimi-wrapper"
+    custom_kimi.parent.mkdir()
+    custom_kimi.write_text("#!/usr/bin/env bash\nexit 0\n")
+    custom_kimi.chmod(0o755)
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "kimi.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "kimi",
+                "binary": str(custom_kimi),
+                "agent_config_env": "KIMI_CODE_HOME",
+                "session_log_dir": "${KIMI_CODE_HOME}/sessions",
+                "session_log_glob": "**/wire.jsonl",
+                "normalizer": "kimi",
+                "required_env": [],
+            }
+        )
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    cd_kimi = coding_agents_dir / "kimi-context"
+    cd_kimi.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2]
+        / "coding-agents"
+        / "kimi-context"
+        / "launch-agent",
+        cd_kimi / "launch-agent",
+    )
+    out_root = tmp_path / "results"
+    superpowers = _make_kimi_superpowers_root(tmp_path)
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-kimi-key")
+
+    with (
+        patch("quorum.runner.run_kimi_auth_preflight"),
+        patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+    ):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="kimi",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = list(out_root.iterdir())[0]
+    shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+    content = shim.read_text()
+    assert f"exec {shlex.quote(str(custom_kimi))} --yolo" in content
+    assert "exec kimi --yolo" not in content
+    assert "$KIMI_BINARY" not in content
 
 
 def test_kimi_runtime_env_file_cleaned_when_gauntlet_never_launches(tmp_path, monkeypatch):

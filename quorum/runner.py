@@ -408,7 +408,10 @@ def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRu
     )
     return AgentRuntime(
         env_file=env_file,
-        substitutions={"$KIMI_ENV_FILE": str(env_file)},
+        substitutions={
+            "$KIMI_ENV_FILE": str(env_file),
+            "$KIMI_BINARY": shlex.quote(kimi_binary),
+        },
         cleanup_dirs=(env_file.parent,),
     )
 
