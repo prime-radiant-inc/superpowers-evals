@@ -427,6 +427,7 @@ def render_batch(
     console = Console(
         file=buf,
         force_terminal=color,
+        color_system="truecolor" if color else None,
         no_color=not color,
         width=200,
     )

@@ -393,8 +393,10 @@ def test_is_batch_dir(tmp_path):
     assert is_batch_dir(run_dir) is False
 
 
-def test_render_batch_emits_ansi_when_color_true(tmp_path):
+def test_render_batch_emits_ansi_when_color_true(tmp_path, monkeypatch):
     """When color=True, glyphs are wrapped in ANSI sequences."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
     batch_dir = _seed_batch(tmp_path, agents=["claude"], rows=[
         {"scenario": "foo", "coding_agent": "claude",
          "run_id": "foo-claude-x", "_verdict": "pass"},
