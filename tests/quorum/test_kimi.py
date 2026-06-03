@@ -3,6 +3,7 @@ import os
 import stat
 import subprocess
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,8 @@ from quorum.kimi import (
     KimiConfigError,
     build_kimi_subprocess_env,
     effective_kimi_model_env,
+    install_kimi_superpowers_plugin,
+    validate_superpowers_kimi_root,
     write_effective_kimi_config,
     write_kimi_runtime_env_file,
 )
@@ -161,3 +164,55 @@ def test_effective_config_summary_omits_non_kimi_runtime_env(tmp_path):
     assert "secret" not in text
     assert "/secret/bin" not in text
     assert "/secret/home" not in text
+
+
+def _superpowers_root(tmp_path: Path) -> Path:
+    root = tmp_path / "superpowers"
+    (root / ".kimi-plugin").mkdir(parents=True)
+    (root / "skills" / "using-superpowers").mkdir(parents=True)
+    (root / "skills" / "brainstorming").mkdir(parents=True)
+    (root / ".kimi-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "superpowers",
+                "skills": "./skills/",
+                "sessionStart": {"skill": "using-superpowers"},
+                "skillInstructions": {"tools": {"Bash": "shell"}},
+            }
+        )
+    )
+    (root / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+    (root / "skills" / "brainstorming" / "SKILL.md").write_text("skill")
+    return root
+
+
+def test_validate_superpowers_kimi_root_accepts_manifest(tmp_path):
+    root = _superpowers_root(tmp_path)
+    assert validate_superpowers_kimi_root(root) == root.resolve()
+
+
+def test_validate_superpowers_kimi_root_rejects_wrong_session_start(tmp_path):
+    root = _superpowers_root(tmp_path)
+    manifest = json.loads((root / ".kimi-plugin" / "plugin.json").read_text())
+    manifest["sessionStart"]["skill"] = "other"
+    (root / ".kimi-plugin" / "plugin.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(KimiConfigError, match="sessionStart.skill"):
+        validate_superpowers_kimi_root(root)
+
+
+def test_install_kimi_superpowers_plugin_writes_local_path_metadata(tmp_path):
+    root = _superpowers_root(tmp_path)
+    kimi_home = tmp_path / "kimi-home"
+
+    installed_path = install_kimi_superpowers_plugin(kimi_home, root)
+
+    installed = json.loads(installed_path.read_text())
+    assert installed["version"] == 1
+    assert len(installed["plugins"]) == 1
+    plugin = installed["plugins"][0]
+    assert plugin["id"] == "superpowers"
+    assert plugin["enabled"] is True
+    assert plugin["source"] == "local-path"
+    assert Path(plugin["root"]).resolve() == root.resolve()
+    assert not (kimi_home / "plugins" / "managed" / "superpowers").exists()

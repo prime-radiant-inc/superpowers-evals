@@ -621,7 +621,13 @@ def test_antigravity_settings_trusts_symlink_alias_and_target(tmp_path):
 class TestSeedAgentConfigDir:
     def test_mkdir_empty_when_no_skeleton(self, tmp_path):
         dest = tmp_path / "agent-config"
-        _seed_agent_config_dir(_tcfg("anything"), tmp_path / "no-fixtures", dest, tmp_path)
+        _seed_agent_config_dir(
+            _tcfg("anything"),
+            tmp_path / "no-fixtures",
+            dest,
+            tmp_path,
+            run_dir=tmp_path / "run-dir",
+        )
         assert dest.is_dir()
         assert list(dest.iterdir()) == []
 
@@ -633,7 +639,13 @@ class TestSeedAgentConfigDir:
         workdir.mkdir()
         dest = tmp_path / "agent-config"
 
-        _seed_agent_config_dir(_tcfg("claude"), tmp_path, dest, workdir)
+        _seed_agent_config_dir(
+            _tcfg("claude"),
+            tmp_path,
+            dest,
+            workdir,
+            run_dir=tmp_path / "run-dir",
+        )
 
         cfg = json.loads((dest / ".claude.json").read_text())
         assert cfg["hasCompletedOnboarding"] is True
@@ -653,7 +665,13 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner._seed_codex_auth"),
             patch("quorum.runner._seed_codex_plugin_hooks"),
         ):
-            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "workdir")
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "workdir",
+                run_dir=tmp_path / "run-dir",
+            )
 
         assert (dest / "config.toml").exists()
         assert not (dest / ".claude.json").exists()
@@ -669,7 +687,13 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner._seed_codex_plugin_hooks"),
         ):
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
-            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
         (cmd, *_), kwargs = mock_run.call_args
         assert cmd == ["codex", "login", "--with-api-key"]
         assert kwargs["input"] == "sk-test-key"
@@ -684,7 +708,13 @@ class TestSeedAgentConfigDir:
         ):
             mock_run.return_value = subprocess.CompletedProcess([], 1, "", "bad key")
             with pytest.raises(RunnerError, match="codex login"):
-                _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+                _seed_agent_config_dir(
+                    _tcfg("codex"),
+                    tmp_path,
+                    dest,
+                    tmp_path / "wd",
+                    run_dir=tmp_path / "run-dir",
+                )
 
     def test_codex_seed_raises_without_api_key(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -693,7 +723,13 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner._seed_codex_plugin_hooks"),
             pytest.raises(RunnerError, match="OPENAI_API_KEY"),
         ):
-            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_codex_target_installs_plugin_hooks(self, tmp_path, monkeypatch):
         # The runner stages Superpowers as a trusted plugin hook into the
@@ -707,7 +743,13 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner._seed_codex_auth"),
             patch("quorum.runner.install_codex_superpowers_plugin_hooks") as mock_install,
         ):
-            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, workdir)
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                workdir,
+                run_dir=tmp_path / "run-dir",
+            )
         (cmd_workdir, cmd_sp), kwargs = mock_install.call_args
         assert cmd_workdir == workdir
         assert cmd_sp == str(tmp_path / "sp")
@@ -720,7 +762,13 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner._seed_codex_auth"),
             pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"),
         ):
-            _seed_agent_config_dir(_tcfg("codex"), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_antigravity_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
@@ -730,7 +778,13 @@ class TestSeedAgentConfigDir:
     def test_antigravity_target_seeds_config(self, tmp_path):
         dest = tmp_path / "agent-config"
         with patch("quorum.runner._seed_antigravity_config") as mock_seed:
-            _seed_agent_config_dir(_antigravity_tcfg(), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _antigravity_tcfg(),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
         mock_seed.assert_called_once_with(dest, tmp_path / "wd")
 
     def test_pi_target_seeds_run_local_auth_files(self, tmp_path, monkeypatch):
@@ -1051,46 +1105,66 @@ class TestSeedAgentConfigDir:
 
     def test_kimi_target_seeds_config(self, tmp_path):
         dest = tmp_path / "agent-config"
+        run_dir = tmp_path / "run-dir"
         with patch("quorum.runner._seed_kimi_config") as mock_seed:
-            _seed_agent_config_dir(_kimi_tcfg(), tmp_path, dest, tmp_path / "wd")
-        mock_seed.assert_called_once_with(dest)
+            _seed_agent_config_dir(
+                _kimi_tcfg(),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=run_dir,
+            )
+        mock_seed.assert_called_once_with(dest, run_dir=run_dir)
 
-    def test_kimi_seed_links_auth_and_installs_local_superpowers(
+    def test_kimi_seed_installs_local_path_superpowers_without_host_state(
         self, tmp_path, monkeypatch
     ):
         home = tmp_path / "home"
         source_home = home / ".kimi-code"
         (source_home / "credentials").mkdir(parents=True)
-        (source_home / "oauth").mkdir()
-        (source_home / "config.toml").write_text('default_model = "kimi-code/kimi-for-coding"\n')
-        (source_home / "credentials" / "kimi-code.json").write_text("{}")
-        (source_home / "oauth" / "kimi-code").write_text("{}")
+        (source_home / "config.toml").write_text("must not be read\n")
+
         superpowers = tmp_path / "superpowers"
         (superpowers / ".kimi-plugin").mkdir(parents=True)
-        (superpowers / ".kimi-plugin" / "plugin.json").write_text('{"name":"superpowers"}\n')
+        (superpowers / ".kimi-plugin" / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "superpowers",
+                    "skills": "./skills/",
+                    "sessionStart": {"skill": "using-superpowers"},
+                    "skillInstructions": {"tools": {"Bash": "shell"}},
+                }
+            )
+        )
         (superpowers / "skills" / "using-superpowers").mkdir(parents=True)
+        (superpowers / "skills" / "brainstorming").mkdir(parents=True)
         (superpowers / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+        (superpowers / "skills" / "brainstorming" / "SKILL.md").write_text("skill")
+
         dest = tmp_path / "agent-config"
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-kimi-key")
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
 
-        _seed_kimi_config(dest)
+        runtime = _seed_kimi_config(dest, run_dir=tmp_path / "run")
 
         assert (dest / "home").is_dir()
-        assert (dest / "config.toml").resolve() == source_home / "config.toml"
-        assert (dest / "credentials").resolve() == source_home / "credentials"
-        assert (dest / "oauth").resolve() == source_home / "oauth"
+        assert not (dest / "config.toml").exists()
+        assert not (dest / "credentials").exists()
+        assert not (dest / "oauth").exists()
         installed = json.loads((dest / "plugins" / "installed.json").read_text())
-        assert installed["plugins"][0]["id"] == "superpowers"
-        assert installed["plugins"][0]["root"] == str(superpowers)
-        assert installed["plugins"][0]["source"] == "local"
-        assert installed["plugins"][0]["enabled"] is True
+        plugin = installed["plugins"][0]
+        assert plugin["id"] == "superpowers"
+        assert Path(plugin["root"]).resolve() == superpowers.resolve()
+        assert plugin["source"] == "local-path"
+        assert plugin["enabled"] is True
+        assert runtime.env_file.exists()
 
     def test_kimi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
         with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
-            _seed_kimi_config(tmp_path / "cfg")
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run")
 
     def test_antigravity_seed_runs_auth_preflight_then_plugin_install(self, tmp_path, monkeypatch):
         sp = tmp_path / "superpowers"

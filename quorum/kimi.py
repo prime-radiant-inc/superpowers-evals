@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import shlex
 import stat
@@ -115,5 +116,56 @@ def write_effective_kimi_config(
     }
     path = kimi_home / "effective-kimi-model-config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
+def validate_superpowers_kimi_root(root: str | Path) -> Path:
+    resolved = Path(root).expanduser().resolve()
+    manifest_path = resolved / ".kimi-plugin" / "plugin.json"
+    required = [
+        manifest_path,
+        resolved / "skills" / "using-superpowers" / "SKILL.md",
+        resolved / "skills" / "brainstorming" / "SKILL.md",
+    ]
+    missing = [str(path.relative_to(resolved)) for path in required if not path.is_file()]
+    if missing:
+        raise KimiConfigError("SUPERPOWERS_ROOT missing Kimi files: " + ", ".join(missing))
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as e:
+        raise KimiConfigError(f"{manifest_path} is not valid JSON: {e}") from e
+    if manifest.get("name") != "superpowers":
+        raise KimiConfigError("Kimi manifest name must be superpowers")
+    if manifest.get("skills") != "./skills/":
+        raise KimiConfigError("Kimi manifest skills must be ./skills/")
+    session_start = manifest.get("sessionStart") or {}
+    if not isinstance(session_start, dict) or session_start.get("skill") != "using-superpowers":
+        raise KimiConfigError("Kimi manifest sessionStart.skill must be using-superpowers")
+    if not manifest.get("skillInstructions"):
+        raise KimiConfigError("Kimi manifest skillInstructions must be non-empty")
+    return resolved
+
+
+def install_kimi_superpowers_plugin(kimi_home: Path, superpowers_root: str | Path) -> Path:
+    root = validate_superpowers_kimi_root(superpowers_root)
+    plugins_dir = kimi_home / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    now = _dt.datetime.now(_dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    payload = {
+        "version": 1,
+        "plugins": [
+            {
+                "id": "superpowers",
+                "root": str(root),
+                "source": "local-path",
+                "enabled": True,
+                "installedAt": now,
+                "updatedAt": now,
+                "originalSource": str(root),
+            }
+        ],
+    }
+    path = plugins_dir / "installed.json"
     path.write_text(json.dumps(payload, indent=2) + "\n")
     return path

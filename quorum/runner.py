@@ -65,6 +65,14 @@ from quorum.composer import (
     compose,
 )
 from quorum.economics import build_run_economics
+from quorum.kimi import (
+    KimiConfigError,
+    build_kimi_subprocess_env,
+    effective_kimi_model_env,
+    install_kimi_superpowers_plugin,
+    write_effective_kimi_config,
+    write_kimi_runtime_env_file,
+)
 from quorum.opencode_capture import (
     OpenCodeCaptureError,
     export_opencode_sessions,
@@ -95,6 +103,13 @@ class RunnerError(RuntimeError):
     def __init__(self, message: str, *, stage: RunErrorStage = "unknown"):
         super().__init__(message)
         self.stage = stage
+
+
+@dataclasses.dataclass(frozen=True)
+class AgentRuntime:
+    env_file: Path | None = None
+    substitutions: dict[str, str] = dataclasses.field(default_factory=dict)
+    cleanup_dirs: tuple[Path, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -334,73 +349,49 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
         )
 
 
-def _symlink_kimi_home_entry(source_home: Path, dest_home: Path, name: str) -> None:
-    source = source_home / name
-    if not source.exists():
-        raise RunnerError(
-            f"~/.kimi-code/{name} not found; run `kimi /login` before Kimi evals",
-            stage="setup",
-        )
-    target = dest_home / name
-    if not target.exists():
-        target.symlink_to(source, target_is_directory=source.is_dir())
-
-
-def _seed_kimi_config(kimi_home: Path) -> None:
-    """Seed an isolated Kimi home with auth/config and local Superpowers plugin."""
+def _seed_kimi_config(kimi_home: Path, *, run_dir: Path) -> AgentRuntime:
+    """Seed an isolated Kimi home with env-overlay auth and local Superpowers plugin."""
     superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
         raise RunnerError(
             "SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin",
             stage="setup",
         )
-    if shutil.which("kimi") is None:
+    kimi_binary = shutil.which("kimi")
+    if kimi_binary is None:
         raise RunnerError(
             "kimi not found on PATH; cannot run Kimi evals",
             stage="setup",
         )
 
-    superpowers_path = Path(superpowers_root)
-    required = [
-        superpowers_path / ".kimi-plugin" / "plugin.json",
-        superpowers_path / "skills" / "using-superpowers" / "SKILL.md",
-    ]
-    missing = [str(p) for p in required if not p.exists()]
-    if missing:
-        raise RunnerError(
-            "SUPERPOWERS_ROOT does not look like a Kimi-capable Superpowers "
-            "checkout; missing: " + ", ".join(missing),
-            stage="setup",
-        )
+    try:
+        kimi_env = effective_kimi_model_env(os.environ)
+        install_kimi_superpowers_plugin(kimi_home, superpowers_root)
+    except KimiConfigError as e:
+        raise RunnerError(str(e), stage="setup") from e
 
-    source_home = Path.home() / ".kimi-code"
     kimi_home.mkdir(parents=True, exist_ok=True)
-    (kimi_home / "home").mkdir(parents=True, exist_ok=True)
-    _symlink_kimi_home_entry(source_home, kimi_home, "config.toml")
-    _symlink_kimi_home_entry(source_home, kimi_home, "credentials")
-    if (source_home / "oauth").exists():
-        target = kimi_home / "oauth"
-        if not target.exists():
-            target.symlink_to(source_home / "oauth", target_is_directory=True)
+    for child in ("home", "cache", "xdg-config", "xdg-cache", "xdg-data"):
+        (kimi_home / child).mkdir(parents=True, exist_ok=True)
 
-    plugins_dir = kimi_home / "plugins"
-    plugins_dir.mkdir(parents=True, exist_ok=True)
-    now = _dt.datetime.now(_dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    installed = {
-        "version": 1,
-        "plugins": [
-            {
-                "id": "superpowers",
-                "root": str(superpowers_path),
-                "source": "local",
-                "enabled": True,
-                "installedAt": now,
-                "updatedAt": now,
-                "originalSource": str(superpowers_path),
-            }
-        ],
-    }
-    (plugins_dir / "installed.json").write_text(json.dumps(installed, indent=2) + "\n")
+    runtime_env = build_kimi_subprocess_env(
+        base_env=os.environ,
+        kimi_home=kimi_home,
+        cwd=kimi_home,
+        kimi_model_env=kimi_env,
+    )
+    env_file = write_kimi_runtime_env_file(runtime_env, run_dir=run_dir)
+    write_effective_kimi_config(
+        kimi_home,
+        runtime_env,
+        kimi_binary=kimi_binary,
+        kimi_version=None,
+    )
+    return AgentRuntime(
+        env_file=env_file,
+        substitutions={"$KIMI_ENV_FILE": str(env_file)},
+        cleanup_dirs=(env_file.parent,),
+    )
 
 
 def _antigravity_transcripts(config_dir: Path) -> list[Path]:
@@ -883,7 +874,9 @@ def _seed_agent_config_dir(
     skeleton_root: Path,
     dest: Path,
     workdir: Path,
-) -> None:
+    *,
+    run_dir: Path,
+) -> AgentRuntime:
     """Allocate a fresh per-run agent-config dir.
 
     If skeleton_root/skeleton-<coding-agent>-home/ exists, copy it; otherwise
@@ -900,10 +893,10 @@ def _seed_agent_config_dir(
     plugin hook — the codex equivalent of the Superpowers access every
     claude run gets.
 
-    For kimi, _seed_kimi_config keeps sessions/plugins isolated while
-    symlinking the user's existing Kimi auth/config and registering the local
-    Superpowers checkout as the only enabled plugin.
+    For kimi, _seed_kimi_config keeps auth/model env and plugins isolated while
+    registering the local Superpowers checkout as the only enabled plugin.
     """
+    runtime = AgentRuntime()
     skeleton = skeleton_root / f"{coding_agent.name}-home-skeleton"
     seeded = skeleton.exists()
     if seeded:
@@ -924,7 +917,7 @@ def _seed_agent_config_dir(
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)
     if coding_agent.name == "kimi":
-        _seed_kimi_config(dest)
+        runtime = _seed_kimi_config(dest, run_dir=run_dir)
     if coding_agent.name == "antigravity":
         _seed_antigravity_config(dest, workdir)
     if coding_agent.name == "gemini":
@@ -933,6 +926,7 @@ def _seed_agent_config_dir(
         _seed_opencode_config(dest)
     if coding_agent.name == "pi":
         _seed_pi_config(dest)
+    return runtime
 
 
 def _exclude_antigravity_project_marker(launch_cwd: Path) -> None:
@@ -1270,6 +1264,7 @@ def _run_scenario_inner(
         skeleton_root=skeleton_root or (_quorum_repo_root() / "coding-agents"),
         dest=agent_config_dir,
         workdir=workdir,
+        run_dir=run_dir,
     )
     session_log_dir = tcfg.resolve_session_log_dir(agent_config_dir)
     env_extra = {"QUORUM_REPO_ROOT": str(_quorum_repo_root())}
