@@ -179,6 +179,28 @@ def test_skill_called_recognizes_antigravity_read_skill_md(tmp_path):
     )
 
 
+def test_skill_called_recognizes_gemini_activate_skill(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(
+        parent,
+        {"tool": "Skill", "args": {"skill": "superpowers:brainstorming"}},
+    )
+    sink = tmp_path / "s"
+    assert (
+        _run(
+            "skill-called",
+            "superpowers:brainstorming",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
 def test_skill_before_tool_recognizes_antigravity_read_skill_md(tmp_path):
     parent = tmp_path / "rundir"
     parent.mkdir()

@@ -399,6 +399,79 @@ class TestNormalizeGeminiLogs:
             {"tool": "Bash", "args": {"command": "git status"}, "source": "shell"},
         ]
 
+    def test_normalizes_realistic_json_and_jsonl_tool_calls(self):
+        messages = [
+            {"kind": "main"},
+            {
+                "type": "gemini",
+                "content": "Using a skill",
+                "toolCalls": [
+                    {
+                        "id": "skill-1",
+                        "name": "activate_skill",
+                        "args": {"skill": "superpowers:brainstorming"},
+                        "status": "success",
+                    },
+                    {
+                        "id": "ls-1",
+                        "name": "list_directory",
+                        "args": {"path": "src"},
+                        "status": "success",
+                    },
+                    {
+                        "id": "write-1",
+                        "name": "write_file",
+                        "args": {"file_path": "notes.md", "content": "x"},
+                        "status": "success",
+                    },
+                    {
+                        "id": "replace-1",
+                        "name": "replace",
+                        "args": {
+                            "file_path": "notes.md",
+                            "old_string": "x",
+                            "new_string": "y",
+                        },
+                        "status": "success",
+                    },
+                    {
+                        "id": "shell-1",
+                        "name": "run_shell_command",
+                        "args": {"command": "git status"},
+                        "status": "success",
+                    },
+                ],
+            },
+            {
+                "type": "gemini",
+                "content": "duplicate tool call id should be ignored",
+                "toolCalls": [
+                    {
+                        "id": "shell-1",
+                        "name": "run_shell_command",
+                        "args": {"command": "pwd"},
+                        "status": "success",
+                    }
+                ],
+            },
+        ]
+
+        json_rows = normalize_gemini_logs(json.dumps({"messages": messages}))
+        jsonl_rows = normalize_gemini_logs("\n".join(json.dumps(m) for m in messages))
+
+        for rows in (json_rows, jsonl_rows):
+            assert [row["tool"] for row in rows] == [
+                "Skill",
+                "Glob",
+                "Write",
+                "Edit",
+                "Bash",
+            ]
+            assert rows[0]["args"]["skill"] == "superpowers:brainstorming"
+            assert rows[0]["source"] == "native"
+            assert rows[-1]["args"]["command"] == "git status"
+            assert rows[-1]["source"] == "shell"
+
 
 class TestNormalizeAntigravityLogs:
     def test_normalizes_top_level_tool_calls_and_pascal_case_args(self):
