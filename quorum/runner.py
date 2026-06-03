@@ -1259,7 +1259,7 @@ def _run_scenario_inner(
     workdir = run_dir / "coding-agent-workdir"
     workdir.mkdir()
     agent_config_dir = run_dir / CODING_AGENT_CONFIG_SUBDIR
-    _seed_agent_config_dir(
+    _agent_runtime = _seed_agent_config_dir(
         tcfg,
         skeleton_root=skeleton_root or (_quorum_repo_root() / "coding-agents"),
         dest=agent_config_dir,

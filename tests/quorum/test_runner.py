@@ -1,4 +1,6 @@
 # tests/quorum/test_runner.py
+import ast
+import inspect
 import json
 import os
 import shutil
@@ -18,6 +20,7 @@ from quorum.runner import (
     _gemini_transcripts,
     _populate_context_dir,
     _run_antigravity_auth_preflight,
+    _run_scenario_inner,
     _seed_agent_config_dir,
     _seed_antigravity_config,
     _seed_gemini_config,
@@ -291,6 +294,22 @@ def _write_gemini_extension_metadata(cfg: Path) -> None:
     ).write_text("{}")
     (cfg / ".gemini" / "extensions" / "extension-enablement.json").write_text("{}")
     (cfg / ".gemini" / "extension_integrity.json").write_text("{}")
+
+
+def test_run_scenario_inner_retains_agent_runtime_handoff():
+    tree = ast.parse(inspect.getsource(_run_scenario_inner))
+    assigned_runtime_names = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_seed_agent_config_dir"
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+    assert assigned_runtime_names & {"agent_runtime", "_agent_runtime"}
 
 
 def _stub_gauntlet_pass(*, run_dir, **kwargs):
@@ -1159,6 +1178,7 @@ class TestSeedAgentConfigDir:
         assert Path(plugin["root"]).resolve() == superpowers.resolve()
         assert plugin["source"] == "local-path"
         assert plugin["enabled"] is True
+        assert runtime.env_file is not None
         assert runtime.env_file.exists()
 
     def test_kimi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
