@@ -312,3 +312,35 @@ def test_run_kimi_auth_preflight_requires_wire_log_under_matching_session_dir(mo
             kimi_model_env={"KIMI_MODEL_API_KEY": "fake", "KIMI_MODEL_NAME": "kimi"},
             base_env={"PATH": "/usr/bin:/bin"},
         )
+
+
+def test_run_kimi_auth_preflight_rejects_matching_session_dir_outside_kimi_home(
+    tmp_path, monkeypatch
+):
+    external_session = tmp_path / "external-session"
+
+    def fake_run(cmd, **kwargs):
+        kimi_home = Path(kwargs["env"]["KIMI_CODE_HOME"])
+        cwd = Path(kwargs["cwd"])
+        kimi_home.mkdir(parents=True)
+        external_main = external_session / "agents" / "main"
+        external_main.mkdir(parents=True)
+        (external_main / "wire.jsonl").write_text("{}\n")
+        (kimi_home / "session_index.jsonl").write_text(
+            json.dumps({"sessionDir": str(external_session), "workDir": str(cwd)}) + "\n"
+        )
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            json.dumps({"role": "assistant", "content": "OK"}) + "\n",
+            "",
+        )
+
+    monkeypatch.setattr("quorum.kimi.subprocess.run", fake_run)
+
+    with pytest.raises(KimiConfigError, match="sessionDir.*outside.*Kimi home/sessions"):
+        run_kimi_auth_preflight(
+            kimi_binary="kimi",
+            kimi_model_env={"KIMI_MODEL_API_KEY": "fake", "KIMI_MODEL_NAME": "kimi"},
+            base_env={"PATH": "/usr/bin:/bin"},
+        )

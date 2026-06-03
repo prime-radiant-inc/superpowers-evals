@@ -151,7 +151,9 @@ def run_kimi_auth_preflight(
         if not index_path.is_file():
             raise KimiConfigError("kimi auth preflight produced no session_index.jsonl")
         target = os.path.realpath(cwd)
+        sessions_root = (kimi_home / "sessions").resolve()
         matched_workdir = False
+        outside_session_dir = False
         matching_session_dirs: list[Path] = []
         with index_path.open() as f:
             for line in f:
@@ -166,10 +168,18 @@ def run_kimi_auth_preflight(
                         matched_workdir = True
                         session_dir = row.get("sessionDir")
                         if isinstance(session_dir, str) and session_dir:
-                            matching_session_dirs.append(Path(os.path.realpath(session_dir)))
+                            resolved_session_dir = Path(session_dir).resolve()
+                            if not resolved_session_dir.is_relative_to(sessions_root):
+                                outside_session_dir = True
+                                continue
+                            matching_session_dirs.append(resolved_session_dir)
         if not matched_workdir:
             raise KimiConfigError("kimi auth preflight session_index workDir did not match cwd")
         if not matching_session_dirs:
+            if outside_session_dir:
+                raise KimiConfigError(
+                    "kimi auth preflight sessionDir outside Kimi home/sessions"
+                )
             raise KimiConfigError("kimi auth preflight session_index matched no sessionDir")
         for session_dir in matching_session_dirs:
             if any(session_dir.glob("**/wire.jsonl")):
