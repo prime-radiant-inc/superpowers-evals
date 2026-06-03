@@ -85,6 +85,45 @@ def test_unpriced_coding_agent_yields_null_total_cost(tmp_path):
     assert econ["partial"] is True
 
 
+def test_mixed_unpriced_coding_models_keep_total_partial(tmp_path):
+    _gauntlet_result(tmp_path)
+    _coding_usage(
+        tmp_path,
+        total_input=2_000_000,
+        total_output=0,
+        total_tokens=2_000_000,
+        model="claude-opus-4-7",
+        est_cost_usd=5.0,
+        has_unpriced_model=True,
+        models={
+            "claude-opus-4-7": {
+                "total_input": 1_000_000,
+                "total_cache_create": 0,
+                "total_cache_read": 0,
+                "total_output": 0,
+                "total_tokens": 1_000_000,
+                "n_assistant_turns": 1,
+                "est_cost_usd": 5.0,
+            },
+            "kimi-for-coding": {
+                "total_input": 1_000_000,
+                "total_cache_create": 0,
+                "total_cache_read": 0,
+                "total_output": 0,
+                "total_tokens": 1_000_000,
+                "n_assistant_turns": 1,
+                "est_cost_usd": None,
+            },
+        },
+    )
+    econ = build_run_economics(tmp_path)
+    assert econ is not None
+    assert econ["coding_agent"]["est_cost_usd"] == 5.0
+    assert econ["coding_agent"]["has_unpriced_model"] is True
+    assert econ["total_est_cost_usd"] is None
+    assert econ["partial"] is True
+
+
 def test_no_sources_returns_none(tmp_path):
     assert build_run_economics(tmp_path) is None
 

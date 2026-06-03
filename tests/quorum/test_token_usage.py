@@ -174,6 +174,52 @@ class TestParseKimiWire:
         assert usage["n_assistant_turns"] == 0
         assert usage["usage_source"] == "session_fallback"
 
+    def test_malformed_usage_fields_contribute_zero(self, tmp_path: Path):
+        p = tmp_path / "wire.jsonl"
+        rows = [
+            "{not json",
+            json.dumps(
+                {
+                    "type": "usage.record",
+                    "usageScope": "turn",
+                    "model": "kimi-for-coding",
+                    "time": "1800000000000",
+                    "usage": {
+                        "inputOther": "not-a-number",
+                        "inputCacheRead": True,
+                        "inputCacheCreation": float("nan"),
+                        "output": "4",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "usage.record",
+                    "usageScope": "turn",
+                    "model": "kimi-for-coding",
+                    "time": float("inf"),
+                    "usage": None,
+                }
+            ),
+        ]
+        p.write_text("\n".join(rows) + "\n")
+
+        usage = parse_kimi_wire(p)
+        captured = capture_tokens(backend_family="kimi", session_log_files=[p])
+
+        assert usage is not None
+        assert usage["total_input"] == 0
+        assert usage["total_cache_read"] == 0
+        assert usage["total_cache_create"] == 0
+        assert usage["total_output"] == 4
+        assert usage["total_tokens"] == 4
+        assert usage["n_assistant_turns"] == 2
+        assert usage["first_ts"] == 1800000000000
+        assert usage["last_ts"] == 1800000000000
+        assert captured is not None
+        assert captured["total_tokens"] == 4
+        assert captured["est_cost_usd"] is None
+
 
 class TestCostEstimation:
     def test_claude_cost_uses_constants(self):

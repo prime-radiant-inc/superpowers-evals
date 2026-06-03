@@ -16,6 +16,7 @@ $5/$25 from the Opus-4.1 $15/$75; a stale constant once inflated cost ~3x).
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,12 +37,36 @@ def _track_numeric_ts(
     current_first: int | None, current_last: int | None, ts: Any
 ) -> tuple[int | None, int | None]:
     """Fold a numeric epoch-ish timestamp into running (first, last)."""
-    if not isinstance(ts, int | float):
+    value = _coerce_numeric_int(ts)
+    if value is None:
         return current_first, current_last
-    value = int(ts)
     first = value if current_first is None or value < current_first else current_first
     last = value if current_last is None or value > current_last else current_last
     return first, last
+
+
+def _coerce_numeric_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number)
+
+
+def _coerce_token_count(value: Any) -> int:
+    number = _coerce_numeric_int(value)
+    if number is None:
+        return 0
+    return max(number, 0)
 
 
 # Anthropic Claude Opus 4.5/4.6/4.7/4.8 list pricing per 1M tokens (USD).
@@ -351,7 +376,7 @@ def parse_kimi_wire(path: Path) -> dict[str, Any] | None:
         selected = [
             max(
                 session_rows,
-                key=lambda row: row["time"] if isinstance(row.get("time"), int | float) else 0,
+                key=lambda row: _coerce_numeric_int(row.get("time")) or -1,
             )
         ]
         usage_source = "session_fallback"
@@ -372,10 +397,10 @@ def parse_kimi_wire(path: Path) -> dict[str, Any] | None:
         raw_usage = row.get("usage")
         usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
         entry = {
-            "total_input": int(usage.get("inputOther", 0) or 0),
-            "total_cache_read": int(usage.get("inputCacheRead", 0) or 0),
-            "total_cache_create": int(usage.get("inputCacheCreation", 0) or 0),
-            "total_output": int(usage.get("output", 0) or 0),
+            "total_input": _coerce_token_count(usage.get("inputOther")),
+            "total_cache_read": _coerce_token_count(usage.get("inputCacheRead")),
+            "total_cache_create": _coerce_token_count(usage.get("inputCacheCreation")),
+            "total_output": _coerce_token_count(usage.get("output")),
         }
         bucket = by_model.setdefault(model_id, _empty_model_bucket())
         for key, value in entry.items():

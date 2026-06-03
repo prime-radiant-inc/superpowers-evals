@@ -79,6 +79,9 @@ def _coding_block(usage: dict) -> dict:
             "est_cost_usd": mt.get("est_cost_usd"),
         })
     models.sort(key=lambda m: m["est_cost_usd"] or 0, reverse=True)
+    has_unpriced_model = bool(usage.get("has_unpriced_model")) or any(
+        model["est_cost_usd"] is None for model in models
+    )
     return {
         "duration_ms": usage.get("duration_ms"),
         "model": usage.get("model"),
@@ -91,6 +94,7 @@ def _coding_block(usage: dict) -> dict:
             "total": usage.get("total_tokens", 0),
         },
         "est_cost_usd": usage.get("est_cost_usd"),
+        "has_unpriced_model": has_unpriced_model,
     }
 
 
@@ -113,10 +117,15 @@ def build_run_economics(run_dir: Path) -> dict | None:
 
     g_cost = gauntlet["est_cost_usd"] if gauntlet else None
     c_cost = coding["est_cost_usd"] if coding else None
-    total = round(g_cost + c_cost, 6) if (g_cost is not None and c_cost is not None) else None
+    coding_has_unpriced = bool(coding and coding.get("has_unpriced_model"))
+    total = (
+        round(g_cost + c_cost, 6)
+        if (g_cost is not None and c_cost is not None and not coding_has_unpriced)
+        else None
+    )
 
     partial = (gauntlet is None or coding is None
-               or g_cost is None or c_cost is None)
+               or g_cost is None or c_cost is None or coding_has_unpriced)
 
     return {
         "pricing_asof": PRICING_ASOF,
