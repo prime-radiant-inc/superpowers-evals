@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=kimi-plugin-installed
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+command -v jq >/dev/null || { echo "jq required"; exit 127; }
+
+if [ -z "${QUORUM_RUN_DIR:-}" ]; then
+    record_fail "QUORUM_RUN_DIR is not set"
+    exit 1
+fi
+
+KIMI_HOME_DIR="$QUORUM_RUN_DIR/coding-agent-config"
+INSTALLED="$KIMI_HOME_DIR/plugins/installed.json"
+
+test -f "$INSTALLED" || { record_fail "missing Kimi installed.json at $INSTALLED"; exit 1; }
+
+PLUGIN_ROOT=$(
+    jq -r '
+      .plugins[]
+      | select(.id == "superpowers" and .enabled == true and .source == "local")
+      | .root
+    ' "$INSTALLED" | head -1
+)
+
+if [ -z "$PLUGIN_ROOT" ] || [ "$PLUGIN_ROOT" = "null" ]; then
+    record_fail "local enabled Superpowers plugin missing from $INSTALLED"
+    exit 1
+fi
+
+missing=()
+for path in \
+    "$PLUGIN_ROOT/.kimi-plugin/plugin.json" \
+    "$PLUGIN_ROOT/skills/using-superpowers/SKILL.md"
+do
+    if [ ! -f "$path" ]; then
+        missing+=("${path#$PLUGIN_ROOT/}")
+    fi
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+    record_pass "Kimi Superpowers plugin configured from $PLUGIN_ROOT"
+else
+    detail=""
+    for rel in "${missing[@]}"; do
+        if [ -z "$detail" ]; then
+            detail="$rel"
+        else
+            detail="$detail, $rel"
+        fi
+    done
+    record_fail "missing Kimi Superpowers plugin files: $detail"
+    exit 1
+fi

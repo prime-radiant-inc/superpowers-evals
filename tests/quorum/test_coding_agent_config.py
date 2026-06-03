@@ -126,6 +126,21 @@ def test_pi_config_loads_when_env_set(monkeypatch, tmp_path):
     assert cfg.resolve_session_log_dir(tmp_path / "cfg") == tmp_path / "cfg" / "sessions"
 
 
+def test_kimi_config_loads_when_superpowers_root_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    cfg = load_coding_agent_config(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "kimi.yaml"
+    )
+
+    assert cfg.name == "kimi"
+    assert cfg.binary == "kimi"
+    assert cfg.agent_config_env == "KIMI_CODE_HOME"
+    assert cfg.normalizer == "kimi"
+    assert cfg.resolve_session_log_dir(tmp_path / "cfg") == (
+        tmp_path / "cfg" / "sessions"
+    )
+
+
 class TestLoadCodingAgentConfig:
     def test_minimal_valid(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")

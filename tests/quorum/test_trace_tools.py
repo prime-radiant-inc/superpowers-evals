@@ -563,6 +563,98 @@ def test_antigravity_plugin_installed_fails_when_skill_missing(tmp_path):
     assert "using-superpowers" in rec["detail"]
 
 
+def test_kimi_plugin_installed_passes(tmp_path):
+    run_dir = tmp_path / "run"
+    workdir = run_dir / "coding-agent-workdir"
+    workdir.mkdir(parents=True)
+    superpowers = tmp_path / "superpowers"
+    (superpowers / ".kimi-plugin").mkdir(parents=True)
+    (superpowers / "skills" / "using-superpowers").mkdir(parents=True)
+    (superpowers / ".kimi-plugin" / "plugin.json").write_text("{}")
+    (superpowers / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+    plugins_dir = run_dir / "coding-agent-config" / "plugins"
+    plugins_dir.mkdir(parents=True)
+    (plugins_dir / "installed.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "plugins": [
+                    {
+                        "id": "superpowers",
+                        "root": str(superpowers),
+                        "source": "local",
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    sink = tmp_path / "s"
+
+    result = subprocess.run(
+        [str(BIN / "kimi-plugin-installed")],
+        cwd=workdir,
+        env={
+            "PATH": f"{BIN}:/usr/bin:/bin",
+            "QUORUM_RECORD_SINK": str(sink),
+            "QUORUM_RUN_DIR": str(run_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert len(sink.read_text().splitlines()) == 1
+    assert _r(sink)["passed"]
+
+
+def test_kimi_plugin_installed_fails_when_skill_missing(tmp_path):
+    run_dir = tmp_path / "run"
+    workdir = run_dir / "coding-agent-workdir"
+    workdir.mkdir(parents=True)
+    superpowers = tmp_path / "superpowers"
+    (superpowers / ".kimi-plugin").mkdir(parents=True)
+    (superpowers / ".kimi-plugin" / "plugin.json").write_text("{}")
+    plugins_dir = run_dir / "coding-agent-config" / "plugins"
+    plugins_dir.mkdir(parents=True)
+    (plugins_dir / "installed.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "plugins": [
+                    {
+                        "id": "superpowers",
+                        "root": str(superpowers),
+                        "source": "local",
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    sink = tmp_path / "s"
+
+    result = subprocess.run(
+        [str(BIN / "kimi-plugin-installed")],
+        cwd=workdir,
+        env={
+            "PATH": f"{BIN}:/usr/bin:/bin",
+            "QUORUM_RECORD_SINK": str(sink),
+            "QUORUM_RUN_DIR": str(run_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert len(sink.read_text().splitlines()) == 1
+    rec = _r(sink)
+    assert not rec["passed"]
+    assert "using-superpowers" in rec["detail"]
+
+
 # worktree-created — semantic check that passes for either Claude
 # (native EnterWorktree tool) or Codex (shells out to `git worktree add`).
 # Replaces `tool-called EnterWorktree`, which was Claude-only and

@@ -169,6 +169,78 @@ class TestCaptureToolCalls:
         )
         assert dropped.path.read_text() == ""
 
+    def test_kimi_filter_uses_launch_cwd(self, tmp_path):
+        log_dir = tmp_path / "sessions"
+        match_dir = log_dir / "wd_target" / "session_match" / "agents" / "main"
+        other_dir = log_dir / "wd_other" / "session_other" / "agents" / "main"
+        match_dir.mkdir(parents=True)
+        other_dir.mkdir(parents=True)
+        snap = snapshot_dir(log_dir, "**/wire.jsonl")
+        launch_cwd = tmp_path / "launch-here"
+        launch_cwd.mkdir()
+        match = match_dir / "wire.jsonl"
+        other = other_dir / "wire.jsonl"
+        match.write_text(
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {
+                        "type": "tool.call",
+                        "name": "Read",
+                        "args": {"path": "README.md"},
+                    },
+                }
+            )
+            + "\n"
+        )
+        other.write_text(
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {
+                        "type": "tool.call",
+                        "name": "Bash",
+                        "args": {"command": "pwd"},
+                    },
+                }
+            )
+            + "\n"
+        )
+        (tmp_path / "session_index.jsonl").write_text(
+            json.dumps(
+                {
+                    "sessionId": "session_match",
+                    "sessionDir": str(match_dir.parent.parent),
+                    "workDir": str(launch_cwd),
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "sessionId": "session_other",
+                    "sessionDir": str(other_dir.parent.parent),
+                    "workDir": str(tmp_path / "elsewhere"),
+                }
+            )
+            + "\n"
+        )
+
+        matched = capture_tool_calls(
+            log_dir=log_dir,
+            log_glob="**/wire.jsonl",
+            snapshot=snap,
+            normalizer="kimi",
+            run_dir=_mkdir(tmp_path / "run-match"),
+            launch_cwd=launch_cwd,
+        )
+
+        rows = [
+            json.loads(x)
+            for x in matched.path.read_text().splitlines()
+            if x.strip()
+        ]
+        assert [r["tool"] for r in rows] == ["Read"]
+
     def test_empty_capture_writes_empty_file(self, tmp_path):
         # File must always exist so assertions can rely on its presence.
         log_dir = tmp_path / "logs"

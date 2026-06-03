@@ -334,6 +334,75 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
         )
 
 
+def _symlink_kimi_home_entry(source_home: Path, dest_home: Path, name: str) -> None:
+    source = source_home / name
+    if not source.exists():
+        raise RunnerError(
+            f"~/.kimi-code/{name} not found; run `kimi /login` before Kimi evals",
+            stage="setup",
+        )
+    target = dest_home / name
+    if not target.exists():
+        target.symlink_to(source, target_is_directory=source.is_dir())
+
+
+def _seed_kimi_config(kimi_home: Path) -> None:
+    """Seed an isolated Kimi home with auth/config and local Superpowers plugin."""
+    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    if not superpowers_root:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin",
+            stage="setup",
+        )
+    if shutil.which("kimi") is None:
+        raise RunnerError(
+            "kimi not found on PATH; cannot run Kimi evals",
+            stage="setup",
+        )
+
+    superpowers_path = Path(superpowers_root)
+    required = [
+        superpowers_path / ".kimi-plugin" / "plugin.json",
+        superpowers_path / "skills" / "using-superpowers" / "SKILL.md",
+    ]
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT does not look like a Kimi-capable Superpowers "
+            "checkout; missing: " + ", ".join(missing),
+            stage="setup",
+        )
+
+    source_home = Path.home() / ".kimi-code"
+    kimi_home.mkdir(parents=True, exist_ok=True)
+    (kimi_home / "home").mkdir(parents=True, exist_ok=True)
+    _symlink_kimi_home_entry(source_home, kimi_home, "config.toml")
+    _symlink_kimi_home_entry(source_home, kimi_home, "credentials")
+    if (source_home / "oauth").exists():
+        target = kimi_home / "oauth"
+        if not target.exists():
+            target.symlink_to(source_home / "oauth", target_is_directory=True)
+
+    plugins_dir = kimi_home / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    now = _dt.datetime.now(_dt.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    installed = {
+        "version": 1,
+        "plugins": [
+            {
+                "id": "superpowers",
+                "root": str(superpowers_path),
+                "source": "local",
+                "enabled": True,
+                "installedAt": now,
+                "updatedAt": now,
+                "originalSource": str(superpowers_path),
+            }
+        ],
+    }
+    (plugins_dir / "installed.json").write_text(json.dumps(installed, indent=2) + "\n")
+
+
 def _antigravity_transcripts(config_dir: Path) -> list[Path]:
     brain = config_dir / ".gemini" / "antigravity-cli" / "brain"
     if not brain.exists():
@@ -830,6 +899,10 @@ def _seed_agent_config_dir(
     picker, then _seed_codex_plugin_hooks stages Superpowers as a trusted
     plugin hook — the codex equivalent of the Superpowers access every
     claude run gets.
+
+    For kimi, _seed_kimi_config keeps sessions/plugins isolated while
+    symlinking the user's existing Kimi auth/config and registering the local
+    Superpowers checkout as the only enabled plugin.
     """
     skeleton = skeleton_root / f"{coding_agent.name}-home-skeleton"
     seeded = skeleton.exists()
@@ -850,6 +923,8 @@ def _seed_agent_config_dir(
     if coding_agent.name == "codex":
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)
+    if coding_agent.name == "kimi":
+        _seed_kimi_config(dest)
     if coding_agent.name == "antigravity":
         _seed_antigravity_config(dest, workdir)
     if coding_agent.name == "gemini":

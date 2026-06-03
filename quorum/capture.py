@@ -9,6 +9,7 @@ from pathlib import Path
 from quorum.normalizers import (
     NORMALIZERS,
     filter_codex_logs_by_cwd,
+    filter_kimi_logs_by_cwd,
     filter_pi_logs_by_cwd,
     find_misplaced_codex_rollouts,
     find_misplaced_pi_sessions,
@@ -44,16 +45,18 @@ def _new_session_logs(
     normalizer: str,
     launch_cwd: Path | None,
 ) -> list[Path]:
-    """New session-log files since `snapshot`, cwd-filtered for codex/pi.
+    """New session-log files since `snapshot`, cwd-filtered for shared-log agents.
 
-    codex and pi share one session-log tree across runs, so their new-file
-    diff is narrowed to rollouts whose recorded session cwd matches the
+    codex, kimi, and pi share one session-log tree across runs, so their new-file
+    diff is narrowed to logs whose recorded session cwd matches the
     launch cwd. This must be the launch cwd, not the scenario workdir — a
     scenario may point the agent at a subdir via .quorum-launch-cwd.
     """
     new = new_files_since(log_dir, log_glob, snapshot)
     if normalizer == "codex" and launch_cwd is not None:
         new = filter_codex_logs_by_cwd(new, str(launch_cwd))
+    elif normalizer == "kimi" and launch_cwd is not None:
+        new = filter_kimi_logs_by_cwd(new, str(launch_cwd))
     elif normalizer == "pi" and launch_cwd is not None:
         new = filter_pi_logs_by_cwd(new, str(launch_cwd))
     return new
@@ -145,7 +148,7 @@ def capture_token_usage(
     cost scenario reads it from an ordinary deterministic assertion (see
     docs/migration-notes.md, the cost / measurement decision). Returns the
     written path, or None when usage can't be captured — a backend
-    token_usage.py does not parse (gemini, pi), or no new session logs were
+    token_usage.py does not parse (gemini, kimi, pi), or no new session logs were
     produced — in which case no file is written.
     """
     new = _new_session_logs(log_dir, log_glob, snapshot, normalizer, launch_cwd)

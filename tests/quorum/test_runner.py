@@ -21,6 +21,7 @@ from quorum.runner import (
     _seed_agent_config_dir,
     _seed_antigravity_config,
     _seed_gemini_config,
+    _seed_kimi_config,
     _write_antigravity_settings,
     _write_gemini_env_file,
     _write_gemini_settings,
@@ -236,6 +237,20 @@ def _make_superpowers_pi_root(path: Path) -> Path:
         "# Pi tools\n"
     )
     return root
+
+
+def _kimi_tcfg() -> CodingAgentConfig:
+    return CodingAgentConfig(
+        name="kimi",
+        binary="kimi",
+        agent_config_env="KIMI_CODE_HOME",
+        session_log_dir="${KIMI_CODE_HOME}/sessions",
+        session_log_glob="**/wire.jsonl",
+        normalizer="kimi",
+        required_env=(),
+        max_time=None,
+        project_prompt=None,
+    )
 
 
 def _make_scenario(
@@ -470,6 +485,62 @@ def test_gemini_launch_agent_handles_shell_sensitive_paths(tmp_path):
         "key": "launch key",
         "trust": "true",
     }
+
+
+def test_kimi_launch_agent_is_interactive_and_substituted(tmp_path):
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "kimi.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "kimi",
+                "binary": "kimi",
+                "agent_config_env": "KIMI_CODE_HOME",
+                "session_log_dir": "${KIMI_CODE_HOME}/sessions",
+                "session_log_glob": "**/wire.jsonl",
+                "normalizer": "kimi",
+                "required_env": [],
+            }
+        )
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    cd_kimi = coding_agents_dir / "kimi-context"
+    cd_kimi.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2]
+        / "coding-agents"
+        / "kimi-context"
+        / "launch-agent",
+        cd_kimi / "launch-agent",
+    )
+    out_root = tmp_path / "results"
+
+    with (
+        patch("quorum.runner._seed_kimi_config"),
+        patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+    ):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="kimi",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+    rd = list(out_root.iterdir())[0]
+    shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+    assert shim.exists()
+    assert shim.stat().st_mode & stat.S_IXUSR
+    content = shim.read_text()
+    assert "$QUORUM_AGENT_CWD" not in content
+    assert "$KIMI_CODE_HOME" not in content
+    assert "KIMI_CODE_HOME=" in content
+    assert "HOME=" in content
+    assert "/home" in content
+    assert "kimi" in content
+    assert "--yolo" in content
+    assert "--auto" not in content
 
 
 def test_antigravity_launch_uses_visible_alias_for_hidden_cwd(tmp_path, monkeypatch):
@@ -977,6 +1048,49 @@ class TestSeedAgentConfigDir:
             ),
         ):
             _seed_gemini_config(cfg, tmp_path / "wd")
+
+    def test_kimi_target_seeds_config(self, tmp_path):
+        dest = tmp_path / "agent-config"
+        with patch("quorum.runner._seed_kimi_config") as mock_seed:
+            _seed_agent_config_dir(_kimi_tcfg(), tmp_path, dest, tmp_path / "wd")
+        mock_seed.assert_called_once_with(dest)
+
+    def test_kimi_seed_links_auth_and_installs_local_superpowers(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        source_home = home / ".kimi-code"
+        (source_home / "credentials").mkdir(parents=True)
+        (source_home / "oauth").mkdir()
+        (source_home / "config.toml").write_text('default_model = "kimi-code/kimi-for-coding"\n')
+        (source_home / "credentials" / "kimi-code.json").write_text("{}")
+        (source_home / "oauth" / "kimi-code").write_text("{}")
+        superpowers = tmp_path / "superpowers"
+        (superpowers / ".kimi-plugin").mkdir(parents=True)
+        (superpowers / ".kimi-plugin" / "plugin.json").write_text('{"name":"superpowers"}\n')
+        (superpowers / "skills" / "using-superpowers").mkdir(parents=True)
+        (superpowers / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+        dest = tmp_path / "agent-config"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
+
+        _seed_kimi_config(dest)
+
+        assert (dest / "home").is_dir()
+        assert (dest / "config.toml").resolve() == source_home / "config.toml"
+        assert (dest / "credentials").resolve() == source_home / "credentials"
+        assert (dest / "oauth").resolve() == source_home / "oauth"
+        installed = json.loads((dest / "plugins" / "installed.json").read_text())
+        assert installed["plugins"][0]["id"] == "superpowers"
+        assert installed["plugins"][0]["root"] == str(superpowers)
+        assert installed["plugins"][0]["source"] == "local"
+        assert installed["plugins"][0]["enabled"] is True
+
+    def test_kimi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
+            _seed_kimi_config(tmp_path / "cfg")
 
     def test_antigravity_seed_runs_auth_preflight_then_plugin_install(self, tmp_path, monkeypatch):
         sp = tmp_path / "superpowers"

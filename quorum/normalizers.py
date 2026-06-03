@@ -171,6 +171,62 @@ def find_unusable_pi_sessions(paths: list[Path]) -> list[Path]:
     return [path for path in paths if _pi_session_header_cwd(path) is None]
 
 
+def _kimi_home_for_log(path: Path) -> Path | None:
+    for parent in path.parents:
+        if parent.name == "sessions":
+            return parent.parent
+    return None
+
+
+def filter_kimi_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
+    """Drop Kimi wire logs whose session_index workDir doesn't match target_cwd."""
+    target = os.path.realpath(target_cwd)
+    matched: list[Path] = []
+    index_cache: dict[Path, list[dict[str, str]]] = {}
+
+    for path in paths:
+        kimi_home = _kimi_home_for_log(path)
+        if kimi_home is None:
+            continue
+        if kimi_home not in index_cache:
+            entries: list[dict[str, str]] = []
+            index_path = kimi_home / "session_index.jsonl"
+            try:
+                with index_path.open() as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(entry, dict):
+                            entries.append(
+                                {
+                                    "sessionDir": str(entry.get("sessionDir", "")),
+                                    "workDir": str(entry.get("workDir", "")),
+                                }
+                            )
+            except OSError:
+                entries = []
+            index_cache[kimi_home] = entries
+
+        path_real = os.path.realpath(path)
+        for entry in index_cache[kimi_home]:
+            session_dir = entry.get("sessionDir", "")
+            work_dir = entry.get("workDir", "")
+            if not session_dir or not work_dir:
+                continue
+            session_real = os.path.realpath(session_dir)
+            inside_session = (
+                path_real == session_real or path_real.startswith(session_real + os.sep)
+            )
+            if inside_session and os.path.realpath(work_dir) == target:
+                matched.append(path)
+                break
+    return matched
+
+
 def normalize_claude_logs(raw_content: str) -> list[dict[str, Any]]:
     """Normalize Claude Code session logs.
 
@@ -322,6 +378,53 @@ def normalize_pi_logs(raw_content: str) -> list[dict[str, Any]]:
             results.append(
                 {"tool": canonical, "args": block.get("arguments", {}), "source": source}
             )
+    return results
+
+
+KIMI_NATIVE_TOOLS = NATIVE_TOOLS | {
+    "AskUserQuestion",
+    "BashOutput",
+    "FetchURL",
+    "TaskOutput",
+    "TaskStop",
+    "TodoList",
+    "WebSearch",
+}
+
+
+def normalize_kimi_logs(raw_content: str) -> list[dict[str, Any]]:
+    """Normalize Kimi Code wire.jsonl tool calls.
+
+    Kimi records tool invocations as context loop events:
+    {"type":"context.append_loop_event",
+     "event":{"type":"tool.call","name":"Read","args":{...}}}
+    """
+    results: list[dict[str, Any]] = []
+    for line in raw_content.strip().split("\n"):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") != "context.append_loop_event":
+            continue
+        event = entry.get("event", {})
+        if not isinstance(event, dict) or event.get("type") != "tool.call":
+            continue
+        name = event.get("name", "")
+        if not isinstance(name, str) or not name:
+            continue
+        raw_args = event.get("args", {})
+        args = dict(raw_args) if isinstance(raw_args, dict) else {"raw_args": raw_args}
+        if name == "Skill":
+            skill = args.get("skill")
+            if isinstance(skill, str) and skill and ":" not in skill:
+                args["skill"] = f"superpowers:{skill}"
+        source = "native" if name in KIMI_NATIVE_TOOLS else "shell"
+        results.append({"tool": name, "args": args, "source": source})
     return results
 
 
@@ -676,6 +779,7 @@ NORMALIZERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "claude": normalize_claude_logs,
     "codex": normalize_codex_logs,
     "gemini": normalize_gemini_logs,
+    "kimi": normalize_kimi_logs,
     "opencode": normalize_opencode_logs,
     "pi": normalize_pi_logs,
 }

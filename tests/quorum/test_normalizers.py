@@ -4,6 +4,7 @@ import os
 from quorum.normalizers import (
     collect_new_logs,
     filter_codex_logs_by_cwd,
+    filter_kimi_logs_by_cwd,
     filter_pi_logs_by_cwd,
     find_misplaced_codex_rollouts,
     find_misplaced_pi_sessions,
@@ -12,6 +13,7 @@ from quorum.normalizers import (
     normalize_claude_logs,
     normalize_codex_logs,
     normalize_gemini_logs,
+    normalize_kimi_logs,
     normalize_opencode_logs,
     normalize_pi_logs,
     snapshot_log_dir,
@@ -759,6 +761,114 @@ class TestNormalizeOpenCodeLogs:
             normalize_opencode_logs(json.dumps({"messages": [{"parts": [{"type": "text"}]}]}))
             == []
         )
+
+
+class TestNormalizeKimiLogs:
+    def test_filter_by_cwd_uses_session_index_entries(self, tmp_path):
+        target = "/tmp/kimi-target"
+        match_dir = tmp_path / "sessions" / "wd_target" / "session_match"
+        other_dir = tmp_path / "sessions" / "wd_other" / "session_other"
+        match_dir.mkdir(parents=True)
+        other_dir.mkdir(parents=True)
+        match = match_dir / "wire.jsonl"
+        other = other_dir / "wire.jsonl"
+        match.write_text("{}\n")
+        other.write_text("{}\n")
+        index = tmp_path / "session_index.jsonl"
+        index.write_text(
+            json.dumps(
+                {
+                    "sessionId": "session_match",
+                    "sessionDir": str(match_dir),
+                    "workDir": target,
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "sessionId": "session_other",
+                    "sessionDir": str(other_dir),
+                    "workDir": "/tmp/elsewhere",
+                }
+            )
+            + "\n"
+        )
+
+        assert filter_kimi_logs_by_cwd([match, other], target) == [match]
+
+    def test_normalizes_wire_tool_calls_and_native_source(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {
+                        "type": "tool.call",
+                        "name": "Read",
+                        "args": {"path": "sample.txt"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {
+                        "type": "tool.call",
+                        "name": "Bash",
+                        "args": {"command": "git status"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {
+                        "type": "tool.call",
+                        "name": "FetchURL",
+                        "args": {"url": "https://example.test"},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "context.append_loop_event",
+                    "event": {"type": "tool.result", "toolCallId": "tool_1"},
+                }
+            ),
+        ]
+
+        rows = normalize_kimi_logs("\n".join(lines))
+
+        assert rows == [
+            {"tool": "Read", "args": {"path": "sample.txt"}, "source": "native"},
+            {"tool": "Bash", "args": {"command": "git status"}, "source": "shell"},
+            {
+                "tool": "FetchURL",
+                "args": {"url": "https://example.test"},
+                "source": "native",
+            },
+        ]
+
+    def test_canonicalizes_short_superpowers_skill_names(self):
+        raw = json.dumps(
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "tool.call",
+                    "name": "Skill",
+                    "args": {"skill": "brainstorming"},
+                },
+            }
+        )
+
+        rows = normalize_kimi_logs(raw)
+
+        assert rows == [
+            {
+                "tool": "Skill",
+                "args": {"skill": "superpowers:brainstorming"},
+                "source": "native",
+            }
+        ]
 
 
 class TestNormalizeAntigravityLogs:

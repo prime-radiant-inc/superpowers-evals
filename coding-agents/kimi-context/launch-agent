@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for Kimi Code (the agent under test).
+#
+# The cd, KIMI_CODE_HOME, and permission flags are baked in here so the QA
+# agent starts Kimi from the prepared workdir with one command. quorum
+# substitutes the $... values below at runtime; the installed copy contains
+# literal absolute paths.
+#
+# Equivalent manual command (for debugging):
+#   cd "$QUORUM_AGENT_CWD" && KIMI_CODE_HOME="$KIMI_CODE_HOME" HOME="$KIMI_CODE_HOME/home" kimi --yolo
+set -euo pipefail
+cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+exec env KIMI_CODE_HOME="$KIMI_CODE_HOME" HOME="$KIMI_CODE_HOME/home" kimi --yolo "$@"
