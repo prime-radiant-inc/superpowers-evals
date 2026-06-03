@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from quorum.normalizers import (
     NORMALIZERS,
@@ -23,6 +25,13 @@ class CaptureResult:
     path: Path
     source_logs: tuple[Path, ...]
     row_count: int
+
+
+@dataclass(frozen=True)
+class KimiUnmatchedLogsDiagnostic:
+    paths: tuple[Path, ...]
+    reason: Literal["wrong-cwd", "unmapped"]
+    stage: Literal["capture", "qa-agent-misconfigured"]
 
 
 def snapshot_dir(log_dir: Path, glob: str) -> set[str]:
@@ -132,6 +141,90 @@ def detect_unusable_pi_sessions(
     return find_unusable_pi_sessions(new)
 
 
+def _kimi_home_for_log(path: Path) -> Path | None:
+    for parent in path.parents:
+        if parent.name == "sessions":
+            return parent.parent
+    return None
+
+
+def _read_kimi_session_index(kimi_home: Path) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    try:
+        with (kimi_home / "session_index.jsonl").open() as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(
+                        {
+                            "sessionDir": str(entry.get("sessionDir", "")),
+                            "workDir": str(entry.get("workDir", "")),
+                        }
+                    )
+    except OSError:
+        return []
+    return entries
+
+
+def _indexed_wrong_cwd_kimi_logs(paths: list[Path], launch_cwd: Path) -> list[Path]:
+    target = os.path.realpath(launch_cwd)
+    mismatched: list[Path] = []
+    index_cache: dict[Path, list[dict[str, str]]] = {}
+    for path in paths:
+        kimi_home = _kimi_home_for_log(path)
+        if kimi_home is None:
+            continue
+        if kimi_home not in index_cache:
+            index_cache[kimi_home] = _read_kimi_session_index(kimi_home)
+
+        path_real = os.path.realpath(path)
+        for entry in index_cache[kimi_home]:
+            session_dir = entry.get("sessionDir", "")
+            work_dir = entry.get("workDir", "")
+            if not session_dir or not work_dir:
+                continue
+            session_real = os.path.realpath(session_dir)
+            inside_session = path_real == session_real or path_real.startswith(
+                session_real + os.sep
+            )
+            if inside_session and os.path.realpath(work_dir) != target:
+                mismatched.append(path)
+                break
+    return mismatched
+
+
+def diagnose_kimi_unmatched_logs(
+    *,
+    log_dir: Path,
+    log_glob: str,
+    snapshot: set[str],
+    launch_cwd: Path,
+) -> KimiUnmatchedLogsDiagnostic | None:
+    new = new_files_since(log_dir, log_glob, snapshot)
+    if not new:
+        return None
+    matched = filter_kimi_logs_by_cwd(new, str(launch_cwd))
+    if matched:
+        return None
+    mismatched = _indexed_wrong_cwd_kimi_logs(new, launch_cwd)
+    if mismatched:
+        return KimiUnmatchedLogsDiagnostic(
+            paths=tuple(mismatched),
+            reason="wrong-cwd",
+            stage="qa-agent-misconfigured",
+        )
+    return KimiUnmatchedLogsDiagnostic(
+        paths=tuple(new),
+        reason="unmapped",
+        stage="capture",
+    )
+
+
 def detect_kimi_cwd_mismatch(
     *,
     log_dir: Path,
@@ -139,13 +232,15 @@ def detect_kimi_cwd_mismatch(
     snapshot: set[str],
     launch_cwd: Path,
 ) -> list[Path]:
-    new = new_files_since(log_dir, log_glob, snapshot)
-    if not new:
+    diagnostic = diagnose_kimi_unmatched_logs(
+        log_dir=log_dir,
+        log_glob=log_glob,
+        snapshot=snapshot,
+        launch_cwd=launch_cwd,
+    )
+    if diagnostic is None or diagnostic.reason != "wrong-cwd":
         return []
-    matched = filter_kimi_logs_by_cwd(new, str(launch_cwd))
-    if matched:
-        return []
-    return new
+    return list(diagnostic.paths)
 
 
 def capture_token_usage(

@@ -2283,6 +2283,152 @@ class TestRunScenario:
         assert verdict.error.stage == "capture"
         assert "no Kimi wire.jsonl" in verdict.error.message
 
+    def test_kimi_wrong_cwd_index_is_qa_agent_misconfigured(self, tmp_path):
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "kimi-home" / "sessions"
+        session_log_dir.mkdir(parents=True)
+        _make_kimi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        def fake_gauntlet(**kwargs):
+            session_dir = session_log_dir / "wd" / "session"
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (wire_dir / "wire.jsonl").write_text(
+                json.dumps(
+                    {
+                        "type": "context.append_loop_event",
+                        "event": {
+                            "type": "tool.call",
+                            "name": "Read",
+                            "args": {"path": "README.md"},
+                        },
+                    }
+                )
+                + "\n"
+            )
+            (session_log_dir.parent / "session_index.jsonl").write_text(
+                json.dumps(
+                    {"sessionDir": str(session_dir), "workDir": str(session_log_dir / "wrong")}
+                )
+                + "\n"
+            )
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_kimi_config", return_value=AgentRuntime()),
+            patch("quorum.runner.invoke_gauntlet", side_effect=fake_gauntlet),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="kimi",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "qa-agent-misconfigured"
+        assert "did not match launch cwd" in verdict.error.message
+
+    def test_kimi_unindexed_wire_logs_are_capture_indeterminate(self, tmp_path):
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "kimi-home" / "sessions"
+        session_log_dir.mkdir(parents=True)
+        _make_kimi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        def fake_gauntlet(**kwargs):
+            session_dir = session_log_dir / "wd" / "session"
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (wire_dir / "wire.jsonl").write_text(
+                json.dumps(
+                    {
+                        "type": "context.append_loop_event",
+                        "event": {
+                            "type": "tool.call",
+                            "name": "Read",
+                            "args": {"path": "README.md"},
+                        },
+                    }
+                )
+                + "\n"
+            )
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_kimi_config", return_value=AgentRuntime()),
+            patch("quorum.runner.invoke_gauntlet", side_effect=fake_gauntlet),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="kimi",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+        assert "not indexed/mappable" in verdict.error.message
+
+    def test_kimi_matched_wire_with_zero_normalized_rows_is_capture_indeterminate(
+        self, tmp_path
+    ):
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "kimi-home" / "sessions"
+        session_log_dir.mkdir(parents=True)
+        _make_kimi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        def fake_gauntlet(*, launch_cwd, **kwargs):
+            session_dir = session_log_dir / "wd" / "session"
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (wire_dir / "wire.jsonl").write_text(
+                json.dumps(
+                    {
+                        "type": "context.append_loop_event",
+                        "event": {
+                            "type": "plugin_session_start",
+                            "plugin": "superpowers",
+                            "skill": "using-superpowers",
+                        },
+                    }
+                )
+                + "\n"
+            )
+            (session_log_dir.parent / "session_index.jsonl").write_text(
+                json.dumps({"sessionDir": str(session_dir), "workDir": str(launch_cwd)}) + "\n"
+            )
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_kimi_config", return_value=AgentRuntime()),
+            patch("quorum.runner.invoke_gauntlet", side_effect=fake_gauntlet),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="kimi",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+        assert "zero rows" in verdict.error.message
+
     def test_kimi_missing_plugin_session_start_is_indeterminate(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"

@@ -261,6 +261,24 @@ class TestCaptureToolCalls:
             launch_cwd=tmp_path / "expected",
         ) == [wire]
 
+    def test_detect_kimi_cwd_mismatch_ignores_unindexed_logs(self, tmp_path):
+        log_dir = tmp_path / "sessions"
+        session_dir = log_dir / "wd_other" / "session_other"
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True)
+        snap = snapshot_dir(log_dir, "**/wire.jsonl")
+        wire_dir.joinpath("wire.jsonl").write_text("{}\n")
+
+        assert (
+            detect_kimi_cwd_mismatch(
+                log_dir=log_dir,
+                log_glob="**/wire.jsonl",
+                snapshot=snap,
+                launch_cwd=tmp_path / "expected",
+            )
+            == []
+        )
+
     def test_empty_capture_writes_empty_file(self, tmp_path):
         # File must always exist so assertions can rely on its presence.
         log_dir = tmp_path / "logs"
