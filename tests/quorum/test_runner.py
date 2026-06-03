@@ -680,6 +680,30 @@ class TestSeedAgentConfigDir:
         assert "extensions link failed" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
 
+    def test_gemini_seed_redacts_api_key_before_truncating_link_failure(
+        self, tmp_path, monkeypatch
+    ):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        api_key = "sk-" + ("secret" * 80)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setenv("GEMINI_API_KEY", api_key)
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+
+        with (
+            patch(
+                "quorum.runner.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    ["gemini", "extensions", "link"], 1, "", f"bad {api_key}"
+                ),
+            ),
+            pytest.raises(RunnerError) as excinfo,
+        ):
+            _seed_gemini_config(tmp_path / "cfg", tmp_path / "wd")
+
+        message = str(excinfo.value)
+        assert "[redacted]" in message
+        assert api_key[:300] not in message
+
     def test_gemini_seed_redacts_api_key_from_list_failure(
         self, tmp_path, monkeypatch
     ):

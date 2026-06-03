@@ -195,10 +195,10 @@ def _shell_single_quote(value: str) -> str:
 
 def _gemini_stderr_excerpt(stderr: str) -> str:
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    excerpt = stderr.strip()[:300]
+    excerpt = stderr.strip()
     if api_key:
         excerpt = excerpt.replace(api_key, "[redacted]")
-    return excerpt
+    return excerpt[:300]
 
 
 def _gemini_extension_list_shows_superpowers(stdout: str) -> bool:
