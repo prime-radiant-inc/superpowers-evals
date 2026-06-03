@@ -172,6 +172,20 @@ def _opencode_tcfg() -> CodingAgentConfig:
     )
 
 
+def _pi_tcfg() -> CodingAgentConfig:
+    return CodingAgentConfig(
+        name="pi",
+        binary="pi",
+        agent_config_env="PI_CODING_AGENT_DIR",
+        session_log_dir="${PI_CODING_AGENT_DIR}/sessions",
+        session_log_glob="*.jsonl",
+        normalizer="pi",
+        required_env=("SUPERPOWERS_ROOT", "PI_PROVIDER", "PI_MODEL", "PI_API_KEY"),
+        max_time="10m",
+        project_prompt=None,
+    )
+
+
 def _make_superpowers_opencode_root(tmp_path: Path) -> Path:
     sp = tmp_path / "superpowers"
     plugin_src = sp / ".opencode" / "plugins" / "superpowers.js"
@@ -182,6 +196,25 @@ def _make_superpowers_opencode_root(tmp_path: Path) -> Path:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(f"# {skill_name}")
     return sp
+
+
+def _make_superpowers_pi_root(path: Path) -> Path:
+    root = path / "superpowers"
+    (root / ".pi" / "extensions").mkdir(parents=True)
+    (root / "skills" / "using-superpowers" / "references").mkdir(parents=True)
+    (root / "package.json").write_text(
+        '{"pi":{"extensions":["./.pi/extensions/superpowers.ts"],"skills":["./skills"]}}'
+    )
+    (root / ".pi" / "extensions" / "superpowers.ts").write_text(
+        "export default function extension() {}"
+    )
+    (root / "skills" / "using-superpowers" / "SKILL.md").write_text(
+        "---\nname: using-superpowers\n---\n"
+    )
+    (root / "skills" / "using-superpowers" / "references" / "pi-tools.md").write_text(
+        "# Pi tools\n"
+    )
+    return root
 
 
 def _make_scenario(
@@ -607,6 +640,79 @@ class TestSeedAgentConfigDir:
         with patch("quorum.runner._seed_antigravity_config") as mock_seed:
             _seed_agent_config_dir(_antigravity_tcfg(), tmp_path, dest, tmp_path / "wd")
         mock_seed.assert_called_once_with(dest, tmp_path / "wd")
+
+    def test_pi_target_seeds_run_local_auth_files(self, tmp_path, monkeypatch):
+        superpowers = _make_superpowers_pi_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setenv("PI_PROVIDER", "azure-openai-responses")
+        monkeypatch.setenv("PI_MODEL", "gpt-5.4")
+        monkeypatch.setenv("PI_API_KEY", "secret-pi-key")
+        monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "https://example.openai.azure.com")
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name: "/usr/bin/pi" if name == "pi" else None,
+        )
+
+        dest = tmp_path / "cfg"
+        _seed_agent_config_dir(_pi_tcfg(), tmp_path, dest, tmp_path / "wd")
+
+        auth_path = dest / "auth.json"
+        auth = json.loads(auth_path.read_text())
+        assert auth == {
+            "azure-openai-responses": {"type": "api_key", "key": "$PI_API_KEY"}
+        }
+        assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
+        assert "secret-pi-key" not in auth_path.read_text()
+
+        settings = json.loads((dest / "settings.json").read_text())
+        assert settings["defaultProvider"] == "azure-openai-responses"
+        assert settings["defaultModel"] == "gpt-5.4"
+
+        env_path = dest / "pi.env"
+        env_text = env_path.read_text()
+        assert "secret-pi-key" in env_text
+        assert "AZURE_OPENAI_BASE_URL=https://example.openai.azure.com" in env_text
+        assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+        assert (dest / "sessions").is_dir()
+
+    def test_pi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        monkeypatch.setenv("PI_PROVIDER", "azure-openai-responses")
+        monkeypatch.setenv("PI_MODEL", "gpt-5.4")
+        monkeypatch.setenv("PI_API_KEY", "secret-pi-key")
+
+        with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
+            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+
+    def test_pi_seed_requires_api_key_env(self, tmp_path, monkeypatch):
+        superpowers = _make_superpowers_pi_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setenv("PI_PROVIDER", "azure-openai-responses")
+        monkeypatch.setenv("PI_MODEL", "gpt-5.4")
+        monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "https://example.openai.azure.com")
+        monkeypatch.delenv("PI_API_KEY", raising=False)
+
+        with pytest.raises(RunnerError, match="PI_API_KEY"):
+            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+
+    def test_pi_seed_requires_azure_endpoint_or_resource_name(self, tmp_path, monkeypatch):
+        superpowers = _make_superpowers_pi_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setenv("PI_PROVIDER", "azure-openai-responses")
+        monkeypatch.setenv("PI_MODEL", "gpt-5.4")
+        monkeypatch.setenv("PI_API_KEY", "secret-pi-key")
+        monkeypatch.delenv("AZURE_OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("AZURE_OPENAI_RESOURCE_NAME", raising=False)
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name: "/usr/bin/pi" if name == "pi" else None,
+        )
+
+        with pytest.raises(
+            RunnerError,
+            match="AZURE_OPENAI_BASE_URL.*AZURE_OPENAI_RESOURCE_NAME",
+        ):
+            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
 
     def test_gemini_target_seeds_config(self, tmp_path):
         dest = tmp_path / "agent-config"
@@ -1483,6 +1589,114 @@ class TestRunScenario:
         assert verdict.gauntlet.status == "pass"
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
+
+    def test_pi_missing_required_env_is_setup_stage(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PI_API_KEY", raising=False)
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "sessions"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir(parents=True)
+        (coding_agents_dir / "pi.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "pi",
+                    "binary": "pi",
+                    "agent_config_env": "PI_CODING_AGENT_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "pi",
+                    "required_env": ["PI_API_KEY"],
+                }
+            )
+        )
+        (coding_agents_dir / "pi-context").mkdir(parents=True)
+        sd = _make_scenario(scenarios_dir, "x")
+
+        with patch("quorum.runner.invoke_gauntlet") as gauntlet:
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        gauntlet.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert "required env vars not set" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+
+    def test_pi_context_substitution_includes_env_file(self, tmp_path, monkeypatch):
+        superpowers = _make_superpowers_pi_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
+        monkeypatch.setenv("PI_API_KEY", "secret-pi-key")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        coding_agents_dir.mkdir(parents=True)
+        (coding_agents_dir / "pi.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "pi",
+                    "binary": "pi",
+                    "agent_config_env": "PI_CODING_AGENT_DIR",
+                    "session_log_dir": "${PI_CODING_AGENT_DIR}/sessions",
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "pi",
+                    "required_env": [],
+                }
+            )
+        )
+        pi_context = coding_agents_dir / "pi-context"
+        pi_context.mkdir(parents=True)
+        (pi_context / "HOWTO.md").write_text(
+            "launch $QUORUM_LAUNCH_AGENT from $QUORUM_AGENT_CWD\n"
+            "config $PI_CODING_AGENT_DIR env $PI_ENV_FILE root $SUPERPOWERS_ROOT\n"
+        )
+        (pi_context / "launch-agent").write_text(
+            "#!/usr/bin/env bash\n"
+            'cd "$QUORUM_AGENT_CWD"\n'
+            '. "$PI_ENV_FILE"\n'
+            'exec env PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" '
+            'pi --no-context-files --extension "$SUPERPOWERS_ROOT" "$@"\n'
+        )
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        with (
+            patch("quorum.runner._seed_pi_config", create=True),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+        ):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        rd = next((tmp_path / "results").iterdir())
+        shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+        howto = rd / "gauntlet-agent" / "context" / "HOWTO.md"
+        assert shim.exists()
+        assert shim.stat().st_mode & stat.S_IXUSR
+
+        copied = shim.read_text() + "\n" + howto.read_text()
+        assert str(rd / "coding-agent-workdir") in copied
+        assert str(rd / "coding-agent-config") in copied
+        assert str(rd / "coding-agent-config" / "pi.env") in copied
+        assert str(superpowers) in copied
+        assert str(shim) in copied
+        assert "--no-context-files" in shim.read_text()
+        assert "secret-pi-key" not in copied
+        for placeholder in (
+            "$PI_ENV_FILE",
+            "$PI_CODING_AGENT_DIR",
+            "$SUPERPOWERS_ROOT",
+            "$QUORUM_LAUNCH_AGENT",
+        ):
+            assert placeholder not in copied
 
     def test_gemini_capture_no_transcript_is_capture_indeterminate(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"

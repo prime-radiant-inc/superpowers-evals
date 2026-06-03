@@ -35,6 +35,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import subprocess
@@ -697,6 +698,115 @@ def _seed_opencode_config(opencode_home: Path) -> None:
     _run_opencode_provider_preflight()
 
 
+def _require_env(name: str, purpose: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise RunnerError(f"{name} not set; cannot {purpose}", stage="setup")
+    return value
+
+
+def _require_pi_superpowers_source(superpowers_root: Path) -> None:
+    required = [
+        superpowers_root / "package.json",
+        superpowers_root / ".pi" / "extensions" / "superpowers.ts",
+        superpowers_root / "skills" / "using-superpowers" / "SKILL.md",
+        superpowers_root / "skills" / "using-superpowers" / "references" / "pi-tools.md",
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT is missing Pi support files: " + ", ".join(missing),
+            stage="setup",
+        )
+
+
+PI_AZURE_ENV_NAMES = (
+    "AZURE_OPENAI_BASE_URL",
+    "AZURE_OPENAI_RESOURCE_NAME",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+)
+
+
+def _pi_provider_extra_env(provider: str) -> dict[str, str]:
+    if provider != "azure-openai-responses":
+        return {}
+    if not os.environ.get("AZURE_OPENAI_BASE_URL") and not os.environ.get(
+        "AZURE_OPENAI_RESOURCE_NAME"
+    ):
+        raise RunnerError(
+            "PI_PROVIDER=azure-openai-responses requires AZURE_OPENAI_BASE_URL "
+            "or AZURE_OPENAI_RESOURCE_NAME",
+            stage="setup",
+        )
+    return {name: os.environ[name] for name in PI_AZURE_ENV_NAMES if os.environ.get(name)}
+
+
+def _write_pi_env_file(
+    pi_config_dir: Path,
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    extra_env: dict[str, str],
+) -> Path:
+    env_path = pi_config_dir / "pi.env"
+    lines = [
+        f"export PI_PROVIDER={shlex.quote(provider)}",
+        f"export PI_MODEL={shlex.quote(model)}",
+        f"export PI_API_KEY={shlex.quote(api_key)}",
+        *[f"export {name}={shlex.quote(value)}" for name, value in sorted(extra_env.items())],
+        "",
+    ]
+    env_path.write_text("\n".join(lines))
+    env_path.chmod(0o600)
+    return env_path
+
+
+def _seed_pi_config(pi_config_dir: Path) -> None:
+    superpowers_raw = _require_env("SUPERPOWERS_ROOT", "load Pi Superpowers extension")
+    provider = _require_env("PI_PROVIDER", "configure Pi provider")
+    model = _require_env("PI_MODEL", "configure Pi model")
+    api_key = _require_env("PI_API_KEY", "configure Pi API-key auth")
+    extra_env = _pi_provider_extra_env(provider)
+
+    superpowers_root = Path(superpowers_raw).expanduser()
+    _require_pi_superpowers_source(superpowers_root)
+
+    if shutil.which("pi") is None:
+        raise RunnerError("pi not found on PATH; cannot run Pi evals", stage="setup")
+
+    pi_config_dir.mkdir(parents=True, exist_ok=True)
+    (pi_config_dir / "sessions").mkdir(parents=True, exist_ok=True)
+
+    auth_path = pi_config_dir / "auth.json"
+    auth_path.write_text(
+        json.dumps({provider: {"type": "api_key", "key": "$PI_API_KEY"}}, indent=2) + "\n"
+    )
+    auth_path.chmod(0o600)
+
+    settings_path = pi_config_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "defaultProvider": provider,
+                "defaultModel": model,
+                "defaultThinkingLevel": "medium",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+    _write_pi_env_file(
+        pi_config_dir,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        extra_env=extra_env,
+    )
+
+
 def _seed_agent_config_dir(
     coding_agent: CodingAgentConfig,
     skeleton_root: Path,
@@ -744,6 +854,8 @@ def _seed_agent_config_dir(
         _seed_gemini_config(dest, workdir)
     if coding_agent.name == "opencode":
         _seed_opencode_config(dest)
+    if coding_agent.name == "pi":
+        _seed_pi_config(dest)
 
 
 def _exclude_antigravity_project_marker(launch_cwd: Path) -> None:
@@ -1156,6 +1268,8 @@ def _run_scenario_inner(
             str(agent_config_dir / GEMINI_ENV_FILE_NAME)
         )
         substitutions[f"${tcfg.agent_config_env}_SH"] = _shell_single_quote(str(agent_config_dir))
+    if tcfg.name == "pi":
+        substitutions["$PI_ENV_FILE"] = str(agent_config_dir / "pi.env")
     _populate_context_dir(
         coding_agents_dir,
         coding_agent,
