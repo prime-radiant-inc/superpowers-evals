@@ -19,6 +19,7 @@ def _run(tool: str, *args: str, trace: Path, cwd: Path, sink: Path) -> int:
         env={
             "PATH": f"{BIN}:/usr/bin:/bin",
             "QUORUM_RECORD_SINK": str(sink),
+            "QUORUM_RUN_DIR": str(trace.parent),
             "QUORUM_TOOL_CALLS_PATH": str(trace),
         },
         capture_output=True,
@@ -199,6 +200,26 @@ def test_skill_called_recognizes_gemini_activate_skill(tmp_path):
         )
         == 0
     )
+
+
+def test_gemini_extension_linked_check(tmp_path):
+    parent = tmp_path / "rundir"
+    root = parent / "coding-agent-config" / ".gemini"
+    (root / "extensions" / "superpowers").mkdir(parents=True)
+    (root / "extensions" / "superpowers" / ".gemini-extension-install.json").write_text(
+        "{}"
+    )
+    (root / "extensions" / "extension-enablement.json").write_text("{}")
+    (root / "extension_integrity.json").write_text("{}")
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir(parents=True)
+    trace = _trace(
+        parent,
+        {"tool": "Skill", "args": {"skill": "superpowers:brainstorming"}},
+    )
+    sink = tmp_path / "s"
+    assert _run("gemini-extension-linked", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
 
 
 def test_skill_before_tool_recognizes_antigravity_read_skill_md(tmp_path):

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=gemini-extension-linked
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+
+if [ -z "${QUORUM_RUN_DIR:-}" ]; then
+    record_fail "QUORUM_RUN_DIR is not set"
+    exit 1
+fi
+
+GEMINI_ROOT="$QUORUM_RUN_DIR/coding-agent-config/.gemini"
+missing=()
+for rel in \
+    "extensions/superpowers/.gemini-extension-install.json" \
+    "extensions/extension-enablement.json" \
+    "extension_integrity.json"
+do
+    if [ ! -f "$GEMINI_ROOT/$rel" ]; then
+        missing+=("$rel")
+    fi
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+    record_pass "Superpowers Gemini extension linked at $GEMINI_ROOT/extensions/superpowers"
+else
+    detail=""
+    for rel in "${missing[@]}"; do
+        if [ -z "$detail" ]; then
+            detail="$rel"
+        else
+            detail="$detail, $rel"
+        fi
+    done
+    record_fail "missing Gemini Superpowers extension metadata: $detail"
+    exit 1
+fi
