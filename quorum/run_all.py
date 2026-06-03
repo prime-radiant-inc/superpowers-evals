@@ -30,7 +30,13 @@ from rich.text import Text
 
 from quorum.checks import parse_coding_agents_directive
 from quorum.composer import RunError
-from quorum.kimi import effective_kimi_model_env, run_kimi_auth_preflight
+from quorum.kimi import (
+    effective_kimi_model_env,
+    kimi_preflight_sentinel_payload,
+    resolve_kimi_binary,
+    run_kimi_auth_preflight,
+    sanitize_kimi_diagnostic,
+)
 from quorum.runner import ANTIGRAVITY_RATE_LIMIT_MARKER, _allocate_run_dir, _write_indeterminate
 from quorum.show import _fmt_cost
 
@@ -225,21 +231,24 @@ def prepare_kimi_batch_preflight(*, batch_dir: Path, coding_agents_dir: Path) ->
     kimi_yaml = coding_agents_dir / "kimi.yaml"
     if not kimi_yaml.exists():
         return {}
+    raw = yaml.safe_load(kimi_yaml.read_text()) or {}
+    binary = raw.get("binary")
+    if not isinstance(binary, str) or not binary:
+        raise ValueError(f"{kimi_yaml}: missing Kimi binary")
+    kimi_binary = resolve_kimi_binary(binary)
     kimi_env = effective_kimi_model_env(os.environ)
     run_kimi_auth_preflight(
-        kimi_binary="kimi",
+        kimi_binary=kimi_binary,
         kimi_model_env=kimi_env,
         base_env=os.environ,
     )
     marker = batch_dir / "kimi-preflight-ok.json"
     marker.write_text(
         json.dumps(
-            {
-                "schema": 1,
-                "agent": "kimi",
-                "model": kimi_env["KIMI_MODEL_NAME"],
-                "provider": kimi_env["KIMI_MODEL_PROVIDER_TYPE"],
-            },
+            kimi_preflight_sentinel_payload(
+                kimi_binary=kimi_binary,
+                kimi_model_env=kimi_env,
+            ),
             indent=2,
         )
         + "\n"
@@ -570,7 +579,7 @@ def run_batch(
                 coding_agents_dir=coding_agents_dir,
             )
         except Exception as e:
-            message = str(e)
+            message = sanitize_kimi_diagnostic(e)
             for idx, entry in kimi_entries:
                 run_id = _write_setup_indeterminate_run(
                     out_root=out_root,

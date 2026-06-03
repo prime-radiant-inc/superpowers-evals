@@ -5,6 +5,7 @@ import datetime as _dt
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -33,6 +34,80 @@ KIMI_RUNTIME_FLAGS = {
 KIMI_CONFIG_SUMMARY_ENV = (
     set(DEFAULT_KIMI_MODEL_ENV) | set(KIMI_RUNTIME_FLAGS) | {"KIMI_MODEL_API_KEY"}
 )
+_SENSITIVE_ENV_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+_MIN_SENSITIVE_VALUE_LEN = 6
+
+
+def resolve_kimi_binary(binary: str) -> str:
+    resolved = shutil.which(binary)
+    if resolved is None:
+        raise KimiConfigError(f"{binary!r} not found on PATH; cannot run Kimi evals")
+    return resolved
+
+
+def kimi_preflight_sentinel_payload(
+    *,
+    kimi_binary: str,
+    kimi_model_env: Mapping[str, str],
+) -> dict[str, str | int]:
+    return {
+        "schema": 1,
+        "agent": "kimi",
+        "kimi_binary": kimi_binary,
+        "model": kimi_model_env["KIMI_MODEL_NAME"],
+        "provider": kimi_model_env["KIMI_MODEL_PROVIDER_TYPE"],
+        "base_url": kimi_model_env["KIMI_MODEL_BASE_URL"],
+    }
+
+
+def validate_kimi_preflight_sentinel(
+    path: Path,
+    *,
+    kimi_binary: str,
+    kimi_model_env: Mapping[str, str],
+) -> None:
+    if not path.is_file():
+        raise KimiConfigError(f"Kimi preflight sentinel missing: {path}")
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise KimiConfigError(f"Kimi preflight sentinel is not valid JSON: {e}") from e
+    except OSError as e:
+        raise KimiConfigError(f"Kimi preflight sentinel could not be read: {e}") from e
+    if not isinstance(payload, dict):
+        raise KimiConfigError("Kimi preflight sentinel must be a JSON object")
+
+    expected = kimi_preflight_sentinel_payload(
+        kimi_binary=kimi_binary,
+        kimi_model_env=kimi_model_env,
+    )
+    for key, expected_value in expected.items():
+        actual = payload.get(key)
+        if actual != expected_value:
+            raise KimiConfigError(
+                "Kimi preflight sentinel "
+                f"{key} mismatch: expected {expected_value!r}, got {actual!r}"
+            )
+
+
+def sanitize_kimi_diagnostic(message: object, env: Mapping[str, str] = os.environ) -> str:
+    text: str = str(message)
+    values: set[str] = set()
+    api_key = env.get("KIMI_MODEL_API_KEY")
+    if api_key:
+        values.add(str(api_key))
+    for key, value in env.items():
+        if (
+            value
+            and len(value) >= _MIN_SENSITIVE_VALUE_LEN
+            and any(part in key.upper() for part in _SENSITIVE_ENV_NAME_PARTS)
+        ):
+            values.add(str(value))
+    ordered_values = list(values)
+    ordered_values.sort(key=lambda value: len(value), reverse=True)
+    for value in ordered_values:
+        text = text.replace(value, "<redacted>")
+    return text
 
 
 def effective_kimi_model_env(env: Mapping[str, str]) -> dict[str, str]:

@@ -72,7 +72,10 @@ from quorum.kimi import (
     effective_kimi_model_env,
     install_kimi_superpowers_plugin,
     kimi_logs_have_superpowers_session_start,
+    resolve_kimi_binary,
     run_kimi_auth_preflight,
+    sanitize_kimi_diagnostic,
+    validate_kimi_preflight_sentinel,
     write_effective_kimi_config,
     write_kimi_runtime_env_file,
 )
@@ -354,10 +357,10 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             "gemini provisioning unexpectedly wrote transcripts before "
             "capture snapshot: " + ", ".join(rel),
             stage="setup",
-        )
+    )
 
 
-def _seed_kimi_config(kimi_home: Path, *, run_dir: Path) -> AgentRuntime:
+def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRuntime:
     """Seed an isolated Kimi home with env-overlay auth and local Superpowers plugin."""
     superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
@@ -366,29 +369,25 @@ def _seed_kimi_config(kimi_home: Path, *, run_dir: Path) -> AgentRuntime:
             stage="setup",
         )
     preflight_sentinel = os.environ.get("QUORUM_KIMI_PREFLIGHT_SENTINEL")
-    if preflight_sentinel and not Path(preflight_sentinel).is_file():
-        raise RunnerError(
-            f"Kimi preflight sentinel missing: {preflight_sentinel}",
-            stage="setup",
-        )
-    kimi_binary = shutil.which("kimi")
-    if kimi_binary is None:
-        raise RunnerError(
-            "kimi not found on PATH; cannot run Kimi evals",
-            stage="setup",
-        )
 
     try:
+        kimi_binary = resolve_kimi_binary(binary)
         kimi_env = effective_kimi_model_env(os.environ)
-        if not preflight_sentinel:
+        if preflight_sentinel:
+            validate_kimi_preflight_sentinel(
+                Path(preflight_sentinel),
+                kimi_binary=kimi_binary,
+                kimi_model_env=kimi_env,
+            )
+        else:
             run_kimi_auth_preflight(
                 kimi_binary=kimi_binary,
                 kimi_model_env=kimi_env,
                 base_env=os.environ,
-            )
+        )
         install_kimi_superpowers_plugin(kimi_home, superpowers_root)
     except KimiConfigError as e:
-        raise RunnerError(str(e), stage="setup") from e
+        raise RunnerError(sanitize_kimi_diagnostic(e), stage="setup") from e
 
     kimi_home.mkdir(parents=True, exist_ok=True)
     for child in ("home", "cache", "xdg-config", "xdg-cache", "xdg-data"):
@@ -937,7 +936,7 @@ def _seed_agent_config_dir(
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)
     if coding_agent.name == "kimi":
-        runtime = _seed_kimi_config(dest, run_dir=run_dir)
+        runtime = _seed_kimi_config(dest, run_dir=run_dir, binary=coding_agent.binary)
     if coding_agent.name == "antigravity":
         _seed_antigravity_config(dest, workdir)
     if coding_agent.name == "gemini":

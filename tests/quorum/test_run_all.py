@@ -33,9 +33,15 @@ def _scenario(root: Path, name: str, *, directive: str | None = None) -> Path:
     return d
 
 
-def _agent(root: Path, name: str, *, max_concurrency: int | None = None) -> None:
+def _agent(
+    root: Path,
+    name: str,
+    *,
+    binary: str = "echo",
+    max_concurrency: int | None = None,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    body = f"name: {name}\nbinary: echo\n"
+    body = f"name: {name}\nbinary: {binary}\n"
     if max_concurrency is not None:
         body += f"max_concurrency: {max_concurrency}\n"
     (root / f"{name}.yaml").write_text(body)
@@ -692,6 +698,83 @@ def test_run_batch_kimi_preflight_failure_writes_indeterminate_runs(tmp_path):
     assert all(v["final"] == "indeterminate" for v in verdicts)
     assert all(v["error"]["stage"] == "setup" for v in verdicts)
     assert all("kimi auth failed" in v["error"]["message"] for v in verdicts)
+
+
+def test_run_batch_kimi_parent_preflight_uses_configured_binary(tmp_path, monkeypatch):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "a")
+    custom_kimi = tmp_path / "custom-kimi"
+    custom_kimi.write_text("#!/usr/bin/env bash\nexit 0\n")
+    custom_kimi.chmod(0o755)
+    _agent(agents, "kimi", binary=str(custom_kimi))
+    out_root = tmp_path / "results"
+    preflight_binaries = []
+    child_envs = []
+    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-kimi-key")
+
+    def fake_preflight(*, kimi_binary, **_kwargs):
+        preflight_binaries.append(kimi_binary)
+
+    def fake_invoke(
+        *,
+        scenario_dir,
+        coding_agent,
+        coding_agents_dir,
+        out_root,
+        extra_env=None,
+        timeout_seconds=None,
+    ):
+        child_envs.append(extra_env or {})
+        return ChildResult(run_id=f"{scenario_dir.name}-{coding_agent}-x", exit_code=0, error=None)
+
+    with patch("quorum.run_all.run_kimi_auth_preflight", side_effect=fake_preflight):
+        run_batch(
+            scenarios_root=scenarios,
+            coding_agents_dir=agents,
+            out_root=out_root,
+            jobs=1,
+            agent_filter=["kimi"],
+            invoke=fake_invoke,
+            use_cursor=False,
+        )
+
+    assert preflight_binaries == [str(custom_kimi)]
+    assert child_envs[0]["QUORUM_KIMI_PREFLIGHT_SENTINEL"]
+
+
+def test_run_batch_kimi_preflight_failure_redacts_secret_in_verdict(tmp_path, monkeypatch):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "a")
+    _agent(agents, "kimi")
+    out_root = tmp_path / "results"
+    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-secret")
+
+    with patch(
+        "quorum.run_all.prepare_kimi_batch_preflight",
+        side_effect=RuntimeError("kimi auth failed with fake-secret"),
+    ):
+        batch_dir = run_batch(
+            scenarios_root=scenarios,
+            coding_agents_dir=agents,
+            out_root=out_root,
+            jobs=1,
+            agent_filter=["kimi"],
+            invoke=lambda **_kwargs: ChildResult(
+                run_id=None,
+                exit_code=99,
+                error="should not run",
+            ),
+            use_cursor=False,
+        )
+
+    [record] = [
+        json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()
+    ]
+    verdict_text = (out_root / record["run_id"] / "verdict.json").read_text()
+    assert "fake-secret" not in verdict_text
+    assert "<redacted>" in verdict_text
 
 
 def test_run_batch_scenario_filter_runs_only_named(tmp_path):

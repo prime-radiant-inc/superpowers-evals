@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from quorum.coding_agent_config import CodingAgentConfig
+from quorum.kimi import effective_kimi_model_env, kimi_preflight_sentinel_payload
 from quorum.runner import (
     ANTIGRAVITY_RATE_LIMIT_MARKER,
     AgentRuntime,
@@ -1216,7 +1217,7 @@ class TestSeedAgentConfigDir:
                 tmp_path / "wd",
                 run_dir=run_dir,
             )
-        mock_seed.assert_called_once_with(dest, run_dir=run_dir)
+        mock_seed.assert_called_once_with(dest, run_dir=run_dir, binary="kimi")
 
     def test_kimi_seed_installs_local_path_superpowers_without_host_state(
         self, tmp_path, monkeypatch
@@ -1229,7 +1230,7 @@ class TestSeedAgentConfigDir:
         superpowers = _make_kimi_superpowers_root(tmp_path)
 
         dest = tmp_path / "agent-config"
-        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
 
         with (
             patch.dict(
@@ -1244,7 +1245,7 @@ class TestSeedAgentConfigDir:
             ),
             patch("quorum.runner.run_kimi_auth_preflight"),
         ):
-            runtime = _seed_kimi_config(dest, run_dir=tmp_path / "run")
+            runtime = _seed_kimi_config(dest, run_dir=tmp_path / "run", binary="kimi")
 
         assert (dest / "home").is_dir()
         assert not (dest / "config.toml").exists()
@@ -1261,7 +1262,7 @@ class TestSeedAgentConfigDir:
 
     def test_kimi_seed_runs_auth_preflight_without_sentinel(self, tmp_path, monkeypatch):
         superpowers = _make_kimi_superpowers_root(tmp_path)
-        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
 
         with (
             patch.dict(
@@ -1275,7 +1276,7 @@ class TestSeedAgentConfigDir:
             ),
             patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight,
         ):
-            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run")
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
 
             mock_preflight.assert_called_once_with(
                 kimi_binary="/usr/bin/kimi",
@@ -1296,9 +1297,18 @@ class TestSeedAgentConfigDir:
 
     def test_kimi_seed_skips_auth_preflight_with_sentinel(self, tmp_path, monkeypatch):
         superpowers = _make_kimi_superpowers_root(tmp_path)
-        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
         sentinel = tmp_path / "sentinel.json"
-        sentinel.write_text("{}\n")
+        kimi_env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-kimi-key"})
+        sentinel.write_text(
+            json.dumps(
+                kimi_preflight_sentinel_payload(
+                    kimi_binary="/usr/bin/kimi",
+                    kimi_model_env=kimi_env,
+                )
+            )
+            + "\n"
+        )
 
         with (
             patch.dict(
@@ -1313,13 +1323,13 @@ class TestSeedAgentConfigDir:
             ),
             patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight,
         ):
-            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run")
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
 
             mock_preflight.assert_not_called()
 
     def test_kimi_seed_requires_existing_preflight_sentinel(self, tmp_path, monkeypatch):
         superpowers = _make_kimi_superpowers_root(tmp_path)
-        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/kimi")
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
 
         with (
             patch.dict(
@@ -1335,7 +1345,63 @@ class TestSeedAgentConfigDir:
             patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight,
             pytest.raises(RunnerError, match="Kimi preflight sentinel missing") as excinfo,
         ):
-            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run")
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
+
+        assert excinfo.value.stage == "setup"
+        mock_preflight.assert_not_called()
+
+    def test_kimi_seed_rejects_malformed_preflight_sentinel(self, tmp_path, monkeypatch):
+        superpowers = _make_kimi_superpowers_root(tmp_path)
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
+        sentinel = tmp_path / "sentinel.json"
+        sentinel.write_text("{not-json")
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PATH": "/usr/bin:/bin",
+                    "SUPERPOWERS_ROOT": str(superpowers),
+                    "KIMI_MODEL_API_KEY": "fake-kimi-key",
+                    "QUORUM_KIMI_PREFLIGHT_SENTINEL": str(sentinel),
+                },
+                clear=True,
+            ),
+            patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight,
+            pytest.raises(RunnerError, match="valid JSON") as excinfo,
+        ):
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
+
+        assert excinfo.value.stage == "setup"
+        mock_preflight.assert_not_called()
+
+    def test_kimi_seed_rejects_mismatched_preflight_sentinel(self, tmp_path, monkeypatch):
+        superpowers = _make_kimi_superpowers_root(tmp_path)
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
+        kimi_env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-kimi-key"})
+        payload = kimi_preflight_sentinel_payload(
+            kimi_binary="/usr/bin/kimi",
+            kimi_model_env=kimi_env,
+        )
+        payload["model"] = "other-model"
+        sentinel = tmp_path / "sentinel.json"
+        sentinel.write_text(json.dumps(payload) + "\n")
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PATH": "/usr/bin:/bin",
+                    "SUPERPOWERS_ROOT": str(superpowers),
+                    "KIMI_MODEL_API_KEY": "fake-kimi-key",
+                    "QUORUM_KIMI_PREFLIGHT_SENTINEL": str(sentinel),
+                },
+                clear=True,
+            ),
+            patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight,
+            pytest.raises(RunnerError, match="model") as excinfo,
+        ):
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
 
         assert excinfo.value.stage == "setup"
         mock_preflight.assert_not_called()
@@ -1343,7 +1409,7 @@ class TestSeedAgentConfigDir:
     def test_kimi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
         with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
-            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run")
+            _seed_kimi_config(tmp_path / "cfg", run_dir=tmp_path / "run", binary="kimi")
 
     def test_antigravity_seed_runs_auth_preflight_then_plugin_install(self, tmp_path, monkeypatch):
         sp = tmp_path / "superpowers"

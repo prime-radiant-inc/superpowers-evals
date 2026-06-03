@@ -13,8 +13,11 @@ from quorum.kimi import (
     effective_kimi_model_env,
     install_kimi_superpowers_plugin,
     kimi_logs_have_superpowers_session_start,
+    kimi_preflight_sentinel_payload,
     kimi_stream_json_reply_ok,
     run_kimi_auth_preflight,
+    sanitize_kimi_diagnostic,
+    validate_kimi_preflight_sentinel,
     validate_superpowers_kimi_root,
     write_effective_kimi_config,
     write_kimi_runtime_env_file,
@@ -168,6 +171,94 @@ def test_effective_config_summary_omits_non_kimi_runtime_env(tmp_path):
     assert "secret" not in text
     assert "/secret/bin" not in text
     assert "/secret/home" not in text
+
+
+def test_kimi_preflight_sentinel_payload_round_trips_validation(tmp_path):
+    env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-key"})
+    path = tmp_path / "sentinel.json"
+    path.write_text(
+        json.dumps(
+            kimi_preflight_sentinel_payload(
+                kimi_binary="/usr/local/bin/kimi-custom",
+                kimi_model_env=env,
+            )
+        )
+        + "\n"
+    )
+
+    validate_kimi_preflight_sentinel(
+        path,
+        kimi_binary="/usr/local/bin/kimi-custom",
+        kimi_model_env=env,
+    )
+
+
+def test_kimi_preflight_sentinel_rejects_malformed_json(tmp_path):
+    env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-key"})
+    path = tmp_path / "sentinel.json"
+    path.write_text("{not-json")
+
+    with pytest.raises(KimiConfigError, match="valid JSON"):
+        validate_kimi_preflight_sentinel(
+            path,
+            kimi_binary="/usr/local/bin/kimi",
+            kimi_model_env=env,
+        )
+
+
+def test_kimi_preflight_sentinel_rejects_model_mismatch(tmp_path):
+    env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-key"})
+    path = tmp_path / "sentinel.json"
+    payload = kimi_preflight_sentinel_payload(
+        kimi_binary="/usr/local/bin/kimi",
+        kimi_model_env=env,
+    )
+    payload["model"] = "other-model"
+    path.write_text(json.dumps(payload) + "\n")
+
+    with pytest.raises(KimiConfigError, match="model"):
+        validate_kimi_preflight_sentinel(
+            path,
+            kimi_binary="/usr/local/bin/kimi",
+            kimi_model_env=env,
+        )
+
+
+def test_kimi_preflight_sentinel_rejects_binary_mismatch(tmp_path):
+    env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-key"})
+    path = tmp_path / "sentinel.json"
+    path.write_text(
+        json.dumps(
+            kimi_preflight_sentinel_payload(
+                kimi_binary="/usr/local/bin/kimi-a",
+                kimi_model_env=env,
+            )
+        )
+        + "\n"
+    )
+
+    with pytest.raises(KimiConfigError, match="binary"):
+        validate_kimi_preflight_sentinel(
+            path,
+            kimi_binary="/usr/local/bin/kimi-b",
+            kimi_model_env=env,
+        )
+
+
+def test_sanitize_kimi_diagnostic_redacts_sensitive_values():
+    text = sanitize_kimi_diagnostic(
+        "preflight failed for fake-secret and token-value but not abc",
+        env={
+            "KIMI_MODEL_API_KEY": "fake-secret",
+            "OTHER_TOKEN": "token-value",
+            "TINY_KEY": "abc",
+        },
+    )
+
+    assert "fake-secret" not in text
+    assert "token-value" not in text
+    assert "<redacted>" in text
+    assert "abc" in text
 
 
 def _superpowers_root(tmp_path: Path) -> Path:
