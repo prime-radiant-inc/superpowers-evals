@@ -26,6 +26,9 @@ KIMI_RUNTIME_FLAGS = {
     "KIMI_DISABLE_CRON": "1",
     "KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT": "false",
 }
+KIMI_CONFIG_SUMMARY_ENV = (
+    set(DEFAULT_KIMI_MODEL_ENV) | set(KIMI_RUNTIME_FLAGS) | {"KIMI_MODEL_API_KEY"}
+)
 
 
 def effective_kimi_model_env(env: Mapping[str, str]) -> dict[str, str]:
@@ -75,12 +78,13 @@ def _shell_assignment(key: str, value: str) -> str:
 
 def _kimi_runtime_env_temp_parent(run_dir: Path) -> Path:
     run_dir_resolved = run_dir.resolve()
+    artifact_root_resolved = run_dir_resolved.parent
     temp_parent = Path(tempfile.gettempdir()).resolve()
-    if temp_parent.is_relative_to(run_dir_resolved):
-        temp_parent = run_dir_resolved.parent.parent
+    if temp_parent.is_relative_to(artifact_root_resolved):
+        temp_parent = artifact_root_resolved.parent
     temp_parent.mkdir(parents=True, exist_ok=True)
-    if temp_parent.resolve().is_relative_to(run_dir_resolved):
-        raise KimiConfigError("Kimi runtime env temp directory resolved inside run dir")
+    if temp_parent.resolve().is_relative_to(artifact_root_resolved):
+        raise KimiConfigError("Kimi runtime env temp directory resolved inside artifact root")
     return temp_parent
 
 
@@ -106,6 +110,7 @@ def write_effective_kimi_config(
         "model_env": {
             key: ("<present>" if key == "KIMI_MODEL_API_KEY" else value)
             for key, value in sorted(env.items())
+            if key in KIMI_CONFIG_SUMMARY_ENV
         },
     }
     path = kimi_home / "effective-kimi-model-config.json"

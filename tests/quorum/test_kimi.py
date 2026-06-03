@@ -15,20 +15,19 @@ from quorum.kimi import (
 )
 
 
-def test_effective_env_allows_only_api_key_and_model_name(monkeypatch):
-    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-key")
-    monkeypatch.setenv("KIMI_MODEL_NAME", "kimi-custom")
-    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://wrong.example")
-
+def test_effective_env_allows_only_api_key_and_model_name():
     with pytest.raises(KimiConfigError, match="KIMI_MODEL_BASE_URL"):
-        effective_kimi_model_env(os.environ)
+        effective_kimi_model_env(
+            {
+                "KIMI_MODEL_API_KEY": "fake-key",
+                "KIMI_MODEL_NAME": "kimi-custom",
+                "KIMI_MODEL_BASE_URL": "https://wrong.example",
+            }
+        )
 
 
-def test_effective_env_supplies_defaults(monkeypatch):
-    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-key")
-    monkeypatch.delenv("KIMI_MODEL_NAME", raising=False)
-
-    env = effective_kimi_model_env(os.environ)
+def test_effective_env_supplies_defaults():
+    env = effective_kimi_model_env({"KIMI_MODEL_API_KEY": "fake-key"})
 
     assert env["KIMI_MODEL_API_KEY"] == "fake-key"
     assert env["KIMI_MODEL_NAME"] == "kimi-for-coding"
@@ -101,6 +100,21 @@ def test_runtime_env_file_avoids_process_temp_dir_inside_run_dir(monkeypatch, tm
     assert not env_file.resolve().is_relative_to(run_dir.resolve())
 
 
+def test_runtime_env_file_avoids_process_temp_dir_inside_results_root(monkeypatch, tmp_path):
+    run_dir = tmp_path / "results" / "run"
+    run_dir.mkdir(parents=True)
+    monkeypatch.setenv("TMPDIR", str(run_dir.parent))
+    monkeypatch.setattr(tempfile, "tempdir", str(run_dir.parent))
+
+    env_file = write_kimi_runtime_env_file(
+        {"KIMI_MODEL_API_KEY": "fake-key"},
+        run_dir=run_dir,
+    )
+
+    assert not env_file.resolve().is_relative_to(run_dir.resolve())
+    assert not env_file.resolve().is_relative_to(run_dir.parent.resolve())
+
+
 def test_effective_config_summary_redacts_api_key(tmp_path):
     path = write_effective_kimi_config(
         tmp_path,
@@ -118,3 +132,32 @@ def test_effective_config_summary_redacts_api_key(tmp_path):
     assert data["kimi_version"] == "kimi 0.6.0"
     assert data["model_env"]["KIMI_MODEL_API_KEY"] == "<present>"
     assert "fake-key" not in path.read_text()
+
+
+def test_effective_config_summary_omits_non_kimi_runtime_env(tmp_path):
+    path = write_effective_kimi_config(
+        tmp_path,
+        {
+            "KIMI_MODEL_API_KEY": "fake-key",
+            "KIMI_MODEL_NAME": "kimi-for-coding",
+            "KIMI_DISABLE_TELEMETRY": "1",
+            "HTTPS_PROXY": "secret",
+            "PATH": "/secret/bin",
+            "HOME": "/secret/home",
+        },
+        kimi_binary="/usr/bin/kimi",
+        kimi_version="kimi 0.6.0",
+    )
+
+    text = path.read_text()
+    data = json.loads(text)
+
+    assert data["model_env"]["KIMI_MODEL_API_KEY"] == "<present>"
+    assert data["model_env"]["KIMI_MODEL_NAME"] == "kimi-for-coding"
+    assert data["model_env"]["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert "HTTPS_PROXY" not in data["model_env"]
+    assert "PATH" not in data["model_env"]
+    assert "HOME" not in data["model_env"]
+    assert "secret" not in text
+    assert "/secret/bin" not in text
+    assert "/secret/home" not in text
