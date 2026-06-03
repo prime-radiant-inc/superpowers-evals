@@ -1,9 +1,9 @@
 # Superpowers Evals
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
-**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity) through
-a Gauntlet QA agent and grades them against scenario acceptance criteria plus
-deterministic post-checks.
+**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini)
+through a Gauntlet QA agent and grades them against scenario acceptance
+criteria plus deterministic post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
 form `Quorum` appears in headings and the actor table.
@@ -19,7 +19,7 @@ quorum has two very different execution modes:
 - **Static/unit checks** are safe for public CI. They run `ruff`, `ty`, and
   `pytest`. They do not call model APIs and do not launch agent CLIs.
 - **Live evals** are trusted-maintainer operations. They launch Claude Code,
-  Codex CLI, or Antigravity CLI in permissive modes and collect raw
+  Codex CLI, Antigravity CLI, or Gemini CLI in permissive modes and collect raw
   transcripts, tool calls, filesystem state, and session logs.
 
 Public CI must stay on the static/unit side of that line. Never add API keys,
@@ -34,13 +34,14 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
+- Gemini uses `--skip-trust --approval-mode=yolo` and API-key auth.
 
 quorum seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity) so
-the Coding-Agent never sees the host's real `~/.claude`, `~/.codex`, or
-`~/.gemini` state, installed plugins, or prior sessions. That narrows the
-blast radius but is not a sandbox — the subprocess still inherits the parent
-shell environment and can read exported credentials.
+Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity, and
+`GEMINI_CLI_HOME` for Gemini) so the Coding-Agent never sees the host's real
+`~/.claude`, `~/.codex`, or `~/.gemini` state, installed plugins, or prior
+sessions. That narrows the blast radius but is not a sandbox — the subprocess
+still inherits the parent shell environment and can read exported credentials.
 
 Run live evals only from a trusted local environment:
 
@@ -64,8 +65,8 @@ Run one scenario:
 uv run quorum run scenarios/triggering-writing-plans --coding-agent claude
 ```
 
-Agent names are `claude`, `codex`, and `antigravity`; not every scenario is
-valid for every agent.
+Agent names are `claude`, `codex`, `antigravity`, and `gemini`; not every
+scenario is valid for every agent.
 
 List scenarios:
 
@@ -101,6 +102,18 @@ SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run-all -
 Do not wire Antigravity live evals to public CI; they launch `agy` with
 `--dangerously-skip-permissions` and depend on local browser/keyring auth.
 
+Trusted-maintainer Gemini smoke:
+
+```bash
+export GEMINI_API_KEY=...
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+uv run quorum show <run-dir>
+```
+
+Do not wire Gemini live evals to public CI; they launch `gemini` with
+`--approval-mode=yolo` and preserve secret-bearing run artifacts.
+
 ## Canonical Actors
 
 Keep the actors straight; confusing them is the most common triage error.
@@ -111,7 +124,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**; future **Gemini**, **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**; future **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Quorum** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/quorum/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
@@ -258,14 +271,16 @@ A Coding-Agent is one agent CLI under test. Its config is
 learn how to launch and observe that CLI. Claude additionally has a home
 skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
 per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run via
-`codex login --with-api-key`; Antigravity provisions an isolated `.gemini`
-config fresh per run). All authored once per agent and shared across scenarios.
+`codex login --with-api-key`; Antigravity and Gemini provision isolated
+`.gemini` state fresh per run). All authored once per agent and shared across
+scenarios.
 
 | Coding-Agent | CLI | Required environment |
 | --- | --- | --- |
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
+| `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY`, `SUPERPOWERS_ROOT` |
 
 When this repo is checked out as `superpowers/evals`, quorum defaults
 `SUPERPOWERS_ROOT` to the parent `superpowers` checkout. In a standalone
@@ -277,6 +292,56 @@ export SUPERPOWERS_ROOT=/path/to/superpowers
 
 Use a different `SUPERPOWERS_ROOT` when running RED/GREEN comparisons against
 modified superpowers skill text.
+
+### Gemini
+
+`coding-agents/gemini.yaml` launches Gemini CLI as `gemini`. quorum creates an
+isolated per-run `GEMINI_CLI_HOME` under `<run>/coding-agent-config`, writes a
+chmod-0600 runtime env file containing `GEMINI_API_KEY`, seeds API-key auth in
+`.gemini/settings.json`, and links Superpowers from local `SUPERPOWERS_ROOT`
+with:
+
+```bash
+gemini extensions link "$SUPERPOWERS_ROOT" --consent
+```
+
+The generated launcher starts interactive Gemini from the scenario workdir with:
+
+```bash
+GEMINI_CLI_HOME="$GEMINI_CLI_HOME" \
+GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key \
+GEMINI_CLI_TRUST_WORKSPACE=true \
+gemini --skip-trust --approval-mode=yolo
+```
+
+Gemini run artifacts are secret-bearing live-eval artifacts because the
+isolated config dir contains the per-run `.gemini-env` file. Do not commit,
+paste, or publish Gemini run directories without scrubbing them.
+
+Provisioning verifies that Gemini linked and enabled Superpowers by checking:
+
+```text
+<run>/coding-agent-config/.gemini/extensions/superpowers/.gemini-extension-install.json
+<run>/coding-agent-config/.gemini/extensions/extension-enablement.json
+<run>/coding-agent-config/.gemini/extension_integrity.json
+```
+
+Those files prove the extension was linked. They do not prove Gemini honored
+Superpowers behavior. Behavioral evidence comes from normalized transcript rows
+in `<run>/coding-agent-tool-calls.jsonl` and from raw Gemini transcripts at:
+
+```text
+<run>/coding-agent-config/.gemini/tmp/**/chats/**/*.json*
+```
+
+Live smoke:
+
+```bash
+export GEMINI_API_KEY=...
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+uv run quorum show <run-dir>
+```
 
 ### Antigravity
 
@@ -348,11 +413,12 @@ A `quorum run` drives one scenario against one Coding-Agent:
 2. **Run dir** — a per-run directory is created under `results/`. It
    doubles as Gauntlet's `--state-dir` root and the evidence root.
 3. **Isolation** — a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-   Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity)
-   is seeded or provisioned, so the Coding-Agent never sees the host's real
-   `~/.claude`, `~/.codex`, or `~/.gemini`, installed plugins, or prior
-   sessions. Antigravity also runs an isolated auth preflight and plugin
-   install before launch.
+   Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity,
+   `GEMINI_CLI_HOME` for Gemini) is seeded or provisioned, so the Coding-Agent
+   never sees the host's real `~/.claude`, `~/.codex`, or `~/.gemini`,
+   installed plugins, or prior sessions. Antigravity also runs an isolated auth
+   preflight and plugin install before launch; Gemini links the local
+   Superpowers extension before launch.
 4. **Setup** — the Coding-Agent's workdir is created inside the run dir as
    `coding-agent-workdir/`; the scenario's `setup.sh` builds the fixture.
 5. **Pre-checks** — `checks.sh`'s `pre()` runs against the workdir; a failure
@@ -366,9 +432,9 @@ A `quorum run` drives one scenario against one Coding-Agent:
    `## Acceptance Criteria`.
 8. **Capture** — the Coding-Agent's session-log dir is diffed, normalized into
    `coding-agent-tool-calls.jsonl`, and token usage is written to
-   `coding-agent-token-usage.json` (measurement only). Antigravity runs fail
-   closed as `indeterminate` if no transcript is captured or transcripts
-   normalize to zero tool-call rows.
+   `coding-agent-token-usage.json` (measurement only). Antigravity and Gemini
+   runs fail closed as `indeterminate` if no transcript is captured or
+   transcripts normalize to zero tool-call rows.
 9. **Post-checks** — `checks.sh`'s `post()` runs against the captured evidence.
 10. **Compose** — the final verdict is `pass` iff the Gauntlet-Agent passed
     **and** every post-check passed. `verdict.json` is written to the run dir.
