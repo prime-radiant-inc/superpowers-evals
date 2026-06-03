@@ -46,6 +46,8 @@ from quorum.capture import (
     capture_token_usage,
     capture_tool_calls,
     detect_misplaced_codex_rollouts,
+    detect_misplaced_pi_sessions,
+    detect_unusable_pi_sessions,
     snapshot_dir,
 )
 from quorum.checks import parse_coding_agents_directive, run_phase
@@ -1365,6 +1367,67 @@ def _run_scenario_inner(
             gauntlet=gauntlet_layer,
             checks=pre_records,
             error=RunError(stage="capture", message="OpenCode export/capture snapshot mismatch"),
+        )
+
+    if tcfg.normalizer == "pi" and not capture_result.source_logs:
+        misplaced = detect_misplaced_pi_sessions(
+            log_dir=session_log_dir,
+            log_glob=tcfg.session_log_glob,
+            snapshot=snap,
+            launch_cwd=launch_cwd,
+        )
+        if misplaced:
+            misplaced_rel = [str(p.relative_to(session_log_dir)) for p in misplaced]
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason=(
+                    "QA agent launched Pi from the wrong cwd - likely skipped "
+                    "`cd $QUORUM_AGENT_CWD` in the Pi launcher. See "
+                    f"{misplaced_rel} for the misplaced session(s)."
+                ),
+                gauntlet=gauntlet_layer,
+                checks=pre_records,
+                error=RunError(
+                    stage="qa-agent-misconfigured",
+                    message=f"misplaced Pi sessions: {misplaced_rel}",
+                ),
+            )
+        unusable = detect_unusable_pi_sessions(
+            log_dir=session_log_dir,
+            log_glob=tcfg.session_log_glob,
+            snapshot=snap,
+        )
+        if unusable:
+            unusable_rel = [str(p.relative_to(session_log_dir)) for p in unusable]
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason="unusable Pi session header(s): " + ", ".join(unusable_rel),
+                gauntlet=gauntlet_layer,
+                checks=pre_records,
+                error=RunError(
+                    stage="capture",
+                    message=f"unusable Pi session headers: {unusable_rel}",
+                ),
+            )
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=(
+                "no Pi session appeared under isolated "
+                f"{session_log_dir}; cannot evaluate this run"
+            ),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(stage="capture", message="no Pi session captured"),
+        )
+
+    if tcfg.normalizer == "pi" and capture_result.source_logs and capture_result.row_count == 0:
+        rel = [str(p.relative_to(session_log_dir)) for p in capture_result.source_logs]
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason="Pi session(s) normalized to zero tool-call rows: " + ", ".join(rel),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(stage="capture", message="Pi capture normalized to zero rows"),
         )
 
     if tcfg.normalizer == "opencode" and not capture_result.source_logs:

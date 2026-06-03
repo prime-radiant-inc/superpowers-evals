@@ -11,6 +11,8 @@ from quorum.normalizers import (
     filter_codex_logs_by_cwd,
     filter_pi_logs_by_cwd,
     find_misplaced_codex_rollouts,
+    find_misplaced_pi_sessions,
+    find_unusable_pi_sessions,
 )
 from quorum.token_usage import capture_tokens
 
@@ -102,6 +104,29 @@ def detect_misplaced_codex_rollouts(
     """
     new = new_files_since(log_dir, log_glob, snapshot)
     return find_misplaced_codex_rollouts(new, run_dir=run_dir, launch_cwd=launch_cwd)
+
+
+def detect_misplaced_pi_sessions(
+    *,
+    log_dir: Path,
+    log_glob: str,
+    snapshot: set[str],
+    launch_cwd: Path,
+) -> list[Path]:
+    """New run-local Pi sessions that launched in the wrong cwd."""
+    new = new_files_since(log_dir, log_glob, snapshot)
+    return find_misplaced_pi_sessions(new, launch_cwd=launch_cwd)
+
+
+def detect_unusable_pi_sessions(
+    *,
+    log_dir: Path,
+    log_glob: str,
+    snapshot: set[str],
+) -> list[Path]:
+    """New Pi session files whose first row cannot identify a session cwd."""
+    new = new_files_since(log_dir, log_glob, snapshot)
+    return find_unusable_pi_sessions(new)
 
 
 def capture_token_usage(

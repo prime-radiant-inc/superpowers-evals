@@ -108,6 +108,27 @@ def _make_opencode_agent(coding_agents_dir: Path, session_log_dir: Path) -> None
     )
 
 
+def _make_pi_agent(coding_agents_dir: Path, session_log_dir: Path) -> None:
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "pi.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "pi",
+                "binary": "pi",
+                "agent_config_env": "PI_CODING_AGENT_DIR",
+                "session_log_dir": str(session_log_dir),
+                "session_log_glob": "*.jsonl",
+                "normalizer": "pi",
+                "required_env": [],
+            }
+        )
+    )
+    ctx = coding_agents_dir / "pi-context"
+    ctx.mkdir(parents=True, exist_ok=True)
+    (ctx / "HOWTO.md").write_text("run $QUORUM_LAUNCH_AGENT\n")
+    (ctx / "launch-agent").write_text("#!/usr/bin/env bash\nset -euo pipefail\n")
+
+
 # Tests pass an empty dir as skeleton_root so _seed_agent_config_dir falls
 # through to mkdir-empty without requiring the production skeleton fixture.
 def _empty_skeleton(tmp_path: Path) -> Path:
@@ -1757,6 +1778,140 @@ class TestRunScenario:
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
         assert "Gemini transcript(s) normalized to zero" in verdict.final_reason
+
+    def test_pi_missing_session_is_indeterminate_even_without_trace_checks(self, tmp_path):
+        coding_agents_dir = tmp_path / "agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "sessions"
+        session_log_dir.mkdir()
+        _make_pi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        with (
+            patch("quorum.runner._seed_pi_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                out_root=tmp_path / "results",
+                coding_agents_dir=coding_agents_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "no Pi session" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+
+    def test_pi_zero_normalized_rows_is_distinct_from_missing_session(self, tmp_path):
+        coding_agents_dir = tmp_path / "agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "sessions"
+        session_log_dir.mkdir()
+        _make_pi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def write_empty_pi_session(*, run_dir, **kwargs):
+            workdir = run_dir / "coding-agent-workdir"
+            session_log_dir.joinpath("session.jsonl").write_text(
+                json.dumps({"type": "session", "cwd": str(workdir)})
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "done"}],
+                        },
+                    }
+                )
+                + "\n"
+            )
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_pi_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=write_empty_pi_session),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                out_root=tmp_path / "results",
+                coding_agents_dir=coding_agents_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "normalized to zero tool-call rows" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+
+    def test_pi_wrong_cwd_session_is_qa_agent_misconfigured(self, tmp_path):
+        coding_agents_dir = tmp_path / "agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "sessions"
+        session_log_dir.mkdir()
+        _make_pi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def write_wrong_cwd_pi_session(*, run_dir, **kwargs):
+            wrong_cwd = run_dir / "scratch"
+            wrong_cwd.mkdir()
+            session_log_dir.joinpath("session.jsonl").write_text(
+                json.dumps({"type": "session", "cwd": str(wrong_cwd)}) + "\n"
+            )
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_pi_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=write_wrong_cwd_pi_session),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                out_root=tmp_path / "results",
+                coding_agents_dir=coding_agents_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "wrong cwd" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "qa-agent-misconfigured"
+
+    def test_pi_malformed_session_header_is_capture_error(self, tmp_path):
+        coding_agents_dir = tmp_path / "agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "sessions"
+        session_log_dir.mkdir()
+        _make_pi_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def write_malformed_pi_session(**kwargs):
+            session_log_dir.joinpath("session.jsonl").write_text("{not json}\n")
+            return "pass"
+
+        with (
+            patch("quorum.runner._seed_pi_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=write_malformed_pi_session),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="pi",
+                out_root=tmp_path / "results",
+                coding_agents_dir=coding_agents_dir,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "unusable Pi session header" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
 
     def test_populate_context_dir_copies_coding_agent_contexts(self, tmp_path):
         # Spot-check that coding-agent context HOWTOs land in <run-dir>/gauntlet-agent/context/.

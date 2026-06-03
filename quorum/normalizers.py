@@ -139,6 +139,38 @@ def filter_pi_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
     return matched
 
 
+def _pi_session_header_cwd(path: Path) -> str | None:
+    try:
+        with path.open() as f:
+            first_line = f.readline()
+        entry = json.loads(first_line)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if entry.get("type") != "session":
+        return None
+    cwd = entry.get("cwd", "")
+    return cwd if isinstance(cwd, str) and cwd else None
+
+
+def find_misplaced_pi_sessions(paths: list[Path], *, launch_cwd: Path) -> list[Path]:
+    """New run-local Pi sessions that launched in the wrong cwd."""
+    launch_cwd_real = os.path.realpath(launch_cwd)
+    misplaced: list[Path] = []
+    for path in paths:
+        cwd = _pi_session_header_cwd(path)
+        if cwd is None:
+            continue
+        cwd_real = os.path.realpath(cwd)
+        if cwd_real != launch_cwd_real:
+            misplaced.append(path)
+    return misplaced
+
+
+def find_unusable_pi_sessions(paths: list[Path]) -> list[Path]:
+    """New Pi session files whose first row cannot identify a session cwd."""
+    return [path for path in paths if _pi_session_header_cwd(path) is None]
+
+
 def normalize_claude_logs(raw_content: str) -> list[dict[str, Any]]:
     """Normalize Claude Code session logs.
 

@@ -6,6 +6,8 @@ from quorum.normalizers import (
     filter_codex_logs_by_cwd,
     filter_pi_logs_by_cwd,
     find_misplaced_codex_rollouts,
+    find_misplaced_pi_sessions,
+    find_unusable_pi_sessions,
     normalize_antigravity_logs,
     normalize_claude_logs,
     normalize_codex_logs,
@@ -320,6 +322,31 @@ class TestNormalizePiLogs:
             json.dumps({"type": "session", "cwd": os.path.realpath(real)}) + "\n"
         )
         assert filter_pi_logs_by_cwd([session], str(link)) == [session]
+
+    def test_find_misplaced_pi_sessions_reports_any_new_wrong_cwd(self, tmp_path):
+        launch_cwd = tmp_path / "run" / "coding-agent-workdir"
+        wrong_cwd = tmp_path / "scratch"
+        launch_cwd.mkdir(parents=True)
+        wrong_cwd.mkdir(parents=True)
+
+        session = tmp_path / "session.jsonl"
+        session.write_text(json.dumps({"type": "session", "cwd": str(wrong_cwd)}) + "\n")
+
+        assert find_misplaced_pi_sessions([session], launch_cwd=launch_cwd) == [session]
+
+    def test_find_unusable_pi_sessions_reports_malformed_or_missing_header(self, tmp_path):
+        malformed = tmp_path / "malformed.jsonl"
+        malformed.write_text("{not json}\n")
+        missing_cwd = tmp_path / "missing-cwd.jsonl"
+        missing_cwd.write_text(json.dumps({"type": "session"}) + "\n")
+        text_first = tmp_path / "text-first.jsonl"
+        text_first.write_text(json.dumps({"type": "message"}) + "\n")
+
+        assert find_unusable_pi_sessions([malformed, missing_cwd, text_first]) == [
+            malformed,
+            missing_cwd,
+            text_first,
+        ]
 
     def test_normalizes_assistant_tool_calls_from_session_entries(self):
         lines = [

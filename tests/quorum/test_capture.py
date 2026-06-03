@@ -6,6 +6,8 @@ import yaml
 from quorum.capture import (
     capture_token_usage,
     capture_tool_calls,
+    detect_misplaced_pi_sessions,
+    detect_unusable_pi_sessions,
     new_files_since,
     snapshot_dir,
 )
@@ -182,6 +184,39 @@ class TestCaptureToolCalls:
         assert result.row_count == 0
         assert result.path.exists()
         assert result.path.read_text() == ""
+
+
+class TestPiSessionDiagnostics:
+    def test_detects_misplaced_pi_sessions_since_snapshot(self, tmp_path):
+        log_dir = _mkdir(tmp_path / "sessions")
+        launch_cwd = _mkdir(tmp_path / "coding-agent-workdir")
+        wrong_cwd = _mkdir(tmp_path / "scratch")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+
+        session = log_dir / "session.jsonl"
+        session.write_text(json.dumps({"type": "session", "cwd": str(wrong_cwd)}) + "\n")
+
+        assert detect_misplaced_pi_sessions(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            launch_cwd=launch_cwd,
+        ) == [session]
+
+    def test_detects_unusable_pi_sessions_since_snapshot(self, tmp_path):
+        log_dir = _mkdir(tmp_path / "sessions")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+
+        malformed = log_dir / "malformed.jsonl"
+        malformed.write_text("{not json}\n")
+        missing_cwd = log_dir / "missing-cwd.jsonl"
+        missing_cwd.write_text(json.dumps({"type": "session"}) + "\n")
+
+        assert detect_unusable_pi_sessions(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+        ) == [malformed, missing_cwd]
 
 
 def _claude_session_line(input_tokens: int, output_tokens: int) -> str:
