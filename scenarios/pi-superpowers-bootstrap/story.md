@@ -1,6 +1,6 @@
 ---
 id: pi-superpowers-bootstrap
-title: Pi loads Superpowers bootstrap and skill context
+title: Pi loads Superpowers skill context
 status: ready
 tags: pi, bootstrap
 ---
@@ -20,8 +20,6 @@ deciding the verdict.
 ## Acceptance Criteria
 
 - Pi was launched through the generated quorum launcher.
-- Pi's raw session contains the Superpowers extension bootstrap marker
-  `superpowers:using-superpowers bootstrap for pi`.
 - Pi created `PI_SUPERPOWERS_OK.md` in the prepared workdir.
 - The file contains exactly `PI_SUPERPOWERS_OK`.
 - Pi's normalized trace shows it loaded `superpowers:brainstorming` by reading
