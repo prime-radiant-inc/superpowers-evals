@@ -92,6 +92,22 @@ def test_gemini_config_loads_when_env_set(monkeypatch, tmp_path):
     )
 
 
+def test_opencode_config_loads_when_superpowers_root_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    cfg = load_coding_agent_config(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "opencode.yaml"
+    )
+
+    assert cfg.name == "opencode"
+    assert cfg.binary == "opencode"
+    assert cfg.agent_config_env == "OPENCODE_QUORUM_HOME"
+    assert cfg.session_log_glob == "[0-9]*-ses_*.json"
+    assert cfg.normalizer == "opencode"
+    assert cfg.resolve_session_log_dir(tmp_path / "cfg") == (
+        tmp_path / "cfg" / ".quorum" / "session-exports"
+    )
+
+
 class TestLoadCodingAgentConfig:
     def test_minimal_valid(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")

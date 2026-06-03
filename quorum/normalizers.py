@@ -359,6 +359,126 @@ def normalize_gemini_logs(raw_content: str) -> list[dict[str, Any]]:
     return results
 
 
+OPENCODE_TOOL_MAP: dict[str, str] = {
+    "skill": "Skill",
+    "task": "Agent",
+    "bash": "Bash",
+    "read": "Read",
+    "write": "Write",
+    "edit": "Edit",
+    "apply_patch": "Edit",
+    "grep": "Grep",
+    "glob": "Glob",
+    "todowrite": "TodoWrite",
+    "webfetch": "WebFetch",
+    "websearch": "WebSearch",
+}
+
+
+OPENCODE_NATIVE_TOOLS = (set(OPENCODE_TOOL_MAP.values()) - {"Bash"}) | {
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+}
+
+
+def _opencode_tool_input(part: dict[str, Any]) -> Any:
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return {}
+    return state.get("input", {})
+
+
+def _opencode_apply_patch_paths(patch_text: Any) -> list[str]:
+    if not isinstance(patch_text, str):
+        return []
+    paths: list[str] = []
+    prefixes = (
+        "*** Add File: ",
+        "*** Update File: ",
+        "*** Delete File: ",
+    )
+    for line in patch_text.splitlines():
+        for prefix in prefixes:
+            if line.startswith(prefix):
+                path = line[len(prefix) :].strip()
+                if path:
+                    paths.append(path)
+                break
+    return paths
+
+
+def _normalize_opencode_args(name: str, raw_input: Any) -> dict[str, Any]:
+    args = dict(raw_input) if isinstance(raw_input, dict) else {}
+    args["raw_input"] = raw_input
+
+    if name == "skill":
+        skill_name = ""
+        if isinstance(raw_input, dict):
+            candidate = raw_input.get("skill") or raw_input.get("name")
+            if isinstance(candidate, str):
+                skill_name = candidate
+        if skill_name:
+            args["name"] = skill_name.split(":", 1)[-1]
+            args["skill"] = skill_name if ":" in skill_name else f"superpowers:{skill_name}"
+
+    if name == "bash" and "command" not in args:
+        command = args.get("cmd")
+        if isinstance(command, str):
+            args["command"] = command
+
+    if name in {"read", "write", "edit"} and "file_path" not in args:
+        for key in ("file_path", "filePath", "path", "file"):
+            value = args.get(key)
+            if isinstance(value, str):
+                args["file_path"] = value
+                break
+
+    if name == "apply_patch" and "file_path" not in args:
+        patch_text = args.get("patch")
+        if not isinstance(patch_text, str) and isinstance(raw_input, str):
+            patch_text = raw_input
+        paths = _opencode_apply_patch_paths(patch_text)
+        if paths:
+            args["file_path"] = paths[0]
+            args["file_paths"] = paths
+
+    return args
+
+
+def normalize_opencode_logs(raw_content: str) -> list[dict[str, Any]]:
+    """Normalize OpenCode exported session JSON tool parts."""
+    try:
+        data = json.loads(raw_content)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    messages = data.get("messages", [])
+    if not isinstance(messages, list):
+        return []
+
+    results: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        parts = message.get("parts", [])
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict) or part.get("type") != "tool":
+                continue
+            name = part.get("tool", "")
+            if not isinstance(name, str) or not name:
+                continue
+            canonical = OPENCODE_TOOL_MAP.get(name, name)
+            args = _normalize_opencode_args(name, _opencode_tool_input(part))
+            source = "native" if canonical in OPENCODE_NATIVE_TOOLS else "shell"
+            results.append({"tool": canonical, "args": args, "source": source})
+    return results
+
+
 ANTIGRAVITY_TOOL_MAP: dict[str, str] = {
     "run_command": "Bash",
     "view_file": "Read",
@@ -524,5 +644,6 @@ NORMALIZERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "claude": normalize_claude_logs,
     "codex": normalize_codex_logs,
     "gemini": normalize_gemini_logs,
+    "opencode": normalize_opencode_logs,
     "pi": normalize_pi_logs,
 }

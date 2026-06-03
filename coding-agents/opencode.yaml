@@ -1,0 +1,10 @@
+name: opencode
+binary: opencode
+agent_config_env: OPENCODE_QUORUM_HOME
+session_log_dir: "${OPENCODE_QUORUM_HOME}/.quorum/session-exports"
+session_log_glob: "[0-9]*-ses_*.json"
+normalizer: opencode
+required_env:
+  - SUPERPOWERS_ROOT
+max_time: 10m
+max_concurrency: 1

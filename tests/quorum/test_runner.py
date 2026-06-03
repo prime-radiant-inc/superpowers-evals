@@ -16,6 +16,7 @@ from quorum.runner import (
     RunnerError,
     _exclude_antigravity_project_marker,
     _gemini_transcripts,
+    _populate_context_dir,
     _run_antigravity_auth_preflight,
     _seed_agent_config_dir,
     _seed_antigravity_config,
@@ -89,6 +90,24 @@ def _make_gemini_agent(coding_agents_dir: Path, session_log_dir: Path) -> None:
     (coding_agents_dir / "gemini-context").mkdir(parents=True, exist_ok=True)
 
 
+def _make_opencode_agent(coding_agents_dir: Path, session_log_dir: Path) -> None:
+    coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    (coding_agents_dir / "opencode.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "opencode",
+                "binary": "opencode",
+                "agent_config_env": "OPENCODE_QUORUM_HOME",
+                "session_log_dir": str(session_log_dir),
+                "session_log_glob": "[0-9]*-ses_*.json",
+                "normalizer": "opencode",
+                "required_env": ["SUPERPOWERS_ROOT"],
+                "max_time": "10m",
+            }
+        )
+    )
+
+
 # Tests pass an empty dir as skeleton_root so _seed_agent_config_dir falls
 # through to mkdir-empty without requiring the production skeleton fixture.
 def _empty_skeleton(tmp_path: Path) -> Path:
@@ -137,6 +156,32 @@ def _gemini_tcfg() -> CodingAgentConfig:
         max_time=None,
         project_prompt=None,
     )
+
+
+def _opencode_tcfg() -> CodingAgentConfig:
+    return CodingAgentConfig(
+        name="opencode",
+        binary="opencode",
+        agent_config_env="OPENCODE_QUORUM_HOME",
+        session_log_dir="${OPENCODE_QUORUM_HOME}/.quorum/session-exports",
+        session_log_glob="[0-9]*-ses_*.json",
+        normalizer="opencode",
+        required_env=("SUPERPOWERS_ROOT",),
+        max_time="10m",
+        project_prompt=None,
+    )
+
+
+def _make_superpowers_opencode_root(tmp_path: Path) -> Path:
+    sp = tmp_path / "superpowers"
+    plugin_src = sp / ".opencode" / "plugins" / "superpowers.js"
+    plugin_src.parent.mkdir(parents=True)
+    plugin_src.write_text("export const SuperpowersPlugin = async () => ({});")
+    for skill_name in ("using-superpowers", "brainstorming"):
+        skill_dir = sp / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name}")
+    return sp
 
 
 def _make_scenario(
@@ -855,6 +900,92 @@ class TestSeedAgentConfigDir:
 
         assert mock_run.call_count == 2
 
+    def test_opencode_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/opencode")
+
+        with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
+            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+
+    def test_opencode_seed_requires_opencode_binary(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: None)
+
+        with pytest.raises(RunnerError, match="opencode not found"):
+            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+
+    def test_opencode_seed_stages_plugin_layout(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        plugin_src = sp / ".opencode" / "plugins" / "superpowers.js"
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            "quorum.runner.subprocess.run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "OK\n", ""),
+        )
+
+        dest = tmp_path / "cfg"
+        _seed_agent_config_dir(_opencode_tcfg(), tmp_path, dest, tmp_path / "wd")
+
+        config_dir = dest / ".config" / "opencode"
+        staged_plugin = config_dir / "superpowers" / ".opencode" / "plugins" / "superpowers.js"
+        plugin_link = config_dir / "plugins" / "superpowers.js"
+        staged_skills = config_dir / "superpowers" / "skills"
+
+        assert staged_plugin.read_text() == plugin_src.read_text()
+        assert plugin_link.is_symlink()
+        assert plugin_link.resolve() == staged_plugin.resolve()
+        assert staged_skills.is_dir()
+        assert not staged_skills.is_symlink()
+        assert (staged_skills / "using-superpowers" / "SKILL.md").exists()
+        assert staged_skills.resolve().is_relative_to(dest.resolve())
+        assert (dest / ".local" / "share" / "opencode").is_dir()
+        assert (dest / ".local" / "state" / "opencode").is_dir()
+        assert (dest / ".cache").is_dir()
+        assert (dest / ".tmp").is_dir()
+        assert (dest / ".quorum" / "session-exports").is_dir()
+
+    def test_opencode_seed_rejects_skill_tree_symlinks(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        (sp / "skills" / "brainstorming" / "escape").symlink_to(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
+
+        with pytest.raises(RunnerError, match="symlink"):
+            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+
+    def test_opencode_seed_rejects_preexisting_session_exports(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        skeleton = tmp_path / "opencode-home-skeleton"
+        stale = skeleton / ".quorum" / "session-exports" / "0000000000000001-ses_old.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("{}")
+        dest = tmp_path / "cfg"
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
+
+        with pytest.raises(RunnerError, match="pre-existing OpenCode session exports"):
+            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, dest, tmp_path / "wd")
+
+    def test_opencode_provider_preflight_timeout_is_setup_error(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
+
+        def fake_run(cmd, **kwargs):
+            if Path(cmd[0]).name == "node" and cmd[1] == "--check":
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd == ["opencode", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, "1.15.10\n", "")
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 90))
+
+        monkeypatch.setattr("quorum.runner.subprocess.run", fake_run)
+
+        with pytest.raises(RunnerError, match="preflight timed out") as exc:
+            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+        assert exc.value.stage == "setup"
+
     def test_antigravity_seed_writes_always_proceed_settings(self, tmp_path, monkeypatch):
         sp = tmp_path / "superpowers"
         sp.mkdir()
@@ -1546,6 +1677,167 @@ class TestRunScenario:
         assert "$QUORUM_LAUNCH_AGENT" not in howto
         expected = str(rd / "gauntlet-agent" / "context" / "launch-agent")
         assert expected in howto
+
+    def test_opencode_howto_substitutes_quorum_home_and_launcher(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = Path(__file__).resolve().parents[2] / "coding-agents"
+        run_dir = tmp_path / "run"
+        launch_cwd = tmp_path / "workdir"
+        launch_cwd.mkdir()
+        agent_config_dir = run_dir / "coding-agent-config"
+        launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
+
+        _populate_context_dir(
+            coding_agents_dir,
+            "opencode",
+            run_dir,
+            substitutions={
+                "$QUORUM_AGENT_CWD": str(launch_cwd),
+                "$SUPERPOWERS_ROOT": str(tmp_path / "sp"),
+                "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
+                "$OPENCODE_QUORUM_HOME": str(agent_config_dir),
+            },
+        )
+
+        howto = (run_dir / "gauntlet-agent" / "context" / "HOWTO.md").read_text()
+        launcher = launch_agent_path.read_text()
+
+        assert str(launch_agent_path) in howto
+        assert str(launch_cwd) in launcher
+        assert str(agent_config_dir) in launcher
+        assert "opencode run -i --dangerously-skip-permissions" in launcher
+        assert "env -i" in launcher
+        assert "OPENCODE_CONFIG_DIR=" in launcher
+        assert "TMPDIR=" in launcher
+        assert "SUPERPOWERS_ROOT" not in launcher
+
+    def test_opencode_exports_sessions_before_capture(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        export_dir = tmp_path / "exports"
+        export_dir.mkdir()
+        _make_opencode_agent(coding_agents_dir, export_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text(
+            "pre() { :; }\npost() { skill-called superpowers:brainstorming; }\n"
+        )
+
+        def fake_export(*, opencode_home, export_dir, launch_cwd, snapshot):
+            assert snapshot == {"ses_old"}
+            exported = export_dir / "0000000000000200-ses_1.json"
+            exported.write_text(
+                json.dumps(
+                    {
+                        "messages": [
+                            {
+                                "parts": [
+                                    {
+                                        "type": "tool",
+                                        "tool": "skill",
+                                        "state": {"input": {"name": "brainstorming"}},
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+            )
+            return (exported,)
+
+        with (
+            patch("quorum.runner._seed_opencode_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+            patch(
+                "quorum.runner.snapshot_opencode_sessions",
+                return_value={"ses_old"},
+                create=True,
+            ),
+            patch(
+                "quorum.runner.export_opencode_sessions",
+                side_effect=fake_export,
+                create=True,
+            ) as mock_export,
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="opencode",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "pass"
+        mock_export.assert_called_once()
+
+    def test_opencode_missing_session_export_is_indeterminate(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        export_dir = tmp_path / "exports"
+        export_dir.mkdir()
+        _make_opencode_agent(coding_agents_dir, export_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def fake_export(*, opencode_home, export_dir, launch_cwd, snapshot):
+            (export_dir / "opencode-session-export-manifest.json").write_text(
+                json.dumps({"matched_ids": [], "exports": []})
+            )
+            return ()
+
+        with (
+            patch("quorum.runner._seed_opencode_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+            patch("quorum.runner.snapshot_opencode_sessions", return_value=set(), create=True),
+            patch("quorum.runner.export_opencode_sessions", side_effect=fake_export, create=True),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="opencode",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "no OpenCode session export" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
+
+    def test_opencode_zero_normalized_rows_is_indeterminate(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        export_dir = tmp_path / "exports"
+        export_dir.mkdir()
+        _make_opencode_agent(coding_agents_dir, export_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def fake_export(*, opencode_home, export_dir, launch_cwd, snapshot):
+            exported = export_dir / "0000000000000100-ses_empty.json"
+            exported.write_text(json.dumps({"messages": []}))
+            return (exported,)
+
+        with (
+            patch("quorum.runner._seed_opencode_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+            patch("quorum.runner.snapshot_opencode_sessions", return_value=set(), create=True),
+            patch("quorum.runner.export_opencode_sessions", side_effect=fake_export, create=True),
+        ):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="opencode",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert "OpenCode export(s) normalized to zero tool-call rows" in verdict.final_reason
+        assert verdict.error is not None
+        assert verdict.error.stage == "capture"
 
     def test_workdir_in_run_dir_always_present(self, tmp_path):
         # The workdir now lives at <run-dir>/coding-agent-workdir/ — always

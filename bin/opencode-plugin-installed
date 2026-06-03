@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+_RECORD_CHECK=opencode-plugin-installed
+_RECORD_ARGS=("$@")
+source "$(dirname "$0")/_record"
+set -uo pipefail
+
+if [ -n "${QUORUM_RUN_DIR:-}" ]; then
+    home="$QUORUM_RUN_DIR/coding-agent-config"
+else
+    home="${OPENCODE_QUORUM_HOME:-}"
+fi
+config_dir="$home/.config/opencode"
+plugin="$config_dir/plugins/superpowers.js"
+using_skill="$config_dir/superpowers/skills/using-superpowers/SKILL.md"
+
+if [ ! -e "$plugin" ]; then
+    record_fail "OpenCode Superpowers plugin missing at $plugin"
+    exit 1
+fi
+
+if [ ! -f "$using_skill" ]; then
+    record_fail "OpenCode using-superpowers skill missing at $using_skill"
+    exit 1
+fi
+
+record_pass "OpenCode Superpowers plugin installed in isolated config"

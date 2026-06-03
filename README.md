@@ -1,9 +1,9 @@
 # Superpowers Evals
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
-**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini)
-through a Gauntlet QA agent and grades them against scenario acceptance
-criteria plus deterministic post-checks.
+**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini,
+OpenCode) through a Gauntlet QA agent and grades them against scenario
+acceptance criteria plus deterministic post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
 form `Quorum` appears in headings and the actor table.
@@ -19,7 +19,8 @@ quorum has two very different execution modes:
 - **Static/unit checks** are safe for public CI. They run `ruff`, `ty`, and
   `pytest`. They do not call model APIs and do not launch agent CLIs.
 - **Live evals** are trusted-maintainer operations. They launch Claude Code,
-  Codex CLI, Antigravity CLI, or Gemini CLI in permissive modes and collect raw
+  Codex CLI, Antigravity CLI, Gemini CLI, or OpenCode CLI in permissive modes
+  and collect raw
   transcripts, tool calls, filesystem state, and session logs.
 
 Public CI must stay on the static/unit side of that line. Never add API keys,
@@ -35,13 +36,16 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
 - Gemini uses `--skip-trust --approval-mode=yolo` and API-key auth.
+- OpenCode uses `--dangerously-skip-permissions`.
 
 quorum seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
 Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity, and
-`GEMINI_CLI_HOME` for Gemini) so the Coding-Agent never sees the host's real
-`~/.claude`, `~/.codex`, or `~/.gemini` state, installed plugins, or prior
-sessions. That narrows the blast radius but is not a sandbox — the subprocess
-still inherits the parent shell environment and can read exported credentials.
+`GEMINI_CLI_HOME` for Gemini, and `OPENCODE_QUORUM_HOME` plus isolated XDG dirs
+for OpenCode) so the Coding-Agent never sees the host's real `~/.claude`,
+`~/.codex`, `~/.gemini`, or OpenCode state, installed plugins, or prior
+sessions. That narrows the blast radius but is not a sandbox. OpenCode's
+launcher additionally uses an allowlisted environment, but live Coding-Agents
+still run with broad filesystem and command execution power.
 
 Run live evals only from a trusted local environment:
 
@@ -65,7 +69,7 @@ Run one scenario:
 uv run quorum run scenarios/triggering-writing-plans --coding-agent claude
 ```
 
-Agent names are `claude`, `codex`, `antigravity`, and `gemini`; not every
+Agent names are `claude`, `codex`, `antigravity`, `gemini`, and `opencode`; not every
 scenario is valid for every agent.
 
 List scenarios:
@@ -114,6 +118,15 @@ uv run quorum show <run-dir>
 Do not wire Gemini live evals to public CI; they launch `gemini` with
 `--approval-mode=yolo` and preserve secret-bearing run artifacts.
 
+Trusted-maintainer OpenCode bootstrap smoke:
+
+```bash
+SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run scenarios/opencode-superpowers-bootstrap --coding-agent opencode
+```
+
+Do not wire OpenCode live evals to public CI; they launch `opencode` with
+`--dangerously-skip-permissions` and depend on local provider credentials.
+
 ## Canonical Actors
 
 Keep the actors straight; confusing them is the most common triage error.
@@ -124,7 +137,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**; future **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**, **OpenCode**; future **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Quorum** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/quorum/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
@@ -272,7 +285,8 @@ learn how to launch and observe that CLI. Claude additionally has a home
 skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
 per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run via
 `codex login --with-api-key`; Antigravity and Gemini provision isolated
-`.gemini` state fresh per run). All authored once per agent and shared across
+`.gemini` state fresh per run; OpenCode stages the local Superpowers plugin and
+skills into isolated XDG dirs). All authored once per agent and shared across
 scenarios.
 
 | Coding-Agent | CLI | Required environment |
@@ -281,6 +295,7 @@ scenarios.
 | `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
 | `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY`, `SUPERPOWERS_ROOT` |
+| `opencode` | OpenCode CLI | `SUPERPOWERS_ROOT`, provider credentials for the selected OpenCode model |
 
 When this repo is checked out as `superpowers/evals`, quorum defaults
 `SUPERPOWERS_ROOT` to the parent `superpowers` checkout. In a standalone
@@ -404,6 +419,48 @@ Note: Gauntlet's own `gauntlet` CLI preserves its `--target <binary>` flag for
 selecting the TUI adapter binary; quorum's `--coding-agent` flag is a
 separate, higher-level concept that selects the agent config.
 
+### OpenCode
+
+`coding-agents/opencode.yaml` launches OpenCode CLI as `opencode`. It requires
+`SUPERPOWERS_ROOT` because quorum stages the local Superpowers OpenCode plugin
+and skills into each run's isolated config home. The runner creates a per-run
+`OPENCODE_QUORUM_HOME`, seeds isolated XDG dirs, copies
+`.opencode/plugins/superpowers.js`, copies the `skills/` tree, links the plugin
+into `.config/opencode/plugins/`, and rejects symlinks or stale session exports
+before launch.
+
+The generated launcher starts interactive OpenCode from the scenario workdir
+with an allowlisted environment:
+
+```bash
+opencode run -i --dangerously-skip-permissions
+```
+
+Before launch, quorum runs a throwaway provider preflight:
+
+```bash
+opencode run --dangerously-skip-permissions "Reply with EXACTLY OK."
+```
+
+OpenCode stores sessions outside simple JSON transcript files, so quorum
+captures behavior by snapshotting `opencode session list --format json` before
+Gauntlet, exporting matching new sessions after Gauntlet, and normalizing the
+exported files under:
+
+```text
+<run>/coding-agent-config/.quorum/session-exports/[0-9]*-ses_*.json
+```
+
+The manifest at:
+
+```text
+<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json
+```
+
+records raw session rows, cwd-filter decisions, skipped existing sessions, and
+export metadata. The manifest is diagnostic evidence only and is excluded from
+normalization.
+
 ## How a Run Works
 
 A `quorum run` drives one scenario against one Coding-Agent:
@@ -414,11 +471,13 @@ A `quorum run` drives one scenario against one Coding-Agent:
    doubles as Gauntlet's `--state-dir` root and the evidence root.
 3. **Isolation** — a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
    Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity,
-   `GEMINI_CLI_HOME` for Gemini) is seeded or provisioned, so the Coding-Agent
-   never sees the host's real `~/.claude`, `~/.codex`, or `~/.gemini`,
-   installed plugins, or prior sessions. Antigravity also runs an isolated auth
-   preflight and plugin install before launch; Gemini links the local
-   Superpowers extension before launch.
+   `GEMINI_CLI_HOME` for Gemini, `OPENCODE_QUORUM_HOME` for OpenCode) is
+   seeded or provisioned, so the Coding-Agent never sees the host's real
+   `~/.claude`, `~/.codex`, `~/.gemini`, or OpenCode state, installed plugins,
+   or prior sessions. Antigravity also runs an isolated auth preflight and
+   plugin install before launch; Gemini links the local Superpowers extension
+   before launch; OpenCode stages the plugin and runs an isolated provider
+   preflight.
 4. **Setup** — the Coding-Agent's workdir is created inside the run dir as
    `coding-agent-workdir/`; the scenario's `setup.sh` builds the fixture.
 5. **Pre-checks** — `checks.sh`'s `pre()` runs against the workdir; a failure
@@ -432,9 +491,10 @@ A `quorum run` drives one scenario against one Coding-Agent:
    `## Acceptance Criteria`.
 8. **Capture** — the Coding-Agent's session-log dir is diffed, normalized into
    `coding-agent-tool-calls.jsonl`, and token usage is written to
-   `coding-agent-token-usage.json` (measurement only). Antigravity and Gemini
-   runs fail closed as `indeterminate` if no transcript is captured or
-   transcripts normalize to zero tool-call rows.
+   `coding-agent-token-usage.json` (measurement only). OpenCode exports matching
+   new sessions before this diff step. Antigravity, Gemini, and OpenCode runs
+   fail closed as `indeterminate` if no transcript/session export is captured or
+   captured logs normalize to zero tool-call rows.
 9. **Post-checks** — `checks.sh`'s `post()` runs against the captured evidence.
 10. **Compose** — the final verdict is `pass` iff the Gauntlet-Agent passed
     **and** every post-check passed. `verdict.json` is written to the run dir.
@@ -482,10 +542,12 @@ git diff coding-agents/claude-home-skeleton/   # sanity-check the scrubbed resul
 git commit coding-agents/claude-home-skeleton/ -m "quorum: refresh Claude skeleton"
 ```
 
-Codex and Antigravity need no committed home skeleton. Codex provisions a fresh
-per-run home from your `OPENAI_API_KEY`; Antigravity provisions an isolated
-per-run `ANTIGRAVITY_CONFIG_DIR`, runs its auth preflight, and installs the
-Superpowers plugin from `SUPERPOWERS_ROOT`.
+Codex, Antigravity, Gemini, and OpenCode need no committed home skeleton. Codex
+provisions a fresh per-run home from your `OPENAI_API_KEY`; Antigravity
+provisions an isolated per-run `ANTIGRAVITY_CONFIG_DIR`, runs its auth
+preflight, and installs the Superpowers plugin from `SUPERPOWERS_ROOT`; Gemini
+seeds API-key auth and links the local extension; OpenCode stages the plugin and
+skills from `SUPERPOWERS_ROOT` into isolated XDG dirs.
 
 ## Safe Checks
 
@@ -556,6 +618,23 @@ When an Antigravity run is non-passing or indeterminate:
 7. Render the verdict with `uv run quorum show <run-or-batch-id>`.
 8. For broad sweep triage, classify failures with
    [docs/baselines/antigravity-sweeps/README.md](docs/baselines/antigravity-sweeps/README.md).
+
+### OpenCode Troubleshooting
+
+When an OpenCode run is non-passing or indeterminate:
+
+1. Confirm `opencode` is installed and reachable: `opencode --version`.
+2. Confirm provider auth works outside quorum with a one-shot command, for
+   example `opencode run --dangerously-skip-permissions "Reply with EXACTLY OK."`.
+3. Confirm the staged plugin exists at
+   `<run>/coding-agent-config/.config/opencode/plugins/superpowers.js`.
+4. Confirm the staged skills exist under
+   `<run>/coding-agent-config/.config/opencode/superpowers/skills/`.
+5. Inspect the export manifest at
+   `<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json`.
+6. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`; plugin
+   files alone do not prove hook or skill behavior.
+7. Render the verdict with `uv run quorum show <run-or-batch-id>`.
 
 ## Contribution Rules
 

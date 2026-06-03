@@ -62,6 +62,12 @@ from quorum.composer import (
     compose,
 )
 from quorum.economics import build_run_economics
+from quorum.opencode_capture import (
+    OpenCodeCaptureError,
+    export_opencode_sessions,
+    opencode_run_env,
+    snapshot_opencode_sessions,
+)
 from quorum.setup_step import SetupError, run_setup
 from quorum.story_meta import StoryMetaError, read_quorum_max_time
 from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
@@ -77,6 +83,7 @@ GEMINI_REQUIRED_SUPERPOWERS_FILES = (
     "skills/using-superpowers/SKILL.md",
     "skills/using-superpowers/references/gemini-tools.md",
 )
+OPENCODE_EXPORT_SUBDIR = Path(".quorum/session-exports")
 
 
 class RunnerError(RuntimeError):
@@ -523,6 +530,173 @@ def _seed_antigravity_config(antigravity_config_dir: Path, workdir: Path) -> Non
         )
 
 
+def _run_opencode_provider_preflight() -> None:
+    """Verify OpenCode can answer in a throwaway isolated home."""
+    with tempfile.TemporaryDirectory(prefix="quorum-opencode-preflight-") as tmp:
+        tmp_path = Path(tmp)
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        home = tmp_path / "home"
+        for path in (
+            home / ".config" / "opencode",
+            home / ".local" / "share" / "opencode",
+            home / ".local" / "state" / "opencode",
+            home / ".cache",
+            home / ".tmp",
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+        version_hint = "unknown"
+        try:
+            version = subprocess.run(
+                ["opencode", "--version"],
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                timeout=15,
+                env=opencode_run_env(home),
+            )
+            version_hint = (version.stdout or version.stderr).strip() or "unknown"
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+        try:
+            result = subprocess.run(
+                [
+                    "opencode",
+                    "run",
+                    "--dangerously-skip-permissions",
+                    "Reply with EXACTLY OK.",
+                ],
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                timeout=90,
+                env=opencode_run_env(home),
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RunnerError(
+                "opencode provider preflight timed out after 90s",
+                stage="setup",
+            ) from e
+    if result.returncode != 0:
+        raise RunnerError(
+            "opencode provider preflight failed "
+            f"(version {version_hint[:120]}, exit {result.returncode}); "
+            f"stderr: {result.stderr.strip()[:300]}",
+            stage="setup",
+        )
+    if not _preflight_response_ok(result.stdout):
+        raise RunnerError(
+            "opencode provider preflight did not return OK; "
+            f"version {version_hint[:120]}, stdout: {result.stdout.strip()[:300]}",
+            stage="setup",
+        )
+
+
+def _reject_symlinks(root: Path, *, label: str) -> None:
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RunnerError(f"{label} contains unsupported symlink: {path}", stage="setup")
+
+
+def _require_under_home(path: Path, opencode_home: Path) -> None:
+    if not path.resolve().is_relative_to(opencode_home.resolve()):
+        raise RunnerError(
+            f"staged OpenCode Superpowers path escapes isolated home: {path}",
+            stage="setup",
+        )
+
+
+def _seed_opencode_config(opencode_home: Path) -> None:
+    """Install Superpowers into an isolated OpenCode home."""
+    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    if not superpowers_root:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT not set; cannot install opencode Superpowers plugin",
+            stage="setup",
+        )
+    if shutil.which("opencode") is None:
+        raise RunnerError("opencode not found on PATH; cannot run opencode evals", stage="setup")
+
+    sp_root = Path(superpowers_root)
+    plugin_src = sp_root / ".opencode" / "plugins" / "superpowers.js"
+    required = [
+        plugin_src,
+        sp_root / "skills" / "using-superpowers" / "SKILL.md",
+        sp_root / "skills" / "brainstorming" / "SKILL.md",
+    ]
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise RunnerError(
+            "SUPERPOWERS_ROOT is missing OpenCode plugin files: " + ", ".join(missing),
+            stage="setup",
+        )
+
+    export_dir = opencode_home / OPENCODE_EXPORT_SUBDIR
+    stale_exports = sorted(export_dir.glob("[0-9]*-ses_*.json"))
+    if stale_exports:
+        raise RunnerError(
+            "pre-existing OpenCode session exports before capture snapshot: "
+            + ", ".join(str(path) for path in stale_exports[:3]),
+            stage="setup",
+        )
+
+    _reject_symlinks(sp_root / "skills", label="SUPERPOWERS_ROOT skills")
+
+    opencode_config_dir = opencode_home / ".config" / "opencode"
+    for path in (
+        opencode_config_dir,
+        opencode_home / ".local" / "share" / "opencode",
+        opencode_home / ".local" / "state" / "opencode",
+        opencode_home / ".cache",
+        opencode_home / ".tmp",
+        export_dir,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    package_root = opencode_config_dir / "superpowers"
+    staged_plugin = package_root / ".opencode" / "plugins" / "superpowers.js"
+    staged_plugin.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(plugin_src, staged_plugin)
+
+    staged_skills = package_root / "skills"
+    if staged_skills.exists() or staged_skills.is_symlink():
+        if staged_skills.is_dir() and not staged_skills.is_symlink():
+            shutil.rmtree(staged_skills)
+        else:
+            staged_skills.unlink()
+    shutil.copytree(sp_root / "skills", staged_skills)
+
+    plugin_link = opencode_config_dir / "plugins" / "superpowers.js"
+    plugin_link.parent.mkdir(parents=True, exist_ok=True)
+    if plugin_link.exists() or plugin_link.is_symlink():
+        plugin_link.unlink()
+    plugin_link.symlink_to(staged_plugin)
+
+    node = shutil.which("node")
+    if node is not None:
+        result = subprocess.run(
+            [node, "--check", str(staged_plugin)],
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RunnerError(
+                "staged OpenCode Superpowers plugin failed node --check: "
+                f"{result.stderr.strip()[:300]}",
+                stage="setup",
+            )
+
+    _require_under_home(staged_plugin, opencode_home)
+    _require_under_home(plugin_link, opencode_home)
+    _require_under_home(staged_skills, opencode_home)
+    for path in staged_skills.rglob("*"):
+        _require_under_home(path, opencode_home)
+
+    _run_opencode_provider_preflight()
+
+
 def _seed_agent_config_dir(
     coding_agent: CodingAgentConfig,
     skeleton_root: Path,
@@ -568,6 +742,8 @@ def _seed_agent_config_dir(
         _seed_antigravity_config(dest, workdir)
     if coding_agent.name == "gemini":
         _seed_gemini_config(dest, workdir)
+    if coding_agent.name == "opencode":
+        _seed_opencode_config(dest)
 
 
 def _exclude_antigravity_project_marker(launch_cwd: Path) -> None:
@@ -938,6 +1114,21 @@ def _run_scenario_inner(
         launch_cwd = _prepare_antigravity_launch_cwd(launch_cwd, run_dir)
         _write_antigravity_settings(agent_config_dir, launch_cwd)
 
+    opencode_session_snapshot: set[str] = set()
+    if tcfg.normalizer == "opencode":
+        try:
+            opencode_session_snapshot = snapshot_opencode_sessions(
+                opencode_home=agent_config_dir,
+                launch_cwd=launch_cwd,
+            )
+        except OpenCodeCaptureError as e:
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason=f"OpenCode session snapshot failed: {e}",
+                checks=pre_records,
+                error=RunError(stage="capture", message=str(e)),
+            )
+
     # 6. Populate gauntlet-agent/context/ with HOWTOs, substituting
     #    $QUORUM_AGENT_CWD, $SUPERPOWERS_ROOT, and the per-coding-agent
     #    agent-config env var (e.g. $CLAUDE_CONFIG_DIR) with resolved
@@ -986,6 +1177,32 @@ def _run_scenario_inner(
         extra_env={tcfg.agent_config_env: str(agent_config_dir)},
     )
 
+    opencode_exported_paths: tuple[Path, ...] = ()
+    if tcfg.normalizer == "opencode":
+        try:
+            opencode_exported_paths = export_opencode_sessions(
+                opencode_home=agent_config_dir,
+                export_dir=session_log_dir,
+                launch_cwd=launch_cwd,
+                snapshot=opencode_session_snapshot,
+            )
+        except OpenCodeCaptureError as e:
+            gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)
+            if gauntlet_layer is None:
+                gauntlet_layer = GauntletLayer(
+                    status=gauntlet_status,
+                    summary="",
+                    reasoning="",
+                    run_id=None,
+                )
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason=f"OpenCode session export failed: {e}",
+                gauntlet=gauntlet_layer,
+                checks=pre_records,
+                error=RunError(stage="capture", message=str(e)),
+            )
+
     # 9. Capture + normalize logs.
     capture_result = capture_tool_calls(
         log_dir=session_log_dir,
@@ -1020,7 +1237,53 @@ def _run_scenario_inner(
             run_id=None,
         )
 
-    strict_capture_names = {"antigravity": "Antigravity", "gemini": "Gemini"}
+    if (
+        tcfg.normalizer == "opencode"
+        and capture_result.source_logs == ()
+        and opencode_exported_paths
+    ):
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=(
+                "OpenCode exported session files, but file-diff capture did not "
+                "see them as new; check export snapshot timing"
+            ),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(stage="capture", message="OpenCode export/capture snapshot mismatch"),
+        )
+
+    if tcfg.normalizer == "opencode" and not capture_result.source_logs:
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason=(
+                "no OpenCode session export appeared under isolated "
+                f"{session_log_dir}; cannot evaluate this run"
+            ),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(stage="capture", message="no OpenCode session export captured"),
+        )
+
+    if (
+        tcfg.normalizer == "opencode"
+        and capture_result.source_logs
+        and capture_result.row_count == 0
+    ):
+        rel = [str(p.relative_to(session_log_dir)) for p in capture_result.source_logs]
+        return run_dir, _write_indeterminate(
+            run_dir,
+            final_reason="OpenCode export(s) normalized to zero tool-call rows: " + ", ".join(rel),
+            gauntlet=gauntlet_layer,
+            checks=pre_records,
+            error=RunError(stage="capture", message="OpenCode capture normalized to zero rows"),
+        )
+
+    strict_capture_names = {
+        "antigravity": "Antigravity",
+        "gemini": "Gemini",
+        "opencode": "OpenCode",
+    }
     strict_capture_name = strict_capture_names.get(tcfg.normalizer)
     if strict_capture_name and not capture_result.source_logs:
         return run_dir, _write_indeterminate(

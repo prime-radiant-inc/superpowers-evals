@@ -10,6 +10,7 @@ from quorum.normalizers import (
     normalize_claude_logs,
     normalize_codex_logs,
     normalize_gemini_logs,
+    normalize_opencode_logs,
     normalize_pi_logs,
     snapshot_log_dir,
 )
@@ -471,6 +472,146 @@ class TestNormalizeGeminiLogs:
             assert rows[0]["source"] == "native"
             assert rows[-1]["args"]["command"] == "git status"
             assert rows[-1]["source"] == "shell"
+
+
+class TestNormalizeOpenCodeLogs:
+    def test_normalizes_tool_parts_from_export_json(self):
+        export = {
+            "info": {"id": "ses_1", "directory": "/tmp/project"},
+            "messages": [
+                {
+                    "info": {"role": "assistant"},
+                    "parts": [
+                        {"type": "step-start"},
+                        {
+                            "type": "tool",
+                            "tool": "skill",
+                            "state": {
+                                "status": "completed",
+                                "input": {"name": "brainstorming"},
+                            },
+                        },
+                        {
+                            "type": "tool",
+                            "tool": "bash",
+                            "state": {
+                                "status": "completed",
+                                "input": {"command": "git status"},
+                            },
+                        },
+                        {
+                            "type": "tool",
+                            "tool": "task",
+                            "state": {
+                                "status": "completed",
+                                "input": {"subagent_type": "general", "prompt": "review"},
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+
+        assert normalize_opencode_logs(json.dumps(export)) == [
+            {
+                "tool": "Skill",
+                "args": {
+                    "skill": "superpowers:brainstorming",
+                    "name": "brainstorming",
+                    "raw_input": {"name": "brainstorming"},
+                },
+                "source": "native",
+            },
+            {
+                "tool": "Bash",
+                "args": {
+                    "command": "git status",
+                    "raw_input": {"command": "git status"},
+                },
+                "source": "shell",
+            },
+            {
+                "tool": "Agent",
+                "args": {
+                    "subagent_type": "general",
+                    "prompt": "review",
+                    "raw_input": {"subagent_type": "general", "prompt": "review"},
+                },
+                "source": "native",
+            },
+        ]
+
+    def test_normalizes_file_search_todo_and_web_tools(self):
+        export = {
+            "messages": [
+                {
+                    "parts": [
+                        {"type": "tool", "tool": "read", "state": {"input": {"file": "README.md"}}},
+                        {
+                            "type": "tool",
+                            "tool": "write",
+                            "state": {"input": {"path": "app.py", "content": "x"}},
+                        },
+                        {
+                            "type": "tool",
+                            "tool": "edit",
+                            "state": {"input": {"filePath": "src/app.py"}},
+                        },
+                        {
+                            "type": "tool",
+                            "tool": "apply_patch",
+                            "state": {
+                                "input": {
+                                    "patch": (
+                                        "*** Begin Patch\n"
+                                        "*** Update File: src/app.py\n"
+                                        "@@\n"
+                                        "-old\n"
+                                        "+new\n"
+                                        "*** End Patch\n"
+                                    )
+                                }
+                            },
+                        },
+                        {"type": "tool", "tool": "grep", "state": {"input": {"pattern": "Skill"}}},
+                        {"type": "tool", "tool": "glob", "state": {"input": {"pattern": "*.py"}}},
+                        {"type": "tool", "tool": "todowrite", "state": {"input": {"todos": []}}},
+                        {
+                            "type": "tool",
+                            "tool": "webfetch",
+                            "state": {"input": {"url": "https://example.com"}},
+                        },
+                    ]
+                }
+            ]
+        }
+
+        rows = normalize_opencode_logs(json.dumps(export))
+
+        assert [row["tool"] for row in rows] == [
+            "Read",
+            "Write",
+            "Edit",
+            "Edit",
+            "Grep",
+            "Glob",
+            "TodoWrite",
+            "WebFetch",
+        ]
+        assert rows[0]["args"]["file_path"] == "README.md"
+        assert rows[1]["args"]["file_path"] == "app.py"
+        assert rows[2]["args"]["file_path"] == "src/app.py"
+        assert rows[3]["args"]["file_path"] == "src/app.py"
+        assert rows[3]["args"]["file_paths"] == ["src/app.py"]
+        assert rows[3]["source"] == "native"
+        assert rows[-1]["args"]["url"] == "https://example.com"
+
+    def test_ignores_non_json_and_non_tool_parts(self):
+        assert normalize_opencode_logs("not json") == []
+        assert (
+            normalize_opencode_logs(json.dumps({"messages": [{"parts": [{"type": "text"}]}]}))
+            == []
+        )
 
 
 class TestNormalizeAntigravityLogs:

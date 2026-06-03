@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for OpenCode (the agent under test).
+#
+# The cd, isolated HOME/XDG directories, OPENCODE_CONFIG_DIR, and dangerous
+# permission flag are baked in here so the QA agent launches OpenCode from the
+# prepared workdir with one command. quorum substitutes the $... values below
+# at runtime; the installed copy contains literal absolute paths.
+set -euo pipefail
+cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+for name in \
+  OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY \
+  GEMINI_API_KEY GOOGLE_API_KEY \
+  AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+  if [[ -n "${!name-}" ]]; then
+    env_args+=("$name=${!name}")
+  fi
+done
+
+exec env -i \
+  "${env_args[@]}" \
+  HOME="$OPENCODE_QUORUM_HOME" \
+  XDG_CONFIG_HOME="$OPENCODE_QUORUM_HOME/.config" \
+  XDG_DATA_HOME="$OPENCODE_QUORUM_HOME/.local/share" \
+  XDG_STATE_HOME="$OPENCODE_QUORUM_HOME/.local/state" \
+  XDG_CACHE_HOME="$OPENCODE_QUORUM_HOME/.cache" \
+  TMPDIR="$OPENCODE_QUORUM_HOME/.tmp" \
+  OPENCODE_CONFIG_DIR="$OPENCODE_QUORUM_HOME/.config/opencode" \
+  opencode run -i --dangerously-skip-permissions "$@"

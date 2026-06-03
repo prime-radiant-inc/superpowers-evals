@@ -161,6 +161,13 @@ class TestChecksShValidation:
         assert any("QUORUM_WORKDIR" in p for p in problems)
 
 
+def test_opencode_bootstrap_requires_native_skill_call():
+    root = Path(__file__).resolve().parents[2]
+    checks = (root / "scenarios" / "opencode-superpowers-bootstrap" / "checks.sh").read_text()
+
+    assert 'tool-arg-match Skill \'.skill == "superpowers:brainstorming"\'' in checks
+
+
 class TestFixExecutableBits:
     def test_fixes_setup(self, tmp_path):
         sd = new_scenario(tmp_path, "demo")
