@@ -128,6 +128,7 @@ def test_pi_config_loads_when_env_set(monkeypatch, tmp_path):
 
 def test_kimi_config_loads_when_superpowers_root_set(monkeypatch, tmp_path):
     monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("KIMI_MODEL_API_KEY", "fake-kimi-key")
     cfg = load_coding_agent_config(
         Path(__file__).resolve().parents[2] / "coding-agents" / "kimi.yaml"
     )
@@ -135,10 +136,21 @@ def test_kimi_config_loads_when_superpowers_root_set(monkeypatch, tmp_path):
     assert cfg.name == "kimi"
     assert cfg.binary == "kimi"
     assert cfg.agent_config_env == "KIMI_CODE_HOME"
+    assert cfg.required_env == ("SUPERPOWERS_ROOT", "KIMI_MODEL_API_KEY")
     assert cfg.normalizer == "kimi"
     assert cfg.resolve_session_log_dir(tmp_path / "cfg") == (
         tmp_path / "cfg" / "sessions"
     )
+
+
+def test_kimi_config_requires_model_api_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+
+    with pytest.raises(CodingAgentConfigError, match="KIMI_MODEL_API_KEY"):
+        load_coding_agent_config(
+            Path(__file__).resolve().parents[2] / "coding-agents" / "kimi.yaml"
+        )
 
 
 class TestLoadCodingAgentConfig:

@@ -67,6 +67,46 @@ def _invoke(
 # Tests
 # ---------------------------------------------------------------------------
 
+def test_coding_agent_config_error_is_setup_indeterminate(tmp_path):
+    scen = tmp_path / "s"
+    scen.mkdir()
+    (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n")
+    _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 0\n")
+    (scen / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+    coding_agents_dir = tmp_path / "coding-agents"
+    coding_agents_dir.mkdir()
+    (coding_agents_dir / "kimi.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "kimi",
+                "binary": "kimi",
+                "agent_config_env": "KIMI_CODE_HOME",
+                "session_log_dir": "${KIMI_CODE_HOME}/sessions",
+                "session_log_glob": "**/wire.jsonl",
+                "normalizer": "kimi",
+                "required_env": ["KIMI_MODEL_API_KEY"],
+            }
+        )
+    )
+
+    with patch("quorum.runner.invoke_gauntlet") as mock_gauntlet:
+        run_dir, verdict = run_scenario(
+            scenario_dir=scen,
+            coding_agent="kimi",
+            coding_agents_dir=coding_agents_dir,
+            out_root=tmp_path / "results",
+            skeleton_root=tmp_path / "fixtures",
+        )
+
+    mock_gauntlet.assert_not_called()
+    assert verdict.final == "indeterminate"
+    assert verdict.error is not None
+    assert verdict.error.stage == "setup"
+    assert "KIMI_MODEL_API_KEY" in verdict.error.message
+    assert json.loads((run_dir / "verdict.json").read_text())["error"]["stage"] == "setup"
+
+
 class TestAlwaysVerdict:
     def test_setup_failure_yields_indeterminate_verdict(self, tmp_path):
         """A scenario whose setup.sh exits non-zero must still produce a verdict.json

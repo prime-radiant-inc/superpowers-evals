@@ -1663,6 +1663,13 @@ def run_scenario(
             out_root=out_root,
             skeleton_root=skeleton_root,
         )
+    except CodingAgentConfigError as e:
+        v = _write_indeterminate(
+            run_dir,
+            final_reason=f"coding-agent config failed: {e}",
+            error=RunError(stage="setup", message=str(e)[:500]),
+        )
+        return run_dir, v
     except SetupError as e:
         v = _write_indeterminate(
             run_dir,
