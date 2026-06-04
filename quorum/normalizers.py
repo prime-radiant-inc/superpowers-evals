@@ -524,7 +524,7 @@ def _opencode_tool_input(part: dict[str, Any]) -> Any:
     return state.get("input", {})
 
 
-def _opencode_apply_patch_paths(patch_text: Any) -> list[str]:
+def _apply_patch_paths(patch_text: Any) -> list[str]:
     if not isinstance(patch_text, str):
         return []
     paths: list[str] = []
@@ -573,7 +573,7 @@ def _normalize_opencode_args(name: str, raw_input: Any) -> dict[str, Any]:
         patch_text = args.get("patch")
         if not isinstance(patch_text, str) and isinstance(raw_input, str):
             patch_text = raw_input
-        paths = _opencode_apply_patch_paths(patch_text)
+        paths = _apply_patch_paths(patch_text)
         if paths:
             args["file_path"] = paths[0]
             args["file_paths"] = paths
@@ -610,6 +610,102 @@ def normalize_opencode_logs(raw_content: str) -> list[dict[str, Any]]:
             canonical = OPENCODE_TOOL_MAP.get(name, name)
             args = _normalize_opencode_args(name, _opencode_tool_input(part))
             source = "native" if canonical in OPENCODE_NATIVE_TOOLS else "shell"
+            results.append({"tool": canonical, "args": args, "source": source})
+    return results
+
+
+COPILOT_TOOL_MAP: dict[str, str] = {
+    "skill": "Skill",
+    "bash": "Bash",
+    "apply_patch": "Edit",
+    "edit": "Edit",
+    "create": "Write",
+    "write": "Write",
+    "view": "Read",
+    "rg": "Grep",
+    "glob": "Glob",
+    "task": "Agent",
+    "read_agent": "Agent",
+    "list_agents": "Agent",
+    "write_agent": "Agent",
+    "update_todo": "TodoWrite",
+    "web_fetch": "WebFetch",
+    "web_search": "WebSearch",
+}
+
+
+COPILOT_NATIVE_TOOLS = (set(COPILOT_TOOL_MAP.values()) - {"Bash"}) | {
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+}
+
+
+def _normalize_copilot_args(name: str, raw_input: Any) -> dict[str, Any]:
+    args = dict(raw_input) if isinstance(raw_input, dict) else {}
+    args["raw_input"] = raw_input
+
+    if name == "skill":
+        skill_name = ""
+        if isinstance(raw_input, dict):
+            candidate = raw_input.get("skill") or raw_input.get("name")
+            if isinstance(candidate, str):
+                skill_name = candidate
+        if skill_name:
+            args["name"] = skill_name.split(":", 1)[-1]
+            args["skill"] = skill_name if ":" in skill_name else f"superpowers:{skill_name}"
+
+    if name == "bash" and "command" not in args:
+        command = args.get("cmd")
+        if isinstance(command, str):
+            args["command"] = command
+
+    if name in {"view", "edit", "create", "write"} and "file_path" not in args:
+        for key in ("file_path", "filePath", "path", "file"):
+            value = args.get(key)
+            if isinstance(value, str):
+                args["file_path"] = value
+                break
+
+    if name == "apply_patch" and "file_path" not in args:
+        patch_text = args.get("patch")
+        if not isinstance(patch_text, str) and isinstance(raw_input, str):
+            patch_text = raw_input
+        paths = _apply_patch_paths(patch_text)
+        if paths:
+            args["file_path"] = paths[0]
+            args["file_paths"] = paths
+
+    return args
+
+
+def normalize_copilot_logs(raw_content: str) -> list[dict[str, Any]]:
+    """Normalize Copilot CLI session-state JSONL assistant tool requests."""
+    results: list[dict[str, Any]] = []
+    for line in raw_content.strip().split("\n"):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "assistant.message":
+            continue
+        data = entry.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        tool_requests = data.get("toolRequests", [])
+        if not isinstance(tool_requests, list):
+            continue
+        for request in tool_requests:
+            if not isinstance(request, dict):
+                continue
+            name = request.get("name", "")
+            if not isinstance(name, str) or not name:
+                continue
+            canonical = COPILOT_TOOL_MAP.get(name, name)
+            args = _normalize_copilot_args(name, request.get("arguments", {}))
+            source = "native" if canonical in COPILOT_NATIVE_TOOLS else "shell"
             results.append({"tool": canonical, "args": args, "source": source})
     return results
 
@@ -778,6 +874,7 @@ NORMALIZERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "antigravity": normalize_antigravity_logs,
     "claude": normalize_claude_logs,
     "codex": normalize_codex_logs,
+    "copilot": normalize_copilot_logs,
     "gemini": normalize_gemini_logs,
     "kimi": normalize_kimi_logs,
     "opencode": normalize_opencode_logs,

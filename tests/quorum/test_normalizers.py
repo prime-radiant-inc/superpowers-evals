@@ -12,6 +12,7 @@ from quorum.normalizers import (
     normalize_antigravity_logs,
     normalize_claude_logs,
     normalize_codex_logs,
+    normalize_copilot_logs,
     normalize_gemini_logs,
     normalize_kimi_logs,
     normalize_opencode_logs,
@@ -869,6 +870,168 @@ class TestNormalizeKimiLogs:
                 "source": "native",
             }
         ]
+
+
+class TestNormalizeCopilotLogs:
+    def test_normalizes_assistant_tool_requests(self):
+        raw_input = {"skill": "superpowers:brainstorming"}
+        lines = [
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {
+                        "toolRequests": [
+                            {"name": "skill", "arguments": raw_input},
+                            {"name": "bash", "arguments": {"cmd": "git status"}},
+                            {
+                                "name": "apply_patch",
+                                "arguments": {
+                                    "patch": (
+                                        "*** Begin Patch\n"
+                                        "*** Update File: src/app.py\n"
+                                        "@@\n"
+                                        "-old\n"
+                                        "+new\n"
+                                        "*** End Patch\n"
+                                    )
+                                },
+                            },
+                            {"name": "view", "arguments": {"file": "README.md"}},
+                            {"name": "edit", "arguments": {"filePath": "src/edit.py"}},
+                            {"name": "create", "arguments": {"path": "src/new.py"}},
+                            {"name": "write", "arguments": {"file_path": "src/write.py"}},
+                            {"name": "rg", "arguments": {"pattern": "Skill"}},
+                            {"name": "glob", "arguments": {"pattern": "*.py"}},
+                            {"name": "task", "arguments": {"prompt": "review"}},
+                            {"name": "read_agent", "arguments": {"agent": "reviewer"}},
+                            {"name": "list_agents", "arguments": {}},
+                            {"name": "write_agent", "arguments": {"agent": "reviewer"}},
+                            {"name": "update_todo", "arguments": {"todos": []}},
+                            {"name": "web_fetch", "arguments": {"url": "https://example.test"}},
+                            {"name": "web_search", "arguments": {"query": "quorum docs"}},
+                        ]
+                    },
+                }
+            )
+        ]
+
+        rows = normalize_copilot_logs("\n".join(lines))
+
+        assert [row["tool"] for row in rows] == [
+            "Skill",
+            "Bash",
+            "Edit",
+            "Read",
+            "Edit",
+            "Write",
+            "Write",
+            "Grep",
+            "Glob",
+            "Agent",
+            "Agent",
+            "Agent",
+            "Agent",
+            "TodoWrite",
+            "WebFetch",
+            "WebSearch",
+        ]
+        assert [row["source"] for row in rows] == [
+            "native",
+            "shell",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+            "native",
+        ]
+        assert rows[0]["args"] == {
+            "skill": "superpowers:brainstorming",
+            "name": "brainstorming",
+            "raw_input": raw_input,
+        }
+        assert rows[1]["source"] == "shell"
+        assert rows[1]["args"]["command"] == "git status"
+        assert rows[2]["source"] == "native"
+        assert rows[2]["args"]["file_path"] == "src/app.py"
+        assert rows[2]["args"]["file_paths"] == ["src/app.py"]
+        assert rows[3]["args"]["file_path"] == "README.md"
+        assert rows[4]["args"]["file_path"] == "src/edit.py"
+        assert rows[5]["args"]["file_path"] == "src/new.py"
+        assert rows[6]["args"]["file_path"] == "src/write.py"
+        assert rows[-1]["args"]["query"] == "quorum docs"
+
+    def test_preserves_multiple_tool_requests_order(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {
+                        "toolRequests": [
+                            {"name": "bash", "arguments": {"command": "pwd"}},
+                            {"name": "skill", "arguments": {"name": "brainstorming"}},
+                        ]
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {
+                        "toolRequests": [
+                            {"name": "view", "arguments": {"path": "README.md"}},
+                            {"name": "write", "arguments": {"file": "notes.md"}},
+                        ]
+                    },
+                }
+            ),
+        ]
+
+        rows = normalize_copilot_logs("\n".join(lines))
+
+        assert [row["tool"] for row in rows] == ["Bash", "Skill", "Read", "Write"]
+        assert rows[1]["args"]["skill"] == "superpowers:brainstorming"
+        assert rows[1]["args"]["name"] == "brainstorming"
+
+    def test_ignores_non_request_events_and_bad_lines(self):
+        lines = [
+            "not json",
+            json.dumps([]),
+            json.dumps({"type": "tool.execution_complete"}),
+            json.dumps({"type": "session.shutdown"}),
+            json.dumps({"type": "assistant.message", "data": {"toolRequests": "bad"}}),
+            json.dumps({"type": "assistant.message", "data": {"toolRequests": [123]}}),
+        ]
+
+        assert normalize_copilot_logs("\n".join(lines)) == []
+
+    def test_negative_fixture_keeps_early_write_before_skill(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {
+                        "toolRequests": [
+                            {"name": "write", "arguments": {"path": "src/app.py"}},
+                            {"name": "skill", "arguments": {"name": "brainstorming"}},
+                        ]
+                    },
+                }
+            )
+        ]
+
+        rows = normalize_copilot_logs("\n".join(lines))
+
+        assert [row["tool"] for row in rows] == ["Write", "Skill"]
+        assert rows[0]["args"]["file_path"] == "src/app.py"
 
 
 class TestNormalizeAntigravityLogs:

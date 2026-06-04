@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from quorum.normalizers import normalize_opencode_logs
+from quorum.normalizers import normalize_copilot_logs, normalize_opencode_logs
 
 BIN = Path("bin").resolve()
 
@@ -414,6 +414,56 @@ def test_skill_before_implementation_tool_accepts_opencode_apply_patch_rows(tmp_
                     }
                 ]
             }
+        )
+    )
+    trace = _trace(parent, *rows)
+    sink = tmp_path / "s"
+
+    assert (
+        _run(
+            "skill-before-implementation-tool",
+            "superpowers:brainstorming",
+            "Edit",
+            trace=trace,
+            cwd=workdir,
+            sink=sink,
+        )
+        == 0
+    )
+
+
+def test_skill_before_implementation_tool_accepts_copilot_apply_patch_rows(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    rows = normalize_copilot_logs(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "assistant.message",
+                        "data": {
+                            "toolRequests": [
+                                {"name": "skill", "arguments": {"name": "brainstorming"}},
+                                {
+                                    "name": "apply_patch",
+                                    "arguments": {
+                                        "patch": (
+                                            "*** Begin Patch\n"
+                                            "*** Update File: src/app.py\n"
+                                            "@@\n"
+                                            "-old\n"
+                                            "+new\n"
+                                            "*** End Patch\n"
+                                        )
+                                    },
+                                },
+                            ]
+                        },
+                    }
+                )
+            ]
         )
     )
     trace = _trace(parent, *rows)
