@@ -1,4 +1,5 @@
 import time
+
 from quorum.agy_watch import AgyRateLimitWatcher
 
 
@@ -38,6 +39,12 @@ def test_clean_log_does_not_trip(tmp_path):
     time.sleep(0.2)
     assert w.tripped is False
     w.stop()
+
+
+def test_stop_before_start_does_not_raise(tmp_path):
+    w = AgyRateLimitWatcher(tmp_path / "agy.log", tmp_path, teardown=lambda sd: True)
+    w.stop()  # never started — must not raise on join
+    assert w.tripped is False
 
 
 def test_tolerates_absent_then_created_log(tmp_path):

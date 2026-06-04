@@ -7,7 +7,7 @@ RESOURCE_EXHAUSTED / 429 while the agy run is in flight.
 from __future__ import annotations
 
 import threading
-import time
+from collections.abc import Callable
 from pathlib import Path
 
 from quorum.agy_teardown import kill_run_tmux_server
@@ -17,7 +17,10 @@ from quorum.runner import _agy_log_shows_rate_limit
 class AgyRateLimitWatcher(threading.Thread):
     """Poll *log_path* for rate-limit signals and call *teardown* on first hit.
 
-    Tolerates the log file being absent at start — agy creates it late.
+    Tolerates the log file being absent at start — agy creates it late. Assumes
+    a single append-only run log; log rotation / truncation under the watcher is
+    out of scope and would stall detection — acceptable because each run gets its
+    own fresh log.
     """
 
     def __init__(
@@ -25,7 +28,7 @@ class AgyRateLimitWatcher(threading.Thread):
         log_path: Path,
         scratch_dir: Path,
         *,
-        teardown=None,
+        teardown: Callable[[Path], object] | None = None,
         poll_interval: float = 0.5,
     ) -> None:
         super().__init__(daemon=True)
@@ -63,6 +66,10 @@ class AgyRateLimitWatcher(threading.Thread):
             self._stop_event.wait(self._poll_interval)
 
     def stop(self, timeout: float = 2.0) -> None:
-        """Signal the polling loop to exit and join the thread."""
+        """Signal the polling loop to exit and join the thread.
+
+        Safe to call even if the thread was never started.
+        """
         self._stop_event.set()
-        self.join(timeout=timeout)
+        if self.ident is not None:  # only join a thread that was actually started
+            self.join(timeout=timeout)
