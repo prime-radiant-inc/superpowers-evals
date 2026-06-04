@@ -6,9 +6,9 @@ import yaml
 from quorum.capture import (
     capture_token_usage,
     capture_tool_calls,
+    detect_kimi_cwd_mismatch,
     detect_misplaced_pi_sessions,
     detect_unusable_pi_sessions,
-    detect_kimi_cwd_mismatch,
     new_files_since,
     snapshot_dir,
 )

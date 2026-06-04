@@ -419,6 +419,41 @@ def test_kimi_logs_have_superpowers_session_start(tmp_path):
     assert kimi_logs_have_superpowers_session_start([wire])
 
 
+def test_kimi_logs_have_superpowers_session_start_in_injected_message(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    wire.write_text(
+        json.dumps(
+            {
+                "type": "context.append_message",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "<system-reminder>\n"
+                                "<plugin_session_start>\n"
+                                "# Using Superpowers\n"
+                                "Path: /tmp/superpowers/skills/"
+                                "using-superpowers/SKILL.md\n"
+                                "</plugin_session_start>\n"
+                                "</system-reminder>"
+                            ),
+                        }
+                    ],
+                    "origin": {
+                        "kind": "injection",
+                        "variant": "plugin_session_start",
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+
+    assert kimi_logs_have_superpowers_session_start([wire])
+
+
 def test_kimi_logs_reject_missing_superpowers_session_start(tmp_path):
     wire = tmp_path / "wire.jsonl"
     wire.write_text(json.dumps({"type": "context.append_loop_event", "event": {}}) + "\n")

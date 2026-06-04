@@ -46,9 +46,9 @@ from quorum.capture import (
     capture_token_usage,
     capture_tool_calls,
     detect_misplaced_codex_rollouts,
-    diagnose_kimi_unmatched_logs,
     detect_misplaced_pi_sessions,
     detect_unusable_pi_sessions,
+    diagnose_kimi_unmatched_logs,
     snapshot_dir,
 )
 from quorum.checks import parse_coding_agents_directive, run_phase
@@ -1484,7 +1484,10 @@ def _run_scenario_inner(
                 ),
                 gauntlet=gauntlet_layer,
                 checks=pre_records,
-                error=RunError(stage="capture", message="OpenCode export/capture snapshot mismatch"),
+                error=RunError(
+                    stage="capture",
+                    message="OpenCode export/capture snapshot mismatch",
+                ),
             )
 
         if tcfg.normalizer == "pi" and not capture_result.source_logs:
@@ -1568,7 +1571,10 @@ def _run_scenario_inner(
             rel = [str(p.relative_to(session_log_dir)) for p in capture_result.source_logs]
             return run_dir, _write_indeterminate(
                 run_dir,
-                final_reason="OpenCode export(s) normalized to zero tool-call rows: " + ", ".join(rel),
+                final_reason=(
+                    "OpenCode export(s) normalized to zero tool-call rows: "
+                    + ", ".join(rel)
+                ),
                 gauntlet=gauntlet_layer,
                 checks=pre_records,
                 error=RunError(stage="capture", message="OpenCode capture normalized to zero rows"),
@@ -1797,13 +1803,6 @@ def run_scenario(
         )
         return run_dir, v
     except SetupError as e:
-        v = _write_indeterminate(
-            run_dir,
-            final_reason=f"setup failed: {e}",
-            error=RunError(stage="setup", message=str(e)[:500]),
-        )
-        return run_dir, v
-    except CodingAgentConfigError as e:
         v = _write_indeterminate(
             run_dir,
             final_reason=f"setup failed: {e}",

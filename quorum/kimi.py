@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 
 class KimiConfigError(RuntimeError):
@@ -190,6 +191,38 @@ def kimi_stream_json_reply_ok(stdout: str) -> bool:
     return _normalized_ok("".join(assistant_parts))
 
 
+def _kimi_message_text(row: dict[str, object]) -> str:
+    message_obj = row.get("message")
+    if not isinstance(message_obj, dict):
+        return ""
+    message = cast(dict[str, object], message_obj)
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, dict):
+            text = cast(dict[str, object], part).get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _kimi_injection_origin(row: dict[str, object]) -> object:
+    origin = row.get("origin")
+    if origin is not None:
+        return origin
+    message_obj = row.get("message")
+    if isinstance(message_obj, dict):
+        message = cast(dict[str, object], message_obj)
+        return message.get("origin")
+    return None
+
+
 def kimi_logs_have_superpowers_session_start(paths: list[Path] | tuple[Path, ...]) -> bool:
     for path in paths:
         try:
@@ -203,13 +236,30 @@ def kimi_logs_have_superpowers_session_start(paths: list[Path] | tuple[Path, ...
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            event = row.get("event") if isinstance(row, dict) else None
-            if not isinstance(event, dict):
+            if not isinstance(row, dict):
                 continue
+            row = cast(dict[str, object], row)
+            event = row.get("event")
+            if isinstance(event, dict) and (
+                cast(dict[str, object], event).get("type") == "plugin_session_start"
+                and cast(dict[str, object], event).get("plugin") == "superpowers"
+                and cast(dict[str, object], event).get("skill") == "using-superpowers"
+            ):
+                return True
+            origin = _kimi_injection_origin(row)
+            origin_dict = cast(dict[str, object], origin) if isinstance(origin, dict) else None
+            if not (
+                origin_dict is not None
+                and origin_dict.get("kind") == "injection"
+                and origin_dict.get("variant") == "plugin_session_start"
+            ):
+                continue
+            text = _kimi_message_text(row)
+            lower_text = text.lower()
             if (
-                event.get("type") == "plugin_session_start"
-                and event.get("plugin") == "superpowers"
-                and event.get("skill") == "using-superpowers"
+                "<plugin_session_start" in text
+                and "superpowers" in lower_text
+                and "using-superpowers" in lower_text
             ):
                 return True
     return False

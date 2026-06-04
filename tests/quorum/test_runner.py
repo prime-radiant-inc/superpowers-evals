@@ -966,7 +966,13 @@ class TestSeedAgentConfigDir:
         )
 
         dest = tmp_path / "cfg"
-        _seed_agent_config_dir(_pi_tcfg(), tmp_path, dest, tmp_path / "wd")
+        _seed_agent_config_dir(
+            _pi_tcfg(),
+            tmp_path,
+            dest,
+            tmp_path / "wd",
+            run_dir=tmp_path / "run-dir",
+        )
 
         auth_path = dest / "auth.json"
         auth = json.loads(auth_path.read_text())
@@ -994,7 +1000,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setenv("PI_API_KEY", "secret-pi-key")
 
         with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
-            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _pi_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_pi_seed_requires_api_key_env(self, tmp_path, monkeypatch):
         superpowers = _make_superpowers_pi_root(tmp_path)
@@ -1005,7 +1017,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.delenv("PI_API_KEY", raising=False)
 
         with pytest.raises(RunnerError, match="PI_API_KEY"):
-            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _pi_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_pi_seed_requires_azure_endpoint_or_resource_name(self, tmp_path, monkeypatch):
         superpowers = _make_superpowers_pi_root(tmp_path)
@@ -1024,12 +1042,24 @@ class TestSeedAgentConfigDir:
             RunnerError,
             match="AZURE_OPENAI_BASE_URL.*AZURE_OPENAI_RESOURCE_NAME",
         ):
-            _seed_agent_config_dir(_pi_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _pi_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_gemini_target_seeds_config(self, tmp_path):
         dest = tmp_path / "agent-config"
         with patch("quorum.runner._seed_gemini_config") as mock_seed:
-            _seed_agent_config_dir(_gemini_tcfg(), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _gemini_tcfg(),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
         mock_seed.assert_called_once_with(dest, tmp_path / "wd")
 
     def test_gemini_seed_requires_api_key(self, tmp_path, monkeypatch):
@@ -1690,7 +1720,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/opencode")
 
         with pytest.raises(RunnerError, match="SUPERPOWERS_ROOT"):
-            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _opencode_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_opencode_seed_requires_opencode_binary(self, tmp_path, monkeypatch):
         sp = _make_superpowers_opencode_root(tmp_path)
@@ -1698,7 +1734,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: None)
 
         with pytest.raises(RunnerError, match="opencode not found"):
-            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _opencode_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_opencode_seed_stages_plugin_layout(self, tmp_path, monkeypatch):
         sp = _make_superpowers_opencode_root(tmp_path)
@@ -1711,7 +1753,13 @@ class TestSeedAgentConfigDir:
         )
 
         dest = tmp_path / "cfg"
-        _seed_agent_config_dir(_opencode_tcfg(), tmp_path, dest, tmp_path / "wd")
+        _seed_agent_config_dir(
+            _opencode_tcfg(),
+            tmp_path,
+            dest,
+            tmp_path / "wd",
+            run_dir=tmp_path / "run-dir",
+        )
 
         config_dir = dest / ".config" / "opencode"
         staged_plugin = config_dir / "superpowers" / ".opencode" / "plugins" / "superpowers.js"
@@ -1738,7 +1786,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
 
         with pytest.raises(RunnerError, match="symlink"):
-            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _opencode_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_opencode_seed_rejects_preexisting_session_exports(self, tmp_path, monkeypatch):
         sp = _make_superpowers_opencode_root(tmp_path)
@@ -1751,7 +1805,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: f"/usr/bin/{name}")
 
         with pytest.raises(RunnerError, match="pre-existing OpenCode session exports"):
-            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, dest, tmp_path / "wd")
+            _seed_agent_config_dir(
+                _opencode_tcfg(),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_opencode_provider_preflight_timeout_is_setup_error(self, tmp_path, monkeypatch):
         sp = _make_superpowers_opencode_root(tmp_path)
@@ -1768,7 +1828,13 @@ class TestSeedAgentConfigDir:
         monkeypatch.setattr("quorum.runner.subprocess.run", fake_run)
 
         with pytest.raises(RunnerError, match="preflight timed out") as exc:
-            _seed_agent_config_dir(_opencode_tcfg(), tmp_path, tmp_path / "cfg", tmp_path / "wd")
+            _seed_agent_config_dir(
+                _opencode_tcfg(),
+                tmp_path,
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
         assert exc.value.stage == "setup"
 
     def test_antigravity_seed_writes_always_proceed_settings(self, tmp_path, monkeypatch):
