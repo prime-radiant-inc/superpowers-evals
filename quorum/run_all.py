@@ -779,13 +779,11 @@ def _read_verdict(run_dir: Path) -> dict | None:
 
 
 def _is_rate_limited_verdict(verdict: dict | None) -> bool:
-    """True when a child's verdict is a Code Assist rate-limit setup failure."""
+    """True when a child's verdict carries a Code Assist rate-limit marker."""
     if not verdict:
         return False
     err = verdict.get("error") or {}
-    return err.get("stage") == "setup" and ANTIGRAVITY_RATE_LIMIT_MARKER in (
-        err.get("message") or ""
-    )
+    return ANTIGRAVITY_RATE_LIMIT_MARKER in (err.get("message") or "")
 
 
 def _run_cost(run_dir: Path) -> float | None:

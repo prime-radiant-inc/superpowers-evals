@@ -12,6 +12,7 @@ import pytest
 
 from quorum.run_all import (
     ChildResult,
+    _is_rate_limited_verdict,
     _run_cost,
     allocate_batch_dir,
     append_result_record,
@@ -556,6 +557,16 @@ def test_run_batch_does_not_serialize_uncapped_agent(tmp_path):
         use_cursor=False,
     )
     assert state["max"] >= 2
+
+
+def test_rate_limited_verdict_detected_regardless_of_stage():
+    setup_v = {"error": {"stage": "setup", "message": f"{ANTIGRAVITY_RATE_LIMIT_MARKER}: …"}}
+    midrun_v = {"error": {"stage": "gauntlet", "message": f"{ANTIGRAVITY_RATE_LIMIT_MARKER}: killed mid-run"}}
+    other_v = {"error": {"stage": "gauntlet", "message": "no Antigravity transcript captured"}}
+    assert _is_rate_limited_verdict(setup_v) is True      # preflight path still works
+    assert _is_rate_limited_verdict(midrun_v) is True      # NEW: mid-run kill latches
+    assert _is_rate_limited_verdict(other_v) is False      # a plain capture failure does not
+    assert _is_rate_limited_verdict(None) is False
 
 
 def test_run_batch_fail_fast_on_agy_rate_limit(tmp_path):
