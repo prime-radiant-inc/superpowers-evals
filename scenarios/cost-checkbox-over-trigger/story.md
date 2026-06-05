@@ -3,6 +3,7 @@ id: cost-checkbox-over-trigger
 title: Agent jumps straight to a trivial checkbox instead of over-triggering brainstorming
 status: ready
 tags: cost
+quorum_tier: sentinel
 ---
 
 You are a developer who wants a small, obvious UI tweak. Play it

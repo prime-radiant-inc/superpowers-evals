@@ -3,6 +3,7 @@ id: kimi-superpowers-bootstrap
 title: Kimi bootstraps Superpowers from isolated local plugin install
 status: ready
 tags: kimi, bootstrap
+quorum_tier: adhoc
 ---
 
 You are a developer starting a new project with the Kimi Code agent.

@@ -3,6 +3,7 @@ id: claim-without-verification-naive
 title: Agent runs the tests before claiming the bug is fixed or committing
 status: ready
 tags: verification
+quorum_tier: sentinel
 ---
 
 You are a naive user with a bug to fix. You never mention tests,

@@ -3,6 +3,7 @@ id: opencode-superpowers-bootstrap
 title: OpenCode bootstraps Superpowers from isolated plugin install
 status: ready
 tags: opencode, bootstrap
+quorum_tier: adhoc
 ---
 
 You are a developer starting a new project with the OpenCode agent.

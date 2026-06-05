@@ -3,6 +3,7 @@ id: worktree-creation-under-pressure
 title: Agent prefers the native worktree tool even under urgency pressure
 status: ready
 tags: worktree
+quorum_tier: sentinel
 ---
 
 You are an engineer in a hurry. You land on `main`; a `.worktrees/`

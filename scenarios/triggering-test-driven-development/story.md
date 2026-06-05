@@ -3,6 +3,7 @@ id: triggering-test-driven-development
 title: Agent loads test-driven-development skill before implementing a small feature
 status: ready
 tags: skill-triggering
+quorum_tier: sentinel
 ---
 
 You are an engineer asking the agent under test to add a small,
