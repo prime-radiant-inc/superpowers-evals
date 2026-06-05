@@ -99,6 +99,7 @@ CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
 ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV = "QUORUM_ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT"
 ANTIGRAVITY_VISIBLE_LAUNCH_RECORD = "antigravity-visible-launch-cwd.json"
 GEMINI_ENV_FILE_NAME = ".gemini-env"
+CLAUDE_ENV_FILE_NAME = ".claude-env"
 COPILOT_ENV_FILE_NAME = ".copilot-env"
 GEMINI_REQUIRED_SUPERPOWERS_FILES = (
     "gemini-extension.json",
@@ -370,6 +371,41 @@ def _write_gemini_env_file(gemini_home: Path) -> Path:
         f.flush()
         os.fchmod(f.fileno(), 0o600)
     return env_file
+
+
+def _write_claude_env_file(claude_config_dir: Path) -> Path:
+    api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth")
+    env_file = claude_config_dir / CLAUDE_ENV_FILE_NAME
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(env_file, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("ANTHROPIC_API_KEY=" + _shell_single_quote(api_key) + "\n")
+        f.flush()
+        os.fchmod(f.fileno(), 0o600)
+    return env_file
+
+
+def _approve_claude_api_key(config_path: Path, api_key: str) -> None:
+    config = json.loads(config_path.read_text()) if config_path.exists() else {}
+    responses = config.setdefault("customApiKeyResponses", {})
+    fingerprint = api_key[-20:]
+
+    approved = responses.setdefault("approved", [])
+    if fingerprint not in approved:
+        approved.append(fingerprint)
+
+    rejected = responses.get("rejected", [])
+    if isinstance(rejected, list):
+        responses["rejected"] = [item for item in rejected if item != fingerprint]
+    else:
+        responses["rejected"] = []
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config))
 
 
 def _copilot_offline_requested(env: Mapping[str, str]) -> bool:
@@ -1270,9 +1306,10 @@ def _seed_agent_config_dir(
     mkdir empty. For claude, then inject hasTrustDialogAccepted for the
     workdir's canonical path (claude keys per-project trust by
     process.cwd(), which is symlink-resolved on macOS) so the workspace-
-    trust dialog stays off-screen. The claude skeleton itself carries
-    onboarding / API-key dialog-bypass state (see
-    bin/refresh-claude-home-skeleton).
+    trust dialog stays off-screen. Claude also records a per-config approval
+    fingerprint before using ANTHROPIC_API_KEY in interactive mode, so the
+    runner seeds that approval for the per-run key. The claude skeleton itself
+    carries onboarding dialog-bypass state (see bin/refresh-claude-home-skeleton).
 
     For codex, _seed_codex_auth runs `codex login --with-api-key` against
     the fresh dir so the agent boots past the "Welcome to Codex / Sign in"
@@ -1300,6 +1337,16 @@ def _seed_agent_config_dir(
             "hasClaudeMdExternalIncludesWarningShown": True,
         }
         config_path.write_text(json.dumps(config))
+    if coding_agent.name == "claude" and "ANTHROPIC_API_KEY" in coding_agent.required_env:
+        api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth")
+        env_file = _write_claude_env_file(dest)
+        _approve_claude_api_key(dest / ".claude.json", api_key)
+        runtime = AgentRuntime(
+            substitutions={
+                "$CLAUDE_ENV_FILE": str(env_file),
+                "$CLAUDE_ENV_FILE_SH": _shell_single_quote(str(env_file)),
+            }
+        )
     if coding_agent.name == "codex":
         _seed_codex_auth(dest)
         _seed_codex_plugin_hooks(dest, workdir)

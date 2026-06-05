@@ -15,6 +15,7 @@ from quorum.coding_agent_config import CodingAgentConfig
 from quorum.kimi import effective_kimi_model_env, kimi_preflight_sentinel_payload
 from quorum.runner import (
     ANTIGRAVITY_RATE_LIMIT_MARKER,
+    CLAUDE_ENV_FILE_NAME,
     COPILOT_ENV_FILE_NAME,
     COPILOT_PROVIDER_ENV_NAMES,
     COPILOT_REQUIRED_SUPERPOWERS_FILES,
@@ -1164,6 +1165,67 @@ class TestSeedAgentConfigDir:
         # Per-project trust keyed by canonical (resolved) workdir path.
         entry = cfg["projects"][str(workdir.resolve())]
         assert entry["hasTrustDialogAccepted"] is True
+
+    def test_claude_target_writes_api_key_env_file_when_required(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        cfg = CodingAgentConfig(
+            name="claude",
+            binary="claude",
+            agent_config_env="CLAUDE_CONFIG_DIR",
+            session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
+            session_log_glob="**/*.jsonl",
+            normalizer="claude",
+            required_env=("ANTHROPIC_API_KEY",),
+            max_time=None,
+            project_prompt=None,
+        )
+        dest = tmp_path / "agent-config"
+
+        runtime = _seed_agent_config_dir(
+            cfg,
+            _empty_skeleton(tmp_path),
+            dest,
+            tmp_path / "workdir",
+            run_dir=tmp_path / "run-dir",
+        )
+
+        env_path = dest / CLAUDE_ENV_FILE_NAME
+        assert env_path.read_text() == "ANTHROPIC_API_KEY='sk-test-key'\n"
+        assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+        assert runtime.substitutions["$CLAUDE_ENV_FILE"] == str(env_path)
+        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(
+            str(env_path)
+        )
+        claude_config = json.loads((dest / ".claude.json").read_text())
+        assert claude_config["customApiKeyResponses"]["approved"] == ["sk-test-key"]
+        assert claude_config["customApiKeyResponses"]["rejected"] == []
+
+    def test_claude_seed_raises_without_api_key_when_required(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cfg = CodingAgentConfig(
+            name="claude",
+            binary="claude",
+            agent_config_env="CLAUDE_CONFIG_DIR",
+            session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
+            session_log_glob="**/*.jsonl",
+            normalizer="claude",
+            required_env=("ANTHROPIC_API_KEY",),
+            max_time=None,
+            project_prompt=None,
+        )
+
+        with pytest.raises(RunnerError, match="ANTHROPIC_API_KEY"):
+            _seed_agent_config_dir(
+                cfg,
+                _empty_skeleton(tmp_path),
+                tmp_path / "agent-config",
+                tmp_path / "workdir",
+                run_dir=tmp_path / "run-dir",
+            )
 
     def test_non_claude_target_skips_trust_injection(self, tmp_path):
         # Codex gets no .claude.json trust injection (that is claude-only);
@@ -4104,6 +4166,71 @@ class TestRunScenario:
         assert "$CLAUDE_CONFIG_DIR" not in content
         cd_line = [ln for ln in content.splitlines() if ln.startswith("cd ")][0]
         assert Path(cd_line.split('"')[1]).exists()
+
+    def test_checked_in_claude_launcher_sources_env_file_and_stays_non_bare(self):
+        launcher = (
+            Path(__file__).resolve().parents[2]
+            / "coding-agents"
+            / "claude-context"
+            / "launch-agent"
+        )
+
+        content = launcher.read_text()
+
+        assert 'source "$CLAUDE_ENV_FILE"' in content
+        assert "ANTHROPIC_API_KEY=" in content
+        assert "claude --dangerously-skip-permissions" in content
+        assert "--bare" not in content
+
+    def test_launch_agent_shim_substitutes_claude_env_file(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir()
+        (coding_agents_dir / "claude.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "claude",
+                    "binary": "echo",
+                    "agent_config_env": "CLAUDE_CONFIG_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "claude",
+                    "required_env": ["ANTHROPIC_API_KEY"],
+                }
+            )
+        )
+        cd_claude = coding_agents_dir / "claude-context"
+        cd_claude.mkdir(parents=True)
+        (cd_claude / "launch-agent").write_text(
+            "#!/usr/bin/env bash\n"
+            'source "$CLAUDE_ENV_FILE"\n'
+            'cd "$QUORUM_AGENT_CWD"\n'
+            'exec env CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" '
+            'ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" echo "$@"\n'
+        )
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        rd = list(out_root.iterdir())[0]
+        shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+        content = shim.read_text()
+        assert "$CLAUDE_ENV_FILE" not in content
+        assert str(rd / "coding-agent-config" / CLAUDE_ENV_FILE_NAME) in content
+        assert (rd / "coding-agent-config" / CLAUDE_ENV_FILE_NAME).is_file()
 
     def test_howto_references_resolved_launch_agent_path(self, tmp_path):
         # $QUORUM_LAUNCH_AGENT in a HOWTO resolves to the shim's absolute path,
