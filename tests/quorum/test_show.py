@@ -60,15 +60,15 @@ def test_resolve_prefix_match_newest(tmp_path: Path):
 
 
 def test_resolve_prefix_greedy_picks_newest_across_variants(tmp_path: Path):
-    # `worktree-already-inside` is a prefix of both `worktree-already-inside-*`
-    # and `worktree-already-inside-spec-aware-*` (today's sweep has both).
-    # Resolver is greedy and picks newest mtime across the union — spec §5.
+    # A bare prefix like `worktree` matches run-dirs from several distinct
+    # scenarios. The resolver is greedy and picks newest mtime across the
+    # whole union — spec §5.
     root = tmp_path / "results"
     root.mkdir()
     _make_run(root, "worktree-already-inside-claude-20260501T000000Z-a",
               age_seconds=10000)
-    new = _make_run(root, "worktree-already-inside-spec-aware-claude-20260523T000000Z-b")
-    assert resolve_target("worktree-already-inside", results_root=root) == new
+    new = _make_run(root, "worktree-consent-flow-claude-20260523T000000Z-b")
+    assert resolve_target("worktree", results_root=root) == new
 
 
 def test_resolve_no_match_raises(tmp_path: Path):
