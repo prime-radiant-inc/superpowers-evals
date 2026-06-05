@@ -633,12 +633,19 @@ ANTIGRAVITY_RATE_LIMIT_MARKER = "Code Assist rate limit"
 # Substrings agy writes to its log/stderr when the Gemini Code Assist backend
 # throttles. RESOURCE_EXHAUSTED is the definitive 429 signal; the others
 # corroborate. Matched case-insensitively.
-_AGY_RATE_LIMIT_SIGNALS = ("resource_exhausted", "ratelimitexceeded", "429")
+# Substrings that unambiguously signal a Code Assist rate limit.
+_AGY_RATE_LIMIT_SUBSTRINGS = ("resource_exhausted", "ratelimitexceeded")
+# A bare "429" matches hex trace IDs (e.g. 0x...e4291...), ports, and byte counts
+# that pepper agy's streaming log, false-tripping the mid-run watcher into killing
+# a healthy run. Require a word-boundaried HTTP-status 429 instead.
+_AGY_429_RE = re.compile(r"\b429\b")
 
 
 def _agy_log_shows_rate_limit(*texts: str) -> bool:
     blob = "\n".join(t for t in texts if t).lower()
-    return any(sig in blob for sig in _AGY_RATE_LIMIT_SIGNALS)
+    return any(sig in blob for sig in _AGY_RATE_LIMIT_SUBSTRINGS) or bool(
+        _AGY_429_RE.search(blob)
+    )
 
 
 def _run_antigravity_auth_preflight() -> None:
