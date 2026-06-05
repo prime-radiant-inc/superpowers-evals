@@ -503,6 +503,8 @@ def run_batch(
     jobs: int,
     agent_filter: list[str] | None,
     scenario_filter: list[str] | None = None,
+    tier: str | None = None,
+    include_drafts: bool = False,
     invoke: Callable[..., ChildResult] | None = None,
     stream: TextIO | None = None,
     use_cursor: bool = True,
@@ -512,6 +514,8 @@ def run_batch(
     `use_cursor=True` (default) uses a Rich `Live` in-flight panel on a
     TTY; falls back to plain append-only output when stdout is not a TTY
     or `use_cursor=False`.
+    `tier` restricts to scenarios with a matching `quorum_tier` (sentinel/full/adhoc).
+    `include_drafts` includes `status: draft` scenarios (excluded by default).
     """
     if jobs < 1:
         raise ValueError(f"jobs must be >= 1, got {jobs}")
@@ -525,6 +529,8 @@ def run_batch(
         coding_agents_dir=coding_agents_dir,
         agent_filter=agent_filter,
         scenario_filter=scenario_filter,
+        tier_filter=tier,
+        include_drafts=include_drafts,
     )
     batch_dir = allocate_batch_dir(out_root=out_root)
     started_at = datetime.now(UTC)

@@ -359,6 +359,78 @@ def test_run_all_accepts_no_cursor_flag(tmp_path, monkeypatch):
     assert captured["use_cursor"] is False
 
 
+def test_run_all_tier_flag_threads_through(tmp_path, monkeypatch):
+    """`--tier sentinel` is forwarded to run_batch as tier="sentinel"."""
+    captured = {}
+
+    def fake_run_batch(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "results" / "batches" / "fakebatch"
+
+    monkeypatch.setattr("quorum.cli.run_batch", fake_run_batch)
+    (tmp_path / "scenarios").mkdir(parents=True)
+    (tmp_path / "coding-agents").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    help_result = CliRunner().invoke(main, ["run-all", "--help"])
+    assert "--tier" in help_result.output
+
+    result = CliRunner().invoke(main, ["run-all", "--tier", "sentinel"])
+    assert result.exit_code == 0, result.output
+    assert captured["tier"] == "sentinel"
+    assert captured["include_drafts"] is False
+
+
+def test_run_all_include_drafts_flag_threads_through(tmp_path, monkeypatch):
+    """`--include-drafts` is forwarded to run_batch as include_drafts=True."""
+    captured = {}
+
+    def fake_run_batch(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "results" / "batches" / "fakebatch"
+
+    monkeypatch.setattr("quorum.cli.run_batch", fake_run_batch)
+    (tmp_path / "scenarios").mkdir(parents=True)
+    (tmp_path / "coding-agents").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    help_result = CliRunner().invoke(main, ["run-all", "--help"])
+    assert "--include-drafts" in help_result.output
+
+    result = CliRunner().invoke(main, ["run-all", "--include-drafts"])
+    assert result.exit_code == 0, result.output
+    assert captured["include_drafts"] is True
+
+
+def test_run_all_tier_default_is_none(tmp_path, monkeypatch):
+    """When --tier is omitted, run_batch receives tier=None (all tiers run)."""
+    captured = {}
+
+    def fake_run_batch(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "results" / "batches" / "fakebatch"
+
+    monkeypatch.setattr("quorum.cli.run_batch", fake_run_batch)
+    (tmp_path / "scenarios").mkdir(parents=True)
+    (tmp_path / "coding-agents").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["run-all"])
+    assert result.exit_code == 0, result.output
+    assert captured["tier"] is None
+    assert captured["include_drafts"] is False
+
+
+def test_run_all_tier_rejects_invalid_value(tmp_path, monkeypatch):
+    """`--tier bogus` exits non-zero (not a valid choice)."""
+    (tmp_path / "scenarios").mkdir(parents=True)
+    (tmp_path / "coding-agents").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["run-all", "--tier", "bogus"])
+    assert result.exit_code != 0
+
+
 def test_show_renders_batch_when_target_is_batch_id(tmp_path, monkeypatch):
     out_root = tmp_path / "results"
     batch_dir = out_root / "batches" / "20260526T180000Z-abcd"
