@@ -43,6 +43,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from quorum import agy_creds
 from quorum.agy_teardown import kill_run_tmux_server
 from quorum.capture import (
     capture_token_usage,
@@ -1475,21 +1476,51 @@ def _run_scenario_inner(
         # 7. Snapshot session-log dir.
         snap = snapshot_dir(session_log_dir, tcfg.session_log_glob)
 
-        # 8. Invoke gauntlet. For antigravity this also runs the agy
-        #    rate-limit watcher; gauntlet_result.rate_limited reports whether a
-        #    mid-run Code Assist rate-limit tripped (consumed by Task 6's
-        #    verdict short-circuit; not yet acted on here).
-        gauntlet_result = invoke_gauntlet(
-            story_path=story_path,
-            target_binary=tcfg.binary,
-            launch_cwd=launch_cwd,
-            run_dir=run_dir,
-            max_time=effective_max_time,
-            coding_agent=coding_agent,
-            project_prompt=tcfg.project_prompt,
-            extra_env={tcfg.agent_config_env: str(agent_config_dir)},
-        )
+        # 8. Invoke gauntlet. For antigravity this also runs the agy rate-limit
+        #    watcher, which may SIGKILL/kill-server agy mid-run — a kill during a
+        #    token refresh can corrupt the shared ~/.gemini/oauth_creds.json. Back
+        #    it up before the run and verify/restore in a finally after it returns
+        #    (A4). Antigravity only; no overhead for other agents.
+        cb = agy_creds.backup_credential() if coding_agent == "antigravity" else None
+        try:
+            gauntlet_result = invoke_gauntlet(
+                story_path=story_path,
+                target_binary=tcfg.binary,
+                launch_cwd=launch_cwd,
+                run_dir=run_dir,
+                max_time=effective_max_time,
+                coding_agent=coding_agent,
+                project_prompt=tcfg.project_prompt,
+                extra_env={tcfg.agent_config_env: str(agent_config_dir)},
+            )
+        finally:
+            if cb is not None:
+                cb.verify_or_restore()
         gauntlet_status = gauntlet_result.status
+
+        # 8a. Mid-run rate-limit short-circuit (A1/A3). When the watcher tripped,
+        #     agy was killed and the run dir has no usable antigravity transcript.
+        #     Intercept BEFORE the capture cascade and its strict-capture guard so
+        #     this surfaces as a recognizable rate-limit verdict (carrying
+        #     ANTIGRAVITY_RATE_LIMIT_MARKER for run_all's latch) rather than a
+        #     generic empty-trace capture indeterminate.
+        if coding_agent == "antigravity" and gauntlet_result.rate_limited:
+            return run_dir, _write_indeterminate(
+                run_dir,
+                final_reason=(
+                    "antigravity hit a Code Assist rate limit mid-run; agy was "
+                    "killed and produced no usable transcript"
+                ),
+                gauntlet=_build_gauntlet_layer_from_run_dir(run_dir),
+                checks=pre_records,
+                error=RunError(
+                    stage="gauntlet",
+                    message=(
+                        f"{ANTIGRAVITY_RATE_LIMIT_MARKER}: agy hit "
+                        "RESOURCE_EXHAUSTED mid-run; killed"
+                    ),
+                ),
+            )
 
         opencode_exported_paths: tuple[Path, ...] = ()
         if tcfg.normalizer == "opencode":

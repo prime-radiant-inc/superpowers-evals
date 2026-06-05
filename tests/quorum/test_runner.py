@@ -2296,6 +2296,123 @@ class TestRunScenario:
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
 
+    def test_antigravity_rate_limited_short_circuits_to_rate_limit_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        from quorum.run_all import _is_rate_limited_verdict
+
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_antigravity_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        out_root = tmp_path / "results"
+
+        def rate_limited_gauntlet(*, run_dir, **kwargs):
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return GauntletResult(status="fail", rate_limited=True)
+
+        with (
+            patch("quorum.runner._seed_antigravity_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=rate_limited_gauntlet),
+        ):
+            run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="antigravity",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "gauntlet"
+        assert ANTIGRAVITY_RATE_LIMIT_MARKER in verdict.error.message
+        assert "no Antigravity transcript captured" not in verdict.error.message
+        assert "no Antigravity transcript" not in verdict.final_reason
+
+        written = json.loads((run_dir / "verdict.json").read_text())
+        assert ANTIGRAVITY_RATE_LIMIT_MARKER in written["error"]["message"]
+        assert _is_rate_limited_verdict(written) is True
+
+    def test_antigravity_run_backs_up_and_restores_credential(self, tmp_path, monkeypatch):
+        from quorum import agy_creds
+
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_antigravity_agent(coding_agents_dir, session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        out_root = tmp_path / "results"
+
+        order: list[str] = []
+
+        class _SpyBackup:
+            def verify_or_restore(self):
+                order.append("restore")
+
+        def spy_backup():
+            order.append("backup")
+            return _SpyBackup()
+
+        def spy_gauntlet(*, run_dir, **kwargs):
+            order.append("gauntlet")
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return GauntletResult(status="pass")
+
+        monkeypatch.setattr(agy_creds, "backup_credential", spy_backup)
+        with (
+            patch("quorum.runner._seed_antigravity_config"),
+            patch("quorum.runner.invoke_gauntlet", side_effect=spy_gauntlet),
+        ):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="antigravity",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        # backup before the agy run, restore exactly once after it returns
+        assert order == ["backup", "gauntlet", "restore"]
+
+    def test_non_antigravity_run_does_not_back_up_credential(self, tmp_path, monkeypatch):
+        from quorum import agy_creds
+
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "sp"))
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        out_root = tmp_path / "results"
+
+        calls = {"backed_up": 0}
+
+        def spy_backup():
+            calls["backed_up"] += 1
+            return None
+
+        monkeypatch.setattr(agy_creds, "backup_credential", spy_backup)
+        with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+            run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        assert calls["backed_up"] == 0
+
     def test_antigravity_zero_normalized_rows_is_distinct_from_missing_transcript(
         self, tmp_path, monkeypatch
     ):
