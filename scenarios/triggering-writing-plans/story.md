@@ -3,6 +3,7 @@ id: triggering-writing-plans
 title: Agent loads writing-plans skill before implementing a multi-step feature
 status: ready
 tags: skill-triggering
+quorum_tier: sentinel
 ---
 
 You are an engineer working in an existing app. You hand the agent

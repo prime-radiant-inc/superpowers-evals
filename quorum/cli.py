@@ -346,6 +346,19 @@ def backfill_economics(target: Path | None, do_all: bool, results_root: Path) ->
     default=False,
     help="Disable in-place live display; print events as plain lines.",
 )
+@click.option(
+    "--tier",
+    type=click.Choice(["sentinel", "full", "adhoc"]),
+    default=None,
+    help="Run only scenarios in this tier. Default: all tiers.",
+)
+@click.option(
+    "--include-drafts",
+    "include_drafts",
+    is_flag=True,
+    default=False,
+    help="Include status: draft scenarios (excluded by default).",
+)
 def run_all_cmd(
     coding_agents_csv: str | None,
     scenarios_csv: str | None,
@@ -354,8 +367,14 @@ def run_all_cmd(
     coding_agents_dir: Path,
     out_root: Path,
     no_cursor: bool,
+    tier: str | None,
+    include_drafts: bool,
 ) -> None:
-    """Run every (scenario × Coding-Agent) pair, gated by `# coding-agents:`."""
+    """Run every (scenario × Coding-Agent) pair, gated by `# coding-agents:`.
+
+    Use --tier to restrict to a named tier (sentinel/full/adhoc).
+    Use --include-drafts to include status: draft scenarios (excluded by default).
+    """
     agent_filter = (
         [a.strip() for a in coding_agents_csv.split(",") if a.strip()]
         if coding_agents_csv
@@ -374,6 +393,8 @@ def run_all_cmd(
             agent_filter=agent_filter,
             scenario_filter=scenario_filter,
             use_cursor=not no_cursor,
+            tier=tier,
+            include_drafts=include_drafts,
         )
     except ValueError as e:
         click.echo(f"error: {e}", err=True)

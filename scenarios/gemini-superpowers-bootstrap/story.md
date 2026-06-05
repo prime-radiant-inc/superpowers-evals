@@ -3,6 +3,7 @@ id: gemini-superpowers-bootstrap
 title: Gemini bootstrap from isolated Superpowers extension link
 status: ready
 tags: gemini, bootstrap
+quorum_tier: adhoc
 ---
 
 You are a developer starting a new project with the Gemini CLI agent.

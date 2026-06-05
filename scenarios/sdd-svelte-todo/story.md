@@ -4,6 +4,7 @@ title: Agent executes a Svelte todo-app plan end-to-end via subagent-driven-deve
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 90m
+quorum_tier: adhoc
 ---
 
 You have a plan ready (plan.md, with design context in design.md) for

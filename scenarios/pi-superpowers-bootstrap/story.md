@@ -3,6 +3,7 @@ id: pi-superpowers-bootstrap
 title: Pi loads Superpowers skill context
 status: ready
 tags: pi, bootstrap
+quorum_tier: adhoc
 ---
 
 # Story

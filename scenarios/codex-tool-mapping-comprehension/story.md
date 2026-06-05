@@ -3,6 +3,7 @@ id: codex-tool-mapping-comprehension
 title: Codex correctly reports the Task-result tool mapping from the reference
 status: ready
 tags: codex, tool-mapping
+quorum_tier: sentinel
 ---
 
 You are an engineer testing whether the Codex agent reads and reports

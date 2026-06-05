@@ -2,6 +2,7 @@
 id: copilot-superpowers-bootstrap
 title: Copilot bootstraps Superpowers from isolated plugin install
 status: ready
+quorum_tier: adhoc
 tags: copilot, bootstrap
 ---
 

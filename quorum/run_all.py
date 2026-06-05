@@ -39,20 +39,27 @@ from quorum.kimi import (
 )
 from quorum.runner import ANTIGRAVITY_RATE_LIMIT_MARKER, _allocate_run_dir, _write_indeterminate
 from quorum.show import _fmt_cost
+from quorum.story_meta import read_quorum_tier, read_story_status
 
 
 @dataclass(frozen=True)
 class MatrixEntry:
     """One (scenario, agent) cell of the batch matrix.
 
-    `skipped_reason` is None for runnable cells, "directive" for cells
-    excluded by `# coding-agents:`.
+    `skipped_reason` is None for runnable cells, or one of:
+      - "directive" — excluded by `# coding-agents:` in checks.sh
+      - "draft"     — scenario has `status: draft` and include_drafts is False
+      - "tier"      — scenario tier does not match the tier_filter
+    `tier` is the scenario's `quorum_tier` value ("sentinel", "full", "adhoc").
+    `status` is the scenario's `status` frontmatter value (e.g. "ready", "draft").
     """
 
     scenario: str
     coding_agent: str
     scenario_dir: Path
-    skipped_reason: str | None  # None | "directive"
+    skipped_reason: str | None  # None | "directive" | "draft" | "tier"
+    tier: str
+    status: str
 
     @property
     def runnable(self) -> bool:
@@ -89,6 +96,8 @@ def build_matrix(
     coding_agents_dir: Path,
     agent_filter: list[str] | None = None,
     scenario_filter: list[str] | None = None,
+    tier_filter: str | None = None,
+    include_drafts: bool = False,
 ) -> list[MatrixEntry]:
     """Compute the (scenario × agent) matrix.
 
@@ -98,6 +107,11 @@ def build_matrix(
     - For each pair, read the `# coding-agents:` directive in
       checks.sh; pairs excluded by the directive are returned with
       `skipped_reason="directive"`.
+    - `status: draft` scenarios are excluded by default (skipped_reason="draft")
+      unless `include_drafts=True`.
+    - When `tier_filter` is set, only scenarios with a matching `quorum_tier`
+      are runnable; others get `skipped_reason="tier"`.
+    - Precedence: "directive" > "draft" > "tier".
 
     Entries are sorted by (scenario, agent) for deterministic output.
     Raises ValueError if `agent_filter` names an unknown agent.
@@ -127,14 +141,25 @@ def build_matrix(
     entries: list[MatrixEntry] = []
     for scenario_dir in scenario_dirs:
         directive = parse_coding_agents_directive(scenario_dir / "checks.sh")
+        tier = read_quorum_tier(scenario_dir / "story.md")
+        status = read_story_status(scenario_dir / "story.md")
         for agent in agents:
-            skipped = "directive" if directive is not None and agent not in directive else None
+            if directive is not None and agent not in directive:
+                skipped: str | None = "directive"
+            elif status == "draft" and not include_drafts:
+                skipped = "draft"
+            elif tier_filter is not None and tier != tier_filter:
+                skipped = "tier"
+            else:
+                skipped = None
             entries.append(
                 MatrixEntry(
                     scenario=scenario_dir.name,
                     coding_agent=agent,
                     scenario_dir=scenario_dir,
                     skipped_reason=skipped,
+                    tier=tier,
+                    status=status,
                 )
             )
     entries.sort(key=lambda e: (e.scenario, e.coding_agent))
@@ -478,6 +503,8 @@ def run_batch(
     jobs: int,
     agent_filter: list[str] | None,
     scenario_filter: list[str] | None = None,
+    tier: str | None = None,
+    include_drafts: bool = False,
     invoke: Callable[..., ChildResult] | None = None,
     stream: TextIO | None = None,
     use_cursor: bool = True,
@@ -487,6 +514,8 @@ def run_batch(
     `use_cursor=True` (default) uses a Rich `Live` in-flight panel on a
     TTY; falls back to plain append-only output when stdout is not a TTY
     or `use_cursor=False`.
+    `tier` restricts to scenarios with a matching `quorum_tier` (sentinel/full/adhoc).
+    `include_drafts` includes `status: draft` scenarios (excluded by default).
     """
     if jobs < 1:
         raise ValueError(f"jobs must be >= 1, got {jobs}")
@@ -500,6 +529,8 @@ def run_batch(
         coding_agents_dir=coding_agents_dir,
         agent_filter=agent_filter,
         scenario_filter=scenario_filter,
+        tier_filter=tier,
+        include_drafts=include_drafts,
     )
     batch_dir = allocate_batch_dir(out_root=out_root)
     started_at = datetime.now(UTC)
@@ -544,7 +575,7 @@ def run_batch(
     # Header banner.
     console.print(
         f"batch {batch_dir.name} · {total} pairs "
-        f"({len(runnable_indexed)} runnable, {len(skipped_indexed)} skipped by directive) "
+        f"({len(runnable_indexed)} runnable, {len(skipped_indexed)} skipped) "
         f"· --jobs {jobs}",
         markup=False,
         highlight=False,
@@ -554,13 +585,21 @@ def run_batch(
     # the literal `[N/M]` prefix would otherwise be interpreted as Rich
     # markup. The styled tail is applied via a (text, style) tuple.
     for idx, entry in skipped_indexed:
-        directive = parse_coding_agents_directive(entry.scenario_dir / "checks.sh") or []
         scn = _truncate(entry.scenario, scn_w)
+        if entry.skipped_reason == "directive":
+            directive = parse_coding_agents_directive(entry.scenario_dir / "checks.sh") or []
+            reason_label = f"(requires {', '.join(directive)})"
+        elif entry.skipped_reason == "draft":
+            reason_label = "(draft)"
+        elif entry.skipped_reason == "tier":
+            reason_label = f"(tier: {entry.tier})"
+        else:
+            reason_label = f"({entry.skipped_reason})"
         line = Text.assemble(
             f"[{idx:0{idx_w}d}/{total}] {'skip':<{_STATE_COL_W}}  "
             f"{scn:<{scn_w}}  {entry.coding_agent:<{agent_w}}  ",
             (_GLYPH_SKIP, _STATUS_STYLES["skipped"]),
-            f"  {'':<{_DUR_COL_W}}  (requires {', '.join(directive)})",
+            f"  {'':<{_DUR_COL_W}}  {reason_label}",
         )
         console.print(line, markup=False, highlight=False)
         append_result_record(
@@ -568,7 +607,7 @@ def run_batch(
             scenario=entry.scenario,
             coding_agent=entry.coding_agent,
             run_id=None,
-            skipped="directive",
+            skipped=entry.skipped_reason,
         )
 
     # Lock guards both `console.print` from workers (plain mode) AND

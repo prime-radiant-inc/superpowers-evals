@@ -3,6 +3,7 @@ id: spec-targets-wrong-component-with-checkpoint
 title: Spec targets wrong component — CLAUDE.md verification-checkpoint variant
 status: ready
 tags: spec-implementation
+quorum_tier: adhoc
 ---
 
 You are a developer who has a design spec for a new feature and wants

@@ -86,6 +86,51 @@ class TestCheckScenario:
         (sd / "scenario.yaml").write_text("compatible_targets: not-a-list\n")
         assert not any("scenario.yaml invalid" in p for p in check_scenario(sd))
 
+    def _story_with_tier(self, tmp_path, tier_line: str) -> Path:
+        sd = self._valid(tmp_path)
+        story = sd / "story.md"
+        text = story.read_text()
+        # Replace the existing quorum_tier line (present in the template).
+        text = text.replace("quorum_tier: full\n", f"{tier_line}\n")
+        story.write_text(text)
+        return sd
+
+    def test_valid_tier_sentinel_is_accepted(self, tmp_path):
+        sd = self._story_with_tier(tmp_path, "quorum_tier: sentinel")
+        assert check_scenario(sd) == []
+
+    def test_valid_tier_full_is_accepted(self, tmp_path):
+        sd = self._story_with_tier(tmp_path, "quorum_tier: full")
+        assert check_scenario(sd) == []
+
+    def test_valid_tier_adhoc_is_accepted(self, tmp_path):
+        sd = self._story_with_tier(tmp_path, "quorum_tier: adhoc")
+        assert check_scenario(sd) == []
+
+    def test_absent_tier_is_accepted(self, tmp_path):
+        # The template now includes quorum_tier: full, so we must explicitly
+        # remove the field to verify backward-compatibility with old scenarios
+        # that pre-date the tiering mechanism.
+        sd = self._valid(tmp_path)
+        story = sd / "story.md"
+        text = story.read_text()
+        text = text.replace("quorum_tier: full\n", "")
+        story.write_text(text)
+        assert check_scenario(sd) == []
+
+    def test_invalid_tier_is_caught(self, tmp_path):
+        sd = self._story_with_tier(tmp_path, "quorum_tier: bogus")
+        problems = check_scenario(sd)
+        assert any("quorum_tier" in p for p in problems)
+
+
+class TestScaffoldTemplate:
+    def test_template_contains_quorum_tier_full(self, tmp_path):
+        """Newly scaffolded scenarios must have quorum_tier: full explicitly set."""
+        scenario_dir = new_scenario(tmp_path, "demo")
+        text = (scenario_dir / "story.md").read_text()
+        assert "quorum_tier: full" in text
+
 
 class TestChecksShValidation:
     def _make_scenario(self, d: Path, *, with_checks: bool = True, body: str = "") -> Path:

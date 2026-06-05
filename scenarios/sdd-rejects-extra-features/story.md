@@ -4,6 +4,7 @@ title: SDD's spec-compliance review enforces YAGNI and removes over-implementati
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 90m
+quorum_tier: adhoc
 ---
 
 You have a tiny plan at docs/superpowers/plans/math-plan.md — just two

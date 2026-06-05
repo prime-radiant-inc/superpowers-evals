@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from quorum.story_meta import _VALID_TIERS
 from setup_helpers import HELPER_REGISTRY
 
 _STORY_TEMPLATE = """\
@@ -22,6 +23,7 @@ _STORY_TEMPLATE = """\
 id: {name}
 title: TODO one-line title
 status: draft
+quorum_tier: full
 tags: TODO
 ---
 
@@ -167,6 +169,12 @@ def check_scenario(scenario_dir: Path) -> list[str]:
                 problems.append(f"story.md frontmatter missing '{key}'")
         if "## Acceptance Criteria" not in text:
             problems.append("story.md missing '## Acceptance Criteria' section")
+        tier = fm.get("quorum_tier")
+        if tier is not None and tier not in _VALID_TIERS:
+            problems.append(
+                f"story.md quorum_tier={tier!r} is not valid "
+                f"(expected one of: {', '.join(_VALID_TIERS)})"
+            )
 
     setup = scenario_dir / "setup.sh"
     if setup.exists() and not os.access(setup, os.X_OK):

@@ -49,6 +49,87 @@ def _agent(
     (root / f"{name}.yaml").write_text(body)
 
 
+def _mk_scenario(
+    root: Path,
+    name: str,
+    *,
+    tier: str | None = None,
+    status: str | None = None,
+    agents_directive: str | None = None,
+) -> Path:
+    """Build a minimal scenario dir with optional tier/status frontmatter."""
+    d = root / name
+    d.mkdir(parents=True)
+    fm = "id: " + name
+    if tier:
+        fm += f"\nquorum_tier: {tier}"
+    if status:
+        fm += f"\nstatus: {status}"
+    (d / "story.md").write_text(f"---\n{fm}\n---\nbody\n")
+    checks = "post() { :; }\n"
+    if agents_directive:
+        checks = f"# coding-agents: {agents_directive}\n" + checks
+    (d / "checks.sh").write_text(checks)
+    (d / "setup.sh").write_text("true\n")
+    return d
+
+
+@pytest.fixture
+def _agents_dir_with(tmp_path: Path):
+    """Factory: creates a coding-agents dir with the given agent names."""
+
+    def factory(agent_names: list[str]) -> Path:
+        agents_dir = tmp_path / "agents"
+        for name in agent_names:
+            _agent(agents_dir, name)
+        return agents_dir
+
+    return factory
+
+
+def test_tier_filter_skips_non_matching(tmp_path, _agents_dir_with):
+    root = tmp_path / "scenarios"
+    _mk_scenario(root, "fast", tier="sentinel")
+    _mk_scenario(root, "slow", tier="adhoc")
+    _mk_scenario(root, "normal")  # default full
+    entries = build_matrix(
+        scenarios_root=root,
+        coding_agents_dir=_agents_dir_with(["claude"]),
+        tier_filter="sentinel",
+    )
+    runnable = {e.scenario for e in entries if e.runnable}
+    assert runnable == {"fast"}
+    assert all(e.skipped_reason == "tier" for e in entries if e.scenario in {"slow", "normal"})
+
+
+def test_drafts_excluded_by_default_and_includable(tmp_path, _agents_dir_with):
+    root = tmp_path / "scenarios"
+    _mk_scenario(root, "draftone", status="draft")
+    _mk_scenario(root, "readyone", status="ready")
+    default = build_matrix(
+        scenarios_root=root,
+        coding_agents_dir=_agents_dir_with(["claude"]),
+    )
+    assert {e.scenario for e in default if e.runnable} == {"readyone"}
+    assert any(e.skipped_reason == "draft" for e in default if e.scenario == "draftone")
+    incl = build_matrix(
+        scenarios_root=root,
+        coding_agents_dir=_agents_dir_with(["claude"]),
+        include_drafts=True,
+    )
+    assert {e.scenario for e in incl if e.runnable} == {"draftone", "readyone"}
+
+
+def test_entry_carries_tier_and_status(tmp_path, _agents_dir_with):
+    root = tmp_path / "scenarios"
+    _mk_scenario(root, "s", tier="sentinel", status="ready")
+    e = build_matrix(
+        scenarios_root=root,
+        coding_agents_dir=_agents_dir_with(["claude"]),
+    )[0]
+    assert e.tier == "sentinel" and e.status == "ready"
+
+
 def test_build_matrix_full_cross_product_when_no_directive(tmp_path):
     scenarios = tmp_path / "scenarios"
     agents = tmp_path / "agents"
