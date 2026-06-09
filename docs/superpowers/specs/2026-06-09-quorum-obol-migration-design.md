@@ -109,6 +109,12 @@ metrics, plus Obol provenance:
 
 Bucket mapping: Obol `cache_write` → Quorum `cache_create`.
 
+**Implementation deviation (2026-06-09):** `pricing_source` is omitted from
+the artifacts — obol's Python binding does not expose it (the Rust core
+serializes it, but `CostEstimate.from_json` drops the field). The footnote
+renders from `pricing_as_of` alone. If the binding gains the field, thread
+it through `obol_capture._merge_estimates`.
+
 **`verdict.json` economics block** — shell unchanged (`gauntlet` /
 `coding_agent`, each with `duration_ms`, `model`, `tokens{}`, `est_cost_usd`;
 plus `total_est_cost_usd`, `partial`). Changes:

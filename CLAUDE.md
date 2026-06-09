@@ -50,7 +50,9 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `quorum/checks.py` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records.
 - `quorum/composer.py` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `quorum/coding_agent_config.py` — per-Coding-Agent YAML loader and session-log config.
-- `quorum/capture.py` — session-log snapshot/diff, normalized tool-call capture, token capture.
+- `quorum/capture.py` — session-log snapshot/diff, normalized tool-call capture, obol-priced token capture.
+- `quorum/obol_capture.py` — all obol calls: session-log + gauntlet-sidecar cost estimation, per-file merge.
+- `quorum/timing.py` — session-log wall-clock span (`duration_ms`).
 - `quorum/normalizers.py` — Coding-Agent session-log normalizers.
 - `quorum/scaffold.py` — `quorum new` / `quorum check` implementation.
 - `quorum/show.py` — verdict renderer for triage.
