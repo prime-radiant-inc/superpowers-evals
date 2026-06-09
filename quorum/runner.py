@@ -2335,7 +2335,13 @@ def _run_scenario_inner(
             capture_empty=capture_empty,
             error=None,
         )
-        economics = build_run_economics(run_dir)
+        try:
+            economics = build_run_economics(run_dir)
+        except Exception:
+            # Economics is measurement, never worth losing a verdict over:
+            # wrong-typed artifacts (version skew, tampering) degrade to no
+            # economics block rather than crashing the run (PRI-2130).
+            economics = None
         if economics is not None:
             verdict = dataclasses.replace(verdict, economics=economics)
 

@@ -98,6 +98,7 @@ def test_missing_coding_usage_is_partial(tmp_path):
     assert econ is not None
     assert econ["coding_agent"] is None
     assert econ["partial"] is True
+    assert econ["total_est_cost_usd"] is None
 
 
 def test_no_sources_returns_none(tmp_path):
@@ -135,3 +136,72 @@ def test_legacy_frozen_file_renders_without_crash(tmp_path):
     assert c["est_cost_usd"] == 0.0015
     assert c["obol"] is None
     assert econ["partial"] is True  # no gauntlet block
+
+
+def test_mixed_unpriced_gauntlet_sidecar_gates_total(tmp_path):
+    # One priced + one unpriced model in the gauntlet sidecar: the priced
+    # cost still shows on the block, but the headline total must not
+    # pretend completeness (never a silent undercount).
+    mystery_row = {
+        "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
+        "model": "mystery-model-9",
+        "usage": {"input_tokens": 5_000_000, "output_tokens": 1000},
+    }
+    _gauntlet_results(tmp_path, usage_rows=[_SONNET_ROW, mystery_row], result=_RESULT)
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))
+
+    econ = build_run_economics(tmp_path)
+
+    assert econ is not None
+    assert econ["gauntlet"]["has_unpriced_model"] is True
+    assert econ["gauntlet"]["est_cost_usd"] == pytest.approx(_SONNET_COST)
+    assert econ["total_est_cost_usd"] is None
+    assert econ["partial"] is True
+
+
+def test_coding_models_sorted_by_cost_desc_with_none_last(tmp_path):
+    usage = json.loads(json.dumps(_CODING_USAGE))  # deep copy
+    usage["models"]["claude-sonnet-4-6"] = {
+        "total_input": 10, "total_cache_create": 0, "total_cache_read": 0,
+        "total_output": 5, "total_tokens": 15, "provider": "anthropic",
+        "est_cost_usd": 0.02,  # costlier than opus's 0.008825
+    }
+    usage["models"]["mystery-model-9"] = {
+        "total_input": 7, "total_cache_create": 0, "total_cache_read": 0,
+        "total_output": 0, "total_tokens": 7, "provider": "anthropic",
+        "est_cost_usd": None,
+    }
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(usage))
+
+    econ = build_run_economics(tmp_path)
+
+    assert econ is not None
+    models = econ["coding_agent"]["models"]
+    assert [m["model"] for m in models] == [
+        "claude-sonnet-4-6", "claude-opus-4-7", "mystery-model-9",
+    ]
+    # per-model None cost flips has_unpriced even without unpriced_models
+    assert econ["coding_agent"]["has_unpriced_model"] is True
+    assert econ["partial"] is True
+
+
+def test_gauntlet_block_none_when_only_coding_usage(tmp_path):
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))
+    econ = build_run_economics(tmp_path)
+    assert econ is not None
+    assert econ["gauntlet"] is None
+    assert econ["partial"] is True
+
+
+def test_wrong_typed_result_config_degrades(tmp_path):
+    # result.json is written by Gauntlet (external tool): config drift to a
+    # list must not crash; model falls back to the sidecar's.
+    _gauntlet_results(
+        tmp_path, usage_rows=[_SONNET_ROW],
+        result={"duration_ms": 1000, "config": ["not", "a", "dict"]},
+    )
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))
+    econ = build_run_economics(tmp_path)
+    assert econ is not None
+    assert econ["gauntlet"]["model"] == "claude-sonnet-4-6"  # from sidecar
+    assert econ["gauntlet"]["duration_ms"] == 1000
