@@ -8,7 +8,10 @@ recompute. No pricing logic lives in quorum (PRI-2130; shell schema from
 PRI-1872).
 
 Every read here is best-effort: missing files/fields degrade to None +
-`partial: true`, never an exception, never a silent $0.
+`partial: true`, never a silent $0. Missing files/fields degrade to None;
+the runner additionally guards the call site against wrong-typed artifacts.
+Legacy frozen files' own has_unpriced_model key is ignored — it is
+re-derived from unpriced_models / per-model costs.
 """
 from __future__ import annotations
 
@@ -22,11 +25,17 @@ def _gauntlet_results_dir(run_dir: Path) -> Path | None:
     base = run_dir / "gauntlet-agent" / "results"
     if not base.is_dir():
         return None
-    # Phase 1 is one gauntlet invocation per run-dir: first result dir wins.
-    for d in sorted(base.iterdir()):
-        if d.is_dir():
-            return d
-    return None
+    # Phase 1 is one gauntlet invocation per run-dir; prefer the first dir
+    # that actually carries artifacts.
+    return next(
+        (
+            d
+            for d in sorted(base.iterdir())
+            if d.is_dir()
+            and ((d / "result.json").is_file() or (d / "usage.jsonl").is_file())
+        ),
+        None,
+    )
 
 
 def _read_json(path: Path) -> dict | None:
@@ -64,12 +73,16 @@ def _gauntlet_block(result: dict | None, usage: dict | None) -> dict | None:
         return None
     result = result or {}
     dur = result.get("duration_ms")
-    model = (usage or {}).get("model") or (result.get("config") or {}).get("model")
+    config = result.get("config")
+    config_model = config.get("model") if isinstance(config, dict) else None
+    model = (usage or {}).get("model") or config_model
+    has_unpriced = bool((usage or {}).get("unpriced_models"))
     return {
         "duration_ms": int(dur) if isinstance(dur, (int, float)) else None,
         "model": model,
         "tokens": _tokens_shell(usage or {}),
         "est_cost_usd": (usage or {}).get("est_cost_usd"),
+        "has_unpriced_model": has_unpriced,
         "obol": _obol_provenance(usage) if usage else None,
     }
 
@@ -124,13 +137,15 @@ def build_run_economics(run_dir: Path) -> dict | None:
     g_cost = gauntlet["est_cost_usd"] if gauntlet else None
     c_cost = coding["est_cost_usd"] if coding else None
     coding_has_unpriced = bool(coding and coding.get("has_unpriced_model"))
+    gauntlet_has_unpriced = bool(gauntlet and gauntlet.get("has_unpriced_model"))
+    any_unpriced = coding_has_unpriced or gauntlet_has_unpriced
     total = (
         round(g_cost + c_cost, 6)
-        if (g_cost is not None and c_cost is not None and not coding_has_unpriced)
+        if (g_cost is not None and c_cost is not None and not any_unpriced)
         else None
     )
     partial = (gauntlet is None or coding is None
-               or g_cost is None or c_cost is None or coding_has_unpriced)
+               or g_cost is None or c_cost is None or any_unpriced)
 
     pricing_asof = None
     for block in (coding, gauntlet):
