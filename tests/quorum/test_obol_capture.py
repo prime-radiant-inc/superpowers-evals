@@ -105,6 +105,92 @@ class TestEstimateSessionLogs:
         # (10*1 + 20*0.1 + 30*1.25 + 40*3)/1e6
         assert usage["est_cost_usd"] == pytest.approx(0.0001695)
 
+    def test_kimi_tool_result_bytes(self, tmp_path):
+        f = tmp_path / "wire.jsonl"
+        rows = [
+            {
+                "type": "usage.record",
+                "usageScope": "turn",
+                "model": "kimi-for-coding",
+                "time": 1_800_000_000_000,
+                "usage": {
+                    "inputOther": 1,
+                    "inputCacheRead": 0,
+                    "inputCacheCreation": 0,
+                    "output": 1,
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "tool.result",
+                    "toolCallId": "t1",
+                    "result": {"output": "hello"},
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "tool.result",
+                    "toolCallId": "t2",
+                    "result": {"output": "café"},
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "tool.result",
+                    "toolCallId": "t3",
+                    "result": {"output": "boom", "isError": True},
+                },
+            },
+        ]
+        f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+        usage = estimate_session_logs("kimi", [f])
+
+        assert usage is not None
+        assert usage["tool_result_total_bytes"] == 14
+
+    def test_kimi_tool_result_bytes_edge_cases(self, tmp_path):
+        f = tmp_path / "wire.jsonl"
+        rows = [
+            {
+                "type": "usage.record",
+                "usageScope": "turn",
+                "model": "kimi-for-coding",
+                "time": 1_800_000_000_000,
+                "usage": {
+                    "inputOther": 1,
+                    "inputCacheRead": 0,
+                    "inputCacheCreation": 0,
+                    "output": 1,
+                },
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {"type": "tool.result", "result": {"output": {"nested": "obj"}}},
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {"type": "tool.result", "result": {}},
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {"type": "tool.result", "result": {"output": ""}},
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {"type": "content.part", "part": {"type": "text", "text": "ignored"}},
+            },
+        ]
+        f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+        usage = estimate_session_logs("kimi", [f])
+
+        assert usage is not None
+        assert usage["tool_result_total_bytes"] == 0
+
     def test_unknown_backend_returns_none(self, tmp_path):
         f = tmp_path / "s.jsonl"
         f.write_text("{}\n")

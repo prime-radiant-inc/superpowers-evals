@@ -14,6 +14,7 @@ structural failures like missing pricing tables or sidecar schema rejection.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,32 @@ def _merge_estimates(estimates: list[obol.CostEstimate]) -> dict[str, Any] | Non
     }
 
 
+def _kimi_tool_result_total_bytes(path: Path) -> int:
+    total = 0
+    with path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            if row.get("type") != "context.append_loop_event":
+                continue
+            event = row.get("event")
+            if not isinstance(event, dict) or event.get("type") != "tool.result":
+                continue
+            result = event.get("result")
+            if not isinstance(result, dict):
+                continue
+            output = result.get("output")
+            if isinstance(output, str):
+                total += len(output.encode("utf-8"))
+    return total
+
+
 def estimate_session_logs(
     backend_family: str, session_log_files: list[Path]
 ) -> dict[str, Any] | None:
@@ -129,7 +156,12 @@ def estimate_session_logs(
             estimates.append(obol.estimate_path(path, dialect=dialect))
         except obol.ObolError:
             return None
-    return _merge_estimates(estimates)
+    usage = _merge_estimates(estimates)
+    if usage is not None and backend_family == "kimi":
+        usage["tool_result_total_bytes"] = sum(
+            _kimi_tool_result_total_bytes(path) for path in session_log_files
+        )
+    return usage
 
 
 def estimate_usage_sidecar(path: Path) -> dict[str, Any] | None:
