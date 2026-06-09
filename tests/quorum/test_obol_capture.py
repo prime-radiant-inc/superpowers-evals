@@ -15,17 +15,27 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _claude_row(model, mid, inp, cc, cr, out):
-    return json.dumps({
-        "type": "assistant",
-        "timestamp": "2026-06-09T00:00:00Z",
-        "message": {
-            "id": mid, "model": model, "role": "assistant", "content": [],
-            "usage": {
-                "input_tokens": inp, "cache_creation_input_tokens": cc,
-                "cache_read_input_tokens": cr, "output_tokens": out,
-            },
-        },
-    }) + "\n"
+    return (
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-09T00:00:00Z",
+                "message": {
+                    "id": mid,
+                    "model": model,
+                    "role": "assistant",
+                    "content": [],
+                    "usage": {
+                        "input_tokens": inp,
+                        "cache_creation_input_tokens": cc,
+                        "cache_read_input_tokens": cr,
+                        "output_tokens": out,
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
 
 
 class TestEstimateSessionLogs:
@@ -33,8 +43,10 @@ class TestEstimateSessionLogs:
         # Main session (opus) + subagent sibling file (sonnet): buckets and
         # cost merge across files, per-model breakdown keeps both.
         main = tmp_path / "main.jsonl"
-        main.write_text(_claude_row("claude-opus-4-7", "m1", 100, 1000, 50, 20)
-                        + _claude_row("claude-opus-4-7", "m2", 50, 0, 1100, 30))
+        main.write_text(
+            _claude_row("claude-opus-4-7", "m1", 100, 1000, 50, 20)
+            + _claude_row("claude-opus-4-7", "m2", 50, 0, 1100, 30)
+        )
         sub = tmp_path / "sub.jsonl"
         sub.write_text(_claude_row("claude-sonnet-4-6", "s1", 10, 0, 0, 5))
 
@@ -56,9 +68,7 @@ class TestEstimateSessionLogs:
 
     def test_codex_rollout(self, tmp_path):
         f = tmp_path / "rollout.jsonl"
-        f.write_text(
-            (FIXTURES / "codex_rollout.jsonl").read_text()
-        )
+        f.write_text((FIXTURES / "codex_rollout.jsonl").read_text())
         usage = estimate_session_logs("codex", [f])
         assert usage is not None
         # Last cumulative token_count wins: input 2000 (900 cached) -> 1100
@@ -68,18 +78,27 @@ class TestEstimateSessionLogs:
         assert usage["total_cache_read"] == 900
         assert usage["total_cache_create"] == 0
         assert usage["total_output"] == 160
-        assert usage["est_cost_usd"] == pytest.approx(
-            (1100 * 5.0 + 900 * 0.5 + 160 * 30.0) / 1e6
-        )
+        assert usage["est_cost_usd"] == pytest.approx((1100 * 5.0 + 900 * 0.5 + 160 * 30.0) / 1e6)
 
     def test_kimi_wire(self, tmp_path):
         f = tmp_path / "wire.jsonl"
-        f.write_text(json.dumps({
-            "type": "usage.record", "usageScope": "turn",
-            "model": "kimi-for-coding", "time": 1_800_000_000_000,
-            "usage": {"inputOther": 10, "inputCacheRead": 20,
-                      "inputCacheCreation": 30, "output": 40},
-        }) + "\n")
+        f.write_text(
+            json.dumps(
+                {
+                    "type": "usage.record",
+                    "usageScope": "turn",
+                    "model": "kimi-for-coding",
+                    "time": 1_800_000_000_000,
+                    "usage": {
+                        "inputOther": 10,
+                        "inputCacheRead": 20,
+                        "inputCacheCreation": 30,
+                        "output": 40,
+                    },
+                }
+            )
+            + "\n"
+        )
         usage = estimate_session_logs("kimi", [f])
         assert usage is not None
         assert usage["total_tokens"] == 100
@@ -114,14 +133,16 @@ class TestEstimateSessionLogs:
         assert usage is not None
         assert usage["unpriced_models"] == ["mystery-model-9"]
         assert usage["est_cost_usd"] is None  # all-unpriced: no silent $0
-        assert usage["total_input"] == 100   # tokens still reported
+        assert usage["total_input"] == 100  # tokens still reported
 
     def test_mixed_priced_and_unpriced(self, tmp_path):
         # One priced + one unpriced model: priced cost survives at top level,
         # the unpriced model is flagged per-model and in unpriced_models.
         f = tmp_path / "s.jsonl"
-        f.write_text(_claude_row("claude-opus-4-7", "m1", 100, 0, 0, 40)
-                     + _claude_row("mystery-model-9", "m2", 50, 0, 0, 5))
+        f.write_text(
+            _claude_row("claude-opus-4-7", "m1", 100, 0, 0, 40)
+            + _claude_row("mystery-model-9", "m2", 50, 0, 0, 5)
+        )
         usage = estimate_session_logs("claude", [f])
         assert usage is not None
         assert usage["unpriced_models"] == ["mystery-model-9"]
@@ -161,12 +182,24 @@ class TestEstimateSessionLogs:
 class TestEstimateUsageSidecar:
     def test_gauntlet_sidecar(self, tmp_path):
         f = tmp_path / "usage.jsonl"
-        f.write_text(json.dumps({
-            "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
-            "model": "claude-sonnet-4-6", "service_tier": "standard",
-            "usage": {"input_tokens": 12, "cache_read_input_tokens": 120,
-                      "cache_creation_input_tokens": 60, "output_tokens": 9},
-        }) + "\n")
+        f.write_text(
+            json.dumps(
+                {
+                    "type": "obol.usage",
+                    "v": "2026-06-08",
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-6",
+                    "service_tier": "standard",
+                    "usage": {
+                        "input_tokens": 12,
+                        "cache_read_input_tokens": 120,
+                        "cache_creation_input_tokens": 60,
+                        "output_tokens": 9,
+                    },
+                }
+            )
+            + "\n"
+        )
         usage = estimate_usage_sidecar(f)
         assert usage is not None
         assert usage["total_input"] == 12

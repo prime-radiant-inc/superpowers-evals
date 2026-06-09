@@ -11,6 +11,7 @@ propagate.) Line-oriented dialect parsers skip unparseable content (a garbage si
 file contributes zero, matching pre-obol behavior); ObolError covers
 structural failures like missing pricing tables or sidecar schema rejection.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

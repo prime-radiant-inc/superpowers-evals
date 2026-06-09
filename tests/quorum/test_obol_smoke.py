@@ -1,4 +1,5 @@
 """Smoke tests for the obol binding itself — pricing resolution both ways."""
+
 import obol
 import pytest
 

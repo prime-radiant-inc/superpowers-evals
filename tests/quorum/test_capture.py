@@ -42,9 +42,7 @@ class TestSnapshotAndDiff:
     def test_codex_target_glob_matches_date_nested_rollouts(self, tmp_path):
         # codex nests rollouts under sessions/YYYY/MM/DD/, so codex.yaml's
         # glob must recurse. A non-recursive glob silently captures nothing.
-        codex_yaml = (
-            Path(__file__).resolve().parents[2] / "coding-agents/codex.yaml"
-        )
+        codex_yaml = Path(__file__).resolve().parents[2] / "coding-agents/codex.yaml"
         glob = yaml.safe_load(codex_yaml.read_text())["session_log_glob"]
         sessions = tmp_path / "sessions"
         nested = sessions / "2026" / "05" / "20"
@@ -68,12 +66,19 @@ class TestCaptureToolCalls:
         log_dir.mkdir()
         snap = snapshot_dir(log_dir, "*.jsonl")
         session = log_dir / "session-abc.jsonl"
-        session.write_text(json.dumps({
-            "type": "assistant",
-            "message": {"content": [
-                {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}
-            ]}
-        }) + "\n")
+        session.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}
+                        ]
+                    },
+                }
+            )
+            + "\n"
+        )
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         result = capture_tool_calls(
@@ -84,11 +89,7 @@ class TestCaptureToolCalls:
             run_dir=run_dir,
         )
         assert result.path == run_dir / "coding-agent-tool-calls.jsonl"
-        rows = [
-            json.loads(line)
-            for line in result.path.read_text().splitlines()
-            if line.strip()
-        ]
+        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
         assert len(rows) == 1
         assert rows[0]["tool"] == "Bash"
         assert rows[0]["source"] == "shell"
@@ -99,21 +100,26 @@ class TestCaptureToolCalls:
         snap = snapshot_dir(log_dir, "*.jsonl")
         first = log_dir / "first.jsonl"
         first.write_text(
-            json.dumps({
-                "type": "assistant",
-                "message": {"content": [
-                    {
-                        "type": "tool_use",
-                        "name": "Read",
-                        "input": {"file_path": "a.py"},
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Read",
+                                "input": {"file_path": "a.py"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "input": {"file_path": "a.py"},
+                            },
+                        ]
                     },
-                    {
-                        "type": "tool_use",
-                        "name": "Edit",
-                        "input": {"file_path": "a.py"},
-                    },
-                ]},
-            }) + "\n"
+                }
+            )
+            + "\n"
         )
         second = log_dir / "second.jsonl"
         second.write_text('{"type":"text","text":"not a tool"}\n')
@@ -165,11 +171,7 @@ class TestCaptureToolCalls:
             run_dir=run_dir,
         )
 
-        rows = [
-            json.loads(line)
-            for line in result.path.read_text().splitlines()
-            if line.strip()
-        ]
+        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
         assert result.source_logs == (events,)
         assert result.row_count == 1
         assert rows[0]["tool"] == "Skill"
@@ -186,30 +188,36 @@ class TestCaptureToolCalls:
         launch_cwd.mkdir()
         rollout = log_dir / "rollout-1.jsonl"
         rollout.write_text(
-            json.dumps({"type": "session_meta",
-                        "payload": {"cwd": str(launch_cwd)}}) + "\n"
-            + json.dumps({"type": "response_item",
-                          "payload": {"type": "function_call",
-                                      "name": "spawn_agent", "arguments": "{}"}}) + "\n"
+            json.dumps({"type": "session_meta", "payload": {"cwd": str(launch_cwd)}})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "name": "spawn_agent", "arguments": "{}"},
+                }
+            )
+            + "\n"
         )
 
         matched = capture_tool_calls(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="codex", run_dir=_mkdir(tmp_path / "run-match"),
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="codex",
+            run_dir=_mkdir(tmp_path / "run-match"),
             launch_cwd=launch_cwd,
         )
-        rows = [
-            json.loads(x)
-            for x in matched.path.read_text().splitlines()
-            if x.strip()
-        ]
+        rows = [json.loads(x) for x in matched.path.read_text().splitlines() if x.strip()]
         # spawn_agent is aliased to the Claude-canonical Agent by CODEX_TOOL_MAP.
         assert [r["tool"] for r in rows] == ["Agent"]
 
         # A non-matching launch_cwd drops the rollout entirely.
         dropped = capture_tool_calls(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="codex", run_dir=_mkdir(tmp_path / "run-miss"),
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="codex",
+            run_dir=_mkdir(tmp_path / "run-miss"),
             launch_cwd=tmp_path / "elsewhere",
         )
         assert dropped.path.read_text() == ""
@@ -279,11 +287,7 @@ class TestCaptureToolCalls:
             launch_cwd=launch_cwd,
         )
 
-        rows = [
-            json.loads(x)
-            for x in matched.path.read_text().splitlines()
-            if x.strip()
-        ]
+        rows = [json.loads(x) for x in matched.path.read_text().splitlines() if x.strip()]
         assert [r["tool"] for r in rows] == ["Read"]
 
     def test_detect_kimi_cwd_mismatch_when_new_logs_exist_but_none_match(self, tmp_path):
@@ -331,8 +335,11 @@ class TestCaptureToolCalls:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         result = capture_tool_calls(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="claude", run_dir=run_dir,
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="claude",
+            run_dir=run_dir,
         )
         assert result.source_logs == ()
         assert result.row_count == 0
@@ -374,20 +381,25 @@ class TestPiSessionDiagnostics:
 
 
 def _claude_session_line(input_tokens: int, output_tokens: int) -> str:
-    return json.dumps({
-        "type": "assistant",
-        "message": {
-            "model": "claude-opus-4-7",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "x"}],
-            "usage": {
-                "input_tokens": input_tokens,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 0,
-                "output_tokens": output_tokens,
-            },
-        },
-    }) + "\n"
+    return (
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus-4-7",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "x"}],
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": output_tokens,
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
 
 
 class TestCaptureTokenUsage:
@@ -397,8 +409,11 @@ class TestCaptureTokenUsage:
         (log_dir / "session.jsonl").write_text(_claude_session_line(100, 40))
         run_dir = _mkdir(tmp_path / "run")
         out = capture_token_usage(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="claude", run_dir=run_dir,
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="claude",
+            run_dir=run_dir,
         )
         assert out is not None
         assert out == run_dir / "coding-agent-token-usage.json"
@@ -415,8 +430,11 @@ class TestCaptureTokenUsage:
         snap = snapshot_dir(log_dir, "*.jsonl")
         run_dir = _mkdir(tmp_path / "run")
         out = capture_token_usage(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="claude", run_dir=run_dir,
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="claude",
+            run_dir=run_dir,
         )
         assert out is None
         assert not (run_dir / "coding-agent-token-usage.json").exists()
@@ -429,8 +447,11 @@ class TestCaptureTokenUsage:
         (log_dir / "s.jsonl").write_text("{}\n")
         run_dir = _mkdir(tmp_path / "run")
         out = capture_token_usage(
-            log_dir=log_dir, log_glob="*.jsonl", snapshot=snap,
-            normalizer="gemini", run_dir=run_dir,
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="gemini",
+            run_dir=run_dir,
         )
         assert out is None
         assert not (run_dir / "coding-agent-token-usage.json").exists()
