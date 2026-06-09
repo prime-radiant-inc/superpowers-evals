@@ -428,9 +428,7 @@ def _make_gemini_superpowers_root(tmp_path: Path) -> Path:
     (root / "gemini-extension.json").write_text("{}")
     (root / "GEMINI.md").write_text("# Superpowers\n")
     (root / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
-    (root / "skills" / "using-superpowers" / "references" / "gemini-tools.md").write_text(
-        "tools"
-    )
+    (root / "skills" / "using-superpowers" / "references" / "gemini-tools.md").write_text("tools")
     return root
 
 
@@ -458,9 +456,9 @@ def _clear_copilot_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _write_gemini_extension_metadata(cfg: Path) -> None:
     (cfg / ".gemini" / "extensions" / "superpowers").mkdir(parents=True)
-    (
-        cfg / ".gemini" / "extensions" / "superpowers" / ".gemini-extension-install.json"
-    ).write_text("{}")
+    (cfg / ".gemini" / "extensions" / "superpowers" / ".gemini-extension-install.json").write_text(
+        "{}"
+    )
     (cfg / ".gemini" / "extensions" / "extension-enablement.json").write_text("{}")
     (cfg / ".gemini" / "extension_integrity.json").write_text("{}")
 
@@ -617,10 +615,7 @@ def test_gemini_launch_agent_is_substituted(tmp_path):
     session_log_dir.mkdir()
     _make_gemini_agent(coding_agents_dir, session_log_dir)
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "gemini-context"
-        / "launch-agent",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "gemini-context" / "launch-agent",
         coding_agents_dir / "gemini-context" / "launch-agent",
     )
     sd = _make_scenario(scenarios_dir, "x", with_checks=False)
@@ -659,10 +654,7 @@ def test_gemini_launch_agent_handles_shell_sensitive_paths(tmp_path):
     session_log_dir.mkdir()
     _make_gemini_agent(coding_agents_dir, session_log_dir)
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "gemini-context"
-        / "launch-agent",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "gemini-context" / "launch-agent",
         coding_agents_dir / "gemini-context" / "launch-agent",
     )
     launch_cwd = tmp_path / 'cwd-$HOME-"quoted"'
@@ -760,10 +752,7 @@ def test_kimi_launch_agent_is_interactive_and_substituted(tmp_path):
     cd_kimi = coding_agents_dir / "kimi-context"
     cd_kimi.mkdir(parents=True)
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "kimi-context"
-        / "launch-agent",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "kimi-context" / "launch-agent",
         cd_kimi / "launch-agent",
     )
     out_root = tmp_path / "results"
@@ -834,10 +823,7 @@ def test_kimi_launch_agent_uses_configured_binary(tmp_path, monkeypatch):
     cd_kimi = coding_agents_dir / "kimi-context"
     cd_kimi.mkdir(parents=True)
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "kimi-context"
-        / "launch-agent",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "kimi-context" / "launch-agent",
         cd_kimi / "launch-agent",
     )
     out_root = tmp_path / "results"
@@ -924,17 +910,11 @@ def test_copilot_launch_agent_is_substituted_and_uses_env_i(tmp_path):
     copilot_context = coding_agents_dir / "copilot-context"
     copilot_context.mkdir(parents=True)
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "copilot-context"
-        / "launch-agent",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "copilot-context" / "launch-agent",
         copilot_context / "launch-agent",
     )
     shutil.copy2(
-        Path(__file__).resolve().parents[2]
-        / "coding-agents"
-        / "copilot-context"
-        / "HOWTO.md",
+        Path(__file__).resolve().parents[2] / "coding-agents" / "copilot-context" / "HOWTO.md",
         copilot_context / "HOWTO.md",
     )
     run_dir = tmp_path / "run $HOME's dir"
@@ -944,10 +924,7 @@ def test_copilot_launch_agent_is_substituted_and_uses_env_i(tmp_path):
     launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
     launch_cwd.mkdir()
     copilot_home.mkdir(parents=True)
-    env_file.write_text(
-        "COPILOT_GITHUB_TOKEN='token with spaces'\n"
-        "LEAK_ME='from-env-file'\n"
-    )
+    env_file.write_text("COPILOT_GITHUB_TOKEN='token with spaces'\nLEAK_ME='from-env-file'\n")
 
     _populate_context_dir(
         coding_agents_dir,
@@ -1203,9 +1180,7 @@ class TestSeedAgentConfigDir:
         entry = cfg["projects"][str(workdir.resolve())]
         assert entry["hasTrustDialogAccepted"] is True
 
-    def test_claude_target_writes_api_key_env_file_when_required(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claude_target_writes_api_key_env_file_when_required(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         cfg = CodingAgentConfig(
             name="claude",
@@ -1232,16 +1207,12 @@ class TestSeedAgentConfigDir:
         assert env_path.read_text() == "ANTHROPIC_API_KEY='sk-test-key'\n"
         assert oct(env_path.stat().st_mode & 0o777) == "0o600"
         assert runtime.substitutions["$CLAUDE_ENV_FILE"] == str(env_path)
-        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(
-            str(env_path)
-        )
+        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(str(env_path))
         claude_config = json.loads((dest / ".claude.json").read_text())
         assert claude_config["customApiKeyResponses"]["approved"] == ["sk-test-key"]
         assert claude_config["customApiKeyResponses"]["rejected"] == []
 
-    def test_claude_seed_raises_without_api_key_when_required(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claude_seed_raises_without_api_key_when_required(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         cfg = CodingAgentConfig(
             name="claude",
@@ -1421,9 +1392,7 @@ class TestSeedAgentConfigDir:
 
         auth_path = dest / "auth.json"
         auth = json.loads(auth_path.read_text())
-        assert auth == {
-            "azure-openai-responses": {"type": "api_key", "key": "$PI_API_KEY"}
-        }
+        assert auth == {"azure-openai-responses": {"type": "api_key", "key": "$PI_API_KEY"}}
         assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
         assert "secret-pi-key" not in auth_path.read_text()
 
@@ -1544,9 +1513,7 @@ class TestSeedAgentConfigDir:
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
         assert env_file.read_text() == "GEMINI_API_KEY='test-'\"'\"'key'\n"
 
-    def test_gemini_env_file_uses_restrictive_open_mode(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_env_file_uses_restrictive_open_mode(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
         real_open = os.open
         seen: dict[str, int] = {}
@@ -1651,8 +1618,7 @@ class TestSeedAgentConfigDir:
         assert env_file.name == COPILOT_ENV_FILE_NAME
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
         assert env_file.read_text() == (
-            "COPILOT_GITHUB_TOKEN='token with spaces'\n"
-            "COPILOT_MODEL='o'\"'\"'clock model'\n"
+            "COPILOT_GITHUB_TOKEN='token with spaces'\nCOPILOT_MODEL='o'\"'\"'clock model'\n"
         )
 
     def test_copilot_env_file_uses_restrictive_open_flags(self, tmp_path):
@@ -1719,9 +1685,7 @@ class TestSeedAgentConfigDir:
         assert env_file.read_text() == "COPILOT_GITHUB_TOKEN='secret'\n"
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
-    def test_copilot_seed_stages_plugin_without_plugin_list_subprocess(
-        self, tmp_path, monkeypatch
-    ):
+    def test_copilot_seed_stages_plugin_without_plugin_list_subprocess(self, tmp_path, monkeypatch):
         sp = _make_superpowers_copilot_root(tmp_path)
         _clear_copilot_auth_env(monkeypatch)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
@@ -1798,9 +1762,7 @@ class TestSeedAgentConfigDir:
             "hooks/session-start",
         ],
     )
-    def test_copilot_seed_rejects_hook_and_plugin_source_symlinks(
-        self, tmp_path, source_rel
-    ):
+    def test_copilot_seed_rejects_hook_and_plugin_source_symlinks(self, tmp_path, source_rel):
         sp = _make_superpowers_copilot_root(tmp_path)
         source = sp / source_rel
         target = tmp_path / "symlink-target"
@@ -1817,9 +1779,7 @@ class TestSeedAgentConfigDir:
 
         assert excinfo.value.stage == "setup"
 
-    def test_copilot_seed_rejects_stale_expected_session_state(
-        self, tmp_path, monkeypatch
-    ):
+    def test_copilot_seed_rejects_stale_expected_session_state(self, tmp_path, monkeypatch):
         sp = _make_superpowers_copilot_root(tmp_path)
         _clear_copilot_auth_env(monkeypatch)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
@@ -1900,10 +1860,12 @@ class TestSeedAgentConfigDir:
 
     def test_copilot_gauntlet_env_rejects_credentialed_proxy(self):
         with pytest.raises(RunnerError, match="credentialed proxy") as excinfo:
-            _copilot_gauntlet_env({
-                "PATH": "/bin",
-                "HTTP_PROXY": "http://user:pass@proxy.example:8080",
-            })
+            _copilot_gauntlet_env(
+                {
+                    "PATH": "/bin",
+                    "HTTP_PROXY": "http://user:pass@proxy.example:8080",
+                }
+            )
 
         assert excinfo.value.stage == "setup"
 
@@ -1956,9 +1918,7 @@ class TestSeedAgentConfigDir:
         assert (cfg / ".gemini-env").exists()
         assert _gemini_transcripts(cfg) == []
 
-    def test_gemini_seed_redacts_api_key_from_link_failure(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_seed_redacts_api_key_from_link_failure(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
@@ -2003,9 +1963,7 @@ class TestSeedAgentConfigDir:
         assert "[redacted]" in message
         assert api_key[:300] not in message
 
-    def test_gemini_seed_redacts_api_key_from_list_failure(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_seed_redacts_api_key_from_list_failure(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
@@ -2028,9 +1986,7 @@ class TestSeedAgentConfigDir:
         assert "extensions list failed" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
 
-    def test_gemini_seed_rejects_substring_extension_list_match(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_seed_rejects_substring_extension_list_match(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
@@ -2055,18 +2011,14 @@ class TestSeedAgentConfigDir:
         assert "did not show Superpowers extension" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
 
-    def test_gemini_seed_reports_missing_metadata_without_api_key(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_seed_reports_missing_metadata_without_api_key(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.setenv("GEMINI_API_KEY", "test-secret-key")
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
 
         def fake_run(cmd, **_kwargs):
-            return subprocess.CompletedProcess(
-                cmd, 0, "superpowers (5.1.0)\t/path\tenabled\n", ""
-            )
+            return subprocess.CompletedProcess(cmd, 0, "superpowers (5.1.0)\t/path\tenabled\n", "")
 
         with (
             patch("quorum.runner.subprocess.run", side_effect=fake_run),
@@ -2078,9 +2030,7 @@ class TestSeedAgentConfigDir:
         assert "expected metadata files are missing" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
 
-    def test_gemini_seed_fails_when_provisioning_creates_transcripts(
-        self, tmp_path, monkeypatch
-    ):
+    def test_gemini_seed_fails_when_provisioning_creates_transcripts(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -2420,9 +2370,7 @@ class TestSeedAgentConfigDir:
         assert not env_file.exists()
         assert not env_dir.exists()
 
-    def test_cleanup_agent_runtime_fails_when_runtime_env_file_remains(
-        self, tmp_path, monkeypatch
-    ):
+    def test_cleanup_agent_runtime_fails_when_runtime_env_file_remains(self, tmp_path, monkeypatch):
         env_dir = tmp_path / "secret-env"
         env_dir.mkdir()
         env_file = env_dir / "kimi-runtime.env"
@@ -3596,9 +3544,7 @@ class TestRunScenario:
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
 
-    def test_kimi_no_wire_logs_is_capture_indeterminate_even_without_trace_checks(
-        self, tmp_path
-    ):
+    def test_kimi_no_wire_logs_is_capture_indeterminate_even_without_trace_checks(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "kimi-home" / "sessions"
@@ -3720,9 +3666,7 @@ class TestRunScenario:
         assert verdict.error.stage == "capture"
         assert "not indexed/mappable" in verdict.error.message
 
-    def test_kimi_matched_wire_with_zero_normalized_rows_is_capture_indeterminate(
-        self, tmp_path
-    ):
+    def test_kimi_matched_wire_with_zero_normalized_rows_is_capture_indeterminate(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         session_log_dir = tmp_path / "kimi-home" / "sessions"
@@ -3878,9 +3822,7 @@ class TestRunScenario:
             "SSL_CERT_FILE": "/certs/ca.pem",
             "COPILOT_MODEL": "gpt-test",
         }
-        assert captured["extra_env"] == {
-            "COPILOT_HOME": str(_run_dir / "coding-agent-config")
-        }
+        assert captured["extra_env"] == {"COPILOT_HOME": str(_run_dir / "coding-agent-config")}
         env_base = captured["env_base"] or {}
         for name in (
             "COPILOT_GITHUB_TOKEN",
@@ -3972,9 +3914,7 @@ class TestRunScenario:
 
         def fake_invoke(*, run_dir, extra_env, **_kwargs):
             copilot_home = Path(extra_env["COPILOT_HOME"])
-            _write_copilot_skill_event(
-                copilot_home / "session-state" / "other" / "events.jsonl"
-            )
+            _write_copilot_skill_event(copilot_home / "session-state" / "other" / "events.jsonl")
             result_dir = run_dir / "gauntlet-agent" / "results" / "run-1"
             result_dir.mkdir(parents=True)
             (result_dir / "result.json").write_text(json.dumps({"status": "pass"}))
@@ -4010,14 +3950,10 @@ class TestRunScenario:
 
         def fake_invoke(*, run_dir, extra_env, **_kwargs):
             copilot_home = Path(extra_env["COPILOT_HOME"])
-            expected_log = (
-                copilot_home / "session-state" / "expected" / "events.jsonl"
-            )
+            expected_log = copilot_home / "session-state" / "expected" / "events.jsonl"
             expected_log.parent.mkdir(parents=True)
             expected_log.write_text('{"type":"session.shutdown"}\n')
-            _write_copilot_skill_event(
-                copilot_home / "session-state" / "other" / "events.jsonl"
-            )
+            _write_copilot_skill_event(copilot_home / "session-state" / "other" / "events.jsonl")
             result_dir = run_dir / "gauntlet-agent" / "results" / "run-1"
             result_dir.mkdir(parents=True)
             (result_dir / "result.json").write_text(json.dumps({"status": "pass"}))
@@ -4040,9 +3976,7 @@ class TestRunScenario:
         assert verdict.error.stage == "capture"
         assert "unexpected Copilot session-state log" in verdict.final_reason
 
-    def test_copilot_secret_leak_in_wrong_session_state_takes_precedence(
-        self, tmp_path
-    ):
+    def test_copilot_secret_leak_in_wrong_session_state_takes_precedence(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
         _make_copilot_agent(coding_agents_dir)
@@ -4083,12 +4017,8 @@ class TestRunScenario:
         assert verdict.final == "indeterminate"
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
-        assert "Copilot secret value appeared in non-secret run artifact" in (
-            verdict.final_reason
-        )
-        assert "expected Copilot session-state log did not appear" not in (
-            verdict.final_reason
-        )
+        assert "Copilot secret value appeared in non-secret run artifact" in (verdict.final_reason)
+        assert "expected Copilot session-state log did not appear" not in (verdict.final_reason)
 
     def test_copilot_secret_leak_forces_indeterminate(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
@@ -4130,9 +4060,7 @@ class TestRunScenario:
         assert verdict.final == "indeterminate"
         assert verdict.error is not None
         assert verdict.error.stage == "capture"
-        assert "Copilot secret value appeared in non-secret run artifact" in (
-            verdict.final_reason
-        )
+        assert "Copilot secret value appeared in non-secret run artifact" in (verdict.final_reason)
 
     def test_populate_context_dir_copies_coding_agent_contexts(self, tmp_path):
         # Spot-check that coding-agent context HOWTOs land in <run-dir>/gauntlet-agent/context/.
@@ -4272,9 +4200,7 @@ class TestRunScenario:
 
         assert "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID" in content
 
-    def test_launch_agent_shim_substitutes_claude_env_file(
-        self, tmp_path, monkeypatch
-    ):
+    def test_launch_agent_shim_substitutes_claude_env_file(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
@@ -4647,12 +4573,22 @@ class TestRunScenario:
             )
             # obol.usage sidecar — economics reads this, not result.json's usage block.
             (gd / "usage.jsonl").write_text(
-                json.dumps({
-                    "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
-                    "model": "claude-sonnet-4-6", "service_tier": "standard",
-                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 1000,
-                              "cache_creation_input_tokens": 0, "output_tokens": 200},
-                }) + "\n"
+                json.dumps(
+                    {
+                        "type": "obol.usage",
+                        "v": "2026-06-08",
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-6",
+                        "service_tier": "standard",
+                        "usage": {
+                            "input_tokens": 100,
+                            "cache_read_input_tokens": 1000,
+                            "cache_creation_input_tokens": 0,
+                            "output_tokens": 200,
+                        },
+                    }
+                )
+                + "\n"
             )
             # Frozen coding-agent token usage (obol-priced; carries provenance fields).
             (run_dir / "coding-agent-token-usage.json").write_text(
@@ -4668,9 +4604,12 @@ class TestRunScenario:
                         "duration_ms": 90000,
                         "models": {
                             "gpt-5.5": {
-                                "total_input": 50, "total_cache_create": 0,
-                                "total_cache_read": 0, "total_output": 80,
-                                "total_tokens": 130, "provider": "openai",
+                                "total_input": 50,
+                                "total_cache_create": 0,
+                                "total_cache_read": 0,
+                                "total_output": 80,
+                                "total_tokens": 130,
+                                "provider": "openai",
                                 "est_cost_usd": 1.23,
                             },
                         },

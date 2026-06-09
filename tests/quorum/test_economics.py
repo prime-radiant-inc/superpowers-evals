@@ -11,17 +11,22 @@ def _gauntlet_results(run_dir, *, usage_rows=None, result=None):
     if result is not None:
         (d / "result.json").write_text(json.dumps(result))
     if usage_rows is not None:
-        (d / "usage.jsonl").write_text(
-            "".join(json.dumps(r) + "\n" for r in usage_rows)
-        )
+        (d / "usage.jsonl").write_text("".join(json.dumps(r) + "\n" for r in usage_rows))
     return d
 
 
 _SONNET_ROW = {
-    "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
-    "model": "claude-sonnet-4-6", "service_tier": "standard",
-    "usage": {"input_tokens": 12, "cache_read_input_tokens": 120,
-              "cache_creation_input_tokens": 60, "output_tokens": 9},
+    "type": "obol.usage",
+    "v": "2026-06-08",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "service_tier": "standard",
+    "usage": {
+        "input_tokens": 12,
+        "cache_read_input_tokens": 120,
+        "cache_creation_input_tokens": 60,
+        "output_tokens": 9,
+    },
 }
 # (12*3 + 60*3.75 + 120*0.3 + 9*15)/1e6 against the fixture snapshot
 _SONNET_COST = 0.000432
@@ -29,14 +34,20 @@ _SONNET_COST = 0.000432
 _RESULT = {"duration_ms": 1000, "config": {"model": "claude-sonnet-4-6"}}
 
 _CODING_USAGE = {
-    "total_input": 160, "total_cache_create": 1000, "total_cache_read": 1150,
-    "total_output": 55, "total_tokens": 2365,
+    "total_input": 160,
+    "total_cache_create": 1000,
+    "total_cache_read": 1150,
+    "total_output": 55,
+    "total_tokens": 2365,
     "model": "claude-opus-4-7",
     "models": {
         "claude-opus-4-7": {
-            "total_input": 150, "total_cache_create": 1000,
-            "total_cache_read": 1150, "total_output": 50,
-            "total_tokens": 2350, "provider": "anthropic",
+            "total_input": 150,
+            "total_cache_create": 1000,
+            "total_cache_read": 1150,
+            "total_output": 50,
+            "total_tokens": 2350,
+            "provider": "anthropic",
             "est_cost_usd": 0.008825,
         },
     },
@@ -59,7 +70,10 @@ def test_full_economics(tmp_path):
     assert g["duration_ms"] == 1000
     assert g["model"] == "claude-sonnet-4-6"
     assert g["tokens"] == {
-        "input": 12, "output": 9, "cache_create": 60, "cache_read": 120,
+        "input": 12,
+        "output": 9,
+        "cache_create": 60,
+        "cache_read": 120,
         "total": 201,
     }
     assert g["est_cost_usd"] == pytest.approx(_SONNET_COST)
@@ -123,9 +137,15 @@ def test_legacy_frozen_file_renders_without_crash(tmp_path):
     # A pre-obol frozen file (no pricing_as_of/unpriced_models/approximations
     # keys): block still builds, with no obol provenance.
     legacy = {
-        "total_input": 100, "total_cache_create": 0, "total_cache_read": 0,
-        "total_output": 40, "total_tokens": 140, "model": "claude-opus-4-7",
-        "est_cost_usd": 0.0015, "duration_ms": 5000, "models": {},
+        "total_input": 100,
+        "total_cache_create": 0,
+        "total_cache_read": 0,
+        "total_output": 40,
+        "total_tokens": 140,
+        "model": "claude-opus-4-7",
+        "est_cost_usd": 0.0015,
+        "duration_ms": 5000,
+        "models": {},
     }
     (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(legacy))
 
@@ -143,7 +163,9 @@ def test_mixed_unpriced_gauntlet_sidecar_gates_total(tmp_path):
     # cost still shows on the block, but the headline total must not
     # pretend completeness (never a silent undercount).
     mystery_row = {
-        "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
+        "type": "obol.usage",
+        "v": "2026-06-08",
+        "provider": "anthropic",
         "model": "mystery-model-9",
         "usage": {"input_tokens": 5_000_000, "output_tokens": 1000},
     }
@@ -162,13 +184,21 @@ def test_mixed_unpriced_gauntlet_sidecar_gates_total(tmp_path):
 def test_coding_models_sorted_by_cost_desc_with_none_last(tmp_path):
     usage = json.loads(json.dumps(_CODING_USAGE))  # deep copy
     usage["models"]["claude-sonnet-4-6"] = {
-        "total_input": 10, "total_cache_create": 0, "total_cache_read": 0,
-        "total_output": 5, "total_tokens": 15, "provider": "anthropic",
+        "total_input": 10,
+        "total_cache_create": 0,
+        "total_cache_read": 0,
+        "total_output": 5,
+        "total_tokens": 15,
+        "provider": "anthropic",
         "est_cost_usd": 0.02,  # costlier than opus's 0.008825
     }
     usage["models"]["mystery-model-9"] = {
-        "total_input": 7, "total_cache_create": 0, "total_cache_read": 0,
-        "total_output": 0, "total_tokens": 7, "provider": "anthropic",
+        "total_input": 7,
+        "total_cache_create": 0,
+        "total_cache_read": 0,
+        "total_output": 0,
+        "total_tokens": 7,
+        "provider": "anthropic",
         "est_cost_usd": None,
     }
     (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(usage))
@@ -178,7 +208,9 @@ def test_coding_models_sorted_by_cost_desc_with_none_last(tmp_path):
     assert econ is not None
     models = econ["coding_agent"]["models"]
     assert [m["model"] for m in models] == [
-        "claude-sonnet-4-6", "claude-opus-4-7", "mystery-model-9",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "mystery-model-9",
     ]
     # per-model None cost flips has_unpriced even without unpriced_models
     assert econ["coding_agent"]["has_unpriced_model"] is True
@@ -197,7 +229,8 @@ def test_wrong_typed_result_config_degrades(tmp_path):
     # result.json is written by Gauntlet (external tool): config drift to a
     # list must not crash; model falls back to the sidecar's.
     _gauntlet_results(
-        tmp_path, usage_rows=[_SONNET_ROW],
+        tmp_path,
+        usage_rows=[_SONNET_ROW],
         result={"duration_ms": 1000, "config": ["not", "a", "dict"]},
     )
     (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))

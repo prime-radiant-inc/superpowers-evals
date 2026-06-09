@@ -29,6 +29,7 @@ def _make_run(root: Path, name: str, *, age_seconds: int = 0) -> Path:
 
 # ---------- resolver ----------------------------------------------------
 
+
 def test_resolve_omitted_picks_newest(tmp_path: Path):
     root = tmp_path / "results"
     root.mkdir()
@@ -65,8 +66,7 @@ def test_resolve_prefix_greedy_picks_newest_across_variants(tmp_path: Path):
     # whole union — spec §5.
     root = tmp_path / "results"
     root.mkdir()
-    _make_run(root, "worktree-already-inside-claude-20260501T000000Z-a",
-              age_seconds=10000)
+    _make_run(root, "worktree-already-inside-claude-20260501T000000Z-a", age_seconds=10000)
     new = _make_run(root, "worktree-consent-flow-claude-20260523T000000Z-b")
     assert resolve_target("worktree", results_root=root) == new
 
@@ -119,6 +119,7 @@ def test_resolve_absolute_path_nonexistent_no_glob_crash(tmp_path: Path):
 
 # ---------- renderer fixtures (used by Tasks 2-4) -----------------------
 
+
 def _verdict_fail_pass_judge() -> dict:
     """worktree-consent-flow shape: gauntlet=pass, post-check fails."""
     return {
@@ -132,18 +133,37 @@ def _verdict_fail_pass_judge() -> dict:
             "run_id": "worktree-consent-flow_20260523T215258Z_22i6",
         },
         "checks": [
-            {"check": "git-repo", "args": [], "negated": False, "passed": True,
-             "detail": None, "phase": "pre"},
-            {"check": "git-branch", "args": ["main"], "negated": False, "passed": True,
-             "detail": None, "phase": "pre"},
-            {"check": "git-count", "args": ["worktrees", "eq", "2"], "negated": False,
-             "passed": False, "detail": "worktrees count 1 not eq 2", "phase": "post"},
+            {
+                "check": "git-repo",
+                "args": [],
+                "negated": False,
+                "passed": True,
+                "detail": None,
+                "phase": "pre",
+            },
+            {
+                "check": "git-branch",
+                "args": ["main"],
+                "negated": False,
+                "passed": True,
+                "detail": None,
+                "phase": "pre",
+            },
+            {
+                "check": "git-count",
+                "args": ["worktrees", "eq", "2"],
+                "negated": False,
+                "passed": False,
+                "detail": "worktrees count 1 not eq 2",
+                "phase": "post",
+            },
         ],
         "error": None,
     }
 
 
 # ---------- renderer: full mode -----------------------------------------
+
 
 def test_render_full_contains_canonical_fields(tmp_path: Path):
     run_dir = tmp_path / "run"
@@ -184,6 +204,7 @@ def test_render_full_failing_check_shows_detail(tmp_path: Path):
 
 # ---------- renderer: quiet + json --------------------------------------
 
+
 def test_render_quiet_two_lines(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -208,17 +229,29 @@ def test_render_json_is_valid_verdict_json(tmp_path: Path):
 
 # ---------- renderer: other verdict shapes ------------------------------
 
+
 def test_render_handles_pass_verdict(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     v = {
-        "schema": 1, "final": "pass",
+        "schema": 1,
+        "final": "pass",
         "final_reason": "Gauntlet-Agent passed; 2 post-check(s) passed",
-        "gauntlet": {"status": "pass", "summary": "ok", "reasoning": "ok",
-                     "run_id": "x_20260523T000000Z_0000"},
+        "gauntlet": {
+            "status": "pass",
+            "summary": "ok",
+            "reasoning": "ok",
+            "run_id": "x_20260523T000000Z_0000",
+        },
         "checks": [
-            {"check": "file-exists", "args": ["x.md"], "negated": False,
-             "passed": True, "detail": None, "phase": "post"},
+            {
+                "check": "file-exists",
+                "args": ["x.md"],
+                "negated": False,
+                "passed": True,
+                "detail": None,
+                "phase": "post",
+            },
         ],
         "error": None,
     }
@@ -231,7 +264,8 @@ def test_render_handles_indeterminate_with_error(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     v = {
-        "schema": 1, "final": "indeterminate",
+        "schema": 1,
+        "final": "indeterminate",
         "final_reason": "setup.sh crashed (exit 2)",
         "gauntlet": None,
         "checks": [],
@@ -246,6 +280,7 @@ def test_render_handles_indeterminate_with_error(tmp_path: Path):
 
 # ---------- renderer: ANSI color ----------------------------------------
 
+
 def test_render_full_color_injects_ansi(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -255,32 +290,24 @@ def test_render_full_color_injects_ansi(tmp_path: Path):
     # Red somewhere for the fail word + the ✗ glyph. Accept named-color
     # forms (\x1b[31m / \x1b[91m) and truecolor forms (\x1b[38;2;R;G;B;m
     # where R is high) — current palette is truecolor (255, 85, 85).
-    assert (
-        "\x1b[31m" in out
-        or "\x1b[91m" in out
-        or "\x1b[38;2;255;85;85m" in out
-    )
+    assert "\x1b[31m" in out or "\x1b[91m" in out or "\x1b[38;2;255;85;85m" in out
 
 
 def test_render_full_color_yellow_on_indeterminate(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     v = {
-        "schema": 1, "final": "indeterminate",
+        "schema": 1,
+        "final": "indeterminate",
         "final_reason": "pre-check(s) failed",
-        "gauntlet": {"status": "pass", "summary": "s", "reasoning": "r",
-                     "run_id": "x_z_0"},
+        "gauntlet": {"status": "pass", "summary": "s", "reasoning": "r", "run_id": "x_z_0"},
         "checks": [],
         "error": None,
     }
     out = render(v, run_dir, color=True, mode="full")
     # Yellow or bright-yellow or the current truecolor Dracula yellow
     # (#f1fa8c = 241,250,140). Contract: "yellow-ish".
-    assert (
-        "\x1b[33m" in out
-        or "\x1b[93m" in out
-        or "\x1b[38;2;241;250;140m" in out
-    )
+    assert "\x1b[33m" in out or "\x1b[93m" in out or "\x1b[38;2;241;250;140m" in out
 
 
 def test_render_full_no_color_omits_ansi(tmp_path: Path):
@@ -300,43 +327,71 @@ def test_render_quiet_color_skipped(tmp_path: Path):
 
 # ---------- renderer: batch matrix --------------------------------------
 
+
 def _seed_batch(tmp_path: Path, *, agents: list[str], rows: list[dict]) -> Path:
     """Build a fake batch dir + sibling per-run dirs to test the renderer."""
     out_root = tmp_path / "results"
     batch_dir = out_root / "batches" / "20260526T180000Z-abcd"
     batch_dir.mkdir(parents=True)
-    (batch_dir / "batch.json").write_text(_json.dumps({
-        "schema_version": 1, "id": batch_dir.name,
-        "started_at": "2026-05-26T18:00:00+00:00",
-        "finished_at": "2026-05-26T18:03:41+00:00",
-        "coding_agents": agents, "jobs": 1,
-    }))
+    (batch_dir / "batch.json").write_text(
+        _json.dumps(
+            {
+                "schema_version": 1,
+                "id": batch_dir.name,
+                "started_at": "2026-05-26T18:00:00+00:00",
+                "finished_at": "2026-05-26T18:03:41+00:00",
+                "coding_agents": agents,
+                "jobs": 1,
+            }
+        )
+    )
     lines = []
     for r in rows:
         lines.append(_json.dumps(r))
         if r.get("run_id"):
             run_dir = out_root / r["run_id"]
             run_dir.mkdir(parents=True)
-            (run_dir / "verdict.json").write_text(_json.dumps({
-                "final": r.pop("_verdict", "pass"),
-                "final_reason": r.pop("_reason", "ok"),
-                "gauntlet": {}, "checks": {}, "error": None,
-            }))
+            (run_dir / "verdict.json").write_text(
+                _json.dumps(
+                    {
+                        "final": r.pop("_verdict", "pass"),
+                        "final_reason": r.pop("_reason", "ok"),
+                        "gauntlet": {},
+                        "checks": {},
+                        "error": None,
+                    }
+                )
+            )
     (batch_dir / "results.jsonl").write_text("\n".join(lines) + "\n")
     return batch_dir
 
 
 def test_render_batch_matrix_two_agents(tmp_path):
-    batch_dir = _seed_batch(tmp_path, agents=["claude", "codex"], rows=[
-        {"scenario": "foo", "coding_agent": "claude",
-         "run_id": "foo-claude-x", "_verdict": "pass"},
-        {"scenario": "foo", "coding_agent": "codex",
-         "run_id": None, "skipped": "directive"},
-        {"scenario": "bar", "coding_agent": "claude",
-         "run_id": "bar-claude-x", "_verdict": "fail"},
-        {"scenario": "bar", "coding_agent": "codex",
-         "run_id": "bar-codex-x", "_verdict": "indeterminate"},
-    ])
+    batch_dir = _seed_batch(
+        tmp_path,
+        agents=["claude", "codex"],
+        rows=[
+            {
+                "scenario": "foo",
+                "coding_agent": "claude",
+                "run_id": "foo-claude-x",
+                "_verdict": "pass",
+            },
+            {"scenario": "foo", "coding_agent": "codex", "run_id": None, "skipped": "directive"},
+            {
+                "scenario": "bar",
+                "coding_agent": "claude",
+                "run_id": "bar-claude-x",
+                "_verdict": "fail",
+            },
+            {
+                "scenario": "bar",
+                "coding_agent": "codex",
+                "run_id": "bar-codex-x",
+                "_verdict": "indeterminate",
+            },
+        ],
+    )
 
     out = render_batch(batch_dir=batch_dir, results_root=tmp_path / "results", color=False)
 
@@ -351,14 +406,19 @@ def test_render_batch_matrix_two_agents(tmp_path):
 
 
 def test_render_batch_missing_verdict_renders_question_glyph(tmp_path):
-    batch_dir = _seed_batch(tmp_path, agents=["claude"], rows=[
-        {"scenario": "foo", "coding_agent": "claude", "run_id": "ghost"},
-    ])
+    batch_dir = _seed_batch(
+        tmp_path,
+        agents=["claude"],
+        rows=[
+            {"scenario": "foo", "coding_agent": "claude", "run_id": "ghost"},
+        ],
+    )
     out = render_batch(batch_dir=batch_dir, results_root=tmp_path / "results", color=False)
     assert "?" in out
 
 
 # ---------- resolver: batch-dir handling --------------------------------
+
 
 def test_resolve_target_returns_batch_dir_for_batch_id(tmp_path):
     out_root = tmp_path / "results"
@@ -397,10 +457,18 @@ def test_render_batch_emits_ansi_when_color_true(tmp_path, monkeypatch):
     """When color=True, glyphs are wrapped in ANSI sequences."""
     monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setenv("TERM", "dumb")
-    batch_dir = _seed_batch(tmp_path, agents=["claude"], rows=[
-        {"scenario": "foo", "coding_agent": "claude",
-         "run_id": "foo-claude-x", "_verdict": "pass"},
-    ])
+    batch_dir = _seed_batch(
+        tmp_path,
+        agents=["claude"],
+        rows=[
+            {
+                "scenario": "foo",
+                "coding_agent": "claude",
+                "run_id": "foo-claude-x",
+                "_verdict": "pass",
+            },
+        ],
+    )
 
     out = render_batch(
         batch_dir=batch_dir,
@@ -421,17 +489,28 @@ def test_render_batch_emits_ansi_when_color_true(tmp_path, monkeypatch):
 
 def test_render_includes_economics_pane():
     from quorum.show import render
+
     verdict = {
-        "final": "pass", "final_reason": "ok",
+        "final": "pass",
+        "final_reason": "ok",
         "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
         "checks": [],
         "economics": {
             "pricing_asof": "2026-05",
-            "gauntlet": {"duration_ms": 1885117, "model": "claude-sonnet-4-6",
-                         "tokens": {"total": 7100000}, "est_cost_usd": 0.42},
-            "coding_agent": {"duration_ms": 1443000, "model": "gpt-5.5",
-                             "tokens": {"total": 2300000}, "est_cost_usd": 1.85},
-            "total_est_cost_usd": 2.27, "partial": False,
+            "gauntlet": {
+                "duration_ms": 1885117,
+                "model": "claude-sonnet-4-6",
+                "tokens": {"total": 7100000},
+                "est_cost_usd": 0.42,
+            },
+            "coding_agent": {
+                "duration_ms": 1443000,
+                "model": "gpt-5.5",
+                "tokens": {"total": 2300000},
+                "est_cost_usd": 1.85,
+            },
+            "total_est_cost_usd": 2.27,
+            "partial": False,
         },
     }
     out = render(verdict, Path("/tmp/run"), color=False, mode="full")
@@ -442,33 +521,58 @@ def test_render_includes_economics_pane():
 
 def test_render_economics_absent_is_safe():
     from quorum.show import render
-    verdict = {"final": "pass", "final_reason": "", "gauntlet": {"status": "pass"},
-               "checks": []}  # no economics key
+
+    verdict = {
+        "final": "pass",
+        "final_reason": "",
+        "gauntlet": {"status": "pass"},
+        "checks": [],
+    }  # no economics key
     out = render(verdict, Path("/tmp/run"), color=False, mode="full")
     assert isinstance(out, str)  # no crash
 
 
 def test_economics_pane_shows_per_model_subrows():
     from quorum.show import render
+
     verdict = {
-        "final": "pass", "final_reason": "ok",
+        "final": "pass",
+        "final_reason": "ok",
         "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
         "checks": [],
         "economics": {
             "pricing_asof": "2026-05",
-            "gauntlet": {"duration_ms": 1000, "model": "claude-sonnet-4-6",
-                         "tokens": {"total": 4_300_000}, "est_cost_usd": 1.71},
-            "coding_agent": {"duration_ms": 2000, "model": "claude-opus-4-7",
-                "tokens": {"total": 27_500_000}, "est_cost_usd": 32.98,
+            "gauntlet": {
+                "duration_ms": 1000,
+                "model": "claude-sonnet-4-6",
+                "tokens": {"total": 4_300_000},
+                "est_cost_usd": 1.71,
+            },
+            "coding_agent": {
+                "duration_ms": 2000,
+                "model": "claude-opus-4-7",
+                "tokens": {"total": 27_500_000},
+                "est_cost_usd": 32.98,
                 "models": [
-                    {"model": "claude-opus-4-7",
-                     "tokens": {"total": 9_700_000}, "est_cost_usd": 25.09},
-                    {"model": "claude-sonnet-4-6",
-                     "tokens": {"total": 11_400_000}, "est_cost_usd": 6.50},
-                    {"model": "claude-haiku-4-5-20251001",
-                     "tokens": {"total": 6_400_000}, "est_cost_usd": 1.39},
-                ]},
-            "total_est_cost_usd": 34.69, "partial": False,
+                    {
+                        "model": "claude-opus-4-7",
+                        "tokens": {"total": 9_700_000},
+                        "est_cost_usd": 25.09,
+                    },
+                    {
+                        "model": "claude-sonnet-4-6",
+                        "tokens": {"total": 11_400_000},
+                        "est_cost_usd": 6.50,
+                    },
+                    {
+                        "model": "claude-haiku-4-5-20251001",
+                        "tokens": {"total": 6_400_000},
+                        "est_cost_usd": 1.39,
+                    },
+                ],
+            },
+            "total_est_cost_usd": 34.69,
+            "partial": False,
         },
     }
     out = render(verdict, Path("/tmp/run"), color=False, mode="full")
@@ -479,25 +583,40 @@ def test_economics_pane_shows_per_model_subrows():
 
 def test_economics_pricing_footnote(tmp_path):
     from quorum.show import render
+
     verdict = {
-        "final": "pass", "final_reason": "ok",
+        "final": "pass",
+        "final_reason": "ok",
         "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
         "checks": [],
         "economics": {
             "pricing_asof": "2026-06-09",
-            "gauntlet": {"duration_ms": 1000, "model": "claude-sonnet-4-6",
-                         "tokens": {"total": 201}, "est_cost_usd": 0.000432,
-                         "obol": {"pricing_as_of": "2026-06-09",
-                                  "approximations": [],
-                                  "unpriced_models": [], "per_model": {}}},
-            "coding_agent": {"duration_ms": 2000, "model": "gpt-5.5",
-                             "tokens": {"total": 2160}, "est_cost_usd": 0.01075,
-                             "models": [], "has_unpriced_model": False,
-                             "obol": {"pricing_as_of": "2026-06-09",
-                                      "approximations": [
-                                          {"kind": "assumed_standard_tier",
-                                           "detail": None}],
-                                      "unpriced_models": [], "per_model": {}}},
+            "gauntlet": {
+                "duration_ms": 1000,
+                "model": "claude-sonnet-4-6",
+                "tokens": {"total": 201},
+                "est_cost_usd": 0.000432,
+                "obol": {
+                    "pricing_as_of": "2026-06-09",
+                    "approximations": [],
+                    "unpriced_models": [],
+                    "per_model": {},
+                },
+            },
+            "coding_agent": {
+                "duration_ms": 2000,
+                "model": "gpt-5.5",
+                "tokens": {"total": 2160},
+                "est_cost_usd": 0.01075,
+                "models": [],
+                "has_unpriced_model": False,
+                "obol": {
+                    "pricing_as_of": "2026-06-09",
+                    "approximations": [{"kind": "assumed_standard_tier", "detail": None}],
+                    "unpriced_models": [],
+                    "per_model": {},
+                },
+            },
             "total_est_cost_usd": 0.011182,
             "partial": False,
         },
@@ -510,13 +629,19 @@ def test_economics_pricing_footnote(tmp_path):
 def test_economics_no_provenance_no_footnote(tmp_path):
     # Pre-obol verdicts (no nested obol blocks) render without a footnote.
     from quorum.show import render
+
     verdict = {
-        "final": "pass", "final_reason": "ok",
+        "final": "pass",
+        "final_reason": "ok",
         "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
         "checks": [],
         "economics": {
-            "gauntlet": {"duration_ms": 1000, "model": "m",
-                         "tokens": {"total": 1}, "est_cost_usd": 0.01},
+            "gauntlet": {
+                "duration_ms": 1000,
+                "model": "m",
+                "tokens": {"total": 1},
+                "est_cost_usd": 0.01,
+            },
             "coding_agent": None,
             "total_est_cost_usd": None,
             "partial": True,

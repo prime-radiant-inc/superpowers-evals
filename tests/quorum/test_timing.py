@@ -9,20 +9,26 @@ def _write(path, rows):
 
 def test_iso_timestamps_span(tmp_path):
     f = tmp_path / "s.jsonl"
-    _write(f, [
-        {"type": "user", "timestamp": "2026-06-09T00:00:00.000Z"},
-        {"type": "assistant", "timestamp": "2026-06-09T00:01:24.000Z"},
-    ])
+    _write(
+        f,
+        [
+            {"type": "user", "timestamp": "2026-06-09T00:00:00.000Z"},
+            {"type": "assistant", "timestamp": "2026-06-09T00:01:24.000Z"},
+        ],
+    )
     assert session_logs_duration_ms([f]) == 84_000
 
 
 def test_numeric_time_span(tmp_path):
     # Kimi usage.record rows carry epoch-ms `time`.
     f = tmp_path / "wire.jsonl"
-    _write(f, [
-        {"type": "usage.record", "time": 1_800_000_000_000},
-        {"type": "usage.record", "time": 1_800_000_042_000},
-    ])
+    _write(
+        f,
+        [
+            {"type": "usage.record", "time": 1_800_000_000_000},
+            {"type": "usage.record", "time": 1_800_000_042_000},
+        ],
+    )
     assert session_logs_duration_ms([f]) == 42_000
 
 
@@ -43,7 +49,7 @@ def test_no_timestamps_returns_none(tmp_path):
 def test_garbage_lines_skipped(tmp_path):
     f = tmp_path / "s.jsonl"
     f.write_text(
-        'not json\n'
+        "not json\n"
         '{"timestamp": "2026-06-09T00:00:00Z"}\n'
         '{"timestamp": 42}\n'
         '{"timestamp": "2026-06-09T00:00:10Z"}\n'

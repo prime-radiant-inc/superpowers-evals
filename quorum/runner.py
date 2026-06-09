@@ -442,9 +442,7 @@ def _resolve_copilot_auth_env(
 
     if host_env.get("COPILOT_PROVIDER_BASE_URL"):
         provider_values = {
-            name: host_env[name]
-            for name in COPILOT_PROVIDER_ENV_NAMES
-            if host_env.get(name)
+            name: host_env[name] for name in COPILOT_PROVIDER_ENV_NAMES if host_env.get(name)
         }
         secret_names = tuple(
             name
@@ -497,8 +495,7 @@ def _require_gemini_superpowers_root(superpowers_root: str) -> Path:
     missing = [rel for rel in GEMINI_REQUIRED_SUPERPOWERS_FILES if not (root / rel).exists()]
     if missing:
         raise RunnerError(
-            "SUPERPOWERS_ROOT is missing required Gemini Superpowers files: "
-            + ", ".join(missing),
+            "SUPERPOWERS_ROOT is missing required Gemini Superpowers files: " + ", ".join(missing),
             stage="setup",
         )
     return root
@@ -579,7 +576,7 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             "gemini provisioning unexpectedly wrote transcripts before "
             "capture snapshot: " + ", ".join(rel),
             stage="setup",
-    )
+        )
 
 
 def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRuntime:
@@ -608,7 +605,7 @@ def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRu
                 kimi_binary=kimi_binary,
                 kimi_model_env=kimi_env,
                 base_env=os.environ,
-        )
+            )
         install_kimi_superpowers_plugin(kimi_home, superpowers_root)
     except KimiConfigError as e:
         raise RunnerError(sanitize_kimi_diagnostic(e), stage="setup") from e
@@ -679,9 +676,7 @@ _AGY_429_RE = re.compile(r"\b429\b")
 
 def _agy_log_shows_rate_limit(*texts: str) -> bool:
     blob = "\n".join(t for t in texts if t).lower()
-    return any(sig in blob for sig in _AGY_RATE_LIMIT_SUBSTRINGS) or bool(
-        _AGY_429_RE.search(blob)
-    )
+    return any(sig in blob for sig in _AGY_RATE_LIMIT_SUBSTRINGS) or bool(_AGY_429_RE.search(blob))
 
 
 def _run_antigravity_auth_preflight() -> None:
@@ -942,8 +937,7 @@ def _require_copilot_superpowers_root(superpowers_root: str) -> Path:
     missing = [rel for rel in COPILOT_REQUIRED_SUPERPOWERS_FILES if not (root / rel).is_file()]
     if missing:
         raise RunnerError(
-            "SUPERPOWERS_ROOT is missing required Copilot Superpowers files: "
-            + ", ".join(missing),
+            "SUPERPOWERS_ROOT is missing required Copilot Superpowers files: " + ", ".join(missing),
             stage="setup",
         )
     return root
@@ -990,8 +984,7 @@ def _stage_copilot_superpowers_plugin(sp_root: Path, copilot_home: Path) -> Path
     ]
     if missing:
         raise RunnerError(
-            "staged Copilot Superpowers plugin is missing required files: "
-            + ", ".join(missing),
+            "staged Copilot Superpowers plugin is missing required files: " + ", ".join(missing),
             stage="setup",
         )
 
@@ -2034,8 +2027,7 @@ def _run_scenario_inner(
                 return run_dir, _write_indeterminate(
                     run_dir,
                     final_reason=(
-                        "expected Copilot session-state log did not appear: "
-                        f"{expected_log}"
+                        f"expected Copilot session-state log did not appear: {expected_log}"
                     ),
                     gauntlet=gauntlet_layer,
                     checks=pre_records,
@@ -2045,9 +2037,7 @@ def _run_scenario_inner(
                     ),
                 )
             unexpected_logs = [
-                path
-                for path in capture_result.source_logs
-                if path.resolve() != expected_resolved
+                path for path in capture_result.source_logs if path.resolve() != expected_resolved
             ]
             if unexpected_logs:
                 rel = [
@@ -2059,8 +2049,7 @@ def _run_scenario_inner(
                 return run_dir, _write_indeterminate(
                     run_dir,
                     final_reason=(
-                        "unexpected Copilot session-state log(s) appeared: "
-                        + ", ".join(rel)
+                        "unexpected Copilot session-state log(s) appeared: " + ", ".join(rel)
                     ),
                     gauntlet=gauntlet_layer,
                     checks=pre_records,
@@ -2152,8 +2141,7 @@ def _run_scenario_inner(
             return run_dir, _write_indeterminate(
                 run_dir,
                 final_reason=(
-                    "OpenCode export(s) normalized to zero tool-call rows: "
-                    + ", ".join(rel)
+                    "OpenCode export(s) normalized to zero tool-call rows: " + ", ".join(rel)
                 ),
                 gauntlet=gauntlet_layer,
                 checks=pre_records,
@@ -2183,11 +2171,7 @@ def _run_scenario_inner(
                 ),
             )
 
-        if (
-            strict_capture_name
-            and capture_result.source_logs
-            and capture_result.row_count == 0
-        ):
+        if strict_capture_name and capture_result.source_logs and capture_result.row_count == 0:
             rel = [str(p.relative_to(session_log_dir)) for p in capture_result.source_logs]
             return run_dir, _write_indeterminate(
                 run_dir,
@@ -2238,8 +2222,7 @@ def _run_scenario_inner(
                         error=RunError(
                             stage="capture",
                             message=(
-                                "Kimi wire logs were not indexed/mappable to launch cwd: "
-                                f"{rel}"
+                                f"Kimi wire logs were not indexed/mappable to launch cwd: {rel}"
                             ),
                         ),
                     )
@@ -2258,8 +2241,7 @@ def _run_scenario_inner(
                 return run_dir, _write_indeterminate(
                     run_dir,
                     final_reason=(
-                        "Kimi wire log(s) normalized to zero tool-call rows: "
-                        + ", ".join(rel)
+                        "Kimi wire log(s) normalized to zero tool-call rows: " + ", ".join(rel)
                     ),
                     gauntlet=gauntlet_layer,
                     checks=pre_records,

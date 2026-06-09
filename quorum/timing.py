@@ -5,6 +5,7 @@ comes from log timestamps, not token usage. Scans every JSONL row for either
 an ISO-8601 `timestamp` (Claude Code, Codex) or an epoch-ms numeric `time`
 (Kimi) and returns last - first in milliseconds.
 """
+
 from __future__ import annotations
 
 import json

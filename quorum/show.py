@@ -8,6 +8,7 @@ The renderer deliberately doesn't attribute failures to patterns — that
 lives in the `triaging-a-failing-eval` skill, where a Bob (the LLM) does
 the judgement Pattern 2 vs Pattern 4 requires.
 """
+
 from __future__ import annotations
 
 import io
@@ -28,6 +29,7 @@ class ShowError(Exception):
 
 
 # ---------- resolver ----------------------------------------------------
+
 
 def is_batch_dir(path: Path) -> bool:
     """A path is a batch dir if it contains batch.json."""
@@ -55,13 +57,10 @@ def resolve_target(target: str | None, *, results_root: Path) -> Path:
                 f"no run-dir resolved from <none> (results root does not exist: {results_root})"
             )
         candidates = [
-            d for d in results_root.iterdir()
-            if d.is_dir() and (d / "verdict.json").is_file()
+            d for d in results_root.iterdir() if d.is_dir() and (d / "verdict.json").is_file()
         ]
         if not candidates:
-            raise ShowError(
-                f"no run-dir resolved from <none> (no runs in {results_root})"
-            )
+            raise ShowError(f"no run-dir resolved from <none> (no runs in {results_root})")
         return max(candidates, key=lambda d: (d / "verdict.json").stat().st_mtime)
 
     p = Path(target)
@@ -95,8 +94,7 @@ def resolve_target(target: str | None, *, results_root: Path) -> Path:
     if is_batch_dir(batch_candidate):
         return batch_candidate
     matches = [
-        d for d in results_root.glob(f"{target}-*")
-        if d.is_dir() and (d / "verdict.json").is_file()
+        d for d in results_root.glob(f"{target}-*") if d.is_dir() and (d / "verdict.json").is_file()
     ]
     if matches:
         return max(matches, key=lambda d: (d / "verdict.json").stat().st_mtime)
@@ -115,8 +113,8 @@ _FOOTER = "see docs/superpowers/skills/triaging-a-failing-eval.md for triage."
 # the theme's color mapping so the verdict has consistent punch everywhere.
 # Palette source: Dracula (a saturated-but-not-headache neon family).
 _VERDICT_COLORS: dict[str, tuple[int, int, int]] = {
-    "pass": (80, 250, 123),         # #50fa7b
-    "fail": (255, 85, 85),          # #ff5555
+    "pass": (80, 250, 123),  # #50fa7b
+    "fail": (255, 85, 85),  # #ff5555
     "indeterminate": (241, 250, 140),  # #f1fa8c
 }
 
@@ -133,11 +131,11 @@ _LABEL_RGB: tuple[int, int, int] = (122, 130, 148)  # #7a8294
 # Mirrors quorum/run_all.py:_STATUS_STYLES (to be added in v2 Task 3) —
 # keep in sync if either changes.
 _BATCH_GLYPH_COLORS = {
-    "pass":          "rgb(80,250,123)",
-    "fail":          "rgb(255,85,85)",
+    "pass": "rgb(80,250,123)",
+    "fail": "rgb(255,85,85)",
     "indeterminate": "rgb(241,250,140)",
-    "skipped":       "rgb(122,130,148)",
-    "unknown":       "rgb(122,130,148)",
+    "skipped": "rgb(122,130,148)",
+    "unknown": "rgb(122,130,148)",
 }
 
 
@@ -166,7 +164,7 @@ def _fmt_ms(ms: int | None) -> str:
     s = int(ms) // 1000
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
-    return (f"{h}h {m:02d}m" if h else f"{m}m {sec:02d}s")
+    return f"{h}h {m:02d}m" if h else f"{m}m {sec:02d}s"
 
 
 def _fmt_cost(c) -> str:
@@ -176,14 +174,14 @@ def _fmt_cost(c) -> str:
 def _fmt_tokens(n) -> str:
     if not isinstance(n, (int, float)) or n == 0:
         return "—"
-    return f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n/1_000:.0f}K"
+    return f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1_000:.0f}K"
 
 
 def _agent_row(label, block, *, color):
     if not block:
         return f"  {label:<10} {'—':>10} {'—':>9} {'—':>9}"
     dur = _fmt_ms(block.get("duration_ms"))
-    tok = _fmt_tokens((block.get('tokens') or {}).get('total'))
+    tok = _fmt_tokens((block.get("tokens") or {}).get("total"))
     cost = _fmt_cost(block.get("est_cost_usd"))
     if block.get("est_cost_usd") is None and block.get("model"):
         cost = f"n/a ({block['model']})"
@@ -217,8 +215,12 @@ def _format_economics_pane(verdict: dict, *, color: bool) -> str:
     econ = verdict.get("economics")
     if not econ:
         return ""
-    sep = _style("─── Economics ────────────────────────────────────",
-                 fg="bright_cyan", bold=True, color=color)
+    sep = _style(
+        "─── Economics ────────────────────────────────────",
+        fg="bright_cyan",
+        bold=True,
+        color=color,
+    )
     header = f"  {'':<10} {'duration':>10} {'tokens':>9} {'est cost':>9}"
     rows = [_agent_row("Gauntlet", econ.get("gauntlet"), color=color)]
     coding = econ.get("coding_agent")
@@ -228,23 +230,18 @@ def _format_economics_pane(verdict: dict, *, color: bool) -> str:
         rows.append(_model_subrow(entry))
     total = econ.get("total_est_cost_usd")
     total_str = (
-        _fmt_cost(total)
-        if total is not None
-        else ("partial" if econ.get("partial") else "—")
+        _fmt_cost(total) if total is not None else ("partial" if econ.get("partial") else "—")
     )
     rows.append(f"  {'total':<10} {'':>10} {'':>9} {total_str:>9}")
     # Pricing provenance footnote (PRI-2130): which snapshot priced this run,
     # plus any approximations obol applied. Pre-obol verdicts have no nested
     # obol blocks and get no footnote.
-    prov = ((econ.get("coding_agent") or {}).get("obol")
-            or (econ.get("gauntlet") or {}).get("obol"))
+    prov = (econ.get("coding_agent") or {}).get("obol") or (econ.get("gauntlet") or {}).get("obol")
     if prov and prov.get("pricing_as_of"):
         note = f"pricing: as of {prov['pricing_as_of']}"
         kinds: list[str] = []
         for block_key in ("coding_agent", "gauntlet"):
-            for a in ((econ.get(block_key) or {}).get("obol") or {}).get(
-                "approximations"
-            ) or []:
+            for a in ((econ.get(block_key) or {}).get("obol") or {}).get("approximations") or []:
                 kind = a.get("kind")
                 if kind and kind not in kinds:
                     kinds.append(kind)
@@ -265,10 +262,7 @@ def render(verdict: dict, run_dir: Path, *, color: bool, mode: ShowMode) -> str:
 
     if mode == "quiet":
         # Quiet mode is for pipelines — never color, regardless of flag.
-        return (
-            f"final     {verdict['final']}\n"
-            f"reason    {verdict.get('final_reason', '')}\n"
-        )
+        return f"final     {verdict['final']}\nreason    {verdict.get('final_reason', '')}\n"
 
     # mode == "full"
     parts: list[str] = [
@@ -294,7 +288,10 @@ def _format_header(verdict: dict, run_dir: Path, *, color: bool) -> str:
     final = verdict["final"]
     reason = verdict.get("final_reason", "")
     final_styled = _style(
-        final, fg=_VERDICT_COLORS.get(final), bold=True, color=color,
+        final,
+        fg=_VERDICT_COLORS.get(final),
+        bold=True,
+        color=color,
     )
     # Path itself stays plain — long, scanned for the timestamp, not the focus.
     return (
@@ -308,13 +305,18 @@ def _format_gauntlet_pane(verdict: dict, *, color: bool) -> str:
     g = verdict.get("gauntlet") or {}
     status = g.get("status") or "—"
     status_styled = _style(
-        status, fg=_VERDICT_COLORS.get(status), bold=True, color=color,
+        status,
+        fg=_VERDICT_COLORS.get(status),
+        bold=True,
+        color=color,
     )
     summary = _wrap_indent(g.get("summary", ""), indent=10, width=72)
     reasoning = _wrap_indent(g.get("reasoning", ""), indent=10, width=72)
     sep = _style(
         "─── Gauntlet-Agent ───────────────────────────────",
-        fg="bright_cyan", bold=True, color=color,
+        fg="bright_cyan",
+        bold=True,
+        color=color,
     )
     return (
         f"{sep}\n"
@@ -328,7 +330,9 @@ def _format_checks_pane(verdict: dict, *, color: bool) -> str:
     checks = verdict.get("checks") or []
     sep = _style(
         "─── Deterministic checks ─────────────────────────",
-        fg="bright_cyan", bold=True, color=color,
+        fg="bright_cyan",
+        bold=True,
+        color=color,
     )
     lines: list[str] = [sep]
     # Group: pre first, then post, preserving order within each phase.
@@ -345,14 +349,16 @@ def _format_checks_pane(verdict: dict, *, color: bool) -> str:
             mark = _style(
                 mark_char,
                 fg=_VERDICT_COLORS["pass" if c["passed"] else "fail"],
-                bold=True, color=color,
+                bold=True,
+                color=color,
             )
             # Negation modifier needs to jump out — `NOT tool-called X`
             # is semantically the opposite of `tool-called X`; if you skim
             # past the NOT you read the line backwards.
             negated = (
                 _style("NOT ", fg="bright_magenta", bold=True, color=color)
-                if c.get("negated") else ""
+                if c.get("negated")
+                else ""
             )
             args = " ".join(c.get("args") or [])
             head = f"{phase_styled} {mark} {negated}{c['check']}"
@@ -378,11 +384,11 @@ def _wrap_indent(text: str, *, indent: int, width: int) -> str:
 # ---------- batch matrix renderer --------------------------------------
 
 _GLYPHS = {
-    "pass":          ("✓", "pass"),
-    "fail":          ("✗", "fail"),
+    "pass": ("✓", "pass"),
+    "fail": ("✗", "fail"),
     "indeterminate": ("⊘", "indet"),
-    "skipped":       ("—", "skip"),
-    "unknown":       ("?", "?"),
+    "skipped": ("—", "skip"),
+    "unknown": ("?", "?"),
 }
 
 
@@ -394,10 +400,7 @@ def render_batch(
 ) -> str:
     """Render a batch as a scenario × agent matrix table."""
     batch = _json.loads((batch_dir / "batch.json").read_text())
-    rows = [
-        _json.loads(line)
-        for line in (batch_dir / "results.jsonl").read_text().splitlines()
-    ]
+    rows = [_json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()]
 
     agents = batch["coding_agents"]
     scenarios = sorted({r["scenario"] for r in rows})
@@ -437,8 +440,7 @@ def render_batch(
 
     sep = "|" + "-" * (scen_w + 2) + "|" + "|".join("-" * (cell_w + 2) for _ in agents) + "|"
     header = (
-        "| " + "scenario".ljust(scen_w) + " | "
-        + " | ".join(a.ljust(cell_w) for a in agents) + " |"
+        "| " + "scenario".ljust(scen_w) + " | " + " | ".join(a.ljust(cell_w) for a in agents) + " |"
     )
 
     buf = io.StringIO()
@@ -450,9 +452,8 @@ def render_batch(
         width=200,
     )
 
-    banner = (
-        f"batch {batch['id']} · started {batch['started_at']}"
-        + (f" · finished {batch['finished_at']}" if batch.get('finished_at') else "")
+    banner = f"batch {batch['id']} · started {batch['started_at']}" + (
+        f" · finished {batch['finished_at']}" if batch.get("finished_at") else ""
     )
     console.print(banner, highlight=False)
     console.print("", highlight=False)
@@ -472,14 +473,13 @@ def render_batch(
         )
     console.print("", highlight=False)
     console.print(
-        "Legend: ✓ pass   ✗ fail   ⊘ indeterminate   "
-        "— skipped (directive)   ? no verdict",
+        "Legend: ✓ pass   ✗ fail   ⊘ indeterminate   — skipped (directive)   ? no verdict",
         highlight=False,
     )
     tally = (
         f"{counts['pass']} ✓ · {counts['fail']} ✗ · "
         f"{counts['indeterminate']} ⊘ · {counts['skipped']} —"
-        + (f" · {counts['unknown']} ?" if counts['unknown'] else "")
+        + (f" · {counts['unknown']} ?" if counts["unknown"] else "")
     )
     console.print(tally, highlight=False)
     return buf.getvalue()
