@@ -116,6 +116,47 @@ class TestEstimateSessionLogs:
         assert usage["est_cost_usd"] is None  # all-unpriced: no silent $0
         assert usage["total_input"] == 100   # tokens still reported
 
+    def test_mixed_priced_and_unpriced(self, tmp_path):
+        # One priced + one unpriced model: priced cost survives at top level,
+        # the unpriced model is flagged per-model and in unpriced_models.
+        f = tmp_path / "s.jsonl"
+        f.write_text(_claude_row("claude-opus-4-7", "m1", 100, 0, 0, 40)
+                     + _claude_row("mystery-model-9", "m2", 50, 0, 0, 5))
+        usage = estimate_session_logs("claude", [f])
+        assert usage is not None
+        assert usage["unpriced_models"] == ["mystery-model-9"]
+        assert usage["est_cost_usd"] == pytest.approx(0.0015)  # opus only
+        assert usage["models"]["mystery-model-9"]["est_cost_usd"] is None
+        assert usage["models"]["claude-opus-4-7"]["est_cost_usd"] == pytest.approx(0.0015)
+
+    def test_same_model_across_files_accumulates(self, tmp_path):
+        # The accumulate-into-existing-bucket path: same model in two files.
+        a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+        a.write_text(_claude_row("claude-opus-4-7", "m1", 100, 0, 0, 20))
+        b.write_text(_claude_row("claude-opus-4-7", "m2", 50, 0, 0, 30))
+        usage = estimate_session_logs("claude", [a, b])
+        assert usage is not None
+        assert usage["total_input"] == 150
+        assert usage["total_output"] == 50
+        assert usage["models"]["claude-opus-4-7"]["total_input"] == 150
+        # (150*5 + 50*25)/1e6
+        assert usage["est_cost_usd"] == pytest.approx(0.002)
+
+    def test_garbage_sibling_file_contributes_nothing(self, tmp_path):
+        # Line-oriented dialects skip unparseable content (obol returns an
+        # empty estimate, same resilience the pre-obol parser had), so a
+        # garbage sibling file leaves the good file's usage intact. The
+        # ObolError -> None guard covers structural failures instead
+        # (pricing tables missing, sidecar schema rejection).
+        good, bad = tmp_path / "good.jsonl", tmp_path / "bad.jsonl"
+        good.write_text(_claude_row("claude-opus-4-7", "m1", 100, 0, 0, 20))
+        bad.write_text("\x00\x01 not jsonl at all")
+        usage = estimate_session_logs("claude", [good, bad])
+        assert usage is not None
+        assert usage["total_input"] == 100
+        # (100*5 + 20*25)/1e6
+        assert usage["est_cost_usd"] == pytest.approx(0.001)
+
 
 class TestEstimateUsageSidecar:
     def test_gauntlet_sidecar(self, tmp_path):

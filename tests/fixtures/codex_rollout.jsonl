@@ -3,7 +3,7 @@
 {"type":"event_msg","payload":{"type":"user_message","text":"do the thing"}}
 {"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}"}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"a","output":"file1.txt\nfile2.txt\n"}}
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050}}}}
 {"type":"event_msg","payload":{"type":"agent_message","text":"done"}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"b","output":"x"}}
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2000,"cached_input_tokens":900,"output_tokens":120,"reasoning_output_tokens":40,"total_tokens":2120},"last_token_usage":{"input_tokens":2000,"cached_input_tokens":900,"output_tokens":120,"reasoning_output_tokens":40,"total_tokens":2120}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2000,"cached_input_tokens":900,"output_tokens":120,"reasoning_output_tokens":40,"total_tokens":2120},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":500,"output_tokens":70,"reasoning_output_tokens":20,"total_tokens":1070}}}}

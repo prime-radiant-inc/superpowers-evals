@@ -5,8 +5,11 @@ dict shape that freezes into run artifacts. estimate_path is single-file, so
 multi-file runs (Claude subagents write sibling JSONLs) merge here — plain
 addition over obol's outputs, never token math of our own.
 
-Capture is best-effort measurement: every failure path returns None and the
-caller degrades to `partial: true`. Never raise, never write a silent $0.
+Capture is best-effort measurement: expected failure paths return None —
+never a silent $0. (Only ObolError is caught; exotic OS errors can still
+propagate.) Line-oriented dialect parsers skip unparseable content (a garbage sibling
+file contributes zero, matching pre-obol behavior); ObolError covers
+structural failures like missing pricing tables or sidecar schema rejection.
 """
 from __future__ import annotations
 
@@ -15,10 +18,11 @@ from typing import Any
 
 import obol
 
-# quorum normalizer name -> obol dialect. Covers every dialect obol knows;
-# backends absent here (antigravity) simply aren't priced. A mapped backend
-# whose log format diverges from obol's parser degrades to None at parse
-# time, so listing one costs nothing.
+# quorum normalizer name -> obol dialect. Covers every backend dialect obol
+# knows (the eighth, `obol`, is the sidecar format, not a backend); backends
+# absent here (antigravity) simply aren't priced. A mapped backend whose log
+# format diverges from obol's parser degrades to None at parse time, so
+# listing one costs nothing.
 DIALECTS: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
@@ -60,6 +64,7 @@ def _merge_estimates(estimates: list[obol.CostEstimate]) -> dict[str, Any] | Non
         for mc in est.per_model:
             bucket = per_model.setdefault(
                 mc.model,
+                # first file's provider label wins for a model seen in several files
                 {**_empty_bucket(), "provider": mc.provider, "subtotal_usd": 0.0},
             )
             bucket["total_input"] += mc.tokens.input
@@ -73,20 +78,22 @@ def _merge_estimates(estimates: list[obol.CostEstimate]) -> dict[str, Any] | Non
         for k in _BUCKET_KEYS:
             totals[k] += bucket[k]
     total_tokens = sum(totals.values())
-    if total_tokens == 0 and not per_model:
-        return None
+    if total_tokens == 0:
+        return None  # zero usage -> no artifact, even if obol named models
 
     total_usd = sum(b["subtotal_usd"] for b in per_model.values())
-    all_unpriced = bool(unpriced) and not any(
-        b["subtotal_usd"] > 0 for b in per_model.values()
-    )
+    # Exact, and consistent with the per-model est_cost_usd field below: a
+    # genuinely-$0-priced model (free tier) must not flip the run to unpriced.
+    all_unpriced = bool(per_model) and all(m in unpriced for m in per_model)
 
     models_out = {
         m: {
             **{k: b[k] for k in _BUCKET_KEYS},
             "total_tokens": sum(b[k] for k in _BUCKET_KEYS),
             "provider": b["provider"],
-            "est_cost_usd": None if m in unpriced else b["subtotal_usd"],
+            # round(…, 10): strips float-summation noise from frozen artifacts
+            # without losing sub-cent precision (plan said 6; that truncated small costs).
+            "est_cost_usd": None if m in unpriced else round(b["subtotal_usd"], 10),
         }
         for m, b in per_model.items()
     }
@@ -101,7 +108,7 @@ def _merge_estimates(estimates: list[obol.CostEstimate]) -> dict[str, Any] | Non
         "total_tokens": total_tokens,
         "model": top_model,
         "models": models_out,
-        "est_cost_usd": None if all_unpriced else total_usd,
+        "est_cost_usd": None if all_unpriced else round(total_usd, 10),
         "unpriced_models": sorted(unpriced),
         "approximations": approximations,
         "pricing_as_of": pricing_as_of,
