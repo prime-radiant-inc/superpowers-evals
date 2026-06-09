@@ -87,7 +87,7 @@ from quorum.kimi import (
 from quorum.opencode_capture import (
     OpenCodeCaptureError,
     export_opencode_sessions,
-    opencode_run_env,
+    run_opencode_command,
     snapshot_opencode_sessions,
 )
 from quorum.setup_step import SetupError, run_setup
@@ -864,31 +864,26 @@ def _run_opencode_provider_preflight() -> None:
 
         version_hint = "unknown"
         try:
-            version = subprocess.run(
-                ["opencode", "--version"],
-                cwd=cwd,
-                text=True,
-                capture_output=True,
+            version = run_opencode_command(
+                ["--version"],
+                opencode_home=home,
+                launch_cwd=cwd,
                 timeout=15,
-                env=opencode_run_env(home),
             )
             version_hint = (version.stdout or version.stderr).strip() or "unknown"
         except (subprocess.TimeoutExpired, OSError):
             pass
 
         try:
-            result = subprocess.run(
+            result = run_opencode_command(
                 [
-                    "opencode",
                     "run",
                     "--dangerously-skip-permissions",
                     "Reply with EXACTLY OK.",
                 ],
-                cwd=cwd,
-                text=True,
-                capture_output=True,
+                opencode_home=home,
+                launch_cwd=cwd,
                 timeout=90,
-                env=opencode_run_env(home),
             )
         except subprocess.TimeoutExpired as e:
             raise RunnerError(
@@ -905,7 +900,8 @@ def _run_opencode_provider_preflight() -> None:
     if not _preflight_response_ok(result.stdout):
         raise RunnerError(
             "opencode provider preflight did not return OK; "
-            f"version {version_hint[:120]}, stdout: {result.stdout.strip()[:300]}",
+            f"version {version_hint[:120]}, stdout: {result.stdout.strip()[:300]}, "
+            f"stderr: {result.stderr.strip()[:300]}",
             stage="setup",
         )
 

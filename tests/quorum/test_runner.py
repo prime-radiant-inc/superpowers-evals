@@ -33,6 +33,7 @@ from quorum.runner import (
     _require_copilot_superpowers_root,
     _resolve_copilot_auth_env,
     _run_antigravity_auth_preflight,
+    _run_opencode_provider_preflight,
     _scan_copilot_secret_leaks,
     _seed_agent_config_dir,
     _seed_antigravity_config,
@@ -2505,6 +2506,10 @@ class TestSeedAgentConfigDir:
             "quorum.runner.subprocess.run",
             lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "OK\n", ""),
         )
+        monkeypatch.setattr(
+            "quorum.runner.run_opencode_command",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "OK\n", ""),
+        )
 
         dest = tmp_path / "cfg"
         _seed_agent_config_dir(
@@ -4662,3 +4667,44 @@ class TestRunScenario:
         assert verdict.final == "indeterminate"
         assert verdict.error is not None
         assert "quorum_max_time" in verdict.error.message
+
+
+# The opencode CLI (bun-compiled) ends every command with a bare process.exit()
+# that discards stdout not yet drained to the pipe; under load the preflight's
+# tiny "OK" reply vanishes (exit 0, empty stdout). The fake binary reproduces
+# that contract: reply written only when stdout is a regular file.
+_FAKE_OPENCODE_PREFLIGHT = """#!/usr/bin/env python3
+import os, stat, sys
+
+args = sys.argv[1:]
+here = os.path.dirname(os.path.abspath(sys.argv[0]))
+if args and args[0] == "--version":
+    sys.stdout.write("1.16.2-fake")
+    sys.exit(0)
+if args and args[0] == "run":
+    if os.path.exists(os.path.join(here, "stderr-error-mode")):
+        sys.stderr.write("provider exploded")
+        sys.exit(0)
+    if stat.S_ISFIFO(os.fstat(1).st_mode):
+        sys.exit(0)
+    sys.stdout.write("OK")
+"""
+
+
+class TestOpencodeProviderPreflight:
+    def _install_fake(self, tmp_path, monkeypatch, *, stderr_error=False):
+        bin_dir = tmp_path / "fake-opencode-bin"
+        bin_dir.mkdir(exist_ok=True)
+        _exec(bin_dir / "opencode", _FAKE_OPENCODE_PREFLIGHT)
+        if stderr_error:
+            (bin_dir / "stderr-error-mode").touch()
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    def test_preflight_survives_stdout_pipe_drop(self, tmp_path, monkeypatch):
+        self._install_fake(tmp_path, monkeypatch)
+        _run_opencode_provider_preflight()
+
+    def test_preflight_failure_carries_stderr(self, tmp_path, monkeypatch):
+        self._install_fake(tmp_path, monkeypatch, stderr_error=True)
+        with pytest.raises(RunnerError, match="provider exploded"):
+            _run_opencode_provider_preflight()

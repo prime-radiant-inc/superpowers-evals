@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +49,36 @@ OPENCODE_ENV_ALLOWLIST = {
 }
 
 OPENCODE_CAPTURE_TIMEOUT_SECONDS = 30
+
+
+def run_opencode_command(
+    args: list[str],
+    *,
+    opencode_home: Path,
+    launch_cwd: Path,
+    timeout: float = OPENCODE_CAPTURE_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    """Run an opencode CLI command with stdout redirected to a file.
+
+    The opencode binary ends every command with a bare process.exit(), which
+    discards stdout that has not yet drained. Through a pipe, payloads >64KiB
+    arrive truncated at the pipe-buffer boundary (still exit 0) and tiny
+    replies can vanish entirely under load. A regular-file stdout drains
+    synchronously, so the payload survives. stderr stays piped (always small).
+    """
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout_file:
+        result = subprocess.run(
+            ["opencode", *args],
+            cwd=launch_cwd,
+            text=True,
+            stdout=stdout_file,
+            stderr=subprocess.PIPE,
+            env=opencode_run_env(opencode_home),
+            timeout=timeout,
+        )
+        stdout_file.seek(0)
+        result.stdout = stdout_file.read()
+    return result
 
 
 def opencode_run_env(opencode_home: Path) -> dict[str, str]:
@@ -107,13 +138,10 @@ def _session_decisions(
 
 def _list_sessions(*, opencode_home: Path, launch_cwd: Path) -> list[Any]:
     try:
-        result = subprocess.run(
-            ["opencode", "session", "list", "--format", "json"],
-            cwd=launch_cwd,
-            text=True,
-            capture_output=True,
-            env=opencode_run_env(opencode_home),
-            timeout=OPENCODE_CAPTURE_TIMEOUT_SECONDS,
+        result = run_opencode_command(
+            ["session", "list", "--format", "json"],
+            opencode_home=opencode_home,
+            launch_cwd=launch_cwd,
         )
     except subprocess.TimeoutExpired as e:
         raise OpenCodeCaptureError(
@@ -152,13 +180,10 @@ def _export_session(
     *, session_id: str, opencode_home: Path, launch_cwd: Path
 ) -> tuple[dict[str, Any], str, str]:
     try:
-        result = subprocess.run(
-            ["opencode", "export", session_id],
-            cwd=launch_cwd,
-            text=True,
-            capture_output=True,
-            env=opencode_run_env(opencode_home),
-            timeout=OPENCODE_CAPTURE_TIMEOUT_SECONDS,
+        result = run_opencode_command(
+            ["export", session_id],
+            opencode_home=opencode_home,
+            launch_cwd=launch_cwd,
         )
     except subprocess.TimeoutExpired as e:
         raise OpenCodeCaptureError(
@@ -172,7 +197,12 @@ def _export_session(
     try:
         exported_json = json.loads(result.stdout)
     except json.JSONDecodeError as e:
-        raise OpenCodeCaptureError(f"opencode export {session_id} returned invalid JSON") from e
+        raise OpenCodeCaptureError(
+            f"opencode export {session_id} returned invalid JSON "
+            f"({len(result.stdout.encode('utf-8', errors='replace'))} bytes; "
+            f"head: {result.stdout[:120]!r}; "
+            f"stderr: {result.stderr.strip()[:300]})"
+        ) from e
     exported_id = exported_json.get("info", {}).get("id")
     if exported_id != session_id:
         raise OpenCodeCaptureError(
