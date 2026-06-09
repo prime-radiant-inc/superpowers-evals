@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from quorum.capture import (
@@ -405,6 +406,8 @@ class TestCaptureTokenUsage:
         assert usage["total_input"] == 100
         assert usage["total_output"] == 40
         assert usage["est_cost_usd"] > 0
+        assert usage["pricing_as_of"] == "2026-06-09"  # fixture snapshot
+        assert "duration_ms" in usage
 
     def test_no_new_logs_writes_nothing(self, tmp_path):
         # Measurement is best-effort: no logs -> no file, not an empty one.
@@ -418,8 +421,9 @@ class TestCaptureTokenUsage:
         assert out is None
         assert not (run_dir / "coding-agent-token-usage.json").exists()
 
-    def test_unparseable_backend_writes_nothing(self, tmp_path):
-        # token_usage.py has no gemini parser; capture must no-op cleanly.
+    def test_unparseable_log_writes_nothing(self, tmp_path):
+        # gemini is a mapped obol dialect, but obol finds no usage in `{}`
+        # -> zero usage -> capture no-ops cleanly.
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
         (log_dir / "s.jsonl").write_text("{}\n")
@@ -431,7 +435,9 @@ class TestCaptureTokenUsage:
         assert out is None
         assert not (run_dir / "coding-agent-token-usage.json").exists()
 
-    def test_kimi_token_usage_writes_unpriced_json(self, tmp_path):
+    def test_kimi_token_usage_priced_by_obol(self, tmp_path):
+        # Pre-obol quorum couldn't price kimi (est None); obol + the fixture
+        # snapshot can.
         log_dir = _mkdir(tmp_path / "sessions")
         session_dir = log_dir / "wd" / "session"
         wire_dir = session_dir / "agents" / "main"
@@ -472,7 +478,6 @@ class TestCaptureTokenUsage:
         )
 
         assert out is not None
-        assert out == run_dir / "coding-agent-token-usage.json"
         data = json.loads(out.read_text())
         assert data["total_tokens"] == 100
-        assert data["est_cost_usd"] is None
+        assert data["est_cost_usd"] == pytest.approx(0.0001695)

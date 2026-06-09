@@ -17,7 +17,8 @@ from quorum.normalizers import (
     find_misplaced_pi_sessions,
     find_unusable_pi_sessions,
 )
-from quorum.token_usage import capture_tokens
+from quorum.obol_capture import estimate_session_logs
+from quorum.timing import session_logs_duration_ms
 
 
 @dataclass(frozen=True)
@@ -252,20 +253,21 @@ def capture_token_usage(
     run_dir: Path,
     launch_cwd: Path | None = None,
 ) -> Path | None:
-    """Sum token usage across the run's new session logs; write coding-agent-token-usage.json.
+    """Price the run's new session logs via obol; write coding-agent-token-usage.json.
 
     Measurement only — the pass/fail verdict is unaffected.
     coding-agent-token-usage.json sits in run_dir alongside verdict.json; a
     cost scenario reads it from an ordinary deterministic assertion (see
     docs/migration-notes.md, the cost / measurement decision). Returns the
-    written path, or None when usage can't be captured — a backend
-    token_usage.py does not parse (gemini, pi), or no new session logs were
-    produced — in which case no file is written.
+    written path, or None when usage can't be captured — a backend obol has
+    no dialect for, a log obol can't parse, or no new session logs — in
+    which case no file is written (PRI-2130).
     """
     new = _new_session_logs(log_dir, log_glob, snapshot, normalizer, launch_cwd)
-    usage = capture_tokens(normalizer, new)
+    usage = estimate_session_logs(normalizer, new)
     if usage is None:
         return None
+    usage["duration_ms"] = session_logs_duration_ms(new)
     out_path = run_dir / "coding-agent-token-usage.json"
     out_path.write_text(json.dumps(usage, indent=2) + "\n")
     return out_path
