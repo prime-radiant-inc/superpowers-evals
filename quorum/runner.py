@@ -1951,14 +1951,17 @@ def _run_scenario_inner(
         # 9b. Capture token usage — measurement only, written to
         #     coding-agent-token-usage.json. Does not affect the verdict (see
         #     docs/migration-notes.md, cost / measurement decision).
-        capture_token_usage(
-            log_dir=session_log_dir,
-            log_glob=tcfg.session_log_glob,
-            snapshot=snap,
-            normalizer=tcfg.normalizer,
-            run_dir=run_dir,
-            launch_cwd=launch_cwd,
-        )
+        # Measurement only — an FFI failure must not cost the verdict
+        # (PRI-2130); the run simply carries no frozen usage file.
+        with contextlib.suppress(Exception):
+            capture_token_usage(
+                log_dir=session_log_dir,
+                log_glob=tcfg.session_log_glob,
+                snapshot=snap,
+                normalizer=tcfg.normalizer,
+                run_dir=run_dir,
+                launch_cwd=launch_cwd,
+            )
 
         # 10. Build Gauntlet layer from run dir before capture short-circuits or
         # post-checks, so early indeterminate verdicts still preserve QA context.

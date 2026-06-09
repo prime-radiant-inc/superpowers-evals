@@ -594,8 +594,9 @@ cannot satisfy the eval accidentally. Raw Pi sessions are captured from:
 <run>/coding-agent-config/sessions/*.jsonl
 ```
 
-Pi token/cost capture is unsupported in v1, so `coding-agent-token-usage.json`
-is not expected for Pi runs.
+Pi runs are priced through obol's `pi` dialect (PRI-2130):
+`coding-agent-token-usage.json` is written whenever obol can parse the
+captured session, and omitted otherwise (`economics.partial: true`).
 
 ### Copilot
 
@@ -763,13 +764,14 @@ quorum/                   quorum CLI and runtime
   coding_agent_config.py  per-coding-agent YAML loader
   setup_step.py         runs scenario setup.sh
   checks.py             sources checks.sh, runs pre()/post(), collects records
-  capture.py            session-log snapshot/diff + token capture
+  capture.py            session-log snapshot/diff + obol-priced token capture
   normalizers.py        per-coding-agent session-log normalization
   composer.py           three-valued verdict from gauntlet + checks layers
   scaffold.py           `quorum new` / `quorum check`
   show.py               verdict renderer for triage
   run_all.py            matrix runner across scenarios × coding-agents
-  token_usage.py        per-coding-agent token-usage parsing
+  obol_capture.py       all obol calls: session-log + gauntlet-sidecar cost estimation
+  timing.py             session-log wall-clock span (duration_ms)
 bin/                    check-tool vocabulary (_record, file-exists, file-contains,
                         command-succeeds, git-repo, git-branch, git-clean, git-count,
                         tool-called, tool-count, tool-before, tool-arg-match,

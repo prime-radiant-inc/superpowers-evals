@@ -6,9 +6,10 @@ numeric suffixes - this looks like real code (not pure noise) so an
 agent that grabs full file contents incurs the same kind of context
 bloat real users see, but the content is fully deterministic and offline.
 
-The scenario measures `tool_result_total_bytes` after asking the agent
-to suggest 3 improvements. Agents that grep / target reads keep the
-metric low; agents that read every file blow it up.
+The scenario measures `total_cache_create` / `total_tokens` (from
+coding-agent-token-usage.json) after asking the agent to suggest 3
+improvements. Agents that grep / target reads keep the metrics low;
+agents that read every file blow them up.
 """
 
 from __future__ import annotations

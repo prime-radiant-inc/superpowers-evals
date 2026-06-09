@@ -19,9 +19,10 @@ Once the agent gives its three improvements (or asks for clarification
 you can't usefully answer), you are done.
 
 This scenario is a cost measurement instrument: the headline is
-`tool_result_total_bytes` in coding-agent-token-usage.json. The src/ tree is five
-large synthetic modules; reading every file in full balloons the
-parent transcript and burns cache-creation tokens on every later turn.
+`total_cache_create` (with `total_tokens` alongside) in
+coding-agent-token-usage.json. The src/ tree is five large synthetic
+modules; reading every file in full balloons the parent transcript and
+burns cache-creation tokens on every later turn.
 
 ## Acceptance Criteria
 
