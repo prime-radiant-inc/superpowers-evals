@@ -4641,17 +4641,20 @@ class TestRunScenario:
                     {
                         "runId": rid,
                         "duration_ms": 120000,
-                        "usage": {
-                            "inputTokens": 100,
-                            "outputTokens": 200,
-                            "cacheCreationInputTokens": 0,
-                            "cacheReadInputTokens": 1000,
-                        },
                         "config": {"model": "claude-sonnet-4-6"},
                     }
                 )
             )
-            # Frozen coding-agent token usage.
+            # obol.usage sidecar — economics reads this, not result.json's usage block.
+            (gd / "usage.jsonl").write_text(
+                json.dumps({
+                    "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
+                    "model": "claude-sonnet-4-6", "service_tier": "standard",
+                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 1000,
+                              "cache_creation_input_tokens": 0, "output_tokens": 200},
+                }) + "\n"
+            )
+            # Frozen coding-agent token usage (obol-priced; carries provenance fields).
             (run_dir / "coding-agent-token-usage.json").write_text(
                 json.dumps(
                     {
@@ -4663,6 +4666,17 @@ class TestRunScenario:
                         "model": "gpt-5.5",
                         "est_cost_usd": 1.23,
                         "duration_ms": 90000,
+                        "models": {
+                            "gpt-5.5": {
+                                "total_input": 50, "total_cache_create": 0,
+                                "total_cache_read": 0, "total_output": 80,
+                                "total_tokens": 130, "provider": "openai",
+                                "est_cost_usd": 1.23,
+                            },
+                        },
+                        "unpriced_models": [],
+                        "approximations": [],
+                        "pricing_as_of": "2026-06-09",
                     }
                 )
             )

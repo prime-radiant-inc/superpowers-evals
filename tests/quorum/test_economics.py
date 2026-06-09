@@ -1,126 +1,102 @@
 import json
-from pathlib import Path
+
+import pytest
 
 from quorum.economics import build_run_economics
 
 
-def _gauntlet_result(run_dir: Path, *, model="claude-sonnet-4-6", duration_ms=120000):
-    rid = "run-x"
-    d = run_dir / "gauntlet-agent" / "results" / rid
+def _gauntlet_results(run_dir, *, usage_rows=None, result=None):
+    d = run_dir / "gauntlet-agent" / "results" / "run-001"
     d.mkdir(parents=True)
-    (d / "result.json").write_text(json.dumps({
-        "runId": rid, "duration_ms": duration_ms,
-        "usage": {"inputTokens": 100, "outputTokens": 200,
-                  "cacheCreationInputTokens": 0, "cacheReadInputTokens": 1000},
-        "config": {"model": model},
-    }))
+    if result is not None:
+        (d / "result.json").write_text(json.dumps(result))
+    if usage_rows is not None:
+        (d / "usage.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in usage_rows)
+        )
+    return d
 
 
-def _coding_usage(run_dir: Path, **over):
-    payload = {"total_input": 50, "total_cache_create": 0, "total_cache_read": 0,
-               "total_output": 80, "total_tokens": 130, "model": "gpt-5.5",
-               "est_cost_usd": 1.23, "duration_ms": 90000}
-    payload.update(over)
-    (run_dir / "coding-agent-token-usage.json").write_text(json.dumps(payload))
+_SONNET_ROW = {
+    "type": "obol.usage", "v": "2026-06-08", "provider": "anthropic",
+    "model": "claude-sonnet-4-6", "service_tier": "standard",
+    "usage": {"input_tokens": 12, "cache_read_input_tokens": 120,
+              "cache_creation_input_tokens": 60, "output_tokens": 9},
+}
+# (12*3 + 60*3.75 + 120*0.3 + 9*15)/1e6 against the fixture snapshot
+_SONNET_COST = 0.000432
+
+_RESULT = {"duration_ms": 1000, "config": {"model": "claude-sonnet-4-6"}}
+
+_CODING_USAGE = {
+    "total_input": 160, "total_cache_create": 1000, "total_cache_read": 1150,
+    "total_output": 55, "total_tokens": 2365,
+    "model": "claude-opus-4-7",
+    "models": {
+        "claude-opus-4-7": {
+            "total_input": 150, "total_cache_create": 1000,
+            "total_cache_read": 1150, "total_output": 50,
+            "total_tokens": 2350, "provider": "anthropic",
+            "est_cost_usd": 0.008825,
+        },
+    },
+    "est_cost_usd": 0.008825,
+    "unpriced_models": [],
+    "approximations": [],
+    "pricing_as_of": "2026-06-09",
+    "duration_ms": 84000,
+}
 
 
-def test_both_agents_present(tmp_path):
-    _gauntlet_result(tmp_path)
-    _coding_usage(tmp_path)
+def test_full_economics(tmp_path):
+    _gauntlet_results(tmp_path, usage_rows=[_SONNET_ROW], result=_RESULT)
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))
+
     econ = build_run_economics(tmp_path)
     assert econ is not None
-    assert econ["gauntlet"]["duration_ms"] == 120000
-    assert econ["gauntlet"]["est_cost_usd"] is not None
-    assert econ["coding_agent"]["duration_ms"] == 90000
-    assert econ["coding_agent"]["est_cost_usd"] == 1.23
-    assert econ["total_est_cost_usd"] == round(
-        econ["gauntlet"]["est_cost_usd"] + 1.23, 6)
+
+    g = econ["gauntlet"]
+    assert g["duration_ms"] == 1000
+    assert g["model"] == "claude-sonnet-4-6"
+    assert g["tokens"] == {
+        "input": 12, "output": 9, "cache_create": 60, "cache_read": 120,
+        "total": 201,
+    }
+    assert g["est_cost_usd"] == pytest.approx(_SONNET_COST)
+    assert g["obol"]["pricing_as_of"] == "2026-06-09"
+
+    c = econ["coding_agent"]
+    assert c["duration_ms"] == 84000
+    assert c["est_cost_usd"] == pytest.approx(0.008825)
+    assert c["models"][0]["model"] == "claude-opus-4-7"
+    assert c["has_unpriced_model"] is False
+    assert c["obol"]["pricing_as_of"] == "2026-06-09"
+
+    assert econ["total_est_cost_usd"] == pytest.approx(_SONNET_COST + 0.008825)
     assert econ["partial"] is False
-    assert econ["pricing_asof"]
+    assert econ["pricing_asof"] == "2026-06-09"
+
+
+def test_missing_usage_sidecar_is_partial(tmp_path):
+    # Older gauntlet (no usage.jsonl): cost None, duration/model still shown.
+    _gauntlet_results(tmp_path, result=_RESULT)
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(_CODING_USAGE))
+
+    econ = build_run_economics(tmp_path)
+    assert econ is not None
+
+    assert econ["gauntlet"]["est_cost_usd"] is None
+    assert econ["gauntlet"]["duration_ms"] == 1000
+    assert econ["gauntlet"]["model"] == "claude-sonnet-4-6"
+    assert econ["partial"] is True
+    assert econ["total_est_cost_usd"] is None
 
 
 def test_missing_coding_usage_is_partial(tmp_path):
-    _gauntlet_result(tmp_path)
+    _gauntlet_results(tmp_path, usage_rows=[_SONNET_ROW], result=_RESULT)
     econ = build_run_economics(tmp_path)
     assert econ is not None
     assert econ["coding_agent"] is None
-    assert econ["partial"] is True
-    assert econ["total_est_cost_usd"] is None
-
-
-def test_missing_gauntlet_result_is_partial(tmp_path):
-    _coding_usage(tmp_path)
-    econ = build_run_economics(tmp_path)
-    assert econ is not None
-    assert econ["gauntlet"] is None
-    assert econ["partial"] is True
-
-
-def test_unpriced_gauntlet_model_yields_null_cost(tmp_path):
-    _gauntlet_result(tmp_path, model="gemini-3-pro")
-    _coding_usage(tmp_path)
-    econ = build_run_economics(tmp_path)
-    assert econ is not None
-    assert econ["gauntlet"]["est_cost_usd"] is None
-    assert econ["gauntlet"]["tokens"]["total"] > 0
-    # total is null because one side is unpriced
-    assert econ["total_est_cost_usd"] is None
-    assert econ["partial"] is True
-
-
-def test_unpriced_coding_agent_yields_null_total_cost(tmp_path):
-    _gauntlet_result(tmp_path)
-    _coding_usage(
-        tmp_path,
-        model="kimi-for-coding",
-        est_cost_usd=None,
-        has_unpriced_model=True,
-    )
-    econ = build_run_economics(tmp_path)
-    assert econ is not None
-    assert econ["gauntlet"]["est_cost_usd"] is not None
-    assert econ["coding_agent"]["est_cost_usd"] is None
-    assert econ["coding_agent"]["tokens"]["total"] == 130
-    assert econ["total_est_cost_usd"] is None
-    assert econ["partial"] is True
-
-
-def test_mixed_unpriced_coding_models_keep_total_partial(tmp_path):
-    _gauntlet_result(tmp_path)
-    _coding_usage(
-        tmp_path,
-        total_input=2_000_000,
-        total_output=0,
-        total_tokens=2_000_000,
-        model="claude-opus-4-7",
-        est_cost_usd=5.0,
-        has_unpriced_model=True,
-        models={
-            "claude-opus-4-7": {
-                "total_input": 1_000_000,
-                "total_cache_create": 0,
-                "total_cache_read": 0,
-                "total_output": 0,
-                "total_tokens": 1_000_000,
-                "n_assistant_turns": 1,
-                "est_cost_usd": 5.0,
-            },
-            "kimi-for-coding": {
-                "total_input": 1_000_000,
-                "total_cache_create": 0,
-                "total_cache_read": 0,
-                "total_output": 0,
-                "total_tokens": 1_000_000,
-                "n_assistant_turns": 1,
-                "est_cost_usd": None,
-            },
-        },
-    )
-    econ = build_run_economics(tmp_path)
-    assert econ is not None
-    assert econ["coding_agent"]["est_cost_usd"] == 5.0
-    assert econ["coding_agent"]["has_unpriced_model"] is True
-    assert econ["total_est_cost_usd"] is None
     assert econ["partial"] is True
 
 
@@ -128,73 +104,34 @@ def test_no_sources_returns_none(tmp_path):
     assert build_run_economics(tmp_path) is None
 
 
-def test_coding_block_carries_per_model_breakdown(tmp_path):
-    _gauntlet_result(tmp_path)
-    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps({
-        "total_input": 30, "total_cache_create": 0, "total_cache_read": 0,
-        "total_output": 130, "total_tokens": 160, "model": "claude-opus-4-7",
-        "est_cost_usd": 31.59, "duration_ms": 90000,
-        "models": {
-            "claude-opus-4-7": {"total_input": 10, "total_cache_create": 0,
-                "total_cache_read": 0, "total_output": 100, "total_tokens": 110,
-                "n_assistant_turns": 1, "est_cost_usd": 25.09},
-            "claude-sonnet-4-6": {"total_input": 20, "total_cache_create": 0,
-                "total_cache_read": 0, "total_output": 30, "total_tokens": 50,
-                "n_assistant_turns": 1, "est_cost_usd": 6.50},
-        },
-    }))
+def test_unpriced_coding_model_is_partial(tmp_path):
+    _gauntlet_results(tmp_path, usage_rows=[_SONNET_ROW], result=_RESULT)
+    usage = dict(_CODING_USAGE)
+    usage["unpriced_models"] = ["mystery-model-9"]
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(usage))
+
     econ = build_run_economics(tmp_path)
     assert econ is not None
-    models = econ["coding_agent"]["models"]
-    assert len(models) == 2
-    # sorted by cost desc → opus first
-    assert models[0]["model"] == "claude-opus-4-7"
-    assert models[0]["est_cost_usd"] == 25.09
-    assert models[1]["model"] == "claude-sonnet-4-6"
-    assert econ["coding_agent"]["est_cost_usd"] == 31.59
+
+    assert econ["coding_agent"]["has_unpriced_model"] is True
+    assert econ["partial"] is True
+    assert econ["total_est_cost_usd"] is None
 
 
-def _claude_session(run_dir):
-    d = run_dir / "coding-agent-config" / "projects" / "proj"
-    d.mkdir(parents=True)
-    rows = [
-        {"type": "assistant", "timestamp": "2026-05-28T10:00:00.000Z",
-         "message": {"model": "claude-opus-4-7",
-                     "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
-        {"type": "assistant", "timestamp": "2026-05-28T10:01:00.000Z",
-         "message": {"model": "claude-sonnet-4-6",
-                     "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}},
-    ]
-    (d / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+def test_legacy_frozen_file_renders_without_crash(tmp_path):
+    # A pre-obol frozen file (no pricing_as_of/unpriced_models/approximations
+    # keys): block still builds, with no obol provenance.
+    legacy = {
+        "total_input": 100, "total_cache_create": 0, "total_cache_read": 0,
+        "total_output": 40, "total_tokens": 140, "model": "claude-opus-4-7",
+        "est_cost_usd": 0.0015, "duration_ms": 5000, "models": {},
+    }
+    (tmp_path / "coding-agent-token-usage.json").write_text(json.dumps(legacy))
 
+    econ = build_run_economics(tmp_path)
+    assert econ is not None
 
-def test_backfill_injects_economics_into_existing_verdict(tmp_path):
-    from quorum.economics import backfill_run_economics
-    _gauntlet_result(tmp_path)
-    _claude_session(tmp_path)
-    # Existing verdict.json WITHOUT economics (pre-feature run).
-    (tmp_path / "verdict.json").write_text(json.dumps(
-        {"schema": 1, "final": "pass", "final_reason": "ok",
-         "gauntlet": {"status": "pass"}, "checks": [], "error": None}))
-
-    status = backfill_run_economics(tmp_path)
-    assert status == "backfilled"
-
-    verdict = json.loads((tmp_path / "verdict.json").read_text())
-    econ = verdict["economics"]
-    # Coding cost is per-model: Opus 1M input ($5) + Sonnet 1M input ($3) = $8
-    assert econ["coding_agent"]["est_cost_usd"] == 8.0
-    models = {m["model"]: m["est_cost_usd"] for m in econ["coding_agent"]["models"]}
-    assert models["claude-opus-4-7"] == 5.0
-    assert models["claude-sonnet-4-6"] == 3.0
-    # Regenerated sidecar carries the per-model breakdown.
-    usage = json.loads((tmp_path / "coding-agent-token-usage.json").read_text())
-    assert "models" in usage
-    # Original verdict fields preserved.
-    assert verdict["final"] == "pass"
-
-
-def test_backfill_skips_when_no_verdict(tmp_path):
-    from quorum.economics import backfill_run_economics
-    _claude_session(tmp_path)
-    assert backfill_run_economics(tmp_path) == "skipped (no verdict.json)"
+    c = econ["coding_agent"]
+    assert c["est_cost_usd"] == 0.0015
+    assert c["obol"] is None
+    assert econ["partial"] is True  # no gauntlet block

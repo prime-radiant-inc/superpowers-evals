@@ -8,7 +8,6 @@ from pathlib import Path
 
 import click
 
-from quorum.economics import backfill_run_economics
 from quorum.run_all import run_batch
 from quorum.runner import run_scenario
 from quorum.scaffold import (
@@ -255,49 +254,6 @@ def show(
             err=True,
         )
         sys.exit(2)
-
-
-@main.command("backfill-economics")
-@click.argument("target", required=False, type=click.Path(path_type=Path))
-@click.option("--all", "do_all", is_flag=True, help="Backfill every run-dir under --results-root.")
-@click.option(
-    "--results-root",
-    default=_DEFAULT_OUT_ROOT,
-    type=click.Path(path_type=Path),
-    help="Where to find run-dirs when using --all (default: results/).",
-)
-def backfill_economics(target: Path | None, do_all: bool, results_root: Path) -> None:
-    """Recompute + inject `economics` into existing runs' verdict.json.
-
-    Re-derives per-agent cost/timing from each run's preserved session logs
-    (regenerating coding-agent-token-usage.json with the per-model breakdown)
-    and adds an `economics` block to verdict.json. Use this to backfill runs
-    that predate the economics feature.
-
-    NOTE: this re-prices at CURRENT pricing tables — a deliberate re-pricing,
-    not a faithful replay of run-time cost. Pass a run-dir, or --all.
-    """
-    if do_all == bool(target):
-        click.echo("error: pass exactly one of a run-dir or --all", err=True)
-        sys.exit(1)
-    if do_all:
-        run_dirs = sorted({p.parent for p in results_root.rglob("verdict.json")})
-        if not run_dirs:
-            click.echo(f"no run-dirs with verdict.json under {results_root}")
-            return
-    else:
-        # The guard above guarantees target is set when do_all is False.
-        assert target is not None
-        run_dirs = [target]
-
-    n_ok = 0
-    for rd in run_dirs:
-        status = backfill_run_economics(rd)
-        if status == "backfilled":
-            n_ok += 1
-        click.echo(f"{status:<32} {rd}")
-    if do_all:
-        click.echo(f"backfilled {n_ok}/{len(run_dirs)}")
 
 
 @main.command("run-all")
