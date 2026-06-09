@@ -697,3 +697,13 @@ def test_economics_pane_omits_zero_tool_result_bytes():
     pane = _format_economics_pane(verdict, color=False)
 
     assert "tool bytes" not in pane
+
+
+def test_fmt_bytes_all_tiers():
+    from quorum.show import _fmt_bytes
+
+    assert _fmt_bytes(0) == "—"
+    assert _fmt_bytes(None) == "—"
+    assert _fmt_bytes(512) == "512B"
+    assert _fmt_bytes(142772) == "143KB"
+    assert _fmt_bytes(1_500_000) == "1.5MB"
