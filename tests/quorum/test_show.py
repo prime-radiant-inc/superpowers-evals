@@ -649,3 +649,51 @@ def test_economics_no_provenance_no_footnote(tmp_path):
     }
     out = render(verdict, tmp_path, color=False, mode="full")
     assert "pricing:" not in out
+
+
+def test_economics_pane_renders_tool_result_bytes():
+    from quorum.show import _format_economics_pane
+
+    verdict = {
+        "economics": {
+            "gauntlet": None,
+            "coding_agent": {
+                "duration_ms": 1000,
+                "model": "kimi-for-coding",
+                "models": [],
+                "tokens": {"total": 1000},
+                "est_cost_usd": None,
+                "tool_result_total_bytes": 142772,
+            },
+            "total_est_cost_usd": None,
+            "partial": True,
+        }
+    }
+
+    pane = _format_economics_pane(verdict, color=False)
+
+    assert "143KB" in pane
+
+
+def test_economics_pane_omits_zero_tool_result_bytes():
+    from quorum.show import _format_economics_pane
+
+    verdict = {
+        "economics": {
+            "gauntlet": None,
+            "coding_agent": {
+                "duration_ms": 1000,
+                "model": "kimi-for-coding",
+                "models": [],
+                "tokens": {"total": 1000},
+                "est_cost_usd": None,
+                "tool_result_total_bytes": 0,
+            },
+            "total_est_cost_usd": None,
+            "partial": True,
+        }
+    }
+
+    pane = _format_economics_pane(verdict, color=False)
+
+    assert "tool bytes" not in pane

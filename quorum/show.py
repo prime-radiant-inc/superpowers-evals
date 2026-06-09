@@ -177,6 +177,16 @@ def _fmt_tokens(n) -> str:
     return f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1_000:.0f}K"
 
 
+def _fmt_bytes(n) -> str:
+    if not isinstance(n, (int, float)) or n == 0:
+        return "—"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}MB"
+    if n >= 1_000:
+        return f"{n/1_000:.0f}KB"
+    return f"{int(n)}B"
+
+
 def _agent_row(label, block, *, color):
     if not block:
         return f"  {label:<10} {'—':>10} {'—':>9} {'—':>9}"
@@ -228,6 +238,9 @@ def _format_economics_pane(verdict: dict, *, color: bool) -> str:
     # Per-model sub-rows under Coding (PRI-1872): a coding run is multi-model.
     for entry in (coding or {}).get("models") or []:
         rows.append(_model_subrow(entry))
+    tr_bytes = (coding or {}).get("tool_result_total_bytes")
+    if tr_bytes:
+        rows.append(f"  {'tool bytes':<10} {'':>10} {_fmt_bytes(tr_bytes):>9} {'':>9}")
     total = econ.get("total_est_cost_usd")
     total_str = (
         _fmt_cost(total) if total is not None else ("partial" if econ.get("partial") else "—")
