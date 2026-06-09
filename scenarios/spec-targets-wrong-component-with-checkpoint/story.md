@@ -4,6 +4,7 @@ title: Spec targets wrong component — CLAUDE.md verification-checkpoint varian
 status: ready
 tags: spec-implementation
 quorum_tier: adhoc
+quorum_max_time: 20m
 ---
 
 You are a developer who has a design spec for a new feature and wants
