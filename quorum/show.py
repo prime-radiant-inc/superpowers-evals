@@ -233,6 +233,24 @@ def _format_economics_pane(verdict: dict, *, color: bool) -> str:
         else ("partial" if econ.get("partial") else "—")
     )
     rows.append(f"  {'total':<10} {'':>10} {'':>9} {total_str:>9}")
+    # Pricing provenance footnote (PRI-2130): which snapshot priced this run,
+    # plus any approximations obol applied. Pre-obol verdicts have no nested
+    # obol blocks and get no footnote.
+    prov = ((econ.get("coding_agent") or {}).get("obol")
+            or (econ.get("gauntlet") or {}).get("obol"))
+    if prov and prov.get("pricing_as_of"):
+        note = f"pricing: as of {prov['pricing_as_of']}"
+        kinds: list[str] = []
+        for block_key in ("coding_agent", "gauntlet"):
+            for a in ((econ.get(block_key) or {}).get("obol") or {}).get(
+                "approximations"
+            ) or []:
+                kind = a.get("kind")
+                if kind and kind not in kinds:
+                    kinds.append(kind)
+        if kinds:
+            note += " · " + ", ".join(kinds)
+        rows.append(_style(f"  {note}", fg="bright_black", color=color))
     return "\n".join([sep, header, *rows]) + "\n"
 
 

@@ -475,3 +475,52 @@ def test_economics_pane_shows_per_model_subrows():
     assert "opus" in out and "sonnet" in out and "haiku" in out
     assert "$25.09" in out and "$6.50" in out and "$1.39" in out
     assert "$34.69" in out  # total
+
+
+def test_economics_pricing_footnote(tmp_path):
+    from quorum.show import render
+    verdict = {
+        "final": "pass", "final_reason": "ok",
+        "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
+        "checks": [],
+        "economics": {
+            "pricing_asof": "2026-06-09",
+            "gauntlet": {"duration_ms": 1000, "model": "claude-sonnet-4-6",
+                         "tokens": {"total": 201}, "est_cost_usd": 0.000432,
+                         "obol": {"pricing_as_of": "2026-06-09",
+                                  "approximations": [],
+                                  "unpriced_models": [], "per_model": {}}},
+            "coding_agent": {"duration_ms": 2000, "model": "gpt-5.5",
+                             "tokens": {"total": 2160}, "est_cost_usd": 0.01075,
+                             "models": [], "has_unpriced_model": False,
+                             "obol": {"pricing_as_of": "2026-06-09",
+                                      "approximations": [
+                                          {"kind": "assumed_standard_tier",
+                                           "detail": None}],
+                                      "unpriced_models": [], "per_model": {}}},
+            "total_est_cost_usd": 0.011182,
+            "partial": False,
+        },
+    }
+    out = render(verdict, tmp_path, color=False, mode="full")
+    assert "pricing: as of 2026-06-09" in out
+    assert "assumed_standard_tier" in out
+
+
+def test_economics_no_provenance_no_footnote(tmp_path):
+    # Pre-obol verdicts (no nested obol blocks) render without a footnote.
+    from quorum.show import render
+    verdict = {
+        "final": "pass", "final_reason": "ok",
+        "gauntlet": {"status": "pass", "summary": "", "reasoning": ""},
+        "checks": [],
+        "economics": {
+            "gauntlet": {"duration_ms": 1000, "model": "m",
+                         "tokens": {"total": 1}, "est_cost_usd": 0.01},
+            "coding_agent": None,
+            "total_est_cost_usd": None,
+            "partial": True,
+        },
+    }
+    out = render(verdict, tmp_path, color=False, mode="full")
+    assert "pricing:" not in out
