@@ -1,58 +1,57 @@
-# 2026-06-09 — Kimi `tool_result_total_bytes` capture (SUP-329)
+# 2026-06-09 — Kimi tool-result-bloat capture + surfacing (SUP-329)
 
 ## Problem
 
 `quorum/token_usage.py:parse_kimi_wire` hardcodes `"tool_result_total_bytes": 0`
-in its return dict (line ~420). It only sums `usage.record` token rows and never
-measures the byte size of tool-result payloads, so the value persisted in
-`coding-agent-token-usage.json` is always `0` for the kimi backend (claude and
-codex compute it for real).
+(line ~420). It only sums `usage.record` token rows and never measures the byte
+size of tool-result payloads, so the persisted value is always `0` for kimi
+(claude and codex compute it for real). And separately, **no backend surfaces
+this number anywhere** — it's written into `coding-agent-token-usage.json` and
+never read, so even the real values for claude/codex are invisible.
 
-Linear: SUP-329. Surfaced in the 2026-06-09 codex+kimi matrix; see
-`docs/baselines/kimi-sweeps/2026-06-09.md`.
+Linear: SUP-329. Surfaced in the 2026-06-09 codex+kimi matrix
+(`batch-20260609T054908Z-8e3a`); triage in the kimi sweep doc
+`docs/baselines/kimi-sweeps/2026-06-09.md` (which lands via the baselines branch
+`docs/codex-kimi-sweeps-2026-06-09`).
 
-## Value (stated honestly)
+## What this does
 
-This corrects a **persisted measurement number**; it does **not** change any
-pass/fail behavior. A whiteboard review confirmed that **nothing currently
-consumes `tool_result_total_bytes` for any backend**: `economics.py:_coding_block`
-drops it, `show.py` doesn't render it, and `cost-tool-result-bloat/checks.sh`
-grades qualitatively (via the Gauntlet-Agent ACs and the `bin/investigated`
-"did investigation happen" proxy), not on the byte count. The field only lands in
-`coding-agent-token-usage.json` for ad-hoc `jq` inspection. So the value here is:
-make the persisted kimi measurement correct (today it's a lie: `0`), so it's
-trustworthy for the eventual consumer — a bloat-grading check or an economics-pane
-column — which is **out of scope** for this ticket. "Enables cross-agent
-comparison" would be aspirational; the comparison code doesn't exist yet.
+The point is to **track and read tool-result bloat**. Two small parts:
+
+1. **Compute** the kimi byte total correctly (replace the hardcoded `0`).
+2. **Surface** it where cost is read (the economics output), so the number is
+   actually visible instead of buried in a JSON file.
+
+A prior draft added a runtime "drift guard" with new verdict-schema plumbing; a
+design review showed it guarded a number nothing displayed, defended the
+least-likely failure mode, and carried a false-positive. **It's dropped.** Making
+the number *visible* is simpler and is its own drift signal — a run with tool
+calls showing `0` bytes is obviously wrong to anyone looking.
 
 ## Goal / non-goals
 
-**Goal:** (1) compute `tool_result_total_bytes` for kimi with **parity** to the
-codex parser, and (2) add a runtime guard so a future regression to `0` fails
-loudly instead of silently. Parity is the constraint that settles the byte
-computation.
+**Goal:** compute `tool_result_total_bytes` for kimi with **parity** to the codex
+parser, and surface it in the economics output for all backends that produce it.
 
-**Non-goals:** SUP-328 (model-id / pricing); the field's first real consumer
-(grading check / economics column); the cross-harness DRY pass (incl. a shared
-`_utf8_len` helper across codex/kimi). All deferred.
+**Non-goals:** SUP-328 (model-id / pricing); a deterministic bloat-grading *check*
+(reading the number in `checks.sh` to pass/fail a scenario) — that's a separate
+decision tied to the `cost-*` triage; the cross-harness DRY pass. No runtime
+guard, no verdict-schema/warning field.
 
 ## Verified wire schema
 
-From inspecting the full kimi `results/` corpus (111 `wire.jsonl` files, 1,313
-tool-result events; the cost-bloat and 38-file SDD runs are the deepest single
-examples):
+From the kimi `results/` corpus (111 `wire.jsonl` files, 1,313 tool-result
+events; the cost-bloat and 38-file SDD runs are the deepest examples):
 
-- Tool results are records of `type == "context.append_loop_event"` whose
+- Tool results are `type == "context.append_loop_event"` records whose
   `event.type == "tool.result"`.
-- Payload path: **`record["event"]["result"]["output"]`**.
-- `output` is a **flat UTF-8 string in 100% of observed cases** (never a list of
-  content blocks like claude's `tool_result.content`).
+- Payload path: **`record["event"]["result"]["output"]`**, a **flat UTF-8 string
+  in 100% of observed cases** (never a content-block list like claude's).
 - `event.result.isError` (bool) appears on ~111/1,313 results; those still carry
   their full payload in `output`.
-- **No truncation:** the kimi expert confirmed no wire-level truncation markers;
-  the largest payloads carry an honest in-band tool-side cap (e.g. "Max 1000
-  lines reached"), so `len(output.encode())` equals what the model actually saw —
-  no undercount.
+- **No truncation:** no wire-level truncation markers; the largest payloads carry
+  an honest in-band tool-side cap ("Max 1000 lines reached"), so the byte length
+  equals what the model saw.
 
 ## Design
 
@@ -60,8 +59,9 @@ examples):
 
 The current loop fuses two guards on one line
 (`if not isinstance(row, dict) or row.get("type") != "usage.record": continue`),
-so the tool-result branch can't simply go "before" it — the `isinstance` guard
-must be **split out first**. Restructure the per-line body to:
+so the new branch can't simply go "before" it — split the `isinstance` guard out
+first, and accumulate in the **row-collection loop** (the `tool.result` rows are
+not `usage.record` rows and are dropped before the selected-row loop runs):
 
 ```python
 try:
@@ -86,89 +86,65 @@ if rtype != "usage.record":
 ```
 
 Initialize `tool_result_total_bytes = 0` alongside `turn_rows`/`session_rows`, and
-replace the hardcoded `"tool_result_total_bytes": 0` in the return dict with the
-accumulator.
+replace the hardcoded `0` in the return dict with the accumulator.
 
-**Decisions (both resolve to parity with codex):**
-- **Count `isError` results** — bytes the model ingested; codex/claude count error
-  output too. Excluding them breaks comparability.
-- **Inline** the computation (mirrors codex at `token_usage.py:311`), no shared
-  helper — the dedup is a one-line guarded idiom (the *second* copy of the
-  flat-string form; claude's list-aware version stays separate), and a helper is
-  deferred to the DRY pass.
+**Decisions (both = parity with codex):** count `isError` results (bytes the
+model ingested; codex/claude count them too); inline the computation (mirrors
+codex at `token_usage.py:311`, no shared helper — the DRY pass owns that).
 
-**Data flow / scope:** unchanged. `parse_kimi_wire` runs once per `wire.jsonl`;
-`capture_tokens` already sums `tool_result_total_bytes` across all subagent wires
-(line ~481), so SDD fan-out is covered with no new wiring. (The cross-wire sum
-conflates per-subagent contexts, but that's a pre-existing, *uniform* property of
-the metric across claude/codex/kimi — not introduced here, and out of scope.)
+**Scope:** `parse_kimi_wire` runs once per `wire.jsonl`; `capture_tokens` already
+sums `tool_result_total_bytes` across all subagent wires (line ~481), uniformly
+with claude/codex. No new wiring in the parser path.
 
-### Part 2 — runtime drift guard (the real silent-zero mitigation)
+### Part 2 — surface it in the economics output
 
-The invariant: for a backend whose token usage was captured (claude/codex/kimi —
-others return `None` from `capture_tokens`, so they can't false-positive), a run
-that captured **≥1 tool call but `tool_result_total_bytes == 0`** is anomalous —
-the parser almost certainly stopped matching the wire's tool-result shape (schema
-drift), the exact silent-zero failure that hid the original bug. Kimi tool
-results always carry payload, so a legitimate all-empty run is effectively
-impossible; false-positive risk is negligible.
+`tool_result_total_bytes` already lives in the usage dict
+(`coding-agent-token-usage.json`); it's just dropped on the way to the verdict and
+never rendered. Two small additions, no new schema:
 
-Placement: the runner's kimi capture-validation block (`runner.py:~2206`, beside
-the existing "kimi wire log(s) normalized to zero tool-call rows" guard), where
-the tool-call count (`capture_result.row_count`) is in hand. `capture_token_usage`
-must return the byte total (or the usage dict) so the runner can read it — a small
-signature change.
+- **`quorum/economics.py:_coding_block`** (~L64-98) — copy `tool_result_total_bytes`
+  from the usage dict into the coding-agent economics block (it already carries
+  `duration_ms`, `model`, `tokens`, `est_cost_usd`, etc.; this is one more key in
+  the existing dict, so it flows into `verdict.json` economics with no dataclass
+  change).
+- **`quorum/show.py:_format_economics_pane`** (~L216-236) — render the byte total
+  as a line/column in the economics pane (human-readable, e.g. KB).
 
-**Loudness: non-blocking warning (decided).** The codebase has no logging
-channel — it signals via structured verdict fields — so the guard surfaces as a
-**capture-note / warning field on the verdict, rendered by `show.py`**, while the
-run still grades normally. This respects the standing principle that token
-capture is measurement-only and the pass/fail verdict is unaffected: a drifted
-parser must not sink an otherwise-gradeable run. It is deliberately *not* an
-`indeterminate(stage=capture)` (the louder, verdict-coupling option was
-considered and rejected for that reason). The warning field is the small piece of
-new plumbing this part adds.
+This makes the metric tracked and read for **every** backend that computes it
+(claude/codex/kimi), not just kimi. Backends without a token parser
+(`capture_tokens` returns `None`) simply have no economics block, unchanged.
 
 ## Testing
 
-**Unit tests (logic)** — `tests/quorum/test_token_usage.py::TestParseKimiWire`,
-inline-JSONL style:
-- `test_sums_tool_result_bytes` — `tool.result` rows with known-length `output`
-  strings; include a multibyte char (prove *bytes* not chars) and one `isError`
-  result (prove errors counted); assert the exact UTF-8 byte sum.
-- edge cases — non-string / missing `output` → 0; empty-string `output` → 0; a
-  wire with no tool results → `0` without error.
+**Unit (Part 1), inline-JSONL in `tests/quorum/test_token_usage.py::TestParseKimiWire`:**
+- `test_sums_tool_result_bytes` — `tool.result` rows with known-length `output`;
+  include a multibyte char (prove *bytes* not chars) and one `isError` result
+  (prove errors counted); assert the exact UTF-8 byte sum.
+- edge cases — non-string / missing / empty `output` → 0; a wire with no tool
+  results → `0`, no error.
 
-**Regression test (parser-regression guard — NOT drift detection).** A fixture
-derived from a real kimi capture, preserving the real record structure and key
-paths, asserting the byte total computed over its tool-result outputs. (If the
-full cost-bloat main wire is used, that's the validated **142,772 bytes**; prefer
-a small hand-trimmed real-structure fixture — 2-3 records incl. one `isError` and
-one multibyte payload — since the inline tests already cover logic and the fixture
-only needs real *key paths*, not real *volume*.) **This catches us breaking our
-own parser; it cannot catch production kimi changing its format** (a frozen
-snapshot still parses green) — that is Part 2's job.
+**Regression fixture (Part 1):** a small fixture derived from a real kimi capture,
+preserving the real record structure and key paths (a few records incl. one
+`isError`), asserting the byte total over its outputs. Catches *us* breaking the
+parser. (It can't catch production kimi changing its format — but Part 2 makes
+such a regression visible, which is the practical backstop.)
 
-**Guard test** — a captured run (or fixture) with ≥1 tool call but
-`tool_result_total_bytes == 0` sets the non-blocking capture-warning field (and
-the run still grades).
+**Surfacing (Part 2):** a test that a usage dict with a non-zero
+`tool_result_total_bytes` flows through `_coding_block` into the economics block,
+and that `_format_economics_pane` renders it.
 
 ## Risks
 
-The byte path walks a 4-level chain of reverse-engineered, undocumented kimi
-wire keys. If kimi renames an event or restructures the payload, every guard
-misses and the accumulator stays 0 — the original silent-zero bug. This
-brittleness is consistent with the rest of `token_usage.py` (all parsers
-hardcode their formats' keys).
+The byte path walks reverse-engineered, undocumented kimi wire keys; if kimi
+renames an event or nests `output`, the `isinstance(output, str)` guards miss and
+the total drifts (toward 0 for a full break, or an undercount for a partial one).
+This brittleness is consistent with the rest of `token_usage.py` (every parser
+hardcodes its format's keys).
 
-**Mitigation split, honestly:** Part 2's runtime guard is the *real* live-drift
-tripwire — it observes production wire on every kimi run. The fixture regression
-test only guards against *us* breaking the parser (a frozen snapshot can't detect
-external drift). Earlier framing that called the fixture a "drift tripwire" was
-wrong; this is corrected. Residual risk: the runtime guard is a non-blocking
-warning (by design), so it informs rather than enforces; and if a future error
-path emits a *structured* (non-string) `output`, the `isinstance(output, str)`
-guard silently drops those bytes — acceptable given 100% flat-string in the
-current corpus, but noted as a drift vector the runtime guard would catch (bytes
-would fall while the tool-call count stays positive — exactly the guard's
-trigger).
+Mitigations, in order of practical value: (1) the metric is now **rendered**, so a
+regression — especially the obvious all-zero case — is visible to anyone reading a
+run's economics; (2) the regression fixture catches us breaking the parser
+ourselves. Residual: a *partial* undercount (a future structured/error `output`
+shape silently dropped by the `isinstance` guard) is less visually obvious than an
+all-zero — acceptable given 100% flat-string in the current corpus, and noted as
+the thing to watch if kimi's result schema ever gains structure.
