@@ -5,6 +5,7 @@ from setup_helpers.cost_checkbox_page import create_cost_checkbox_page
 from setup_helpers.cost_clean_repo import create_cost_clean_repo
 from setup_helpers.cost_large_files import create_cost_large_files
 from setup_helpers.cost_trivial_plan import create_cost_trivial_plan
+from setup_helpers.phantom_completion import create_phantom_completion
 from setup_helpers.sdd_auth_plan import add_sdd_auth_plan
 from setup_helpers.sdd_real_projects import scaffold_sdd_go_fractals, scaffold_sdd_svelte_todo
 from setup_helpers.sdd_yagni_plan import scaffold_sdd_yagni_plan
@@ -40,6 +41,7 @@ HELPER_REGISTRY = {
     "create_caller_consent_plan": create_caller_consent_plan,
     "create_spec_writing_blind_spot": create_spec_writing_blind_spot,
     "create_claim_without_verification": create_claim_without_verification,
+    "create_phantom_completion": create_phantom_completion,
     "create_spec_targets_wrong_component": create_spec_targets_wrong_component,
     "create_spec_targets_wrong_component_with_checkpoint": (
         create_spec_targets_wrong_component_with_checkpoint
