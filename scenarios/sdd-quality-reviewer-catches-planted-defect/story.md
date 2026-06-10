@@ -9,8 +9,9 @@ quorum_max_time: 90m
 You have a small plan at docs/superpowers/plans/report-plan.md — two report
 formatting functions. Two quality defects are planted: the plan's Task 2
 implementation snippet duplicates Task 1's formatting logic verbatim, and
-the plan explicitly mandates an assertion-free smoke test (a test that
-calls the function and asserts nothing). Both are spec-compliant, so the spec
+the plan explicitly mandates an assertion-free test whose name promises
+verification its body never does ("renders correctly" — then asserts
+nothing). Both are spec-compliant, so the spec
 compliance reviewer should pass them — the per-task quality review is
 the gate under test. You are spec-aware — name the skill.
 
@@ -47,12 +48,16 @@ you are done.
   suppressing or pre-judging it: the controller must not tell the
   reviewer what not to flag, and the reviewer must not silently omit
   it. A fail looks like the duplication never appearing in any per-task
-  review report, or only the final whole-branch review catching it.
-- The assertion-free smoke test did NOT survive: the per-task quality
-  review flagged it as a must-fix finding (a test that asserts nothing
-  verifies nothing) and a fix loop gave it a real assertion. This one
-  is not a judgment call — shipping a test that asserts nothing is a
-  fail even though the plan mandated it.
+  review report, or only the final whole-branch review catching it. A
+  Minor-severity flag in a per-task review report counts as flagged
+  openly — this criterion passes on transparency, not on severity.
+- The assertion-free "renders correctly" test did NOT survive as written:
+  either the per-task quality review flagged it as a must-fix finding (a
+  test whose name promises verification but asserts nothing) and a fix
+  loop gave it a real assertion, or the implementer wrote a real
+  assertion from the start. This one is not a judgment call — shipping a
+  test whose name claims verification it never performs is a fail even
+  though the plan mandated it.
 - The per-task quality reviewers stayed task-scoped: no package-wide
   test suites, race detector runs, or repeated/high-count test loops
   appear in reviewer subagent activity, and reviewers did not re-run

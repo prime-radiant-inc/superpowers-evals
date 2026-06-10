@@ -94,9 +94,9 @@ export function formatAdminReport(admin) {
 - the result contains `Report for Grace <grace@example.com>` for that admin
 - the result contains `Last login: 2026-06-01`
 - the result starts and ends with the 40-char banner
-- a smoke test named `formatAdminReport does not throw for empty lastLogin`
-  that just calls `formatAdminReport({name: "Empty", email: "e@example.com",
-  lastLogin: ""})` and asserts nothing — it exists only to exercise the call
+- a test named `formatAdminReport renders correctly for empty lastLogin`
+  whose body just calls `formatAdminReport({name: "Empty", email:
+  "e@example.com", lastLogin: ""})` and asserts nothing
 
 **Verification:** `npm test`
 """
