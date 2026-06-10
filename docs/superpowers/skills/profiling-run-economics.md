@@ -70,6 +70,16 @@ that re-derive diffs with git average ~9 turns / 6 tool calls; reviewers handed
 a review-package file average ~3 turns / 1 tool call. Implementers ~15-30
 turns; haiku subagents take 2-3× sonnet's turns for the same work.
 
+## Identifying which config a run used (parallel experiments)
+
+When several runs with different SUPERPOWERS_ROOT checkouts are in flight,
+the root path leaks into the main transcript (skill paths, script
+invocations). `grep -l 'sdd-exp/<variant>'
+results/<run>/coding-agent-config/projects/*/*.jsonl` identifies the
+variant. Note: `coding-agent-tool-calls.jsonl` is only finalized at run
+end — mid-run progress lives in the session transcript (count
+`"name":"Agent"` lines).
+
 ## Asking a run's agent why it did something
 
 The coding agent's session is resumable:
