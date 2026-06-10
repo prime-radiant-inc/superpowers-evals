@@ -9,7 +9,11 @@ from setup_helpers.phantom_completion import create_phantom_completion
 from setup_helpers.review_pushback import create_review_pushback
 from setup_helpers.sdd_auth_plan import add_sdd_auth_plan
 from setup_helpers.sdd_quality_defect_plan import scaffold_sdd_quality_defect_plan
-from setup_helpers.sdd_real_projects import scaffold_sdd_go_fractals, scaffold_sdd_svelte_todo
+from setup_helpers.sdd_real_projects import (
+    scaffold_sdd_go_fractals,
+    scaffold_sdd_go_fractals_crisp,
+    scaffold_sdd_svelte_todo,
+)
 from setup_helpers.sdd_yagni_plan import scaffold_sdd_yagni_plan
 from setup_helpers.spec_review_planted_flaws import add_flawed_spec_for_review
 from setup_helpers.spec_targets_wrong_component import create_spec_targets_wrong_component
@@ -55,6 +59,7 @@ HELPER_REGISTRY = {
     "add_flawed_spec_for_review": add_flawed_spec_for_review,
     "add_sdd_auth_plan": add_sdd_auth_plan,
     "scaffold_sdd_go_fractals": scaffold_sdd_go_fractals,
+    "scaffold_sdd_go_fractals_crisp": scaffold_sdd_go_fractals_crisp,
     "scaffold_sdd_svelte_todo": scaffold_sdd_svelte_todo,
     "scaffold_sdd_quality_defect_plan": scaffold_sdd_quality_defect_plan,
     "scaffold_sdd_yagni_plan": scaffold_sdd_yagni_plan,

@@ -41,5 +41,9 @@ def scaffold_sdd_go_fractals(workdir: Path) -> None:
     _scaffold_from_fixture(Path(workdir), "sdd-go-fractals")
 
 
+def scaffold_sdd_go_fractals_crisp(workdir: Path) -> None:
+    _scaffold_from_fixture(Path(workdir), "sdd-go-fractals-crisp")
+
+
 def scaffold_sdd_svelte_todo(workdir: Path) -> None:
     _scaffold_from_fixture(Path(workdir), "sdd-svelte-todo")
