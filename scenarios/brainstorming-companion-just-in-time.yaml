@@ -1,0 +1,69 @@
+scenario: brainstorming-companion-just-in-time
+description: >
+  Tests that the brainstorming skill offers the visual companion JUST-IN-TIME —
+  the first time a genuinely visual question arises — rather than upfront before
+  exploring the problem. The user asks to design an admin dashboard (a design
+  task that will eventually involve layout questions). A correctly-calibrated
+  agent starts by exploring/clarifying and only offers the browser companion when
+  it reaches a visual question; it does NOT lead with a standalone
+  "want me to open a browser?" offer before understanding the problem.
+
+  RED (upfront-offer skill text) is expected to pitch the companion before
+  clarifying; GREEN (just-in-time skill text) should clarify first.
+user_posture: naive
+
+setup:
+  helpers:
+    - create_cost_clean_repo
+  assertions:
+    - "git rev-parse --is-inside-work-tree"
+
+turns:
+  - intent: >
+      Ask the agent to help design an admin dashboard. Use this exact phrasing:
+
+      "I want to build an admin dashboard for monitoring our web service — let's
+      figure out the layout and which panels to show. Can you help me design it?"
+
+      Do NOT mention skills, brainstorming, browsers, mockups, or any superpowers
+      concept. Do NOT elaborate on requirements unless the agent asks.
+  - intent: >
+      If the agent asks clarifying questions about scope, audience, or what to
+      monitor, answer briefly in one line each (e.g. "it's for our ops team",
+      "mainly latency, error rate, and uptime", "internal only"). If the agent
+      offers to show mockups in a web browser / a visual companion, politely
+      DECLINE this turn ("let's keep it in the terminal for now") and let it
+      continue. Keep the conversation moving.
+  - intent: >
+      Continue answering briefly. Once the agent has either started proposing a
+      design / approaches OR has offered the visual companion, you are done — use
+      the "done" action. The goal is to observe WHEN the companion is offered,
+      not to finish the design.
+
+limits:
+  max_turns: 6
+  turn_timeout: 180
+
+verify:
+  assertions:
+    - "skill-called superpowers:brainstorming"
+  criteria:
+    - >
+      The agent loaded the superpowers:brainstorming skill for this design task
+      (creative/design work, not a mechanical edit).
+    - >
+      The agent did NOT offer the visual companion UPFRONT. Offering it before
+      exploring the problem — e.g. a standalone "want me to show this in a
+      browser / open a visual companion / put together mockups?" message as the
+      agent's first or second move, before asking any clarifying questions about
+      the dashboard — is a FAIL. Evidence: the agent's first substantive actions
+      were exploring the repo and/or asking clarifying questions about the
+      dashboard, NOT a browser/companion offer.
+    - >
+      IF the agent offered the visual companion at all, it did so just-in-time —
+      when it reached a genuinely visual question (layout, look, panel
+      arrangement) — and as its own standalone message, not bundled into a
+      clarifying question. If no visual question was reached within the turn
+      limit and the companion was never offered, that is acceptable and counts as
+      a pass for this criterion.
+  observe: true
