@@ -1,9 +1,10 @@
 # Superpowers Evals
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
-**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini,
-Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA agent and grades them
-against scenario acceptance criteria plus deterministic post-checks.
+**Quorum** drives real coding-agent CLIs (Claude, Claude Haiku, Codex,
+Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA
+agent and grades them against scenario acceptance criteria plus deterministic
+post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
 form `Quorum` appears in headings and the actor table.
@@ -31,7 +32,7 @@ CI.
 
 Live evals run the Coding-Agent under test with broad execution power:
 
-- Claude uses `--dangerously-skip-permissions`.
+- Claude and Claude Haiku use `--dangerously-skip-permissions`.
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
@@ -42,8 +43,8 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Copilot uses `--allow-all`.
 
 quorum seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity,
-`GEMINI_CLI_HOME` for Gemini, `KIMI_CODE_HOME` for Kimi,
+Claude and Claude Haiku, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for
+Antigravity, `GEMINI_CLI_HOME` for Gemini, `KIMI_CODE_HOME` for Kimi,
 `OPENCODE_QUORUM_HOME` plus isolated XDG dirs for OpenCode,
 `PI_CODING_AGENT_DIR` for Pi, and `COPILOT_HOME` for Copilot) so the
 Coding-Agent never sees the host's real
@@ -79,8 +80,23 @@ Run one scenario:
 uv run quorum run scenarios/triggering-writing-plans --coding-agent claude
 ```
 
-Agent names are `claude`, `codex`, `antigravity`, `gemini`, `kimi`,
-`opencode`, `pi`, and `copilot`; not every scenario is valid for every agent.
+Agent names are `claude`, `claude-haiku`, `codex`, `antigravity`, `gemini`,
+`kimi`, `opencode`, `pi`, and `copilot`; not every scenario is valid for every
+agent.
+
+Trusted-maintainer Claude Haiku smoke:
+
+```bash
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+export ANTHROPIC_API_KEY=...
+uv run quorum run scenarios/00-quorum-smoke-hello-world \
+  --coding-agent claude-haiku \
+  --out-root results/claude-haiku-smoke
+uv run quorum show <run-dir>
+```
+
+Do not wire Claude Haiku live evals to public CI; it uses the same Anthropic
+API-key path and broad Claude Code execution permissions as the `claude` target.
 
 List scenarios:
 
@@ -193,7 +209,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Claude Haiku**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Quorum** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/quorum/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
@@ -347,10 +363,13 @@ OpenCode stages the local Superpowers plugin and skills into isolated XDG
 dirs; Pi provisions run-local auth and settings; Copilot stages the local
 Superpowers plugin into an isolated `COPILOT_HOME` and writes a private
 `.copilot-env`). All authored once per agent and shared across scenarios.
+`claude-haiku` is a Claude Code target variant that uses the Claude
+runtime/context and the same `ANTHROPIC_API_KEY` path as `claude`.
 
 | Coding-Agent | CLI | Required environment |
 | --- | --- | --- |
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
+| `claude-haiku` | Claude Code (Haiku target variant) | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
 | `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY`, `SUPERPOWERS_ROOT` |
@@ -664,8 +683,9 @@ A `quorum run` drives one scenario against one Coding-Agent:
 2. **Run dir** — a per-run directory is created under `results/`. It
    doubles as Gauntlet's `--state-dir` root and the evidence root.
 3. **Isolation** — a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-   Claude, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for Antigravity,
-   `GEMINI_CLI_HOME` for Gemini, `KIMI_CODE_HOME` for Kimi,
+   Claude and Claude Haiku, `CODEX_HOME` for Codex,
+   `ANTIGRAVITY_CONFIG_DIR` for Antigravity, `GEMINI_CLI_HOME` for Gemini,
+   `KIMI_CODE_HOME` for Kimi,
    `OPENCODE_QUORUM_HOME` for OpenCode, `PI_CODING_AGENT_DIR` for Pi, and
    `COPILOT_HOME` for Copilot) is seeded or provisioned, so the Coding-Agent
    never sees the host's real `~/.claude`, `~/.codex`, `~/.gemini`,

@@ -165,6 +165,34 @@ def test_build_matrix_marks_directive_excluded_pairs_skipped(tmp_path):
             assert e.skipped_reason == "directive"
 
 
+def test_build_matrix_treats_claude_haiku_as_distinct_literal_agent(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "claude_only", directive="claude")
+    _scenario(scenarios, "haiku_only", directive="claude-haiku")
+    _scenario(scenarios, "open")
+    _agent(agents, "claude")
+    _agent(agents, "claude-haiku")
+
+    entries = build_matrix(scenarios_root=scenarios, coding_agents_dir=agents)
+
+    skipped = {(e.scenario, e.coding_agent) for e in entries if not e.runnable}
+    runnable = {(e.scenario, e.coding_agent) for e in entries if e.runnable}
+    assert skipped == {
+        ("claude_only", "claude-haiku"),
+        ("haiku_only", "claude"),
+    }
+    assert runnable == {
+        ("claude_only", "claude"),
+        ("haiku_only", "claude-haiku"),
+        ("open", "claude"),
+        ("open", "claude-haiku"),
+    }
+    for e in entries:
+        if not e.runnable:
+            assert e.skipped_reason == "directive"
+
+
 def test_build_matrix_filters_agents(tmp_path):
     scenarios = tmp_path / "scenarios"
     agents = tmp_path / "agents"

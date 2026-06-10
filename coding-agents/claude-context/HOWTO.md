@@ -20,7 +20,7 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && source <per-run-claude-env> && CLAUDE_CONFIG_DIR=<per-run-isolated-dir> claude --dangerously-skip-permissions --plugin-dir <superpowers-root> --model opus
+cd <prepared-workdir> && source <per-run-claude-env> && CLAUDE_CONFIG_DIR=<per-run-isolated-dir> claude --dangerously-skip-permissions --plugin-dir <superpowers-root> --model "$CLAUDE_MODEL"
 ```
 
 Because the `cd` and the flags live inside the launcher, you cannot skip

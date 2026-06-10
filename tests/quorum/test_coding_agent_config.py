@@ -75,6 +75,45 @@ def test_antigravity_config_loads_when_superpowers_root_set(monkeypatch, tmp_pat
     )
 
 
+def test_claude_config_exposes_runtime_family_and_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+
+    cfg = load_coding_agent_config(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "claude.yaml"
+    )
+
+    assert cfg.name == "claude"
+    assert cfg.runtime_family == "claude"
+    assert cfg.model == "opus"
+    assert cfg.project_prompt == (
+        Path(__file__).resolve().parents[2]
+        / "coding-agents"
+        / "claude.project-prompt.md"
+    ).resolve()
+
+
+def test_claude_haiku_config_loads(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+
+    cfg = load_coding_agent_config(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "claude-haiku.yaml"
+    )
+
+    assert cfg.name == "claude-haiku"
+    assert cfg.runtime_family == "claude"
+    assert cfg.binary == "claude"
+    assert cfg.agent_config_env == "CLAUDE_CONFIG_DIR"
+    assert cfg.normalizer == "claude"
+    assert cfg.model == "claude-haiku-4-5-20251001"
+    assert cfg.project_prompt == (
+        Path(__file__).resolve().parents[2]
+        / "coding-agents"
+        / "claude.project-prompt.md"
+    ).resolve()
+
+
 def test_gemini_config_loads_when_env_set(monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
@@ -182,6 +221,7 @@ class TestLoadCodingAgentConfig:
             "session_log_glob": "**/session-*.jsonl",
             "normalizer": "claude",
             "required_env": ["ANTHROPIC_API_KEY"],
+            "model": "opus",
         })
         cfg = load_coding_agent_config(path)
         assert isinstance(cfg, CodingAgentConfig)
@@ -192,6 +232,134 @@ class TestLoadCodingAgentConfig:
         assert cfg.normalizer == "claude"
         assert cfg.max_time is None
 
+    def test_runtime_family_defaults_to_name_and_model_defaults_unset(self, tmp_path):
+        path = _write(tmp_path, "codex", {
+            "name": "codex",
+            "binary": "codex",
+            "agent_config_env": "CODEX_HOME",
+            "session_log_dir": "${CODEX_HOME}/sessions",
+            "session_log_glob": "*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+        })
+
+        cfg = load_coding_agent_config(path)
+
+        assert cfg.runtime_family == "codex"
+        assert cfg.model is None
+
+    def test_valid_claude_variant_loads_runtime_family_and_model(self, tmp_path):
+        path = _write(tmp_path, "claude-haiku", {
+            "name": "claude-haiku",
+            "runtime_family": "claude",
+            "binary": "claude",
+            "agent_config_env": "CLAUDE_CONFIG_DIR",
+            "session_log_dir": "${CLAUDE_CONFIG_DIR}/projects",
+            "session_log_glob": "**/*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+            "model": "claude-haiku-4-5-20251001",
+        })
+
+        cfg = load_coding_agent_config(path)
+
+        assert cfg.name == "claude-haiku"
+        assert cfg.runtime_family == "claude"
+        assert cfg.model == "claude-haiku-4-5-20251001"
+
+    def test_file_stem_must_match_name(self, tmp_path):
+        path = _write(tmp_path, "claude-haiku", {
+            "name": "claude",
+            "runtime_family": "claude",
+            "binary": "claude",
+            "agent_config_env": "CLAUDE_CONFIG_DIR",
+            "session_log_dir": "${CLAUDE_CONFIG_DIR}/projects",
+            "session_log_glob": "**/*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+            "model": "claude-haiku-4-5-20251001",
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="name must match file stem"):
+            load_coding_agent_config(path)
+
+    def test_unknown_runtime_family_raises(self, tmp_path):
+        path = _write(tmp_path, "strange", {
+            "name": "strange",
+            "runtime_family": "strange",
+            "binary": "strange",
+            "agent_config_env": "STRANGE_HOME",
+            "session_log_dir": "/tmp/strange",
+            "session_log_glob": "*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="unknown runtime_family"):
+            load_coding_agent_config(path)
+
+    def test_claude_family_requires_model(self, tmp_path):
+        path = _write(tmp_path, "claude-haiku", {
+            "name": "claude-haiku",
+            "runtime_family": "claude",
+            "binary": "claude",
+            "agent_config_env": "CLAUDE_CONFIG_DIR",
+            "session_log_dir": "${CLAUDE_CONFIG_DIR}/projects",
+            "session_log_glob": "**/*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="model"):
+            load_coding_agent_config(path)
+
+    def test_model_must_not_be_blank(self, tmp_path):
+        path = _write(tmp_path, "claude-haiku", {
+            "name": "claude-haiku",
+            "runtime_family": "claude",
+            "binary": "claude",
+            "agent_config_env": "CLAUDE_CONFIG_DIR",
+            "session_log_dir": "${CLAUDE_CONFIG_DIR}/projects",
+            "session_log_glob": "**/*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+            "model": " ",
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="model must not be blank"):
+            load_coding_agent_config(path)
+
+    def test_model_must_be_string_when_provided(self, tmp_path):
+        path = _write(tmp_path, "codex", {
+            "name": "codex",
+            "binary": "codex",
+            "agent_config_env": "CODEX_HOME",
+            "session_log_dir": "${CODEX_HOME}/sessions",
+            "session_log_glob": "*.jsonl",
+            "normalizer": "claude",
+            "required_env": [],
+            "model": 123,
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="model must be a string"):
+            load_coding_agent_config(path)
+
+    def test_non_claude_variant_is_rejected_in_v1(self, tmp_path):
+        path = _write(tmp_path, "opencode-claude", {
+            "name": "opencode-claude",
+            "runtime_family": "opencode",
+            "binary": "opencode",
+            "agent_config_env": "OPENCODE_QUORUM_HOME",
+            "session_log_dir": "${OPENCODE_QUORUM_HOME}/sessions",
+            "session_log_glob": "*.json",
+            "normalizer": "opencode",
+            "required_env": [],
+            "model": "anthropic/claude-sonnet-4-6",
+        })
+
+        with pytest.raises(CodingAgentConfigError, match="non-Claude variants"):
+            load_coding_agent_config(path)
+
     def test_resolve_session_log_dir_substitutes_agent_config(self, tmp_path):
         path = _write(tmp_path, "claude", {
             "name": "claude",
@@ -201,6 +369,7 @@ class TestLoadCodingAgentConfig:
             "session_log_glob": "*.jsonl",
             "normalizer": "claude",
             "required_env": [],
+            "model": "opus",
         })
         cfg = load_coding_agent_config(path)
         resolved = cfg.resolve_session_log_dir(Path("/tmp/agent-cfg"))
@@ -208,10 +377,10 @@ class TestLoadCodingAgentConfig:
 
     def test_resolve_session_log_dir_literal_path_unchanged(self, tmp_path):
         # No placeholder: resolve is a no-op aside from expanduser.
-        path = _write(tmp_path, "weirdo", {
-            "name": "weirdo",
-            "binary": "weirdo",
-            "agent_config_env": "WEIRDO_HOME",
+        path = _write(tmp_path, "codex", {
+            "name": "codex",
+            "binary": "codex",
+            "agent_config_env": "CODEX_HOME",
             "session_log_dir": "~/literal/path",
             "session_log_glob": "*.jsonl",
             "normalizer": "claude",
@@ -231,6 +400,7 @@ class TestLoadCodingAgentConfig:
             "session_log_glob": "*.jsonl",
             "normalizer": "claude",
             "required_env": ["ANTHROPIC_API_KEY"],
+            "model": "opus",
         })
         with pytest.raises(CodingAgentConfigError, match="ANTHROPIC_API_KEY"):
             load_coding_agent_config(path)
@@ -248,10 +418,10 @@ class TestLoadCodingAgentConfig:
             load_coding_agent_config(path)
 
     def test_unknown_normalizer_raises(self, tmp_path, monkeypatch):
-        path = _write(tmp_path, "weirdo", {
-            "name": "weirdo",
-            "binary": "weirdo",
-            "agent_config_env": "WEIRDO_HOME",
+        path = _write(tmp_path, "codex", {
+            "name": "codex",
+            "binary": "codex",
+            "agent_config_env": "CODEX_HOME",
             "session_log_dir": "/tmp",
             "session_log_glob": "*.jsonl",
             "normalizer": "weirdo",
@@ -270,6 +440,7 @@ class TestLoadCodingAgentConfig:
             "normalizer": "claude",
             "required_env": [],
             "max_time": "5m",
+            "model": "opus",
         })
         cfg = load_coding_agent_config(path)
         assert cfg.max_time == "5m"

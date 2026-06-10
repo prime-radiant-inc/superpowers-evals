@@ -73,18 +73,20 @@ def _fake_copilot_bin(bin_dir: Path, output_path: Path) -> None:
 
 def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
     coding_agents_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "name": name,
+        "binary": "echo",  # we never actually run the real CLI in tests
+        "agent_config_env": "CLAUDE_CONFIG_DIR",
+        "session_log_dir": str(session_log_dir),
+        "session_log_glob": "*.jsonl",
+        "normalizer": "claude",
+        "required_env": [],
+    }
+    if name in {"claude", "claude-haiku"}:
+        doc["runtime_family"] = "claude"
+        doc["model"] = "opus" if name == "claude" else "claude-haiku-4-5-20251001"
     (coding_agents_dir / f"{name}.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "name": name,
-                "binary": "echo",  # we never actually run the real CLI in tests
-                "agent_config_env": "CLAUDE_CONFIG_DIR",
-                "session_log_dir": str(session_log_dir),
-                "session_log_glob": "*.jsonl",
-                "normalizer": "claude",
-                "required_env": [],
-            }
-        )
+        yaml.safe_dump(doc)
     )
 
 
@@ -255,15 +257,22 @@ def _empty_skeleton(tmp_path: Path) -> Path:
     return p
 
 
-def _tcfg(name: str = "claude") -> CodingAgentConfig:
+def _tcfg(
+    name: str = "claude",
+    runtime_family: str | None = None,
+    model: str | None = None,
+) -> CodingAgentConfig:
+    family = runtime_family or name
     return CodingAgentConfig(
         name=name,
+        runtime_family=family,
         binary="echo",
         agent_config_env="CLAUDE_CONFIG_DIR",
         session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
         session_log_glob="*.jsonl",
         normalizer="claude",
         required_env=(),
+        model=model if model is not None else ("opus" if family == "claude" else None),
         max_time=None,
         project_prompt=None,
     )
@@ -272,12 +281,14 @@ def _tcfg(name: str = "claude") -> CodingAgentConfig:
 def _antigravity_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="antigravity",
+        runtime_family="antigravity",
         binary="agy",
         agent_config_env="ANTIGRAVITY_CONFIG_DIR",
         session_log_dir="${ANTIGRAVITY_CONFIG_DIR}/.gemini/antigravity-cli/brain",
         session_log_glob="**/transcript.jsonl",
         normalizer="antigravity",
         required_env=(),
+        model=None,
         max_time=None,
         project_prompt=None,
     )
@@ -286,12 +297,14 @@ def _antigravity_tcfg() -> CodingAgentConfig:
 def _gemini_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="gemini",
+        runtime_family="gemini",
         binary="gemini",
         agent_config_env="GEMINI_CLI_HOME",
         session_log_dir="${GEMINI_CLI_HOME}/.gemini/tmp",
         session_log_glob="**/chats/**/*.json*",
         normalizer="gemini",
         required_env=(),
+        model=None,
         max_time=None,
         project_prompt=None,
     )
@@ -300,12 +313,14 @@ def _gemini_tcfg() -> CodingAgentConfig:
 def _opencode_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="opencode",
+        runtime_family="opencode",
         binary="opencode",
         agent_config_env="OPENCODE_QUORUM_HOME",
         session_log_dir="${OPENCODE_QUORUM_HOME}/.quorum/session-exports",
         session_log_glob="[0-9]*-ses_*.json",
         normalizer="opencode",
         required_env=("SUPERPOWERS_ROOT",),
+        model=None,
         max_time="10m",
         project_prompt=None,
     )
@@ -314,12 +329,14 @@ def _opencode_tcfg() -> CodingAgentConfig:
 def _pi_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="pi",
+        runtime_family="pi",
         binary="pi",
         agent_config_env="PI_CODING_AGENT_DIR",
         session_log_dir="${PI_CODING_AGENT_DIR}/sessions",
         session_log_glob="*.jsonl",
         normalizer="pi",
         required_env=("SUPERPOWERS_ROOT", "PI_PROVIDER", "PI_MODEL", "PI_API_KEY"),
+        model=None,
         max_time="10m",
         project_prompt=None,
     )
@@ -328,12 +345,14 @@ def _pi_tcfg() -> CodingAgentConfig:
 def _copilot_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="copilot",
+        runtime_family="copilot",
         binary="copilot",
         agent_config_env="COPILOT_HOME",
         session_log_dir="${COPILOT_HOME}/session-state",
         session_log_glob="**/events.jsonl",
         normalizer="copilot",
         required_env=(),
+        model=None,
         max_time=None,
         project_prompt=None,
     )
@@ -373,12 +392,14 @@ def _make_superpowers_pi_root(path: Path) -> Path:
 def _kimi_tcfg() -> CodingAgentConfig:
     return CodingAgentConfig(
         name="kimi",
+        runtime_family="kimi",
         binary="kimi",
         agent_config_env="KIMI_CODE_HOME",
         session_log_dir="${KIMI_CODE_HOME}/sessions",
         session_log_glob="**/wire.jsonl",
         normalizer="kimi",
         required_env=(),
+        model=None,
         max_time=None,
         project_prompt=None,
     )
@@ -1181,16 +1202,64 @@ class TestSeedAgentConfigDir:
         entry = cfg["projects"][str(workdir.resolve())]
         assert entry["hasTrustDialogAccepted"] is True
 
-    def test_claude_target_writes_api_key_env_file_when_required(self, tmp_path, monkeypatch):
+    def test_claude_family_variant_uses_claude_skeleton_and_auth(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        skel = tmp_path / "claude-home-skeleton"
+        skel.mkdir()
+        (skel / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True}))
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        dest = tmp_path / "agent-config"
+        cfg = CodingAgentConfig(
+            name="claude-haiku",
+            runtime_family="claude",
+            binary="echo",
+            agent_config_env="CLAUDE_CONFIG_DIR",
+            session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
+            session_log_glob="**/*.jsonl",
+            normalizer="claude",
+            required_env=("ANTHROPIC_API_KEY",),
+            model="claude-haiku-4-5-20251001",
+            max_time=None,
+            project_prompt=None,
+        )
+
+        runtime = _seed_agent_config_dir(
+            cfg,
+            tmp_path,
+            dest,
+            workdir,
+            run_dir=tmp_path / "run-dir",
+        )
+
+        env_path = dest / CLAUDE_ENV_FILE_NAME
+        claude_config = json.loads((dest / ".claude.json").read_text())
+        assert claude_config["hasCompletedOnboarding"] is True
+        assert claude_config["projects"][str(workdir.resolve())]["hasTrustDialogAccepted"] is True
+        assert claude_config["customApiKeyResponses"]["approved"] == ["sk-test-key"]
+        assert env_path.read_text() == "ANTHROPIC_API_KEY='sk-test-key'\n"
+        assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+        assert runtime.substitutions["$CLAUDE_ENV_FILE"] == str(env_path)
+        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(
+            str(env_path)
+        )
+
+    def test_claude_target_writes_api_key_env_file_when_required(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         cfg = CodingAgentConfig(
             name="claude",
+            runtime_family="claude",
             binary="claude",
             agent_config_env="CLAUDE_CONFIG_DIR",
             session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
             session_log_glob="**/*.jsonl",
             normalizer="claude",
             required_env=("ANTHROPIC_API_KEY",),
+            model="opus",
             max_time=None,
             project_prompt=None,
         )
@@ -1217,12 +1286,14 @@ class TestSeedAgentConfigDir:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         cfg = CodingAgentConfig(
             name="claude",
+            runtime_family="claude",
             binary="claude",
             agent_config_env="CLAUDE_CONFIG_DIR",
             session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
             session_log_glob="**/*.jsonl",
             normalizer="claude",
             required_env=("ANTHROPIC_API_KEY",),
+            model="opus",
             max_time=None,
             project_prompt=None,
         )
@@ -2771,6 +2842,51 @@ class TestAntigravityProjectMarkerExclusion:
 
 
 class TestRunScenario:
+    def test_claude_family_missing_binary_fails_before_writing_env(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda _binary: None)
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir(parents=True)
+        (coding_agents_dir / "claude-haiku.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "claude-haiku",
+                    "runtime_family": "claude",
+                    "binary": "claude",
+                    "agent_config_env": "CLAUDE_CONFIG_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "claude",
+                    "required_env": ["ANTHROPIC_API_KEY"],
+                    "model": "claude-haiku-4-5-20251001",
+                }
+            )
+        )
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        with patch("quorum.runner.invoke_gauntlet") as mock_g:
+            run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude-haiku",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        mock_g.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+        assert "Claude Code is not on PATH" in verdict.error.message
+        assert not (run_dir / "coding-agent-config" / CLAUDE_ENV_FILE_NAME).exists()
+
     def test_happy_path(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"
         scenarios_dir = tmp_path / "scenarios"
@@ -4190,6 +4306,8 @@ class TestRunScenario:
         assert 'source "$CLAUDE_ENV_FILE"' in content
         assert "ANTHROPIC_API_KEY=" in content
         assert "claude --dangerously-skip-permissions" in content
+        assert '--model "$CLAUDE_MODEL"' in content
+        assert "--model opus" not in content
         assert "--bare" not in content
 
     def test_checked_in_claude_launcher_strips_nested_claude_session_env(self):
@@ -4220,12 +4338,14 @@ class TestRunScenario:
             yaml.safe_dump(
                 {
                     "name": "claude",
+                    "runtime_family": "claude",
                     "binary": "echo",
                     "agent_config_env": "CLAUDE_CONFIG_DIR",
                     "session_log_dir": str(session_log_dir),
                     "session_log_glob": "*.jsonl",
                     "normalizer": "claude",
                     "required_env": ["ANTHROPIC_API_KEY"],
+                    "model": "opus",
                 }
             )
         )
@@ -4256,6 +4376,121 @@ class TestRunScenario:
         assert "$CLAUDE_ENV_FILE" not in content
         assert str(rd / "coding-agent-config" / CLAUDE_ENV_FILE_NAME) in content
         assert (rd / "coding-agent-config" / CLAUDE_ENV_FILE_NAME).is_file()
+
+    def test_claude_family_variant_uses_shared_context_model_and_project_prompt(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda binary: f"/bin/{binary}")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir()
+        (coding_agents_dir / "claude-haiku.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "claude-haiku",
+                    "runtime_family": "claude",
+                    "binary": "claude",
+                    "agent_config_env": "CLAUDE_CONFIG_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "claude",
+                    "required_env": ["ANTHROPIC_API_KEY"],
+                    "model": "claude-haiku-4-5-20251001",
+                    "project_prompt": "claude.project-prompt.md",
+                }
+            )
+        )
+        shared_prompt = coding_agents_dir / "claude.project-prompt.md"
+        shared_prompt.write_text("shared claude prompt")
+        claude_context = coding_agents_dir / "claude-context"
+        claude_context.mkdir()
+        (claude_context / "HOWTO.md").write_text(
+            'run "$QUORUM_LAUNCH_AGENT" with model "$CLAUDE_MODEL"\n'
+        )
+        (claude_context / "launch-agent").write_text(
+            "#!/usr/bin/env bash\n"
+            'exec "$QUORUM_LAUNCH_AGENT" --model "$CLAUDE_MODEL"\n'
+        )
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+        captured: dict[str, object] = {}
+
+        def stub_invoke(*, run_dir, project_prompt, coding_agent, **kwargs):
+            captured["project_prompt"] = project_prompt
+            captured["coding_agent"] = coding_agent
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            (session_log_dir / "session.jsonl").write_text(_claude_log_line())
+            return GauntletResult(status="pass")
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=stub_invoke):
+            run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude-haiku",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        context_dir = run_dir / "gauntlet-agent" / "context"
+        howto = (context_dir / "HOWTO.md").read_text()
+        launcher = (context_dir / "launch-agent").read_text()
+        assert verdict.final == "pass"
+        assert "claude-haiku-4-5-20251001" in howto
+        assert "claude-haiku-4-5-20251001" in launcher
+        assert "$CLAUDE_MODEL" not in howto
+        assert "$CLAUDE_MODEL" not in launcher
+        assert not (coding_agents_dir / "claude-haiku-context").exists()
+        assert captured["project_prompt"] == shared_prompt.resolve()
+        assert captured["coding_agent"] == "claude-haiku"
+
+    def test_claude_family_missing_shared_context_is_setup_indeterminate(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda binary: f"/bin/{binary}")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir()
+        (coding_agents_dir / "claude-haiku.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "claude-haiku",
+                    "runtime_family": "claude",
+                    "binary": "claude",
+                    "agent_config_env": "CLAUDE_CONFIG_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "claude",
+                    "required_env": ["ANTHROPIC_API_KEY"],
+                    "model": "claude-haiku-4-5-20251001",
+                }
+            )
+        )
+        sd = _make_scenario(scenarios_dir, "x")
+        out_root = tmp_path / "results"
+
+        with patch("quorum.runner.invoke_gauntlet") as mock_g:
+            run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude-haiku",
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                skeleton_root=_empty_skeleton(tmp_path),
+            )
+
+        mock_g.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+        assert "claude-context" in verdict.error.message
+        assert (run_dir / "verdict.json").exists()
 
     def test_howto_references_resolved_launch_agent_path(self, tmp_path):
         # $QUORUM_LAUNCH_AGENT in a HOWTO resolves to the shim's absolute path,
@@ -4486,6 +4721,7 @@ class TestRunScenario:
             yaml.safe_dump(
                 {
                     "name": "claude",
+                    "runtime_family": "claude",
                     "binary": "echo",
                     "agent_config_env": "CLAUDE_CONFIG_DIR",
                     "session_log_dir": str(session_log_dir),
@@ -4493,6 +4729,7 @@ class TestRunScenario:
                     "normalizer": "claude",
                     "required_env": [],
                     "max_time": max_time,
+                    "model": "opus",
                 }
             )
         )

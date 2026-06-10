@@ -22,7 +22,7 @@ from quorum.runner import run_scenario
 
 def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
     coding_agents_dir.mkdir(parents=True, exist_ok=True)
-    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump({
+    doc = {
         "name": name,
         "binary": "echo",
         "agent_config_env": "CLAUDE_CONFIG_DIR",
@@ -30,7 +30,11 @@ def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path
         "session_log_glob": "*.jsonl",
         "normalizer": "claude",
         "required_env": [],
-    }))
+    }
+    if name in {"claude", "claude-haiku"}:
+        doc["runtime_family"] = "claude"
+        doc["model"] = "opus" if name == "claude" else "claude-haiku-4-5-20251001"
+    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump(doc))
 
 
 def _exec(path: Path, body: str) -> None:
@@ -63,7 +67,8 @@ def _run(
     session_log_dir.mkdir(parents=True, exist_ok=True)
     _make_coding_agent(coding_agents_dir, coding_agent, session_log_dir)
 
-    (coding_agents_dir / f"{coding_agent}-context").mkdir(parents=True, exist_ok=True)
+    context_name = "claude" if coding_agent == "claude-haiku" else coding_agent
+    (coding_agents_dir / f"{context_name}-context").mkdir(parents=True, exist_ok=True)
 
     skeleton_root = tmp_path / "fixtures"
     skeleton_root.mkdir(exist_ok=True)
@@ -173,6 +178,53 @@ class TestCodingAgentGating:
             _run(tmp_path, scen, coding_agent="claude")
 
         assert invoked, "invoke_gauntlet should have been called for a compatible agent"
+
+    def test_claude_directive_does_not_include_claude_haiku(self, tmp_path):
+        scen = _scenario(
+            tmp_path / "s",
+            checks_body="# coding-agents: claude\npre() { :; }\npost() { :; }\n",
+        )
+
+        with patch("quorum.runner.invoke_gauntlet") as mock_g:
+            verdict = _run(tmp_path, scen, coding_agent="claude-haiku")
+
+        mock_g.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert "requires coding-agents" in verdict.final_reason
+
+    def test_haiku_directive_proceeds_for_claude_haiku(self, tmp_path):
+        scen = _scenario(
+            tmp_path / "s",
+            checks_body="# coding-agents: claude-haiku\npre() { :; }\npost() { :; }\n",
+        )
+        invoked = []
+
+        def fake_gauntlet(*, run_dir, **kwargs):
+            invoked.append(True)
+            (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+            return "pass"
+
+        fake_verdict = FinalVerdict(final="pass")
+        with (
+            patch("quorum.runner.invoke_gauntlet", side_effect=fake_gauntlet),
+            patch("quorum.runner.compose", return_value=fake_verdict),
+        ):
+            _run(tmp_path, scen, coding_agent="claude-haiku")
+
+        assert invoked
+
+    def test_haiku_directive_does_not_include_claude(self, tmp_path):
+        scen = _scenario(
+            tmp_path / "s",
+            checks_body="# coding-agents: claude-haiku\npre() { :; }\npost() { :; }\n",
+        )
+
+        with patch("quorum.runner.invoke_gauntlet") as mock_g:
+            verdict = _run(tmp_path, scen, coding_agent="claude")
+
+        mock_g.assert_not_called()
+        assert verdict.final == "indeterminate"
+        assert "requires coding-agents" in verdict.final_reason
 
     def test_no_directive_proceeds_for_any_agent(self, tmp_path):
         """Absent directive → compatible with every Coding-Agent."""

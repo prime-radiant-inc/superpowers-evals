@@ -20,7 +20,7 @@ from quorum.runner import run_scenario
 
 def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
     coding_agents_dir.mkdir(parents=True, exist_ok=True)
-    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump({
+    doc = {
         "name": name,
         "binary": "echo",
         "agent_config_env": "CLAUDE_CONFIG_DIR",
@@ -28,7 +28,11 @@ def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path
         "session_log_glob": "*.jsonl",
         "normalizer": "claude",
         "required_env": [],
-    }))
+    }
+    if name in {"claude", "claude-haiku"}:
+        doc["runtime_family"] = "claude"
+        doc["model"] = "opus" if name == "claude" else "claude-haiku-4-5-20251001"
+    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump(doc))
 
 
 def _exec(path: Path, body: str) -> None:

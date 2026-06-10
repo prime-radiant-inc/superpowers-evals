@@ -196,6 +196,16 @@ class RunnerError(RuntimeError):
         self.stage = stage
 
 
+def _preflight_coding_agent_binary(tcfg: CodingAgentConfig) -> None:
+    if tcfg.runtime_family != "claude":
+        return
+    if shutil.which(tcfg.binary) is None:
+        raise RunnerError(
+            f"Claude Code is not on PATH: {tcfg.binary!r}",
+            stage="setup",
+        )
+
+
 @dataclasses.dataclass(frozen=True)
 class AgentRuntime:
     env_file: Path | None = None
@@ -1314,7 +1324,7 @@ def _seed_agent_config_dir(
 ) -> AgentRuntime:
     """Allocate a fresh per-run agent-config dir.
 
-    If skeleton_root/skeleton-<coding-agent>-home/ exists, copy it; otherwise
+    If skeleton_root/<runtime_family>-home-skeleton/ exists, copy it; otherwise
     mkdir empty. For claude, then inject hasTrustDialogAccepted for the
     workdir's canonical path (claude keys per-project trust by
     process.cwd(), which is symlink-resolved on macOS) so the workspace-
@@ -1333,13 +1343,14 @@ def _seed_agent_config_dir(
     registering the local Superpowers checkout as the only enabled plugin.
     """
     runtime = AgentRuntime()
-    skeleton = skeleton_root / f"{coding_agent.name}-home-skeleton"
+    runtime_family = coding_agent.runtime_family
+    skeleton = skeleton_root / f"{runtime_family}-home-skeleton"
     seeded = skeleton.exists()
     if seeded:
         shutil.copytree(skeleton, dest)
     else:
         dest.mkdir(parents=True)
-    if coding_agent.name == "claude" and seeded:
+    if runtime_family == "claude" and seeded:
         config_path = dest / ".claude.json"
         config = json.loads(config_path.read_text())
         config.setdefault("projects", {})[str(workdir.resolve())] = {
@@ -1349,7 +1360,7 @@ def _seed_agent_config_dir(
             "hasClaudeMdExternalIncludesWarningShown": True,
         }
         config_path.write_text(json.dumps(config))
-    if coding_agent.name == "claude" and "ANTHROPIC_API_KEY" in coding_agent.required_env:
+    if runtime_family == "claude" and "ANTHROPIC_API_KEY" in coding_agent.required_env:
         api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth")
         env_file = _write_claude_env_file(dest)
         _approve_claude_api_key(dest / ".claude.json", api_key)
@@ -1655,6 +1666,9 @@ def _populate_context_dir(
     coding_agent: str,
     run_dir: Path,
     substitutions: dict[str, str] | None = None,
+    *,
+    required: bool = False,
+    forbidden_placeholders: tuple[str, ...] = (),
 ) -> None:
     """Copy per-coding-agent HOWTOs into <run-dir>/gauntlet-agent/context/.
 
@@ -1677,12 +1691,35 @@ def _populate_context_dir(
     dst.mkdir(parents=True, exist_ok=True)
     subs = substitutions or {}
     if not src.exists():
+        if required:
+            raise RunnerError(f"required context directory missing: {src}", stage="setup")
         return
     for entry in src.iterdir():
         if entry.is_file():
             _copy_with_substitutions(entry, dst / entry.name, subs)
         elif entry.is_dir():
             _copytree_with_substitutions(entry, dst / entry.name, subs)
+    if forbidden_placeholders:
+        _raise_if_context_contains_placeholders(dst, forbidden_placeholders)
+
+
+def _raise_if_context_contains_placeholders(
+    context_dir: Path,
+    forbidden_placeholders: tuple[str, ...],
+) -> None:
+    for path in context_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for placeholder in forbidden_placeholders:
+            if placeholder in content:
+                raise RunnerError(
+                    f"context file contains unresolved placeholder {placeholder!r}: {path}",
+                    stage="setup",
+                )
 
 
 def _copy_with_substitutions(src: Path, dst: Path, subs: dict[str, str]) -> None:
@@ -1760,6 +1797,7 @@ def _run_scenario_inner(
             run_dir,
             final_reason=f"requires coding-agents: {', '.join(allowed)}",
         )
+    _preflight_coding_agent_binary(tcfg)
 
     # 3. Create workdir (inside run_dir) + per-run coding-agent-config dir.
     #    Both live inside run_dir so they persist with the rest of the
@@ -1873,11 +1911,17 @@ def _run_scenario_inner(
             substitutions["$QUORUM_COPILOT_SESSION_ID"] = copilot_provisioning.session_id
         if tcfg.name == "pi":
             substitutions["$PI_ENV_FILE"] = str(agent_config_dir / "pi.env")
+        if tcfg.runtime_family == "claude":
+            substitutions["$CLAUDE_MODEL"] = tcfg.model or ""
         _populate_context_dir(
             coding_agents_dir,
-            coding_agent,
+            tcfg.runtime_family,
             run_dir,
             substitutions=substitutions,
+            required=tcfg.runtime_family == "claude",
+            forbidden_placeholders=(
+                ("$CLAUDE_MODEL",) if tcfg.runtime_family == "claude" else ()
+            ),
         )
 
         # 7. Snapshot session-log dir.

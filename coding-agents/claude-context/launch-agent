@@ -16,8 +16,8 @@
 # target, so the run is a loud indeterminate(stage=capture), never a silent pass.
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus
+#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 source "$CLAUDE_ENV_FILE"
-exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model opus "$@"
+exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"

@@ -25,6 +25,9 @@ import yaml
 from quorum.normalizers import NORMALIZERS
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+KNOWN_RUNTIME_FAMILIES = frozenset(
+    {"antigravity", "claude", "codex", "copilot", "gemini", "kimi", "opencode", "pi"}
+)
 
 
 class CodingAgentConfigError(ValueError):
@@ -34,12 +37,14 @@ class CodingAgentConfigError(ValueError):
 @dataclass(frozen=True)
 class CodingAgentConfig:
     name: str
+    runtime_family: str
     binary: str
     agent_config_env: str
     session_log_dir: str  # template, e.g. "${CLAUDE_CONFIG_DIR}/projects"
     session_log_glob: str
     normalizer: str
     required_env: tuple[str, ...]
+    model: str | None
     max_time: str | None
     project_prompt: Path | None
 
@@ -88,6 +93,31 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
     if missing:
         raise CodingAgentConfigError(f"{path}: missing required fields: {missing}")
 
+    name = raw["name"]
+    if name != path.stem:
+        raise CodingAgentConfigError(
+            f"{path}: name must match file stem; got name {name!r}"
+        )
+
+    runtime_family = raw.get("runtime_family", name)
+    if runtime_family not in KNOWN_RUNTIME_FAMILIES:
+        raise CodingAgentConfigError(
+            f"{path}: unknown runtime_family {runtime_family!r}; "
+            f"known: {sorted(KNOWN_RUNTIME_FAMILIES)}"
+        )
+
+    model = raw.get("model")
+    if model is not None and not isinstance(model, str):
+        raise CodingAgentConfigError(f"{path}: model must be a string")
+    if runtime_family == "claude" and not isinstance(model, str):
+        raise CodingAgentConfigError(f"{path}: claude runtime_family requires model")
+    if isinstance(model, str) and not model.strip():
+        raise CodingAgentConfigError(f"{path}: model must not be blank")
+    if runtime_family != "claude" and runtime_family != name:
+        raise CodingAgentConfigError(
+            f"{path}: non-Claude variants are not supported in v1"
+        )
+
     required_env = tuple(raw["required_env"])
     missing_env = [v for v in required_env if not os.environ.get(v)]
     if missing_env:
@@ -112,13 +142,15 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
         project_prompt = candidate
 
     return CodingAgentConfig(
-        name=raw["name"],
+        name=name,
+        runtime_family=runtime_family,
         binary=raw["binary"],
         agent_config_env=raw["agent_config_env"],
         session_log_dir=raw["session_log_dir"],
         session_log_glob=raw["session_log_glob"],
         normalizer=normalizer,
         required_env=required_env,
+        model=model,
         max_time=raw.get("max_time"),
         project_prompt=project_prompt,
     )

@@ -1,4 +1,4 @@
-name: claude
+name: claude-haiku
 runtime_family: claude
 binary: claude
 agent_config_env: CLAUDE_CONFIG_DIR
@@ -10,4 +10,4 @@ required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
 project_prompt: claude.project-prompt.md
-model: opus
+model: claude-haiku-4-5-20251001
