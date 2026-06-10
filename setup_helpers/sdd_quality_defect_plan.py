@@ -3,9 +3,10 @@
 Scaffolds a tiny Node project with a 2-task plan whose Task 2
 implementation snippet duplicates Task 1's formatting logic verbatim.
 The duplication is spec-compliant — the requirements only describe
-behavior — so the spec compliance reviewer should pass it. The test
-measures whether the per-task code quality reviewer catches the DRY
-violation and forces a refactor in the review-fix loop.
+behavior — so the spec compliance reviewer should pass it. The plan also
+mandates an assertion-free smoke test. The scenario measures whether the
+quality review flags the duplication openly (severity is the reviewer's
+call) and treats the assertion-free test as a must-fix finding.
 """
 
 from __future__ import annotations
@@ -93,6 +94,9 @@ export function formatAdminReport(admin) {
 - the result contains `Report for Grace <grace@example.com>` for that admin
 - the result contains `Last login: 2026-06-01`
 - the result starts and ends with the 40-char banner
+- a smoke test named `formatAdminReport does not throw for empty lastLogin`
+  that just calls `formatAdminReport({name: "Empty", email: "e@example.com",
+  lastLogin: ""})` and asserts nothing — it exists only to exercise the call
 
 **Verification:** `npm test`
 """

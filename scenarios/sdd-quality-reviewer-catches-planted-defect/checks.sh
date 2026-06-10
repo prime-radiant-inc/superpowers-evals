@@ -5,6 +5,7 @@ pre() {
     file-exists 'docs/superpowers/plans/report-plan.md'
     file-contains 'docs/superpowers/plans/report-plan.md' 'formatAdminReport'
     file-contains 'docs/superpowers/plans/report-plan.md' 'repeat\(40\)'
+    file-contains 'docs/superpowers/plans/report-plan.md' 'asserts nothing'
 }
 
 post() {
@@ -13,5 +14,5 @@ post() {
     command-succeeds 'npm test'
     file-contains 'src/report.js' 'export function formatUserReport'
     file-contains 'src/report.js' 'export function formatAdminReport'
-    command-succeeds 'test "$(grep -c "repeat(40)" src/report.js)" -le 1'
+    command-succeeds 'grep -A4 "empty lastLogin" test/report.test.js | grep -q assert'
 }
