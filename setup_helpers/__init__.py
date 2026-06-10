@@ -1,4 +1,4 @@
-from setup_helpers.base import create_base_repo
+from setup_helpers.base import create_base_repo, record_head
 from setup_helpers.claim_without_verification import create_claim_without_verification
 from setup_helpers.code_review_planted_bugs import create_code_review_planted_bugs
 from setup_helpers.cost_checkbox_page import create_cost_checkbox_page
@@ -57,4 +57,5 @@ HELPER_REGISTRY = {
     "create_cost_clean_repo": create_cost_clean_repo,
     "create_cost_trivial_plan": create_cost_trivial_plan,
     "create_cost_large_files": create_cost_large_files,
+    "record_head": record_head,
 }

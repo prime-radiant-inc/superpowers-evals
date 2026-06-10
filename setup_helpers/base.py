@@ -66,6 +66,22 @@ def create_base_repo(workdir: Path, template_dir: Path) -> None:
     _git(["git", "commit", "-m", "add entry point"], cwd=workdir)
 
 
+def record_head(workdir: Path) -> None:
+    """Record HEAD into the checkout's git dir for assert-checkout-clean.
+
+    bin/assert-checkout-clean compares HEAD against this file (when
+    present) to prove a checkout's HEAD did not move during a run.
+    """
+    workdir = Path(workdir)
+    git_dir = (
+        _git(["git", "rev-parse", "--absolute-git-dir"], cwd=workdir)
+        .stdout.decode()
+        .strip()
+    )
+    head = _git(["git", "rev-parse", "HEAD"], cwd=workdir).stdout.decode().strip()
+    (Path(git_dir) / "quorum-recorded-head").write_text(head + "\n")
+
+
 def _write(root: Path, rel: str, content: str) -> None:
     """Write content to root/rel, creating parent directories as needed."""
     path = root / rel
