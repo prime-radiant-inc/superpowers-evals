@@ -67,6 +67,7 @@ def create_base_repo(workdir: Path, template_dir: Path) -> None:
 
 
 def _write(root: Path, rel: str, content: str) -> None:
+    """Write content to root/rel, creating parent directories as needed."""
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -79,8 +80,6 @@ def provision_venv(workdir: Path) -> None:
     back to `python -m venv` + `pip install` otherwise. Installs from the
     workdir so the package is importable as `textkit`.
     """
-    import shutil
-
     venv_dir = workdir / ".venv"
     uv_available = shutil.which("uv") is not None
 
