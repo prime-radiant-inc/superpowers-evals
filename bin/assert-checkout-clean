@@ -9,7 +9,10 @@ fi
 
 # .quorum-launch-cwd is harness plumbing (the launch-cwd sentinel written
 # by setup.sh into the primary workdir), not agent drift — ignore it.
-dirty=$(git -C "$path" status --porcelain | grep -vE '^\?\? \.quorum-launch-cwd$' || true)
+if ! status_out=$(git -C "$path" status --porcelain 2>/dev/null); then
+    record_fail "git status failed at $path"; exit 1
+fi
+dirty=$(printf '%s' "$status_out" | grep -vE '^\?\? \.quorum-launch-cwd$' || true)
 if [ -n "$dirty" ]; then
     record_fail "tree at $path not clean: $(printf '%s' "$dirty" | head -3 | tr '\n' ' ')"; exit 1
 fi
