@@ -49,7 +49,7 @@ from quorum import agy_creds
 from quorum.agy_teardown import kill_run_tmux_server
 from quorum.capture import (
     capture_token_usage,
-    capture_tool_calls,
+    capture_tool_calls_with_retry,
     detect_misplaced_codex_rollouts,
     detect_misplaced_pi_sessions,
     detect_unusable_pi_sessions,
@@ -93,6 +93,15 @@ from quorum.opencode_capture import (
 from quorum.setup_step import SetupError, run_setup
 from quorum.story_meta import StoryMetaError, read_quorum_max_time
 from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
+
+# Empty-capture retry/guard (PRI-2081). A transient flush race between the
+# Coding-Agent exiting and the capture diff reading its session log used to
+# become a permanent stage="capture" indeterminate. Bounded re-diff: worst
+# case adds (attempts - 1) * delay seconds to a genuinely-empty run before
+# the per-backend diagnostic cascade proceeds unchanged.
+CAPTURE_RETRY_ATTEMPTS = 3
+CAPTURE_RETRY_DELAY_S = 2.0
+
 
 LAUNCH_CWD_SENTINEL = ".quorum-launch-cwd"
 CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
@@ -1919,9 +1928,7 @@ def _run_scenario_inner(
             run_dir,
             substitutions=substitutions,
             required=tcfg.runtime_family == "claude",
-            forbidden_placeholders=(
-                ("$CLAUDE_MODEL",) if tcfg.runtime_family == "claude" else ()
-            ),
+            forbidden_placeholders=(("$CLAUDE_MODEL",) if tcfg.runtime_family == "claude" else ()),
         )
 
         # 7. Snapshot session-log dir.
@@ -2001,14 +2008,18 @@ def _run_scenario_inner(
                     error=RunError(stage="capture", message=str(e)),
                 )
 
-        # 9. Capture + normalize logs.
-        capture_result = capture_tool_calls(
+        # 9. Capture + normalize logs, with the empty-capture retry/guard
+        #    (PRI-2081): a session log still being flushed when the diff runs
+        #    must not turn the run into a permanent capture indeterminate.
+        capture_result = capture_tool_calls_with_retry(
             log_dir=session_log_dir,
             log_glob=tcfg.session_log_glob,
             snapshot=snap,
             normalizer=tcfg.normalizer,
             run_dir=run_dir,
             launch_cwd=launch_cwd,
+            attempts=CAPTURE_RETRY_ATTEMPTS,
+            delay_s=CAPTURE_RETRY_DELAY_S,
         )
 
         # 9b. Capture token usage — measurement only, written to
