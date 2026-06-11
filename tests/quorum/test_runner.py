@@ -27,6 +27,7 @@ from quorum.runner import (
     _cleanup_agent_runtime,
     _copilot_gauntlet_env,
     _exclude_antigravity_project_marker,
+    _gemini_extension_list_shows_superpowers,
     _gemini_transcripts,
     _gh_auth_token,
     _populate_context_dir,
@@ -2101,6 +2102,27 @@ class TestSeedAgentConfigDir:
         assert excinfo.value.stage == "setup"
         assert "expected metadata files are missing" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
+
+    def test_gemini_extension_list_accepts_status_icon_prefix(self):
+        output = "✓ superpowers (5.1.0)\n ID: ext_123\n"
+
+        assert _gemini_extension_list_shows_superpowers(output)
+
+    def test_gemini_seed_accepts_extension_list_on_stderr(self, tmp_path, monkeypatch):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+        cfg = tmp_path / "cfg"
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[:3] == ["gemini", "extensions", "link"]:
+                _write_gemini_extension_metadata(cfg)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "✓ superpowers (5.1.0)\n")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_gemini_config(cfg, tmp_path / "wd")
 
     def test_gemini_seed_fails_when_provisioning_creates_transcripts(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)

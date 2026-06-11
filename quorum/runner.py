@@ -375,7 +375,7 @@ def _gemini_stderr_excerpt(stderr: str) -> str:
 
 def _gemini_extension_list_shows_superpowers(stdout: str) -> bool:
     return any(
-        re.match(r"^\s*superpowers(?:\s|\(|$)", line, flags=re.IGNORECASE)
+        re.match(r"^\s*(?:[^\w\s]+\s+)?superpowers(?:\s|\(|$)", line, flags=re.IGNORECASE)
         for line in stdout.splitlines()
     )
 
@@ -574,7 +574,7 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             f"(exit {listing.returncode}); stderr: {_gemini_stderr_excerpt(listing.stderr)}",
             stage="setup",
         )
-    if not _gemini_extension_list_shows_superpowers(listing.stdout):
+    if not _gemini_extension_list_shows_superpowers(f"{listing.stdout}\n{listing.stderr}"):
         raise RunnerError(
             "gemini extensions list did not show Superpowers extension",
             stage="setup",
