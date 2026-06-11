@@ -1,4 +1,5 @@
 name: claude-sonnet
+runtime_family: claude
 binary: claude
 agent_config_env: CLAUDE_CONFIG_DIR
 session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"
@@ -9,3 +10,4 @@ required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
 project_prompt: claude.project-prompt.md
+model: sonnet
