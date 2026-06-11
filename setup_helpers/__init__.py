@@ -17,6 +17,7 @@ from setup_helpers.sdd_real_projects import (
     scaffold_sdd_go_fractals_elicited,
     scaffold_sdd_go_fractals_stripped,
     scaffold_sdd_svelte_todo,
+    scaffold_sdd_svelte_todo_elicited,
 )
 from setup_helpers.sdd_yagni_plan import scaffold_sdd_yagni_plan
 from setup_helpers.spec_review_planted_flaws import add_flawed_spec_for_review
@@ -69,6 +70,7 @@ HELPER_REGISTRY = {
     "scaffold_sdd_go_fractals_elicited": scaffold_sdd_go_fractals_elicited,
     "scaffold_sdd_go_fractals_stripped": scaffold_sdd_go_fractals_stripped,
     "scaffold_sdd_svelte_todo": scaffold_sdd_svelte_todo,
+    "scaffold_sdd_svelte_todo_elicited": scaffold_sdd_svelte_todo_elicited,
     "scaffold_sdd_quality_defect_plan": scaffold_sdd_quality_defect_plan,
     "scaffold_sdd_yagni_plan": scaffold_sdd_yagni_plan,
     "setup_pressure_worktree_conditions": setup_pressure_worktree_conditions,
