@@ -53,6 +53,10 @@ def scaffold_sdd_go_fractals_stripped(workdir: Path) -> None:
     _scaffold_from_fixture(Path(workdir), "sdd-go-fractals-stripped")
 
 
+def scaffold_sdd_go_fractals_coarse(workdir: Path) -> None:
+    _scaffold_from_fixture(Path(workdir), "sdd-go-fractals-coarse")
+
+
 def scaffold_sdd_go_fractals_elicited(workdir: Path) -> None:
     _scaffold_from_fixture(Path(workdir), "sdd-go-fractals-elicited")
 
