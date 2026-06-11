@@ -29,3 +29,16 @@ def _obol_pricing_fixture(monkeypatch):
     (test_obol_smoke.py) delenv it explicitly.
     """
     monkeypatch.setenv("OBOL_PRICING_DIR", str(_PRICING_FIXTURE))
+
+
+@pytest.fixture(autouse=True)
+def _fast_capture_retry(monkeypatch):
+    """Keep the empty-capture retry (PRI-2081) instant in tests.
+
+    The retry logic still runs (attempts unchanged), but the inter-attempt
+    delay is zeroed so the runner tests that exercise genuinely-empty
+    captures don't pay (attempts - 1) * 2s of wall clock each.
+    """
+    import quorum.runner
+
+    monkeypatch.setattr(quorum.runner, "CAPTURE_RETRY_DELAY_S", 0.0)

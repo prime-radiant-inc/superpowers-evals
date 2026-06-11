@@ -7,6 +7,7 @@ import yaml
 from quorum.capture import (
     capture_token_usage,
     capture_tool_calls,
+    capture_tool_calls_with_retry,
     detect_kimi_cwd_mismatch,
     detect_misplaced_pi_sessions,
     detect_unusable_pi_sessions,
@@ -400,6 +401,122 @@ def _claude_session_line(input_tokens: int, output_tokens: int) -> str:
         )
         + "\n"
     )
+
+
+_PI_TOOLCALL_LINE = (
+    json.dumps(
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "name": "read", "arguments": {}}],
+            },
+        }
+    )
+    + "\n"
+)
+
+
+class TestCaptureToolCallsWithRetry:
+    """Empty-capture retry/guard (PRI-2081).
+
+    A transient capture miss — the Coding-Agent's session log still being
+    flushed when the post-drive diff+normalize runs — must not become a
+    permanent stage="capture" indeterminate. The retry re-runs the same
+    snapshot diff after a delay; the injectable sleep doubles as the
+    "log arrives late" simulation hook in these tests.
+    """
+
+    def test_no_retry_when_first_capture_has_rows(self, tmp_path):
+        log_dir = _mkdir(tmp_path / "logs")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+        (log_dir / "s.jsonl").write_text(_PI_TOOLCALL_LINE)
+        run_dir = _mkdir(tmp_path / "run")
+        sleeps: list[float] = []
+
+        result = capture_tool_calls_with_retry(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="pi",
+            run_dir=run_dir,
+            sleep=sleeps.append,
+        )
+
+        assert result.row_count == 1
+        assert result.attempts == 1
+        assert sleeps == []
+
+    def test_retries_pick_up_a_late_appearing_log(self, tmp_path):
+        log_dir = _mkdir(tmp_path / "logs")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+        run_dir = _mkdir(tmp_path / "run")
+
+        def sleep_then_flush(seconds: float) -> None:
+            (log_dir / "late.jsonl").write_text(_PI_TOOLCALL_LINE)
+
+        result = capture_tool_calls_with_retry(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="pi",
+            run_dir=run_dir,
+            sleep=sleep_then_flush,
+        )
+
+        assert result.row_count == 1
+        assert [p.name for p in result.source_logs] == ["late.jsonl"]
+        assert result.attempts == 2
+        # The artifact reflects the final (successful) capture.
+        lines = result.path.read_text().strip().splitlines()
+        assert len(lines) == 1
+
+    def test_retries_pick_up_a_late_filling_log(self, tmp_path):
+        # The file exists but normalizes to zero rows (still mid-flush);
+        # content arrives during the retry delay.
+        log_dir = _mkdir(tmp_path / "logs")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+        run_dir = _mkdir(tmp_path / "run")
+        (log_dir / "s.jsonl").write_text("")
+
+        def sleep_then_fill(seconds: float) -> None:
+            (log_dir / "s.jsonl").write_text(_PI_TOOLCALL_LINE)
+
+        result = capture_tool_calls_with_retry(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="pi",
+            run_dir=run_dir,
+            sleep=sleep_then_fill,
+        )
+
+        assert result.row_count == 1
+        assert result.attempts == 2
+
+    def test_gives_up_after_bounded_attempts(self, tmp_path):
+        log_dir = _mkdir(tmp_path / "logs")
+        snap = snapshot_dir(log_dir, "*.jsonl")
+        run_dir = _mkdir(tmp_path / "run")
+        sleeps: list[float] = []
+
+        result = capture_tool_calls_with_retry(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="pi",
+            run_dir=run_dir,
+            attempts=3,
+            delay_s=2.0,
+            sleep=sleeps.append,
+        )
+
+        assert result.row_count == 0
+        assert result.source_logs == ()
+        assert result.attempts == 3
+        assert sleeps == [2.0, 2.0]
+        # The empty artifact still exists for downstream assertions.
+        assert result.path.exists()
 
 
 class TestCaptureTokenUsage:
