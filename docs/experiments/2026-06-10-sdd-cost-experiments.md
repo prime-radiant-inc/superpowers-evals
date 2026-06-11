@@ -118,12 +118,15 @@ down despite coarser tasks. ≈ −$1.5/run mean at fractals scale.
 Open half: eliciting such plans from writing-plans guidance (validated
 by hand-crisped plan only) — that's the L1 follow-up PR's burden.
 
-### C. Sonnet controller (strict-cost L2 recon) — run 1: $6.68, judgment promising, n=2 pending
+### C. Sonnet controller (strict-cost L2 recon) — $6.68 / $8.05, judgment promising
 claude-sonnet coding-agent (`--model sonnet` launcher). Run 1: PASS all
 gates, 31 min / 12.6M / **$6.68** — half the combo band, fastest fractals
-measured. 26/26 dispatches model-explicit; haiku used for mechanical
-fixes + README (better tiering than opus controllers showed); review
-loops + omnibus final fixer + re-reviews all followed. Judgment audit
+measured. Run 2: PASS, 40.8 min / 16.1M / $8.05 — n=2 lands ~40% below
+the combo band with tokens inside it (no cheap-controller turn
+inflation). 26/26 and 31/31 dispatches model-explicit; haiku tiered in
+for mechanical fixes + README (10/31 dispatches in run 2 — heavier and
+saner tiering than opus controllers showed); review loops, per-task
+Important→fix→re-review, omnibus final fixer all followed in both runs. Judgment audit
 (narrative): caught a fixer side-effect (`go mod tidy` removed cobra)
 and re-fixed before re-review — genuine cross-check. Caveats: zero
 BLOCKED/⚠️ events arose, so the audit could not stress the escalation
