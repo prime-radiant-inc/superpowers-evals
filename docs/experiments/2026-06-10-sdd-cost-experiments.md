@@ -193,10 +193,35 @@ Storage", "TodoItem and TodoList"). ≈ −1 task ≈ −$0.6-1.00/run at this
 scale. One fractals C sample over-merged to 3 tasks — watch coarse
 review gates when combining with other guidance.
 
-### Full-run confirmation — scenario `sdd-go-fractals-elicited`
-Fixture plan = an actual C-variant output (7 tasks, GC header,
-Interfaces blocks, module `github.com/example/fractals`). 2 runs on the
-combo config (results recorded when complete).
+### Full-run results — elicited vs control plan (the attribution that matters)
+`sdd-go-fractals-elicited` (C-variant output: 7 tasks, GC header,
+Interfaces) vs `sdd-go-fractals-control-plan` (A-control output: opus
+plan, complete code, none of the new guidance). Both on combo config,
+opus controller, all gates green:
+
+| plan | coding $ | fix waves |
+|---|---|---|
+| elicited ×2 | **$6.34 / $8.49** | 1 (a go.mod version floor — the constraints header made it catchable) |
+| control ×2 | **$7.59 / $7.73** | 2-4 (incl. a real Sierpinski formula bug in the plan's code, both runs) |
+| hand-crisped ×3 (prior) | $9.51-12.65 | 5-9 |
+| combo band (hand 10-task plan) | $11.67-14.84 | ~7 |
+
+**Attribution: the big cost win (~45% below the combo band) belongs to
+opus-written complete-code plans, not to the new guidance** — the
+control lands inside the elicited range. The guidance's measured
+contributions are fidelity and variance: deterministic constraints
+propagation, exact cross-task interfaces, fewer fix waves (1 vs 2-4),
+−1 task at svelte scale. Claim the writing-plans PR on those grounds,
+not dollars.
+
+### Methodology correction — hand-written eval fixture plans are unrepresentative
+Both fractals fixture plans (10-task and crisp 7-task) are prose
+Do/Verify plans without code. Real writing-plans output carries complete
+code in every step and executes at roughly HALF their cost. All
+relative comparisons this campaign (same fixture on both sides) stand;
+absolute per-run dollar figures describe the prose-plan regime and
+overstate production costs. Future scenario fixtures should be generated
+by the skill, not hand-written.
 
 ## Measurement traps logged
 - Raw JSONL line counts overstate long-session turns 6-45% (compaction
