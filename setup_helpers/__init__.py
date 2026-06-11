@@ -11,8 +11,8 @@ from setup_helpers.sdd_auth_plan import add_sdd_auth_plan
 from setup_helpers.sdd_quality_defect_plan import scaffold_sdd_quality_defect_plan
 from setup_helpers.sdd_real_projects import (
     scaffold_sdd_go_fractals,
-    scaffold_sdd_go_fractals_crisp,
     scaffold_sdd_go_fractals_control_plan,
+    scaffold_sdd_go_fractals_crisp,
     scaffold_sdd_go_fractals_critical_plan,
     scaffold_sdd_go_fractals_elicited,
     scaffold_sdd_go_fractals_stripped,
