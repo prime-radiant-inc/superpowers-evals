@@ -163,6 +163,41 @@ better, cost $14.99-20.30 vs $20.98 — overlapping at the top.
 Deviation logged: controller dispatched fixes without re-review
 dispatches afterward (judgment-audit candidate).
 
+## 2026-06-11: L1 elicitation micro-tests (writing-plans crispening)
+
+Harness `/tmp/sdd-exp/micro4` (opus, 5 reps/variant, one API call per
+plan, programmatic scoring + manual read of every sample). Fixtures: the
+fractals and svelte design.md files. Variants: A control (current-skill
+guidance only), B +task-right-sizing recipe, C +`## Global Constraints`
+header +per-task `Interfaces:` blocks.
+
+### Global Constraints header — CLEAN ELICITATION WIN
+0/5 control → 5/5 with guidance, exact values verbatim every time
+(gradient string, cobra, go 1.21). Unlocks the mechanical half:
+`task-brief` can append the section to every brief.
+
+### Per-task Interfaces blocks — CLEAN ELICITATION WIN
+0 control → present on 100% of tasks, with exact signatures
+(`Generate(size, depth int, char rune) ([]string, error)`) consumed
+verbatim by later tasks; within-plan consistency held in every sample
+read. This was the controller's main legitimate "restating" work, now
+done once at plan time.
+
+### Task right-sizing recipe — REAL BUT MODEST, SCALE-DEPENDENT
+Fractals-scale spec: no effect (control already writes 6-7 tasks —
+NOTE: current opus does NOT produce the 10-task over-split shape of our
+hand-written eval fixture; that shape came from real larger projects).
+Svelte-scale spec: control 9.4 mean (standalone "Types" micro-task in
+4/5 plans) → recipe 8.4 (7-10), merges all sensible ("Types and
+Storage", "TodoItem and TodoList"). ≈ −1 task ≈ −$0.6-1.00/run at this
+scale. One fractals C sample over-merged to 3 tasks — watch coarse
+review gates when combining with other guidance.
+
+### Full-run confirmation — scenario `sdd-go-fractals-elicited`
+Fixture plan = an actual C-variant output (7 tasks, GC header,
+Interfaces blocks, module `github.com/example/fractals`). 2 runs on the
+combo config (results recorded when complete).
+
 ## Measurement traps logged
 - Raw JSONL line counts overstate long-session turns 6-45% (compaction
   writes duplicate records). De-dup before counting.
