@@ -1,10 +1,23 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["src/**", "test/**", "*.ts", "*.json"] },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["src/**", "test/**", "*.ts", "*.json"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
   "javascript": {
-    "formatter": { "quoteStyle": "single", "semicolons": "always" }
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always"
+    }
   },
   "linter": {
     "enabled": true,
@@ -35,15 +48,36 @@
   "overrides": [
     {
       "includes": ["src/cli/**", "src/dashboard/**"],
-      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
     },
     {
       "includes": ["src/env.ts"],
-      "linter": { "rules": { "style": { "noProcessEnv": "off" } } }
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
     },
     {
       "includes": ["test/**"],
-      "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          },
+          "suspicious": {
+            "noTemplateCurlyInString": "off"
+          }
+        }
+      }
     }
   ]
 }
