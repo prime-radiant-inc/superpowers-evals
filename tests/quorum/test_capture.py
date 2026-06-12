@@ -178,6 +178,63 @@ class TestCaptureToolCalls:
         assert rows[0]["tool"] == "Skill"
         assert rows[0]["args"]["skill"] == "superpowers:brainstorming"
 
+    def test_gemini_capture_orders_rows_by_message_timestamp(self, tmp_path):
+        log_dir = tmp_path / "gemini-home" / ".gemini" / "tmp"
+        subagent = log_dir / "workdir" / "chats" / "abc" / "subagent.jsonl"
+        main = log_dir / "workdir" / "chats" / "session-20260612.jsonl"
+        subagent.parent.mkdir(parents=True)
+        main.parent.mkdir(parents=True, exist_ok=True)
+        snap = snapshot_dir(log_dir, "**/chats/**/*.jsonl")
+        subagent.write_text(
+            json.dumps({"kind": "subagent"})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "gemini",
+                    "timestamp": "2026-06-12T00:20:31.453Z",
+                    "toolCalls": [
+                        {
+                            "id": "edit-1",
+                            "name": "replace",
+                            "args": {"file_path": "app.js"},
+                        }
+                    ],
+                }
+            )
+            + "\n"
+        )
+        main.write_text(
+            json.dumps({"kind": "main"})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "gemini",
+                    "timestamp": "2026-06-12T00:19:23.695Z",
+                    "toolCalls": [
+                        {
+                            "id": "skill-1",
+                            "name": "activate_skill",
+                            "args": {"name": "writing-plans"},
+                        }
+                    ],
+                }
+            )
+            + "\n"
+        )
+
+        result = capture_tool_calls(
+            log_dir=log_dir,
+            log_glob="**/chats/**/*.jsonl",
+            snapshot=snap,
+            normalizer="gemini",
+            run_dir=_mkdir(tmp_path / "run"),
+        )
+
+        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
+        assert [row["tool"] for row in rows] == ["Skill", "Edit"]
+        assert rows[0]["args"]["skill"] == "superpowers:writing-plans"
+        assert result.row_count == 2
+
     def test_codex_filter_uses_launch_cwd(self, tmp_path):
         # capture_tool_calls attributes codex rollouts by the launch cwd
         # passed in. A scenario may launch the agent in a subdir via

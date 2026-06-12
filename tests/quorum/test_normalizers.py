@@ -666,6 +666,33 @@ class TestNormalizeGeminiLogs:
             assert rows[-1]["args"]["command"] == "git status"
             assert rows[-1]["source"] == "shell"
 
+    def test_normalizes_activate_skill_name_argument_to_skill_name(self):
+        raw = json.dumps(
+            {
+                "type": "gemini",
+                "toolCalls": [
+                    {
+                        "id": "skill-1",
+                        "name": "activate_skill",
+                        "args": {"name": "test-driven-development"},
+                    }
+                ],
+            }
+        )
+
+        rows = normalize_gemini_logs(raw)
+
+        assert rows == [
+            {
+                "tool": "Skill",
+                "args": {
+                    "name": "test-driven-development",
+                    "skill": "superpowers:test-driven-development",
+                },
+                "source": "native",
+            }
+        ]
+
 
 class TestNormalizeOpenCodeLogs:
     def test_normalizes_tool_parts_from_export_json(self):

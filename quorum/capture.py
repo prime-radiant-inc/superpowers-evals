@@ -18,6 +18,7 @@ from quorum.normalizers import (
     find_misplaced_codex_rollouts,
     find_misplaced_pi_sessions,
     find_unusable_pi_sessions,
+    normalize_gemini_logs_with_order,
 )
 from quorum.obol_capture import estimate_session_logs
 from quorum.timing import session_logs_duration_ms
@@ -98,10 +99,24 @@ def capture_tool_calls(
     out_path = run_dir / "coding-agent-tool-calls.jsonl"
     row_count = 0
     with out_path.open("w") as f:
-        for path in new:
-            for row in fn(path.read_text()):
+        if normalizer == "gemini":
+            ordered_rows: list[tuple[bool, str, int, int, dict[str, object]]] = []
+            for source_index, path in enumerate(new):
+                for row_index, (timestamp, row) in enumerate(
+                    normalize_gemini_logs_with_order(path.read_text())
+                ):
+                    ordered_rows.append(
+                        (not bool(timestamp), timestamp, source_index, row_index, row)
+                    )
+            ordered_rows.sort(key=lambda item: item[:4])
+            for *_order, row in ordered_rows:
                 f.write(json.dumps(row) + "\n")
                 row_count += 1
+        else:
+            for path in new:
+                for row in fn(path.read_text()):
+                    f.write(json.dumps(row) + "\n")
+                    row_count += 1
     return CaptureResult(path=out_path, source_logs=tuple(new), row_count=row_count)
 
 

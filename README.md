@@ -36,7 +36,8 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
-- Gemini uses `--skip-trust --approval-mode=yolo` and API-key auth.
+- Gemini uses `--skip-trust --approval-mode=yolo`; API-key auth is default,
+  with opt-in OAuth auth for trusted local runs.
 - Kimi uses `--yolo`.
 - OpenCode uses `--dangerously-skip-permissions`.
 - Pi uses explicit tool allowlists and API-key auth in a run-local config dir.
@@ -140,6 +141,11 @@ export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
 uv run quorum show <run-dir>
 ```
+
+To use an existing Gemini OAuth login instead of API-key auth, set
+`GEMINI_AUTH_TYPE=oauth-personal`. quorum copies `oauth_creds.json` and
+`google_accounts.json` from `GEMINI_OAUTH_HOME` or `~/.gemini` into the
+isolated per-run Gemini home.
 
 Do not wire Gemini live evals to public CI; they launch `gemini` with
 `--approval-mode=yolo` and preserve secret-bearing run artifacts.
@@ -372,7 +378,7 @@ runtime/context and the same `ANTHROPIC_API_KEY` path as `claude`.
 | `claude-haiku` | Claude Code (Haiku target variant) | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
-| `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY`, `SUPERPOWERS_ROOT` |
+| `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY`, `SUPERPOWERS_ROOT` |
 | `opencode` | OpenCode CLI | `SUPERPOWERS_ROOT`, provider credentials for the selected OpenCode model |
 | `pi` | Pi CLI (`pi`) | `SUPERPOWERS_ROOT`, `PI_PROVIDER`, `PI_MODEL`, `PI_API_KEY` |
@@ -397,9 +403,8 @@ modified superpowers skill text.
 
 `coding-agents/gemini.yaml` launches Gemini CLI as `gemini`. quorum creates an
 isolated per-run `GEMINI_CLI_HOME` under `<run>/coding-agent-config`, writes a
-chmod-0600 runtime env file containing `GEMINI_API_KEY`, seeds API-key auth in
-`.gemini/settings.json`, and links Superpowers from local `SUPERPOWERS_ROOT`
-with:
+chmod-0600 runtime env file, seeds auth in `.gemini/settings.json`, and links
+Superpowers from local `SUPERPOWERS_ROOT` with:
 
 ```bash
 gemini extensions link "$SUPERPOWERS_ROOT" --consent
@@ -409,14 +414,21 @@ The generated launcher starts interactive Gemini from the scenario workdir with:
 
 ```bash
 GEMINI_CLI_HOME="$GEMINI_CLI_HOME" \
-GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key \
+GEMINI_DEFAULT_AUTH_TYPE=<gemini-api-key|oauth-personal> \
 GEMINI_CLI_TRUST_WORKSPACE=true \
 gemini --skip-trust --approval-mode=yolo
 ```
 
+By default, Gemini uses `GEMINI_AUTH_TYPE=gemini-api-key`; quorum requires
+`GEMINI_API_KEY` and writes it into the run-local `.gemini-env` file. For a
+trusted local OAuth run, set `GEMINI_AUTH_TYPE=oauth-personal`; quorum copies
+`oauth_creds.json` and `google_accounts.json` from `GEMINI_OAUTH_HOME` or
+`~/.gemini` into the isolated run home and leaves `.gemini-env` empty.
+
 Gemini run artifacts are secret-bearing live-eval artifacts because the
-isolated config dir contains the per-run `.gemini-env` file. Do not commit,
-paste, or publish Gemini run directories without scrubbing them.
+isolated config dir can contain the per-run `.gemini-env` file or copied OAuth
+credentials. Do not commit, paste, or publish Gemini run directories without
+scrubbing them.
 
 Provisioning verifies that Gemini linked and enabled Superpowers by checking:
 
@@ -438,6 +450,15 @@ Live smoke:
 
 ```bash
 export GEMINI_API_KEY=...
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+uv run quorum show <run-dir>
+```
+
+OAuth smoke:
+
+```bash
+export GEMINI_AUTH_TYPE=oauth-personal
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
 uv run quorum show <run-dir>
@@ -766,7 +787,7 @@ Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot need no committed
 home skeleton. Codex provisions a fresh per-run home from your
 `OPENAI_API_KEY`; Antigravity provisions an isolated per-run
 `ANTIGRAVITY_CONFIG_DIR`, runs its auth preflight, and installs the Superpowers
-plugin from `SUPERPOWERS_ROOT`; Gemini seeds API-key auth and links the local
+plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local auth and links the local
 extension; Kimi provisions a fresh per-run `KIMI_CODE_HOME` and installs only
 the local-path Superpowers plugin from `SUPERPOWERS_ROOT`; OpenCode stages the
 plugin and skills from `SUPERPOWERS_ROOT` into isolated XDG dirs; Pi provisions

@@ -108,6 +108,9 @@ CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
 ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV = "QUORUM_ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT"
 ANTIGRAVITY_VISIBLE_LAUNCH_RECORD = "antigravity-visible-launch-cwd.json"
 GEMINI_ENV_FILE_NAME = ".gemini-env"
+GEMINI_AUTH_TYPE_API_KEY = "gemini-api-key"
+GEMINI_AUTH_TYPE_OAUTH = "oauth-personal"
+GEMINI_AUTH_TYPES = (GEMINI_AUTH_TYPE_API_KEY, GEMINI_AUTH_TYPE_OAUTH)
 CLAUDE_ENV_FILE_NAME = ".claude-env"
 COPILOT_ENV_FILE_NAME = ".copilot-env"
 GEMINI_REQUIRED_SUPERPOWERS_FILES = (
@@ -351,12 +354,25 @@ def _gemini_transcripts(config_dir: Path) -> list[Path]:
     return sorted(tmp_dir.glob("**/chats/**/*.json*"))
 
 
-def _write_gemini_settings(gemini_home: Path) -> None:
+def _gemini_auth_type(env: Mapping[str, str] = os.environ) -> str:
+    auth_type = env.get("GEMINI_AUTH_TYPE", GEMINI_AUTH_TYPE_API_KEY).strip()
+    if not auth_type:
+        auth_type = GEMINI_AUTH_TYPE_API_KEY
+    if auth_type not in GEMINI_AUTH_TYPES:
+        raise RunnerError(
+            f"GEMINI_AUTH_TYPE must be one of {', '.join(GEMINI_AUTH_TYPES)}; "
+            f"got {auth_type!r}",
+            stage="setup",
+        )
+    return auth_type
+
+
+def _write_gemini_settings(gemini_home: Path, auth_type: str | None = None) -> None:
     settings_path = gemini_home / ".gemini" / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     security = settings.setdefault("security", {})
     auth = security.setdefault("auth", {})
-    auth["selectedType"] = "gemini-api-key"
+    auth["selectedType"] = auth_type or _gemini_auth_type()
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(settings, indent=2))
 
@@ -380,9 +396,10 @@ def _gemini_extension_list_shows_superpowers(stdout: str) -> bool:
     )
 
 
-def _write_gemini_env_file(gemini_home: Path) -> Path:
+def _write_gemini_env_file(gemini_home: Path, auth_type: str | None = None) -> Path:
+    auth_type = auth_type or _gemini_auth_type()
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
+    if auth_type == GEMINI_AUTH_TYPE_API_KEY and not api_key:
         raise RunnerError("GEMINI_API_KEY not set; cannot seed Gemini auth", stage="setup")
     env_file = gemini_home / GEMINI_ENV_FILE_NAME
     env_file.parent.mkdir(parents=True, exist_ok=True)
@@ -391,10 +408,37 @@ def _write_gemini_env_file(gemini_home: Path) -> Path:
         flags |= os.O_NOFOLLOW
     fd = os.open(env_file, flags, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write("GEMINI_API_KEY=" + _shell_single_quote(api_key) + "\n")
+        if auth_type == GEMINI_AUTH_TYPE_API_KEY:
+            f.write("GEMINI_API_KEY=" + _shell_single_quote(api_key) + "\n")
         f.flush()
         os.fchmod(f.fileno(), 0o600)
     return env_file
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+        f.flush()
+        os.fchmod(f.fileno(), 0o600)
+
+
+def _copy_gemini_oauth_credentials(gemini_home: Path) -> None:
+    source_home = Path(
+        os.environ.get("GEMINI_OAUTH_HOME", str(Path.home() / ".gemini"))
+    ).expanduser()
+    for name in ("oauth_creds.json", "google_accounts.json"):
+        source = source_home / name
+        if not source.is_file():
+            raise RunnerError(
+                f"Gemini OAuth credential file not found: {source}",
+                stage="setup",
+            )
+        _write_private_text(gemini_home / ".gemini" / name, source.read_text())
 
 
 def _write_claude_env_file(claude_config_dir: Path) -> Path:
@@ -535,15 +579,18 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             stage="setup",
         )
 
+    auth_type = _gemini_auth_type()
     gemini_home.mkdir(parents=True, exist_ok=True)
-    _write_gemini_settings(gemini_home)
-    _write_gemini_env_file(gemini_home)
+    _write_gemini_settings(gemini_home, auth_type)
+    _write_gemini_env_file(gemini_home, auth_type)
+    if auth_type == GEMINI_AUTH_TYPE_OAUTH:
+        _copy_gemini_oauth_credentials(gemini_home)
 
     env = {
         **os.environ,
         "GEMINI_CLI_HOME": str(gemini_home),
         "GEMINI_CLI_TRUST_WORKSPACE": "true",
-        "GEMINI_DEFAULT_AUTH_TYPE": "gemini-api-key",
+        "GEMINI_DEFAULT_AUTH_TYPE": auth_type,
     }
     link_cmd = ["gemini", "extensions", "link", str(superpowers_root), "--consent"]
     link = subprocess.run(
@@ -1903,10 +1950,13 @@ def _run_scenario_inner(
             **agent_runtime.substitutions,
         }
         if tcfg.name == "gemini":
+            gemini_auth_type = _gemini_auth_type()
             substitutions["$GEMINI_ENV_FILE"] = str(agent_config_dir / GEMINI_ENV_FILE_NAME)
             substitutions["$GEMINI_ENV_FILE_SH"] = _shell_single_quote(
                 str(agent_config_dir / GEMINI_ENV_FILE_NAME)
             )
+            substitutions["$GEMINI_AUTH_TYPE"] = gemini_auth_type
+            substitutions["$GEMINI_AUTH_TYPE_SH"] = _shell_single_quote(gemini_auth_type)
         if tcfg.name == "copilot":
             if copilot_provisioning is None:
                 raise RunnerError(

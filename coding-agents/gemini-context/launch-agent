@@ -10,6 +10,6 @@ set -a
 set +a
 exec env \
   GEMINI_CLI_HOME=$GEMINI_CLI_HOME_SH \
-  GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key \
+  GEMINI_DEFAULT_AUTH_TYPE=$GEMINI_AUTH_TYPE_SH \
   GEMINI_CLI_TRUST_WORKSPACE=true \
   gemini --skip-trust --approval-mode=yolo "$@"

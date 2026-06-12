@@ -667,7 +667,41 @@ def test_gemini_launch_agent_is_substituted(tmp_path):
     assert "$GEMINI_ENV_FILE" not in content
     assert "GEMINI_CLI_HOME=" in content
     assert ".gemini-env" in content
+    assert "GEMINI_DEFAULT_AUTH_TYPE='gemini-api-key'" in content
     assert "--skip-trust --approval-mode=yolo" in content
+
+
+def test_gemini_launch_agent_substitutes_oauth_auth_type(tmp_path, monkeypatch):
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    session_log_dir = tmp_path / "logs"
+    session_log_dir.mkdir()
+    _make_gemini_agent(coding_agents_dir, session_log_dir)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "gemini-context" / "launch-agent",
+        coding_agents_dir / "gemini-context" / "launch-agent",
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    out_root = tmp_path / "results"
+    monkeypatch.setenv("GEMINI_AUTH_TYPE", "oauth-personal")
+
+    with (
+        patch("quorum.runner._seed_gemini_config"),
+        patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+    ):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="gemini",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = next(out_root.iterdir())
+    content = (rd / "gauntlet-agent" / "context" / "launch-agent").read_text()
+    assert "GEMINI_DEFAULT_AUTH_TYPE='oauth-personal'" in content
+    assert "GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key" not in content
 
 
 def test_gemini_launch_agent_handles_shell_sensitive_paths(tmp_path):
@@ -1990,6 +2024,45 @@ class TestSeedAgentConfigDir:
         assert (cfg / ".gemini" / "settings.json").exists()
         assert (cfg / ".gemini-env").exists()
         assert _gemini_transcripts(cfg) == []
+
+    def test_gemini_seed_oauth_copies_credentials_and_uses_oauth_auth(
+        self, tmp_path, monkeypatch
+    ):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        source_home = tmp_path / "source-gemini"
+        source_home.mkdir()
+        (source_home / "oauth_creds.json").write_text('{"refresh_token":"test-refresh"}')
+        (source_home / "google_accounts.json").write_text('{"active":"me@example.test"}')
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setenv("GEMINI_AUTH_TYPE", "oauth-personal")
+        monkeypatch.setenv("GEMINI_OAUTH_HOME", str(source_home))
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+        cfg = tmp_path / "cfg"
+
+        def fake_run(cmd, **kwargs):
+            assert kwargs["cwd"] == cfg
+            assert kwargs["env"]["GEMINI_CLI_HOME"] == str(cfg)
+            assert kwargs["env"]["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+            assert kwargs["env"]["GEMINI_DEFAULT_AUTH_TYPE"] == "oauth-personal"
+            if cmd[:3] == ["gemini", "extensions", "link"]:
+                _write_gemini_extension_metadata(cfg)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            assert cmd == ["gemini", "extensions", "list"]
+            return subprocess.CompletedProcess(cmd, 0, "", "✓ superpowers (5.1.0)\n")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_gemini_config(cfg, tmp_path / "wd")
+
+        settings = json.loads((cfg / ".gemini" / "settings.json").read_text())
+        assert settings["security"]["auth"]["selectedType"] == "oauth-personal"
+        copied_creds = cfg / ".gemini" / "oauth_creds.json"
+        copied_accounts = cfg / ".gemini" / "google_accounts.json"
+        assert copied_creds.read_text() == '{"refresh_token":"test-refresh"}'
+        assert copied_accounts.read_text() == '{"active":"me@example.test"}'
+        assert stat.S_IMODE(copied_creds.stat().st_mode) == 0o600
+        assert stat.S_IMODE(copied_accounts.stat().st_mode) == 0o600
+        assert (cfg / ".gemini-env").read_text() == ""
 
     def test_gemini_seed_redacts_api_key_from_link_failure(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
