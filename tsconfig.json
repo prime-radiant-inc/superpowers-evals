@@ -1,15 +1,23 @@
 {
+  "include": ["src", "test"],
   "compilerOptions": {
+    "lib": ["ESNext"],
     "target": "ESNext",
-    "module": "ESNext",
+    "module": "Preserve",
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "types": ["bun-types"],
+    "types": ["bun"],
+    "noEmit": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
     "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": ["src", "test"]
+    "forceConsistentCasingInFileNames": true,
+    "allowImportingTsExtensions": true
+  }
 }

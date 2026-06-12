@@ -2,14 +2,20 @@
   "name": "quorum",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "quorum": "./src/cli/index.ts" },
-  "engines": { "bun": ">=1.3.13" },
+  "bin": {
+    "quorum": "./src/cli/index.ts"
+  },
+  "engines": {
+    "bun": ">=1.3.13"
+  },
   "scripts": {
     "quorum": "bun run src/cli/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test",
-    "format": "biome format --write src test",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "biome ci . && tsc --noEmit && bun test",
     "build": "bun build src/cli/index.ts --compile --outfile dist/quorum"
   },
   "dependencies": {
@@ -19,7 +25,7 @@
     "zod": "^3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9",
+    "@biomejs/biome": "^2",
     "@types/bun": "latest",
     "typescript": "^5.9"
   }
