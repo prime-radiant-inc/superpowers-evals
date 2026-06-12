@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import click
 
@@ -17,7 +19,8 @@ from quorum.doctor import (
     run_all_doctors,
     run_target_doctor,
 )
-from quorum.managed_state import discover_managed_paths
+from quorum.managed_commands import run_managed_worker, status_summary, tail_job
+from quorum.managed_state import discover_managed_paths, job_to_json, read_job
 from quorum.run_all import run_batch
 from quorum.runner import run_scenario
 from quorum.runtime_env import (
@@ -408,6 +411,116 @@ def _render_doctor_table(results: list[TargetDoctorResult]) -> str:
                 lines.append(f"{'':<7} {'':<8} {'remediation':<22} {check.remediation}")
             first = False
     return "\n".join(lines) + "\n"
+
+
+@main.command("status")
+@click.argument("job_id", required=False)
+@click.option("--json", "mode_json", is_flag=True, help="Print stable JSON for automation.")
+@click.option("--limit", default=20, type=click.IntRange(min=1), help="Maximum jobs to show.")
+@click.option(
+    "--active-only",
+    is_flag=True,
+    help="Hide terminal jobs and show only planned/running jobs.",
+)
+def managed_status(
+    job_id: str | None,
+    mode_json: bool,
+    limit: int,
+    active_only: bool,
+) -> None:
+    """Show managed Quorum job status."""
+    paths = discover_managed_paths(os.environ)
+    if job_id is not None:
+        try:
+            job = read_job(paths, job_id)
+        except (FileNotFoundError, ValueError) as e:
+            click.echo(f"error: {e}", err=True)
+            sys.exit(1)
+        if mode_json:
+            click.echo(json.dumps(job_to_json(job), indent=2, sort_keys=True))
+        else:
+            click.echo(_render_managed_job_detail(job_to_json(job)), nl=False)
+        return
+
+    jobs = status_summary(paths, limit=limit, include_finished=not active_only)
+    payload = [job_to_json(job) for job in jobs]
+    if mode_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        click.echo(_render_managed_status_table(payload), nl=False)
+
+
+@main.command("tail")
+@click.argument("job_id")
+@click.option("--child", "child_id", help="Tail one child record's underlying log.")
+@click.option("--follow", is_flag=True, help="Follow appended bytes until the job is terminal.")
+def managed_tail(job_id: str, child_id: str | None, follow: bool) -> None:
+    """Tail managed Quorum job events and logs."""
+    paths = discover_managed_paths(os.environ)
+    try:
+        for line in tail_job(job_id, child_id=child_id, follow=follow, paths=paths):
+            click.echo(line, nl=False)
+    except (FileNotFoundError, ValueError) as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("managed-worker", hidden=True)
+@click.argument("job_id")
+def managed_worker(job_id: str) -> None:
+    """Internal managed Quorum worker entrypoint."""
+    if os.environ.get("QUORUM_MANAGED_WORKER") != "1":
+        click.echo("error: managed-worker must be launched by a managed supervisor", err=True)
+        sys.exit(2)
+    paths = discover_managed_paths(os.environ)
+    sys.exit(run_managed_worker(job_id, paths, dict(os.environ)))
+
+
+def _render_managed_status_table(jobs: list[dict[str, object]]) -> str:
+    if not jobs:
+        return "no managed jobs\n"
+    lines = ["job id                       state        updated               command"]
+    for job in jobs:
+        command = _render_managed_command(job)
+        lines.append(
+            f"{str(job['id']):<28} {str(job['state']):<12} "
+            f"{str(job['updated_at']):<21} {command}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _render_managed_job_detail(job: dict[str, object]) -> str:
+    lines = [
+        f"id: {job['id']}",
+        f"state: {job['state']}",
+        f"created_at: {job['created_at']}",
+        f"updated_at: {job['updated_at']}",
+        "command: " + _render_managed_command(job),
+    ]
+    for field in ("owner", "started_at", "finished_at", "final_exit_code", "failure_reason"):
+        value = job.get(field)
+        if value is not None:
+            lines.append(f"{field}: {value}")
+    children = job.get("children")
+    if isinstance(children, list):
+        lines.append("children:")
+        if children:
+            for child in children:
+                if isinstance(child, Mapping):
+                    child_record = cast(Mapping[str, object], child)
+                    child_id = child_record.get("id") or child_record.get("child_id") or "unknown"
+                    child_state = child_record.get("state") or "unknown"
+                    lines.append(f"  - {child_id}: {child_state}")
+        else:
+            lines.append("  (none)")
+    return "\n".join(lines) + "\n"
+
+
+def _render_managed_command(job: Mapping[str, object]) -> str:
+    command = job.get("command")
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return ""
 
 
 @main.command("run-all")

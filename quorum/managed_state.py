@@ -119,6 +119,10 @@ def write_job_atomic(paths: ManagedPaths, job: ManagedJob) -> None:
             tmp_path.unlink()
 
 
+def job_to_json(job: ManagedJob) -> dict[str, object]:
+    return _job_to_json(job)
+
+
 def read_job(paths: ManagedPaths, job_id: str) -> ManagedJob:
     return _job_from_json(json.loads(_job_path(paths, job_id).read_text()))
 
