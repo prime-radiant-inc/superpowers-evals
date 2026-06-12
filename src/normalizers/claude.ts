@@ -1,28 +1,6 @@
 import { z } from 'zod';
 import type { ToolCall } from '../contracts/verdict.ts';
-
-/**
- * Tools the harness considers "native"; everything else is "shell". Global set,
- * matches the Python `NATIVE_TOOLS` (quorum/normalizers.py). Claude does not
- * remap tool names, so membership is checked against the raw name.
- */
-export const NATIVE_TOOLS: ReadonlySet<string> = new Set([
-  'EnterWorktree',
-  'ExitWorktree',
-  'EnterPlanMode',
-  'ExitPlanMode',
-  'TaskCreate',
-  'TaskUpdate',
-  'TaskList',
-  'TaskGet',
-  'Skill',
-  'Agent',
-  'Read',
-  'Write',
-  'Edit',
-  'Glob',
-  'Grep',
-]);
+import { classifySource } from './native-tools.ts';
 
 // A single tool_use block: `{ type: 'tool_use', name, input }`. `input` is
 // optional and defaults to `{}` (Python uses `block.get("input", {})`); a
@@ -50,7 +28,7 @@ function toCall(name: string, input: Record<string, unknown>): ToolCall {
   return {
     tool: name,
     args: input,
-    source: NATIVE_TOOLS.has(name) ? 'native' : 'shell',
+    source: classifySource(name),
   };
 }
 
