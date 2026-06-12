@@ -1,0 +1,13 @@
+{"type":"session_meta","payload":{"id":"019dfae9-codex","cwd":"/private/tmp/quorum-codex-fixture"}}
+{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"type":"event_msg","payload":{"type":"user_message","text":"set up the worktree and patch the file"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git worktree add .worktrees/feature\",\"workdir\":\"/private/tmp/quorum-codex-fixture\"}","call_id":"call_1"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Preparing worktree\n"}}
+{"type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"{\"patch\":\"--- a/main.go\\n+++ b/main.go\\n@@\\n-old\\n+new\"}","call_id":"call_2"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Add File: foo.go\n+package main\n*** End Patch\n","call_id":"call_3"}}
+{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task\":\"review the PR\"}","call_id":"call_4"}}
+{"type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{}","call_id":"call_5"}}
+{"type":"response_item","payload":{"type":"function_call","name":"close_agent","arguments":"{}","call_id":"call_6"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"not-json-args","call_id":"call_7"}}
+{"type":"response_item","item":{"type":"local_shell_call","action":{"command":["git","status","--short"]},"status":"completed"}}
+{"type":"event_msg","payload":{"type":"agent_message","text":"done"}}

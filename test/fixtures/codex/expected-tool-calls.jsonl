@@ -1,0 +1,8 @@
+{"tool":"Bash","args":{"command":"git worktree add .worktrees/feature"},"source":"shell"}
+{"tool":"Edit","args":{"patch":"--- a/main.go\n+++ b/main.go\n@@\n-old\n+new"},"source":"native"}
+{"tool":"Edit","args":{"patch":"*** Begin Patch\n*** Add File: foo.go\n+package main\n*** End Patch\n"},"source":"native"}
+{"tool":"Agent","args":{"task":"review the PR"},"source":"native"}
+{"tool":"wait_agent","args":{},"source":"shell"}
+{"tool":"close_agent","args":{},"source":"shell"}
+{"tool":"Bash","args":{"command":""},"source":"shell"}
+{"tool":"Bash","args":{"command":"git status --short"},"source":"shell"}
