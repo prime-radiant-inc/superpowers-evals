@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec bun "$(dirname "$0")/mock-gauntlet.ts" "$@"

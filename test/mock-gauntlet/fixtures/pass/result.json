@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 5,
+  "runId": "mock_pass_0000",
+  "status": "pass",
+  "summary": "ok",
+  "reasoning": "all ACs met",
+  "duration_ms": 1000,
+  "config": { "model": "claude-opus-4-8" }
+}

@@ -1,0 +1,2 @@
+{"type":"tool_use","name":"Bash","input":{"command":"git status"}}
+{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}

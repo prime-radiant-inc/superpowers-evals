@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 5,
+  "runId": "mock_fail_0000",
+  "status": "fail",
+  "summary": "no",
+  "reasoning": "AC2 unmet",
+  "duration_ms": 500,
+  "config": { "model": "claude-opus-4-8" }
+}
