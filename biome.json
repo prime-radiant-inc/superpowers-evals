@@ -78,6 +78,29 @@
           }
         }
       }
+    },
+    {
+      "includes": ["test/mock-gauntlet/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          },
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["test/runner-e2e.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
     }
   ]
 }
