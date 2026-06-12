@@ -37,6 +37,14 @@ from quorum.managed_state import (
 from quorum.run_all import ChildResult, MatrixEntry, run_batch
 from quorum.runner import ANTIGRAVITY_RATE_LIMIT_MARKER, _allocate_run_dir, run_scenario_in_dir
 from quorum.runtime_env import TargetProfile, build_managed_env, load_target_profile
+from quorum.secret_scan import (
+    SecretPattern,
+    SecretScanResult,
+    build_secret_patterns,
+    scan_job_artifacts,
+    scan_path_for_secrets,
+    taint_job_on_secret_match,
+)
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "interrupted"})
 ACTIVE_STATES = frozenset({"planned", "running"})
@@ -63,6 +71,7 @@ PROVIDER_BY_TARGET = {
     "pi": "pi",
 }
 RATE_LIMIT_SKIP_SENTINEL = "agy-rate-limit-skip"
+ABORT_SKIP_SENTINEL = "batch-abort-skip"
 TMUX_WORKER_ENV_ALLOWLIST = (
     "PATH",
     "HOME",
@@ -151,6 +160,11 @@ class TmuxSupervisor:
             supervisor={"kind": "tmux", "session": session},
             exit_code=None,
         )
+
+
+class _SecretScanTainted(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("secret-like material detected in managed artifacts")
 
 
 def create_job(
@@ -292,6 +306,7 @@ def run_managed_worker(job_id: str, paths: ManagedPaths, env: Mapping[str, str])
     worker_env = dict(env)
     worker_env["QUORUM_MANAGED_WORKER"] = "1"
     job = mark_job_state(paths, job_id, "running")
+    secret_patterns = _secret_patterns_for_job(job, worker_env)
     append_event(
         paths,
         job.id,
@@ -322,6 +337,26 @@ def run_managed_worker(job_id: str, paths: ManagedPaths, env: Mapping[str, str])
             failure_reason="worker interrupted",
         )
         return 130
+    except _SecretScanTainted:
+        append_event(
+            paths,
+            job.id,
+            {
+                "event": "worker-tainted",
+                "job_id": job.id,
+                "exit_code": 1,
+            },
+        )
+        current = read_job(paths, job.id)
+        if current.state == "running":
+            mark_job_state(
+                paths,
+                job.id,
+                "failed",
+                final_exit_code=1,
+                failure_reason="secret-like material detected in managed artifacts",
+            )
+        return 1
     except BaseException as exc:
         exit_code = _exit_code(exc)
         failure_reason = _failure_reason(exc)
@@ -335,16 +370,19 @@ def run_managed_worker(job_id: str, paths: ManagedPaths, env: Mapping[str, str])
                 "failure_reason": failure_reason,
             },
         )
-        mark_job_state(
+        failed = mark_job_state(
             paths,
             job.id,
             "failed",
             final_exit_code=exit_code,
             failure_reason=failure_reason,
         )
+        _taint_job_if_secret_match(paths, failed.id, secret_patterns)
         return exit_code
 
     if exit_code == 0:
+        if _fail_job_if_secret_match(paths, job.id, secret_patterns):
+            return 1
         append_event(
             paths,
             job.id,
@@ -375,6 +413,7 @@ def run_managed_worker(job_id: str, paths: ManagedPaths, env: Mapping[str, str])
         final_exit_code=exit_code,
         failure_reason=failure_reason,
     )
+    _taint_job_if_secret_match(paths, job.id, secret_patterns)
     return exit_code
 
 
@@ -413,6 +452,7 @@ def tail_job(
 def _execute_smoke(job: ManagedJob, paths: ManagedPaths, env: Mapping[str, str]) -> int:
     target = _single_target(job)
     opts = _parse_managed_options(job.command[2:])
+    secret_patterns = _secret_patterns_for_job(job, env)
     scenarios_root = Path(_str_option(opts, "scenarios_root", "scenarios"))
     coding_agents_dir = Path(_str_option(opts, "coding_agents_dir", "coding-agents"))
     out_root = Path(_str_option(opts, "out_root", str(paths.artifact_root)))
@@ -462,6 +502,7 @@ def _execute_smoke(job: ManagedJob, paths: ManagedPaths, env: Mapping[str, str])
             },
         )
         _update_job(paths, job.id, result_rollup=_rollup_children(read_job(paths, job.id).children))
+        _raise_if_artifact_secret_match(paths, job.id, [run_dir], secret_patterns)
         return 0
     finally:
         release_locks(held)
@@ -497,8 +538,10 @@ def _execute_batch_like(
     _fail_on_active_cooldowns(paths, job, targets)
     held = _acquire_job_locks(paths, job, locks)
     state_lock = threading.Lock()
+    abort_event = threading.Event()
     current_batch: dict[str, str] = {}
     batch_out_root = Path(str(opts.get("out_root") or paths.artifact_root)).resolve()
+    secret_patterns = _secret_patterns_for_job(job, env)
     try:
         _update_job(paths, job.id, locks=[lock.name for lock in held])
 
@@ -536,15 +579,18 @@ def _execute_batch_like(
             )
 
         def on_child_finished(child_id: str, result: ChildResult) -> None:
-            _record_child_finished(
+            tainted = _record_child_finished(
                 paths,
                 job.id,
                 child_id,
                 result,
                 artifact_root=batch_out_root,
                 batch=current_batch,
+                secret_patterns=secret_patterns,
                 lock=state_lock,
             )
+            if tainted:
+                abort_event.set()
 
         batch_dir = run_batch(
             scenarios_root=Path(str(opts.get("scenarios_root") or "scenarios")).resolve(),
@@ -565,6 +611,7 @@ def _execute_batch_like(
             on_batch_allocated=on_batch_allocated,
             on_child_started=on_child_started,
             on_child_finished=on_child_finished,
+            abort_event=abort_event,
         )
         _upsert_child(
             paths,
@@ -579,6 +626,10 @@ def _execute_batch_like(
             lock=state_lock,
         )
         _update_job(paths, job.id, result_rollup=_rollup_children(read_job(paths, job.id).children))
+        if _taint_job_if_artifact_secret_match(paths, job.id, [batch_dir], secret_patterns):
+            abort_event.set()
+        if abort_event.is_set():
+            raise _SecretScanTainted()
         return 0
     finally:
         release_locks(held)
@@ -590,6 +641,104 @@ def _run_executor(job: ManagedJob, paths: ManagedPaths, env: Mapping[str, str]) 
     if executor is None:
         raise NotImplementedError(f"managed job kind {kind!r} is not implemented yet")
     return executor(job, paths, env)
+
+
+def _secret_patterns_for_job(job: ManagedJob, env: Mapping[str, str]) -> list[SecretPattern]:
+    patterns = build_secret_patterns(TargetProfile(target="managed", path=None, env={}))
+    profile_root = env.get("QUORUM_TARGET_PROFILE_ROOT")
+    if profile_root:
+        for target in _targets_for_secret_scan(job):
+            try:
+                profile = load_target_profile(Path(profile_root), target)
+            except runtime_env.TargetProfileError:
+                continue
+            patterns.extend(build_secret_patterns(profile))
+    return _dedupe_secret_patterns(patterns)
+
+
+def _targets_for_secret_scan(job: ManagedJob) -> list[str]:
+    targets = list(job.coding_agents)
+    if not targets:
+        targets = _targets_from_options_or_job(_parse_managed_options(job.command[2:]), job)
+    return sorted(set(targets))
+
+
+def _dedupe_secret_patterns(patterns: Sequence[SecretPattern]) -> list[SecretPattern]:
+    deduped: list[SecretPattern] = []
+    seen: set[tuple[str, bytes]] = set()
+    for pattern in patterns:
+        key = (pattern.name, pattern.regex.pattern)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(pattern)
+    return deduped
+
+
+def _taint_job_if_secret_match(
+    paths: ManagedPaths,
+    job_id: str,
+    patterns: Sequence[SecretPattern],
+) -> bool:
+    job = read_job(paths, job_id)
+    result = scan_job_artifacts(job, patterns, paths)
+    taint_job_on_secret_match(paths, job, result)
+    return result.found
+
+
+def _fail_job_if_secret_match(
+    paths: ManagedPaths,
+    job_id: str,
+    patterns: Sequence[SecretPattern],
+) -> bool:
+    if not _taint_job_if_secret_match(paths, job_id, patterns):
+        return False
+    append_event(
+        paths,
+        job_id,
+        {
+            "event": "worker-tainted",
+            "job_id": job_id,
+            "exit_code": 1,
+        },
+    )
+    mark_job_state(
+        paths,
+        job_id,
+        "failed",
+        final_exit_code=1,
+        failure_reason="secret-like material detected in managed artifacts",
+    )
+    return True
+
+
+def _taint_job_if_artifact_secret_match(
+    paths: ManagedPaths,
+    job_id: str,
+    artifact_paths: Sequence[Path],
+    patterns: Sequence[SecretPattern],
+) -> bool:
+    matches = []
+    for artifact_path in artifact_paths:
+        matches.extend(scan_path_for_secrets(artifact_path, patterns).matches)
+    if not matches:
+        return False
+    taint_job_on_secret_match(
+        paths,
+        read_job(paths, job_id),
+        SecretScanResult(matches=matches),
+    )
+    return True
+
+
+def _raise_if_artifact_secret_match(
+    paths: ManagedPaths,
+    job_id: str,
+    artifact_paths: Sequence[Path],
+    patterns: Sequence[SecretPattern],
+) -> None:
+    if _taint_job_if_artifact_secret_match(paths, job_id, artifact_paths, patterns):
+        raise _SecretScanTainted()
 
 
 def _parse_managed_options(args: Sequence[str]) -> dict[str, str | bool]:
@@ -753,8 +902,9 @@ def _record_child_finished(
     *,
     artifact_root: Path,
     batch: Mapping[str, str],
+    secret_patterns: Sequence[SecretPattern],
     lock: threading.Lock,
-) -> None:
+) -> bool:
     skipped_reason = _skipped_reason(result)
     if skipped_reason is not None:
         _upsert_child(
@@ -770,7 +920,7 @@ def _record_child_finished(
             },
             lock=lock,
         )
-        return
+        return False
 
     final = _final_for_child_result(result, artifact_root)
     child: dict[str, object] = {
@@ -808,11 +958,21 @@ def _record_child_finished(
             },
             lock=lock,
         )
+    if result.run_id is not None:
+        return _taint_job_if_artifact_secret_match(
+            paths,
+            job_id,
+            [artifact_root / result.run_id],
+            secret_patterns,
+        )
+    return False
 
 
 def _skipped_reason(result: ChildResult) -> str | None:
     if result.error == RATE_LIMIT_SKIP_SENTINEL:
         return "rate-limited"
+    if result.error == ABORT_SKIP_SENTINEL:
+        return "aborted"
     prefix = "skipped:"
     if isinstance(result.error, str) and result.error.startswith(prefix):
         return result.error[len(prefix) :] or "skipped"

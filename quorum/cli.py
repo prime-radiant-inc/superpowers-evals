@@ -721,11 +721,12 @@ def managed_worker(job_id: str) -> None:
 def _render_managed_status_table(jobs: list[dict[str, object]]) -> str:
     if not jobs:
         return "no managed jobs\n"
-    lines = ["job id                       state        updated               command"]
+    lines = ["job id                       state        taint    updated               command"]
     for job in jobs:
         command = _render_managed_command(job)
+        taint = "tainted" if job.get("tainted") else ""
         lines.append(
-            f"{str(job['id']):<28} {str(job['state']):<12} "
+            f"{str(job['id']):<28} {str(job['state']):<12} {taint:<8} "
             f"{str(job['updated_at']):<21} {command}"
         )
     return "\n".join(lines) + "\n"
@@ -739,6 +740,11 @@ def _render_managed_job_detail(job: dict[str, object]) -> str:
         f"updated_at: {job['updated_at']}",
         "command: " + _render_managed_command(job),
     ]
+    if job.get("tainted"):
+        lines.append("tainted: true")
+        taint_reason = job.get("taint_reason")
+        if taint_reason is not None:
+            lines.append(f"taint_reason: {taint_reason}")
     for field in ("owner", "started_at", "finished_at", "final_exit_code", "failure_reason"):
         value = job.get(field)
         if value is not None:

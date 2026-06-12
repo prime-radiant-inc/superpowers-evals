@@ -191,6 +191,7 @@ _RUN_ID_PREFIX = "run-id: "
 # Sentinel ChildResult.error marking a cell we skipped without invoking because
 # its agent already hit its rate-limit window earlier this batch.
 _RATE_LIMIT_SKIP_SENTINEL = "agy-rate-limit-skip"
+_ABORT_SKIP_SENTINEL = "batch-abort-skip"
 
 
 def _parse_run_id(stdout: str) -> str | None:
@@ -561,6 +562,7 @@ def run_batch(
     on_batch_allocated: Callable[[Path], None] | None = None,
     on_child_started: Callable[[str, MatrixEntry, list[str]], None] | None = None,
     on_child_finished: Callable[[str, ChildResult], None] | None = None,
+    abort_event: threading.Event | None = None,
 ) -> Path:
     """Run the full batch. Returns the batch dir path.
 
@@ -751,16 +753,24 @@ def run_batch(
 
     def _worker(idx: int, entry: MatrixEntry) -> tuple[int, MatrixEntry, ChildResult, float]:
         child_id = _child_id_for_index(idx)
+        child_command = _child_run_command(
+            scenario_dir=entry.scenario_dir,
+            coding_agent=entry.coding_agent,
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+        )
+        if abort_event is not None and abort_event.is_set():
+            result = ChildResult(run_id=None, exit_code=0, error=_ABORT_SKIP_SENTINEL)
+            if on_child_started is not None:
+                on_child_started(child_id, entry, child_command)
+            if on_child_finished is not None:
+                on_child_finished(child_id, result)
+            return (idx, entry, result, 0.0)
         if on_child_started is not None:
             on_child_started(
                 child_id,
                 entry,
-                _child_run_command(
-                    scenario_dir=entry.scenario_dir,
-                    coding_agent=entry.coding_agent,
-                    coding_agents_dir=coding_agents_dir,
-                    out_root=out_root,
-                ),
+                child_command,
             )
         with rate_limit_lock:
             latched = entry.coding_agent in rate_limited_agents
@@ -834,6 +844,25 @@ def run_batch(
                         coding_agent=entry.coding_agent,
                         run_id=None,
                         skipped="rate-limited",
+                    )
+                continue
+            if result.error == _ABORT_SKIP_SENTINEL:
+                scn = _truncate(entry.scenario, scn_w)
+                line = Text.assemble(
+                    f"[{idx:0{idx_w}d}/{total}] {'skip':<{_STATE_COL_W}}  "
+                    f"{scn:<{scn_w}}  {entry.coding_agent:<{agent_w}}  ",
+                    (_GLYPH_SKIP, _STATUS_STYLES["skipped"]),
+                    f"  {'':<{_DUR_COL_W}}  (batch aborted)",
+                )
+                with print_lock:
+                    progress.finished(idx, "skipped")
+                    console.print(line, markup=False, highlight=False)
+                    append_result_record(
+                        batch_dir=batch_dir,
+                        scenario=entry.scenario,
+                        coding_agent=entry.coding_agent,
+                        run_id=None,
+                        skipped="aborted",
                     )
                 continue
             final = _final_status_for_result(result, out_root)

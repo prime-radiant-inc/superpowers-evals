@@ -1,5 +1,6 @@
 import json
 import subprocess
+import threading
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from quorum.managed_state import (
     append_event,
     discover_managed_paths,
     mark_job_state,
+    mark_job_tainted,
     read_job,
     write_job_atomic,
 )
@@ -155,6 +157,186 @@ def test_inline_supervisor_runs_worker_and_marks_job_succeeded(tmp_path, monkeyp
         "unit-executor-ran",
         "worker-succeeded",
     ]
+
+
+def test_worker_marks_job_failed_and_tainted_when_final_scan_finds_secret(
+    tmp_path, monkeypatch
+):
+    paths = _paths(tmp_path)
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    secret = "target-secret-value-456"
+    (profile_root / "claude.env").write_text(f"ANTHROPIC_API_KEY={secret}\n")
+
+    def executor(job, worker_paths, env):
+        del env
+        run_dir = worker_paths.artifact_root / "unit-claude-x"
+        run_dir.mkdir(parents=True)
+        (run_dir / "stdout.txt").write_text(f"leaked {secret}\n")
+        managed_commands._upsert_child(
+            worker_paths,
+            job.id,
+            {
+                "id": "child-0001",
+                "kind": "run",
+                "run_dir": str(run_dir),
+                "state": "finished",
+                "final": "pass",
+            },
+        )
+        return 0
+
+    monkeypatch.setitem(managed_commands.WORKER_EXECUTORS, "unit", executor)
+    job = managed_commands.create_job("unit", "claude", [], paths, owner="drew")
+
+    exit_code = managed_commands.run_managed_worker(
+        job.id,
+        paths,
+        {**_env(paths), "QUORUM_TARGET_PROFILE_ROOT": str(profile_root)},
+    )
+
+    assert exit_code == 1
+    stored = read_job(paths, job.id)
+    assert stored.state == "failed"
+    assert stored.final_exit_code == 1
+    assert stored.failure_reason == "secret-like material detected in managed artifacts"
+    assert stored.tainted is True
+    assert stored.taint_matches == [
+        {
+            "path": str(paths.artifact_root / "unit-claude-x" / "stdout.txt"),
+            "offset": len("leaked "),
+            "pattern": "ANTHROPIC_API_KEY",
+            "digest": stored.taint_matches[0]["digest"],
+        }
+    ]
+    assert secret not in json.dumps(stored.taint_matches, sort_keys=True)
+    assert [event["event"] for event in _events(paths, job.id)][-2:] == [
+        "job-tainted",
+        "worker-tainted",
+    ]
+
+
+def test_worker_final_scan_leaves_clean_artifacts_unchanged(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    (profile_root / "claude.env").write_text("ANTHROPIC_API_KEY=target-secret-value-789\n")
+
+    def executor(job, worker_paths, env):
+        del env
+        run_dir = worker_paths.artifact_root / "unit-claude-clean"
+        run_dir.mkdir(parents=True)
+        (run_dir / "stdout.txt").write_text("clean artifact\n")
+        managed_commands._upsert_child(
+            worker_paths,
+            job.id,
+            {
+                "id": "child-0001",
+                "kind": "run",
+                "run_dir": str(run_dir),
+                "state": "finished",
+                "final": "pass",
+            },
+        )
+        return 0
+
+    monkeypatch.setitem(managed_commands.WORKER_EXECUTORS, "unit", executor)
+    job = managed_commands.create_job("unit", "claude", [], paths, owner="drew")
+
+    exit_code = managed_commands.run_managed_worker(
+        job.id,
+        paths,
+        {**_env(paths), "QUORUM_TARGET_PROFILE_ROOT": str(profile_root)},
+    )
+
+    assert exit_code == 0
+    stored = read_job(paths, job.id)
+    assert stored.state == "succeeded"
+    assert stored.final_exit_code == 0
+    assert stored.tainted is False
+    assert stored.taint_matches == []
+    assert "job-tainted" not in [event["event"] for event in _events(paths, job.id)]
+
+
+def test_worker_token_value_is_not_used_as_secret_scan_pattern(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    worker_token = "worker-token-not-provider-shaped"
+
+    def executor(job, worker_paths, env):
+        assert env["QUORUM_MANAGED_WORKER_TOKEN"] == worker_token
+        run_dir = worker_paths.artifact_root / "unit-claude-worker-token"
+        run_dir.mkdir(parents=True)
+        (run_dir / "stdout.txt").write_text(worker_token)
+        managed_commands._upsert_child(
+            worker_paths,
+            job.id,
+            {
+                "id": "child-0001",
+                "kind": "run",
+                "run_dir": str(run_dir),
+                "state": "finished",
+                "final": "pass",
+            },
+        )
+        return 0
+
+    monkeypatch.setitem(managed_commands.WORKER_EXECUTORS, "unit", executor)
+    job = managed_commands.create_job("unit", "claude", [], paths, owner="drew")
+
+    exit_code = managed_commands.run_managed_worker(
+        job.id,
+        paths,
+        {**_env(paths), "QUORUM_MANAGED_WORKER_TOKEN": worker_token},
+    )
+
+    stored = read_job(paths, job.id)
+    assert exit_code == 0
+    assert stored.state == "succeeded"
+    assert stored.tainted is False
+    assert stored.taint_matches == []
+    assert worker_token not in (paths.jobs_dir / f"{job.id}.json").read_text()
+
+
+def test_record_child_finished_taints_job_when_child_artifact_leaks_secret(tmp_path):
+    paths = _paths(tmp_path)
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    secret = "child-artifact-secret-123"
+    (profile_root / "claude.env").write_text(f"ANTHROPIC_API_KEY={secret}\n")
+    run_dir = paths.artifact_root / "scenario-claude-x"
+    run_dir.mkdir(parents=True)
+    (run_dir / "stdout.txt").write_text(secret)
+    job = managed_commands.create_job(
+        "batch",
+        None,
+        [],
+        paths,
+        owner="drew",
+        coding_agents=["claude"],
+    )
+    mark_job_state(paths, job.id, "running")
+
+    tainted = managed_commands._record_child_finished(
+        paths,
+        job.id,
+        "child-0001",
+        ChildResult(run_id=run_dir.name, exit_code=0, error=None),
+        artifact_root=paths.artifact_root,
+        batch={},
+        secret_patterns=managed_commands._secret_patterns_for_job(
+            job,
+            {**_env(paths), "QUORUM_TARGET_PROFILE_ROOT": str(profile_root)},
+        ),
+        lock=threading.Lock(),
+    )
+
+    stored = read_job(paths, job.id)
+    assert tainted is True
+    assert stored.state == "running"
+    assert stored.tainted is True
+    assert stored.taint_matches[0]["path"] == str(run_dir / "stdout.txt")
+    assert secret not in (paths.jobs_dir / f"{job.id}.json").read_text()
+    assert secret not in (paths.events_dir / f"{job.id}.jsonl").read_text()
 
 
 def test_worker_marks_failed_with_exit_code_when_executor_raises(tmp_path, monkeypatch):
@@ -402,6 +584,33 @@ def test_status_json_is_parseable_and_contains_child_records(tmp_path):
     ]
 
 
+def test_status_text_surfaces_tainted_jobs(tmp_path):
+    paths = _paths(tmp_path)
+    job = managed_commands.create_job("unit", "claude", [], paths, owner="drew")
+    mark_job_state(
+        paths,
+        job.id,
+        "failed",
+        final_exit_code=1,
+        failure_reason="secret-like material detected in managed artifacts",
+    )
+    mark_job_tainted(
+        paths,
+        job.id,
+        "secret-like material detected in managed artifacts",
+        [{"path": "run/stdout.txt", "offset": 0, "pattern": "ANTHROPIC_API_KEY"}],
+    )
+
+    detail = CliRunner().invoke(main, ["status", job.id], env=_env(paths))
+    summary = CliRunner().invoke(main, ["status"], env=_env(paths))
+
+    assert detail.exit_code == 0, detail.output
+    assert "tainted: true" in detail.output
+    assert "taint_reason: secret-like material detected in managed artifacts" in detail.output
+    assert summary.exit_code == 0, summary.output
+    assert "tainted" in summary.output
+
+
 def test_tail_returns_parent_events_and_log_content(tmp_path):
     paths = _paths(tmp_path)
     job = managed_commands.create_job("unit", "claude", [], paths, owner="drew")
@@ -643,6 +852,93 @@ def test_column_executor_calls_run_batch_and_rolls_up_child_results(tmp_path, mo
             "state": "finished",
         }
     ]
+
+
+def test_column_executor_taints_job_and_aborts_after_child_secret_leak(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    scenarios_root = tmp_path / "scenarios"
+    coding_agents_dir = tmp_path / "coding-agents"
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    secret = "column-child-secret-123"
+    (profile_root / "claude.env").write_text(f"ANTHROPIC_API_KEY={secret}\n")
+    alpha = _scenario(scenarios_root, "alpha")
+    beta = _scenario(scenarios_root, "beta")
+    _agent(coding_agents_dir, "claude")
+    job = managed_commands.create_job(
+        "column",
+        "claude",
+        [
+            "--scenarios-root",
+            str(scenarios_root),
+            "--coding-agents-dir",
+            str(coding_agents_dir),
+        ],
+        paths,
+        owner="drew",
+    )
+    batch_dir = paths.artifact_root / "batches" / "batch-tainted"
+
+    def fake_run_batch(**kwargs):
+        abort_event = kwargs["abort_event"]
+        assert abort_event.is_set() is False
+        kwargs["on_batch_allocated"](batch_dir)
+        alpha_entry = MatrixEntry(
+            scenario="alpha",
+            coding_agent="claude",
+            scenario_dir=alpha,
+            skipped_reason=None,
+            tier="sentinel",
+            status="ready",
+        )
+        kwargs["on_child_started"]("child-0001", alpha_entry, ["uv", "run", "quorum", "run"])
+        run_id = "alpha-claude-x"
+        run_dir = paths.artifact_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "verdict.json").write_text(json.dumps({"final": "pass"}))
+        (run_dir / "stdout.txt").write_text(secret)
+        kwargs["on_child_finished"](
+            "child-0001",
+            ChildResult(run_id=run_id, exit_code=0, error=None),
+        )
+        assert abort_event.is_set() is True
+        beta_entry = MatrixEntry(
+            scenario="beta",
+            coding_agent="claude",
+            scenario_dir=beta,
+            skipped_reason=None,
+            tier="sentinel",
+            status="ready",
+        )
+        kwargs["on_child_started"]("child-0002", beta_entry, ["uv", "run", "quorum", "run"])
+        kwargs["on_child_finished"](
+            "child-0002",
+            ChildResult(run_id=None, exit_code=0, error=managed_commands.ABORT_SKIP_SENTINEL),
+        )
+        return batch_dir
+
+    monkeypatch.setattr(managed_commands, "run_batch", fake_run_batch)
+
+    exit_code = managed_commands.run_managed_worker(
+        job.id,
+        paths,
+        {**_env(paths), "QUORUM_TARGET_PROFILE_ROOT": str(profile_root)},
+    )
+
+    assert exit_code == 1
+    stored = read_job(paths, job.id)
+    assert stored.state == "failed"
+    assert stored.final_exit_code == 1
+    assert stored.tainted is True
+    assert stored.taint_matches[0]["path"] == str(
+        paths.artifact_root / "alpha-claude-x" / "stdout.txt"
+    )
+    run_children = [child for child in stored.children if child["kind"] == "run"]
+    assert run_children[0]["state"] == "finished"
+    assert run_children[1]["state"] == "skipped"
+    assert run_children[1]["skipped"] == "aborted"
+    assert secret not in (paths.jobs_dir / f"{job.id}.json").read_text()
+    assert secret not in (paths.events_dir / f"{job.id}.jsonl").read_text()
 
 
 def test_column_executor_records_children_under_configured_out_root(tmp_path, monkeypatch):

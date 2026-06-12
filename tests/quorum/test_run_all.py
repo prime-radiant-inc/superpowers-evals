@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -653,6 +654,56 @@ def test_run_batch_lifecycle_callbacks_observe_allocation_start_and_finish(tmp_p
     assert finished == [
         ("child-0001", ChildResult(run_id="alpha-claude-x", exit_code=0, error=None))
     ]
+
+
+def test_run_batch_abort_event_skips_queued_children_and_writes_footer(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    for name in ("alpha", "beta", "gamma"):
+        _scenario(scenarios, name)
+    _agent(agents, "claude")
+    out_root = tmp_path / "results"
+    abort_event = threading.Event()
+    invoked: list[str] = []
+
+    def fake_invoke(
+        *,
+        scenario_dir,
+        coding_agent,
+        coding_agents_dir,
+        out_root,
+        extra_env=None,
+        timeout_seconds=None,
+    ):
+        del coding_agent, coding_agents_dir, extra_env, timeout_seconds
+        invoked.append(scenario_dir.name)
+        run_id = f"{scenario_dir.name}-claude-x"
+        run_dir = out_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "verdict.json").write_text(json.dumps({"final": "pass"}))
+        return ChildResult(run_id=run_id, exit_code=0, error=None)
+
+    def on_child_finished(child_id: str, result: ChildResult) -> None:
+        del child_id
+        if result.run_id == "alpha-claude-x":
+            abort_event.set()
+
+    batch_dir = run_batch(
+        scenarios_root=scenarios,
+        coding_agents_dir=agents,
+        out_root=out_root,
+        jobs=1,
+        agent_filter=["claude"],
+        invoke=fake_invoke,
+        use_cursor=False,
+        abort_event=abort_event,
+        on_child_finished=on_child_finished,
+    )
+
+    assert invoked == ["alpha"]
+    records = [json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()]
+    assert [record.get("skipped") for record in records] == [None, "aborted", "aborted"]
+    assert json.loads((batch_dir / "batch.json").read_text())["finished_at"] is not None
 
 
 def test_run_batch_child_finished_callback_observes_rate_limit_skips(tmp_path):
