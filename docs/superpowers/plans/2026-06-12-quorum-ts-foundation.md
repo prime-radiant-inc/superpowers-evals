@@ -52,7 +52,7 @@ test/
   mock-gauntlet/
     mock-gauntlet.ts    stub gauntlet binary: drops result.json + usage.jsonl + session log
     fixtures/
-      pass-with-usage/  result.json, usage.jsonl, claude-session.jsonl
+      pass/  result.json, usage.jsonl, claude-session.jsonl
       fail-no-usage/    result.json
       investigate/      result.json
   fixtures/
@@ -849,7 +849,7 @@ export function mergeEstimates(estimates: CostEstimate[]): TokenUsage | null {
     pricingAsOf = pricingAsOf ?? est.pricing_as_of ?? null;
     for (const m of est.unpriced_models ?? []) unpriced.add(m);
     for (const a of est.approximations ?? []) {
-      const key = `${a.kind} ${a.detail ?? ""}`;
+      const key = JSON.stringify([a.kind, a.detail ?? null]); // tuple key: null != "" (parity)
       if (!seenApprox.has(key)) {
         seenApprox.add(key);
         approximations.push({ kind: a.kind, detail: a.detail ?? null });
@@ -990,6 +990,19 @@ test("builds economics from a frozen coding-agent usage file with no gauntlet us
   expect(e.total_est_cost_usd).toBeNull();
 });
 
+test("gauntlet result.json with no usage sidecar still yields a gauntlet block (zero tokens)", async () => {
+  const runDir = mkdtempSync(join(tmpdir(), "run-"));
+  const rdir = join(runDir, "gauntlet-agent", "results", "g_0000");
+  mkdirSync(rdir, { recursive: true });
+  writeFileSync(join(rdir, "result.json"), JSON.stringify({ status: "pass", duration_ms: 1200, config: { model: "claude-opus-4-8" } }));
+  const econ = await buildRunEconomics(runDir); // usage.jsonl absent -> estimateUsageSidecar returns null without calling obol
+  const e = econ as NonNullable<typeof econ>;
+  expect(e.gauntlet).not.toBeNull();
+  expect((e.gauntlet as { tokens: { total: number } }).tokens.total).toBe(0);
+  expect((e.gauntlet as { est_cost_usd: number | null }).est_cost_usd).toBeNull();
+  expect((e.gauntlet as { model: string }).model).toBe("claude-opus-4-8");
+});
+
 test("returns null when neither source exists", async () => {
   const runDir = mkdtempSync(join(tmpdir(), "run-"));
   expect(await buildRunEconomics(runDir)).toBeNull();
@@ -1009,11 +1022,21 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Glob } from "bun";
 import { TokenUsageSchema, type TokenUsage } from "./contracts/economics.ts";
-import { GauntletResultSchema } from "./contracts/gauntlet.ts";
 import { estimateUsageSidecar } from "./obol/index.ts";
 
 interface TokenShell { input: number; output: number; cache_create: number; cache_read: number; total: number }
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+const ZERO_TOKENS: TokenShell = { input: 0, output: 0, cache_create: 0, cache_read: 0, total: 0 };
+
+/** Tolerant JSON read (Python economics._read_json): malformed/missing -> null, never throws. */
+function readJsonLoose(path: string): Record<string, unknown> | null {
+  try {
+    const d = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
 
 function tokensShell(u: TokenUsage): TokenShell {
   return {
@@ -1029,30 +1052,33 @@ function obolProvenance(u: TokenUsage) {
   };
 }
 
+/** First sorted results dir carrying a result.json (Python economics._gauntlet_results_dir
+ *  uses `next(sorted(...))` — first, not newest; Spec-1 has exactly one per run). */
 function gauntletResultPath(runDir: string): string | null {
   const base = join(runDir, "gauntlet-agent", "results");
   if (!existsSync(base)) return null;
-  const hits = [...new Glob("*/result.json").scanSync({ cwd: base, absolute: true })];
-  return hits.sort().at(-1) ?? null;
+  const hits = [...new Glob("*/result.json").scanSync({ cwd: base, absolute: true })].sort();
+  return hits[0] ?? null;
 }
 
 export async function buildRunEconomics(runDir: string): Promise<Record<string, unknown> | null> {
-  // gauntlet block
+  // gauntlet block — built whenever result.json OR usage exists; null only if both absent
+  // (parity with Python economics._gauntlet_block).
   let gauntlet: Record<string, unknown> | null = null;
   const resultPath = gauntletResultPath(runDir);
-  if (resultPath) {
-    const result = GauntletResultSchema.parse(JSON.parse(readFileSync(resultPath, "utf8")));
-    const usage = await estimateUsageSidecar(join(resultPath, "..", "usage.jsonl"));
-    if (usage) {
-      gauntlet = {
-        duration_ms: result.duration_ms ?? null,
-        model: result.config?.model ?? usage.model ?? null,
-        tokens: tokensShell(usage),
-        est_cost_usd: usage.est_cost_usd,
-        has_unpriced_model: usage.unpriced_models.length > 0,
-        obol: obolProvenance(usage),
-      };
-    }
+  const gResult = resultPath ? readJsonLoose(resultPath) : null;
+  const gUsage = resultPath ? await estimateUsageSidecar(join(resultPath, "..", "usage.jsonl")) : null;
+  if (gResult || gUsage) {
+    const dur = (gResult as { duration_ms?: unknown } | null)?.duration_ms;
+    const configModel = (gResult as { config?: { model?: string } } | null)?.config?.model ?? null;
+    gauntlet = {
+      duration_ms: typeof dur === "number" ? Math.trunc(dur) : null,
+      model: gUsage?.model ?? configModel,
+      tokens: gUsage ? tokensShell(gUsage) : { ...ZERO_TOKENS },
+      est_cost_usd: gUsage?.est_cost_usd ?? null,
+      has_unpriced_model: (gUsage?.unpriced_models.length ?? 0) > 0,
+      obol: gUsage ? obolProvenance(gUsage) : null,
+    };
   }
 
   // coding-agent block (frozen, already priced at capture time)
@@ -1087,9 +1113,10 @@ export async function buildRunEconomics(runDir: string): Promise<Record<string, 
   const anyUnpriced = Boolean(coding?.has_unpriced_model) || Boolean(gauntlet?.has_unpriced_model);
   const total = gCost !== null && cCost !== null && !anyUnpriced ? round6(gCost + cCost) : null;
   const partial = !gauntlet || !coding || gCost === null || cCost === null || anyUnpriced;
+  // Python iterates (coding, gauntlet) — coding first.
   const pricingAsof =
-    ((gauntlet?.obol as { pricing_as_of?: string } | null)?.pricing_as_of ??
-      (coding?.obol as { pricing_as_of?: string } | null)?.pricing_as_of) ?? null;
+    ((coding?.obol as { pricing_as_of?: string } | null)?.pricing_as_of ??
+      (gauntlet?.obol as { pricing_as_of?: string } | null)?.pricing_as_of) ?? null;
 
   return { pricing_asof: pricingAsof, gauntlet, coding_agent: coding, total_est_cost_usd: total, partial };
 }
@@ -1163,7 +1190,7 @@ test("pre() emitting a passing file-exists record is collected", async () => {
   const { records, exitCode } = await runPhase({ checksSh, phase: "pre", workdir, quorumBin: BIN });
   expect(exitCode).toBe(0);
   expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({ check: "file-exists", passed: true, phase: "pre" });
+  expect(records[0]).toMatchObject({ check: "file-exists", args: ["present.txt"], passed: true, phase: "pre" });
 });
 
 test("parseCodingAgentsDirective reads a leading '# coding-agents:' csv", () => {
@@ -1244,8 +1271,8 @@ export async function runPhase(args: RunPhaseArgs): Promise<{ records: CheckReco
 export function parseCodingAgentsDirective(checksSh: string): string[] | null {
   const head = readFileSync(checksSh, "utf8").split("\n").slice(0, 20);
   for (const line of head) {
-    const m = line.match(/^#\s*coding-agents:\s*(.+)$/);
-    if (m) return m[1].split(",").map((s) => s.trim()).filter(Boolean);
+    const g = line.match(/^#\s*coding-agents:\s*(.+)$/)?.[1];
+    if (g) return g.split(",").map((s) => s.trim()).filter(Boolean);
   }
   return null;
 }
@@ -1344,10 +1371,10 @@ export class StoryMetaError extends Error {}
 
 function frontmatter(storyPath: string): Map<string, string> {
   const text = readFileSync(storyPath, "utf8");
-  const m = text.match(/^---\n([\s\S]*?)\n---/);
+  const body = text.match(/^---\n([\s\S]*?)\n---/)?.[1];
   const out = new Map<string, string>();
-  if (!m) return out;
-  for (const line of m[1].split("\n")) {
+  if (body === undefined) return out;
+  for (const line of body.split("\n")) {
     const i = line.indexOf(":");
     if (i === -1) continue;
     const key = line.slice(0, i).trim();
@@ -1771,14 +1798,18 @@ async function runInner(a: RunScenarioArgs & { scenario: string; runDir: string 
   // drive gauntlet
   const storyPath = join(a.scenarioDir, "story.md");
   const maxTime = readQuorumMaxTime(storyPath) ?? cfg.max_time ?? null;
+  // launch cwd: honor a .quorum-launch-cwd sentinel if setup.sh wrote one (Python _resolve_launch_cwd)
+  const launchCwdFile = join(workdir, ".quorum-launch-cwd");
+  const launchCwd = existsSync(launchCwdFile) ? readFileSync(launchCwdFile, "utf8").trim() : workdir;
   const { gauntlet, error } = invokeGauntlet({
     storyPath, targetBinary: cfg.binary, runDir: a.runDir, maxTime,
-    launchCwd: workdir, extraEnv,
+    launchCwd, extraEnv,
   });
   if (error) return compose({ gauntlet, checks: pre.records, captureEmpty: false, error });
 
   // capture
   const capture = captureToolCalls({ logDir, logGlob: cfg.session_log_glob, snapshot, normalizer: cfg.normalizer, runDir: a.runDir });
+  // writes coding-agent-token-usage.json as a side effect (null if obol can't price); path not needed here
   await captureTokenUsage({ logDir, logGlob: cfg.session_log_glob, snapshot, normalizer: cfg.normalizer, runDir: a.runDir });
   const captureEmpty = capture.rowCount === 0;
 
@@ -1828,7 +1859,8 @@ import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const argv = process.argv.slice(2);
-const projectDir = argv[argv.indexOf("--project-dir") + 1];
+const pdIdx = argv.indexOf("--project-dir");
+const projectDir = pdIdx >= 0 ? argv[pdIdx + 1] : undefined;
 const fixture = process.env.MOCK_GAUNTLET_FIXTURE;
 if (!projectDir || !fixture) {
   console.error("mock-gauntlet: need --project-dir and MOCK_GAUNTLET_FIXTURE");
@@ -1860,12 +1892,12 @@ process.exit(0);
 
 - [ ] **Step 2: Write fixtures**
 
-`test/mock-gauntlet/fixtures/pass-with-usage/result.json`:
+`test/mock-gauntlet/fixtures/pass/result.json`:
 ```json
 { "schemaVersion": 5, "runId": "mock_pass_0000", "status": "pass", "summary": "ok", "reasoning": "all ACs met", "duration_ms": 1000, "config": { "model": "claude-opus-4-8" } }
 ```
 
-`test/mock-gauntlet/fixtures/pass-with-usage/claude-session.jsonl`:
+`test/mock-gauntlet/fixtures/pass/claude-session.jsonl`:
 ```json
 {"type":"tool_use","name":"Bash","input":{"command":"git status"}}
 {"type":"tool_use","name":"Read","input":{"file_path":"/x"}}
@@ -1918,7 +1950,7 @@ test("mock-gauntlet drives a full pass run to a parity verdict", async () => {
   const prevFixture = process.env.MOCK_GAUNTLET_FIXTURE;
   process.env.PATH = `${MOCK}:${prevPath}`;            // mock-gauntlet.ts must be chmod +x and named `gauntlet` on PATH
   process.env.ANTHROPIC_API_KEY = "sk-test";
-  process.env.MOCK_GAUNTLET_FIXTURE = "pass-with-usage";
+  process.env.MOCK_GAUNTLET_FIXTURE = "pass";
   try {
     const { runDir, verdict } = await runScenario({
       scenarioDir, codingAgent: "claude", codingAgentsDir: agentsDir, outRoot,
@@ -2046,7 +2078,7 @@ program
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
     });
-    process.stdout.write(`run-id: ${runDir.split("/").pop()}\n`);
+    process.stdout.write(`run-id: ${runDir.split("/").at(-1) ?? runDir}\n`);
     process.stdout.write(render(verdict, runDir, { color: process.stdout.isTTY ?? false, mode: "full" }));
     process.exit(EXIT[verdict.final]);
   });
@@ -2176,7 +2208,8 @@ export function resolveTarget(target: string | undefined, resultsRoot: string): 
       .filter((p) => existsSync(join(p, "verdict.json")))
       .map((p) => ({ p, mtime: statSync(join(p, "verdict.json")).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
-    if (matches[0]) return matches[0].p;
+    const first = matches[0];
+    if (first) return first.p;
   }
   throw new ShowError(`could not resolve target: ${target}`);
 }
@@ -2266,7 +2299,7 @@ program
   });
 ```
 
-> **Implementer note:** add `import { join } from "node:path";` to `index.ts` if not already present from the `run` command (it imports `resolve` only). Keep one import line.
+> **Implementer note:** update the existing path import in `src/cli/index.ts` from `import { resolve } from "node:path";` to `import { join, resolve } from "node:path";` — the `show` action uses `join` to read `verdict.json`.
 
 - [ ] **Step 6: Run tests to verify pass**
 
@@ -2355,3 +2388,5 @@ git commit -m "test(quorum-ts): claude replay-differential parity oracle (PRI-22
 - Every scary seam is proven: gauntlet subprocess contract, capture→normalize, checks-bridge over real `bin/`, obol `mergeEstimates`, economics composition, three-valued composer, `verdict.json` write, CLI exit codes.
 
 **Deferred to later specs (out of scope here):** the 7 other normalizers + custom agent adapters (Spec 2); `list`/`new`/`check` + setup-helpers (Spec 3); scheduler + run-all (Spec 4, PRI-2203); dashboard (Spec 5); live parity smoke + Python deletion (Spec 6). The `sessionDurationMs` timing span and a priced obol fixture also land in Spec 2.
+
+**Deferred live-gauntlet provisioning (intentional):** the full claude provisioning the real `gauntlet` tui adapter needs — generating the executable `launch-agent` shim, populating `gauntlet-agent/context/` with HOWTO substitutions (`$QUORUM_AGENT_CWD`, `$CLAUDE_CONFIG_DIR`, …), and wiring `--project-prompt` from the agent config — is **not** required by mock-gauntlet (it never execs the agent). Spec 1 therefore seeds only the config dir (`.claude.json` trust + `.claude-env`). `buildGauntletArgv` already supports `--project-prompt` (unit-tested in isolation); the runner wires it, plus launch-agent/context-dir population, when real-gauntlet provisioning is added (alongside the Spec 6 live smoke). The e2e exercises obol's bundled native binding (it ships in the npm package and prices offline) — a genuine, not mocked, obol round-trip.
