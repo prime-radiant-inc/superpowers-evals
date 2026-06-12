@@ -136,9 +136,14 @@ set -a; source .env; set +a
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 export GEMINI_AUTH_TYPE=oauth-personal
 export SCENARIOS="scenario-a,scenario-b"
+export LOGDIR="results/runlogs/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$LOGDIR"
+
+# Use the repo-owned logger instead of hand-written shell wrappers. It runs
+# under bash even when launched from zsh and records exit status in the log.
 
 # Uncapped targets share the --jobs pool.
-uv run quorum run-all \
+scripts/run-with-log --log "$LOGDIR/uncapped.log" -- uv run quorum run-all \
   --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
   --scenarios "$SCENARIOS" \
   --jobs 4 \
@@ -146,15 +151,20 @@ uv run quorum run-all \
 
 # Capped or fragile targets run one serial column per batch. Launch several
 # single-column batches in parallel only when their backends do not interfere.
-uv run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-uv run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-uv run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-uv run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/copilot.log" -- \
+  uv run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/opencode.log" -- \
+  uv run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/pi.log" -- \
+  uv run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/gemini.log" -- \
+  uv run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
 wait
 
 # Keep Antigravity separate from Gemini to avoid Google/Gemini auth or quota
 # noise while collecting clean capture.
-uv run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
+scripts/run-with-log --log "$LOGDIR/antigravity.log" -- \
+  uv run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
 ```
 
 Trusted-maintainer Antigravity sweep:
