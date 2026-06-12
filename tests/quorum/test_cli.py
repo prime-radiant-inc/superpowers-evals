@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from quorum.cli import main
+from quorum.cli import _managed_env_base_for_target, main
 
 
 def test_list_finds_scenarios(tmp_path):
@@ -47,6 +47,106 @@ def test_run_invokes_run_scenario(tmp_path):
         )
         assert result.exit_code == 0
         mock.assert_called_once()
+
+
+def test_run_blocked_on_managed_host_before_runner(tmp_path, monkeypatch):
+    sd = tmp_path / "scenarios" / "x"
+    sd.mkdir(parents=True)
+    (sd / "story.md").write_text("---\nid: x\n---\n")
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    runner = CliRunner()
+    with patch("quorum.cli.run_scenario") as mock:
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                str(sd),
+                "--coding-agent",
+                "claude",
+            ],
+        )
+    assert result.exit_code == 2
+    assert "raw live eval commands are disabled on the managed Quorum host" in result.output
+    mock.assert_not_called()
+
+
+def test_run_all_blocked_on_managed_host_before_batch(tmp_path, monkeypatch):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    (scenarios / "x").mkdir(parents=True)
+    (scenarios / "x" / "story.md").write_text("---\nid: x\n---\n")
+    agents.mkdir()
+    (agents / "claude.yaml").write_text("name: claude\nbinary: echo\n")
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    runner = CliRunner()
+    with patch("quorum.cli.run_batch") as mock:
+        result = runner.invoke(
+            main,
+            [
+                "run-all",
+                "--scenarios-root",
+                str(scenarios),
+                "--coding-agents-dir",
+                str(agents),
+            ],
+        )
+    assert result.exit_code == 2
+    assert "raw live eval commands are disabled on the managed Quorum host" in result.output
+    mock.assert_not_called()
+
+
+def test_run_managed_worker_flag_without_token_is_blocked(tmp_path, monkeypatch):
+    sd = tmp_path / "scenarios" / "x"
+    sd.mkdir(parents=True)
+    (sd / "story.md").write_text("---\nid: x\n---\n")
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_MANAGED_WORKER", "1")
+    runner = CliRunner()
+    with patch("quorum.cli.run_scenario") as mock:
+        fake_run_dir = tmp_path / "results" / "x-claude-20260101T000000"
+        fake_verdict = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        mock.return_value = (fake_run_dir, fake_verdict)
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                str(sd),
+                "--coding-agent",
+                "claude",
+            ],
+        )
+    assert result.exit_code == 2
+    mock.assert_not_called()
+
+
+def test_run_allowed_on_managed_worker_with_matching_token(tmp_path, monkeypatch):
+    sd = tmp_path / "scenarios" / "x"
+    sd.mkdir(parents=True)
+    (sd / "story.md").write_text("---\nid: x\n---\n")
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "worker-token").write_text("worker-secret\n")
+    (state_root / "worker-token").chmod(0o600)
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_MANAGED_WORKER", "1")
+    monkeypatch.setenv("QUORUM_MANAGED_WORKER_TOKEN", "worker-secret")
+    monkeypatch.setattr("quorum.runtime_env.MANAGED_WORKER_TOKEN_PATH", state_root / "worker-token")
+    runner = CliRunner()
+    with patch("quorum.cli.run_scenario") as mock:
+        fake_run_dir = tmp_path / "results" / "x-claude-20260101T000000"
+        fake_verdict = MagicMock(final="pass", to_dict=lambda: {"final": "pass"})
+        mock.return_value = (fake_run_dir, fake_verdict)
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                str(sd),
+                "--coding-agent",
+                "claude",
+            ],
+        )
+    assert result.exit_code == 0
+    mock.assert_called_once()
 
 
 def test_run_prints_run_id_line(tmp_path, monkeypatch):
@@ -303,6 +403,57 @@ def test_run_all_command_invokes_run_batch(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert captured["jobs"] == 4
     assert captured["agent_filter"] == ["claude", "codex"]
+
+
+def test_run_all_managed_worker_passes_token_to_child_control_env(tmp_path, monkeypatch):
+    captured = {}
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    token_file = state_root / "worker-token"
+    token_file.write_text("worker-secret\n")
+    token_file.chmod(0o600)
+
+    def fake_run_batch(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "results" / "batches" / "fakebatch"
+
+    monkeypatch.setattr("quorum.cli.run_batch", fake_run_batch)
+    monkeypatch.setattr("quorum.runtime_env.MANAGED_WORKER_TOKEN_PATH", token_file)
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_MANAGED_WORKER", "1")
+    monkeypatch.setenv("QUORUM_MANAGED_WORKER_TOKEN", "worker-secret")
+    monkeypatch.setenv("QUORUM_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+    (tmp_path / "scenarios").mkdir(parents=True)
+    (tmp_path / "coding-agents").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["run-all"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["env_base"]["QUORUM_MANAGED_WORKER_TOKEN"] == "worker-secret"
+    assert "OPENAI_API_KEY" not in captured["env_base"]
+
+
+def test_managed_kimi_target_env_preserves_batch_preflight_markers(tmp_path, monkeypatch):
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    (profile_root / "kimi.env").write_text("KIMI_MODEL_API_KEY=profile-key\n")
+    marker = tmp_path / "batch" / "kimi-preflight-ok.json"
+
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profile_root))
+    monkeypatch.setenv("QUORUM_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("QUORUM_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("QUORUM_KIMI_PREFLIGHT_SENTINEL", str(marker))
+    monkeypatch.setenv("QUORUM_KIMI_PREFLIGHT_TOKEN", "batch-token")
+
+    env_base = _managed_env_base_for_target("kimi")
+
+    assert env_base is not None
+    assert env_base["KIMI_MODEL_API_KEY"] == "profile-key"
+    assert env_base["QUORUM_KIMI_PREFLIGHT_SENTINEL"] == str(marker)
+    assert env_base["QUORUM_KIMI_PREFLIGHT_TOKEN"] == "batch-token"
 
 
 def test_run_all_scenarios_filter_forwarded(tmp_path, monkeypatch):

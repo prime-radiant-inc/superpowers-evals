@@ -307,6 +307,24 @@ def test_invoke_child_merges_extra_env(tmp_path):
     assert env["QUORUM_KIMI_PREFLIGHT_SENTINEL"] == str(tmp_path / "sentinel.json")
 
 
+def test_invoke_child_env_base_replaces_ambient_poison(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+    fake_stdout = "run-id: foo-claude-20260526T180001Z-abcd\n"
+    completed = CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+    with patch("quorum.run_all.subprocess.run", return_value=completed) as mock:
+        invoke_child(
+            scenario_dir=tmp_path / "foo",
+            coding_agent="claude",
+            coding_agents_dir=tmp_path / "agents",
+            out_root=tmp_path / "results",
+            env_base={"PATH": "/usr/bin:/bin", "QUORUM_MANAGED_WORKER": "1"},
+        )
+
+    env = mock.call_args.kwargs["env"]
+    assert env["QUORUM_MANAGED_WORKER"] == "1"
+    assert "OPENAI_API_KEY" not in env
+
+
 def test_invoke_child_records_nonzero_exit_with_run_id_when_present(tmp_path):
     """A fail verdict exits 1 but still emits run-id. We record both."""
     completed = CompletedProcess(
@@ -535,6 +553,42 @@ def test_run_batch_writes_batch_json_header_and_footer(tmp_path):
     assert data["finished_at"] is not None
 
 
+def test_run_batch_passes_env_base_to_children(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-poison")
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "alpha")
+    _agent(agents, "claude")
+    out_root = tmp_path / "results"
+    seen_env_base = []
+
+    def fake_invoke(
+        *,
+        scenario_dir,
+        coding_agent,
+        coding_agents_dir,
+        out_root,
+        extra_env=None,
+        env_base=None,
+        timeout_seconds=None,
+    ):
+        seen_env_base.append(env_base)
+        return ChildResult(run_id="alpha-claude-fake", exit_code=0, error=None)
+
+    run_batch(
+        scenarios_root=scenarios,
+        coding_agents_dir=agents,
+        out_root=out_root,
+        jobs=1,
+        agent_filter=None,
+        invoke=fake_invoke,
+        use_cursor=False,
+        env_base={"PATH": "/usr/bin:/bin"},
+    )
+
+    assert seen_env_base == [{"PATH": "/usr/bin:/bin"}]
+
+
 def test_run_batch_jobs_gt_one_runs_all_pairs(tmp_path):
     scenarios = tmp_path / "scenarios"
     agents = tmp_path / "agents"
@@ -741,6 +795,78 @@ def test_run_batch_fail_fast_on_agy_rate_limit(tmp_path):
     assert len(rate_limited) == 2
     assert all(r["coding_agent"] == "antigravity" for r in rate_limited)
     assert all(r["run_id"] is None for r in rate_limited)
+
+
+def test_run_batch_redacts_profile_kimi_secret_from_preflight_failure(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "a")
+    _agent(agents, "kimi")
+    out_root = tmp_path / "results"
+    secret = "profile-only-kimi-secret"
+
+    def fail_preflight(**_kwargs):
+        raise RuntimeError(f"bad auth {secret}")
+
+    with patch("quorum.run_all.prepare_kimi_batch_preflight", side_effect=fail_preflight):
+        batch_dir = run_batch(
+            scenarios_root=scenarios,
+            coding_agents_dir=agents,
+            out_root=out_root,
+            jobs=1,
+            agent_filter=None,
+            use_cursor=False,
+            env_base={"PATH": "/usr/bin:/bin", "KIMI_MODEL_API_KEY": secret},
+        )
+
+    record = json.loads((batch_dir / "results.jsonl").read_text().splitlines()[0])
+    artifacts = [batch_dir / "results.jsonl", out_root / record["run_id"] / "verdict.json"]
+    combined = "\n".join(path.read_text() for path in artifacts)
+    assert secret not in combined
+    assert "<redacted>" in combined
+
+
+def test_run_batch_kimi_preflight_uses_managed_target_profile(tmp_path, monkeypatch):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "a")
+    custom_kimi = tmp_path / "custom-kimi"
+    custom_kimi.write_text("#!/usr/bin/env bash\nexit 0\n")
+    custom_kimi.chmod(0o755)
+    _agent(agents, "kimi", binary=str(custom_kimi))
+    profile_root = tmp_path / "profiles"
+    profile_root.mkdir()
+    (profile_root / "kimi.env").write_text("KIMI_MODEL_API_KEY=profile-kimi-key\n")
+    out_root = tmp_path / "results"
+    seen_model_envs: list[dict[str, str]] = []
+
+    def fake_preflight(*, kimi_model_env, **_kwargs):
+        seen_model_envs.append(dict(kimi_model_env))
+
+    def fake_invoke(**_kwargs):
+        return ChildResult(run_id="a-kimi-x", exit_code=0, error=None)
+
+    monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+    with patch("quorum.run_all.run_kimi_auth_preflight", side_effect=fake_preflight):
+        run_batch(
+            scenarios_root=scenarios,
+            coding_agents_dir=agents,
+            out_root=out_root,
+            jobs=1,
+            agent_filter=["kimi"],
+            invoke=fake_invoke,
+            use_cursor=False,
+            env_base={
+                "PATH": "/usr/bin:/bin",
+                "QUORUM_MANAGED_HOST": "1",
+                "QUORUM_TARGET_PROFILE_ROOT": str(profile_root),
+                "QUORUM_STATE_ROOT": str(tmp_path / "state"),
+                "QUORUM_ARTIFACT_ROOT": str(out_root),
+            },
+        )
+
+    assert seen_model_envs
+    assert seen_model_envs[0]["KIMI_MODEL_API_KEY"] == "profile-kimi-key"
 
 
 def test_run_batch_preflights_kimi_once_for_multiple_cells(tmp_path):

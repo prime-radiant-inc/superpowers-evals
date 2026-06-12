@@ -16,6 +16,7 @@ no-op if no placeholders are present).
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
@@ -80,8 +81,13 @@ def ensure_superpowers_root_default(eval_repo_root: Path = PROJECT_ROOT) -> None
         os.environ["SUPERPOWERS_ROOT"] = str(default)
 
 
-def load_coding_agent_config(path: Path) -> CodingAgentConfig:
-    ensure_superpowers_root_default()
+def load_coding_agent_config(
+    path: Path,
+    env: Mapping[str, str] | None = None,
+) -> CodingAgentConfig:
+    if env is None:
+        ensure_superpowers_root_default()
+    host_env = os.environ if env is None else env
 
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
@@ -122,7 +128,7 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
         raise CodingAgentConfigError(f"{path}: non-Claude variants are not supported in v1")
 
     required_env = tuple(raw["required_env"])
-    missing_env = [v for v in required_env if not os.environ.get(v)]
+    missing_env = [v for v in required_env if not host_env.get(v)]
     if missing_env:
         raise CodingAgentConfigError(f"{path}: required env vars not set: {missing_env}")
 

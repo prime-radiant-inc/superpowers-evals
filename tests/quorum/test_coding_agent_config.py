@@ -449,6 +449,27 @@ class TestLoadCodingAgentConfig:
         with pytest.raises(CodingAgentConfigError, match="ANTHROPIC_API_KEY"):
             load_coding_agent_config(path)
 
+    def test_required_env_can_be_supplied_by_explicit_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        path = _write(
+            tmp_path,
+            "claude",
+            {
+                "name": "claude",
+                "binary": "claude",
+                "agent_config_env": "CLAUDE_CONFIG_DIR",
+                "session_log_dir": "/tmp",
+                "session_log_glob": "*.jsonl",
+                "normalizer": "claude",
+                "required_env": ["ANTHROPIC_API_KEY"],
+                "model": "opus",
+            },
+        )
+
+        cfg = load_coding_agent_config(path, env={"ANTHROPIC_API_KEY": "profile-key"})
+
+        assert cfg.required_env == ("ANTHROPIC_API_KEY",)
+
     def test_missing_agent_config_env_raises(self, tmp_path):
         path = _write(
             tmp_path,

@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import click
 
+from quorum.managed_state import discover_managed_paths
 from quorum.run_all import run_batch
 from quorum.runner import run_scenario
+from quorum.runtime_env import (
+    TargetProfile,
+    TargetProfileError,
+    assert_raw_command_allowed,
+    build_managed_env,
+    is_managed_host,
+    is_trusted_managed_worker,
+    load_target_profile,
+)
 from quorum.scaffold import (
     ScaffoldError,
     check_scenario,
@@ -28,6 +39,29 @@ from quorum.show import (
 _DEFAULT_SCENARIOS_ROOT = Path("scenarios")
 _DEFAULT_CODING_AGENTS_DIR = Path("coding-agents")
 _DEFAULT_OUT_ROOT = Path("results")
+_KIMI_PREFLIGHT_RUNTIME_KEYS = (
+    "QUORUM_KIMI_PREFLIGHT_SENTINEL",
+    "QUORUM_KIMI_PREFLIGHT_TOKEN",
+)
+
+
+def _managed_env_base_for_target(target: str | None) -> dict[str, str] | None:
+    if not is_managed_host(os.environ):
+        return None
+    paths = discover_managed_paths(os.environ)
+    profile = TargetProfile(target=target or "batch", path=None, env={})
+    profile_root = os.environ.get("QUORUM_TARGET_PROFILE_ROOT")
+    if target is not None and profile_root:
+        profile = load_target_profile(Path(profile_root), target)
+    runtime_vars = (
+        {name: os.environ[name] for name in _KIMI_PREFLIGHT_RUNTIME_KEYS if os.environ.get(name)}
+        if target == "kimi"
+        else {}
+    )
+    env_base = build_managed_env(os.environ, paths, profile, runtime_vars=runtime_vars)
+    if target is None and is_trusted_managed_worker(os.environ):
+        env_base["QUORUM_MANAGED_WORKER_TOKEN"] = os.environ["QUORUM_MANAGED_WORKER_TOKEN"]
+    return env_base
 
 
 @click.group()
@@ -62,6 +96,16 @@ def run(
     out_root: Path,
 ) -> None:
     """Run one scenario against one Coding-Agent."""
+    try:
+        assert_raw_command_allowed("run", os.environ)
+    except PermissionError as e:
+        click.echo(str(e), err=True)
+        sys.exit(2)
+    try:
+        env_base = _managed_env_base_for_target(coding_agent)
+    except TargetProfileError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(2)
     # Resolve every path to absolute at the CLI boundary. subprocess.run
     # with cwd= resolves relative executable paths against that cwd, not
     # quorum's cwd — relative paths here would silently misresolve
@@ -75,6 +119,7 @@ def run(
         coding_agent=coding_agent,
         coding_agents_dir=coding_agents_dir,
         out_root=out_root,
+        env_base=env_base,
     )
     # Machine-readable line for `quorum run-all` to parse. Printed
     # unconditionally — color/mode flags don't affect it.
@@ -331,6 +376,16 @@ def run_all_cmd(
     Use --tier to restrict to a named tier (sentinel/full/adhoc).
     Use --include-drafts to include status: draft scenarios (excluded by default).
     """
+    try:
+        assert_raw_command_allowed("run-all", os.environ)
+    except PermissionError as e:
+        click.echo(str(e), err=True)
+        sys.exit(2)
+    try:
+        env_base = _managed_env_base_for_target(None)
+    except TargetProfileError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(2)
     agent_filter = (
         [a.strip() for a in coding_agents_csv.split(",") if a.strip()]
         if coding_agents_csv
@@ -351,6 +406,7 @@ def run_all_cmd(
             use_cursor=not no_cursor,
             tier=tier,
             include_drafts=include_drafts,
+            env_base=env_base,
         )
     except ValueError as e:
         click.echo(f"error: {e}", err=True)

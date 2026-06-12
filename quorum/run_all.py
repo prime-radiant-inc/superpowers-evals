@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -37,7 +37,9 @@ from quorum.kimi import (
     run_kimi_auth_preflight,
     sanitize_kimi_diagnostic,
 )
+from quorum.managed_state import discover_managed_paths
 from quorum.runner import ANTIGRAVITY_RATE_LIMIT_MARKER, _allocate_run_dir, _write_indeterminate
+from quorum.runtime_env import build_managed_env, is_managed_host, load_target_profile
 from quorum.show import _fmt_cost
 from quorum.story_meta import read_quorum_tier, read_story_status
 
@@ -206,6 +208,7 @@ def invoke_child(
     out_root: Path,
     timeout_seconds: float | None = None,
     extra_env: dict[str, str] | None = None,
+    env_base: Mapping[str, str] | None = None,
 ) -> ChildResult:
     """Run one `quorum run` as a subprocess; capture its run-id line.
 
@@ -226,12 +229,13 @@ def invoke_child(
         str(out_root),
     ]
     try:
+        base_env = dict(env_base) if env_base is not None else dict(os.environ)
         completed = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
-            env={**os.environ, **(extra_env or {})},
+            env={**base_env, **(extra_env or {})},
         )
     except subprocess.TimeoutExpired:
         return ChildResult(run_id=None, exit_code=-1, error="child timed out")
@@ -246,7 +250,12 @@ def invoke_child(
     return ChildResult(run_id=run_id, exit_code=completed.returncode, error=None)
 
 
-def prepare_kimi_batch_preflight(*, batch_dir: Path, coding_agents_dir: Path) -> dict[str, str]:
+def prepare_kimi_batch_preflight(
+    *,
+    batch_dir: Path,
+    coding_agents_dir: Path,
+    env_base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Run Kimi auth/model preflight once for a run-all batch.
 
     Children receive the returned marker env so they can skip their direct
@@ -260,12 +269,13 @@ def prepare_kimi_batch_preflight(*, batch_dir: Path, coding_agents_dir: Path) ->
     binary = raw.get("binary")
     if not isinstance(binary, str) or not binary:
         raise ValueError(f"{kimi_yaml}: missing Kimi binary")
-    kimi_binary = resolve_kimi_binary(binary)
-    kimi_env = effective_kimi_model_env(os.environ)
+    base_env = dict(env_base) if env_base is not None else dict(os.environ)
+    kimi_binary = resolve_kimi_binary(binary, env=base_env)
+    kimi_env = effective_kimi_model_env(base_env)
     run_kimi_auth_preflight(
         kimi_binary=kimi_binary,
         kimi_model_env=kimi_env,
-        base_env=os.environ,
+        base_env=base_env,
     )
     preflight_token = secrets.token_urlsafe(32)
     marker = batch_dir / "kimi-preflight-ok.json"
@@ -285,6 +295,26 @@ def prepare_kimi_batch_preflight(*, batch_dir: Path, coding_agents_dir: Path) ->
         "QUORUM_KIMI_PREFLIGHT_SENTINEL": str(marker),
         "QUORUM_KIMI_PREFLIGHT_TOKEN": preflight_token,
     }
+
+
+def _target_env_base_for_preflight(
+    env_base: Mapping[str, str] | None,
+    target: str,
+) -> Mapping[str, str] | None:
+    if env_base is None or not is_managed_host(env_base):
+        return env_base
+    if env_base.get("QUORUM_TARGET") == target:
+        return env_base
+    profile_root = env_base.get("QUORUM_TARGET_PROFILE_ROOT")
+    if not profile_root:
+        return env_base
+    profile = load_target_profile(Path(profile_root), target)
+    return build_managed_env(
+        env_base,
+        discover_managed_paths(env_base),
+        profile,
+        runtime_vars={},
+    )
 
 
 def _write_setup_indeterminate_run(
@@ -508,6 +538,7 @@ def run_batch(
     invoke: Callable[..., ChildResult] | None = None,
     stream: TextIO | None = None,
     use_cursor: bool = True,
+    env_base: Mapping[str, str] | None = None,
 ) -> Path:
     """Run the full batch. Returns the batch dir path.
 
@@ -618,13 +649,18 @@ def run_batch(
 
     kimi_entries = [(idx, entry) for idx, entry in runnable_indexed if entry.coding_agent == "kimi"]
     if kimi_entries:
+        kimi_env_base = _target_env_base_for_preflight(env_base, "kimi")
+        kimi_preflight_base_env = (
+            dict(kimi_env_base) if kimi_env_base is not None else dict(os.environ)
+        )
         try:
             preflight_env_by_agent["kimi"] = prepare_kimi_batch_preflight(
                 batch_dir=batch_dir,
                 coding_agents_dir=coding_agents_dir,
+                env_base=kimi_env_base,
             )
         except Exception as e:
-            message = sanitize_kimi_diagnostic(e)
+            message = sanitize_kimi_diagnostic(e, env=kimi_preflight_base_env)
             for idx, entry in kimi_entries:
                 run_id = _write_setup_indeterminate_run(
                     out_root=out_root,
@@ -677,13 +713,23 @@ def run_batch(
                     highlight=False,
                 )
         t0 = time.monotonic()
-        result = invoke(
-            scenario_dir=entry.scenario_dir,
-            coding_agent=entry.coding_agent,
-            coding_agents_dir=coding_agents_dir,
-            out_root=out_root,
-            extra_env=preflight_env_by_agent.get(entry.coding_agent),
-        )
+        if env_base is None:
+            result = invoke(
+                scenario_dir=entry.scenario_dir,
+                coding_agent=entry.coding_agent,
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                extra_env=preflight_env_by_agent.get(entry.coding_agent),
+            )
+        else:
+            result = invoke(
+                scenario_dir=entry.scenario_dir,
+                coding_agent=entry.coding_agent,
+                coding_agents_dir=coding_agents_dir,
+                out_root=out_root,
+                extra_env=preflight_env_by_agent.get(entry.coding_agent),
+                env_base=env_base,
+            )
         if result.run_id and _is_rate_limited_verdict(_read_verdict(out_root / result.run_id)):
             with rate_limit_lock:
                 rate_limited_agents.add(entry.coding_agent)

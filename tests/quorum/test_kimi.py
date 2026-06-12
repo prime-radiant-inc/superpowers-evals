@@ -15,6 +15,7 @@ from quorum.kimi import (
     kimi_logs_have_superpowers_session_start,
     kimi_preflight_sentinel_payload,
     kimi_stream_json_reply_ok,
+    resolve_kimi_binary,
     run_kimi_auth_preflight,
     sanitize_kimi_diagnostic,
     validate_kimi_preflight_sentinel,
@@ -70,6 +71,19 @@ def test_sanitized_env_drops_host_state(monkeypatch, tmp_path):
     assert env["XDG_DATA_HOME"] == str(kimi_home / "xdg-data")
     assert "PWD" not in env
     assert "MOONSHOT_API_KEY" not in env
+
+
+def test_resolve_kimi_binary_uses_os_defpath_for_explicit_env_without_path(monkeypatch):
+    seen_paths: list[str | None] = []
+
+    def fake_which(binary, path=None):
+        seen_paths.append(path)
+        return "/bin/kimi"
+
+    monkeypatch.setattr("quorum.kimi.shutil.which", fake_which)
+
+    assert resolve_kimi_binary("kimi", env={}) == "/bin/kimi"
+    assert seen_paths == [os.defpath]
 
 
 def test_runtime_env_file_is_0600_outside_run_dir_and_sourceable(tmp_path):
