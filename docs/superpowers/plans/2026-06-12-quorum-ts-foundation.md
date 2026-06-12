@@ -10,6 +10,8 @@
 
 **Parity rule:** behavior matches the Python (`quorum/*.py`) except where an approved spec supersedes it. None of the Spec-1 surface is superseded, so this slice is straight parity. Spec: `docs/superpowers/specs/2026-06-12-quorum-typescript-rewrite-design.md`. Ticket: PRI-2207.
 
+**Coding standard (MANDATORY):** all TypeScript follows `docs/superpowers/specs/2026-06-12-typescript-coding-standard.md`. The gate is `bun run check` (Biome 2.x `ci` + `tsc --noEmit` + scoped `bun test`) and must be green per task. Non-negotiables: the single `src/env.ts` for **all** `process.env` access (use `getEnv`/`envSnapshot`/`superpowersRoot`); named exports + `import type`; **no** `any`/`as any`/`as never`/`!` in `src/`; `undefined` internally, `null` only where the on-disk JSON says so; `assertNever` on closed-union switches; `readonly` on boundary types; test fixtures zod-typed (never `as never`). The Task-1 `package.json`/`tsconfig.json`/`biome.json` blocks below are **superseded** by the adopted versions committed in `d44f3ff` (plus `bunfig.toml`, `src/env.ts`, `src/invariant.ts`); treat the standard + that commit as authoritative where they differ from a code block here.
+
 **Reference (Python source of truth):** `quorum/runner.py`, `quorum/capture.py`, `quorum/normalizers.py` (claude), `quorum/obol_capture.py`, `quorum/economics.py`, `quorum/checks.py`, `quorum/composer.py`, `quorum/cli.py`, `quorum/show.py`, `quorum/setup_step.py`, `quorum/story_meta.py`, `quorum/coding_agent_config.py`.
 
 ---
@@ -110,6 +112,7 @@ test/
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "types": ["bun-types"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
