@@ -8,6 +8,10 @@ a team-accessible AWS node so he can ask Codex or another agent to run smoke
 tests, grid columns, baseline campaigns, reruns, and triage without relying on
 a local desktop.
 
+This document is the roadmap-level design. The normative Phase 1 implementation
+contract is `docs/superpowers/specs/2026-06-12-quorum-aws-eval-runner-phase-1-design.md`.
+When the two differ, the Phase 1 spec controls current implementation scope.
+
 ---
 
 ## Goal
@@ -54,8 +58,9 @@ The important split is:
   Tailscale, SSM parameter inventory, backups, host bootstrap, and host-level
   secret materialization.
 - **Quorum owns the eval operation.** Quorum exposes safe commands for smoke
-  runs, columns, batch profiles, managed jobs, locks, logs, status, tails,
-  archive, cleanup, reruns, comparisons, and handoff.
+  runs, columns, batch profiles, managed jobs, locks, logs, status, and tails
+  in Phase 1. Archive, cleanup, reruns, comparisons, and handoff are roadmap
+  work for later phases.
 
 This avoids a second command surface. Agents should be able to SSH to the host
 and run `uv run quorum ...` with first-class Quorum subcommands. Host-local
@@ -123,11 +128,11 @@ The host should keep mutable eval state under `/opt/quorum`:
 ├── worktrees/
 ├── results/
 ├── state/
+│   ├── cooldowns/
 │   ├── jobs/
 │   ├── locks/
 │   ├── logs/
-│   └── cooldowns/
-├── archive-staging/
+│   └── volume-identity.json
 └── secrets-runtime/
 ```
 
@@ -141,14 +146,16 @@ and prevents same-UID sibling process snooping across operators. Shared
 handoff should happen through sanitized job metadata and promoted artifacts,
 not through a shared raw run directory.
 
-Host-managed secret files may be readable to a trusted `quorum-operators` group
-when that is the simplest v1 implementation, but personal OAuth/subscription
-state must not be shared that way.
+Host-managed source secret profiles should be root-only. Managed jobs
+materialize only the selected target credentials into a per-job `0600` runtime
+file for the invoking operator. Personal OAuth/subscription state must not be
+shared through the host.
 
 ## Managed Job Model
 
-Add a Quorum-managed job model. This is the central seam for locks, logs,
-status, tail, archive, cleanup, reruns, comparisons, and handoff.
+Add a Quorum-managed job model. In Phase 1 this is the central seam for locks,
+logs, status, tail, and recovery. Later phases can reuse the same seam for
+archive, cleanup, reruns, comparisons, and handoff.
 
 Every managed command creates a job record before it starts side effects:
 
@@ -166,18 +173,20 @@ the AWS host uses `/opt/quorum/state` so locks cannot be bypassed by changing
 Initial states:
 
 - `planned`: job record exists, locks not yet acquired.
-- `waiting`: blocked on locks or a cooldown.
 - `running`: supervisor process is active.
-- `finishing`: child runs are done, rollup/archive/finalization is running.
 - `succeeded`: managed command completed cleanly.
 - `failed`: managed command failed.
 - `interrupted`: supervisor or child process died unexpectedly.
 - `orphaned`: job metadata exists, but the recorded supervisor is gone and the
   final state is unknown.
 
+Phase 1 should fail fast on lock conflicts and cooldowns rather than adding a
+queue. `waiting` and richer `finishing` substates belong to later platform
+phases if a queue or archive finalizer is added.
+
 ### `job.json`
 
-`job.json` should include at least:
+`job.json` should include at least the Phase 1 operational fields:
 
 ```json
 {
@@ -222,12 +231,16 @@ Initial states:
     }
   ],
   "artifact_bytes": null,
-  "archive_uri": null,
+  "result_rollup": null,
+  "tainted": false,
   "started_at": "2026-06-12T18:30:00Z",
-  "finished_at": null,
-  "handoff_notes": []
+  "finished_at": null
 }
 ```
+
+Later phases can add archive URIs, handoff notes, cleanup state, and comparison
+metadata without requiring current `batch.json`, `results.jsonl`, or
+`verdict.json` readers to understand them.
 
 Foreground commands should stream the durable log, but the job itself should
 survive SSH disconnect via `tmux`, `systemd-run`, or another simple host-native
@@ -236,16 +249,23 @@ exit.
 
 ## Quorum CLI Additions
 
-Add Quorum subcommands that express maintainer workflows directly:
+Add Quorum subcommands that express maintainer workflows directly.
+
+Phase 1 command surface:
 
 ```bash
 uv run quorum doctor
 uv run quorum smoke claude
 uv run quorum column copilot
-uv run quorum batch --profile sentinel-default --coding-agents claude,kimi
+uv run quorum batch --profile sentinel-default
 uv run quorum status
 uv run quorum status --json
 uv run quorum tail <run-or-batch-or-job>
+```
+
+Later platform phases can add:
+
+```bash
 uv run quorum rerun --from-batch <batch-id> --final fail,indeterminate
 uv run quorum compare <batch-a> <batch-b>
 uv run quorum promote <run-or-batch>
@@ -259,7 +279,9 @@ Use `--coding-agents` as the canonical flag name, matching existing Quorum.
 documented spelling.
 
 These commands are convenience and safety affordances over `quorum run`,
-`run-all`, and `show`, not a replacement for the underlying primitives.
+`run-all`, and `show`, not a replacement for the underlying primitives. On the
+AWS host, raw live `run` and `run-all` should still fail closed outside the
+managed worker so they cannot bypass locks by accident.
 
 ### `quorum doctor`
 
@@ -316,9 +338,9 @@ manifest that records all child batch ids.
 Initial profiles:
 
 - `sentinel-default`: a small configured target pair at `--tier sentinel
-  --jobs 2`. Prefer `claude,codex` only when a dedicated Codex eval identity
-  exists; otherwise use `claude` plus another Tier 1 target. This is the day
-  one low-risk campaign profile.
+  --jobs 1` per child. Prefer `claude,codex` only when a dedicated Codex eval
+  identity exists; otherwise use `claude` plus another Tier 1 target. This is
+  the day one low-risk campaign profile.
 - `sentinel-all`: split into one uncapped child batch and serial capped child
   columns. Antigravity stays separate from Gemini.
 - `uncapped-group`: `claude,claude-haiku,claude-sonnet,codex,kimi --jobs 4`.
@@ -641,26 +663,25 @@ Likely Quorum work:
   AWS host;
 - add lock helpers with `fcntl.flock`, JSON sidecars, deterministic acquisition,
   ownership reporting, and stale/orphan detection;
-- add command modules for `doctor`, `smoke`, `column`, `batch`, `status`,
-  `tail`, `rerun`, `compare`, `promote`, `handoff`, `archive`, and `cleanup`;
+- add Phase 1 command modules for `doctor`, `smoke`, `column`, `batch`,
+  `status`, and `tail`;
 - extend batch metadata additively with `job_id`, command, profile, user, host,
   repo SHAs, out root, log path, locks, tier, scenario filter, env profile,
-  effective concurrency, archive URI, and artifact byte counts;
+  effective concurrency, result rollup, taint state, and artifact byte counts;
 - preserve compatibility with current `batch.json` consumers and tests;
-- ensure cleanup preserves thin summaries or make `show` archive-aware before
-  deleting local run directories;
 - document the AWS-host workflow in the README or a runbook.
 
 ### Terminus Infra Plan
 
 Likely Terminus work:
 
-- add a `terraform/quorum/evals` or similar service root;
+- add a `terraform/quorum-evals/` service root;
 - instantiate `machine-westworld`;
 - add an encrypted persistent data volume with `prevent_destroy`, backup tags,
   DLM or AWS Backup policy, and backup freshness verification;
 - add SSM parameter inventory under `/quorum-evals/*`;
-- add least-privilege IAM for SSM read and private S3 artifact archive access;
+- add least-privilege IAM for SSM read. Private S3 artifact archive access is a
+  later phase;
 - block IMDS for eval users/processes;
 - add dedicated Tailscale tag and SSH ACLs;
 - add cloud-init bootstrap for uv, Python, Node, agent CLIs, Gauntlet,
@@ -671,16 +692,32 @@ Likely Terminus work:
 
 ## Implementation Sequence
 
+Phase 1a:
+
 1. Add managed-job state, locks, logs, `status`, and `tail` locally without
    changing live eval execution.
-2. Extend batch metadata additively and update tests.
-3. Add `doctor`, `smoke`, `column`, and `batch` profile wrappers over existing
-   `run` / `run-all`.
-4. Add branch/root pinning and per-job worktree support.
-5. Add `rerun`, `compare`, `promote`, `archive`, and `cleanup`.
-6. Write the Terminus infra plan.
-7. Provision the AWS host.
-8. Run the AWS dry-run campaign and adjust defaults from measured data.
+2. Make AWS host-mode raw live `run` / `run-all` fail closed outside the
+   managed worker.
+3. Add sanitized run-environment plumbing and selected-target secret
+   materialization.
+4. Add `doctor`, `smoke`, and sentinel `column` wrappers over existing `run` /
+   `run-all`.
+5. Write the Terminus infra plan.
+6. Provision the AWS host.
+7. Run the Phase 1a AWS dry run with one ready key-backed target.
+
+Phase 1b:
+
+1. Add the explicit `sentinel-default` batch profile manifest.
+2. Run the provider-diverse sentinel campaign after a second key-backed target is
+   honestly `doctor`-ready.
+3. Adjust defaults from measured data.
+
+Later phases:
+
+- branch/root pinning and per-job worktree creation;
+- `rerun`, `compare`, `promote`, `archive`, `handoff`, and `cleanup`;
+- S3/private index, queueing, Slack/web submission, and multi-host workers.
 
 ## Testing Strategy
 
@@ -702,10 +739,7 @@ Add Quorum tests for:
 - smoke mapping, including draft smoke scenarios;
 - profile expansion into child batches;
 - additive batch metadata;
-- branch/root metadata capture;
-- cleanup dry-run planning and `quorum show` preservation;
-- archive manifest generation;
-- rerun and compare behavior using fake batch/run artifacts.
+- branch/root metadata capture.
 
 Use `CliRunner` with fake `run_batch` or fake child invocations for command API
 tests. AWS verification stays manual/runbook-level.
@@ -721,18 +755,14 @@ Before treating the AWS runner as usable:
 3. Host bootstrap installs required binaries and clones the expected repo SHAs.
 4. `quorum doctor claude` passes.
 5. `quorum smoke claude` passes.
-6. One configured capped or Tier 2 target smoke/bootstrap passes, if such a
-   target identity is ready.
-7. `quorum batch --profile sentinel-default` completes with the configured
-   day-one target pair.
-8. `quorum batch --profile uncapped-group --tier sentinel` completes only after
-   the smaller sentinel run is healthy.
-9. `status`, `tail`, `show`, `handoff`, archive, promote, and cleanup dry-run
-   work from a fresh SSH session.
-10. The run records p50/p90/p99 cell duration, queue wait, active live cells,
-    CPU, memory, EBS IOPS/throughput/queue, network, artifact bytes by
-    component, provider 429s/quota errors, cost coverage, archive upload
-    bytes/time, and cleanup reclaimable bytes.
+6. `quorum column claude` starts as a managed sentinel column and writes a batch
+   artifact.
+7. `status`, `tail`, and `show` work from a fresh SSH session.
+8. `quorum batch --profile sentinel-default` completes only after a second
+   key-backed target is ready.
+9. The run records p50/p90/p99 cell duration, lock conflicts/cooldowns, active
+   live cells, CPU, memory, EBS IOPS/throughput/queue, network, artifact bytes
+   by component, provider 429s/quota errors, and cost coverage.
 
 ## Open Questions
 
