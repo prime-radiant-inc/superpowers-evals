@@ -200,6 +200,32 @@ def _parse_run_id(stdout: str) -> str | None:
     return None
 
 
+def _child_id_for_index(idx: int) -> str:
+    return f"child-{idx:04d}"
+
+
+def _child_run_command(
+    *,
+    scenario_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    out_root: Path,
+) -> list[str]:
+    return [
+        "uv",
+        "run",
+        "quorum",
+        "run",
+        str(scenario_dir),
+        "--coding-agent",
+        coding_agent,
+        "--coding-agents-dir",
+        str(coding_agents_dir),
+        "--out-root",
+        str(out_root),
+    ]
+
+
 def invoke_child(
     *,
     scenario_dir: Path,
@@ -215,19 +241,12 @@ def invoke_child(
     `coding_agents_dir` and `out_root` are forwarded as explicit flags so
     the child doesn't rely on its own cwd-relative defaults.
     """
-    cmd = [
-        "uv",
-        "run",
-        "quorum",
-        "run",
-        str(scenario_dir),
-        "--coding-agent",
-        coding_agent,
-        "--coding-agents-dir",
-        str(coding_agents_dir),
-        "--out-root",
-        str(out_root),
-    ]
+    cmd = _child_run_command(
+        scenario_dir=scenario_dir,
+        coding_agent=coding_agent,
+        coding_agents_dir=coding_agents_dir,
+        out_root=out_root,
+    )
     try:
         base_env = dict(env_base) if env_base is not None else dict(os.environ)
         completed = subprocess.run(
@@ -539,6 +558,9 @@ def run_batch(
     stream: TextIO | None = None,
     use_cursor: bool = True,
     env_base: Mapping[str, str] | None = None,
+    on_batch_allocated: Callable[[Path], None] | None = None,
+    on_child_started: Callable[[str, MatrixEntry, list[str]], None] | None = None,
+    on_child_finished: Callable[[str, ChildResult], None] | None = None,
 ) -> Path:
     """Run the full batch. Returns the batch dir path.
 
@@ -564,6 +586,8 @@ def run_batch(
         include_drafts=include_drafts,
     )
     batch_dir = allocate_batch_dir(out_root=out_root)
+    if on_batch_allocated is not None:
+        on_batch_allocated(batch_dir)
     started_at = datetime.now(UTC)
     indexed = list(enumerate(entries, 1))
     total = len(entries)
@@ -633,6 +657,18 @@ def run_batch(
             f"  {'':<{_DUR_COL_W}}  {reason_label}",
         )
         console.print(line, markup=False, highlight=False)
+        child_id = _child_id_for_index(idx)
+        if on_child_started is not None:
+            on_child_started(
+                child_id,
+                entry,
+                _child_run_command(
+                    scenario_dir=entry.scenario_dir,
+                    coding_agent=entry.coding_agent,
+                    coding_agents_dir=coding_agents_dir,
+                    out_root=out_root,
+                ),
+            )
         append_result_record(
             batch_dir=batch_dir,
             scenario=entry.scenario,
@@ -640,6 +676,15 @@ def run_batch(
             run_id=None,
             skipped=entry.skipped_reason,
         )
+        if on_child_finished is not None:
+            on_child_finished(
+                child_id,
+                ChildResult(
+                    run_id=None,
+                    exit_code=0,
+                    error=f"skipped:{entry.skipped_reason or 'skipped'}",
+                ),
+            )
 
     # Lock guards both `console.print` from workers (plain mode) AND
     # results.jsonl writes (which happen on the main futures-completion
@@ -662,12 +707,29 @@ def run_batch(
         except Exception as e:
             message = sanitize_kimi_diagnostic(e, env=kimi_preflight_base_env)
             for idx, entry in kimi_entries:
+                child_id = _child_id_for_index(idx)
+                if on_child_started is not None:
+                    on_child_started(
+                        child_id,
+                        entry,
+                        _child_run_command(
+                            scenario_dir=entry.scenario_dir,
+                            coding_agent=entry.coding_agent,
+                            coding_agents_dir=coding_agents_dir,
+                            out_root=out_root,
+                        ),
+                    )
                 run_id = _write_setup_indeterminate_run(
                     out_root=out_root,
                     scenario=entry.scenario,
                     coding_agent=entry.coding_agent,
                     message=message,
                 )
+                if on_child_finished is not None:
+                    on_child_finished(
+                        child_id,
+                        ChildResult(run_id=run_id, exit_code=2, error=None),
+                    )
                 progress.finished(idx, "indeterminate")
                 append_result_record(
                     batch_dir=batch_dir,
@@ -688,18 +750,28 @@ def run_batch(
     rate_limited_agents: set[str] = set()
 
     def _worker(idx: int, entry: MatrixEntry) -> tuple[int, MatrixEntry, ChildResult, float]:
+        child_id = _child_id_for_index(idx)
+        if on_child_started is not None:
+            on_child_started(
+                child_id,
+                entry,
+                _child_run_command(
+                    scenario_dir=entry.scenario_dir,
+                    coding_agent=entry.coding_agent,
+                    coding_agents_dir=coding_agents_dir,
+                    out_root=out_root,
+                ),
+            )
         with rate_limit_lock:
             latched = entry.coding_agent in rate_limited_agents
         if latched:
             # This agent already exhausted its rate-limit window; don't invoke
             # — a doomed preflight can hang for the full timeout and deepen the
             # lockout. Signal a skip to _drain via the sentinel.
-            return (
-                idx,
-                entry,
-                ChildResult(run_id=None, exit_code=0, error=_RATE_LIMIT_SKIP_SENTINEL),
-                0.0,
-            )
+            result = ChildResult(run_id=None, exit_code=0, error=_RATE_LIMIT_SKIP_SENTINEL)
+            if on_child_finished is not None:
+                on_child_finished(child_id, result)
+            return (idx, entry, result, 0.0)
         progress.started(idx, entry)
         if not use_live:
             with print_lock:
@@ -733,6 +805,8 @@ def run_batch(
         if result.run_id and _is_rate_limited_verdict(_read_verdict(out_root / result.run_id)):
             with rate_limit_lock:
                 rate_limited_agents.add(entry.coding_agent)
+        if on_child_finished is not None:
+            on_child_finished(child_id, result)
         return idx, entry, result, time.monotonic() - t0
 
     def _drain(pool_for: Callable[[str], ThreadPoolExecutor]) -> None:

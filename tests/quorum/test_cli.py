@@ -7,10 +7,20 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from quorum.cli import _managed_env_base_for_target, main
+from quorum.doctor import DoctorCheck, DoctorStatus, TargetDoctorResult
+from quorum.managed_commands import StartResult
+from quorum.managed_state import discover_managed_paths, read_job
 
 
 def _allow_test_profile_owner(monkeypatch) -> None:
     monkeypatch.setattr("quorum.doctor.DEFAULT_PROFILE_OWNER_UID", os.getuid())
+
+
+def _managed_paths_env(tmp_path: Path) -> dict[str, str]:
+    return {
+        "QUORUM_STATE_ROOT": str(tmp_path / "state"),
+        "QUORUM_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+    }
 
 
 def test_list_finds_scenarios(tmp_path):
@@ -861,3 +871,110 @@ def test_show_renders_batch_when_target_is_batch_id(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Legend:" in result.output
     assert "— skip" in result.output
+
+
+def test_smoke_command_creates_job_starts_worker_and_prints_next_command(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_start_job(job, paths, supervisor):
+        captured["job"] = job
+        captured["paths"] = paths
+        captured["supervisor"] = supervisor
+        return StartResult(
+            job_id=job.id,
+            command=["env", "uv", "run", "quorum", "managed-worker", job.id],
+            supervisor={"kind": "inline"},
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("quorum.cli.start_job", fake_start_job)
+    env = _managed_paths_env(tmp_path)
+
+    result = CliRunner().invoke(main, ["smoke", "claude"], env=env)
+
+    assert result.exit_code == 0, result.output
+    job = captured["job"]
+    paths = discover_managed_paths(env)
+    stored = read_job(paths, job.id)
+    assert stored.managed_command == "smoke"
+    assert stored.command == ["quorum", "smoke", "claude"]
+    assert stored.coding_agents == ["claude"]
+    assert f"job id: {job.id}" in result.output
+    assert f"quorum status {job.id}" in result.output
+    assert f"quorum tail {job.id}" in result.output
+
+
+def test_column_command_creates_sentinel_job_with_jobs(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_start_job(job, paths, supervisor):
+        captured["job"] = job
+        return StartResult(job_id=job.id, command=[], supervisor={"kind": "inline"}, exit_code=0)
+
+    monkeypatch.setattr("quorum.cli.start_job", fake_start_job)
+    env = _managed_paths_env(tmp_path)
+
+    result = CliRunner().invoke(main, ["column", "claude", "--jobs", "2"], env=env)
+
+    assert result.exit_code == 0, result.output
+    stored = read_job(discover_managed_paths(env), captured["job"].id)
+    assert stored.managed_command == "column"
+    assert stored.command == ["quorum", "column", "claude", "--jobs", "2"]
+    assert stored.coding_agents == ["claude"]
+    assert stored.tier == "sentinel"
+    assert stored.include_drafts is False
+
+
+def test_batch_without_target_or_all_ready_targets_exits_two(tmp_path):
+    result = CliRunner().invoke(main, ["batch"], env=_managed_paths_env(tmp_path))
+
+    assert result.exit_code == 2
+    assert "pass --coding-agent, --coding-agents, or --all-ready-targets" in result.output
+
+
+def test_batch_all_ready_targets_expands_only_ready_doctor_targets(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_doctors(paths, env):
+        del paths, env
+        return [
+            TargetDoctorResult(
+                target="claude",
+                status=DoctorStatus.READY,
+                checks=[DoctorCheck("unit", DoctorStatus.READY, "ok")],
+            ),
+            TargetDoctorResult(
+                target="codex",
+                status=DoctorStatus.BLOCKED,
+                checks=[DoctorCheck("unit", DoctorStatus.BLOCKED, "blocked")],
+            ),
+            TargetDoctorResult(
+                target="gemini",
+                status=DoctorStatus.FAILED,
+                checks=[DoctorCheck("unit", DoctorStatus.FAILED, "failed")],
+            ),
+        ]
+
+    def fake_start_job(job, paths, supervisor):
+        captured["job"] = job
+        return StartResult(job_id=job.id, command=[], supervisor={"kind": "inline"}, exit_code=0)
+
+    monkeypatch.setattr("quorum.cli.run_all_doctors", fake_doctors)
+    monkeypatch.setattr("quorum.cli.start_job", fake_start_job)
+    (tmp_path / "scenarios").mkdir()
+    (tmp_path / "coding-agents").mkdir()
+    monkeypatch.chdir(tmp_path)
+    env = _managed_paths_env(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["batch", "--all-ready-targets"],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    stored = read_job(discover_managed_paths(env), captured["job"].id)
+    assert stored.coding_agents == ["claude"]
+    assert stored.command == ["quorum", "batch", "--coding-agents", "claude"]
+    assert stored.tier == "sentinel"
+    assert stored.include_drafts is False

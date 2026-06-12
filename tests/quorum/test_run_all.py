@@ -589,6 +589,173 @@ def test_run_batch_passes_env_base_to_children(tmp_path, monkeypatch):
     assert seen_env_base == [{"PATH": "/usr/bin:/bin"}]
 
 
+def test_run_batch_lifecycle_callbacks_observe_allocation_start_and_finish(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "alpha")
+    _agent(agents, "claude")
+    out_root = tmp_path / "results"
+    allocated: list[Path] = []
+    started: list[tuple[str, str, str, list[str]]] = []
+    finished: list[tuple[str, ChildResult]] = []
+
+    def fake_invoke(
+        *,
+        scenario_dir,
+        coding_agent,
+        coding_agents_dir,
+        out_root,
+        extra_env=None,
+        timeout_seconds=None,
+    ):
+        run_id = f"{scenario_dir.name}-{coding_agent}-x"
+        run_dir = out_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "verdict.json").write_text(json.dumps({"final": "pass"}))
+        return ChildResult(run_id=run_id, exit_code=0, error=None)
+
+    batch_dir = run_batch(
+        scenarios_root=scenarios,
+        coding_agents_dir=agents,
+        out_root=out_root,
+        jobs=1,
+        agent_filter=["claude"],
+        invoke=fake_invoke,
+        use_cursor=False,
+        on_batch_allocated=lambda path: allocated.append(path),
+        on_child_started=lambda child_id, entry, command: started.append(
+            (child_id, entry.scenario, entry.coding_agent, command)
+        ),
+        on_child_finished=lambda child_id, result: finished.append((child_id, result)),
+    )
+
+    assert allocated == [batch_dir]
+    assert started == [
+        (
+            "child-0001",
+            "alpha",
+            "claude",
+            [
+                "uv",
+                "run",
+                "quorum",
+                "run",
+                str(scenarios / "alpha"),
+                "--coding-agent",
+                "claude",
+                "--coding-agents-dir",
+                str(agents),
+                "--out-root",
+                str(out_root),
+            ],
+        )
+    ]
+    assert finished == [
+        ("child-0001", ChildResult(run_id="alpha-claude-x", exit_code=0, error=None))
+    ]
+
+
+def test_run_batch_child_finished_callback_observes_rate_limit_skips(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "alpha")
+    _scenario(scenarios, "beta")
+    _agent(agents, "antigravity", max_concurrency=1)
+    out_root = tmp_path / "results"
+    finished: list[tuple[str, ChildResult]] = []
+
+    def fake_invoke(
+        *,
+        scenario_dir,
+        coding_agent,
+        coding_agents_dir,
+        out_root,
+        extra_env=None,
+        timeout_seconds=None,
+    ):
+        run_id = f"{scenario_dir.name}-{coding_agent}-x"
+        run_dir = out_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "verdict.json").write_text(
+            json.dumps(
+                {
+                    "final": "indeterminate",
+                    "error": {
+                        "stage": "setup",
+                        "message": f"{ANTIGRAVITY_RATE_LIMIT_MARKER}: throttled",
+                    },
+                }
+            )
+        )
+        return ChildResult(run_id=run_id, exit_code=2, error=None)
+
+    run_batch(
+        scenarios_root=scenarios,
+        coding_agents_dir=agents,
+        out_root=out_root,
+        jobs=1,
+        agent_filter=["antigravity"],
+        invoke=fake_invoke,
+        use_cursor=False,
+        on_child_finished=lambda child_id, result: finished.append((child_id, result)),
+    )
+
+    assert finished == [
+        (
+            "child-0001",
+            ChildResult(run_id="alpha-antigravity-x", exit_code=2, error=None),
+        ),
+        (
+            "child-0002",
+            ChildResult(run_id=None, exit_code=0, error="agy-rate-limit-skip"),
+        ),
+    ]
+
+
+def test_run_batch_callbacks_observe_static_skips(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "alpha", directive="codex")
+    _agent(agents, "claude")
+    out_root = tmp_path / "results"
+    started: list[tuple[str, str, str]] = []
+    finished: list[tuple[str, ChildResult]] = []
+    order: list[str] = []
+
+    def on_child_started(child_id, entry, command):
+        del command
+        order.append("started")
+        batch_dirs = sorted((out_root / "batches").glob("batch-*"))
+        assert len(batch_dirs) == 1
+        assert not (batch_dirs[0] / "results.jsonl").exists()
+        started.append((child_id, entry.scenario, entry.coding_agent))
+
+    def on_child_finished(child_id, result):
+        order.append("finished")
+        finished.append((child_id, result))
+
+    run_batch(
+        scenarios_root=scenarios,
+        coding_agents_dir=agents,
+        out_root=out_root,
+        jobs=1,
+        agent_filter=["claude"],
+        invoke=lambda **_kwargs: ChildResult(run_id=None, exit_code=99, error="should not run"),
+        use_cursor=False,
+        on_child_started=on_child_started,
+        on_child_finished=on_child_finished,
+    )
+
+    assert order == ["started", "finished"]
+    assert started == [("child-0001", "alpha", "claude")]
+    assert finished == [
+        (
+            "child-0001",
+            ChildResult(run_id=None, exit_code=0, error="skipped:directive"),
+        )
+    ]
+
+
 def test_run_batch_jobs_gt_one_runs_all_pairs(tmp_path):
     scenarios = tmp_path / "scenarios"
     agents = tmp_path / "agents"
@@ -971,6 +1138,48 @@ def test_run_batch_kimi_preflight_failure_writes_indeterminate_runs(tmp_path):
     assert all(v["final"] == "indeterminate" for v in verdicts)
     assert all(v["error"]["stage"] == "setup" for v in verdicts)
     assert all("kimi auth failed" in v["error"]["message"] for v in verdicts)
+
+
+def test_run_batch_callbacks_observe_kimi_parent_preflight_failures(tmp_path):
+    scenarios = tmp_path / "scenarios"
+    agents = tmp_path / "agents"
+    _scenario(scenarios, "a")
+    _scenario(scenarios, "b")
+    _agent(agents, "kimi")
+    out_root = tmp_path / "results"
+    started: list[tuple[str, str, str, list[str]]] = []
+    finished: list[tuple[str, ChildResult]] = []
+
+    with patch(
+        "quorum.run_all.prepare_kimi_batch_preflight",
+        side_effect=RuntimeError("kimi auth failed"),
+    ):
+        run_batch(
+            scenarios_root=scenarios,
+            coding_agents_dir=agents,
+            out_root=out_root,
+            jobs=1,
+            agent_filter=["kimi"],
+            invoke=lambda **_kwargs: ChildResult(
+                run_id=None,
+                exit_code=99,
+                error="should not run",
+            ),
+            use_cursor=False,
+            on_child_started=lambda child_id, entry, command: started.append(
+                (child_id, entry.scenario, entry.coding_agent, command)
+            ),
+            on_child_finished=lambda child_id, result: finished.append((child_id, result)),
+        )
+
+    assert [(child_id, scenario, agent) for child_id, scenario, agent, _ in started] == [
+        ("child-0001", "a", "kimi"),
+        ("child-0002", "b", "kimi"),
+    ]
+    assert all(command[:4] == ["uv", "run", "quorum", "run"] for *_, command in started)
+    assert [child_id for child_id, _ in finished] == ["child-0001", "child-0002"]
+    assert all(result.run_id for _, result in finished)
+    assert all(result.exit_code == 2 and result.error is None for _, result in finished)
 
 
 def test_run_batch_kimi_parent_preflight_uses_configured_binary(tmp_path, monkeypatch):

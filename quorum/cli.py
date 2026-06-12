@@ -19,7 +19,16 @@ from quorum.doctor import (
     run_all_doctors,
     run_target_doctor,
 )
-from quorum.managed_commands import run_managed_worker, status_summary, tail_job
+from quorum.managed_commands import (
+    InlineSupervisor,
+    Supervisor,
+    TmuxSupervisor,
+    create_job,
+    run_managed_worker,
+    start_job,
+    status_summary,
+    tail_job,
+)
 from quorum.managed_state import discover_managed_paths, job_to_json, read_job
 from quorum.run_all import run_batch
 from quorum.runner import run_scenario
@@ -411,6 +420,239 @@ def _render_doctor_table(results: list[TargetDoctorResult]) -> str:
                 lines.append(f"{'':<7} {'':<8} {'remediation':<22} {check.remediation}")
             first = False
     return "\n".join(lines) + "\n"
+
+
+@main.command("smoke")
+@click.argument("target")
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+@click.option(
+    "--coding-agents-dir",
+    default=_DEFAULT_CODING_AGENTS_DIR,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def managed_smoke(target: str, scenarios_root: Path, coding_agents_dir: Path) -> None:
+    """Run the managed smoke scenario for one target."""
+    args = _managed_path_args(
+        scenarios_root=scenarios_root,
+        coding_agents_dir=coding_agents_dir,
+    )
+    _start_managed_cli_job(
+        kind="smoke",
+        target=target,
+        args=args,
+        coding_agents=[target],
+        tier=None,
+        include_drafts=True,
+    )
+
+
+@main.command("column")
+@click.argument("target")
+@click.option("--jobs", default=1, type=click.IntRange(min=1), help="Worker pool size.")
+@click.option(
+    "--tier",
+    type=click.Choice(["sentinel", "full", "adhoc"]),
+    default="sentinel",
+    help="Scenario tier to run. Default: sentinel.",
+)
+@click.option(
+    "--include-drafts",
+    "include_drafts",
+    is_flag=True,
+    default=False,
+    help="Include status: draft scenarios.",
+)
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+@click.option(
+    "--coding-agents-dir",
+    default=_DEFAULT_CODING_AGENTS_DIR,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def managed_column(
+    target: str,
+    jobs: int,
+    tier: str,
+    include_drafts: bool,
+    scenarios_root: Path,
+    coding_agents_dir: Path,
+) -> None:
+    """Run a managed sentinel column for one target."""
+    args = ["--jobs", str(jobs)]
+    if tier != "sentinel":
+        args.extend(["--tier", tier])
+    if include_drafts:
+        args.append("--include-drafts")
+    args.extend(
+        _managed_path_args(
+            scenarios_root=scenarios_root,
+            coding_agents_dir=coding_agents_dir,
+        )
+    )
+    _start_managed_cli_job(
+        kind="column",
+        target=target,
+        args=args,
+        coding_agents=[target],
+        tier=tier,
+        include_drafts=include_drafts,
+    )
+
+
+@main.command("batch")
+@click.option("--coding-agent", "coding_agent", help="Single Coding-Agent target.")
+@click.option("--coding-agents", "coding_agents_csv", help="CSV Coding-Agent target filter.")
+@click.option(
+    "--all-ready-targets",
+    is_flag=True,
+    help="Expand to targets whose doctor status is ready.",
+)
+@click.option("--jobs", default=1, type=click.IntRange(min=1), help="Worker pool size.")
+@click.option(
+    "--tier",
+    type=click.Choice(["sentinel", "full", "adhoc"]),
+    default="sentinel",
+    help="Scenario tier to run. Default: sentinel.",
+)
+@click.option(
+    "--include-drafts",
+    "include_drafts",
+    is_flag=True,
+    default=False,
+    help="Include status: draft scenarios.",
+)
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+@click.option(
+    "--coding-agents-dir",
+    default=_DEFAULT_CODING_AGENTS_DIR,
+    hidden=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def managed_batch(
+    coding_agent: str | None,
+    coding_agents_csv: str | None,
+    all_ready_targets: bool,
+    jobs: int,
+    tier: str,
+    include_drafts: bool,
+    scenarios_root: Path,
+    coding_agents_dir: Path,
+) -> None:
+    """Run a managed batch over explicit or doctor-ready targets."""
+    selectors = [bool(coding_agent), bool(coding_agents_csv), all_ready_targets]
+    if sum(selectors) != 1:
+        click.echo(
+            "error: pass --coding-agent, --coding-agents, or --all-ready-targets",
+            err=True,
+        )
+        sys.exit(2)
+
+    targets: list[str]
+    if all_ready_targets:
+        targets = _doctor_ready_targets(
+            scenarios_root=scenarios_root,
+            coding_agents_dir=coding_agents_dir,
+        )
+    elif coding_agent is not None:
+        targets = [str(coding_agent)]
+    else:
+        targets = [str(a.strip()) for a in (coding_agents_csv or "").split(",") if a.strip()]
+    if not targets:
+        click.echo("error: no ready targets resolved", err=True)
+        sys.exit(2)
+
+    args = ["--coding-agents", ",".join(targets)]
+    if jobs != 1:
+        args.extend(["--jobs", str(jobs)])
+    if tier != "sentinel":
+        args.extend(["--tier", tier])
+    if include_drafts:
+        args.append("--include-drafts")
+    args.extend(
+        _managed_path_args(
+            scenarios_root=scenarios_root,
+            coding_agents_dir=coding_agents_dir,
+        )
+    )
+    _start_managed_cli_job(
+        kind="batch",
+        target=None,
+        args=args,
+        coding_agents=targets,
+        tier=tier,
+        include_drafts=include_drafts,
+    )
+
+
+def _managed_path_args(*, scenarios_root: Path, coding_agents_dir: Path) -> list[str]:
+    args: list[str] = []
+    if scenarios_root != _DEFAULT_SCENARIOS_ROOT:
+        args.extend(["--scenarios-root", str(scenarios_root)])
+    if coding_agents_dir != _DEFAULT_CODING_AGENTS_DIR:
+        args.extend(["--coding-agents-dir", str(coding_agents_dir)])
+    return args
+
+
+def _start_managed_cli_job(
+    *,
+    kind: str,
+    target: str | None,
+    args: list[str],
+    coding_agents: list[str],
+    tier: str | None,
+    include_drafts: bool | None,
+) -> None:
+    paths = discover_managed_paths(os.environ)
+    job = create_job(
+        kind,
+        target,
+        args,
+        paths,
+        owner=None,
+        coding_agents=coding_agents,
+        tier=tier,
+        include_drafts=include_drafts,
+    )
+    result = start_job(job, paths, _managed_supervisor(os.environ))
+    click.echo(f"job id: {result.job_id}")
+    click.echo(f"status: quorum status {result.job_id}")
+    click.echo(f"tail: quorum tail {result.job_id}")
+
+
+def _managed_supervisor(env: Mapping[str, str]) -> Supervisor:
+    if env.get("QUORUM_MANAGED_SUPERVISOR") == "inline":
+        return InlineSupervisor(env=env)
+    return TmuxSupervisor(env=env)
+
+
+def _doctor_ready_targets(*, scenarios_root: Path, coding_agents_dir: Path) -> list[str]:
+    env = dict(os.environ)
+    paths = DoctorPaths(
+        coding_agents_dir=coding_agents_dir.resolve(),
+        scenarios_root=scenarios_root.resolve(),
+        profile_root=Path(env["QUORUM_TARGET_PROFILE_ROOT"]).resolve()
+        if env.get("QUORUM_TARGET_PROFILE_ROOT")
+        else None,
+        managed_paths=discover_managed_paths(env),
+    )
+    results = run_all_doctors(paths, env)
+    return [result.target for result in results if result.status is DoctorStatus.READY]
 
 
 @main.command("status")

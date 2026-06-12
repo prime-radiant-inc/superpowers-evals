@@ -52,6 +52,7 @@ from quorum.runner import (
     _write_gemini_settings,
     invoke_gauntlet,
     run_scenario,
+    run_scenario_in_dir,
 )
 
 
@@ -3432,6 +3433,31 @@ class TestAntigravityProjectMarkerExclusion:
 
 
 class TestRunScenario:
+    def test_run_scenario_in_dir_uses_preallocated_dir_and_maps_exceptions(self, tmp_path):
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        coding_agents_dir.mkdir(parents=True)
+        (coding_agents_dir / "broken.yaml").write_text("name: broken\n")
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        run_dir = tmp_path / "results" / "managed-smoke-run"
+        run_dir.mkdir(parents=True)
+
+        returned_dir, verdict = run_scenario_in_dir(
+            run_dir=run_dir,
+            scenario_dir=sd,
+            coding_agent="broken",
+            coding_agents_dir=coding_agents_dir,
+            out_root=tmp_path / "results",
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+        assert returned_dir == run_dir
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+        assert (run_dir / "verdict.json").exists()
+
     def test_claude_family_missing_binary_fails_before_writing_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))

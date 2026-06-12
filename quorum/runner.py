@@ -2626,6 +2626,33 @@ def run_scenario(
         scenario_name=scenario_dir.name,
         coding_agent=coding_agent,
     )
+    return run_scenario_in_dir(
+        run_dir=run_dir,
+        scenario_dir=scenario_dir,
+        coding_agent=coding_agent,
+        coding_agents_dir=coding_agents_dir,
+        out_root=out_root,
+        skeleton_root=skeleton_root,
+        env_base=env_base,
+    )
+
+
+def run_scenario_in_dir(
+    *,
+    run_dir: Path,
+    scenario_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    out_root: Path,
+    skeleton_root: Path | None = None,
+    env_base: Mapping[str, str] | None = None,
+) -> tuple[Path, FinalVerdict]:
+    """Run one scenario in a caller-allocated run directory.
+
+    Managed smoke uses this seam to persist the run-dir in job state before
+    executing the live eval. Exception mapping intentionally matches
+    `run_scenario`.
+    """
     try:
         return _run_scenario_inner(
             run_dir=run_dir,
