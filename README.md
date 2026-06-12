@@ -124,6 +124,39 @@ uv run quorum run-all --coding-agents claude,codex --jobs 2
 scenario's `# coding-agents:` directive. View the resulting matrix with
 `uv run quorum show <batch-id>`.
 
+For all-harness trusted-maintainer sweeps, do not put every Coding-Agent in one
+`run-all --jobs N` command when you need a hard global concurrency cap. Agents
+with `max_concurrency: 1` in `coding-agents/*.yaml` run in dedicated lanes beside
+the shared `--jobs` pool, so one broad batch can exceed `N` live cells.
+
+Prefer grouped batches:
+
+```bash
+set -a; source .env; set +a
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+export GEMINI_AUTH_TYPE=oauth-personal
+export SCENARIOS="scenario-a,scenario-b"
+
+# Uncapped targets share the --jobs pool.
+uv run quorum run-all \
+  --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+  --scenarios "$SCENARIOS" \
+  --jobs 4 \
+  --no-cursor
+
+# Capped or fragile targets run one serial column per batch. Launch several
+# single-column batches in parallel only when their backends do not interfere.
+uv run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+uv run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+uv run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+uv run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+wait
+
+# Keep Antigravity separate from Gemini to avoid Google/Gemini auth or quota
+# noise while collecting clean capture.
+uv run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
+```
+
 Trusted-maintainer Antigravity sweep:
 
 ```bash
