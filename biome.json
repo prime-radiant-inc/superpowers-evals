@@ -42,6 +42,9 @@
       },
       "nursery": {
         "noFloatingPromises": "error"
+      },
+      "complexity": {
+        "useLiteralKeys": "off"
       }
     }
   },
@@ -93,7 +96,7 @@
       }
     },
     {
-      "includes": ["test/runner-e2e.test.ts"],
+      "includes": ["test/runner-e2e.test.ts", "test/cli-run.test.ts"],
       "linter": {
         "rules": {
           "style": {
