@@ -9,6 +9,14 @@ from pathlib import Path
 
 import click
 
+from quorum.doctor import (
+    DoctorPaths,
+    DoctorStatus,
+    TargetDoctorResult,
+    is_doctor_command_error,
+    run_all_doctors,
+    run_target_doctor,
+)
 from quorum.managed_state import discover_managed_paths
 from quorum.run_all import run_batch
 from quorum.runner import run_scenario
@@ -299,6 +307,107 @@ def show(
             err=True,
         )
         sys.exit(2)
+
+
+@main.command("doctor")
+@click.argument("target", required=False)
+@click.option(
+    "--all",
+    "all_targets",
+    is_flag=True,
+    help="Check every configured Coding-Agent target.",
+)
+@click.option("--json", "mode_json", is_flag=True, help="Print stable JSON for automation.")
+@click.option(
+    "--scenarios-root",
+    default=_DEFAULT_SCENARIOS_ROOT,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--coding-agents-dir",
+    default=_DEFAULT_CODING_AGENTS_DIR,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def doctor(
+    target: str | None,
+    all_targets: bool,
+    mode_json: bool,
+    scenarios_root: Path,
+    coding_agents_dir: Path,
+) -> None:
+    """Check whether Coding-Agent targets are runnable without launching live evals."""
+    if all_targets and target is not None:
+        click.echo("error: pass either TARGET or --all, not both", err=True)
+        sys.exit(1)
+    if not all_targets and target is None:
+        click.echo("error: pass TARGET or --all", err=True)
+        sys.exit(1)
+
+    env = dict(os.environ)
+    paths = DoctorPaths(
+        coding_agents_dir=coding_agents_dir.resolve(),
+        scenarios_root=scenarios_root.resolve(),
+        profile_root=Path(env["QUORUM_TARGET_PROFILE_ROOT"]).resolve()
+        if env.get("QUORUM_TARGET_PROFILE_ROOT")
+        else None,
+        managed_paths=discover_managed_paths(env),
+    )
+    if all_targets:
+        results = run_all_doctors(paths, env)
+        if mode_json:
+            click.echo(
+                json.dumps(
+                    [result.to_dict() for result in results],
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            click.echo(_render_doctor_table(results), nl=False)
+        sys.exit(_doctor_results_exit_code(results))
+
+    assert target is not None
+    result = run_target_doctor(target, paths, env)
+    if mode_json:
+        click.echo(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        click.echo(_render_doctor_table([result]), nl=False)
+    sys.exit(_doctor_exit_code(result))
+
+
+def _doctor_exit_code(result: TargetDoctorResult) -> int:
+    if is_doctor_command_error(result):
+        return 2
+    status = result.status
+    if status is DoctorStatus.READY:
+        return 0
+    if status is DoctorStatus.BLOCKED:
+        return 3
+    return 1
+
+
+def _doctor_results_exit_code(results: list[TargetDoctorResult]) -> int:
+    if any(is_doctor_command_error(result) for result in results):
+        return 2
+    if any(result.status is DoctorStatus.FAILED for result in results):
+        return 1
+    return 0
+
+
+def _render_doctor_table(results: list[TargetDoctorResult]) -> str:
+    lines = ["target  status   check                  message"]
+    for result in results:
+        first = True
+        for check in result.checks:
+            target_text = result.target if first else ""
+            status_text = result.status.value if first else ""
+            lines.append(
+                f"{target_text:<7} {status_text:<8} {check.name:<22} {check.message}"
+            )
+            if check.remediation:
+                lines.append(f"{'':<7} {'':<8} {'remediation':<22} {check.remediation}")
+            first = False
+    return "\n".join(lines) + "\n"
 
 
 @main.command("run-all")

@@ -1,11 +1,16 @@
 # tests/quorum/test_cli.py
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from quorum.cli import _managed_env_base_for_target, main
+
+
+def _allow_test_profile_owner(monkeypatch) -> None:
+    monkeypatch.setattr("quorum.doctor.DEFAULT_PROFILE_OWNER_UID", os.getuid())
 
 
 def test_list_finds_scenarios(tmp_path):
@@ -454,6 +459,245 @@ def test_managed_kimi_target_env_preserves_batch_preflight_markers(tmp_path, mon
     assert env_base["KIMI_MODEL_API_KEY"] == "profile-key"
     assert env_base["QUORUM_KIMI_PREFLIGHT_SENTINEL"] == str(marker)
     assert env_base["QUORUM_KIMI_PREFLIGHT_TOKEN"] == "batch-token"
+
+
+def _write_doctor_agent_fixture(
+    tmp_path: Path,
+    *,
+    target: str = "gemini",
+) -> tuple[Path, Path, Path]:
+    import yaml
+
+    agents = tmp_path / "coding-agents"
+    scenarios = tmp_path / "scenarios"
+    profiles = tmp_path / "profiles"
+    bin_dir = tmp_path / "bin"
+    agents.mkdir()
+    scenarios.mkdir()
+    profiles.mkdir()
+    profiles.chmod(0o700)
+    bin_dir.mkdir()
+    (bin_dir / "demo-agent").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "demo-agent").chmod(0o755)
+    (agents / f"{target}.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": target,
+                "binary": "demo-agent",
+                "agent_config_env": "DEMO_HOME",
+                "session_log_dir": "${DEMO_HOME}/sessions",
+                "session_log_glob": "*.jsonl",
+                "normalizer": "codex",
+                "required_env": ["GEMINI_API_KEY", "SUPERPOWERS_ROOT"],
+            }
+        )
+    )
+    context = agents / f"{target}-context"
+    context.mkdir()
+    (context / "HOWTO.md").write_text("Use gemini.\n")
+    sentinel = scenarios / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "story.md").write_text(
+        "---\nid: sentinel\nstatus: ready\nquorum_tier: sentinel\n---\n"
+    )
+    (sentinel / "checks.sh").write_text(
+        f"# coding-agents: {target}\npre() {{ :; }}\npost() {{ :; }}\n"
+    )
+    profile = profiles / f"{target}.env"
+    profile.write_text("GEMINI_API_KEY=profile-key\n")
+    profile.chmod(0o600)
+    superpowers = tmp_path / "superpowers"
+    for rel in (
+        "GEMINI.md",
+        "skills/using-superpowers/SKILL.md",
+        "skills/using-superpowers/references/gemini-tools.md",
+    ):
+        path = superpowers / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n")
+    return agents, scenarios, profiles
+
+
+def test_doctor_ready_target_exits_zero(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "gemini",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "gemini" in result.output
+    assert "ready" in result.output
+
+
+def test_doctor_missing_profile_on_managed_host_exits_one(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    (profiles / "gemini.env").unlink()
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "gemini",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "failed" in result.output
+    assert "profile" in result.output
+
+
+def test_doctor_all_reports_failed_profile_and_exits_one(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    (profiles / "gemini.env").unlink()
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "--all",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "gemini" in result.output
+    assert "failed" in result.output
+
+
+def test_doctor_all_missing_coding_agents_dir_exits_two(tmp_path, monkeypatch):
+    missing_agents = tmp_path / "missing-agents"
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "--all",
+            "--coding-agents-dir",
+            str(missing_agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "coding-agents directory not found" in result.output
+
+
+def test_doctor_missing_coding_agent_yaml_fails_and_exits_one(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    (agents / "gemini.yaml").unlink()
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "gemini",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "failed" in result.output
+    assert "coding-agent config" in result.output
+
+
+def test_doctor_malformed_coding_agent_yaml_exits_two(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    (agents / "gemini.yaml").write_text("[]\n")
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "gemini",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "failed" in result.output
+    assert "coding-agent config" in result.output
+
+
+def test_doctor_json_output_is_stable(tmp_path, monkeypatch):
+    _allow_test_profile_owner(monkeypatch)
+    agents, scenarios, profiles = _write_doctor_agent_fixture(tmp_path)
+    (profiles / "gemini.env").chmod(0o666)
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("QUORUM_TARGET_PROFILE_ROOT", str(profiles))
+    monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "doctor",
+            "gemini",
+            "--json",
+            "--coding-agents-dir",
+            str(agents),
+            "--scenarios-root",
+            str(scenarios),
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["target"] == "gemini"
+    assert payload["status"] == "failed"
+    assert isinstance(payload["checks"], list)
+    assert any(check.get("remediation") for check in payload["checks"])
+    assert any(check.get("reason") == "config-error" for check in payload["checks"])
 
 
 def test_run_all_scenarios_filter_forwarded(tmp_path, monkeypatch):

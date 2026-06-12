@@ -106,11 +106,11 @@ def load_coding_agent_config(
     if missing:
         raise CodingAgentConfigError(f"{path}: missing required fields: {missing}")
 
-    name = raw["name"]
+    name = _required_string(path, raw, "name")
     if name != path.stem:
         raise CodingAgentConfigError(f"{path}: name must match file stem; got name {name!r}")
 
-    runtime_family = raw.get("runtime_family", name)
+    runtime_family = _optional_string(path, raw, "runtime_family") or name
     if runtime_family not in KNOWN_RUNTIME_FAMILIES:
         raise CodingAgentConfigError(
             f"{path}: unknown runtime_family {runtime_family!r}; "
@@ -127,18 +127,23 @@ def load_coding_agent_config(
     if runtime_family != "claude" and runtime_family != name:
         raise CodingAgentConfigError(f"{path}: non-Claude variants are not supported in v1")
 
-    required_env = tuple(raw["required_env"])
+    binary = _required_string(path, raw, "binary")
+    agent_config_env = _required_string(path, raw, "agent_config_env")
+    session_log_dir = _required_string(path, raw, "session_log_dir")
+    session_log_glob = _required_string(path, raw, "session_log_glob")
+    normalizer = _required_string(path, raw, "normalizer")
+    max_time = _optional_string(path, raw, "max_time")
+    required_env = _required_string_sequence(path, raw, "required_env")
     missing_env = [v for v in required_env if not host_env.get(v)]
     if missing_env:
         raise CodingAgentConfigError(f"{path}: required env vars not set: {missing_env}")
 
-    normalizer = raw["normalizer"]
     if normalizer not in NORMALIZERS:
         raise CodingAgentConfigError(
             f"{path}: unknown normalizer {normalizer!r}; known: {sorted(NORMALIZERS)}"
         )
 
-    project_prompt_raw = raw.get("project_prompt")
+    project_prompt_raw = _optional_string(path, raw, "project_prompt")
     project_prompt: Path | None = None
     if project_prompt_raw:
         candidate = (path.parent / project_prompt_raw).resolve()
@@ -149,13 +154,46 @@ def load_coding_agent_config(
     return CodingAgentConfig(
         name=name,
         runtime_family=runtime_family,
-        binary=raw["binary"],
-        agent_config_env=raw["agent_config_env"],
-        session_log_dir=raw["session_log_dir"],
-        session_log_glob=raw["session_log_glob"],
+        binary=binary,
+        agent_config_env=agent_config_env,
+        session_log_dir=session_log_dir,
+        session_log_glob=session_log_glob,
         normalizer=normalizer,
         required_env=required_env,
         model=model,
-        max_time=raw.get("max_time"),
+        max_time=max_time,
         project_prompt=project_prompt,
     )
+
+
+def _required_string(path: Path, raw: Mapping[str, object], key: str) -> str:
+    value = raw[key]
+    if not isinstance(value, str):
+        raise CodingAgentConfigError(f"{path}: {key} must be a string")
+    if not value.strip():
+        raise CodingAgentConfigError(f"{path}: {key} must not be blank")
+    return value
+
+
+def _optional_string(path: Path, raw: Mapping[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CodingAgentConfigError(f"{path}: {key} must be a string")
+    if not value.strip():
+        raise CodingAgentConfigError(f"{path}: {key} must not be blank")
+    return value
+
+
+def _required_string_sequence(
+    path: Path,
+    raw: Mapping[str, object],
+    key: str,
+) -> tuple[str, ...]:
+    value = raw[key]
+    if not isinstance(value, list | tuple):
+        raise CodingAgentConfigError(f"{path}: {key} must be a list of strings")
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        raise CodingAgentConfigError(f"{path}: {key} must be a list of non-blank strings")
+    return tuple(str(item) for item in value)
