@@ -1070,6 +1070,83 @@ def test_copilot_launch_agent_is_substituted_and_uses_env_i(tmp_path):
     ]
 
 
+def test_codex_launch_agent_scrubs_openai_api_key_env(tmp_path, monkeypatch):
+    coding_agents_dir = tmp_path / "coding-agents"
+    codex_context = coding_agents_dir / "codex-context"
+    codex_context.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "launch-agent",
+        codex_context / "launch-agent",
+    )
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "HOWTO.md",
+        codex_context / "HOWTO.md",
+    )
+    run_dir = tmp_path / "run"
+    launch_cwd = tmp_path / "workdir"
+    codex_home = run_dir / "coding-agent-config"
+    launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
+    launch_cwd.mkdir()
+
+    _populate_context_dir(
+        coding_agents_dir,
+        "codex",
+        run_dir,
+        substitutions={
+            "$QUORUM_AGENT_CWD": str(launch_cwd),
+            "$QUORUM_AGENT_CWD_SH": _shell_single_quote(str(launch_cwd)),
+            "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
+            "$QUORUM_LAUNCH_AGENT_SH": _shell_single_quote(str(launch_agent_path)),
+            "$CODEX_HOME": str(codex_home),
+            "$CODEX_HOME_SH": _shell_single_quote(str(codex_home)),
+        },
+    )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    capture_path = tmp_path / "codex-capture.json"
+    _exec(
+        fake_bin / "codex",
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        f"Path({json.dumps(str(capture_path))}).write_text(json.dumps({{\n"
+        "    'argv': sys.argv[1:],\n"
+        "    'cwd': os.getcwd(),\n"
+        "    'env': dict(os.environ),\n"
+        "}, sort_keys=True))\n",
+    )
+
+    launch_env_path = str(fake_bin) + os.pathsep + os.environ["PATH"]
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "PATH="
+            + _shell_single_quote(launch_env_path)
+            + " "
+            + _shell_single_quote(str(launch_agent_path)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": os.environ["PATH"],
+            "OPENAI_API_KEY": "sk-should-not-reach-codex",
+            "OPENAI_BASE_URL": "https://api-key-proxy.example",
+            "OPENAI_ORG_ID": "org-key-mode",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    captured = json.loads(capture_path.read_text())
+    assert captured["cwd"] == str(launch_cwd)
+    assert captured["env"]["CODEX_HOME"] == str(codex_home)
+    assert "OPENAI_API_KEY" not in captured["env"]
+    assert "OPENAI_BASE_URL" not in captured["env"]
+    assert "OPENAI_ORG_ID" not in captured["env"]
+
+
 def test_copilot_context_gets_runtime_substitutions(tmp_path):
     coding_agents_dir = tmp_path / "coding-agents"
     scenarios_dir = tmp_path / "scenarios"
@@ -1357,17 +1434,34 @@ class TestSeedAgentConfigDir:
         assert (dest / "config.toml").exists()
         assert not (dest / ".claude.json").exists()
 
-    def test_codex_target_seeds_auth_via_codex_login(self, tmp_path, monkeypatch):
-        # Codex's auth picker is gated on auth.json, not on $OPENAI_API_KEY,
-        # so the runner pipes the env key through `codex login --with-api-key`
-        # into the fresh per-run CODEX_HOME.
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    def test_codex_target_seeds_subscription_auth_from_signed_in_home(self, tmp_path, monkeypatch):
+        # Codex evals should use ChatGPT subscription auth, not Platform API-key
+        # auth. The per-run CODEX_HOME copies the signed-in account auth state.
+        home = tmp_path / "home"
+        source = home / ".codex" / "auth.json"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            json.dumps(
+                {
+                    "auth_mode": "chatgpt",
+                    "OPENAI_API_KEY": None,
+                    "tokens": {
+                        "access_token": "access",
+                        "refresh_token": "refresh",
+                        "id_token": "id",
+                        "account_id": "acct",
+                    },
+                    "last_refresh": "2026-06-12T00:00:00.000Z",
+                }
+            )
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-be-used")
         dest = tmp_path / "agent-config"
         with (
             patch("quorum.runner.subprocess.run") as mock_run,
             patch("quorum.runner._seed_codex_plugin_hooks"),
         ):
-            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             _seed_agent_config_dir(
                 _tcfg("codex"),
                 tmp_path,
@@ -1375,34 +1469,35 @@ class TestSeedAgentConfigDir:
                 tmp_path / "wd",
                 run_dir=tmp_path / "run-dir",
             )
-        (cmd, *_), kwargs = mock_run.call_args
-        assert cmd == ["codex", "login", "--with-api-key"]
-        assert kwargs["input"] == "sk-test-key"
-        assert kwargs["env"]["CODEX_HOME"] == str(dest)
+        mock_run.assert_not_called()
+        assert json.loads((dest / "auth.json").read_text())["auth_mode"] == "chatgpt"
+        assert (dest / "auth.json").stat().st_mode & 0o777 == 0o600
 
-    def test_codex_seed_raises_on_login_failure(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    def test_codex_seed_rejects_api_key_auth_state(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        source = home / ".codex" / "auth.json"
+        source.parent.mkdir(parents=True)
+        source.write_text(json.dumps({"auth_mode": "api_key", "OPENAI_API_KEY": "sk-test-key"}))
+        monkeypatch.setenv("HOME", str(home))
         dest = tmp_path / "agent-config"
         with (
-            patch("quorum.runner.subprocess.run") as mock_run,
             patch("quorum.runner._seed_codex_plugin_hooks"),
+            pytest.raises(RunnerError, match="ChatGPT subscription auth"),
         ):
-            mock_run.return_value = subprocess.CompletedProcess([], 1, "", "bad key")
-            with pytest.raises(RunnerError, match="codex login"):
-                _seed_agent_config_dir(
-                    _tcfg("codex"),
-                    tmp_path,
-                    dest,
-                    tmp_path / "wd",
-                    run_dir=tmp_path / "run-dir",
-                )
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
-    def test_codex_seed_raises_without_api_key(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    def test_codex_seed_raises_without_signed_in_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
         dest = tmp_path / "agent-config"
         with (
             patch("quorum.runner._seed_codex_plugin_hooks"),
-            pytest.raises(RunnerError, match="OPENAI_API_KEY"),
+            pytest.raises(RunnerError, match="Codex ChatGPT subscription auth"),
         ):
             _seed_agent_config_dir(
                 _tcfg("codex"),

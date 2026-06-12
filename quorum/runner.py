@@ -307,29 +307,36 @@ def _cleanup_agent_runtime(runtime: AgentRuntime) -> None:
 
 
 def _seed_codex_auth(codex_home: Path) -> None:
-    """Seed codex auth.json so the agent boots past the sign-in picker.
-
-    Codex gates its TUI auth picker on auth.json, not on $OPENAI_API_KEY:
-    `codex login status` reports "Not logged in" for an env-var-only
-    setup. Piping the key through `codex login --with-api-key` writes a
-    logged-in auth.json into CODEX_HOME. Seeded per-run from the env
-    rather than from a checked-in fixture, so the API key is never
-    persisted outside the environment and the gitignored run dir.
-    """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RunnerError("OPENAI_API_KEY not set; cannot seed codex auth")
-    result = subprocess.run(
-        ["codex", "login", "--with-api-key"],
-        input=api_key,
-        text=True,
-        capture_output=True,
-        env={**os.environ, "CODEX_HOME": str(codex_home)},
-    )
-    if result.returncode != 0:
+    """Seed ChatGPT subscription auth into the isolated per-run CODEX_HOME."""
+    source = Path.home() / ".codex" / "auth.json"
+    if not source.exists():
         raise RunnerError(
-            f"codex login --with-api-key failed (exit {result.returncode}): {result.stderr.strip()}"
+            "Codex ChatGPT subscription auth not found at ~/.codex/auth.json; "
+            "run `codex login` before Codex evals",
+            stage="setup",
         )
+    try:
+        auth = json.loads(source.read_text())
+    except json.JSONDecodeError as e:
+        raise RunnerError(
+            "Codex ChatGPT subscription auth at ~/.codex/auth.json is not valid JSON",
+            stage="setup",
+        ) from e
+    if auth.get("auth_mode") != "chatgpt" or auth.get("OPENAI_API_KEY") is not None:
+        raise RunnerError(
+            "Codex evals require ChatGPT subscription auth in ~/.codex/auth.json, not API-key auth",
+            stage="setup",
+        )
+    tokens = auth.get("tokens")
+    if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
+        raise RunnerError(
+            "Codex ChatGPT subscription auth is missing a refresh token; run `codex login` again",
+            stage="setup",
+        )
+    codex_home.mkdir(parents=True, exist_ok=True)
+    dest = codex_home / "auth.json"
+    shutil.copy2(source, dest)
+    dest.chmod(0o600)
 
 
 def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
@@ -1388,11 +1395,10 @@ def _seed_agent_config_dir(
     runner seeds that approval for the per-run key. The claude skeleton itself
     carries onboarding dialog-bypass state (see bin/refresh-claude-home-skeleton).
 
-    For codex, _seed_codex_auth runs `codex login --with-api-key` against
-    the fresh dir so the agent boots past the "Welcome to Codex / Sign in"
-    picker, then _seed_codex_plugin_hooks stages Superpowers as a trusted
-    plugin hook — the codex equivalent of the Superpowers access every
-    claude run gets.
+    For codex, _seed_codex_auth copies local ChatGPT subscription auth into the
+    fresh dir so the agent boots past the "Welcome to Codex / Sign in" picker,
+    then _seed_codex_plugin_hooks stages Superpowers as a trusted plugin hook —
+    the codex equivalent of the Superpowers access every claude run gets.
 
     For kimi, _seed_kimi_config keeps auth/model env and plugins isolated while
     registering the local Superpowers checkout as the only enabled plugin.

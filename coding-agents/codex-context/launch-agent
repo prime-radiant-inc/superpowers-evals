@@ -10,7 +10,13 @@
 # tmux strips env from new sessions).
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
+#   cd "$QUORUM_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
-exec env CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox "$@"
+exec env \
+  -u OPENAI_API_KEY \
+  -u OPENAI_BASE_URL \
+  -u OPENAI_ORG_ID \
+  -u OPENAI_PROJECT \
+  CODEX_HOME="$CODEX_HOME" \
+  codex --dangerously-bypass-approvals-and-sandbox "$@"

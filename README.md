@@ -395,8 +395,9 @@ A Coding-Agent is one agent CLI under test. Its config is
 `coding-agents/<name>-context/HOWTO.md`, is prose the Gauntlet-Agent reads to
 learn how to launch and observe that CLI. Claude additionally has a home
 skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
-per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run via
-`codex login --with-api-key`; Antigravity and Gemini provision isolated
+per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run by
+copying local ChatGPT subscription auth from `~/.codex/auth.json`;
+Antigravity and Gemini provision isolated
 `.gemini` state fresh per run; Kimi provisions an isolated `KIMI_CODE_HOME`;
 OpenCode stages the local Superpowers plugin and skills into isolated XDG
 dirs; Pi provisions run-local auth and settings; Copilot stages the local
@@ -409,7 +410,7 @@ runtime/context and the same `ANTHROPIC_API_KEY` path as `claude`.
 | --- | --- | --- |
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `claude-haiku` | Claude Code (Haiku target variant) | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
-| `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
+| `codex` | Codex CLI | `SUPERPOWERS_ROOT`; local ChatGPT subscription login via `codex login` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
 | `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY`, `SUPERPOWERS_ROOT` |
@@ -817,8 +818,8 @@ git commit coding-agents/claude-home-skeleton/ -m "quorum: refresh Claude skelet
 ```
 
 Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot need no committed
-home skeleton. Codex provisions a fresh per-run home from your
-`OPENAI_API_KEY`; Antigravity provisions an isolated per-run
+home skeleton. Codex provisions a fresh per-run home from your local
+ChatGPT subscription login in `~/.codex/auth.json`; Antigravity provisions an isolated per-run
 `ANTIGRAVITY_CONFIG_DIR`, runs its auth preflight, and installs the Superpowers
 plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local auth and links the local
 extension; Kimi provisions a fresh per-run `KIMI_CODE_HOME` and installs only
