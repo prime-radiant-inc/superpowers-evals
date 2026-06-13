@@ -30,6 +30,20 @@ function discoverAgents(codingAgentsDir: string): string[] {
   return out;
 }
 
+// The exported known-agent name list (sorted *.yaml stems). The dashboard's
+// read-side (parseRunDirName longest-suffix match) and `startDashboard` use the
+// SAME list buildMatrix derives `available` from, so a run dir's agent segment
+// resolves identically whether it was launched by run-all or the dashboard.
+// Returns [] when the dir is missing/unreadable (a fresh checkout with no agents
+// configured still serves an empty grid rather than throwing).
+export function knownAgentNames(codingAgentsDir: string): readonly string[] {
+  try {
+    return discoverAgents(codingAgentsDir);
+  } catch {
+    return [];
+  }
+}
+
 // Sorted scenario dirs (children with a story.md) — mirrors `quorum list`
 // (_discover_scenarios). Returns absolute dir paths.
 function discoverScenarios(scenariosRoot: string): string[] {
