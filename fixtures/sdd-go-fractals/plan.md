@@ -48,9 +48,10 @@ Implement the Sierpinski triangle generation algorithm.
 - Implement `Generate(size, depth int, char rune) []string` that returns lines of the triangle
 - Use recursive midpoint subdivision algorithm
 - Create `internal/sierpinski/sierpinski_test.go` with tests:
-  - Small triangle (size=4, depth=2) matches expected output
+  - Filled triangle (`--size 7 --depth 0`) matches the canonical centered
+    output in design.md (`--size` is the base width)
   - Size=1 returns single character
-  - Depth=0 returns filled triangle
+  - Depth=0 returns a solid filled triangle; higher depth cuts recursive gaps
 
 **Verify:**
 - `go test ./internal/sierpinski/...` passes

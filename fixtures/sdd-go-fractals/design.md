@@ -34,6 +34,21 @@ Flags:
 
 Output: Triangle printed to stdout, one line per row.
 
+**Rendering:** The triangle is **centered** — its apex sits over the middle of
+the base. `--size` is the **base width in characters** (the width of the bottom
+row), not the number of rows; the row count follows from the base width. With
+`--depth 0` the triangle is solid; higher depths cut the recursive Sierpinski
+gaps. Trailing whitespace on a row is not significant.
+
+Canonical output — `fractals sierpinski --size 7 --depth 0`:
+
+```text
+   *
+  ***
+ *****
+*******
+```
+
 ### `mandelbrot`
 
 Renders the Mandelbrot set as ASCII art. Maps iteration count to characters.
