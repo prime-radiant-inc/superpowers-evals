@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { repoRoot } from '../src/paths.ts';
 import { runSetup, SetupError } from '../src/setup-step.ts';
 
 test('runSetup runs setup.sh in workdir with QUORUM_WORKDIR', () => {
@@ -57,5 +58,20 @@ test('envExtra is passed through to setup.sh', () => {
   runSetup(scn, wd, { EXTRA_TOKEN: 'hello-extra' });
   expect(readFileSync(join(wd, 'token.txt'), 'utf8').trim()).toBe(
     'hello-extra',
+  );
+});
+
+test('runSetup plumbs QUORUM_REPO_ROOT into setup.sh', () => {
+  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const wd = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    '#!/usr/bin/env bash\necho "$QUORUM_REPO_ROOT" > repo-root.txt\n',
+  );
+  chmodSync(join(scn, 'setup.sh'), 0o755);
+  // This is the exact env_extra the runner passes (quorum/runner.py parity).
+  runSetup(scn, wd, { QUORUM_REPO_ROOT: repoRoot() });
+  expect(readFileSync(join(wd, 'repo-root.txt'), 'utf8').trim()).toBe(
+    repoRoot(),
   );
 });

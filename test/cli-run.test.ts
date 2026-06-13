@@ -6,6 +6,11 @@ import { join, resolve } from 'node:path';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
+// The REAL coding-agents/ dir: the runner now requires claude-context/ +
+// claude.project-prompt.md for a claude run, and both live here (a synthetic
+// fixture would lack them). Its session_log_dir is the same
+// ${CLAUDE_CONFIG_DIR}/projects the mock-gauntlet seeds.
+const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
 function scenario(): string {
   const scn = mkdtempSync(join(tmpdir(), 'scn-'));
@@ -19,25 +24,6 @@ function scenario(): string {
   return scn;
 }
 
-function agentsDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agents-'));
-  writeFileSync(
-    join(dir, 'claude.yaml'),
-    [
-      'name: claude',
-      'runtime_family: claude',
-      'binary: claude',
-      'agent_config_env: CLAUDE_CONFIG_DIR',
-      'session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"',
-      'session_log_glob: "**/*.jsonl"',
-      'normalizer: claude',
-      'required_env:',
-      '  - ANTHROPIC_API_KEY',
-    ].join('\n'),
-  );
-  return dir;
-}
-
 function runCli(fixture: string): { status: number | null; stdout: string } {
   const proc = spawnSync(
     'bun',
@@ -48,7 +34,7 @@ function runCli(fixture: string): { status: number | null; stdout: string } {
       '--coding-agent',
       'claude',
       '--coding-agents-dir',
-      agentsDir(),
+      REAL_CODING_AGENTS,
       '--out-root',
       mkdtempSync(join(tmpdir(), 'out-')),
     ],
@@ -57,6 +43,9 @@ function runCli(fixture: string): { status: number | null; stdout: string } {
         ...process.env,
         PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
+        // The real claude.yaml lists SUPERPOWERS_ROOT in required_env and the
+        // $SUPERPOWERS_ROOT context substitution reads it.
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
         MOCK_GAUNTLET_FIXTURE: fixture,
       },
       encoding: 'utf8',

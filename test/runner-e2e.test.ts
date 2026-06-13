@@ -9,6 +9,14 @@ import { runScenario } from '../src/runner/index.ts';
 // `gauntlet` spawn resolve to the stub, so the whole pipeline runs for $0.
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 
+// The REAL coding-agents/ dir (sibling of test/, one level up from import.meta.dir).
+// The runner now requires claude-context/ + claude.project-prompt.md to exist
+// for a claude run (populateContextDir required + project_prompt-existence
+// check); both live in the real dir, so we point the e2e there rather than at a
+// synthetic fixture missing them. The real claude.yaml's session_log_dir is the
+// same ${CLAUDE_CONFIG_DIR}/projects the mock-gauntlet seeds.
+const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
+
 // A minimal scenario the runner can drive: a story carrying quorum_max_time, an
 // executable no-op setup.sh, and a checks.sh whose pre/post phases assert
 // nothing (no trace primitives), so the verdict is decided by the gauntlet
@@ -25,50 +33,33 @@ function makeScenario(): string {
   return dir;
 }
 
-// A claude.yaml whose session_log_dir resolves (via the runner's substituteEnv)
-// to ${CLAUDE_CONFIG_DIR}/projects — the same dir the mock-gauntlet seeds.
-function makeAgentsDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agents-'));
-  writeFileSync(
-    join(dir, 'claude.yaml'),
-    [
-      'name: claude',
-      'runtime_family: claude',
-      'binary: claude',
-      'agent_config_env: CLAUDE_CONFIG_DIR',
-      'session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"',
-      'session_log_glob: "**/*.jsonl"',
-      'normalizer: claude',
-      'required_env:',
-      '  - ANTHROPIC_API_KEY',
-      '',
-    ].join('\n'),
-  );
-  return dir;
-}
-
 // Drive runScenario with the mock-gauntlet on PATH and the named fixture
-// selected, restoring every mutated env var afterwards (even on throw).
+// selected, restoring every mutated env var afterwards (even on throw). Uses the
+// REAL coding-agents/ dir so the claude run's required context (HOWTO + launcher
+// + project-prompt + home-skeleton) is present. SUPERPOWERS_ROOT is set because
+// the real claude.yaml lists it in required_env and the $SUPERPOWERS_ROOT
+// substitution reads it.
 async function runWithFixture(
   fixture: string,
 ): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const scenarioDir = makeScenario();
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
-  const codingAgentsDir = makeAgentsDir();
 
   // process.env is an index signature, so noPropertyAccessFromIndexSignature
   // requires bracket access throughout (the standard's tsconfig is ON).
   const prevPath = process.env['PATH'];
   const prevKey = process.env['ANTHROPIC_API_KEY'];
+  const prevRoot = process.env['SUPERPOWERS_ROOT'];
   const prevFixture = process.env['MOCK_GAUNTLET_FIXTURE'];
   process.env['PATH'] = `${MOCK}:${prevPath ?? ''}`;
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
+  process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
   process.env['MOCK_GAUNTLET_FIXTURE'] = fixture;
   try {
     return await runScenario({
       scenarioDir,
       codingAgent: 'claude',
-      codingAgentsDir,
+      codingAgentsDir: REAL_CODING_AGENTS,
       outRoot,
     });
   } finally {
@@ -81,6 +72,11 @@ async function runWithFixture(
       delete process.env['ANTHROPIC_API_KEY'];
     } else {
       process.env['ANTHROPIC_API_KEY'] = prevKey;
+    }
+    if (prevRoot === undefined) {
+      delete process.env['SUPERPOWERS_ROOT'];
+    } else {
+      process.env['SUPERPOWERS_ROOT'] = prevRoot;
     }
     if (prevFixture === undefined) {
       delete process.env['MOCK_GAUNTLET_FIXTURE'];

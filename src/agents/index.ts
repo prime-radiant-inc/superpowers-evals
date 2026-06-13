@@ -53,6 +53,12 @@ export class ProvisionError extends Error {
   }
 }
 
+/** Basename of the per-run Claude auth env file ClaudeAgent.provision writes
+ *  under configDir (mirrors quorum CLAUDE_ENV_FILE_NAME = ".claude-env"). The
+ *  runner derives the $CLAUDE_ENV_FILE substitution from this deterministic
+ *  path, so the constant is the single source of truth for both sides. */
+export const CLAUDE_ENV_FILE_NAME = '.claude-env';
+
 /** The minimal `.claude.json` surface quorum reads/writes: an object whose
  *  `projects` map (when present) is itself an object. Everything else passes
  *  through untouched so claude can evolve the file without breaking us. */
@@ -115,7 +121,7 @@ class ClaudeAgent implements CodingAgent {
     // .claude-env carries the API key for the launcher; mode 0600 (§6.4). Read
     // the key through the one sanctioned env module (§6.5), never process.env.
     const apiKey = getEnv('ANTHROPIC_API_KEY') ?? '';
-    const envFile = join(configDir, '.claude-env');
+    const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
     writeFileSync(envFile, `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`, {
       mode: 0o600,
     });
@@ -123,8 +129,10 @@ class ClaudeAgent implements CodingAgent {
   }
 }
 
-/** Single-quote a value for a POSIX shell, escaping embedded single quotes. */
-function shellSingleQuote(s: string): string {
+/** Single-quote a value for a POSIX shell, escaping embedded single quotes.
+ *  Exported for reuse by the runner's context-dir _SH substitutions (mirrors
+ *  quorum/runner.py:_shell_single_quote). */
+export function shellSingleQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 

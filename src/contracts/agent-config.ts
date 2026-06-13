@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -21,13 +21,42 @@ export const AgentConfigSchema = z.object({
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
+// Thrown when a coding-agent YAML is structurally valid but a referenced file
+// cannot be resolved (mirrors quorum/coding_agent_config.py:CodingAgentConfigError
+// for the project_prompt-existence leg). The runner maps it to a setup-stage
+// indeterminate via errorStage.
+export class CodingAgentConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CodingAgentConfigError';
+  }
+}
+
 export function loadAgentConfig(
   codingAgentsDir: string,
   name: string,
 ): AgentConfig {
   const path = join(codingAgentsDir, `${name}.yaml`);
   const raw: unknown = parseYaml(readFileSync(path, 'utf8'));
-  return AgentConfigSchema.parse(raw);
+  const cfg = AgentConfigSchema.parse(raw);
+
+  // Resolve project_prompt relative to the YAML file's dir to an absolute path
+  // and require it to exist, mirroring quorum/coding_agent_config.py:
+  //   candidate = (path.parent / project_prompt_raw).resolve()
+  //   if not candidate.is_file(): raise ...
+  // Gauntlet's --project-prompt needs an absolute, existing file; the raw
+  // "claude.project-prompt.md" alone fails ("file not found"). Overwrite the
+  // parsed field with the resolved absolute path so invokeGauntlet passes it.
+  if (cfg.project_prompt !== undefined && cfg.project_prompt !== '') {
+    const candidate = resolve(dirname(path), cfg.project_prompt);
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) {
+      throw new CodingAgentConfigError(
+        `${path}: project_prompt path does not exist: ${candidate}`,
+      );
+    }
+    return { ...cfg, project_prompt: candidate };
+  }
+  return cfg;
 }
 
 /** Replace ${VAR} occurrences from a map. Unknown vars are left intact (mirrors Python). */

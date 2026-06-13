@@ -5,7 +5,12 @@ import { Glob } from 'bun';
 import { z } from 'zod';
 import { antigravityRateLimitReason } from '../agents/antigravity.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
-import { ProvisionError, resolveAgent } from '../agents/index.ts';
+import {
+  CLAUDE_ENV_FILE_NAME,
+  ProvisionError,
+  resolveAgent,
+  shellSingleQuote,
+} from '../agents/index.ts';
 import {
   captureTokenUsage,
   captureToolCalls,
@@ -13,7 +18,11 @@ import {
 } from '../capture/index.ts';
 import { runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
-import { loadAgentConfig, substituteEnv } from '../contracts/agent-config.ts';
+import {
+  CodingAgentConfigError,
+  loadAgentConfig,
+  substituteEnv,
+} from '../contracts/agent-config.ts';
 import { GauntletResultSchema } from '../contracts/gauntlet.ts';
 import type {
   FinalVerdict,
@@ -23,23 +32,16 @@ import type {
 } from '../contracts/verdict.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
-import { hexNonce, nowStampUtc } from '../paths.ts';
+import { hexNonce, nowStampUtc, repoRoot } from '../paths.ts';
 import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
+import { populateContextDir } from './context.ts';
+import { RunnerError } from './errors.ts';
 
-// A staged invariant failure inside the runner pipeline. The stage drives the
-// error-stage of the indeterminate verdict (coding standard 6.1); a bug is an
-// exception, but a staged one so the composer can attribute it.
-// erasableSyntaxOnly forbids constructor parameter properties (5.3), so the
-// stage is an explicit field assigned in the body.
-export class RunnerError extends Error {
-  readonly stage: RunErrorStage;
-  constructor(message: string, stage: RunErrorStage) {
-    super(message);
-    this.name = 'RunnerError';
-    this.stage = stage;
-  }
-}
+// RunnerError moved to ./errors.ts so context.ts can throw it without a
+// runner<->context import cycle. Re-export it here to preserve the existing
+// public surface (src/runner/index.ts exported it before this split).
+export { RunnerError };
 
 // Create and return the per-run output dir
 // <outRoot>/<scenario>-<agent>-<stamp>-<nonce>/.
@@ -222,7 +224,11 @@ function errorStage(err: unknown): RunErrorStage {
   if (err instanceof RunnerError) {
     return err.stage;
   }
-  if (err instanceof SetupError || err instanceof ProvisionError) {
+  if (
+    err instanceof SetupError ||
+    err instanceof ProvisionError ||
+    err instanceof CodingAgentConfigError
+  ) {
     return 'setup';
   }
   return 'unknown';
@@ -247,15 +253,22 @@ async function runInner(
   const configDir = join(runDir, 'coding-agent-config');
   const workdir = join(runDir, 'coding-agent-workdir');
   mkdirSync(workdir, { recursive: true });
+  // skeletonRoot default = the coding-agents dir itself, so ClaudeAgent copies
+  // <codingAgentsDir>/claude-home-skeleton (parity with quorum/runner.py, which
+  // defaults skeleton_root to _quorum_repo_root()/"coding-agents").
   const extraEnv = agent.provision(
     {
       configDir,
       workdir,
-      skeletonRoot: a.skeletonRoot ?? undefined,
+      skeletonRoot: a.skeletonRoot ?? a.codingAgentsDir,
     },
     defaultCommandRunner,
   );
-  runSetup(a.scenarioDir, workdir);
+  // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
+  // setup-helpers against it). Parity with quorum/runner.py 1826/1831:
+  //   env_extra = {"QUORUM_REPO_ROOT": str(_quorum_repo_root())}
+  //   run_setup(scenario_dir, workdir, env_extra=env_extra)
+  runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
 
   const checksSh = join(a.scenarioDir, 'checks.sh');
   const hasChecks = existsSync(checksSh);
@@ -297,6 +310,75 @@ async function runInner(
   const launchCwd = existsSync(launchCwdFile)
     ? readFileSync(launchCwdFile, 'utf8').trim()
     : workdir;
+
+  // Populate <runDir>/gauntlet-agent/context/ with the per-agent HOWTO +
+  // launcher, burning resolved absolute paths into every $… placeholder. tmux
+  // strips arbitrary env from new sessions, so the QA agent reads concrete
+  // paths from the substituted files rather than from env inheritance. Parity
+  // with quorum/runner.py 1885-1925 (the substitutions dict + _populate_context_dir).
+  const family = cfg.runtime_family ?? cfg.name;
+  const agentConfigEnv = cfg.agent_config_env;
+  const launchAgentPath = join(
+    runDir,
+    'gauntlet-agent',
+    'context',
+    'launch-agent',
+  );
+  const substitutions: Record<string, string> = {
+    $QUORUM_AGENT_CWD: launchCwd,
+    $QUORUM_AGENT_CWD_SH: shellSingleQuote(launchCwd),
+    $SUPERPOWERS_ROOT: getEnv('SUPERPOWERS_ROOT') ?? '',
+    $QUORUM_LAUNCH_AGENT: launchAgentPath,
+    $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(launchAgentPath),
+    [`$${agentConfigEnv}`]: configDir,
+    [`$${agentConfigEnv}_SH`]: shellSingleQuote(configDir),
+  };
+  // Provision-supplied substitutions (quorum's agent_runtime.substitutions). For
+  // claude these are the auth env-file path the launcher sources; the path is
+  // deterministic (configDir/.claude-env, written by ClaudeAgent.provision), so
+  // the runner derives it rather than threading it back through provision().
+  if (family === 'claude') {
+    const claudeEnvFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+    substitutions['$CLAUDE_ENV_FILE'] = claudeEnvFile;
+    substitutions['$CLAUDE_ENV_FILE_SH'] = shellSingleQuote(claudeEnvFile);
+    substitutions['$CLAUDE_MODEL'] = cfg.model ?? '';
+  }
+  // Per-agent env-file substitutions the runner can derive from configDir (parity
+  // with quorum/runner.py's name-keyed additions). These mirror the Python's
+  // deterministic agent_config_dir-relative paths.
+  if (cfg.name === 'gemini') {
+    const geminiEnvFile = join(configDir, '.gemini-env');
+    substitutions['$GEMINI_ENV_FILE'] = geminiEnvFile;
+    substitutions['$GEMINI_ENV_FILE_SH'] = shellSingleQuote(geminiEnvFile);
+  }
+  if (cfg.name === 'pi') {
+    substitutions['$PI_ENV_FILE'] = join(configDir, 'pi.env');
+  }
+  if (cfg.name === 'copilot') {
+    const copilotEnvFile = join(configDir, '.copilot-env');
+    substitutions['$COPILOT_ENV_FILE'] = copilotEnvFile;
+    substitutions['$COPILOT_ENV_FILE_SH'] = shellSingleQuote(copilotEnvFile);
+  }
+  // NOTE: provision-supplied substitutions the TS provision does not yet expose:
+  //   - kimi: $KIMI_ENV_FILE / $KIMI_BINARY (KimiAgent.provision RETURNS these in
+  //     its extra-env map, but that map is gauntlet env, not the context-dir
+  //     substitution set; threading provision-substitutions back to the runner is
+  //     deferred). The kimi-context launcher will carry unresolved placeholders
+  //     until that lands.
+  //   - copilot: $QUORUM_COPILOT_SESSION_ID (minted inside CopilotAgent.provision;
+  //     not yet surfaced). The $COPILOT_ENV_FILE path above is derived, but the
+  //     real Python uses copilot_provisioning.env_file — verify before a live
+  //     copilot run.
+  // CLAUDE needs none of these, so the claude context-dir path is COMPLETE.
+  populateContextDir({
+    codingAgentsDir: a.codingAgentsDir,
+    codingAgent: family,
+    runDir,
+    substitutions,
+    required: family === 'claude',
+    forbiddenPlaceholders: family === 'claude' ? ['$CLAUDE_MODEL'] : [],
+  });
+
   const { gauntlet, error } = invokeGauntlet({
     storyPath,
     targetBinary: cfg.binary,
