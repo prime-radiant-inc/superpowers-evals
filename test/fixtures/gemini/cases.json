@@ -164,5 +164,31 @@
         "source": "shell"
       }
     ]
+  },
+  {
+    "name": "non-string id dedup: truthy numeric dedups, falsy id passes through",
+    "input": "{\"type\": \"gemini\", \"content\": \"non-string ids\", \"toolCalls\": [{\"id\": 7, \"name\": \"read_file\", \"args\": {}}, {\"id\": 7, \"name\": \"glob\", \"args\": {}}, {\"id\": 0, \"name\": \"read_file\", \"args\": {}}, {\"id\": 0, \"name\": \"write_file\", \"args\": {}}, {\"id\": null, \"name\": \"grep_search\", \"args\": {}}]}",
+    "expected": [
+      {
+        "tool": "Read",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "Read",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "Write",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "Grep",
+        "args": {},
+        "source": "native"
+      }
+    ]
   }
 ]

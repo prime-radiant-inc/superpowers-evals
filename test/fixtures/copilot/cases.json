@@ -250,5 +250,23 @@
         "source": "native"
       }
     ]
+  },
+  {
+    "name": "truthy non-string skill -> no rewrite (name not consulted)",
+    "input": "{\"type\": \"assistant.message\", \"data\": {\"toolRequests\": [{\"name\": \"skill\", \"arguments\": {\"skill\": 5, \"name\": \"brainstorming\"}}]}}",
+    "expected": [
+      {
+        "tool": "Skill",
+        "args": {
+          "skill": 5,
+          "name": "brainstorming",
+          "raw_input": {
+            "skill": 5,
+            "name": "brainstorming"
+          }
+        },
+        "source": "native"
+      }
+    ]
   }
 ]

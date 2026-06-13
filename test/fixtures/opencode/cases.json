@@ -140,5 +140,30 @@
     "name": "non-tool parts -> empty",
     "input": "{\"messages\": [{\"parts\": [{\"type\": \"text\"}]}]}",
     "expected": []
+  },
+  {
+    "name": "falsy skill falls through to name + present-null input stays null",
+    "input": "{\"messages\": [{\"parts\": [{\"type\": \"tool\", \"tool\": \"skill\", \"state\": {\"input\": {\"skill\": \"\", \"name\": \"brainstorming\"}}}, {\"type\": \"tool\", \"tool\": \"read\", \"state\": {\"input\": null}}]}]}",
+    "expected": [
+      {
+        "tool": "Skill",
+        "args": {
+          "skill": "superpowers:brainstorming",
+          "name": "brainstorming",
+          "raw_input": {
+            "skill": "",
+            "name": "brainstorming"
+          }
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Read",
+        "args": {
+          "raw_input": null
+        },
+        "source": "native"
+      }
+    ]
   }
 ]

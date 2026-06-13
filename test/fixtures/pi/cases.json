@@ -140,5 +140,30 @@
         "source": "shell"
       }
     ]
+  },
+  {
+    "name": "subagent alias on key presence: missing args -> Agent, action -> subagent",
+    "input": "{\"type\": \"session\", \"cwd\": \"/tmp/project\"}\n{\"type\": \"message\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"toolCall\", \"name\": \"subagent\"}, {\"type\": \"toolCall\", \"name\": \"subagent\", \"arguments\": {\"action\": \"list\"}}, {\"type\": \"toolCall\", \"name\": \"subagent\", \"arguments\": {\"agent\": \"x\"}}]}}",
+    "expected": [
+      {
+        "tool": "Agent",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "subagent",
+        "args": {
+          "action": "list"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Agent",
+        "args": {
+          "agent": "x"
+        },
+        "source": "native"
+      }
+    ]
   }
 ]

@@ -82,5 +82,16 @@
         "source": "native"
       }
     ]
+  },
+  {
+    "name": "missing args key defaults to empty object (not raw_args wrap)",
+    "input": "{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"TodoList\"}}",
+    "expected": [
+      {
+        "tool": "TodoList",
+        "args": {},
+        "source": "native"
+      }
+    ]
   }
 ]

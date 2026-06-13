@@ -177,10 +177,35 @@ def pi_cases() -> list[tuple[str, str]]:
         ]
     )
 
+    # Lock the subagent alias on PRESENCE: a subagent call with a MISSING
+    # arguments key defaults to {} (no "action") and aliases to Agent; an args
+    # dict WITH "action" stays subagent. (Non-object args also stay subagent in
+    # Python, but that path emits a non-record args -> not a valid ToolCall, so
+    # it is an accepted divergence covered by a comment, not this fixture.)
+    subagent_presence = "\n".join(
+        [
+            session,
+            J(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "toolCall", "name": "subagent"},
+                            {"type": "toolCall", "name": "subagent", "arguments": {"action": "list"}},
+                            {"type": "toolCall", "name": "subagent", "arguments": {"agent": "x"}},
+                        ],
+                    },
+                }
+            ),
+        ]
+    )
+
     return [
         ("assistant tool calls (read/bash/subagent)", "\n".join([session, assistant_tool_calls])),
         ("subagent execution vs management calls", subagent_variants),
         ("live-style session with model rows and tool result", live_style),
+        ("subagent alias on key presence: missing args -> Agent, action -> subagent", subagent_presence),
     ]
 
 
@@ -291,11 +316,30 @@ def gemini_cases() -> list[tuple[str, str]]:
         }
     )
 
+    # Lock dedup on non-string ids: Python keys the seen-set on the raw id value
+    # via truthiness (`if tool_call_id`), so a truthy numeric id dedups, while a
+    # falsy id (0, null) bypasses the set entirely and is always emitted. A naive
+    # string-only id schema would instead DROP these calls.
+    non_string_ids = J(
+        {
+            "type": "gemini",
+            "content": "non-string ids",
+            "toolCalls": [
+                {"id": 7, "name": "read_file", "args": {}},
+                {"id": 7, "name": "glob", "args": {}},
+                {"id": 0, "name": "read_file", "args": {}},
+                {"id": 0, "name": "write_file", "args": {}},
+                {"id": None, "name": "grep_search", "args": {}},
+            ],
+        }
+    )
+
     return [
         ("jsonl form: read_file + run_shell_command", jsonl_basic),
         ("json-doc form with messages array + dedup by id", J({"messages": messages})),
         ("jsonl form realistic + dedup by id", "\n".join(J(m) for m in messages)),
         ("source classification: web/todo -> shell, plan-mode -> native", source_quirks),
+        ("non-string id dedup: truthy numeric dedups, falsy id passes through", non_string_ids),
     ]
 
 
@@ -370,11 +414,31 @@ def opencode_cases() -> list[tuple[str, str]]:
         ]
     }
 
+    # Lock falsy-vs-nullish skill selection and present-null input. Python uses
+    # `raw_input.get("skill") or raw_input.get("name")` (FALSY fallthrough): an
+    # empty-string skill falls through to name. And `state.get("input", {})`
+    # only defaults on ABSENCE, so a present-but-null input stays null in raw_input.
+    edge = {
+        "messages": [
+            {
+                "parts": [
+                    {
+                        "type": "tool",
+                        "tool": "skill",
+                        "state": {"input": {"skill": "", "name": "brainstorming"}},
+                    },
+                    {"type": "tool", "tool": "read", "state": {"input": None}},
+                ]
+            }
+        ]
+    }
+
     return [
         ("export json: skill/bash/task with raw_input", J(skill_bash_task)),
         ("export json: file/search/todo/web tools + file_path inference", J(file_search_web)),
         ("not json -> empty", "not json"),
         ("non-tool parts -> empty", J({"messages": [{"parts": [{"type": "text"}]}]})),
+        ("falsy skill falls through to name + present-null input stays null", J(edge)),
     ]
 
 
@@ -451,10 +515,20 @@ def kimi_cases() -> list[tuple[str, str]]:
         ]
     )
 
+    # Lock missing-args handling: Python `event.get("args", {})` defaults an
+    # ABSENT args key to {} (a truly empty dict), NOT to a {"raw_args": ...} wrap.
+    missing_args = J(
+        {
+            "type": "context.append_loop_event",
+            "event": {"type": "tool.call", "name": "TodoList"},
+        }
+    )
+
     return [
         ("wire tool calls + native source + tool.result ignored", wire),
         ("short superpowers skill name canonicalization", skill),
         ("source set extras native + skill/no-skill + non-dict args", quirks),
+        ("missing args key defaults to empty object (not raw_args wrap)", missing_args),
     ]
 
 
@@ -547,11 +621,27 @@ def copilot_cases() -> list[tuple[str, str]]:
         }
     )
 
+    # Lock the truthy-non-string skill case: Python `get("skill") or get("name")`
+    # short-circuits on a TRUTHY non-string skill (e.g. a number), so candidate is
+    # that non-string value, isinstance(str) is False, and NO rewrite happens —
+    # name is NOT consulted and skill/name are left untouched.
+    truthy_non_string_skill = J(
+        {
+            "type": "assistant.message",
+            "data": {
+                "toolRequests": [
+                    {"name": "skill", "arguments": {"skill": 5, "name": "brainstorming"}},
+                ]
+            },
+        }
+    )
+
     return [
         ("assistant tool requests: all 16 mappings", big),
         ("multiple assistant.message lines preserve order", multi),
         ("non-request events and bad lines -> empty", bad),
         ("negative: early write before skill", write_before_skill),
+        ("truthy non-string skill -> no rewrite (name not consulted)", truthy_non_string_skill),
     ]
 
 
@@ -697,6 +787,11 @@ def antigravity_cases() -> list[tuple[str, str]]:
         }
     )
 
+    # Lock present-null args: Python `tool_call.get("args", {})` defaults only on
+    # ABSENCE, so a present-but-null args yields None -> _normalize_antigravity_args
+    # returns {"raw_args": None}. (Absent args -> {} -> {"raw_args": {}}.)
+    null_args = J({"tool_calls": [{"name": "run_command", "args": None}]})
+
     return [
         ("top-level tool_calls + PascalCase args + skip non-tool lines", top_level),
         ("JSON string-literal scalar decoding", json_string_literal),
@@ -707,6 +802,7 @@ def antigravity_cases() -> list[tuple[str, str]]:
         ("unknown tools + non-launch manage subagents", unknown_manage),
         ("non-string tool names ignored", non_string_names),
         ("skill marker casing + nested metadata", skill_metadata),
+        ("present-null args -> raw_args null (absence-only default)", null_args),
     ]
 
 

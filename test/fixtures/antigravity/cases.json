@@ -383,5 +383,18 @@
         "source": "native"
       }
     ]
+  },
+  {
+    "name": "present-null args -> raw_args null (absence-only default)",
+    "input": "{\"tool_calls\": [{\"name\": \"run_command\", \"args\": null}]}",
+    "expected": [
+      {
+        "tool": "Bash",
+        "args": {
+          "raw_args": null
+        },
+        "source": "shell"
+      }
+    ]
   }
 ]
