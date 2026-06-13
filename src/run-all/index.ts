@@ -8,24 +8,45 @@ import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import { runnable } from '../contracts/batch.ts';
 import { envSnapshot } from '../env.ts';
+import type { Clock } from '../scheduler/clock.ts';
+import { RealClock } from '../scheduler/clock.ts';
+import type { SchedulerEvent } from '../scheduler/index.ts';
+import { runSchedule } from '../scheduler/index.ts';
 import {
   allocateBatchDir,
   appendResultRecord,
   writeBatchFooter,
   writeBatchHeader,
 } from './batch-index.ts';
-import { agentMaxConcurrency, buildMatrix } from './matrix.ts';
+import {
+  agentLaunchSpacingSeconds,
+  agentMaxConcurrency,
+  buildMatrix,
+} from './matrix.ts';
 
 // quorum run-all orchestrator. Ports invoke_child + run_batch (run_all.py).
 // The run-all COMMAND is wired by the integrator (src/cli/index.ts); this
 // module exports the functions its action calls.
 //
+// As of PRI-2203 (Spec 4) the batch is driven through the central scheduler
+// (src/scheduler/index.ts): runBatch builds the matrix + renders the
+// directive/draft/tier skips caller-side, then hands the runnable cells to
+// runSchedule and becomes its event consumer. The scheduler owns ONE global
+// slot pool of size `jobs` and a TRUE global cap — replacing the prior
+// buildLanes/pLimit nested-pool model (a per-agent lane limiter alongside a main
+// pool), whose total in-flight could exceed `jobs` (the incumbent's bug).
+//
 // DEFER (run_all.py parity gaps left for later specs):
 //  - NOTE: the Rich in-place LIVE in-flight panel — plain append-only output is
-//    the functional core, so only the plain path is ported here.
+//    the functional core, so only the plain path is ported here. A cell_started
+//    line is the live panel's concern; plain mode prints only on completion
+//    (parity with the current output), so cell_started is a no-op consumer-side.
 //  - NOTE: the kimi batch preflight (prepare_kimi_batch_preflight) — each kimi
 //    child self-preflights via its adapter, which avoids coupling run-all into
 //    kimi.ts internals.
+//  - NOTE (Spec 5): the dashboard SSE consumer of the same scheduler events —
+//    onSpawn (pid registration) and requestStop (/stop) pass through the
+//    scheduler API but are wired by the dashboard, not here.
 
 const RUN_ID_PREFIX = 'run-id: ';
 
@@ -135,6 +156,10 @@ export interface RunBatchArgs {
   readonly invoke?: InvokeFn;
   readonly useCursor?: boolean;
   readonly stream?: { write(s: string): void };
+  // The scheduler clock; defaults to RealClock. Tests inject a FakeClock to
+  // drive spacing deterministically — but run-all's own behavior tests use the
+  // real clock with instant fake invokes (no spacing configured).
+  readonly clock?: Clock;
 }
 
 type Final = 'pass' | 'fail' | 'indeterminate' | 'unknown';
@@ -151,12 +176,12 @@ const GLYPH_SKIP = '—';
 // append-only output only (Rich Live in-place panel deferred). `invoke`
 // defaults to the live (async) invokeChild; tests inject a fake.
 //
-// Children run concurrently under the --jobs pool: each runnable cell is driven
-// through its agent's lane limiter (buildLanes), so an agent with
-// max_concurrency < jobs (e.g. antigravity=1) stays serial against its
-// rate-limited backend while the rest of the matrix fills the main pool. Output
-// interleaves by completion order (parity with the Python as_completed drain);
-// JS is single-threaded so the per-cell record/print between awaits is atomic.
+// The runnable cells are driven through the central scheduler (runSchedule),
+// which owns ONE global slot pool of size `jobs` and enforces a TRUE global cap
+// plus per-harness caps + launch spacing. run-all is the event consumer: it
+// renders the completion / skip lines, appends results.jsonl records, and
+// tallies cost as the scheduler emits events. JS is single-threaded so the
+// per-event record/print is atomic against the dispatcher's task.
 export async function runBatch(args: RunBatchArgs): Promise<string> {
   const {
     scenariosRoot,
@@ -169,6 +194,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     includeDrafts = false,
     invoke = invokeChild,
     stream = process.stdout,
+    clock = new RealClock(),
   } = args;
   // NOTE: useCursor / the Rich Live panel are deferred; only plain mode runs.
 
@@ -210,6 +236,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     unknown: 0,
     skipped: skippedIndexed.length,
     rate_limited: 0,
+    stopped: 0,
   };
   let batchCostTotal = 0;
 
@@ -236,72 +263,90 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     });
   }
 
-  // Concurrency lanes (run_all.py agent_caps/lanes): an agent with
-  // max_concurrency < jobs gets a dedicated limiter of that size; every other
-  // agent shares the main pool of size jobs. `fallback` is a type-safety guard
-  // for the lookup — every runnable agent is in agentsInBatch, so it's a lane.
-  const lanes = buildLanes(agentsInBatch, codingAgentsDir, jobs);
-  const fallback = pLimit(jobs);
+  // The cell's 1-based idx in the scheduler's view is its position among the
+  // RUNNABLE cells. run-all's display labels are the matrix's global 1..total
+  // indices, so map the scheduler idx back to the matrix idx via this array.
+  const runnableEntries = runnableIndexed.map(([, entry]) => entry);
+  const matrixIdxForRunnable = runnableIndexed.map(([idx]) => idx);
+  const matrixIdxFor = (schedulerIdx: number): number =>
+    matrixIdxForRunnable[schedulerIdx - 1] ?? schedulerIdx;
 
-  // Agents that hit their rate-limit window this batch; once latched, their
-  // remaining (not-yet-started) cells are recorded skipped:"rate-limited"
-  // instead of invoked.
-  const rateLimitedAgents = new Set<string>();
+  // The scheduler invokes a cell; adapt the MatrixEntry to invoke_child's args.
+  const invokeCell = (entry: MatrixEntry): Promise<ChildResult> =>
+    invoke({
+      scenarioDir: entry.scenarioDir,
+      codingAgent: entry.codingAgent,
+      codingAgentsDir,
+      outRoot,
+    });
 
-  await Promise.all(
-    runnableIndexed.map(([idx, entry]) => {
-      const limit = lanes.get(entry.codingAgent) ?? fallback;
-      return limit(async () => {
-        if (rateLimitedAgents.has(entry.codingAgent)) {
-          // Agent already exhausted its rate-limit window; don't invoke — a
-          // doomed preflight can hang and deepen the lockout (run_all.py skip).
-          counts.rate_limited += 1;
-          println(rateLimitLine(idx, total, entry));
-          appendResultRecord({
-            batchDir,
-            scenario: entry.scenario,
-            codingAgent: entry.codingAgent,
-            runId: null,
-            skipped: 'rate-limited',
-          });
-          return;
-        }
+  // The rate-limit latch hook: a finished child whose verdict.json carries the
+  // Code Assist marker latches its harness (run_all.py _is_rate_limited_verdict).
+  const isRateLimited = (result: ChildResult): boolean =>
+    result.run_id !== null &&
+    isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)));
 
-        const t0 = Date.now();
-        const result = await invoke({
-          scenarioDir: entry.scenarioDir,
-          codingAgent: entry.codingAgent,
-          codingAgentsDir,
-          outRoot,
-        });
-        const elapsed = (Date.now() - t0) / 1000;
-
-        // Latch the agent if the child verdict carries the rate-limit marker.
-        if (
-          result.run_id !== null &&
-          isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)))
-        ) {
-          rateLimitedAgents.add(entry.codingAgent);
-        }
-
-        const final = finalStatusForResult(result, outRoot);
-        counts[final] += 1;
-        const cost =
-          result.run_id !== null ? runCost(join(outRoot, result.run_id)) : null;
-        if (cost !== null) {
-          batchCostTotal += cost;
-        }
-        println(doneLine(idx, total, entry, final, elapsed, cost));
+  // run-all consumes the scheduler's event stream: render the completion / skip
+  // line, append the results.jsonl record, and tally cost. cell_queued /
+  // cell_started are no-ops in plain mode (the start line is the deferred live
+  // panel's concern); batch_done's summary is printed after the drive resolves.
+  const onEvent = (event: SchedulerEvent): void => {
+    if (event.kind === 'cell_finished') {
+      const idx = matrixIdxFor(event.idx);
+      const final = finalStatusForResult(event.result, outRoot);
+      counts[final] += 1;
+      const cost =
+        event.run_id !== null ? runCost(join(outRoot, event.run_id)) : null;
+      if (cost !== null) {
+        batchCostTotal += cost;
+      }
+      println(doneLine(idx, total, event.entry, final, event.elapsed_s, cost));
+      appendResultRecord({
+        batchDir,
+        scenario: event.entry.scenario,
+        codingAgent: event.entry.codingAgent,
+        runId: event.run_id,
+        skipped: null,
+      });
+      return;
+    }
+    if (event.kind === 'cell_skipped') {
+      const idx = matrixIdxFor(event.idx);
+      if (event.skipped_reason === 'rate-limited') {
+        counts.rate_limited += 1;
+        println(rateLimitLine(idx, total, event.entry));
         appendResultRecord({
           batchDir,
-          scenario: entry.scenario,
-          codingAgent: entry.codingAgent,
-          runId: result.run_id,
-          skipped: null,
+          scenario: event.entry.scenario,
+          codingAgent: event.entry.codingAgent,
+          runId: null,
+          skipped: 'rate-limited',
         });
-      });
-    }),
-  );
+      } else {
+        counts.stopped += 1;
+        println(stoppedLine(idx, total, event.entry));
+        appendResultRecord({
+          batchDir,
+          scenario: event.entry.scenario,
+          codingAgent: event.entry.codingAgent,
+          runId: null,
+          skipped: 'stopped',
+        });
+      }
+    }
+  };
+
+  const { done } = runSchedule({
+    cells: runnableEntries,
+    jobs,
+    capFor: (h) => agentMaxConcurrency(codingAgentsDir, h),
+    spacingFor: (h) => agentLaunchSpacingSeconds(codingAgentsDir, h),
+    clock,
+    invoke: invokeCell,
+    isRateLimited,
+    onEvent,
+  });
+  await done;
 
   const finishedAt = new Date();
   writeBatchFooter({ batchDir, finishedAt: finishedAt.toISOString() });
@@ -310,6 +355,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     `batch done · ${counts.pass} ✓ · ${counts.fail} ✗ · ` +
     `${counts.indeterminate} ⊘ · ${counts.skipped} —`;
   if (counts.rate_limited) summary += ` · ${counts.rate_limited} ⏸`;
+  if (counts.stopped) summary += ` · ${counts.stopped} ⏹`;
   if (counts.unknown) summary += ` · ${counts.unknown} ?`;
   summary += ` · wall ${fmtDuration(
     (finishedAt.getTime() - startedAt.getTime()) / 1000,
@@ -318,60 +364,6 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   println(summary);
   println(`artifacts: ${relativeToCwd(batchDir)}`);
   return batchDir;
-}
-
-// A bounded concurrency runner: at most n promise-returning tasks in flight.
-// No external dep. Exported for the deferred async drive (spawn-based) and the
-// per-agent lane caps; the current sync runBatch does not await it.
-export function pLimit(n: number): <T>(task: () => Promise<T>) => Promise<T> {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  const next = (): void => {
-    if (active >= n) return;
-    const run = queue.shift();
-    if (run === undefined) return;
-    active += 1;
-    run();
-  };
-  return <T>(task: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolveP, rejectP) => {
-      const run = (): void => {
-        task().then(
-          (value) => {
-            active -= 1;
-            resolveP(value);
-            next();
-          },
-          (err: unknown) => {
-            active -= 1;
-            rejectP(err);
-            next();
-          },
-        );
-      };
-      queue.push(run);
-      next();
-    });
-}
-
-// Map each agent to its lane limiter when its cap is below the global jobs
-// pool, else the shared main pool (run_all.py lanes/agent_caps). For the
-// deferred async (spawn-based) drive; the sync runBatch does not use it.
-export function buildLanes(
-  agents: readonly string[],
-  codingAgentsDir: string,
-  jobs: number,
-): Map<string, ReturnType<typeof pLimit>> {
-  const main = pLimit(jobs);
-  const lanes = new Map<string, ReturnType<typeof pLimit>>();
-  for (const agent of agents) {
-    const cap = agentMaxConcurrency(codingAgentsDir, agent);
-    lanes.set(
-      agent,
-      cap !== null && cap < jobs ? pLimit(Math.max(1, cap)) : main,
-    );
-  }
-  return lanes;
 }
 
 // One skip line for an upfront-skipped cell, with its reason label
@@ -401,6 +393,16 @@ function rateLimitLine(idx: number, total: number, entry: MatrixEntry): string {
   return (
     `[${idxLabel(idx, total)}] skip   ` +
     `${entry.scenario}  ${entry.codingAgent}  ${GLYPH_SKIP}  (agy rate-limited)`
+  );
+}
+
+// One skip line for a cell skipped by an eager stop (dashboard /stop). The
+// scheduler emits cell_skipped('stopped') for every undispatched cell once stop
+// is requested; in-flight children are the consumer's concern.
+function stoppedLine(idx: number, total: number, entry: MatrixEntry): string {
+  return (
+    `[${idxLabel(idx, total)}] skip   ` +
+    `${entry.scenario}  ${entry.codingAgent}  ${GLYPH_SKIP}  (stopped)`
   );
 }
 

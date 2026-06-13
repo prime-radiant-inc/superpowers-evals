@@ -19,6 +19,7 @@ import {
   newScenario,
   ScaffoldError,
 } from '../scaffold.ts';
+import { DEFAULT_JOBS } from '../scheduler/index.ts';
 import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
 import { batchJson, isBatchDir, renderBatch } from './render-batch.ts';
@@ -208,7 +209,7 @@ program
   .command('run-all')
   .option('--coding-agents <csv>', 'CSV agent filter (default: all)')
   .option('--scenarios <csv>', 'CSV scenario filter (default: all)')
-  .option('--jobs <n>', 'worker pool size (>=1)', '1')
+  .option('--jobs <n>', 'global slot pool size (>=1)', String(DEFAULT_JOBS))
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
   .option('--out-root <dir>', 'results root', 'results')
