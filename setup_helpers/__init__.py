@@ -35,10 +35,8 @@ from setup_helpers.worktree import (
     add_existing_worktree,
     add_worktree,
     create_caller_consent_plan,
-    detach_head,
     detach_worktree_head,
     install_codex_superpowers_plugin_hooks,
-    link_gemini_extension,
     symlink_superpowers,
 )
 from setup_helpers.worktree_pressure import setup_pressure_worktree_conditions
@@ -46,12 +44,10 @@ from setup_helpers.worktree_pressure import setup_pressure_worktree_conditions
 HELPER_REGISTRY = {
     "create_base_repo": create_base_repo,
     "add_worktree": add_worktree,
-    "detach_head": detach_head,
     "symlink_superpowers": symlink_superpowers,
     "install_codex_superpowers_plugin_hooks": install_codex_superpowers_plugin_hooks,
     "add_existing_worktree": add_existing_worktree,
     "detach_worktree_head": detach_worktree_head,
-    "link_gemini_extension": link_gemini_extension,
     "create_caller_consent_plan": create_caller_consent_plan,
     "create_spec_writing_blind_spot": create_spec_writing_blind_spot,
     "create_claim_without_verification": create_claim_without_verification,

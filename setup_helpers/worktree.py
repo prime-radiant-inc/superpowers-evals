@@ -350,41 +350,6 @@ def _terminate_codex_app_server(proc: subprocess.Popen[str]) -> None:
     proc.wait(timeout=3)
 
 
-def link_gemini_extension(workdir: Path, superpowers_root: str) -> None:
-    """Link superpowers as a Gemini CLI extension and inject project context.
-
-    Extensions are global, but GEMINI.md context loading is project-scoped.
-    Temp workdirs need a GEMINI.md with absolute paths so Gemini loads
-    the using-superpowers instructions that tell it to invoke skills.
-    """
-    extension_name = "superpowers"
-    manifest = Path(superpowers_root) / "gemini-extension.json"
-    if manifest.exists():
-        with suppress(json.JSONDecodeError):
-            extension_name = json.loads(manifest.read_text()).get("name", extension_name)
-
-    # Gemini extensions are global; replace any prior link so this run tests
-    # the requested SUPERPOWERS_ROOT checkout rather than a stale install.
-    subprocess.run(
-        ["gemini", "extensions", "uninstall", extension_name],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["gemini", "extensions", "link", superpowers_root],
-        capture_output=True,
-        input="y\n",
-        text=True,
-        check=True,
-    )
-    # Create GEMINI.md with absolute @imports so context loads in the temp workdir
-    skills_root = Path(superpowers_root) / "skills"
-    gemini_md = workdir / "GEMINI.md"
-    gemini_md.write_text(
-        f"@{skills_root}/using-superpowers/SKILL.md\n"
-        f"@{skills_root}/using-superpowers/references/gemini-tools.md\n"
-    )
-
-
 def create_caller_consent_plan(workdir: Path) -> None:
     """Add a committed implementation plan that should trigger caller-layer gating."""
     plan_path = workdir / "docs" / "superpowers" / "plans" / "custom-greeting.md"

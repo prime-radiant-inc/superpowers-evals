@@ -16,7 +16,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM inside Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream -> `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict -> `result.{json,md}` |
-| **Coding-Agent** | The agent under test. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log -> `<run>/coding-agent-config/...`; files it writes -> `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test. Wired instances: **Claude** (claude, claude-sonnet, claude-haiku), **Codex**, **Gemini** (agy), **Pi**, **Antigravity**, **Copilot**, **Kimi**, **OpenCode**. | session log -> `<run>/coding-agent-config/...`; files it writes -> `<run>/coding-agent-workdir/` |
 | **Quorum** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and final verdict composition. | repo `superpowers-evals/quorum/`; `<run>/verdict.json` |
 
 A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
@@ -52,10 +52,19 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `quorum/coding_agent_config.py` — per-Coding-Agent YAML loader and session-log config.
 - `quorum/capture.py` — session-log snapshot/diff, normalized tool-call capture, obol-priced token capture.
 - `quorum/obol_capture.py` — all obol calls: session-log + gauntlet-sidecar cost estimation, per-file merge.
+- `quorum/economics.py` — per-run economics: timing + cost for both agents, composed from obol and token-usage captures.
 - `quorum/timing.py` — session-log wall-clock span (`duration_ms`).
 - `quorum/normalizers.py` — Coding-Agent session-log normalizers.
 - `quorum/scaffold.py` — `quorum new` / `quorum check` implementation.
 - `quorum/show.py` — verdict renderer for triage.
+- `quorum/run_all.py` — `quorum run-all` batch driver: builds the scenario × Coding-Agent matrix and runs pairs concurrently.
+- `quorum/setup_step.py` — runs a scenario's `setup.sh` against a temp workdir.
+- `quorum/story_meta.py` — reads quorum orchestration hints from a scenario's `story.md` frontmatter.
+- `quorum/agy_creds.py` — protects agy's shared OAuth token around mid-run kills.
+- `quorum/agy_teardown.py` — kills gauntlet's private tmux server for a given run after agy sessions complete.
+- `quorum/agy_watch.py` — daemon thread that tails `agy.log` and fires teardown on a rate-limit signal.
+- `quorum/kimi.py` — Kimi-specific launcher configuration, preflight, and subprocess environment helpers.
+- `quorum/opencode_capture.py` — exports OpenCode sessions from isolated per-run state.
 - `bin/` — check-tool vocabulary; tools emit one JSON record each.
 - `scenarios/` — active scenarios, one directory each.
 - `coding-agents/` — per-agent YAML, context HOWTOs, and home skeletons (see "Per-coding-agent" above).
