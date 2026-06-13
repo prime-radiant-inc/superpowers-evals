@@ -48,6 +48,16 @@ const { calls, empty } = loadCalls();
 const cliArgs = rest;
 
 function dispatch(): void {
+  try {
+    dispatchInner();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    recordFail(verb, cliArgs, `tool error: ${message}`);
+    process.exit(1);
+  }
+}
+
+function dispatchInner(): void {
   switch (verb) {
     case "tool-called": {
       const r = verbToolCalled(calls, empty, cliArgs);

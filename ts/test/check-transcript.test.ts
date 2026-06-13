@@ -685,3 +685,23 @@ test("record detail is null when no detail string (via no-sink no-op)", () => {
   expect(result.detail).toBe("Bash never called");
   expect(result.passed).toBe(false);
 });
+
+// ---------------------------------------------------------------------------
+// Crash → fail record emitted (Fix 3)
+// ---------------------------------------------------------------------------
+
+test("crash on invalid regex emits fail record and exits non-zero (E2E)", async () => {
+  // An unbalanced paren '(' is an invalid regex even after POSIX translation.
+  // Before the fix, this throws out of dispatch with NO record written.
+  // After the fix, the CLI catches the exception, emits {passed:false, detail:"tool error:..."},
+  // and exits 1.
+  const r = await runCLI(
+    ["tool-match-before-tool-match", "Edit", "(", "Edit", ".*"],
+    [call("Edit", { file_path: "foo.ts" })],
+  );
+  expect(r.exitCode).not.toBe(0);
+  // The sink must contain at least one record
+  expect(r.lastRecord).not.toBeNull();
+  expect(r.lastRecord!["passed"]).toBe(false);
+  expect(String(r.lastRecord!["detail"] ?? "")).toContain("tool error");
+});
