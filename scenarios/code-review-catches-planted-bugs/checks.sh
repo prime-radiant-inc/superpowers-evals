@@ -8,6 +8,6 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:requesting-code-review
-    tool-called Agent
+    check-transcript skill-called superpowers:requesting-code-review
+    check-transcript tool-called Agent
 }

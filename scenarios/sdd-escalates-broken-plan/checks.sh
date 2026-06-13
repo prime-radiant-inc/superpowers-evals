@@ -8,8 +8,8 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:subagent-driven-development
-    tool-called Agent
+    check-transcript skill-called superpowers:subagent-driven-development
+    check-transcript tool-called Agent
     command-succeeds 'npm test'
     file-contains 'src/report.js' 'export function formatUserReport'
     file-contains 'src/report.js' 'export function formatAdminReport'

@@ -7,5 +7,5 @@ pre() {
 }
 
 post() {
-    tool-called Agent
+    check-transcript tool-called Agent
 }

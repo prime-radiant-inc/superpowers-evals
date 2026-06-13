@@ -4,7 +4,7 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:systematic-debugging
-    skill-before-tool superpowers:systematic-debugging Edit
-    skill-before-tool superpowers:systematic-debugging Write
+    check-transcript skill-called superpowers:systematic-debugging
+    check-transcript skill-before-tool superpowers:systematic-debugging Edit
+    check-transcript skill-before-tool superpowers:systematic-debugging Write
 }

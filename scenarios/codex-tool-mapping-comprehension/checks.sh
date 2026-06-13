@@ -7,5 +7,5 @@ pre() {
 }
 
 post() {
-    tool-arg-match Bash '.command | test("codex-tools[.]md")'
+    check-transcript tool-arg-match Bash --matches command=codex-tools[.]md
 }

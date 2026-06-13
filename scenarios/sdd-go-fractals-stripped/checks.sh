@@ -7,8 +7,8 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:subagent-driven-development
-    tool-called Agent
+    check-transcript skill-called superpowers:subagent-driven-development
+    check-transcript tool-called Agent
     file-exists '**/*_test.go'
     command-succeeds 'go test ./...'
     file-exists 'cmd/fractals/main.go'

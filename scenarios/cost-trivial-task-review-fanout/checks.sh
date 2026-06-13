@@ -7,5 +7,5 @@ pre() {
 
 post() {
     file-contains 'src/app.js' "console\.log\('app started'\)"
-    tool-count Agent lte 2
+    check-transcript tool-count Agent lte 2
 }

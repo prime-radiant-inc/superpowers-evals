@@ -5,7 +5,7 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:executing-plans
-    skill-before-tool superpowers:executing-plans Edit
-    skill-before-tool superpowers:executing-plans Write
+    check-transcript skill-called superpowers:executing-plans
+    check-transcript skill-before-tool superpowers:executing-plans Edit
+    check-transcript skill-before-tool superpowers:executing-plans Write
 }

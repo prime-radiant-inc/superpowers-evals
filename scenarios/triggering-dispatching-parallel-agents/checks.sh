@@ -4,6 +4,6 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:dispatching-parallel-agents
-    skill-before-tool superpowers:dispatching-parallel-agents Agent
+    check-transcript skill-called superpowers:dispatching-parallel-agents
+    check-transcript skill-before-tool superpowers:dispatching-parallel-agents Agent
 }

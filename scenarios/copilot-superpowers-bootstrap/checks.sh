@@ -7,8 +7,8 @@ pre() {
 
 post() {
     copilot-plugin-installed
-    tool-arg-match Skill '.skill == "superpowers:brainstorming"'
-    skill-called superpowers:brainstorming
-    tool-match-before-tool-match Skill '"skill":"superpowers:brainstorming"' Edit '.*'
-    tool-match-before-tool-match Skill '"skill":"superpowers:brainstorming"' Write '.*'
+    check-transcript tool-arg-match Skill --eq skill=superpowers:brainstorming
+    check-transcript skill-called superpowers:brainstorming
+    check-transcript tool-match-before-tool-match Skill '"skill":"superpowers:brainstorming"' Edit '.*'
+    check-transcript tool-match-before-tool-match Skill '"skill":"superpowers:brainstorming"' Write '.*'
 }
