@@ -6,10 +6,6 @@
 //   0 — check passed
 //   1 — check failed
 //   2 — usage error (unknown verb or bad args)
-//
-// DEFERRED verb: tool-arg-match
-//   Takes an arbitrary jq expression that requires a separate TS expression
-//   contract decision. Keep using the shell tool for this verb.
 
 import { loadCalls } from "../check/transcript.ts";
 import { recordPass, recordFail } from "../check/record.ts";
@@ -26,21 +22,13 @@ import {
   verbInvestigated,
   verbWorktreeCreated,
   verbToolMatchBeforeToolMatch,
+  verbToolArgMatch,
 } from "../check/verbs.ts";
 
 const [, , verb, ...rest] = Bun.argv;
 
 if (!verb) {
   console.error("usage: check-transcript <verb> [args...]");
-  process.exit(2);
-}
-
-// tool-arg-match is intentionally deferred — needs a separate TS expression
-// contract decision before a jq-expression-free interface can be defined.
-if (verb === "tool-arg-match") {
-  console.error(
-    "verb not yet supported in check-transcript (uses jq expressions); keep using the shell tool",
-  );
   process.exit(2);
 }
 
@@ -144,6 +132,13 @@ function dispatchInner(): void {
     }
     case "tool-match-before-tool-match": {
       const r = verbToolMatchBeforeToolMatch(calls, empty, cliArgs);
+      r.passed
+        ? recordPass(verb, cliArgs, r.detail)
+        : recordFail(verb, cliArgs, r.detail);
+      process.exit(r.passed ? 0 : 1);
+    }
+    case "tool-arg-match": {
+      const r = verbToolArgMatch(calls, empty, cliArgs);
       r.passed
         ? recordPass(verb, cliArgs, r.detail)
         : recordFail(verb, cliArgs, r.detail);
