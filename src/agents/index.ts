@@ -35,6 +35,17 @@ export interface CodingAgent {
   provision(home: RunHome, runner: CommandRunner): Record<string, string>;
 }
 
+// Thrown by an agent's provision() when setup fails (missing required input, a
+// non-zero provisioning subprocess, a missing staged plugin file). The runner
+// maps it to a 'setup'-stage indeterminate verdict. Defined here, not in
+// runner/index.ts, so adapters import it without a runner<->agents cycle.
+export class ProvisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProvisionError';
+  }
+}
+
 /** The minimal `.claude.json` surface quorum reads/writes: an object whose
  *  `projects` map (when present) is itself an object. Everything else passes
  *  through untouched so claude can evolve the file without breaking us. */
