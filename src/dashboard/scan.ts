@@ -73,19 +73,27 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-// verdict.json is immutable once written, so a path-keyed cache never has to
-// invalidate. Cached entries are the parsed view (or null when absent/bad JSON).
-const _verdictCache = new Map<string, DashboardVerdict | null>();
+// verdict.json is immutable ONCE WRITTEN, so a path-keyed cache of a PRESENT
+// verdict never has to invalidate. Absence, however, is transient — a live
+// in-flight dir has no verdict yet, and one lands later. So we cache only the
+// present parse and re-read on a miss; caching `null` would pin a live dir as
+// verdict-less forever and break the running -> done transition the scanner
+// drives (parity with the Python's uncached _read_json, but keeping the
+// immutable-hit fast path).
+const _verdictCache = new Map<string, DashboardVerdict>();
 
-// Cached, immutable read of <runDir>/verdict.json narrowed to the read-side
-// view. Returns null when the file is missing, unreadable, or unparseable.
+// Cached (for present verdicts), immutable read of <runDir>/verdict.json narrowed
+// to the read-side view. Returns null when the file is missing, unreadable, or
+// unparseable — and does NOT cache that null, so a verdict landing later is seen.
 export function readDashboardVerdict(runDir: string): DashboardVerdict | null {
   const cached = _verdictCache.get(runDir);
   if (cached !== undefined) {
     return cached;
   }
   const result = parseDashboardVerdict(join(runDir, 'verdict.json'));
-  _verdictCache.set(runDir, result);
+  if (result !== null) {
+    _verdictCache.set(runDir, result);
+  }
   return result;
 }
 
