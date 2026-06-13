@@ -32,6 +32,37 @@ skill-called, skill-not-called, skill-before-tool, skill-before-implementation-t
 implementation-tool-not-called, investigated, worktree-created,
 tool-match-before-tool-match.
 
+## Post-review hardening (roborev + adversarial /par review)
+
+Two adversarial reviewers + a roborev branch review found a real **Critical** and
+several lesser issues — all now fixed (TDD), suite at **133 pass**, typecheck
+clean via a declared `typescript` dep:
+
+1. **[Critical, fixed]** `tool-match-before-tool-match` compiled caller-supplied
+   jq/Oniguruma regexes (e.g. `git[[:space:]]+commit`) with JS `RegExp`, which
+   doesn't grok POSIX classes → silent mismatch → **vacuous PASS**, flipping
+   `verification-phantom-completion` / `claim-without-verification-naive`
+   FAIL→PASS once migrated. Fix: `ts/src/check/regex.ts` `posixToJsRegex`
+   translates POSIX classes before `RegExp`; regression-tested
+   (commit-before-pytest now FAILs).
+2. **[Important, fixed]** an invalid-in-JS caller regex threw uncaught → **no
+   record written** (shell `_record` emits a fail record via its ERR trap). Fix:
+   the CLI now catches verb errors and emits `{passed:false, detail:"tool
+   error…"}` before exiting.
+3. **[Medium, fixed]** `typecheck` needed `tsc` but `typescript` wasn't a
+   dependency → added as a devDep.
+4. **[Minor, fixed]** normalizer dropped a `tool_result` when a user turn mixed
+   text + tool_result → now attaches the observation and still emits the text step.
+5. **[Minor, fixed]** the committed "real 2.1.177" fixture was truncated and had
+   no tool_use rows (so real tool_use mapping wasn't committed-tested, and the
+   doc below overstated it). Added `claude-2.1.177-with-tooluse.jsonl` (real
+   on-disk shape incl. noise rows + assistant tool_use + user tool_result) with
+   a test proving real-shape tool_use mapping.
+
+Still-open from review (decisions, not bugs): `tool-arg-match` contract (arbitrary
+jq → TS); the caller-migration allow-list must include ONLY the ported verbs;
+`loadCalls` can't yet distinguish a corrupt trajectory from "no transcript".
+
 ## CORRECTION: B1 (claude capture) root cause was wrong
 
 Reproduction (Task 7, see `docs/audits/2026-06-13-claude-2.1.x-transcript-location.md`)
