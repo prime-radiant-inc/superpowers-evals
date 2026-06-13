@@ -646,18 +646,12 @@ test("tool-match-before-tool-match: fail on empty transcript (C1 contract)", () 
 });
 
 // ---------------------------------------------------------------------------
-// Unknown verb / tool-arg-match deferred
+// Unknown verb
 // ---------------------------------------------------------------------------
 
 test("unknown verb exits 2 (E2E)", async () => {
   const r = await runCLI(["totally-unknown-verb"], []);
   expect(r.exitCode).toBe(2);
-});
-
-test("tool-arg-match exits 2 with deferred message (E2E)", async () => {
-  const r = await runCLI(["tool-arg-match", "Bash", ".command | test(\"ls\")"], [call("Bash", { command: "ls" })]);
-  expect(r.exitCode).toBe(2);
-  expect(r.stderr).toContain("not yet supported");
 });
 
 // ---------------------------------------------------------------------------

@@ -374,3 +374,122 @@ export function verbToolMatchBeforeToolMatch(
     detail: `${toolA} /${reA}/ at line ${idxA + 1} fired after ${toolB} /${reB}/ at line ${idxB + 1}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// tool-arg-match <tool> [--eq key=value]... [--matches key=regex]... [--ignore-case]
+//
+// Structured replacement for the old jq-driven shell tool. PASS iff THERE
+// EXISTS a call with tool === <tool> whose args satisfy ALL given matchers.
+// This is a positive existence assertion, so it naturally fails on an empty
+// transcript (no call can satisfy it) — no empty-guard is needed, matching
+// the shell original.
+//
+// Matcher key syntax supports comma-separated field-fallback keys, mirroring
+// jq's `(.path // .file_path // "")`: the FIRST key present in args is used
+// (empty string if none present), and that value is tested.
+//
+//   --eq key[,key2,...]=value     String(value) === <value>
+//   --matches key[,key2,...]=regex  posixToJsRegex(regex) tests String(value)
+//   --ignore-case                 add the `i` flag to all --matches regexes
+//
+// The key=spec is split on the FIRST `=` only, so the value/regex may contain
+// further `=` characters.
+// ---------------------------------------------------------------------------
+
+export interface ToolArgMatcher {
+  keys: string[];
+  /** "eq" → exact-string compare; "matches" → regex test. */
+  kind: "eq" | "matches";
+  /** literal value (eq) or regex source (matches). */
+  expected: string;
+}
+
+export interface ParsedToolArgMatch {
+  tool: string;
+  matchers: ToolArgMatcher[];
+  ignoreCase: boolean;
+}
+
+/** Parse tool-arg-match argv (after the verb) into a structured form. */
+export function parseToolArgMatchArgs(args: string[]): ParsedToolArgMatch {
+  const tool = args[0] ?? "";
+  const matchers: ToolArgMatcher[] = [];
+  let ignoreCase = false;
+
+  for (let i = 1; i < args.length; i++) {
+    const flag = args[i];
+    if (flag === "--ignore-case") {
+      ignoreCase = true;
+      continue;
+    }
+    if (flag === "--eq" || flag === "--matches") {
+      const spec = args[i + 1] ?? "";
+      i++;
+      const eqIdx = spec.indexOf("=");
+      const keyPart = eqIdx >= 0 ? spec.slice(0, eqIdx) : spec;
+      const expected = eqIdx >= 0 ? spec.slice(eqIdx + 1) : "";
+      const keys = keyPart.split(",").map((k) => k.trim()).filter((k) => k.length > 0);
+      matchers.push({
+        keys,
+        kind: flag === "--eq" ? "eq" : "matches",
+        expected,
+      });
+      continue;
+    }
+    // Unknown token — ignore (keeps parity with lenient shell parsing).
+  }
+
+  return { tool, matchers, ignoreCase };
+}
+
+/**
+ * Resolve the value to test for a matcher's keys: the FIRST key present in
+ * args wins (jq's `// ` fallback). Returns "" if none present.
+ */
+function firstPresentValue(args: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(args, key)) {
+      return String(args[key] ?? "");
+    }
+  }
+  return "";
+}
+
+function matcherSatisfied(
+  args: Record<string, unknown>,
+  matcher: ToolArgMatcher,
+  ignoreCase: boolean,
+): boolean {
+  const value = firstPresentValue(args, matcher.keys);
+  if (matcher.kind === "eq") {
+    return value === matcher.expected;
+  }
+  const re = posixToJsRegex(matcher.expected);
+  const flags = ignoreCase ? re.flags + "i" : re.flags;
+  const effective = ignoreCase && !re.flags.includes("i") ? new RegExp(re.source, flags) : re;
+  return effective.test(value);
+}
+
+export function verbToolArgMatch(
+  calls: ToolCallView[],
+  _empty: boolean,
+  args: string[],
+): VerbResult {
+  const parsed = parseToolArgMatchArgs(args);
+  const candidates = calls.filter((c) => c.tool === parsed.tool);
+
+  const matchCount = candidates.filter((c) =>
+    parsed.matchers.every((m) => matcherSatisfied(c.args, m, parsed.ignoreCase)),
+  ).length;
+
+  if (matchCount > 0) {
+    return {
+      passed: true,
+      detail: `${parsed.tool} has ${matchCount} call(s) matching all ${parsed.matchers.length} matcher(s)`,
+    };
+  }
+  return {
+    passed: false,
+    detail: `no ${parsed.tool} call matches all ${parsed.matchers.length} matcher(s)`,
+  };
+}
