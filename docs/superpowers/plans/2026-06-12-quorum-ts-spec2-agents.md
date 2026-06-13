@@ -73,3 +73,114 @@ Wave A blew the account token ceiling — largely because each Bob scanned `resu
 - **antigravity** — multi-file + dual-location (`PLANNER_RESPONSE`); the committed tool-calls concatenate across files, so a single-file oracle needs the right file or a concat.
 
 **Rate-limit lesson:** cap concurrent worktree Bobs and pre-supply fixtures; a 7-wide wave of results/-scanning Bobs cost ~770k tokens and hit the ceiling.
+
+---
+
+## Wave A — DONE (commits 1bd11ed fixtures, 083bdc1 normalizers)
+
+All 8 dialect normalizers at Python-oracle replay parity; `NORMALIZERS` wired.
+`bun run check` green (105 pass). The rate-limit fix worked: fixtures pre-mined
+from the **Python oracle over the curated `tests/quorum/test_normalizers.py`
+inputs** (NOT real `results/` logs — better coverage, zero scan, safe to commit),
+6 Bobs each built one normalizer + a 3-line replay test against the pre-placed
+`test/fixtures/<agent>/cases.json`. Cost ~588k tokens, no ceiling hit.
+
+**Methodology that worked:** the parity oracle is "TS output == Python output
+over the same input." `tools/gen_ts_replay_fixtures.py` (transitional dev tool,
+delete at cutover) runs the real `normalize_<agent>_logs` over authored inputs
+and freezes `cases.json`; the shared harness `test/replay-cases.ts` asserts it.
+`gen --check` is a parity-drift detector. Adding a fixture case CANNOT make a
+false parity claim — it only chooses which shapes are covered. Each verifier-found
+fix got a new oracle-backed case before being applied.
+
+**Verifier-found parity fixes** (adversarial verify stage caught all; high value):
+- gemini: dedup keys on raw id **truthiness** (`id: unknown`); a non-string id
+  no longer drops the call.
+- pi: `subagent`→`Agent` alias decided on the **raw** arguments object-ness
+  (absent→`{}`→Agent; non-object/null→`subagent`), pre-coercion.
+- kimi: absent `args` key → `{}` (not `{raw_args: undefined}`).
+- opencode/copilot: skill selection uses Python **falsy-fallthrough (`or`)**, not
+  nullish (`??`) — empty/non-string skill no longer mis-captures the name.
+- opencode: present-null `state.input` preserved as `raw_input: null`.
+- antigravity: present-null `args` → `{raw_args: null}` (absence-only default).
+
+**Accepted divergences** (documented in-source; NOT fixtured — reproducing them
+needs breaking the `ToolCall` contract or matching a Python crash):
+- non-object `args` → coerced to `{}`; non-string `name` → `''` (contract types
+  `args: Record`, `tool: string`; real logs never emit these).
+- gemini/pi: Python *crashes* (TypeError/AttributeError) on non-iterable
+  `messages`/`toolCalls`/`content`; TS is robust and skips. Can't be "parity"
+  with an exception.
+- antigravity `canonicalValue`: JS `JSON.parse` rejects `NaN`/`Infinity` and
+  parses bignum literals lossily (Python `json.loads` differs). Pathological as
+  command/path/bool values.
+- apply_patch path split uses `\n` (LF + CRLF both work via `.trim()`); Python
+  `splitlines()` also splits bare `\r`/`\v`/`\f`/Unicode seps — not matched
+  (control-chars in regex hit Biome `noControlCharactersInRegex`; unreachable in
+  real `\n`-delimited patch bodies).
+
+**Remaining Spec 2:** Wave B provisioning adapters (`src/agents/`, shared
+`resolveAgent`) + Wave C (cwd-filtering in capture for codex/kimi/pi; antigravity
+rate-limit→`indeterminate` in the runner). kimi/antigravity provisioning are the
+heavy lifts — dedicate Bobs, ground from `kimi.py`/`agy_*.py`/`opencode_capture.py`.
+
+---
+
+## Wave B — execution notes (from Kepler's recon, 2026-06-12)
+
+**TS contract today:** `interface CodingAgent { readonly config: AgentConfig;
+provision(home: RunHome): Record<string,string>; }` where `RunHome = {configDir,
+workdir, skeletonRoot?}`. The runner: `loadAgentConfig` → enforce `required_env`
+→ `resolveAgent(config)` (claude family → `ClaudeAgent`, else `DefaultAgent`) →
+`agent.provision(home)` returns extra env → `spawnSync('gauntlet', argv, {env:
+{...envSnapshot(), QUORUM_AGENT_CWD, ...extraEnv}})` → capture. Setup failures
+`throw new RunnerError(msg, 'setup')` → indeterminate.
+
+**The testability crux:** subprocess execution is NOT abstracted in the TS code
+(Spec 1 only stubs the `gauntlet` binary via `mock-gauntlet` on PATH). Real
+provisioning shells out: `codex login --with-api-key` (stdin), `gemini extensions
+link/list`, opencode/kimi/agy preflight (`ask`/reply "OK"), `agy plugin install`,
+the `AgyRateLimitWatcher` thread. None can run in the hermetic gate.
+
+**DECISION — introduce a `CommandRunner` seam** (`src/agents/command-runner.ts`):
+`interface CommandRunner { run(cmd, args, opts?): {status, stdout, stderr} }`,
+default impl wraps `spawnSync`; a `FakeCommandRunner` (test helper) records calls
+and returns canned results. Adapters receive a runner (constructor-injected,
+defaulting to the real one). This makes provisioning unit-testable at the
+**file/env/argv level** (assert: dirs created, config/env files + content,
+returned env map, and the exact commands+args+stdin invoked). The live subprocess
+paths only execute under real `quorum run` (trusted-maintainer). This is the
+parity bar for Wave B: hermetic tests prove the *generation* logic; subprocess
+*execution* is exercised live.
+
+**Decomposition (mirrors Wave A's pre-scaffold → disjoint fan-out → integrate):**
+- **B1 foundation (sequential, 1 step):** `command-runner.ts` (interface + real
+  impl + `FakeCommandRunner`); thread a `CommandRunner` through adapter
+  construction/`resolveAgent` (DefaultAgent/ClaudeAgent unchanged behaviorally);
+  a `provisionInTempHome` test helper. Gate green. Unblocks B2.
+- **B2 adapters (fan out, disjoint files `src/agents/<agent>.ts` + tests; do NOT
+  touch the shared `resolveAgent` registry — integrator wires it):**
+  - declarative: **pi** (~40L: auth.json/settings.json/pi.env, no subprocess).
+  - login-ceremony: **codex** (`codex login` stdin + plugin hooks),
+    **gemini** (settings.json + `.gemini-env` + `extensions link/list` + manifest
+    verify).
+  - custom-hard: **copilot** (`COPILOT_GAUNTLET_ENV_ALLOWLIST` filtering +
+    `.copilot-env` + dirs + plugin stage + post-run secret-leak scan, no
+    subprocess), **opencode** (XDG isolation + `opencode.json` model pin + plugin
+    symlink + `node --check` + preflight `ask`), **kimi** (port `kimi.py`: binary
+    resolve, `effective_kimi_model_env` merge, SHA256 sentinel preflight, plugin
+    install, `build_kimi_subprocess_env`, runtime env file, effective config),
+    **antigravity** (port `agy_watch`/`agy_creds`/`agy_teardown`: preflight,
+    `agy plugin install`, settings, rate-limit watcher, OAuth backup/restore,
+    tmux reap, launch-cwd visible-symlink wrapping).
+- **B3 integration / Wave C:** wire `resolveAgent` to all custom adapters;
+  antigravity `rate_limited` → short-circuit `indeterminate` in the runner
+  (`InvokeGauntletResult` gains the flag); port `filter_{codex,kimi,pi}_logs_by_cwd`
+  into the normalizer modules and call them in `captureToolCalls()` with
+  `launchCwd` before normalizing (currently MISSING in TS). Mock-gauntlet smokes.
+
+**Required env per agent:** codex `[OPENAI_API_KEY, SUPERPOWERS_ROOT]`; gemini
+`[GEMINI_API_KEY, SUPERPOWERS_ROOT]`; pi `[SUPERPOWERS_ROOT, PI_PROVIDER, PI_MODEL,
+PI_API_KEY]`; copilot `[SUPERPOWERS_ROOT]` (+optional token/allowlist); opencode
+`[SUPERPOWERS_ROOT]`; kimi `[SUPERPOWERS_ROOT, KIMI_MODEL_API_KEY]`; antigravity
+`[SUPERPOWERS_ROOT]`.
