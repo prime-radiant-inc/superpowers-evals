@@ -37,6 +37,7 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **show verdict**: `uv run quorum show [<target>]`
 - **run all**: `uv run quorum run-all [--coding-agents X,Y] [--jobs N]`
 - **show batch**: `uv run quorum show <batch-id>` (matrix view)
+- **dashboard**: `uv run quorum dashboard [--port N]` (web matrix: results, launch, live progress; the TS path is `bun run src/cli/index.ts dashboard`)
 
 Per-coding-agent config: `coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
 `coding-agents/<name>-context/HOWTO.md`. Per-coding-agent home skeleton (seeded
@@ -55,6 +56,7 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `quorum/timing.py` — session-log wall-clock span (`duration_ms`).
 - `quorum/normalizers.py` — Coding-Agent session-log normalizers.
 - `quorum/scaffold.py` — `quorum new` / `quorum check` implementation.
+- `src/dashboard/` (TS port, PRI-2207) — web dashboard: `scan.ts`/`view.ts` (read side over `results/`), `templates.ts` (typed HTML renderers; `cellHtml` is the single source for first paint + SSE swaps), `event-bus.ts` (bounded SSE fan-out), `orchestrator.ts` (one-session-at-a-time launch/stop over the scheduler, pid-tracked SIGINT), `server.ts` (`Bun.serve` routes + ~1s scanner loop), `index.ts` (`startDashboard`). Specs: `docs/superpowers/specs/2026-06-11-quorum-dashboard-{visual,build}-design.md`.
 - `quorum/show.py` — verdict renderer for triage.
 - `bin/` — check-tool vocabulary; tools emit one JSON record each.
 - `scenarios/` — active scenarios, one directory each.
