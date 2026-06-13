@@ -9,6 +9,7 @@
 import type { ToolCallView } from "../atif/project.ts";
 import { isSkillInvocation } from "../detect/skill.ts";
 import { isImplementationPath, implementationRelpath } from "../detect/implementation.ts";
+import { posixToJsRegex } from "./regex.ts";
 
 export interface VerbResult {
   passed: boolean;
@@ -347,8 +348,8 @@ export function verbToolMatchBeforeToolMatch(
     return { passed: false, detail: "tool-calls file missing or empty" };
   }
 
-  const regexA = new RegExp(reA);
-  const regexB = new RegExp(reB);
+  const regexA = posixToJsRegex(reA);
+  const regexB = posixToJsRegex(reB);
 
   const idxA = calls.findIndex((c) => c.tool === toolA && regexA.test(matchText(c)));
   const idxB = calls.findIndex((c) => c.tool === toolB && regexB.test(matchText(c)));
