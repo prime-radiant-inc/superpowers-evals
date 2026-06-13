@@ -347,24 +347,29 @@ test('gridHtml renders the matrix table, run-all button, headers, and row labels
       row: { 'scn-a': '4.50', 'scn-b': '' },
       column: { claude: '4.50', codex: '3.20' },
     },
+    counts: {
+      row: { 'scn-a': 2, 'scn-b': 1 },
+      column: { claude: 2, codex: 1 },
+    },
   });
   expect(html).toContain('<table class="mx" id="grid">');
   // run-all corner button with the runnable count = pass+fail+indet+not_run.
   expect(html).toContain('data-launch="all"');
   expect(html).toContain('data-count="4"');
-  // column headers carry data-launch="column" + data-agent + data-estimate.
+  // column headers carry data-launch + data-agent + data-count + data-estimate;
+  // the per-column data-count drives app.js's "Run N cells" confirm.
   expect(html).toContain(
-    'data-launch="column" data-agent="claude" data-estimate="4.50"',
+    'data-launch="column" data-agent="claude" data-count="2" data-estimate="4.50"',
   );
   expect(html).toContain(
-    'data-launch="column" data-agent="codex" data-estimate="3.20"',
+    'data-launch="column" data-agent="codex" data-count="1" data-estimate="3.20"',
   );
-  // row labels carry data-launch="row" + data-scenario + data-estimate.
+  // row labels carry data-launch + data-scenario + data-count + data-estimate.
   expect(html).toContain(
-    'data-launch="row" data-scenario="scn-a" data-estimate="4.50"',
+    'data-launch="row" data-scenario="scn-a" data-count="2" data-estimate="4.50"',
   );
   expect(html).toContain(
-    'data-launch="row" data-scenario="scn-b" data-estimate=""',
+    'data-launch="row" data-scenario="scn-b" data-count="1" data-estimate=""',
   );
   // cells are inlined (cell ids present).
   expect(html).toContain('id="cell-scn-a-claude"');
@@ -394,6 +399,7 @@ test('gridHtml escapes scenario and agent names in data attributes and labels', 
       not_run: 0,
     },
     estimates: { row: { 's&x': '' }, column: { 'a"b': '' } },
+    counts: { row: { 's&x': 1 }, column: { 'a"b': 1 } },
   });
   expect(html).toContain('data-agent="a&quot;b"');
   expect(html).toContain('data-scenario="s&amp;x"');

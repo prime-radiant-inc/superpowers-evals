@@ -190,6 +190,14 @@ export interface GridEstimates {
   readonly column: Readonly<Record<string, string>>;
 }
 
+// Per-column (agent) and per-row (scenario) RUNNABLE cell counts — what a
+// column/row launch will actually run. Surfaced in `data-count` so app.js's
+// confirm reads "Run N cells" (build spec) instead of the placeholder "Run ?".
+export interface GridCounts {
+  readonly row: Readonly<Record<string, number>>;
+  readonly column: Readonly<Record<string, number>>;
+}
+
 export interface GridArgs {
   readonly scenarios: readonly string[];
   readonly agents: readonly string[];
@@ -198,6 +206,7 @@ export interface GridArgs {
   readonly views: ReadonlyMap<string, CellView>;
   readonly tally: HeaderTally;
   readonly estimates: GridEstimates;
+  readonly counts: GridCounts;
 }
 
 // The matrix table (`grid.html.j2`). Sticky-header table with the run-all corner
@@ -205,7 +214,7 @@ export interface GridArgs {
 // labels (data-launch="row"), and inlined cell <td>s. data-count on the run-all
 // button is the runnable total = pass+fail+indeterminate+not_run.
 export function gridHtml(args: GridArgs): string {
-  const { scenarios, agents, views, tally, estimates } = args;
+  const { scenarios, agents, views, tally, estimates, counts } = args;
 
   const runnableCount =
     tally.passed + tally.failed + tally.indeterminate + tally.not_run;
@@ -213,8 +222,9 @@ export function gridHtml(args: GridArgs): string {
   const headerCells = agents
     .map((agent) => {
       const est = esc(estimates.column[agent] ?? '');
+      const count = counts.column[agent] ?? 0;
       return (
-        `<th data-launch="column" data-agent="${esc(agent)}" data-estimate="${est}">` +
+        `<th data-launch="column" data-agent="${esc(agent)}" data-count="${count}" data-estimate="${est}">` +
         `${esc(agent)}<span class="play">▶</span></th>`
       );
     })
@@ -223,6 +233,7 @@ export function gridHtml(args: GridArgs): string {
   const bodyRows = scenarios
     .map((scenario) => {
       const est = esc(estimates.row[scenario] ?? '');
+      const rowCount = counts.row[scenario] ?? 0;
       const cells = agents
         .map((agent) => {
           const view = views.get(`${scenario}\t${agent}`);
@@ -246,7 +257,7 @@ export function gridHtml(args: GridArgs): string {
         .join('');
       return (
         `<tr>` +
-        `<td class="rl" data-launch="row" data-scenario="${esc(scenario)}" data-estimate="${est}">` +
+        `<td class="rl" data-launch="row" data-scenario="${esc(scenario)}" data-count="${rowCount}" data-estimate="${est}">` +
         `<span class="play">▶</span>${esc(scenario)}</td>` +
         cells +
         `</tr>`

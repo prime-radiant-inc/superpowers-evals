@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runnable } from '../contracts/batch.ts';
 import type { InvokeFn } from '../run-all/index.ts';
+import { buildMatrix } from '../run-all/matrix.ts';
 import type { SchedulerEvent } from '../scheduler/index.ts';
 import { type Cell, cellId, cellKey, type Grid } from './contracts.ts';
 import { EventBus } from './event-bus.ts';
@@ -231,6 +233,19 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         session.spent += cost;
       }
       publishStrip();
+      return;
+    }
+    if (event.kind === 'batch_done') {
+      // The session is over. Clear the run strip so #runbar doesn't linger with
+      // a misleading "Running N · ■ Stop" that the user can click into a no-op
+      // stop. The grid cells carry the results; a fresh launch re-seeds the
+      // strip. (The Python left the final strip up; clearing matches the spec's
+      // "the run strip describes the dashboard's own launch session.")
+      session.running = 0;
+      session.inFlight = 0;
+      session.done = 0;
+      session.spent = 0;
+      bus.publish({ event: 'strip', data: '' });
     }
   };
 
@@ -293,6 +308,36 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
 
   // --- routes ----------------------------------------------------------------
 
+  // Per-column (agent) and per-row (scenario) runnable cell counts for the
+  // launch confirm ("Run N cells"). buildMatrix throws only on a bad filter
+  // (none here); guard anyway so GET / never 500s on a missing dir.
+  const runnableCounts = (
+    scenarios: readonly string[],
+    agents: readonly string[],
+  ): { row: Record<string, number>; column: Record<string, number> } => {
+    const row: Record<string, number> = {};
+    const column: Record<string, number> = {};
+    for (const s of scenarios) {
+      row[s] = 0;
+    }
+    for (const a of agents) {
+      column[a] = 0;
+    }
+    try {
+      for (const e of buildMatrix({ scenariosRoot, codingAgentsDir })) {
+        if (!runnable(e)) {
+          continue;
+        }
+        row[e.scenario] = (row[e.scenario] ?? 0) + 1;
+        column[e.codingAgent] = (column[e.codingAgent] ?? 0) + 1;
+      }
+    } catch {
+      // Missing/unreadable dir — fall back to the zeroed maps so GET / still
+      // renders the grid (the confirm shows "Run 0 cells" rather than 500ing).
+    }
+    return { row, column };
+  };
+
   const renderRoot = (): Response => {
     const scenarios = discoverScenarios(scenariosRoot);
     const agents = discoverAgents(codingAgentsDir);
@@ -334,9 +379,17 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       ),
     };
 
+    const counts = runnableCounts(scenarios, agents);
     const page = layoutHtml({
       tallyHtml: tallyHtml(tally),
-      gridHtml: gridHtml({ scenarios, agents, views, tally, estimates }),
+      gridHtml: gridHtml({
+        scenarios,
+        agents,
+        views,
+        tally,
+        estimates,
+        counts,
+      }),
     });
     return new Response(page, {
       headers: { 'content-type': 'text/html; charset=utf-8' },

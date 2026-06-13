@@ -140,8 +140,6 @@ export class Orchestrator {
     if (this.isActive) {
       throw new LaunchBusyError('a launch session is already active');
     }
-    this.isActive = true;
-    this.stopRequested = false;
 
     const agentFilter =
       args.kind === 'column' && args.agent !== undefined
@@ -152,6 +150,10 @@ export class Orchestrator {
         ? [args.scenario]
         : undefined;
 
+    // buildMatrix THROWS on an unknown agent/scenario filter. Build it BEFORE
+    // claiming the session, so a bad launch surfaces as a clean 4xx and never
+    // wedges `isActive` true (which would 409 every subsequent launch until a
+    // server restart).
     const entries = buildMatrix({
       scenariosRoot: this.scenariosRoot,
       codingAgentsDir: this.codingAgentsDir,
@@ -159,6 +161,10 @@ export class Orchestrator {
       ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
     });
     const runnableEntries = entries.filter((e) => runnable(e));
+
+    // Input validated — claim the session.
+    this.isActive = true;
+    this.stopRequested = false;
     this.runnableTotal = runnableEntries.length;
 
     const batchDir = allocateBatchDir({ outRoot: this.resultsRoot });
