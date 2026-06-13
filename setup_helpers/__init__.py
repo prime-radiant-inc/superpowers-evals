@@ -22,6 +22,7 @@ from setup_helpers.sdd_real_projects import (
     scaffold_sdd_svelte_todo_elicited,
 )
 from setup_helpers.sdd_spec_constraint_plan import scaffold_sdd_spec_constraint_plan
+from setup_helpers.sdd_spec_contradiction import scaffold_sdd_spec_contradiction
 from setup_helpers.sdd_yagni_plan import scaffold_sdd_yagni_plan
 from setup_helpers.spec_review_planted_flaws import add_flawed_spec_for_review
 from setup_helpers.spec_targets_wrong_component import create_spec_targets_wrong_component
@@ -78,6 +79,7 @@ HELPER_REGISTRY = {
     "scaffold_sdd_svelte_todo_elicited": scaffold_sdd_svelte_todo_elicited,
     "scaffold_sdd_quality_defect_plan": scaffold_sdd_quality_defect_plan,
     "scaffold_sdd_spec_constraint_plan": scaffold_sdd_spec_constraint_plan,
+    "scaffold_sdd_spec_contradiction": scaffold_sdd_spec_contradiction,
     "scaffold_sdd_yagni_plan": scaffold_sdd_yagni_plan,
     "setup_pressure_worktree_conditions": setup_pressure_worktree_conditions,
     "create_cost_checkbox_page": create_cost_checkbox_page,
