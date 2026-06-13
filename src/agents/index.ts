@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
+import type { CommandRunner } from './command-runner.ts';
 
 /** The isolated home a run hands an agent to provision. Absence is undefined
  *  (§5.5): a missing skeleton root is undefined, never null. */
@@ -26,8 +27,12 @@ export interface RunHome {
  *  environment gauntlet must pass into the agent CLI. */
 export interface CodingAgent {
   readonly config: AgentConfig;
-  /** Seed the isolated agent-config dir; return extra env to pass to gauntlet. */
-  provision(home: RunHome): Record<string, string>;
+  // Seed the isolated agent-config dir; return extra env to pass to gauntlet.
+  // `runner` is the subprocess seam for agents whose provisioning shells out
+  // (codex/gemini/opencode/kimi/antigravity). Declarative adapters
+  // (DefaultAgent, ClaudeAgent) ignore it — a 1-arg method satisfies this
+  // 2-arg signature via TS method bivariance, so they need no change.
+  provision(home: RunHome, runner: CommandRunner): Record<string, string>;
 }
 
 /** The minimal `.claude.json` surface quorum reads/writes: an object whose

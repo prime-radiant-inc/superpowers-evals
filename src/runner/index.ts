@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import { z } from 'zod';
+import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { resolveAgent } from '../agents/index.ts';
 import {
   captureTokenUsage,
@@ -245,11 +246,14 @@ async function runInner(
   const configDir = join(runDir, 'coding-agent-config');
   const workdir = join(runDir, 'coding-agent-workdir');
   mkdirSync(workdir, { recursive: true });
-  const extraEnv = agent.provision({
-    configDir,
-    workdir,
-    skeletonRoot: a.skeletonRoot ?? undefined,
-  });
+  const extraEnv = agent.provision(
+    {
+      configDir,
+      workdir,
+      skeletonRoot: a.skeletonRoot ?? undefined,
+    },
+    defaultCommandRunner,
+  );
   runSetup(a.scenarioDir, workdir);
 
   const checksSh = join(a.scenarioDir, 'checks.sh');
