@@ -124,19 +124,19 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
   return entries;
 }
 
-// Just the `max_concurrency` integer cap parse, kept narrow so a malformed
-// YAML (or absent key) is null rather than a throw (_agent_max_concurrency).
-const MaxConcurrencyViewSchema = z.object({
+// Just the scheduler keys, kept narrow so a malformed YAML (or absent key) is a
+// null rather than a throw (_agent_max_concurrency, plus the new spacing key).
+const SchedulerKeysViewSchema = z.object({
   max_concurrency: z.number().int().nullable().optional(),
+  launch_spacing_seconds: z.number().nullable().optional(),
 });
 
-// An agent's optional max_concurrency cap from its YAML, or null when unset /
-// unreadable (run_all.py _agent_max_concurrency). Agents whose backend
-// rate-limits concurrent calls set this to 1 so run-all serializes them.
-export function agentMaxConcurrency(
+// Read + zod-narrow an agent's YAML for the scheduler keys, or null when the
+// file is missing/unreadable/malformed.
+function readSchedulerKeys(
   codingAgentsDir: string,
   agent: string,
-): number | null {
+): z.infer<typeof SchedulerKeysViewSchema> | null {
   let raw: unknown;
   try {
     raw = parseYaml(
@@ -145,7 +145,26 @@ export function agentMaxConcurrency(
   } catch {
     return null;
   }
-  const view = MaxConcurrencyViewSchema.safeParse(raw ?? {});
-  if (!view.success) return null;
-  return view.data.max_concurrency ?? null;
+  const view = SchedulerKeysViewSchema.safeParse(raw ?? {});
+  return view.success ? view.data : null;
+}
+
+// An agent's optional max_concurrency cap from its YAML, or null when unset /
+// unreadable (run_all.py _agent_max_concurrency). Agents whose backend
+// rate-limits concurrent calls set this to 1 so the scheduler serializes them.
+export function agentMaxConcurrency(
+  codingAgentsDir: string,
+  agent: string,
+): number | null {
+  return readSchedulerKeys(codingAgentsDir, agent)?.max_concurrency ?? null;
+}
+
+// An agent's optional launch_spacing_seconds (minimum start-to-start gap), or 0
+// when unset / unreadable. The scheduler reads this as spacingFor(h); absent =
+// no spacing (the harness runs at full slot speed). Mirrors agentMaxConcurrency.
+export function agentLaunchSpacingSeconds(
+  codingAgentsDir: string,
+  agent: string,
+): number {
+  return readSchedulerKeys(codingAgentsDir, agent)?.launch_spacing_seconds ?? 0;
 }

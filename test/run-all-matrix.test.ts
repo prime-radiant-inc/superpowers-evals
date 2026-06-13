@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MatrixEntry } from '../src/contracts/batch.ts';
-import { agentMaxConcurrency, buildMatrix } from '../src/run-all/matrix.ts';
+import {
+  agentLaunchSpacingSeconds,
+  agentMaxConcurrency,
+  buildMatrix,
+} from '../src/run-all/matrix.ts';
 
 interface ScenarioSpec {
   readonly name: string;
@@ -187,4 +191,20 @@ test('agentMaxConcurrency reads the YAML cap, null when unset', () => {
   expect(agentMaxConcurrency(codingAgentsDir, 'antigravity')).toBe(1);
   expect(agentMaxConcurrency(codingAgentsDir, 'claude')).toBeNull();
   expect(agentMaxConcurrency(codingAgentsDir, 'missing')).toBeNull();
+});
+
+test('agentLaunchSpacingSeconds reads the YAML spacing, 0 when unset', () => {
+  const root = mkdtempSync(join(tmpdir(), 'runall-spacing-'));
+  const codingAgentsDir = join(root, 'coding-agents');
+  mkdirSync(codingAgentsDir, { recursive: true });
+  writeFileSync(
+    join(codingAgentsDir, 'antigravity.yaml'),
+    'name: antigravity\nmax_concurrency: 1\nlaunch_spacing_seconds: 30\n',
+  );
+  writeFileSync(join(codingAgentsDir, 'claude.yaml'), 'name: claude\n');
+
+  // Present -> the configured number; absent -> 0; missing file -> 0.
+  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'antigravity')).toBe(30);
+  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'claude')).toBe(0);
+  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'missing')).toBe(0);
 });
