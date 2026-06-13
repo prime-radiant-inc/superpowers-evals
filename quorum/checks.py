@@ -64,6 +64,7 @@ def run_phase(
     workdir: Path,
     quorum_bin: Path,
     tool_calls_path: Path | None = None,
+    transcript_path: Path | None = None,
     run_dir: Path | None = None,
 ) -> tuple[list[CheckRecord], int]:
     """Source checks.sh, call <phase>, return (records, script_exit_code).
@@ -84,6 +85,12 @@ def run_phase(
     }
     if tool_calls_path is not None:
         env["QUORUM_TOOL_CALLS_PATH"] = str(tool_calls_path)
+    if transcript_path is not None:
+        # ATIF trajectory.json for the new check-transcript CLI. Set even when
+        # the file is absent (agent without ATIF support, or emission failed):
+        # check-transcript's loader treats a missing file as empty (fail-closed),
+        # so check execution must not depend on the file existing.
+        env["QUORUM_TRANSCRIPT_PATH"] = str(transcript_path)
     if run_dir is not None:
         # Anchor for checks that need sibling paths (e.g. coding-agent-config/).
         # cwd inside checks.sh is the workdir, so siblings need an explicit anchor.
