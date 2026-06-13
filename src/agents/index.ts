@@ -9,7 +9,14 @@ import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
+import { AntigravityAgent } from './antigravity.ts';
+import { CodexAgent } from './codex.ts';
 import type { CommandRunner } from './command-runner.ts';
+import { CopilotAgent } from './copilot.ts';
+import { GeminiAgent } from './gemini.ts';
+import { KimiAgent } from './kimi.ts';
+import { OpenCodeAgent } from './opencode.ts';
+import { PiAgent } from './pi.ts';
 
 /** The isolated home a run hands an agent to provision. Absence is undefined
  *  (§5.5): a missing skeleton root is undefined, never null. */
@@ -121,12 +128,32 @@ function shellSingleQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
+// name -> custom adapter factory (Spec 2). Each dialect with provisioning beyond
+// the declarative default registers here; everything else falls through to
+// DefaultAgent. Mirrors the per-name dispatch in quorum/runner.py.
+const CUSTOM_AGENTS: Readonly<
+  Record<string, (config: AgentConfig) => CodingAgent>
+> = {
+  codex: (config) => new CodexAgent(config),
+  gemini: (config) => new GeminiAgent(config),
+  pi: (config) => new PiAgent(config),
+  copilot: (config) => new CopilotAgent(config),
+  opencode: (config) => new OpenCodeAgent(config),
+  kimi: (config) => new KimiAgent(config),
+  antigravity: (config) => new AntigravityAgent(config),
+};
+
 /** Resolve the agent implementation for a config: the Claude provisioner when
- *  the runtime family (or, absent that, the name) is `claude`, else the
- *  declarative default. */
+ *  the runtime family (or, absent that, the name) is `claude`; a registered
+ *  custom adapter when the name matches; else the declarative default. */
 export function resolveAgent(config: AgentConfig): CodingAgent {
-  if ((config.runtime_family ?? config.name) === 'claude') {
+  const name = config.runtime_family ?? config.name;
+  if (name === 'claude') {
     return new ClaudeAgent(config);
+  }
+  const factory = CUSTOM_AGENTS[name];
+  if (factory !== undefined) {
+    return factory(config);
   }
   return new DefaultAgent(config);
 }
