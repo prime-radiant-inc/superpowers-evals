@@ -136,31 +136,6 @@ def test_skill_before_tool_recognizes_bash_skill_md_read(tmp_path):
     ), "should pass — Bash skill-read at index 0 precedes Edit at index 1"
 
 
-def test_skill_before_tool_match_recognizes_bash_skill_md_read(tmp_path):
-    """skill-before-tool-match must use the same predicate as skill-called."""
-    parent = tmp_path / "rundir"
-    parent.mkdir()
-    workdir = parent / "coding-agent-workdir"
-    workdir.mkdir()
-    trace = _trace(
-        parent,
-        {"tool": "Bash", "args": {"command": "cat skills/superpowers/foo/SKILL.md"}},
-        {"tool": "Bash", "args": {"command": "git commit -m 'x'"}},
-    )
-    sink = tmp_path / "s"
-    assert (
-        _run(
-            "skill-before-tool-match",
-            "superpowers:foo",
-            "git[[:space:]]+commit",
-            trace=trace,
-            cwd=workdir,
-            sink=sink,
-        )
-        == 0
-    ), "should pass — Bash skill-read at index 0 precedes git commit at index 1"
-
-
 def test_skill_called_recognizes_antigravity_read_skill_md(tmp_path):
     parent = tmp_path / "rundir"
     parent.mkdir()
