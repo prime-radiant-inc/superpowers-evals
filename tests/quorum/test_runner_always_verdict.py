@@ -6,14 +6,16 @@ final=indeterminate and error.stage=setup.  Same for unexpected quorum errors.
 """
 
 import json
+import shutil
 import stat
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from quorum.composer import FinalVerdict
-from quorum.runner import run_scenario
+from quorum.runner import GauntletResult, run_scenario
 
 # ---------------------------------------------------------------------------
 # Helpers (shared with test_runner_gating pattern)
@@ -213,3 +215,104 @@ class TestAlwaysVerdict:
         # verdict.json must exist and be valid JSON
         data = json.loads((run_dir / "verdict.json").read_text())
         assert data["final"] == "indeterminate"
+
+
+# ---------------------------------------------------------------------------
+# ATIF trajectory emission (best-effort, additive)
+# ---------------------------------------------------------------------------
+
+
+def _claude_session_line() -> str:
+    """One claude transcript line with a tool_use so capture is non-empty."""
+    return (
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-sonnet-4-6",
+                    "content": [
+                        {"type": "tool_use", "name": "Bash", "input": {"command": "echo hi"}}
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            }
+        )
+        + "\n"
+    )
+
+
+def _stub_gauntlet_pass_writing_claude_log(session_log_dir: Path):
+    """Passing-gauntlet stub that drops a claude session log into session_log_dir.
+
+    Mirrors test_runner's _stub_gauntlet_pass_writing_log so the capture (and
+    thus the ATIF emission) sees a real new session log after the snapshot.
+    """
+
+    def _stub(*, run_dir, **kwargs):
+        (run_dir / ".gauntlet" / "results").mkdir(parents=True, exist_ok=True)
+        (session_log_dir / "session.jsonl").write_text(_claude_session_line())
+        return GauntletResult(status="pass")
+
+    return _stub
+
+
+def _passing_scenario(tmp_path: Path) -> Path:
+    scen = tmp_path / "s"
+    scen.mkdir()
+    (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
+    _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 0\n")
+    (scen / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    return scen
+
+
+@pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
+def test_runner_emits_atif_trajectory_for_claude(tmp_path):
+    """A claude run additionally writes a valid ATIF trajectory.json."""
+    scen = _passing_scenario(tmp_path)
+    session_log_dir = tmp_path / "session-logs"
+    session_log_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch(
+        "quorum.runner.invoke_gauntlet",
+        side_effect=_stub_gauntlet_pass_writing_claude_log(session_log_dir),
+    ):
+        run_dir, _verdict = _invoke(tmp_path, scen)
+
+    trajectory = run_dir / "trajectory.json"
+    assert trajectory.exists(), "claude run must additionally emit trajectory.json"
+    traj = json.loads(trajectory.read_text())
+    assert traj["schema_version"] == "ATIF-v1.7"
+    # The flat-JSONL capture is untouched and still present alongside it.
+    assert (run_dir / "coding-agent-tool-calls.jsonl").exists()
+
+
+def test_runner_atif_emission_is_best_effort(tmp_path):
+    """An ATIF emission failure must not raise or change the verdict.
+
+    Patch emit_atif_trajectory to raise; the run must still complete, the
+    verdict is produced from the untouched flat-JSONL path, and no
+    trajectory.json is written.
+    """
+    scen = _passing_scenario(tmp_path)
+    session_log_dir = tmp_path / "session-logs"
+    session_log_dir.mkdir(parents=True, exist_ok=True)
+
+    def _boom(**kwargs):
+        raise RuntimeError("simulated bun/normalizer failure")
+
+    with (
+        patch(
+            "quorum.runner.invoke_gauntlet",
+            side_effect=_stub_gauntlet_pass_writing_claude_log(session_log_dir),
+        ),
+        patch("quorum.runner.emit_atif_trajectory", side_effect=_boom),
+    ):
+        run_dir, verdict = _invoke(tmp_path, scen)
+
+    # Run completed and produced a real (non-error) verdict despite the raise.
+    assert verdict.final in {"pass", "fail", "indeterminate"}
+    assert (run_dir / "verdict.json").exists()
+    # The flat-JSONL capture path is unaffected.
+    assert (run_dir / "coding-agent-tool-calls.jsonl").exists()
+    # No partial trajectory left behind.
+    assert not (run_dir / "trajectory.json").exists()
