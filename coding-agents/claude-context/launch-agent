@@ -15,9 +15,15 @@
 # calls). If capture ever comes back empty anyway, claude is a strict-capture
 # target, so the run is a loud indeterminate(stage=capture), never a silent pass.
 #
+# As of claude 2.1.176 the env-strip alone is insufficient: nested detection
+# gained additional signals (e.g. CLAUDE_CODE_CHILD_SESSION) that the strip does
+# not cover. CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 is the authoritative
+# override — it forces transcript persistence regardless of nested-session
+# detection, so capture stays robust across claude versions.
+#
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 source "$CLAUDE_ENV_FILE"
-exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
+exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
