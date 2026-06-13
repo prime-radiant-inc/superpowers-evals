@@ -39,16 +39,33 @@ systemic capture rot" hypothesis was **wrong** and is retracted.
 
 ## Bitrot (wired up but broken)
 
-### B1 — claude transcript capture produces no transcript  [MITIGATED 2026-06-13: pin 2.1.175]
-DECISION (Jesse): pin claude **2.1.175** for now rather than chase the new
-layout — the older CLI still writes the legacy `projects/**/*.jsonl` the harness
-globs. Root cause CONFIRMED (below): claude 2.1.x moved session transcripts to
-`sessions/<uuid>/history.jsonl`. Independent corroboration: the `prudence`
-harness (TS, bun) globs the same old `projects/**/*.jsonl` and dodges the bug
-only by forcing `CLAUDE_CONFIG_DIR` + pinning an older claude — i.e. exactly the
-pin-2.1.175 strategy. Proper fix (prefer `sessions/<uuid>/history.jsonl`, fall
-back to legacy `projects/**`) deferred; revisit when we unpin or during the TS
-capture port. Original investigation below.
+### B1 — claude transcript capture produces no transcript  [RESOLVED 2026-06-13: FORCE_SESSION_PERSISTENCE=1]
+RESOLUTION: the launcher now sets `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`
+(`coding-agents/claude-context/launch-agent`); claude capture works on the latest
+CLI (2.1.177) with **no version pin**. The earlier "pin 2.1.175" decision and the
+"moved to `sessions/`" root cause are both **superseded — empirically disproven.**
+
+Real root cause (reconfirmed on 2.1.177): claude ≥2.1.176 *skips transcript
+persistence* when it detects a nested interactive Claude Code session. The
+existing `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID` strip no longer covers
+every nested signal (e.g. `CLAUDE_CODE_CHILD_SESSION`), so the subject writes
+nothing. The transcript did **not** move to `sessions/`: claude still writes to
+`${CLAUDE_CONFIG_DIR}/projects/**/*.jsonl` (host had 7056 live `projects/` jsonl
+vs **0** `*.jsonl` in `sessions/`; authenticated `-p` probes also wrote to
+`projects/`) — the dir is empty purely from non-persistence, which *read* as a
+move. `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` is the documented override that
+forces persistence regardless of detection signals (version-proof; beats
+whack-a-mole on `env -u`). Same fix as prior exp-branch commit `5c2bebe`.
+
+Verified end-to-end on 2.1.177 (same hello-world smoke, same machine):
+- **before** (strip-only launcher) → `indeterminate`, "no Claude transcript appeared … /projects".
+- **after** (FORCE override) → `pass`, real **59K-token** capture, post-checks run.
+
+Do NOT pin 2.1.175 (defeats "stay on latest") and do NOT repoint the glob to
+`sessions/`. The `prudence` note below is **not** corroboration of a path move —
+it pinned an older claude to dodge the *same* non-persistence bug. The original
+investigation (with the now-disproven "moved to `sessions/`" hypothesis) is kept
+verbatim below as the audit trail.
 
 ---
 
