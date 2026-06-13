@@ -273,9 +273,12 @@ program
       process.exit(1);
     }
 
+    // resultsRoot is used as-given (default 'results', relative): the rendered
+    // run-dir path mirrors it, matching the Python CLI byte-for-byte. resolve()
+    // here would print an absolute run-dir and diverge from `uv run quorum show`.
     let runDir: string;
     try {
-      runDir = resolveTarget(target, resolve(opts.resultsRoot));
+      runDir = resolveTarget(target, opts.resultsRoot);
     } catch (err: unknown) {
       if (err instanceof ShowError) {
         process.stderr.write(`${err.message}\n`);
@@ -294,7 +297,7 @@ program
       process.stdout.write(
         renderBatch({
           batchDir: runDir,
-          resultsRoot: resolve(opts.resultsRoot),
+          resultsRoot: opts.resultsRoot,
           color: opts.color && (process.stdout.isTTY ?? false),
         }),
       );
