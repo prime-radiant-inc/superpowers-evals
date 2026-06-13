@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
+import { startDashboard } from '../dashboard/index.ts';
 import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
 import { currentGauntletChild, runScenario } from '../runner/index.ts';
@@ -296,6 +297,46 @@ program
     }
     process.exit(0);
   });
+
+program
+  .command('dashboard')
+  .description(
+    'serve the web dashboard (results matrix + launch + live progress)',
+  )
+  .option('--port <n>', 'port (0 picks a free port)', '8787')
+  .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
+  .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
+  .option('--results-root <dir>', 'results root', 'results')
+  .action(
+    (opts: {
+      port: string;
+      scenariosRoot: string;
+      codingAgentsDir: string;
+      resultsRoot: string;
+    }) => {
+      const port = Number.parseInt(opts.port, 10);
+      if (!Number.isInteger(port) || port < 0) {
+        process.stderr.write('error: --port must be an integer >= 0\n');
+        process.exit(1);
+      }
+      const handle = startDashboard({
+        port,
+        resultsRoot: resolve(opts.resultsRoot),
+        scenariosRoot: resolve(opts.scenariosRoot),
+        codingAgentsDir: resolve(opts.codingAgentsDir),
+        jobs: DEFAULT_JOBS,
+      });
+      process.stdout.write(
+        `quorum dashboard on http://localhost:${handle.port}\n`,
+      );
+      // Bun.serve holds the event loop open; Ctrl-C stops the process. A clean
+      // SIGINT stops the server (and its scanner) before exiting.
+      process.once('SIGINT', () => {
+        handle.stop();
+        process.exit(0);
+      });
+    },
+  );
 
 program
   .command('show')
