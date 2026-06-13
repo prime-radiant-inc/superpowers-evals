@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"create hello.txt with hi"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I'll write the file."},{"type":"text","text":"Writing the file now."},{"type":"tool_use","id":"toolu_01","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"File created"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"cat hello.txt"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"hi"}]}}
