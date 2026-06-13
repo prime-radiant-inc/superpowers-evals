@@ -304,7 +304,7 @@ function rstripDotBang(s: string): string {
 
 // Port of _agy_log_shows_rate_limit: join the candidate texts, lowercase, and
 // look for an unambiguous Code Assist throttle signal.
-function agyLogShowsRateLimit(...texts: string[]): boolean {
+export function agyLogShowsRateLimit(...texts: string[]): boolean {
   const blob = texts
     .filter((t) => t !== '')
     .join('\n')
@@ -313,6 +313,31 @@ function agyLogShowsRateLimit(...texts: string[]): boolean {
     return true;
   }
   return AGY_429_RE.test(blob);
+}
+
+// Post-run rate-limit detection for the verdict layer. quorum writes the run's
+// agy log to <configDir>/agy.log (parity with quorum/runner.py). spawnSync
+// blocks, so the live AgyRateLimitWatcher's early tmux teardown is deferred
+// (live-efficiency only); scanning the log after the run yields the same
+// indeterminate VERDICT. Returns the reason string when rate-limited, else null.
+// NOTE (live validation): confirm the gauntlet antigravity launcher routes the
+// run's agy log to <configDir>/agy.log; the early-teardown watcher and OAuth
+// creds restore / tmux reap remain B3/live work.
+export function antigravityRateLimitReason(configDir: string): string | null {
+  const agyLog = join(configDir, 'agy.log');
+  if (!existsSync(agyLog)) {
+    return null;
+  }
+  let logText: string;
+  try {
+    logText = readFileSync(agyLog, 'utf8');
+  } catch {
+    return null;
+  }
+  if (!agyLogShowsRateLimit(logText)) {
+    return null;
+  }
+  return `${ANTIGRAVITY_RATE_LIMIT_MARKER}: the run's agy.log shows Code Assist 429 / RESOURCE_EXHAUSTED. The Gemini Code Assist rate/quota window is exhausted; wait for it to refresh before re-running antigravity.`;
 }
 
 // Port of the preflight's transcript glob (a focused

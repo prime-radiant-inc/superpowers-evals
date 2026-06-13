@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import { z } from 'zod';
+import { antigravityRateLimitReason } from '../agents/antigravity.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { ProvisionError, resolveAgent } from '../agents/index.ts';
 import {
@@ -305,6 +306,24 @@ async function runInner(
     launchCwd,
     extraEnv,
   });
+
+  // antigravity: a rate-limited Code Assist backend is an environmental
+  // indeterminate, not pass/fail (parity with quorum/runner.py, which maps it
+  // ahead of the generic empty-trace path). spawnSync blocks, so we scan the
+  // post-run agy.log rather than tailing it live; the early-teardown watcher is
+  // deferred. This precedes the gauntlet-error and capture handling.
+  if (cfg.normalizer === 'antigravity') {
+    const reason = antigravityRateLimitReason(configDir);
+    if (reason !== null) {
+      return compose({
+        gauntlet: gauntlet ?? null,
+        checks: [...pre.records],
+        captureEmpty: false,
+        error: { stage: 'gauntlet', message: reason },
+      });
+    }
+  }
+
   if (error !== undefined) {
     return compose({
       gauntlet: gauntlet ?? null,
