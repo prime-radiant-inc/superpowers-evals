@@ -321,6 +321,7 @@ async function runInner(
     snapshot,
     normalizer: cfg.normalizer,
     runDir,
+    launchCwd,
   });
   // captureTokenUsage writes coding-agent-token-usage.json as a side effect
   // (null when obol cannot price); economics reads that file, so the returned
@@ -331,6 +332,7 @@ async function runInner(
     snapshot,
     normalizer: cfg.normalizer,
     runDir,
+    launchCwd,
   });
   const captureEmpty = capture.rowCount === 0;
 
