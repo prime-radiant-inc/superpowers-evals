@@ -35,6 +35,7 @@ test('captureToolCalls writes coding-agent-tool-calls.jsonl from claude logs', (
     snapshot: snap,
     normalizer: 'claude',
     runDir,
+    launchCwd: runDir,
   });
   expect(res.rowCount).toBe(1);
   const written = readFileSync(
@@ -57,6 +58,7 @@ test('captureToolCalls writes an empty file when there are no new logs', () => {
     snapshot: new Set(),
     normalizer: 'claude',
     runDir,
+    launchCwd: runDir,
   });
   expect(res.rowCount).toBe(0);
   expect(

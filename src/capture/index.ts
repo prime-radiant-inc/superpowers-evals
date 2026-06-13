@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { Glob } from 'bun';
 import { NORMALIZERS } from '../normalizers/index.ts';
 import { estimateSessionLogs } from '../obol/index.ts';
+import { filterLogsByCwd } from './cwd-filter.ts';
 
 /** Map each matched log to its (relative path -> absolute path). Empty when the
  *  log dir does not exist. */
@@ -41,6 +42,16 @@ export interface CaptureArgs {
   readonly snapshot: ReadonlySet<string>;
   readonly normalizer: string;
   readonly runDir: string;
+  // The run's launch cwd. codex/kimi/pi share a home tree, so new logs are
+  // filtered to those whose recorded cwd matches this before normalizing
+  // (parity with quorum/capture.py). Other dialects ignore it.
+  readonly launchCwd: string;
+}
+
+// New session logs since the snapshot, narrowed to this run via cwd filtering.
+function capturedLogs(args: CaptureArgs): string[] {
+  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  return filterLogsByCwd(args.normalizer, newLogs, args.launchCwd);
 }
 
 export interface CaptureResult {
@@ -53,8 +64,8 @@ export interface CaptureResult {
  *  coding-agent-tool-calls.jsonl. The file is always written, even when empty,
  *  so downstream consumers can assume it exists. */
 export function captureToolCalls(args: CaptureArgs): CaptureResult {
-  const { logDir, logGlob, snapshot, normalizer, runDir } = args;
-  const newLogs = newFilesSince(logDir, logGlob, snapshot);
+  const { normalizer, runDir } = args;
+  const newLogs = capturedLogs(args);
   const fn = NORMALIZERS[normalizer];
   if (fn === undefined) {
     throw new Error(`unknown normalizer: ${normalizer}`);
@@ -83,7 +94,7 @@ function sessionDurationMs(_files: readonly string[]): number | null {
 export async function captureTokenUsage(
   args: CaptureArgs,
 ): Promise<string | null> {
-  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  const newLogs = capturedLogs(args);
   const usage = await estimateSessionLogs(args.normalizer, newLogs);
   if (usage === null) {
     return null;
