@@ -1,0 +1,144 @@
+[
+  {
+    "name": "export json: skill/bash/task with raw_input",
+    "input": "{\"info\": {\"id\": \"ses_1\", \"directory\": \"/tmp/project\"}, \"messages\": [{\"info\": {\"role\": \"assistant\"}, \"parts\": [{\"type\": \"step-start\"}, {\"type\": \"tool\", \"tool\": \"skill\", \"state\": {\"status\": \"completed\", \"input\": {\"name\": \"brainstorming\"}}}, {\"type\": \"tool\", \"tool\": \"bash\", \"state\": {\"status\": \"completed\", \"input\": {\"command\": \"git status\"}}}, {\"type\": \"tool\", \"tool\": \"task\", \"state\": {\"status\": \"completed\", \"input\": {\"subagent_type\": \"general\", \"prompt\": \"review\"}}}]}]}",
+    "expected": [
+      {
+        "tool": "Skill",
+        "args": {
+          "name": "brainstorming",
+          "raw_input": {
+            "name": "brainstorming"
+          },
+          "skill": "superpowers:brainstorming"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Bash",
+        "args": {
+          "command": "git status",
+          "raw_input": {
+            "command": "git status"
+          }
+        },
+        "source": "shell"
+      },
+      {
+        "tool": "Agent",
+        "args": {
+          "subagent_type": "general",
+          "prompt": "review",
+          "raw_input": {
+            "subagent_type": "general",
+            "prompt": "review"
+          }
+        },
+        "source": "native"
+      }
+    ]
+  },
+  {
+    "name": "export json: file/search/todo/web tools + file_path inference",
+    "input": "{\"messages\": [{\"parts\": [{\"type\": \"tool\", \"tool\": \"read\", \"state\": {\"input\": {\"file\": \"README.md\"}}}, {\"type\": \"tool\", \"tool\": \"write\", \"state\": {\"input\": {\"path\": \"app.py\", \"content\": \"x\"}}}, {\"type\": \"tool\", \"tool\": \"edit\", \"state\": {\"input\": {\"filePath\": \"src/app.py\"}}}, {\"type\": \"tool\", \"tool\": \"apply_patch\", \"state\": {\"input\": {\"patch\": \"*** Begin Patch\\n*** Update File: src/app.py\\n@@\\n-old\\n+new\\n*** End Patch\\n\"}}}, {\"type\": \"tool\", \"tool\": \"grep\", \"state\": {\"input\": {\"pattern\": \"Skill\"}}}, {\"type\": \"tool\", \"tool\": \"glob\", \"state\": {\"input\": {\"pattern\": \"*.py\"}}}, {\"type\": \"tool\", \"tool\": \"todowrite\", \"state\": {\"input\": {\"todos\": []}}}, {\"type\": \"tool\", \"tool\": \"webfetch\", \"state\": {\"input\": {\"url\": \"https://example.com\"}}}]}]}",
+    "expected": [
+      {
+        "tool": "Read",
+        "args": {
+          "file": "README.md",
+          "raw_input": {
+            "file": "README.md"
+          },
+          "file_path": "README.md"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Write",
+        "args": {
+          "path": "app.py",
+          "content": "x",
+          "raw_input": {
+            "path": "app.py",
+            "content": "x"
+          },
+          "file_path": "app.py"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Edit",
+        "args": {
+          "filePath": "src/app.py",
+          "raw_input": {
+            "filePath": "src/app.py"
+          },
+          "file_path": "src/app.py"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Edit",
+        "args": {
+          "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n-old\n+new\n*** End Patch\n",
+          "raw_input": {
+            "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n-old\n+new\n*** End Patch\n"
+          },
+          "file_path": "src/app.py",
+          "file_paths": ["src/app.py"]
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Grep",
+        "args": {
+          "pattern": "Skill",
+          "raw_input": {
+            "pattern": "Skill"
+          }
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Glob",
+        "args": {
+          "pattern": "*.py",
+          "raw_input": {
+            "pattern": "*.py"
+          }
+        },
+        "source": "native"
+      },
+      {
+        "tool": "TodoWrite",
+        "args": {
+          "todos": [],
+          "raw_input": {
+            "todos": []
+          }
+        },
+        "source": "native"
+      },
+      {
+        "tool": "WebFetch",
+        "args": {
+          "url": "https://example.com",
+          "raw_input": {
+            "url": "https://example.com"
+          }
+        },
+        "source": "native"
+      }
+    ]
+  },
+  {
+    "name": "not json -> empty",
+    "input": "not json",
+    "expected": []
+  },
+  {
+    "name": "non-tool parts -> empty",
+    "input": "{\"messages\": [{\"parts\": [{\"type\": \"text\"}]}]}",
+    "expected": []
+  }
+]

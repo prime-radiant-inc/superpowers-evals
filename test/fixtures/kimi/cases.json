@@ -1,0 +1,86 @@
+[
+  {
+    "name": "wire tool calls + native source + tool.result ignored",
+    "input": "{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Read\", \"args\": {\"path\": \"sample.txt\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Bash\", \"args\": {\"command\": \"git status\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"FetchURL\", \"args\": {\"url\": \"https://example.test\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.result\", \"toolCallId\": \"tool_1\"}}",
+    "expected": [
+      {
+        "tool": "Read",
+        "args": {
+          "path": "sample.txt"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Bash",
+        "args": {
+          "command": "git status"
+        },
+        "source": "shell"
+      },
+      {
+        "tool": "FetchURL",
+        "args": {
+          "url": "https://example.test"
+        },
+        "source": "native"
+      }
+    ]
+  },
+  {
+    "name": "short superpowers skill name canonicalization",
+    "input": "{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Skill\", \"args\": {\"skill\": \"brainstorming\"}}}",
+    "expected": [
+      {
+        "tool": "Skill",
+        "args": {
+          "skill": "superpowers:brainstorming"
+        },
+        "source": "native"
+      }
+    ]
+  },
+  {
+    "name": "source set extras native + skill/no-skill + non-dict args",
+    "input": "{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"WebSearch\", \"args\": {\"query\": \"x\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"TodoList\", \"args\": {}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"UnknownKimiTool\", \"args\": {\"k\": \"v\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Skill\", \"args\": {\"skill\": \"superpowers:already\"}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Skill\", \"args\": {}}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": \"Read\", \"args\": [\"not\", \"a\", \"dict\"]}}\n{\"type\": \"context.append_loop_event\", \"event\": {\"type\": \"tool.call\", \"name\": 123, \"args\": {\"ignored\": true}}}",
+    "expected": [
+      {
+        "tool": "WebSearch",
+        "args": {
+          "query": "x"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "TodoList",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "UnknownKimiTool",
+        "args": {
+          "k": "v"
+        },
+        "source": "shell"
+      },
+      {
+        "tool": "Skill",
+        "args": {
+          "skill": "superpowers:already"
+        },
+        "source": "native"
+      },
+      {
+        "tool": "Skill",
+        "args": {},
+        "source": "native"
+      },
+      {
+        "tool": "Read",
+        "args": {
+          "raw_args": ["not", "a", "dict"]
+        },
+        "source": "native"
+      }
+    ]
+  }
+]
