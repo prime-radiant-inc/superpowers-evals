@@ -11,17 +11,19 @@ TypeScript/Bun under `src/setup-helpers/`, producing **semantically-equivalent
 fixtures** to the Python. Additive: the Python stays in place. This is the
 duplication half of a two-PR migration.
 
-## Landing strategy (two PRs)
+## Landing strategy (one mega PR, then the purge)
 
-- **PR 1 — full duplication (this spec).** TS helpers land *alongside* the
-  Python. Both implementations are present and each is exercised by its own
-  runner (see "Runner wiring"). A transitional differential harness proves
-  TS ≡ Python.
-- **PR 2 — purge (separate, hours later).** Delete `setup_helpers/`, the Python
+- **The duplication mega PR.** *Everything up to removing Python* lands as a
+  single PR on `matt/pri-2207-quorum-ts-spec2` — Specs 1–5 (already stacked) plus
+  this setup-helpers port. TS helpers land *alongside* the Python; both
+  implementations are present and each is exercised by its own runner (see
+  "Runner wiring"). A transitional differential harness proves TS ≡ Python.
+  This work is **not** a separate PR — it stacks onto that branch.
+- **The purge PR (separate, hours later).** Delete `setup_helpers/`, the Python
   `setup-helpers` console script, and the differential harness. The scenario
   `setup.sh` files are already at their end-state and do **not** change again.
 
-Per Matt: Python lives "for hours, not longer" after PR 1 lands — so the
+Per Matt: Python lives "for hours, not longer" after the mega PR lands — so the
 differential harness is deliberately throwaway; lasting confidence comes from
 Python-independent unit tests (below).
 
@@ -177,7 +179,7 @@ Two layers, deliberately split by lifespan:
    outputs and (b) the exact external commands issued (e.g. `gemini extensions
    link <root>`, `codex login --with-api-key`, the JSON-RPC frames).
 
-2. **Transitional differential harness (throwaway; deleted in PR 2).** For the
+2. **Transitional differential harness (throwaway; deleted in the purge PR).** For the
    hermetic helpers, run the Python helper into `tmpA` and the TS helper into
    `tmpB`, then diff: recursive file-tree content (excluding `.git/`) and
    `git log --format="%s"` + `git ls-tree -r --name-only HEAD`. SHAs excluded
@@ -197,7 +199,7 @@ Reuse existing infra: `paths.ts` (`repoRoot`, `nowStampUtc`, `hexNonce`),
 `command-runner.ts` (`CommandRunner`/`SpawnCommandRunner`), `env.ts`
 (`getEnv`/`envSnapshot`/`superpowersRoot`).
 
-## Out of scope (PR 2)
+## Out of scope (the purge PR)
 
 Deleting `setup_helpers/`, the Python console script, and the differential
 harness; flipping any docs that name the Python path. The `setup.sh` files do
