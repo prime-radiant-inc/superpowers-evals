@@ -14,6 +14,15 @@ def _trace(tmp_path: Path, *records: dict) -> Path:
     return p
 
 
+def _empty_trace(tmp_path: Path) -> Path:
+    """A capture file that exists but is empty — the condition produced when
+    transcript capture bitrots (the agent ran but no tool-call records were
+    recovered). Negative assertions must NOT vacuously pass on this."""
+    p = tmp_path / "coding-agent-tool-calls.jsonl"
+    p.write_text("")
+    return p
+
+
 def _run(tool: str, *args: str, trace: Path, cwd: Path, sink: Path) -> int:
     return subprocess.run(
         [str(BIN / tool), *args],
@@ -1211,3 +1220,89 @@ def test_investigated_does_not_false_match_grep_substring(tmp_path):
     )
     sink = tmp_path / "s"
     assert _run("investigated", trace=trace, cwd=workdir, sink=sink) != 0
+
+
+# Negative-assertion tools (tool-not-called / skill-not-called) must
+# distinguish "agent demonstrably did not do X" from "we have no transcript to
+# judge". On an empty capture (the bitrot condition) they previously reported
+# PASS — a silent false-pass that made cost/over-trigger scenarios green when
+# the harness was actually blind. Their guarded sibling
+# implementation-tool-not-called already fails on empty; these pin the same
+# contract for the other two.
+
+
+def test_tool_not_called_passes_when_tool_absent(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Read", "args": {}})
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
+
+
+def test_tool_not_called_fails_when_tool_present(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Edit", "args": {}})
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) != 0
+    assert not _r(sink)["passed"]
+
+
+def test_tool_not_called_fails_on_empty_capture(tmp_path):
+    """Empty capture must not vacuously pass a negative assertion."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _empty_trace(parent)
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) != 0
+    assert not _r(sink)["passed"]
+
+
+def test_skill_not_called_passes_when_skill_absent(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Edit", "args": {}})
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        == 0
+    )
+    assert _r(sink)["passed"]
+
+
+def test_skill_not_called_fails_when_skill_present(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Skill", "args": {"skill": "superpowers:foo"}})
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        != 0
+    )
+    assert not _r(sink)["passed"]
+
+
+def test_skill_not_called_fails_on_empty_capture(tmp_path):
+    """Empty capture must not vacuously pass a negative assertion."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _empty_trace(parent)
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        != 0
+    )
+    assert not _r(sink)["passed"]
