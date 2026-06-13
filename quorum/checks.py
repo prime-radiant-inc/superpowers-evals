@@ -63,7 +63,6 @@ def run_phase(
     phase: Phase,
     workdir: Path,
     quorum_bin: Path,
-    tool_calls_path: Path | None = None,
     transcript_path: Path | None = None,
     run_dir: Path | None = None,
 ) -> tuple[list[CheckRecord], int]:
@@ -83,8 +82,6 @@ def run_phase(
         "PATH": f"{quorum_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
         "QUORUM_RECORD_SINK": str(sink),
     }
-    if tool_calls_path is not None:
-        env["QUORUM_TOOL_CALLS_PATH"] = str(tool_calls_path)
     if transcript_path is not None:
         # ATIF trajectory.json for the new check-transcript CLI. Set even when
         # the file is absent (agent without ATIF support, or emission failed):

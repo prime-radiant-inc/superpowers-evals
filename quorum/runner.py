@@ -47,11 +47,7 @@ from urllib.parse import urlsplit
 
 from quorum import agy_creds
 from quorum.agy_teardown import kill_run_tmux_server
-from quorum.atif import (
-    ATIF_TRAJECTORY_FILENAME,
-    emit_atif_trajectory,
-    supports_atif,
-)
+from quorum.atif import ATIF_TRAJECTORY_FILENAME
 from quorum.capture import (
     capture_token_usage,
     capture_tool_calls_with_retry,
@@ -251,11 +247,6 @@ class GauntletResult:
 def _quorum_bin_dir() -> Path:
     """Return the repo's bin/ directory (where check tools live)."""
     return Path(__file__).resolve().parent.parent / "bin"
-
-
-def _ts_root() -> Path:
-    """Return the repo's ts/ directory (where the bun ATIF normalizers live)."""
-    return Path(__file__).resolve().parent.parent / "ts"
 
 
 def _allocate_run_dir(*, out_root: Path, scenario_name: str, coding_agent: str) -> Path:
@@ -1907,8 +1898,7 @@ def _run_scenario_inner(
             phase="pre",
             workdir=workdir,
             quorum_bin=_quorum_bin_dir(),
-            tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
-            transcript_path=run_dir / "trajectory.json",
+            transcript_path=run_dir / ATIF_TRAJECTORY_FILENAME,
             run_dir=run_dir,
         )
         if pre_exit != 0:
@@ -2102,22 +2092,6 @@ def _run_scenario_inner(
                 run_dir=run_dir,
                 launch_cwd=launch_cwd,
             )
-
-        # 9c. Additionally emit an ATIF v1.7 trajectory.json from the captured
-        #     session log (best-effort, additive). The flat-JSONL capture above
-        #     and the verdict are untouched; a bun/normalizer failure or missing
-        #     session log just leaves no trajectory.json. All six TS-backed
-        #     normalizers (claude, codex, gemini, copilot, opencode, pi) are
-        #     supported via the unified cli/normalize.ts dispatcher.
-        if supports_atif(tcfg.normalizer) and capture_result.source_logs:
-            with contextlib.suppress(Exception):
-                emit_atif_trajectory(
-                    session_log_path=capture_result.source_logs[0],
-                    out_path=run_dir / ATIF_TRAJECTORY_FILENAME,
-                    normalizer=tcfg.normalizer,
-                    version="unknown",
-                    ts_root=_ts_root(),
-                )
 
         # 10. Build Gauntlet layer from run dir before capture short-circuits or
         # post-checks, so early indeterminate verdicts still preserve QA context.
@@ -2427,8 +2401,7 @@ def _run_scenario_inner(
             phase="post",
             workdir=workdir,
             quorum_bin=_quorum_bin_dir(),
-            tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
-            transcript_path=run_dir / "trajectory.json",
+            transcript_path=run_dir / ATIF_TRAJECTORY_FILENAME,
             run_dir=run_dir,
         )
         if post_exit != 0:

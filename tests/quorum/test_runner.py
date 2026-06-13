@@ -3227,7 +3227,7 @@ class TestRunScenario:
         assert len(run_dirs) == 1
         rd = run_dirs[0]
         assert (rd / "verdict.json").exists()
-        assert (rd / "coding-agent-tool-calls.jsonl").exists()
+        assert (rd / "trajectory.json").exists()
         assert (rd / "gauntlet-agent" / "context" / "HOWTO.md").read_text() == "invoke `claude`"
 
     def test_check_fail_overrides_gauntlet_pass(self, tmp_path):

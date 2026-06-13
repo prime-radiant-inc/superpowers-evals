@@ -29,7 +29,6 @@ TRACE_PRIMITIVES = {
     "skill-called",
     "skill-not-called",
     "skill-before-tool",
-    "skill-before-tool-match",
 }
 
 

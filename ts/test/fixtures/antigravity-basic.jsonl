@@ -1,0 +1,4 @@
+{"type":"assistant","tool_calls":[{"name":"run_command","args":{"CommandLine":"pytest -q"}},{"name":"view_file","args":{"AbsolutePath":"/tmp/run/.gemini/config/plugins/superpowers/skills/test-driven-development/SKILL.md","IsSkillFile":true}},{"name":"list_dir","args":{"DirectoryPath":"src"}}]}
+not json
+{"type":"assistant","text":"no tools here"}
+{"PLANNER_RESPONSE":{"tool_calls":[{"name":"write_to_file","args":{"TargetFile":"\"/tmp/run/coding-agent-workdir/src/app.js\""}},{"name":"grep_search","args":{"pattern":"validate"}}]}}

@@ -22,7 +22,7 @@ from string import Template
 
 import yaml
 
-from quorum.normalizers import NORMALIZERS
+from quorum.atif import ATIF_SUPPORTED_NORMALIZERS
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KNOWN_RUNTIME_FAMILIES = frozenset(
@@ -127,9 +127,10 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
         raise CodingAgentConfigError(f"{path}: required env vars not set: {missing_env}")
 
     normalizer = raw["normalizer"]
-    if normalizer not in NORMALIZERS:
+    if normalizer not in ATIF_SUPPORTED_NORMALIZERS:
         raise CodingAgentConfigError(
-            f"{path}: unknown normalizer {normalizer!r}; known: {sorted(NORMALIZERS)}"
+            f"{path}: unknown normalizer {normalizer!r}; "
+            f"known: {sorted(ATIF_SUPPORTED_NORMALIZERS)}"
         )
 
     project_prompt_raw = raw.get("project_prompt")

@@ -1,0 +1,5 @@
+{"type":"context.append_loop_event","event":{"type":"tool.call","name":"Read","args":{"path":"sample.txt"}}}
+{"type":"context.append_loop_event","event":{"type":"tool.call","name":"Bash","args":{"command":"git status"}}}
+{"type":"context.append_loop_event","event":{"type":"tool.call","name":"FetchURL","args":{"url":"https://example.test"}}}
+{"type":"context.append_loop_event","event":{"type":"tool.call","name":"Skill","args":{"skill":"brainstorming"}}}
+{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool_1"}}

@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
 
 from quorum.capture import (
+    CaptureResult,
     capture_token_usage,
     capture_tool_calls,
     capture_tool_calls_with_retry,
@@ -19,6 +21,16 @@ from quorum.capture import (
 def _mkdir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _tool_names(trajectory_path: Path) -> list[str]:
+    """Flatten function_name across all tool_calls in an emitted ATIF trajectory."""
+    data = json.loads(trajectory_path.read_text())
+    names: list[str] = []
+    for step in data.get("steps", []):
+        for call in step.get("tool_calls", []) or []:
+            names.append(call["function_name"])
+    return names
 
 
 class TestSnapshotAndDiff:
@@ -62,7 +74,12 @@ class TestSnapshotAndDiff:
 
 
 class TestCaptureToolCalls:
-    def test_writes_normalized_jsonl(self, tmp_path):
+    """capture_tool_calls emits the ATIF trajectory via the bun TS normalizer.
+
+    These are integration tests against the real cli/normalize.ts dispatcher.
+    """
+
+    def test_emits_trajectory_from_session_log(self, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -73,7 +90,12 @@ class TestCaptureToolCalls:
                     "type": "assistant",
                     "message": {
                         "content": [
-                            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}
+                            {
+                                "type": "tool_use",
+                                "id": "t1",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            }
                         ]
                     },
                 }
@@ -89,13 +111,12 @@ class TestCaptureToolCalls:
             normalizer="claude",
             run_dir=run_dir,
         )
-        assert result.path == run_dir / "coding-agent-tool-calls.jsonl"
-        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
-        assert len(rows) == 1
-        assert rows[0]["tool"] == "Bash"
-        assert rows[0]["source"] == "shell"
+        assert result.path == run_dir / "trajectory.json"
+        assert result.path.exists()
+        assert result.row_count == 1
+        assert _tool_names(result.path) == ["Bash"]
 
-    def test_capture_tool_calls_returns_source_logs_and_row_count(self, tmp_path):
+    def test_returns_source_logs_and_row_count(self, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -108,11 +129,13 @@ class TestCaptureToolCalls:
                         "content": [
                             {
                                 "type": "tool_use",
+                                "id": "r1",
                                 "name": "Read",
                                 "input": {"file_path": "a.py"},
                             },
                             {
                                 "type": "tool_use",
+                                "id": "e1",
                                 "name": "Edit",
                                 "input": {"file_path": "a.py"},
                             },
@@ -135,105 +158,12 @@ class TestCaptureToolCalls:
             run_dir=run_dir,
         )
 
-        assert result.path == run_dir / "coding-agent-tool-calls.jsonl"
+        assert result.path == run_dir / "trajectory.json"
+        # Both files are located as source logs; the trajectory is emitted from
+        # the first new source log (capture passes new[0] to the normalizer).
         assert result.source_logs == (first, second)
         assert result.row_count == 2
-
-    def test_copilot_recursive_events_capture(self, tmp_path):
-        log_dir = tmp_path / "copilot-home"
-        session_id = "12345678-1234-5678-1234-567812345678"
-        events = log_dir / "session-state" / session_id / "events.jsonl"
-        events.parent.mkdir(parents=True)
-        snap = snapshot_dir(log_dir, "**/events.jsonl")
-        events.write_text(
-            json.dumps(
-                {
-                    "type": "assistant.message",
-                    "data": {
-                        "toolRequests": [
-                            {
-                                "name": "skill",
-                                "arguments": {"skill": "superpowers:brainstorming"},
-                            }
-                        ]
-                    },
-                }
-            )
-            + "\n"
-        )
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-
-        result = capture_tool_calls(
-            log_dir=log_dir,
-            log_glob="**/events.jsonl",
-            snapshot=snap,
-            normalizer="copilot",
-            run_dir=run_dir,
-        )
-
-        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
-        assert result.source_logs == (events,)
-        assert result.row_count == 1
-        assert rows[0]["tool"] == "Skill"
-        assert rows[0]["args"]["skill"] == "superpowers:brainstorming"
-
-    def test_gemini_capture_orders_rows_by_message_timestamp(self, tmp_path):
-        log_dir = tmp_path / "gemini-home" / ".gemini" / "tmp"
-        subagent = log_dir / "workdir" / "chats" / "abc" / "subagent.jsonl"
-        main = log_dir / "workdir" / "chats" / "session-20260612.jsonl"
-        subagent.parent.mkdir(parents=True)
-        main.parent.mkdir(parents=True, exist_ok=True)
-        snap = snapshot_dir(log_dir, "**/chats/**/*.jsonl")
-        subagent.write_text(
-            json.dumps({"kind": "subagent"})
-            + "\n"
-            + json.dumps(
-                {
-                    "type": "gemini",
-                    "timestamp": "2026-06-12T00:20:31.453Z",
-                    "toolCalls": [
-                        {
-                            "id": "edit-1",
-                            "name": "replace",
-                            "args": {"file_path": "app.js"},
-                        }
-                    ],
-                }
-            )
-            + "\n"
-        )
-        main.write_text(
-            json.dumps({"kind": "main"})
-            + "\n"
-            + json.dumps(
-                {
-                    "type": "gemini",
-                    "timestamp": "2026-06-12T00:19:23.695Z",
-                    "toolCalls": [
-                        {
-                            "id": "skill-1",
-                            "name": "activate_skill",
-                            "args": {"name": "writing-plans"},
-                        }
-                    ],
-                }
-            )
-            + "\n"
-        )
-
-        result = capture_tool_calls(
-            log_dir=log_dir,
-            log_glob="**/chats/**/*.jsonl",
-            snapshot=snap,
-            normalizer="gemini",
-            run_dir=_mkdir(tmp_path / "run"),
-        )
-
-        rows = [json.loads(line) for line in result.path.read_text().splitlines() if line.strip()]
-        assert [row["tool"] for row in rows] == ["Skill", "Edit"]
-        assert rows[0]["args"]["skill"] == "superpowers:writing-plans"
-        assert result.row_count == 2
+        assert _tool_names(result.path) == ["Read", "Edit"]
 
     def test_codex_filter_uses_launch_cwd(self, tmp_path):
         # capture_tool_calls attributes codex rollouts by the launch cwd
@@ -265,11 +195,11 @@ class TestCaptureToolCalls:
             run_dir=_mkdir(tmp_path / "run-match"),
             launch_cwd=launch_cwd,
         )
-        rows = [json.loads(x) for x in matched.path.read_text().splitlines() if x.strip()]
-        # spawn_agent is aliased to the Claude-canonical Agent by CODEX_TOOL_MAP.
-        assert [r["tool"] for r in rows] == ["Agent"]
+        # spawn_agent is aliased to the Claude-canonical Agent by the codex map.
+        assert _tool_names(matched.path) == ["Agent"]
 
-        # A non-matching launch_cwd drops the rollout entirely.
+        # A non-matching launch_cwd drops the rollout entirely → empty capture,
+        # which leaves no trajectory file (so downstream loaders fail closed).
         dropped = capture_tool_calls(
             log_dir=log_dir,
             log_glob="*.jsonl",
@@ -278,7 +208,9 @@ class TestCaptureToolCalls:
             run_dir=_mkdir(tmp_path / "run-miss"),
             launch_cwd=tmp_path / "elsewhere",
         )
-        assert dropped.path.read_text() == ""
+        assert dropped.source_logs == ()
+        assert dropped.row_count == 0
+        assert not dropped.path.exists()
 
     def test_kimi_filter_uses_launch_cwd(self, tmp_path):
         log_dir = tmp_path / "sessions"
@@ -345,8 +277,7 @@ class TestCaptureToolCalls:
             launch_cwd=launch_cwd,
         )
 
-        rows = [json.loads(x) for x in matched.path.read_text().splitlines() if x.strip()]
-        assert [r["tool"] for r in rows] == ["Read"]
+        assert _tool_names(matched.path) == ["Read"]
 
     def test_detect_kimi_cwd_mismatch_when_new_logs_exist_but_none_match(self, tmp_path):
         log_dir = tmp_path / "sessions"
@@ -385,8 +316,9 @@ class TestCaptureToolCalls:
             == []
         )
 
-    def test_empty_capture_writes_empty_file(self, tmp_path):
-        # File must always exist so assertions can rely on its presence.
+    def test_empty_capture_leaves_no_trajectory(self, tmp_path):
+        # A zero-row capture removes any trajectory so loaders fail closed and
+        # the empty-capture retry still fires.
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -401,8 +333,7 @@ class TestCaptureToolCalls:
         )
         assert result.source_logs == ()
         assert result.row_count == 0
-        assert result.path.exists()
-        assert result.path.read_text() == ""
+        assert not result.path.exists()
 
 
 class TestPiSessionDiagnostics:
@@ -460,34 +391,35 @@ def _claude_session_line(input_tokens: int, output_tokens: int) -> str:
     )
 
 
-_PI_TOOLCALL_LINE = (
-    json.dumps(
-        {
-            "type": "message",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "toolCall", "name": "read", "arguments": {}}],
-            },
-        }
+def _pi_toolcall_line() -> str:
+    return (
+        json.dumps(
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "toolCall", "name": "read", "arguments": {}}],
+                },
+            }
+        )
+        + "\n"
     )
-    + "\n"
-)
 
 
 class TestCaptureToolCallsWithRetry:
     """Empty-capture retry/guard (PRI-2081).
 
     A transient capture miss — the Coding-Agent's session log still being
-    flushed when the post-drive diff+normalize runs — must not become a
-    permanent stage="capture" indeterminate. The retry re-runs the same
-    snapshot diff after a delay; the injectable sleep doubles as the
-    "log arrives late" simulation hook in these tests.
+    flushed when the post-drive diff+emit runs — must not become a permanent
+    stage="capture" indeterminate. The retry re-runs the same snapshot diff
+    after a delay; the injectable sleep doubles as the "log arrives late"
+    simulation hook in these tests.
     """
 
     def test_no_retry_when_first_capture_has_rows(self, tmp_path):
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
-        (log_dir / "s.jsonl").write_text(_PI_TOOLCALL_LINE)
+        (log_dir / "s.jsonl").write_text(_pi_toolcall_line())
         run_dir = _mkdir(tmp_path / "run")
         sleeps: list[float] = []
 
@@ -504,13 +436,44 @@ class TestCaptureToolCallsWithRetry:
         assert result.attempts == 1
         assert sleeps == []
 
+    def test_retry_loop_reruns_underlying_capture_until_nonempty(self, tmp_path):
+        # Isolate the retry loop (PRI-2081) from the bun emission: mock the
+        # underlying capture to return an empty result first, then a non-empty
+        # one. The wrapper must retry and return the non-empty result with
+        # attempts == 2.
+        run_dir = _mkdir(tmp_path / "run")
+        traj = run_dir / "trajectory.json"
+        empty = CaptureResult(path=traj, source_logs=(), row_count=0)
+        filled = CaptureResult(path=traj, source_logs=(tmp_path / "s.jsonl",), row_count=3)
+        sleeps: list[float] = []
+
+        with patch(
+            "quorum.capture.capture_tool_calls", side_effect=[empty, filled]
+        ) as mock_capture:
+            result = capture_tool_calls_with_retry(
+                log_dir=tmp_path / "logs",
+                log_glob="*.jsonl",
+                snapshot=set(),
+                normalizer="claude",
+                run_dir=run_dir,
+                attempts=3,
+                delay_s=2.0,
+                sleep=sleeps.append,
+            )
+
+        assert mock_capture.call_count == 2
+        assert result.row_count == 3
+        assert result.source_logs == (tmp_path / "s.jsonl",)
+        assert result.attempts == 2
+        assert sleeps == [2.0]
+
     def test_retries_pick_up_a_late_appearing_log(self, tmp_path):
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
         run_dir = _mkdir(tmp_path / "run")
 
         def sleep_then_flush(seconds: float) -> None:
-            (log_dir / "late.jsonl").write_text(_PI_TOOLCALL_LINE)
+            (log_dir / "late.jsonl").write_text(_pi_toolcall_line())
 
         result = capture_tool_calls_with_retry(
             log_dir=log_dir,
@@ -525,11 +488,10 @@ class TestCaptureToolCallsWithRetry:
         assert [p.name for p in result.source_logs] == ["late.jsonl"]
         assert result.attempts == 2
         # The artifact reflects the final (successful) capture.
-        lines = result.path.read_text().strip().splitlines()
-        assert len(lines) == 1
+        assert _tool_names(result.path) == ["Read"]
 
     def test_retries_pick_up_a_late_filling_log(self, tmp_path):
-        # The file exists but normalizes to zero rows (still mid-flush);
+        # The file exists but yields zero tool calls (still mid-flush);
         # content arrives during the retry delay.
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -537,7 +499,7 @@ class TestCaptureToolCallsWithRetry:
         (log_dir / "s.jsonl").write_text("")
 
         def sleep_then_fill(seconds: float) -> None:
-            (log_dir / "s.jsonl").write_text(_PI_TOOLCALL_LINE)
+            (log_dir / "s.jsonl").write_text(_pi_toolcall_line())
 
         result = capture_tool_calls_with_retry(
             log_dir=log_dir,
@@ -572,8 +534,8 @@ class TestCaptureToolCallsWithRetry:
         assert result.source_logs == ()
         assert result.attempts == 3
         assert sleeps == [2.0, 2.0]
-        # The empty artifact still exists for downstream assertions.
-        assert result.path.exists()
+        # A genuinely-empty capture leaves no trajectory artifact.
+        assert not result.path.exists()
 
 
 class TestCaptureTokenUsage:
