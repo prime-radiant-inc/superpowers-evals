@@ -52,7 +52,7 @@ function dispatch(): void {
     dispatchInner();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    recordFail(verb, cliArgs, `tool error: ${message}`);
+    recordFail(verb!, cliArgs, `tool error: ${message}`);
     process.exit(1);
   }
 }
