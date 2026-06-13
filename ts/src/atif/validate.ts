@@ -1,11 +1,13 @@
-import { ATIF_SCHEMA_VERSION, type AtifTrajectory, type AtifStep } from "./types.ts";
+import { ATIF_SCHEMA_VERSION, type AtifTrajectory, type AtifStep, type AtifSource } from "./types.ts";
 
 export interface ValidationResult {
   ok: boolean;
   errors: string[];
 }
 
-const AGENT_ONLY: (keyof AtifStep)[] = ["tool_calls", "reasoning_content", "model_name", "metrics"];
+const AGENT_ONLY: (keyof AtifStep)[] = ["tool_calls", "reasoning_content", "model_name", "metrics", "observation"];
+
+const VALID_SOURCES = new Set<string>(["system", "user", "agent"] satisfies AtifSource[]);
 
 export function validateTrajectory(t: AtifTrajectory): ValidationResult {
   const errors: string[] = [];
@@ -26,7 +28,7 @@ export function validateTrajectory(t: AtifTrajectory): ValidationResult {
     if (step.step_id !== expectedId) {
       errors.push(`step[${i}].step_id must be ${expectedId} (sequential from 1), got ${step.step_id}`);
     }
-    if (!["system", "user", "agent"].includes(step.source)) {
+    if (!VALID_SOURCES.has(step.source)) {
       errors.push(`step[${i}].source invalid: ${String(step.source)}`);
     }
     if (step.source !== "agent") {
@@ -36,9 +38,13 @@ export function validateTrajectory(t: AtifTrajectory): ValidationResult {
         }
       }
     }
-    const callIds = new Set((step.tool_calls ?? []).map((c) => c.tool_call_id));
+    const toolCalls = step.tool_calls ?? [];
+    const callIds = new Set(toolCalls.map((c) => c.tool_call_id));
+    if (toolCalls.length !== callIds.size) {
+      errors.push(`step[${i}] has duplicate tool_call_id values`);
+    }
     for (const result of step.observation?.results ?? []) {
-      if (result.source_call_id !== undefined && !callIds.has(result.source_call_id)) {
+      if (result.source_call_id != null && !callIds.has(result.source_call_id)) {
         errors.push(
           `step[${i}] observation source_call_id "${result.source_call_id}" does not match a tool_call in the same step`,
         );
