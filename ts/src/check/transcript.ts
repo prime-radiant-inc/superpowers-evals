@@ -3,6 +3,8 @@
 // Reads QUORUM_TRANSCRIPT_PATH (a trajectory.json file). If the file is
 // missing, unreadable, or has no tool calls after flattening → empty: true.
 
+import { readFileSync } from "node:fs";
+
 import type { AtifTrajectory } from "../atif/types.ts";
 import { flattenToolCalls, type ToolCallView } from "../atif/project.ts";
 
@@ -19,7 +21,7 @@ export function loadCalls(): TranscriptResult {
 
   let raw: string;
   try {
-    raw = require("node:fs").readFileSync(path, "utf8");
+    raw = readFileSync(path, "utf8");
   } catch {
     return { calls: [], empty: true };
   }
