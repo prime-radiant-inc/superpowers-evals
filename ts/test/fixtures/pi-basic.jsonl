@@ -1,0 +1,2 @@
+{"type":"session","cwd":"/tmp/project"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"README.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status"}}]}}

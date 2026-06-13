@@ -1,0 +1,2 @@
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git status\",\"workdir\":\"/tmp\"}","call_id":"call_1"}}
+{"type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"{\"patch\":\"--- a/file\\n+++ b/file\"}","call_id":"call_2"}}

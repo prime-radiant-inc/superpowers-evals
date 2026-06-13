@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from quorum.atif import (
+    ATIF_SUPPORTED_NORMALIZERS,
     ATIF_TRAJECTORY_FILENAME,
     emit_atif_trajectory,
     supports_atif,
@@ -24,6 +25,23 @@ from quorum.atif import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TS_ROOT = REPO_ROOT / "ts"
+
+# Minimal codex session log: a single function_call response_item.
+CODEX_SESSION = "\n".join(
+    [
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "arguments": json.dumps({"cmd": "ls /tmp", "workdir": "/tmp"}),
+                    "call_id": "call_1",
+                },
+            }
+        ),
+    ]
+)
 
 # A minimal claude session log in the legacy projects/*.jsonl layout the
 # normalize-claude.ts CLI consumes: one user turn, one assistant turn with a
@@ -67,16 +85,24 @@ CLAUDE_SESSION = "\n".join(
 )
 
 
-def _write_session(tmp_path: Path) -> Path:
+def _write_session(tmp_path: Path, content: str = CLAUDE_SESSION) -> Path:
     session = tmp_path / "session-abc.jsonl"
-    session.write_text(CLAUDE_SESSION + "\n")
+    session.write_text(content + "\n")
     return session
 
 
-def test_supports_atif_only_claude():
-    assert supports_atif("claude") is True
-    assert supports_atif("codex") is False
-    assert supports_atif("gemini") is False
+def test_supports_atif_all_six_normalizers():
+    """supports_atif returns True for all six TS-backed normalizers."""
+    for name in ("claude", "codex", "gemini", "copilot", "opencode", "pi"):
+        assert supports_atif(name) is True, f"expected True for normalizer {name!r}"
+    assert {"claude", "codex", "gemini", "copilot", "opencode", "pi"} == ATIF_SUPPORTED_NORMALIZERS
+
+
+def test_supports_atif_false_for_unsupported():
+    """supports_atif returns False for normalizers without a TS implementation."""
+    assert supports_atif("kimi") is False
+    assert supports_atif("antigravity") is False
+    assert supports_atif("unknown") is False
 
 
 @pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
@@ -101,13 +127,14 @@ def test_emit_writes_valid_atif_trajectory(tmp_path):
 
 
 def test_emit_unsupported_normalizer_returns_false_no_file(tmp_path):
+    # kimi has no TS normalizer yet; must return False without writing anything.
     session = _write_session(tmp_path)
     out_path = tmp_path / ATIF_TRAJECTORY_FILENAME
 
     ok = emit_atif_trajectory(
         session_log_path=session,
         out_path=out_path,
-        normalizer="codex",
+        normalizer="kimi",
         version="unknown",
         ts_root=TS_ROOT,
     )
@@ -165,3 +192,26 @@ def test_emit_normalizer_error_returns_false(tmp_path):
 
     assert ok is False
     assert not out_path.exists()
+
+
+@pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
+def test_emit_codex_writes_valid_atif_trajectory(tmp_path):
+    """codex normalizer emits a valid ATIF trajectory via the unified CLI."""
+    session = _write_session(tmp_path, content=CODEX_SESSION)
+    out_path = tmp_path / ATIF_TRAJECTORY_FILENAME
+
+    ok = emit_atif_trajectory(
+        session_log_path=session,
+        out_path=out_path,
+        normalizer="codex",
+        version="1.0.0",
+        ts_root=TS_ROOT,
+    )
+
+    assert ok is True
+    assert out_path.exists()
+    traj = json.loads(out_path.read_text())
+    assert traj["schema_version"] == "ATIF-v1.7"
+    assert traj["agent"]["name"] == "codex"
+    assert traj["agent"]["version"] == "1.0.0"
+    assert isinstance(traj["steps"], list) and traj["steps"]

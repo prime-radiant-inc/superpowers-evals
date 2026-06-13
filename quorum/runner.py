@@ -2105,9 +2105,9 @@ def _run_scenario_inner(
         # 9c. Additionally emit an ATIF v1.7 trajectory.json from the captured
         #     session log (best-effort, additive). The flat-JSONL capture above
         #     and the verdict are untouched; a bun/normalizer failure or missing
-        #     session log just leaves no trajectory.json. Only the claude
-        #     runtime is wired today (supports_atif); other agents are one-line
-        #     additions to ATIF_NORMALIZER_CLIS once their normalizers land.
+        #     session log just leaves no trajectory.json. All six TS-backed
+        #     normalizers (claude, codex, gemini, copilot, opencode, pi) are
+        #     supported via the unified cli/normalize.ts dispatcher.
         if supports_atif(tcfg.normalizer) and capture_result.source_logs:
             with contextlib.suppress(Exception):
                 emit_atif_trajectory(
