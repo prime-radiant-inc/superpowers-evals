@@ -57,3 +57,15 @@ test("tolerates blank and unparseable lines", () => {
   expect(traj.steps.length).toBe(1);
   expect(traj.steps[0]!.message).toBe("hi");
 });
+
+test("CLI reads a session file and prints valid ATIF JSON", async () => {
+  const fixture = new URL("./fixtures/claude-legacy-basic.jsonl", import.meta.url).pathname;
+  const cli = new URL("../src/cli/normalize-claude.ts", import.meta.url).pathname;
+  const proc = Bun.spawn(["bun", "run", cli, fixture, "--version", "2.1.175"]);
+  const out = await new Response(proc.stdout).text();
+  const code = await proc.exited;
+  expect(code).toBe(0);
+  const traj = JSON.parse(out);
+  expect(traj.schema_version).toBe("ATIF-v1.7");
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
