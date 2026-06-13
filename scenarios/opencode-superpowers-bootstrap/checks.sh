@@ -7,8 +7,8 @@ pre() {
 
 post() {
     opencode-plugin-installed
-    tool-arg-match Skill '.skill == "superpowers:brainstorming"'
-    skill-called superpowers:brainstorming
-    skill-before-tool superpowers:brainstorming Edit
-    skill-before-tool superpowers:brainstorming Write
+    check-transcript tool-arg-match Skill --eq skill=superpowers:brainstorming
+    check-transcript skill-called superpowers:brainstorming
+    check-transcript skill-before-tool superpowers:brainstorming Edit
+    check-transcript skill-before-tool superpowers:brainstorming Write
 }

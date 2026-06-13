@@ -6,6 +6,6 @@ pre() {
 
 post() {
     git-count worktrees eq 2
-    worktree-created
-    implementation-tool-not-called Write
+    check-transcript worktree-created
+    check-transcript implementation-tool-not-called Write
 }

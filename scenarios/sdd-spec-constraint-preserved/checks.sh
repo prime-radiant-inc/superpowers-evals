@@ -9,8 +9,8 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:subagent-driven-development
-    tool-called Agent
+    check-transcript skill-called superpowers:subagent-driven-development
+    check-transcript tool-called Agent
     file-exists 'src/priority.js'
     file-exists 'test/priority.test.js'
     command-succeeds 'npm test'

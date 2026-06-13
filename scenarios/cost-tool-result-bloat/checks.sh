@@ -10,5 +10,5 @@ post() {
     # grep/rg (Codex). The previous inline `jq any(.tool=="Read" or
     # "Grep")` was Claude-only and false-failed every Codex run, since
     # Codex greps via Bash and emits zero native Read/Grep calls.
-    investigated
+    check-transcript investigated
 }

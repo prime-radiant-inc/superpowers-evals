@@ -7,8 +7,8 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:subagent-driven-development
-    tool-called Agent
+    check-transcript skill-called superpowers:subagent-driven-development
+    check-transcript tool-called Agent
     file-exists 'package.json'
     file-exists 'src/**/*.svelte'
     command-succeeds 'npm test'
