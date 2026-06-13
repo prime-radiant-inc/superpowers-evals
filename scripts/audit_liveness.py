@@ -84,16 +84,19 @@ def inventory_setup_helpers() -> list[Unit]:
     tree = ast.parse(init)
     keys: dict[str, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "HELPER_REGISTRY" for t in node.targets
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Dict)
+            and any(isinstance(t, ast.Name) and t.id == "HELPER_REGISTRY" for t in node.targets)
         ):
-            if isinstance(node.value, ast.Dict):
-                for k, v in zip(node.value.keys, node.value.values):
-                    if isinstance(k, ast.Constant) and isinstance(v, ast.Name):
-                        keys[k.value] = v.id
-    return [
-        Unit(k, "setup-helper", REPO / "setup_helpers" / "__init__.py") for k in keys
-    ]
+            for k, v in zip(node.value.keys, node.value.values, strict=True):
+                if (
+                    isinstance(k, ast.Constant)
+                    and isinstance(k.value, str)
+                    and isinstance(v, ast.Name)
+                ):
+                    keys[k.value] = v.id
+    return [Unit(k, "setup-helper", REPO / "setup_helpers" / "__init__.py") for k in keys]
 
 
 def inventory_quorum_modules() -> list[Unit]:
@@ -107,8 +110,7 @@ def inventory_quorum_modules() -> list[Unit]:
 
 def inventory_coding_agents() -> list[Unit]:
     return [
-        Unit(p.stem, "coding-agent", p)
-        for p in sorted((REPO / "coding-agents").glob("*.yaml"))
+        Unit(p.stem, "coding-agent", p) for p in sorted((REPO / "coding-agents").glob("*.yaml"))
     ]
 
 
@@ -130,11 +132,10 @@ def count_refs(units: list[Unit], search_files: list[Path], own_files: set[Path]
     for u in units:
         pat = _word_re(u.name)
         for f, text in contents:
-            if f in own_files and u.kind != "bin-tool":
-                # bin tools legitimately reference each other (sourcing _record,
-                # wrapping `not`); count those. Other kinds: skip self-file.
-                if f == u.defined_in:
-                    continue
+            # bin tools legitimately reference each other (sourcing _record,
+            # wrapping `not`); count those. Other kinds: skip self-file.
+            if f in own_files and u.kind != "bin-tool" and f == u.defined_in:
+                continue
             if f == u.defined_in:
                 continue
             if pat.search(text):
