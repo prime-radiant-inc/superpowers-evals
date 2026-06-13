@@ -57,3 +57,19 @@ All emit `ToolCall = {tool, args, source}`; `source` = `native` iff canonical to
 
 ## Definition of done (Spec 2)
 All 7 agents: normalizer at replay-parity vs recorded data; provisioning adapter resolves and (where mock-able) drives a parity verdict; `NORMALIZERS` + `resolveAgent` wired; codex/kimi/pi cwd-filtering and antigravity rate-limit→indeterminate in place. `bun run check` green. (Live per-agent smoke is trusted-maintainer; the gate stays hermetic via recorded fixtures + mock-gauntlet.)
+
+---
+
+## Fixture-mining notes (discovered during Wave A; read before re-running)
+
+Wave A blew the account token ceiling — largely because each Bob scanned `results/` and read large session logs to mine a replay fixture, and fixture location is **agent-specific**. **Pre-mine fixtures cheaply (filesystem cp + a one-shot Python `normalize_<agent>_logs` diff, no large reads into context), commit them, then have Bobs build only the normalizer + a test against the pre-placed fixture.** Per-agent status (real runs exist for all):
+
+- **codex** — DONE (integrated, real-data replay green).
+- **gemini** — clean single-session fixture available (`coding-agent-config/.gemini/tmp/.../chats/session-*.jsonl`, ~3 rows).
+- **pi** — clean single-session fixture (`coding-agent-config/sessions/*.jsonl`).
+- **copilot** — clean single-session fixture (`coding-agent-config/session-state/<id>/events.jsonl`).
+- **kimi** — `session_index.jsonl` is the workdir-attribution INDEX, not the tool-call log; the real log lives elsewhere in the kimi home. Needs kimi-aware mining (read `kimi.py` / the yaml glob).
+- **opencode** — tool-calls come from a CLI **export** (`opencode_capture.py` subprocess), not an on-disk `.jsonl` under `coding-agent-config`. Replay fixture must capture the exported form.
+- **antigravity** — multi-file + dual-location (`PLANNER_RESPONSE`); the committed tool-calls concatenate across files, so a single-file oracle needs the right file or a concat.
+
+**Rate-limit lesson:** cap concurrent worktree Bobs and pre-supply fixtures; a 7-wide wave of results/-scanning Bobs cost ~770k tokens and hit the ceiling.
