@@ -1,11 +1,5 @@
 #!/usr/bin/env bun
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
@@ -24,6 +18,11 @@ import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
 import { batchJson, isBatchDir, renderBatch } from './render-batch.ts';
 import { resolveTarget, ShowError } from './resolve-target.ts';
+import {
+  resolveScenarioDir,
+  scenarioDirFor,
+  scenarioName,
+} from './scenario.ts';
 
 // Process exit code per the verdict's final value. A closed switch over the
 // FinalStatus union (coding standard 5.1) gives a guaranteed number without an
@@ -76,25 +75,6 @@ interface RunOptions {
   readonly scenariosRoot: string;
 }
 
-// Resolve a `run` scenario argument flexibly: an explicit path (cwd-relative or
-// absolute) as given, else a bare name resolved under scenariosRoot. Lets both
-// `run 00-foo` and `run scenarios/00-foo` (tab-completion) work. Returns the
-// absolute dir, or undefined when neither is a directory.
-function resolveScenarioDir(
-  arg: string,
-  scenariosRoot: string,
-): string | undefined {
-  const direct = resolve(arg);
-  if (existsSync(direct) && statSync(direct).isDirectory()) {
-    return direct;
-  }
-  const underRoot = resolve(scenariosRoot, arg);
-  if (existsSync(underRoot) && statSync(underRoot).isDirectory()) {
-    return underRoot;
-  }
-  return undefined;
-}
-
 interface ShowOptions {
   readonly quiet: boolean;
   readonly json: boolean;
@@ -141,7 +121,7 @@ program
       process.exit(2);
     }
     const { runDir, verdict } = await runScenario({
-      scenarioDir: scn,
+      scenarioDir: resolve(scn),
       codingAgent: opts.codingAgent,
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
@@ -173,7 +153,7 @@ program
   .action((name: string, opts: { scenariosRoot: string }) => {
     let scenarioDir: string;
     try {
-      scenarioDir = newScenario(resolve(opts.scenariosRoot), name);
+      scenarioDir = newScenario(scenarioDirFor(name, opts.scenariosRoot));
     } catch (err: unknown) {
       if (err instanceof ScaffoldError) {
         process.stderr.write(`error: ${err.message}\n`);
@@ -194,20 +174,24 @@ program
   .option('--fix', 'chmod +x scripts missing the bit', false)
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((names: string[], opts: { fix: boolean; scenariosRoot: string }) => {
-    const root = resolve(opts.scenariosRoot);
+    const root = opts.scenariosRoot;
     let targets: string[];
     if (names.length > 0) {
-      targets = names.map((n) => join(root, n));
-      for (const target of targets) {
-        if (!existsSync(target) || !statSync(target).isDirectory()) {
+      // Each name resolves via the shared rule — a bare name or a path/prefixed
+      // form (`foo` or `scenarios/foo`) both work, symmetric with `run`.
+      targets = [];
+      for (const name of names) {
+        const dir = resolveScenarioDir(name, root);
+        if (dir === undefined) {
           process.stderr.write(
-            `error: no scenario '${basename(target)}' under ${root}\n`,
+            `error: no scenario '${name}' (looked at the path and under ${root}/)\n`,
           );
           process.exit(1);
         }
+        targets.push(dir);
       }
     } else {
-      targets = scenarioNames(root).map((n) => join(root, n));
+      targets = scenarioNames(resolve(root)).map((n) => join(resolve(root), n));
     }
 
     let failed = 0;
@@ -248,7 +232,9 @@ program
   .option('--include-drafts', 'include status: draft scenarios', false)
   .action(async (opts: RunAllOptions) => {
     const agentFilter = csvList(opts.codingAgents);
-    const scenarioFilter = csvList(opts.scenarios);
+    // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
+    // -> foo), symmetric with run/check.
+    const scenarioFilter = csvList(opts.scenarios)?.map(scenarioName);
     const jobs = Number.parseInt(opts.jobs, 10);
     if (!Number.isInteger(jobs) || jobs < 1) {
       process.stderr.write('error: --jobs must be an integer >= 1\n');

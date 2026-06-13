@@ -33,7 +33,7 @@ function clearExec(path: string): void {
 
 test('newScenario writes the three files with the right modes and content', () => {
   const root = scenariosRoot();
-  const dir = newScenario(root, 'my-scenario');
+  const dir = newScenario(join(root, 'my-scenario'));
   expect(dir).toBe(join(root, 'my-scenario'));
 
   const story = readFileSync(join(dir, 'story.md'), 'utf8');
@@ -59,21 +59,21 @@ test('newScenario writes the three files with the right modes and content', () =
 
 test('a fresh scenario round-trips through checkScenario with zero problems', () => {
   const root = scenariosRoot();
-  const dir = newScenario(root, 'fresh');
+  const dir = newScenario(join(root, 'fresh'));
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
 
 test('newScenario throws ScaffoldError when the dir already exists', () => {
   const root = scenariosRoot();
-  newScenario(root, 'dupe');
-  expect(() => newScenario(root, 'dupe')).toThrow(ScaffoldError);
+  newScenario(join(root, 'dupe'));
+  expect(() => newScenario(join(root, 'dupe'))).toThrow(ScaffoldError);
   rmSync(root, { recursive: true, force: true });
 });
 
 // Build a valid scenario, then let the caller mutate one file to drive a case.
 function scenario(root: string, name: string): string {
-  return newScenario(root, name);
+  return newScenario(join(root, name));
 }
 
 test('checkScenario flags missing story.md', () => {

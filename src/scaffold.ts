@@ -17,7 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
@@ -120,13 +120,14 @@ export class ScaffoldError extends Error {
 }
 
 /** Create a structurally-valid scenario skeleton; return its directory. */
-export function newScenario(scenariosRoot: string, name: string): string {
-  const scenarioDir = join(scenariosRoot, name);
+export function newScenario(scenarioDir: string): string {
   if (existsSync(scenarioDir)) {
     throw new ScaffoldError(`scenario already exists: ${scenarioDir}`);
   }
   mkdirSync(scenarioDir, { recursive: true });
 
+  // The story `id` is the scenario's final path segment (its name).
+  const name = basename(scenarioDir);
   writeFileSync(
     join(scenarioDir, 'story.md'),
     STORY_TEMPLATE.replace('{name}', name),
