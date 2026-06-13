@@ -68,9 +68,29 @@ test("pi: exits 0 and emits valid ATIF", async () => {
   expect(validateTrajectory(traj).ok).toBe(true);
 });
 
+test("kimi: exits 0 and emits valid ATIF", async () => {
+  const fixture = new URL("./fixtures/kimi-basic.jsonl", import.meta.url).pathname;
+  const { code, stdout } = await runCli("kimi", fixture, "0.1.0");
+  expect(code).toBe(0);
+  const traj = JSON.parse(stdout);
+  expect(traj.schema_version).toBe("ATIF-v1.7");
+  expect(traj.agent.name).toBe("kimi");
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
+test("antigravity: exits 0 and emits valid ATIF", async () => {
+  const fixture = new URL("./fixtures/antigravity-basic.jsonl", import.meta.url).pathname;
+  const { code, stdout } = await runCli("antigravity", fixture, "0.1.0");
+  expect(code).toBe(0);
+  const traj = JSON.parse(stdout);
+  expect(traj.schema_version).toBe("ATIF-v1.7");
+  expect(traj.agent.name).toBe("antigravity");
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
 test("unknown normalizer: exits 2 with error on stderr", async () => {
   const fixture = new URL("./fixtures/claude-legacy-basic.jsonl", import.meta.url).pathname;
-  const { code, stderr } = await runCli("kimi", fixture);
+  const { code, stderr } = await runCli("nonexistent-agent", fixture);
   expect(code).toBe(2);
   expect(stderr).toContain("unknown normalizer");
 });

@@ -15,12 +15,14 @@ import { normalizeGemini } from "../normalize/gemini.ts";
 import { normalizeCopilot } from "../normalize/copilot.ts";
 import { normalizeOpencode } from "../normalize/opencode.ts";
 import { normalizePi } from "../normalize/pi.ts";
+import { normalizeKimi } from "../normalize/kimi.ts";
+import { normalizeAntigravity } from "../normalize/antigravity.ts";
 import type { AtifTrajectory } from "../atif/types.ts";
 
 type NormalizeFn = (raw: string, version: string) => AtifTrajectory;
 
 // Maps every normalizer name used in coding-agents/*.yaml to its normalize
-// function. kimi and antigravity have no TS normalizer yet — they are absent.
+// function. All eight coding agents are TS-backed.
 const NORMALIZERS: Record<string, NormalizeFn> = {
   claude: normalizeClaudeLegacy,
   codex: normalizeCodex,
@@ -28,6 +30,8 @@ const NORMALIZERS: Record<string, NormalizeFn> = {
   copilot: normalizeCopilot,
   opencode: normalizeOpencode,
   pi: normalizePi,
+  kimi: normalizeKimi,
+  antigravity: normalizeAntigravity,
 };
 
 function arg(flag: string, fallback: string): string {

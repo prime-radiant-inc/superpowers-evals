@@ -91,18 +91,18 @@ def _write_session(tmp_path: Path, content: str = CLAUDE_SESSION) -> Path:
     return session
 
 
-def test_supports_atif_all_six_normalizers():
-    """supports_atif returns True for all six TS-backed normalizers."""
-    for name in ("claude", "codex", "gemini", "copilot", "opencode", "pi"):
+def test_supports_atif_all_eight_normalizers():
+    """supports_atif returns True for all eight TS-backed normalizers."""
+    expected = {"claude", "codex", "gemini", "copilot", "opencode", "pi", "kimi", "antigravity"}
+    for name in expected:
         assert supports_atif(name) is True, f"expected True for normalizer {name!r}"
-    assert {"claude", "codex", "gemini", "copilot", "opencode", "pi"} == ATIF_SUPPORTED_NORMALIZERS
+    assert expected == ATIF_SUPPORTED_NORMALIZERS
 
 
 def test_supports_atif_false_for_unsupported():
-    """supports_atif returns False for normalizers without a TS implementation."""
-    assert supports_atif("kimi") is False
-    assert supports_atif("antigravity") is False
+    """supports_atif returns False for names that aren't a known normalizer."""
     assert supports_atif("unknown") is False
+    assert supports_atif("") is False
 
 
 @pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
@@ -127,14 +127,14 @@ def test_emit_writes_valid_atif_trajectory(tmp_path):
 
 
 def test_emit_unsupported_normalizer_returns_false_no_file(tmp_path):
-    # kimi has no TS normalizer yet; must return False without writing anything.
+    # An unknown normalizer name must return False without writing anything.
     session = _write_session(tmp_path)
     out_path = tmp_path / ATIF_TRAJECTORY_FILENAME
 
     ok = emit_atif_trajectory(
         session_log_path=session,
         out_path=out_path,
-        normalizer="kimi",
+        normalizer="nonexistent-agent",
         version="unknown",
         ts_root=TS_ROOT,
     )

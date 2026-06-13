@@ -128,21 +128,18 @@ def test_run_phase_exports_harness_run_dir(tmp_path: Path):
     assert len(records) == 1 and records[0].passed
 
 
-def test_run_phase_exports_both_capture_env_vars(tmp_path: Path):
-    # The flat-JSONL pipeline (QUORUM_TOOL_CALLS_PATH) and the ATIF pipeline
-    # (QUORUM_TRANSCRIPT_PATH) live simultaneously: both env vars must be set
-    # in the check environment, each pointing at its run-dir artifact.
+def test_run_phase_exports_transcript_env_var(tmp_path: Path):
+    # The ATIF pipeline exposes QUORUM_TRANSCRIPT_PATH in the check
+    # environment, pointing at the run-dir trajectory.json artifact.
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     workdir = run_dir / "wd"
     workdir.mkdir()
-    tool_calls = run_dir / "coding-agent-tool-calls.jsonl"
     transcript = run_dir / "trajectory.json"
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text(
         "pre() { :; }\n"
         "post() {\n"
-        f'  command-succeeds "test \\"$QUORUM_TOOL_CALLS_PATH\\" = \\"{tool_calls}\\"";\n'
         f'  command-succeeds "test \\"$QUORUM_TRANSCRIPT_PATH\\" = \\"{transcript}\\"";\n'
         "}\n"
     )
@@ -151,12 +148,11 @@ def test_run_phase_exports_both_capture_env_vars(tmp_path: Path):
         phase="post",
         workdir=workdir,
         quorum_bin=Path("bin").resolve(),
-        tool_calls_path=tool_calls,
         transcript_path=transcript,
         run_dir=run_dir,
     )
     assert exit_code == 0
-    assert len(records) == 2
+    assert len(records) == 1
     assert all(r.passed for r in records), [r.detail for r in records]
 
 
