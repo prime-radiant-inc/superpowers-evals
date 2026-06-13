@@ -669,6 +669,52 @@ def test_gemini_launch_agent_is_substituted(tmp_path):
     assert "--skip-trust --approval-mode=yolo" in content
 
 
+def test_claude_launch_agent_forces_session_persistence(tmp_path):
+    """Regression (B1): the generated claude launcher must export
+    CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1.
+
+    claude >= 2.1.176 skips transcript persistence when it detects a nested
+    interactive Claude Code session; the `env -u CLAUDECODE -u
+    CLAUDE_CODE_SESSION_ID` strip no longer covers every nested-detection signal
+    (e.g. CLAUDE_CODE_CHILD_SESSION). Without the FORCE override the transcript
+    is never written, capture comes back empty, and every claude run launched
+    from inside Claude Code is a loud indeterminate(stage=capture). The override
+    forces persistence regardless of nested-session detection.
+    """
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    session_log_dir = tmp_path / "logs"
+    session_log_dir.mkdir()
+    _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+    (coding_agents_dir / "claude-context").mkdir(parents=True)
+    (coding_agents_dir / "claude-context" / "HOWTO.md").write_text("invoke `claude`")
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "claude-context" / "launch-agent",
+        coding_agents_dir / "claude-context" / "launch-agent",
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    out_root = tmp_path / "results"
+
+    with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="claude",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = next(out_root.iterdir())
+    shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+    assert shim.exists()
+    content = shim.read_text()
+    # The nested-session identity strip is necessary but not sufficient on >=2.1.176 ...
+    assert "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID" in content
+    # ... so the launcher must also force transcript persistence.
+    assert "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" in content
+
+
 def test_gemini_launch_agent_substitutes_oauth_auth_type(tmp_path, monkeypatch):
     coding_agents_dir = tmp_path / "coding-agents"
     scenarios_dir = tmp_path / "scenarios"
