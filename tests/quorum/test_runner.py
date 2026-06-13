@@ -1147,6 +1147,93 @@ def test_codex_launch_agent_scrubs_openai_api_key_env(tmp_path, monkeypatch):
     assert "OPENAI_ORG_ID" not in captured["env"]
 
 
+def test_codex_launch_agent_isolates_home(tmp_path):
+    # Codex discovers user-scope skills/plugins from $HOME/.agents (resolved via
+    # $HOME, NOT $CODEX_HOME). If HOME is left at the host's, a host
+    # ~/.agents/skills symlink bleeds host skills into the run. The launcher must
+    # pin HOME to a per-run dir so Codex uses the staged superpowers@debug skills.
+    coding_agents_dir = tmp_path / "coding-agents"
+    codex_context = coding_agents_dir / "codex-context"
+    codex_context.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "launch-agent",
+        codex_context / "launch-agent",
+    )
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "HOWTO.md",
+        codex_context / "HOWTO.md",
+    )
+    run_dir = tmp_path / "run"
+    launch_cwd = tmp_path / "workdir"
+    codex_home = run_dir / "coding-agent-config"
+    launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
+    launch_cwd.mkdir()
+
+    _populate_context_dir(
+        coding_agents_dir,
+        "codex",
+        run_dir,
+        substitutions={
+            "$QUORUM_AGENT_CWD": str(launch_cwd),
+            "$QUORUM_AGENT_CWD_SH": _shell_single_quote(str(launch_cwd)),
+            "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
+            "$QUORUM_LAUNCH_AGENT_SH": _shell_single_quote(str(launch_agent_path)),
+            "$CODEX_HOME": str(codex_home),
+            "$CODEX_HOME_SH": _shell_single_quote(str(codex_home)),
+        },
+    )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    capture_path = tmp_path / "codex-capture.json"
+    _exec(
+        fake_bin / "codex",
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        f"Path({json.dumps(str(capture_path))}).write_text(json.dumps({{\n"
+        "    'env': dict(os.environ),\n"
+        "}, sort_keys=True))\n",
+    )
+
+    host_home = tmp_path / "host-home-should-not-leak"
+    host_home.mkdir()
+    launch_env_path = str(fake_bin) + os.pathsep + os.environ["PATH"]
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "PATH="
+            + _shell_single_quote(launch_env_path)
+            + " "
+            + _shell_single_quote(str(launch_agent_path)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(host_home),
+            "OPENAI_API_KEY": "sk-should-not-reach-codex",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    captured = json.loads(capture_path.read_text())
+    agent_home = codex_home / "agent-home"
+    # HOME is pinned inside the per-run home, not the inherited host HOME, so
+    # Codex's $HOME/.agents/{skills,plugins} discovery stays in-isolation.
+    assert captured["env"]["HOME"] == str(agent_home)
+    assert captured["env"]["HOME"] != str(host_home)
+    assert captured["env"]["HOME"].startswith(str(codex_home))
+    # XDG + TMPDIR isolated too, and the dirs were created.
+    assert captured["env"]["XDG_CONFIG_HOME"] == str(agent_home / ".config")
+    assert captured["env"]["TMPDIR"] == str(agent_home / ".tmp")
+    assert agent_home.is_dir()
+    # CODEX_HOME still set so config/sessions/plugins stay isolated.
+    assert captured["env"]["CODEX_HOME"] == str(codex_home)
+
+
 def test_copilot_context_gets_runtime_substitutions(tmp_path):
     coding_agents_dir = tmp_path / "coding-agents"
     scenarios_dir = tmp_path / "scenarios"
