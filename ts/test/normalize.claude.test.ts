@@ -58,6 +58,29 @@ test("tolerates blank and unparseable lines", () => {
   expect(traj.steps[0]!.message).toBe("hi");
 });
 
+// --- string-content user message tests (2.1.177 real-format) ---
+
+test("string-content user record becomes a user step", () => {
+  const line = '{"type":"user","message":{"role":"user","content":"hello world"}}';
+  const traj = normalizeClaudeLegacy(line, "2.1.177");
+  expect(traj.steps.length).toBe(1);
+  expect(traj.steps[0]!.source).toBe("user");
+  expect(traj.steps[0]!.message).toBe("hello world");
+});
+
+test("real 2.1.177 fixture: user prompt captured, unknown types ignored", async () => {
+  const raw = await Bun.file(
+    new URL("./fixtures/claude-2.1.177-real.jsonl", import.meta.url),
+  ).text();
+  const traj = normalizeClaudeLegacy(raw, "2.1.177");
+  const r = validateTrajectory(traj);
+  expect(r.ok).toBe(true);
+  const userStep = traj.steps.find((s) => s.source === "user" && s.message && s.message.length > 0);
+  expect(userStep).toBeDefined();
+  expect(userStep!.message).toBe("create a file hello.txt containing the word hi, then stop");
+  expect(traj.steps.every((s) => s.source === "user" || s.source === "agent")).toBe(true);
+});
+
 test("CLI reads a session file and prints valid ATIF JSON", async () => {
   const fixture = new URL("./fixtures/claude-legacy-basic.jsonl", import.meta.url).pathname;
   const cli = new URL("../src/cli/normalize-claude.ts", import.meta.url).pathname;

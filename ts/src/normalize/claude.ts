@@ -71,6 +71,13 @@ export function normalizeClaudeLegacy(raw: string, version: string): AtifTraject
     }
 
     if (type === "user") {
+      // String-form content: the initial human prompt in 2.1.177+ logs.
+      const message = (entry["message"] as { content?: unknown } | undefined)?.content;
+      if (typeof message === "string" && message.length > 0) {
+        steps.push({ step_id: steps.length + 1, source: "user", message });
+        continue;
+      }
+
       const results: AtifObservationResult[] = [];
       const texts: string[] = [];
       for (const b of blocks) {
