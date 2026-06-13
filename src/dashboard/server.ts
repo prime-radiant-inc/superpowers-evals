@@ -10,7 +10,7 @@ import {
   type LaunchKind,
   Orchestrator,
 } from './orchestrator.ts';
-import { scanResults } from './scan.ts';
+import { readDashboardVerdict, scanResults } from './scan.ts';
 import {
   cellHtml,
   gridHtml,
@@ -217,7 +217,16 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       publishCell(cell, scenario, agent);
       session.done += 1;
       session.inFlight = Math.max(0, session.inFlight - 1);
-      const cost = costOfResult(grid, scenario, agent);
+      // Attribute "$ spent" to the EXACT run the dashboard launched (the
+      // event's run_id), not the newest window slot — parity with scheduler.py
+      // _run_cost(out_root / result.run_id). Reading the newest slot would let a
+      // sibling terminal run-all that lands a later run for the same cell
+      // corrupt the strip total in the post-finish rescan.
+      const cost =
+        event.run_id !== null
+          ? (readDashboardVerdict(join(resultsRoot, event.run_id))?.economics
+              ?.total_est_cost_usd ?? null)
+          : null;
       if (cost !== null) {
         session.spent += cost;
       }
@@ -255,8 +264,13 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         }
         publishCell(cell, cell.scenario, cell.agent);
       }
-      // The strip reflects the live session counts every tick (cheap, idempotent).
-      publishStrip();
+      // The scanner publishes ONLY cell partials (parity with app.py
+      // _scanner_loop). The run strip is driven by launch + cell_started/
+      // cell_finished events alone — publishing it here pushed the idle
+      // "Running 0 · 0 in flight · ■ Stop" strip into #runbar the moment any
+      // client connected, showing a session that isn't running. Idle ⇒ #runbar
+      // stays empty (its first-paint state). The SSE stream stays warm via its
+      // own keepalive (handleEvents), not a phantom strip.
       lastGrid = next;
     }
     scannerTimer = setTimeout(tick, 1000);
@@ -399,10 +413,29 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     let pump: ReturnType<typeof setInterval> | null = null;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
+        // Flush the response headers immediately and warm the connection: a
+        // stream that emits no bytes until its first real frame leaves a
+        // browser/fetch waiting on an idle dashboard with no headers at all
+        // (sse-starlette sends an analogous opening ping). Comment lines
+        // (": ...") are ignored by EventSource.
+        controller.enqueue(encoder.encode(': connected\n\n'));
+        let idleTicks = 0;
         // Drain the client's queue on a short interval, writing one SSE frame
         // per buffered message. Frames are `event: <name>\ndata: <oneline>\n\n`.
+        // When the queue is empty for a while, send a keepalive comment so the
+        // connection (and any proxy in between) stays open on an idle board.
         pump = setInterval(() => {
-          for (const msg of queue.drain()) {
+          const messages = queue.drain();
+          if (messages.length === 0) {
+            idleTicks += 1;
+            if (idleTicks >= 75) {
+              idleTicks = 0;
+              controller.enqueue(encoder.encode(': keepalive\n\n'));
+            }
+            return;
+          }
+          idleTicks = 0;
+          for (const msg of messages) {
             controller.enqueue(
               encoder.encode(`event: ${msg.event}\ndata: ${msg.data}\n\n`),
             );
@@ -488,21 +521,6 @@ function cellForId(grid: Grid, id: string): Cell | null {
     }
   }
   return null;
-}
-
-// The cost of the just-finished run for (scenario, agent): the latest window
-// record's frozen cost, or null. Used to accumulate the strip's "$X spent".
-function costOfResult(
-  grid: Grid,
-  scenario: string,
-  agent: string,
-): number | null {
-  const cell = grid.cells.get(cellKey(scenario, agent));
-  if (cell === undefined || cell.window.length === 0) {
-    return null;
-  }
-  const latest = cell.window[cell.window.length - 1];
-  return latest?.cost_usd ?? null;
 }
 
 // Parse the /launch kind form field into a LaunchKind, or null when invalid. The

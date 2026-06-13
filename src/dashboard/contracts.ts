@@ -38,18 +38,26 @@ export const PhaseJsonSchema = z.object({
 export type PhaseJson = z.infer<typeof PhaseJsonSchema>;
 
 // The narrow read-side view of verdict.json — only the fields the grid needs.
-// Everything is optional/nullable so a partial or pre-PRI-2185 verdict still
-// parses (the read-side falls back to dir-name parsing for identity).
+// Every field is `.catch`-guarded so a single wrong-typed field never sinks the
+// whole parse: a malformed/legacy/externally-edited verdict still reads as a
+// PRESENT verdict, matching Python's type-blind `.get()` (data.py _read_json).
+// This preserves the authority rule — once verdict.json exists, phase.json is
+// ignored for that dir — for off-happy-path files too. A non-string `final`
+// degrades to undefined (the read-side then collapses it to 'unknown'); a
+// non-number cost degrades to null (rendered "cost unknown", never $0).
 export const DashboardVerdictSchema = z.object({
-  final: z.string().optional(),
+  final: z.string().optional().catch(undefined),
   economics: z
-    .object({ total_est_cost_usd: z.number().nullable().optional() })
+    .object({
+      total_est_cost_usd: z.number().nullable().optional().catch(null),
+    })
     .nullable()
-    .optional(),
-  finished_at: z.string().nullable().optional(),
-  scenario: z.string().optional(),
-  coding_agent: z.string().optional(),
-  started_at: z.string().optional(),
+    .optional()
+    .catch(null),
+  finished_at: z.string().nullable().optional().catch(null),
+  scenario: z.string().optional().catch(undefined),
+  coding_agent: z.string().optional().catch(undefined),
+  started_at: z.string().optional().catch(undefined),
 });
 export type DashboardVerdict = z.infer<typeof DashboardVerdictSchema>;
 
