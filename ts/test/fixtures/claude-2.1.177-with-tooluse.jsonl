@@ -1,0 +1,5 @@
+{"type":"queue-operation","operation":"enqueue"}
+{"type":"user","parentUuid":null,"isSidechain":false,"uuid":"u1","timestamp":"2026-06-13T12:37:00Z","cwd":"/wd","message":{"role":"user","content":"create hello.txt with hi"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-06-13T12:37:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Writing it."},{"type":"tool_use","id":"toolu_01","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-06-13T12:37:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"File created"}]}}
+{"type":"ai-title","aiTitle":"create hello"}

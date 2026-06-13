@@ -133,6 +133,45 @@ test("mixed user turn: attaches tool_result observation AND emits user step", ()
   expect(traj.steps.length).toBe(2);
 });
 
+// ---------------------------------------------------------------------------
+// Fix 5: real 2.1.177 fixture with tool_use
+// ---------------------------------------------------------------------------
+
+test("real 2.1.177 fixture with tool_use: noise rows ignored, tool_call and observation mapped", async () => {
+  const raw = await Bun.file(
+    new URL("./fixtures/claude-2.1.177-with-tooluse.jsonl", import.meta.url),
+  ).text();
+  const traj = normalizeClaudeLegacy(raw, "2.1.177");
+  const r = validateTrajectory(traj);
+  expect(r.ok).toBe(true);
+
+  // Exactly one user step (the string prompt)
+  const userSteps = traj.steps.filter((s) => s.source === "user");
+  expect(userSteps.length).toBe(1);
+  expect(userSteps[0]!.message).toBe("create hello.txt with hi");
+
+  // Exactly one agent step
+  const agentSteps = traj.steps.filter((s) => s.source === "agent");
+  expect(agentSteps.length).toBe(1);
+
+  // Agent step has a Write tool_call with id toolu_01
+  const agentStep = agentSteps[0]!;
+  expect(agentStep.tool_calls).toBeDefined();
+  expect(agentStep.tool_calls!.length).toBe(1);
+  const tc = agentStep.tool_calls![0]!;
+  expect(tc.function_name).toBe("Write");
+  expect(tc.tool_call_id).toBe("toolu_01");
+
+  // Agent step has an observation for toolu_01
+  expect(agentStep.observation?.results).toBeDefined();
+  expect(agentStep.observation!.results).toEqual([
+    { source_call_id: "toolu_01", content: "File created" },
+  ]);
+
+  // Noise rows (queue-operation, ai-title) are ignored
+  expect(traj.steps.length).toBe(2); // user + agent only
+});
+
 test("CLI reads a session file and prints valid ATIF JSON", async () => {
   const fixture = new URL("./fixtures/claude-legacy-basic.jsonl", import.meta.url).pathname;
   const cli = new URL("../src/cli/normalize-claude.ts", import.meta.url).pathname;
