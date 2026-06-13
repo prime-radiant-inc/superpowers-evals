@@ -1,5 +1,6 @@
 import type { ToolCall } from '../contracts/verdict.ts';
 import { normalizeClaudeLogs } from './claude.ts';
+import { normalizeCodexLogs } from './codex.ts';
 
 export type Normalizer = (raw: string) => ToolCall[];
 
@@ -10,4 +11,5 @@ export type Normalizer = (raw: string) => ToolCall[];
  */
 export const NORMALIZERS: Record<string, Normalizer> = {
   claude: normalizeClaudeLogs,
+  codex: normalizeCodexLogs,
 };
