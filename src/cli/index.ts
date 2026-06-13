@@ -6,7 +6,8 @@ import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
-import { runScenario } from '../runner/index.ts';
+import { currentGauntletChild, runScenario } from '../runner/index.ts';
+import { writeStoppedVerdict } from '../runner/stopped.ts';
 import {
   checkScenario,
   fixExecutableBits,
@@ -120,11 +121,36 @@ program
       );
       process.exit(2);
     }
+    // Graceful SIGINT (dashboard Stop sends SIGINT to this process). The handler
+    // must know the run dir + identity before the await resolves, so the run dir
+    // is captured via onRunDir and startedAt is stamped here (shared with the
+    // happy path). On SIGINT: forward the signal to the gauntlet child, write a
+    // stopped (indeterminate) verdict so the cell resolves instead of vanishing
+    // under the dead-pid rule, then exit 2.
+    const startedAt = new Date().toISOString();
+    const scenarioId = scenarioName(scn);
+    let runDirForStop: string | null = null;
+    const onSigint = (): void => {
+      currentGauntletChild()?.kill('SIGINT');
+      if (runDirForStop !== null) {
+        writeStoppedVerdict(runDirForStop, {
+          scenario: scenarioId,
+          codingAgent: opts.codingAgent,
+          startedAt,
+        });
+      }
+      process.exit(2);
+    };
+    process.once('SIGINT', onSigint);
     const { runDir, verdict } = await runScenario({
       scenarioDir: resolve(scn),
       codingAgent: opts.codingAgent,
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
+      startedAt,
+      onRunDir: (dir) => {
+        runDirForStop = dir;
+      },
     });
     process.stdout.write(`run-id: ${basename(runDir)}\n`);
     process.stdout.write(

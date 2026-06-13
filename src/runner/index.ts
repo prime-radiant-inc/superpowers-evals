@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Glob } from 'bun';
@@ -37,6 +38,7 @@ import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
+import { writePhase } from './phase.ts';
 
 // RunnerError moved to ./errors.ts so context.ts can throw it without a
 // runner<->context import cycle. Re-export it here to preserve the existing
@@ -117,25 +119,70 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   readonly extraEnv: Record<string, string>;
 }
 
+// The gauntlet child currently in flight for this process (one run per process),
+// so the run-command SIGINT handler can forward the signal to it before writing
+// the stopped verdict. Set on spawn, cleared on exit.
+let activeGauntletChild: ChildProcess | null = null;
+export function currentGauntletChild(): ChildProcess | null {
+  return activeGauntletChild;
+}
+
+// Settled exit of the gauntlet child: the exit code (null on signal-kill) plus
+// the collected stderr (for the error message). A typed value, not a string
+// match on stderr inline (coding standard 6.4).
+interface GauntletExit {
+  readonly status: number | null;
+  readonly stderr: string;
+}
+
+// Spawn the gauntlet CLI and await its exit, collecting stdout/stderr. async
+// (not spawnSync) so the run-command SIGINT handler can fire while gauntlet runs
+// — spawnSync would block the event loop and starve the handler. The live child
+// is published via currentGauntletChild() for the duration.
+function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
+  return new Promise<GauntletExit>((resolvePromise, rejectPromise) => {
+    const child = spawn('gauntlet', buildGauntletArgv(a), {
+      env: {
+        ...envSnapshot(),
+        QUORUM_AGENT_CWD: a.launchCwd,
+        ...a.extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    activeGauntletChild = child;
+    let stderr = '';
+    child.stdout?.on('data', () => {
+      // Drain stdout so the pipe never fills and blocks the child; the runner
+      // reads gauntlet's result from result.json, not its stdout.
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (err: Error) => {
+      activeGauntletChild = null;
+      rejectPromise(err);
+    });
+    child.on('close', (code: number | null) => {
+      activeGauntletChild = null;
+      resolvePromise({ status: code, stderr });
+    });
+  });
+}
+
 // Spawn the gauntlet CLI, then discover and parse its result.json. The
 // subprocess env is the sanctioned snapshot (6.5) overlaid with the launch cwd
 // and the agent's extra env.
-export function invokeGauntlet(a: InvokeGauntletArgs): InvokeGauntletResult {
-  const proc = spawnSync('gauntlet', buildGauntletArgv(a), {
-    env: {
-      ...envSnapshot(),
-      QUORUM_AGENT_CWD: a.launchCwd,
-      ...a.extraEnv,
-    },
-    encoding: 'utf8',
-  });
+export async function invokeGauntlet(
+  a: InvokeGauntletArgs,
+): Promise<InvokeGauntletResult> {
+  const proc = await spawnGauntlet(a);
   const status = proc.status ?? 0;
   if (status !== 0) {
     return {
       gauntlet: undefined,
       error: {
         stage: 'gauntlet',
-        message: `gauntlet exited ${proc.status}\n${proc.stderr ?? ''}`,
+        message: `gauntlet exited ${proc.status}\n${proc.stderr}`,
       },
     };
   }
@@ -166,6 +213,12 @@ export interface RunScenarioArgs {
   readonly codingAgentsDir: string;
   readonly outRoot: string;
   readonly skeletonRoot?: string | undefined;
+  // Caller-supplied run-start stamp (ISO8601). When set, the verdict's
+  // started_at uses it so a CLI SIGINT handler and the happy path agree.
+  readonly startedAt?: string | undefined;
+  // Fired once, right after the run dir is allocated, so a caller can learn the
+  // dir before the long await (the SIGINT handler writes a stopped verdict here).
+  readonly onRunDir?: ((runDir: string) => void) | undefined;
 }
 
 export interface RunScenarioResult {
@@ -186,6 +239,13 @@ export async function runScenario(
 ): Promise<RunScenarioResult> {
   const scenario = scenarioName(a.scenarioDir);
   const runDir = allocateRunDir(a.outRoot, scenario, a.codingAgent);
+  // Fire onRunDir right after allocation so a caller (the CLI SIGINT handler)
+  // learns the run dir before the long await — it needs it to write a stopped
+  // verdict if the run is interrupted mid-flight.
+  a.onRunDir?.(runDir);
+  // startedAt: caller-supplied stamp wins so the handler and the happy path
+  // agree on the same value; else stamp it here.
+  const startedAt = a.startedAt ?? new Date().toISOString();
   let verdict: FinalVerdict;
   try {
     verdict = await runInner(a, runDir);
@@ -199,11 +259,18 @@ export async function runScenario(
       error: { stage, message },
     });
   }
+  const identified: FinalVerdict = {
+    ...verdict,
+    scenario,
+    coding_agent: a.codingAgent,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+  };
   writeFileSync(
     join(runDir, 'verdict.json'),
-    `${JSON.stringify(verdict, null, 2)}\n`,
+    `${JSON.stringify(identified, null, 2)}\n`,
   );
-  return { runDir, verdict };
+  return { runDir, verdict: identified };
 }
 
 // Trailing path segment of a scenario dir (its name), guarded against a
@@ -238,6 +305,7 @@ async function runInner(
   a: RunScenarioArgs,
   runDir: string,
 ): Promise<FinalVerdict> {
+  writePhase(runDir, 'setup');
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
   for (const key of cfg.required_env) {
     if (!getEnv(key)) {
@@ -379,7 +447,8 @@ async function runInner(
     forbiddenPlaceholders: family === 'claude' ? ['$CLAUDE_MODEL'] : [],
   });
 
-  const { gauntlet, error } = invokeGauntlet({
+  writePhase(runDir, 'agent');
+  const { gauntlet, error } = await invokeGauntlet({
     storyPath,
     targetBinary: cfg.binary,
     runDir,
@@ -438,6 +507,7 @@ async function runInner(
   const captureEmpty = capture.rowCount === 0;
 
   // post-checks: again a crash is an error stage, a failure flows to compose.
+  writePhase(runDir, 'checks');
   const post = hasChecks
     ? await runPhase({
         checksSh,

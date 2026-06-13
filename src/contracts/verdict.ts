@@ -64,5 +64,11 @@ export const FinalVerdictSchema = z.object({
   checks: z.array(CheckRecordSchema),
   error: RunErrorSchema.nullable(),
   economics: z.record(z.unknown()).nullable(),
+  // Self-identity (dashboard read-side). Additive + optional: runs predating
+  // PRI-2185 fall back to run-dir-name parsing. The runner writes all four.
+  scenario: z.string().optional(),
+  coding_agent: z.string().optional(),
+  started_at: z.string().optional(),
+  finished_at: z.string().optional(),
 });
 export type FinalVerdict = z.infer<typeof FinalVerdictSchema>;
