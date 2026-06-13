@@ -3319,7 +3319,9 @@ class TestRunScenario:
         (sd / "story.md").write_text("---\nid: x\ntitle: x\n---\nbody\n")
         _exec(sd / "setup.sh", "#!/usr/bin/env bash\necho ok > marker\n")
         # post() references tool-called (a trace primitive) — triggers capture-empty guard
-        (sd / "checks.sh").write_text("pre() { :; }\npost() { tool-called Edit; }\n")
+        (sd / "checks.sh").write_text(
+            "pre() { :; }\npost() { check-transcript tool-called Edit; }\n"
+        )
         (coding_agents_dir / "claude-context").mkdir(parents=True)
         out_root = tmp_path / "results"
 
@@ -4872,7 +4874,7 @@ class TestRunScenario:
         _make_opencode_agent(coding_agents_dir, export_dir)
         sd = _make_scenario(scenarios_dir, "x", with_checks=False)
         (sd / "checks.sh").write_text(
-            "pre() { :; }\npost() { skill-called superpowers:brainstorming; }\n"
+            "pre() { :; }\npost() { check-transcript skill-called superpowers:brainstorming; }\n"
         )
 
         def fake_export(*, opencode_home, export_dir, launch_cwd, snapshot):
