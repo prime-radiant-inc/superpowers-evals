@@ -81,6 +81,58 @@ test("real 2.1.177 fixture: user prompt captured, unknown types ignored", async 
   expect(traj.steps.every((s) => s.source === "user" || s.source === "agent")).toBe(true);
 });
 
+// ---------------------------------------------------------------------------
+// Fix 4: mixed text+tool_result user turns
+// ---------------------------------------------------------------------------
+
+test("mixed user turn: attaches tool_result observation AND emits user step", () => {
+  // A user message containing both a tool_result and a text block.
+  // Before the fix: the tool_result was discarded and only the user step was emitted.
+  // After the fix: the observation is attached to the issuing agent step AND
+  // a user step is emitted for the text.
+  const raw = [
+    // assistant step that issues toolu_01
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_01", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    }),
+    // user turn with BOTH a tool_result and a text block (interrupted)
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_01", content: "file.txt" },
+          { type: "text", text: "[interrupted]" },
+        ],
+      },
+    }),
+  ].join("\n");
+
+  const traj = normalizeClaudeLegacy(raw, "2.1.175");
+
+  // The agent step should have the observation attached
+  const agentStep = traj.steps.find((s) => s.source === "agent");
+  expect(agentStep).toBeDefined();
+  expect(agentStep!.observation?.results).toBeDefined();
+  expect(agentStep!.observation!.results).toEqual([
+    { source_call_id: "toolu_01", content: "file.txt" },
+  ]);
+
+  // A user step should also be emitted for the text
+  const userStep = traj.steps.find((s) => s.source === "user");
+  expect(userStep).toBeDefined();
+  expect(userStep!.message).toBe("[interrupted]");
+
+  // Total: agent step + user step
+  expect(traj.steps.length).toBe(2);
+});
+
 test("CLI reads a session file and prints valid ATIF JSON", async () => {
   const fixture = new URL("./fixtures/claude-legacy-basic.jsonl", import.meta.url).pathname;
   const cli = new URL("../src/cli/normalize-claude.ts", import.meta.url).pathname;

@@ -87,17 +87,18 @@ export function normalizeClaudeLegacy(raw: string, version: string): AtifTraject
           texts.push(b.text);
         }
       }
-      if (results.length && !texts.length) {
-        for (const r of results) {
-          const owner = r.source_call_id ? callIndex.get(r.source_call_id) : undefined;
-          if (owner) {
-            (owner.observation ??= { results: [] }).results.push(r);
-          }
+      // Always attach tool_results to their owning agent step, regardless of
+      // whether there is also a text block in this user turn.
+      for (const r of results) {
+        const owner = r.source_call_id ? callIndex.get(r.source_call_id) : undefined;
+        if (owner) {
+          (owner.observation ??= { results: [] }).results.push(r);
         }
-        continue;
       }
       if (texts.length) {
         steps.push({ step_id: steps.length + 1, source: "user", message: texts.join("\n") });
+      } else if (!results.length) {
+        // Pure empty user turn — skip.
       }
     }
   }
