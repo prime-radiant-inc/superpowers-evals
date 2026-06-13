@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -49,12 +50,7 @@ def _write_sentinel(scenarios_root: Path, target: str = "codex") -> None:
     scenario = scenarios_root / "sentinel"
     scenario.mkdir(parents=True, exist_ok=True)
     scenario.joinpath("story.md").write_text(
-        "---\n"
-        "id: sentinel\n"
-        "status: ready\n"
-        "quorum_tier: sentinel\n"
-        "---\n"
-        "Sentinel.\n"
+        "---\nid: sentinel\nstatus: ready\nquorum_tier: sentinel\n---\nSentinel.\n"
     )
     scenario.joinpath("checks.sh").write_text(
         f"# coding-agents: {target}\npre() {{ :; }}\npost() {{ :; }}\n"
@@ -91,6 +87,12 @@ def _doctor_paths(tmp_path: Path) -> DoctorPaths:
     )
 
 
+def _profiles_dir(paths: DoctorPaths) -> Path:
+    """Narrow DoctorPaths.profile_root (Optional) to Path — every doctor test sets it."""
+    assert paths.profile_root is not None
+    return paths.profile_root
+
+
 def _ready_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -101,16 +103,16 @@ def _ready_fixture(
     _write_agent(paths.coding_agents_dir, required_env=["GEMINI_API_KEY", "SUPERPOWERS_ROOT"])
     _write_context(paths.coding_agents_dir, runtime_family="gemini")
     _write_sentinel(paths.scenarios_root, target="gemini")
-    paths.profile_root.mkdir(parents=True)
-    paths.profile_root.chmod(0o700)
-    profile = paths.profile_root / "gemini.env"
+    _profiles_dir(paths).mkdir(parents=True)
+    _profiles_dir(paths).chmod(0o700)
+    profile = _profiles_dir(paths) / "gemini.env"
     profile.write_text("GEMINI_API_KEY=profile-key\n")
     profile.chmod(0o600)
     _write_superpowers_root(tmp_path / "superpowers")
     env = {
         "PATH": str(bin_dir),
         "QUORUM_MANAGED_HOST": "1",
-        "QUORUM_TARGET_PROFILE_ROOT": str(paths.profile_root),
+        "QUORUM_TARGET_PROFILE_ROOT": str(_profiles_dir(paths)),
         "SUPERPOWERS_ROOT": str(tmp_path / "superpowers"),
     }
     monkeypatch.setenv("PATH", str(bin_dir))
@@ -147,7 +149,7 @@ def test_bad_profile_permissions_are_failed_with_remediation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
-    profile = paths.profile_root / "gemini.env"
+    profile = _profiles_dir(paths) / "gemini.env"
     profile.chmod(0o666)
 
     result = run_target_doctor("gemini", paths, env)
@@ -163,15 +165,17 @@ def test_json_shape_includes_target_status_checks_and_remediation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
-    (paths.profile_root / "gemini.env").chmod(0o666)
+    (_profiles_dir(paths) / "gemini.env").chmod(0o666)
 
     payload = run_target_doctor("gemini", paths, env).to_dict()
 
     assert payload["target"] == "gemini"
     assert payload["status"] == "failed"
-    assert isinstance(payload["checks"], list)
-    assert any(check.get("remediation") for check in payload["checks"])
-    assert any(check.get("reason") == "config-error" for check in payload["checks"])
+    checks = payload["checks"]
+    assert isinstance(checks, list)
+    typed_checks = cast("list[dict[str, Any]]", checks)
+    assert any(check.get("remediation") for check in typed_checks)
+    assert any(check.get("reason") == "config-error" for check in typed_checks)
     json.dumps(payload)
 
 
@@ -223,9 +227,9 @@ def test_codex_is_blocked_until_key_backed_mode_is_verified(
     _write_agent(paths.coding_agents_dir, name="codex", required_env=["SUPERPOWERS_ROOT"])
     _write_context(paths.coding_agents_dir)
     _write_sentinel(paths.scenarios_root, target="codex")
-    paths.profile_root.mkdir(parents=True)
-    paths.profile_root.chmod(0o700)
-    profile = paths.profile_root / "codex.env"
+    _profiles_dir(paths).mkdir(parents=True)
+    _profiles_dir(paths).chmod(0o700)
+    profile = _profiles_dir(paths) / "codex.env"
     profile.write_text("OPENAI_API_KEY=profile-key\n")
     profile.chmod(0o600)
     _write_superpowers_root(tmp_path / "superpowers")
@@ -270,7 +274,7 @@ def test_placeholder_profile_secret_is_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
-    (paths.profile_root / "gemini.env").write_text("GEMINI_API_KEY=placeholder\n")
+    (_profiles_dir(paths) / "gemini.env").write_text("GEMINI_API_KEY=placeholder\n")
 
     result = run_target_doctor("gemini", paths, env)
 
@@ -280,14 +284,12 @@ def test_placeholder_profile_secret_is_failed(
     assert "GEMINI_API_KEY" in credentials.message
 
 
-def test_wrong_profile_owner_is_failed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_wrong_profile_owner_is_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
     paths = DoctorPaths(
         coding_agents_dir=paths.coding_agents_dir,
         scenarios_root=paths.scenarios_root,
-        profile_root=paths.profile_root,
+        profile_root=_profiles_dir(paths),
         profile_owner_uid=os.getuid() + 1,
     )
 
@@ -299,9 +301,7 @@ def test_wrong_profile_owner_is_failed(
     assert "owner uid" in permissions.message
 
 
-def test_managed_roots_must_be_directories(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_managed_roots_must_be_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
     artifact_root = tmp_path / "artifact-file"
     artifact_root.write_text("not a directory\n")
@@ -379,11 +379,9 @@ def test_run_all_missing_coding_agents_dir_is_command_error(tmp_path: Path) -> N
     assert check.reason == "config-error"
 
 
-def test_gemini_personal_oauth_is_blocked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_gemini_personal_oauth_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths, env = _ready_fixture(tmp_path, monkeypatch)
-    (paths.profile_root / "gemini.env").write_text(
+    (_profiles_dir(paths) / "gemini.env").write_text(
         "GEMINI_API_KEY=profile-key\nGEMINI_AUTH_TYPE=oauth-personal\n"
     )
 
@@ -404,9 +402,9 @@ def test_copilot_missing_provider_mode_profile_is_failed(
     _write_agent(paths.coding_agents_dir, name="copilot", required_env=["SUPERPOWERS_ROOT"])
     _write_context(paths.coding_agents_dir, runtime_family="copilot")
     _write_sentinel(paths.scenarios_root, target="copilot")
-    paths.profile_root.mkdir(parents=True)
-    paths.profile_root.chmod(0o700)
-    profile = paths.profile_root / "copilot.env"
+    _profiles_dir(paths).mkdir(parents=True)
+    _profiles_dir(paths).chmod(0o700)
+    profile = _profiles_dir(paths) / "copilot.env"
     profile.write_text("# no provider mode yet\n")
     profile.chmod(0o600)
     _write_superpowers_root(tmp_path / "superpowers")
@@ -434,9 +432,9 @@ def test_copilot_hook_env_references_must_be_profile_backed(
     _write_agent(paths.coding_agents_dir, name="copilot", required_env=["SUPERPOWERS_ROOT"])
     _write_context(paths.coding_agents_dir, runtime_family="copilot")
     _write_sentinel(paths.scenarios_root, target="copilot")
-    paths.profile_root.mkdir(parents=True)
-    paths.profile_root.chmod(0o700)
-    profile = paths.profile_root / "copilot.env"
+    _profiles_dir(paths).mkdir(parents=True)
+    _profiles_dir(paths).chmod(0o700)
+    profile = _profiles_dir(paths) / "copilot.env"
     profile.write_text(
         "COPILOT_PROVIDER_BASE_URL=https://example.invalid\n"
         "COPILOT_PROVIDER_TYPE=openai\n"
@@ -445,7 +443,7 @@ def test_copilot_hook_env_references_must_be_profile_backed(
     profile.chmod(0o600)
     sp_root = tmp_path / "superpowers"
     _write_superpowers_root(sp_root)
-    (sp_root / "hooks" / "session-start").write_text("echo \"$OPENAI_API_KEY\"\n")
+    (sp_root / "hooks" / "session-start").write_text('echo "$OPENAI_API_KEY"\n')
     env = {
         "PATH": str(bin_dir),
         "QUORUM_MANAGED_HOST": "1",
@@ -470,9 +468,9 @@ def test_copilot_personal_github_token_is_blocked(
     _write_agent(paths.coding_agents_dir, name="copilot", required_env=["SUPERPOWERS_ROOT"])
     _write_context(paths.coding_agents_dir, runtime_family="copilot")
     _write_sentinel(paths.scenarios_root, target="copilot")
-    paths.profile_root.mkdir(parents=True)
-    paths.profile_root.chmod(0o700)
-    profile = paths.profile_root / "copilot.env"
+    _profiles_dir(paths).mkdir(parents=True)
+    _profiles_dir(paths).chmod(0o700)
+    profile = _profiles_dir(paths) / "copilot.env"
     profile.write_text(
         "COPILOT_PROVIDER_BASE_URL=https://example.invalid\n"
         "COPILOT_PROVIDER_TYPE=openai\n"
