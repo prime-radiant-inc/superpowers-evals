@@ -4,6 +4,19 @@
 
 **Goal:** Bring the 7 remaining coding agents to capture/normalize + provisioning parity with the Python, so `quorum run … --coding-agent <codex|kimi|gemini|pi|opencode|copilot|antigravity>` works. Builds on Spec 1 (PRI-2207, PR #13).
 
+> **STATUS: COMPLETE (2026-06-12, branch tip `667ca0d`, `bun run check` green / 183 pass).**
+> Wave A (8 normalizers at parity) + B1 (CommandRunner seam + ProvisionError) +
+> B2 (7 provisioning adapters, `resolveAgent` wired) + Wave C (codex/kimi/pi
+> cwd-filtering; antigravity rate-limit→indeterminate). Provisioning is unit-tested
+> at the file/env/argv level via `FakeCommandRunner` + `makeTempHome`; real
+> subprocess ceremonies are live-only (repo bans live evals in CI). **Deferred,
+> flagged in-source (B3/live):** codex `app-server` sync-seam approximation;
+> copilot `gh auth token` fallback + secret-leak scan + session-snapshot guard;
+> kimi session_index attribution + session-start assertion; antigravity OAuth
+> creds + tmux teardown + launch-cwd wrapping + early-teardown watcher; opencode
+> session-export + containment audits. Optional polish: per-agent mock-gauntlet
+> e2e smokes.
+
 **Architecture:** Each agent = (a) a **normalizer** `src/normalizers/<agent>.ts` following the proven `src/normalizers/claude.ts` template (JSON.parse → `unknown` → narrow with permissive zod → emit `{tool, args, source}`), registered in `src/normalizers/index.ts`; and (b) a **provisioning adapter** in `src/agents/` — `DefaultAgent` (YAML-only) for the simple ones, a custom `CodingAgent` for the rest — resolved by `resolveAgent`. Parity is proven per-agent by a **replay-differential test** against a real recorded run mined from `results/` (the Spec-1 oracle pattern: pick a single-session run so one file's normalization equals the committed `coding-agent-tool-calls.jsonl`).
 
 **Source of truth:** `quorum/normalizers.py` (per-dialect normalize fns + `TOOL_MAP`s + `NATIVE_TOOLS`), `quorum/capture.py` (cwd-filtering), `quorum/runner.py` (provisioning), `quorum/kimi.py`, `quorum/opencode_capture.py`, `quorum/agy_{watch,creds,teardown}.py`, `coding-agents/<agent>.yaml`. Each builder reads the Python for exact logic.
