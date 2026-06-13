@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec bun run "$(dirname "$0")/../ts/src/cli/check-transcript.ts" "$@"

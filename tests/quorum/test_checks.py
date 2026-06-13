@@ -1,10 +1,15 @@
 # tests/quorum/test_checks.py
+import json
+import os
+import subprocess
 from pathlib import Path
 
 from quorum.checks import (
     parse_coding_agents_directive,
     run_phase,
 )
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def test_parse_coding_agents_present(tmp_path: Path):
@@ -121,6 +126,115 @@ def test_run_phase_exports_harness_run_dir(tmp_path: Path):
     )
     assert exit_code == 0
     assert len(records) == 1 and records[0].passed
+
+
+def test_run_phase_exports_both_capture_env_vars(tmp_path: Path):
+    # The flat-JSONL pipeline (QUORUM_TOOL_CALLS_PATH) and the ATIF pipeline
+    # (QUORUM_TRANSCRIPT_PATH) live simultaneously: both env vars must be set
+    # in the check environment, each pointing at its run-dir artifact.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    workdir = run_dir / "wd"
+    workdir.mkdir()
+    tool_calls = run_dir / "coding-agent-tool-calls.jsonl"
+    transcript = run_dir / "trajectory.json"
+    checks_sh = tmp_path / "checks.sh"
+    checks_sh.write_text(
+        "pre() { :; }\n"
+        "post() {\n"
+        f'  command-succeeds "test \\"$QUORUM_TOOL_CALLS_PATH\\" = \\"{tool_calls}\\"";\n'
+        f'  command-succeeds "test \\"$QUORUM_TRANSCRIPT_PATH\\" = \\"{transcript}\\"";\n'
+        "}\n"
+    )
+    records, exit_code = run_phase(
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
+        quorum_bin=Path("bin").resolve(),
+        tool_calls_path=tool_calls,
+        transcript_path=transcript,
+        run_dir=run_dir,
+    )
+    assert exit_code == 0
+    assert len(records) == 2
+    assert all(r.passed for r in records), [r.detail for r in records]
+
+
+def test_run_phase_sets_transcript_path_even_when_file_absent(tmp_path: Path):
+    # Fail-closed: QUORUM_TRANSCRIPT_PATH is set even though trajectory.json
+    # does not exist (agent without ATIF support, or emission failed). Check
+    # execution must not depend on the file existing — check-transcript's
+    # loader treats a missing file as empty.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    workdir = run_dir / "wd"
+    workdir.mkdir()
+    transcript = run_dir / "trajectory.json"  # never created
+    checks_sh = tmp_path / "checks.sh"
+    checks_sh.write_text(
+        "pre() { :; }\n"
+        "post() {\n"
+        f'  command-succeeds "test \\"$QUORUM_TRANSCRIPT_PATH\\" = \\"{transcript}\\"";\n'
+        "}\n"
+    )
+    records, exit_code = run_phase(
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
+        quorum_bin=Path("bin").resolve(),
+        transcript_path=transcript,
+    )
+    assert exit_code == 0
+    assert not transcript.exists()
+    assert len(records) == 1 and records[0].passed
+
+
+def test_check_transcript_shim_runs_and_writes_record(tmp_path: Path):
+    # The bin/check-transcript shim execs the bun CLI, resolving ts/ relative
+    # to its own location. Invoke it via PATH from an arbitrary cwd with a
+    # tiny ATIF fixture and assert it emits a record.
+    traj = {
+        "schema_version": "ATIF-v1.7",
+        "agent": {"name": "test", "version": "1.0"},
+        "steps": [
+            {
+                "step_id": 1,
+                "source": "agent",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "c1",
+                        "function_name": "Write",
+                        "arguments": {"file_path": "x.md"},
+                    }
+                ],
+            }
+        ],
+    }
+    traj_path = tmp_path / "trajectory.json"
+    traj_path.write_text(json.dumps(traj))
+    sink = tmp_path / "sink.jsonl"
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+
+    env = {
+        **os.environ,
+        "PATH": f"{REPO / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "QUORUM_TRANSCRIPT_PATH": str(traj_path),
+        "QUORUM_RECORD_SINK": str(sink),
+    }
+    proc = subprocess.run(
+        ["check-transcript", "tool-called", "Write"],
+        cwd=workdir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"shim failed: {proc.stderr}"
+    assert sink.exists(), "shim did not write a record sink"
+    lines = [ln for ln in sink.read_text().splitlines() if ln.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["check"] == "tool-called" and rec["passed"] is True
 
 
 def test_run_phase_omits_harness_run_dir_when_none(tmp_path: Path):

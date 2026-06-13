@@ -1908,6 +1908,7 @@ def _run_scenario_inner(
             workdir=workdir,
             quorum_bin=_quorum_bin_dir(),
             tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
+            transcript_path=run_dir / "trajectory.json",
             run_dir=run_dir,
         )
         if pre_exit != 0:
@@ -2427,6 +2428,7 @@ def _run_scenario_inner(
             workdir=workdir,
             quorum_bin=_quorum_bin_dir(),
             tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
+            transcript_path=run_dir / "trajectory.json",
             run_dir=run_dir,
         )
         if post_exit != 0:
