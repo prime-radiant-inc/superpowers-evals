@@ -73,6 +73,26 @@ interface RunOptions {
   readonly codingAgent: string;
   readonly codingAgentsDir: string;
   readonly outRoot: string;
+  readonly scenariosRoot: string;
+}
+
+// Resolve a `run` scenario argument flexibly: an explicit path (cwd-relative or
+// absolute) as given, else a bare name resolved under scenariosRoot. Lets both
+// `run 00-foo` and `run scenarios/00-foo` (tab-completion) work. Returns the
+// absolute dir, or undefined when neither is a directory.
+function resolveScenarioDir(
+  arg: string,
+  scenariosRoot: string,
+): string | undefined {
+  const direct = resolve(arg);
+  if (existsSync(direct) && statSync(direct).isDirectory()) {
+    return direct;
+  }
+  const underRoot = resolve(scenariosRoot, arg);
+  if (existsSync(underRoot) && statSync(underRoot).isDirectory()) {
+    return underRoot;
+  }
+  return undefined;
 }
 
 interface ShowOptions {
@@ -100,14 +120,24 @@ program.name('quorum').description('Behavioral eval runner (TypeScript)');
 
 program
   .command('run')
-  .argument('<scenario-dir>', 'scenario directory')
+  .argument(
+    '<scenario>',
+    'scenario dir or name (a bare name resolves under --scenarios-root)',
+  )
   .requiredOption('--coding-agent <name>', 'coding agent to run')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
   .option('--out-root <dir>', 'results root', 'results')
-  .action(async (scenarioDir: string, opts: RunOptions) => {
-    const scn = resolve(scenarioDir);
-    if (!existsSync(scn)) {
-      process.stderr.write(`scenario dir not found: ${scn}\n`);
+  .option(
+    '--scenarios-root <dir>',
+    'root for a bare scenario name',
+    'scenarios',
+  )
+  .action(async (scenario: string, opts: RunOptions) => {
+    const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
+    if (scn === undefined) {
+      process.stderr.write(
+        `scenario not found: ${scenario} (looked at the path and under ${opts.scenariosRoot}/)\n`,
+      );
       process.exit(2);
     }
     const { runDir, verdict } = await runScenario({
