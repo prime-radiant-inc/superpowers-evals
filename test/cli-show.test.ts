@@ -36,7 +36,7 @@ test('show <dir> --quiet prints final + reason and exits 0 even for a fail verdi
     encoding: 'utf8',
   });
   expect(proc.status).toBe(0);
-  expect(proc.stdout).toBe('fail\nbecause\n');
+  expect(proc.stdout).toBe('final     fail\nreason    because\n');
 });
 
 test('show --quiet --json together exits 1', () => {
@@ -69,7 +69,7 @@ test('show resolves a bare verdict.json file to its parent run dir', () => {
     { encoding: 'utf8' },
   );
   expect(proc.status).toBe(0);
-  expect(proc.stdout).toBe('indeterminate\nbecause\n');
+  expect(proc.stdout).toBe('final     indeterminate\nreason    because\n');
 });
 
 test('show resolves a scenario prefix to the newest matching run', () => {
@@ -80,7 +80,7 @@ test('show resolves a scenario prefix to the newest matching run', () => {
     { encoding: 'utf8' },
   );
   expect(proc.status).toBe(0);
-  expect(proc.stdout).toBe('pass\nbecause\n');
+  expect(proc.stdout).toBe('final     pass\nreason    because\n');
 });
 
 test('show exits 1 when the target cannot be resolved', () => {
@@ -124,15 +124,17 @@ test('show --json emits the raw verdict and never recolors', () => {
   expect(parsed.schema).toBe(1);
 });
 
-test('show full mode renders the run-dir basename and an uppercased final', () => {
+test('show full mode renders the run-dir, final, and reason header', () => {
   const { dir } = runDirWithVerdict('pass');
   const proc = spawnSync('bun', [CLI, 'show', dir, '--no-color'], {
     encoding: 'utf8',
   });
   expect(proc.status).toBe(0);
   expect(proc.stdout).toContain('scn-claude-20260612T010101Z-abcd');
-  expect(proc.stdout).toContain('PASS');
-  expect(proc.stdout).toContain('because');
+  expect(proc.stdout).toContain('final     pass');
+  expect(proc.stdout).toContain('reason    because');
+  // The full renderer emits the labelled, sectioned layout.
+  expect(proc.stdout).toContain('─── Deterministic checks');
   // --no-color must produce no ANSI escape sequences (no ESC control char).
   // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting the absence of the ESC control char is the point of this test.
   expect(proc.stdout).not.toMatch(/\x1b\[/);
