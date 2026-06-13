@@ -35,7 +35,16 @@ export function startDashboard(args: StartDashboardArgs): DashboardHandle {
     knownAgents,
     ...(args.invoke !== undefined ? { invoke: args.invoke } : {}),
   });
-  const server = Bun.serve({ port: args.port, fetch: dash.fetch });
+  // idleTimeout: 0 disables Bun.serve's per-request idle timeout (default 10s).
+  // The GET /events SSE stream is intentionally long-lived; with the default a
+  // quiet connection is killed every 10s ("request timed out after 10 seconds"
+  // on the console) and htmx reconnect-loops. The stream's own keepalive keeps
+  // proxies/clients warm.
+  const server = Bun.serve({
+    port: args.port,
+    idleTimeout: 0,
+    fetch: dash.fetch,
+  });
   dash.startScanner();
   // server.port is the actually-bound port (the ephemeral pick when port 0 was
   // requested). Bun types it as possibly-undefined; fall back to the requested

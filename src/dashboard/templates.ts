@@ -121,6 +121,16 @@ export function cellHtml(view: CellView): string {
   const open = `<td class="c" id="${id}" sse-swap="${id}" hx-swap="outerHTML">`;
 
   if (view.state === 'empty') {
+    // A "not applicable" cell (title set) can never run here (directive/draft):
+    // dim it, show "n/a", and carry a hover tooltip explaining why — visually
+    // distinct from a plain never-run cell, which shows the em-dash.
+    if (view.title !== undefined) {
+      return (
+        `<td class="c c-na" id="${id}" sse-swap="${id}" hx-swap="outerHTML" title="${esc(view.title)}">` +
+        `<div class="cell" style="opacity:${f3(view.opacity)}">` +
+        `<span class="empty">n/a</span></div></td>`
+      );
+    }
     return `${open}<div class="cell"><span class="empty">—</span></div></td>`;
   }
 

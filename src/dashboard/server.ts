@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runnable } from '../contracts/batch.ts';
+import { runnable, type SkippedReason } from '../contracts/batch.ts';
 import type { InvokeFn } from '../run-all/index.ts';
 import { buildMatrix } from '../run-all/matrix.ts';
 import type { SchedulerEvent } from '../scheduler/index.ts';
@@ -146,6 +146,22 @@ function discoverAgents(codingAgentsDir: string): string[] {
 // when unknown. Carried verbatim in the data-estimate attribute; app.js reparses.
 function fmtEst(value: number | undefined): string {
   return value !== undefined ? value.toFixed(2) : '';
+}
+
+// The hover "why" for a not-applicable cell (an empty cell that can never run
+// here), by skip reason. directive is the common case (a scenario's
+// `# coding-agents:` line excludes this agent).
+function naTitle(reason: SkippedReason): string {
+  switch (reason) {
+    case 'directive':
+      return "not eligible — this scenario's coding-agents directive excludes this agent";
+    case 'draft':
+      return 'draft scenario — not run by default';
+    case 'tier':
+      return 'filtered out by tier';
+    default:
+      return 'not run-eligible';
+  }
 }
 
 export function createDashboard(args: CreateDashboardArgs): Dashboard {
@@ -308,15 +324,20 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
 
   // --- routes ----------------------------------------------------------------
 
-  // Per-column (agent) and per-row (scenario) runnable cell counts for the
-  // launch confirm ("Run N cells"). buildMatrix throws only on a bad filter
-  // (none here); guard anyway so GET / never 500s on a missing dir.
-  const runnableCounts = (
+  // Launch info for the grid: per-column/row RUNNABLE counts (the confirm's
+  // "Run N cells") AND the set of cells that can NEVER run here (directive/
+  // draft/tier skips), keyed by cellKey -> a human "why" string. buildMatrix
+  // throws only on a bad filter (none here); guard so GET / never 500s.
+  const launchInfo = (
     scenarios: readonly string[],
     agents: readonly string[],
-  ): { row: Record<string, number>; column: Record<string, number> } => {
+  ): {
+    counts: { row: Record<string, number>; column: Record<string, number> };
+    skipped: Map<string, string>;
+  } => {
     const row: Record<string, number> = {};
     const column: Record<string, number> = {};
+    const skipped = new Map<string, string>();
     for (const s of scenarios) {
       row[s] = 0;
     }
@@ -325,17 +346,21 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     }
     try {
       for (const e of buildMatrix({ scenariosRoot, codingAgentsDir })) {
-        if (!runnable(e)) {
-          continue;
+        if (runnable(e)) {
+          row[e.scenario] = (row[e.scenario] ?? 0) + 1;
+          column[e.codingAgent] = (column[e.codingAgent] ?? 0) + 1;
+        } else {
+          skipped.set(
+            cellKey(e.scenario, e.codingAgent),
+            naTitle(e.skippedReason),
+          );
         }
-        row[e.scenario] = (row[e.scenario] ?? 0) + 1;
-        column[e.codingAgent] = (column[e.codingAgent] ?? 0) + 1;
       }
     } catch {
-      // Missing/unreadable dir — fall back to the zeroed maps so GET / still
-      // renders the grid (the confirm shows "Run 0 cells" rather than 500ing).
+      // Missing/unreadable dir — fall back to empty info so GET / still renders
+      // the grid (counts show 0, no cell is marked n/a) rather than 500ing.
     }
-    return { row, column };
+    return { counts: { row, column }, skipped };
   };
 
   const renderRoot = (): Response => {
@@ -344,13 +369,24 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     const grid = scanResults(resultsRoot, knownAgents);
     lastGrid = grid;
 
+    const { counts, skipped } = launchInfo(scenarios, agents);
+
     const views = new Map<string, ReturnType<typeof cellView>>();
     for (const scenario of scenarios) {
       for (const agent of agents) {
-        const cell =
-          grid.cells.get(cellKey(scenario, agent)) ??
-          emptyCell(scenario, agent);
-        views.set(`${scenario}\t${agent}`, cellView(cell, scenario, agent));
+        const key = cellKey(scenario, agent);
+        const cell = grid.cells.get(key) ?? emptyCell(scenario, agent);
+        const view = cellView(cell, scenario, agent);
+        // An empty cell that can never run here renders dimmed "n/a" + tooltip
+        // (vs the plain never-run em-dash). A cell with history keeps it even
+        // if it's no longer eligible.
+        const naReason = skipped.get(key);
+        views.set(
+          key,
+          view.state === 'empty' && naReason !== undefined
+            ? { ...view, opacity: 0.3, title: naReason }
+            : view,
+        );
       }
     }
     const tally = headerTally(grid, scenarios, agents);
@@ -379,7 +415,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       ),
     };
 
-    const counts = runnableCounts(scenarios, agents);
     const page = layoutHtml({
       tallyHtml: tallyHtml(tally),
       gridHtml: gridHtml({
@@ -481,7 +516,9 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
           const messages = queue.drain();
           if (messages.length === 0) {
             idleTicks += 1;
-            if (idleTicks >= 75) {
+            // ~5s (25 * 200ms) — comfortably under common idle timeouts so a
+            // proxy or a non-idleTimeout-0 server never severs a quiet stream.
+            if (idleTicks >= 25) {
               idleTicks = 0;
               controller.enqueue(encoder.encode(': keepalive\n\n'));
             }

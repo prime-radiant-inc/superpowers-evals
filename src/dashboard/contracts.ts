@@ -139,6 +139,11 @@ export interface CellView {
   readonly drift: boolean;
   readonly opacity: number;
   readonly card: CardView | null;
+  // A hover tooltip for the cell. Set for "not applicable" cells (an empty cell
+  // that can never run here — the scenario's coding-agents directive excludes
+  // this agent, or it's a draft) to explain why it shows "n/a" rather than "—".
+  // Absent for ordinary cells.
+  readonly title?: string;
 }
 
 // The grid-wide rollup for the header tally line.

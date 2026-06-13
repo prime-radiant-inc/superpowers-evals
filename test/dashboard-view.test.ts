@@ -292,10 +292,10 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
   expect(v.card?.rows.length).toBe(2);
 });
 
-test('cellView: done cell with unknown cost shows "cost unknown"', () => {
+test('cellView: done cell with unknown cost shows "$—" (never "$0.00")', () => {
   const c = cell({ window: [rec({ cost_usd: null, final: 'pass' })] });
   const v = cellView(c, 's', 'claude');
-  expect(v.bottom).toBe('cost unknown');
+  expect(v.bottom).toBe('$—');
 });
 
 test('cellView: running on top of history shimmers newest, phase bottom', () => {

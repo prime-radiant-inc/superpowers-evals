@@ -99,6 +99,26 @@ test('empty cell renders the em-dash placeholder and no inner ribbon', () => {
   expect(html).not.toContain('class="vs"');
 });
 
+test('not-applicable cell (title set) renders dimmed n/a + tooltip, not the em-dash', () => {
+  const html = cellHtml({
+    cell_id: 'cell-s-claude',
+    scenario: 's',
+    agent: 'claude',
+    state: 'empty',
+    slots: ghostSlots(),
+    bottom: '—',
+    drift: false,
+    opacity: 0.3,
+    card: null,
+    title: 'not eligible — directive',
+  });
+  expect(html).toContain('c-na');
+  expect(html).toContain('title="not eligible — directive"');
+  expect(html).toContain('<span class="empty">n/a</span>');
+  expect(html).toContain('opacity:0.300');
+  expect(html).not.toContain('<span class="empty">—</span>');
+});
+
 test('done cell carries solid bands, a cost-bar with --h, and the cost bottom', () => {
   const html = cellHtml(doneView());
   expect(html).toContain('class="vs-slot b-pass"');

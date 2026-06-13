@@ -212,8 +212,11 @@ export function headerTally(
   };
 }
 
+// A cost figure, or "$—" when the run couldn't be priced (economics null/
+// partial). NOT "$0.00" — that would falsely read as a free run (build spec:
+// "never as $0"); "$—" reads as a cost field with an unknown value.
 function rowCost(costUsd: number | null): string {
-  return costUsd !== null ? `$${costUsd.toFixed(2)}` : 'cost unknown';
+  return costUsd !== null ? `$${costUsd.toFixed(2)}` : '$—';
 }
 
 // Compact card-row timestamp. Prefers the dir-name started_at (always present)
@@ -336,10 +339,7 @@ export function cellView(
     drift = false;
   } else {
     const latest = cell.window[cell.window.length - 1] as RunRecord;
-    bottom =
-      latest.cost_usd !== null
-        ? `$${latest.cost_usd.toFixed(2)}`
-        : 'cost unknown';
+    bottom = latest.cost_usd !== null ? `$${latest.cost_usd.toFixed(2)}` : '$—';
     drift = driftFlag(cellCosts(cell));
   }
   const state = cell.running !== null ? 'running' : 'done';
