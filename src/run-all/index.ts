@@ -69,6 +69,10 @@ export interface InvokeChildArgs {
   readonly outRoot: string;
   readonly timeoutSeconds?: number;
   readonly extraEnv?: Readonly<Record<string, string>>;
+  // Called once with the spawned child's OS pid, right after spawn. The
+  // dashboard orchestrator (Spec 5) registers the pid here so /stop can SIGINT
+  // in-flight children; run-all leaves it unset.
+  readonly onPid?: (pid: number) => void;
 }
 
 // Run one `quorum run` as a child process and capture its run-id line. The
@@ -96,6 +100,12 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
       ],
       { env },
     );
+
+    // Report the OS pid to the optional dashboard hook the instant it exists,
+    // before any child output, so /stop can target in-flight children.
+    if (child.pid !== undefined) {
+      args.onPid?.(child.pid);
+    }
 
     let stdout = '';
     let timedOut = false;
