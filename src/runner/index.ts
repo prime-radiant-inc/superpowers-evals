@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Glob } from 'bun';
 import { z } from 'zod';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
-import { resolveAgent } from '../agents/index.ts';
+import { ProvisionError, resolveAgent } from '../agents/index.ts';
 import {
   captureTokenUsage,
   captureToolCalls,
@@ -221,7 +221,7 @@ function errorStage(err: unknown): RunErrorStage {
   if (err instanceof RunnerError) {
     return err.stage;
   }
-  if (err instanceof SetupError) {
+  if (err instanceof SetupError || err instanceof ProvisionError) {
     return 'setup';
   }
   return 'unknown';
