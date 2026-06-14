@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type CheckPhase,
@@ -49,7 +49,10 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   // directly. undefined values are simply absent in the child's environment.
   // Assembled as one literal (conditional spreads for the optional keys) so the
   // names are object properties, not index-signature reads/writes.
-  const path = getEnv('PATH') ?? '';
+  // Match quorum/checks.py:82 — an unset PATH falls back to the system default,
+  // not '' (a '' fallback yields `{quorumBin}:` whose trailing empty component is
+  // CWD on POSIX and drops /usr/bin:/bin, so even bash itself fails to resolve).
+  const path = getEnv('PATH') ?? '/usr/bin:/bin';
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
     PATH: `${args.quorumBin}:${path}`,
@@ -66,7 +69,20 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
       ['-c', `source '${args.checksSh}'; ${args.phase}`],
       { cwd: args.workdir, env, encoding: 'utf8' },
     );
-    const rc = proc.status ?? 0;
+    // Python's subprocess.run raises FileNotFoundError when bash cannot be
+    // spawned; that exception propagates out of run_phase. Node's spawnSync does
+    // NOT throw on spawn failure — it returns {status:null, error:<Error>}. Mirror
+    // the raise rather than swallowing it into a clean, empty phase.
+    if (proc.error) {
+      throw proc.error;
+    }
+    // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
+    // status:null with proc.signal set. Python's subprocess.run returns the
+    // negative returncode (-9), a nonzero crash; map a signal kill to the POSIX
+    // 128+signo crash code so it lands in the >=128 band below rather than being
+    // coerced to a clean rc 0 by `?? 0`.
+    const rc =
+      proc.status ?? (proc.signal ? 128 + signalNumber(proc.signal) : 0);
     const records = readRecords(sink, args.phase);
 
     // Crash heuristic (parity with quorum/checks.py):
@@ -85,6 +101,11 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   } finally {
     rmSync(sinkDir, { recursive: true, force: true });
   }
+}
+
+/** Map a signal name (e.g. "SIGKILL") to its number; SIGKILL (9) if unknown. */
+function signalNumber(signal: NodeJS.Signals): number {
+  return constants.signals[signal] ?? constants.signals.SIGKILL;
 }
 
 /** Parse every sink line as a CheckRecord, injecting the phase. */
@@ -107,27 +128,38 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
   return records;
 }
 
-const DIRECTIVE_RE = /^#\s*coding-agents:\s*(.+)$/;
+// Mirror of quorum/checks.py:_DIRECTIVE_RE — `^\s*#\s*coding-agents:\s*(.+?)\s*$`.
+// Leading whitespace before the `#` is allowed; the trailing `\s*$` plus the
+// non-greedy `(.+?)` mean a bare `# coding-agents:` (no value) does NOT match.
+const DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
 
 /**
  * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
- * trimmed CSV members. Internal absence is undefined (§5.5), not null.
+ * trimmed CSV members. A line that matches the directive but lists only
+ * separators (e.g. `# coding-agents: ,`) is a *matched-but-empty* directive and
+ * returns `[]` (parity with quorum/checks.py:56) — the matrix gate reads `[]` as
+ * skip-all-agents, whereas a true absence (no matching line, or a missing
+ * checks.sh) returns `undefined` (§5.5).
  */
 export function parseCodingAgentsDirective(
   checksSh: string,
 ): string[] | undefined {
-  const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 20);
+  // Python guards `if not checks_sh.exists(): return None` (quorum/checks.py:49)
+  // before reading; a story-only scenario dir has no checks.sh and must be
+  // treated as un-gated rather than crashing the matrix build.
+  if (!existsSync(checksSh)) {
+    return undefined;
+  }
+  // Python scans line indices 0..20 inclusive (`if i > 20: break`) — 21 lines.
+  const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 21);
   for (const line of head) {
     const match = DIRECTIVE_RE.exec(line);
     const csv = match?.[1];
     if (csv !== undefined) {
-      const members = csv
+      return csv
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      if (members.length > 0) {
-        return members;
-      }
     }
   }
   return undefined;

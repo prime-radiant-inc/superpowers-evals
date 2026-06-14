@@ -1,10 +1,16 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
 
 const BIN = resolve(import.meta.dir, '..', 'bin');
+
+function checksShWith(body: string): string {
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(checksSh, body);
+  return checksSh;
+}
 
 test('pre() emitting a passing file-exists record is collected', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
@@ -66,6 +72,83 @@ test('a bash crash (unbound command) with no records surfaces as a nonzero exitC
   expect(exitCode).toBe(127);
 });
 
+// E-signal-killed-status-null: when the bash child running a phase is killed by a
+// signal (OOM-killer, timeout SIGKILL), spawnSync returns status:null + a signal.
+// TS used to do `proc.status ?? 0`, coercing the crash to a clean rc 0 with
+// whatever partial records exist. Python's subprocess.run returns a negative
+// returncode (-9), which the crash heuristic treats as nonzero. Parity: a
+// signal-killed phase with no records must surface a nonzero (crash) exitCode.
+test('a signal-killed bash phase (status null) surfaces a nonzero crash exitCode', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  // No records emitted, then kill the running bash with SIGKILL.
+  const checksSh = checksShWith('pre() {\n  kill -KILL $$\n}\npost() { :; }\n');
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    quorumBin: BIN,
+  });
+  expect(records).toEqual([]);
+  expect(exitCode).not.toBe(0);
+  // Signal kills land in the >=128 crash band (POSIX 128+signo convention).
+  expect(exitCode).toBeGreaterThanOrEqual(128);
+});
+
+// E-spawn-failure-swallowed: Python `subprocess.run(['bash', ...])` raises
+// FileNotFoundError when bash cannot be spawned, propagating out of run_phase.
+// Node's spawnSync does NOT throw — it returns {status:null, error:<ENOENT>}.
+// TS used to ignore proc.error and report a clean, empty phase. Parity: a spawn
+// failure must throw rather than silently swallow into {records:[], exitCode:0}.
+test('a bash spawn failure throws instead of reporting a clean empty phase', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const emptyDir = mkdtempSync(join(tmpdir(), 'nobin-'));
+  const checksSh = checksShWith('pre() { :; }\npost() { :; }\n');
+  // Compose an env where neither quorumBin nor the inherited PATH can resolve
+  // `bash`, forcing spawnSync to fail with ENOENT (status:null, error set).
+  // runPhase composes the child PATH from envSnapshot() (a live process.env view),
+  // so we set it to a bash-less dir for the duration of this one assertion.
+  // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
+  const savedPath = process.env['PATH'];
+  // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
+  process.env['PATH'] = emptyDir;
+  try {
+    await expect(
+      runPhase({ checksSh, phase: 'pre', workdir, quorumBin: emptyDir }),
+    ).rejects.toThrow();
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
+    process.env['PATH'] = savedPath;
+  }
+});
+
+// E-path-empty-fallback: Python composes the child PATH as
+// `{quorum_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}` (quorum/checks.py:82),
+// so an UNSET PATH still resolves system utilities. TS fell back to '' — yielding
+// `{quorumBin}:` whose trailing empty component means CWD on POSIX, and no
+// /usr/bin or /bin. Parity: an unset PATH falls back to /usr/bin:/bin.
+test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-PATH empty component)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  // bash lives under /bin or /usr/bin, so the fallback is what makes this run at
+  // all once PATH is unset. Capture the child's PATH for inspection.
+  const out = join(workdir, 'path.txt');
+  const checksSh = checksShWith(
+    `pre() {\n  printf '%s' "$PATH" > '${out}'\n}\npost() { :; }\n`,
+  );
+  // biome-ignore lint/style/noProcessEnv: must unset inherited PATH to exercise the fallback
+  const savedPath = process.env['PATH'];
+  // biome-ignore lint/style/noProcessEnv: must unset inherited PATH to exercise the fallback
+  process.env['PATH'] = undefined;
+  let childPath: string;
+  try {
+    await runPhase({ checksSh, phase: 'pre', workdir, quorumBin: BIN });
+    childPath = readFileSync(out, 'utf8');
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
+    process.env['PATH'] = savedPath;
+  }
+  expect(childPath).toBe(`${BIN}:/usr/bin:/bin`);
+});
+
 test('parseCodingAgentsDirective reads a leading "# coding-agents:" csv', () => {
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
   writeFileSync(
@@ -79,6 +162,58 @@ test('parseCodingAgentsDirective returns undefined when no directive present', (
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
   writeFileSync(checksSh, 'pre() { :; }\npost() { :; }\n');
   expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
+});
+
+// E-directive-missing-file-crash: Python guards `if not checks_sh.exists():
+// return None` (quorum/checks.py:49-50). The TS bridge unconditionally read the
+// file, throwing ENOENT — which crashes the whole matrix/run-all build for a
+// story-only scenario dir. Parity: a missing checks.sh is un-gated (undefined).
+test('parseCodingAgentsDirective returns undefined for a missing checks.sh (no crash)', () => {
+  const missing = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  expect(parseCodingAgentsDirective(missing)).toBeUndefined();
+});
+
+// E-directive-leading-whitespace: Python's regex `^\s*#\s*coding-agents:`
+// (quorum/checks.py:41) allows leading whitespace before the `#`. The TS regex
+// anchored on `^#`, silently dropping an indented directive.
+test('parseCodingAgentsDirective honors a leading-whitespace directive line', () => {
+  const checksSh = checksShWith(
+    '   # coding-agents: claude, codex\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude', 'codex']);
+});
+
+// E-directive-empty-returns-undefined: a directive line whose value is only
+// separators (`# coding-agents: ,`) is a *matched-but-empty* directive. Python
+// returns `[]` (quorum/checks.py:56), which the matrix gate treats as
+// skip-ALL-agents. TS used to fall through to `undefined` (run-all). Parity
+// requires `[]` (matched) here — distinct from `undefined` (no match).
+test('parseCodingAgentsDirective returns [] for a degenerate (separators-only) directive', () => {
+  const checksSh = checksShWith(
+    '# coding-agents: ,\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual([]);
+});
+
+// A bare `# coding-agents:` with nothing after the colon does NOT match Python's
+// `(.+?)` (quorum/checks.py:41 requires at least one char), so it keeps scanning
+// and ultimately returns None/undefined — distinct from the degenerate `,` case.
+test('parseCodingAgentsDirective returns undefined for a bare "# coding-agents:" (no value)', () => {
+  const checksSh = checksShWith(
+    '# coding-agents:\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
+});
+
+// E-directive-line-window-offbyone: Python scans line indices 0..20 inclusive
+// (`if i > 20: break`, quorum/checks.py:51-53) — 21 lines. TS sliced [0,20) — 20
+// lines. A directive on the 21st physical line (index 20) must be honored.
+test('parseCodingAgentsDirective honors a directive on the 21st physical line', () => {
+  const filler = Array.from({ length: 20 }, () => '#').join('\n');
+  const checksSh = checksShWith(
+    `${filler}\n# coding-agents: claude\npre() { :; }\npost() { :; }\n`,
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude']);
 });
 
 // Negative-assertion empty-capture guard (oracle 0f6af56, lives in
