@@ -45,7 +45,14 @@ function extractTimestamp(message: GeminiMessage): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (typeof raw === "number" && isFinite(raw)) {
-    return new Date(raw).toISOString();
+    // A finite-but-out-of-range epoch (e.g. nanoseconds) makes toISOString()
+    // throw RangeError; treat it as "no timestamp" rather than crash the
+    // normalizer (which would drop this whole log from the merge).
+    try {
+      return new Date(raw).toISOString();
+    } catch {
+      return undefined;
+    }
   }
   return undefined;
 }

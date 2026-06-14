@@ -2,6 +2,23 @@ import { test, expect } from "bun:test";
 import { normalizeGemini } from "../src/normalize/gemini.ts";
 import { validateTrajectory } from "../src/atif/validate.ts";
 
+test("gemini: out-of-range numeric timestamp does not crash the normalizer", () => {
+  // A nanosecond-scale epoch is finite but out of Date's range → toISOString()
+  // would throw. The normalizer must tolerate it (no step timestamp) rather
+  // than crash and drop the whole log from the merge.
+  const raw = JSON.stringify({
+    messages: [
+      {
+        type: "gemini",
+        timestamp: 8.64e18,
+        content: [{ type: "tool_call", id: "g1", name: "Skill", args: { skill: "x" } }],
+      },
+    ],
+  });
+  expect(() => normalizeGemini(raw, "test")).not.toThrow();
+  expect(validateTrajectory(normalizeGemini(raw, "test")).ok).toBe(true);
+});
+
 // ---------------------------------------------------------------------------
 // Fixtures — derived from quorum/normalizers.py and tests/quorum/test_normalizers.py
 // ---------------------------------------------------------------------------

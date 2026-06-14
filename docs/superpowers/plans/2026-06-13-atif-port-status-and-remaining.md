@@ -74,6 +74,31 @@ tool-match-before-tool-match, tool-arg-match.
   an improvement over the pre-port behavior.) Covered by tests in
   `ts/test/normalize.codex.test.ts`.
 
+## Latent robustness follow-ups (adversarial review; unreachable with today's logs)
+
+Two `/par` rounds found NO Critical/Important issues in the cutover or the
+hardening. These residual Minors are latent — not reachable with current
+uniform log formats — and are documented rather than fixed (the gemini one
+WAS fixed):
+
+- **FIXED — gemini out-of-range numeric epoch** (`ts/src/normalize/gemini.ts`):
+  a finite-but-out-of-range numeric timestamp made `toISOString()` throw and
+  drop the whole log; now wrapped in try/catch → treated as no-timestamp.
+- **Multi-log merge ordering with mixed/partial timestamps** (`quorum/capture.py`
+  `_merge_trajectories`): the sort key pushes untimestamped steps to the end,
+  and timestamps are compared as raw strings (so differing ISO precision/offset
+  could misorder). Today every real log is uniform (all steps timestamped, or
+  none; ms-precision `Z`), so neither is reachable. A robust k-way merge (parse
+  timestamps to epoch; keep untimestamped steps in file-relative position) would
+  close it if a future normalizer emits mixed/variable-precision timestamps.
+- **`not check-transcript` + empty-capture guard** (`quorum/composer.py`): a
+  `not`-wrapped check records `check: "check-transcript"` (not the verb), which
+  isn't in `TRACE_PRIMITIVES`, so a scenario whose ONLY trace check is
+  `not check-transcript …` would skip the empty-capture indeterminate guard.
+  Pre-existing; the one such scenario also has a bare trace check, so it's
+  protected today. Fix: have `not` record the inner verb, or add the negated
+  form to the guard's recognition.
+
 ## B1 (claude capture) — RESOLVED on main, in this branch via rebase
 
 B1 was a **launcher** bug, not a transcript-location change: claude 2.1.177
