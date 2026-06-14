@@ -75,31 +75,29 @@ export interface InvokeChildArgs {
   readonly onPid?: (pid: number) => void;
 }
 
-// Run one `quorum run` as a child process and capture its run-id line. The
-// agents-dir / out-root are forwarded as explicit flags so the child doesn't
-// rely on its own cwd-relative defaults (invoke_child). Spawned ASYNC (so the
-// batch honors --jobs concurrency) via the bun runtime on the TS CLI entry.
-export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
+// The spawn-and-collect core shared by invokeChild (and exercisable directly in
+// tests). Spawns `command args`, captures the run-id line from stdout, and
+// DRAINS stderr so a child writing more than the OS pipe buffer (~64KB) never
+// blocks on its stderr write — matching Python's subprocess.run(capture_output=
+// True), which buffers both streams. Without the stderr drain a verbose child
+// deadlocks on write() and the scheduler slot hangs forever (H-child-stderr-
+// not-drained).
+export interface SpawnCollectArgs {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Record<string, string | undefined>;
+  readonly timeoutSeconds?: number;
+  readonly onPid?: (pid: number) => void;
+  // Called with each stderr chunk's byte length as it is drained. Lets tests
+  // assert stderr is actively consumed (not ignored); unused in production.
+  readonly onStderr?: (byteLength: number) => void;
+}
+
+export function spawnCollectRunId(
+  args: SpawnCollectArgs,
+): Promise<ChildResult> {
   return new Promise<ChildResult>((resolveP) => {
-    const env: Record<string, string | undefined> = {
-      ...envSnapshot(),
-      ...(args.extraEnv ?? {}),
-    };
-    const child = spawn(
-      process.execPath,
-      [
-        CLI_ENTRY,
-        'run',
-        args.scenarioDir,
-        '--coding-agent',
-        args.codingAgent,
-        '--coding-agents-dir',
-        args.codingAgentsDir,
-        '--out-root',
-        args.outRoot,
-      ],
-      { env },
-    );
+    const child = spawn(args.command, [...args.args], { env: args.env });
 
     // Report the OS pid to the optional dashboard hook the instant it exists,
     // before any child output, so /stop can target in-flight children.
@@ -120,6 +118,15 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
       stdout += chunk;
+    });
+    // Drain stderr too. We don't keep its contents in the result (Python's
+    // invoke_child discards stderr), but the bytes MUST be actively consumed —
+    // attaching a 'data' listener switches the stream to flowing mode and reads
+    // it — or the child can block once the OS pipe buffer fills (pipe-buffer
+    // deadlock). The optional onStderr hook lets tests observe that consumption
+    // happens (the prior code attached no stderr handler at all).
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      args.onStderr?.(chunk.length);
     });
     child.on('error', () => {
       if (timer !== undefined) {
@@ -147,6 +154,36 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
       }
       resolveP({ run_id: runId, exit_code: exitCode, error: null });
     });
+  });
+}
+
+// Run one `quorum run` as a child process and capture its run-id line. The
+// agents-dir / out-root are forwarded as explicit flags so the child doesn't
+// rely on its own cwd-relative defaults (invoke_child). Spawned ASYNC (so the
+// batch honors --jobs concurrency) via the bun runtime on the TS CLI entry.
+export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
+  const env: Record<string, string | undefined> = {
+    ...envSnapshot(),
+    ...(args.extraEnv ?? {}),
+  };
+  return spawnCollectRunId({
+    command: process.execPath,
+    args: [
+      CLI_ENTRY,
+      'run',
+      args.scenarioDir,
+      '--coding-agent',
+      args.codingAgent,
+      '--coding-agents-dir',
+      args.codingAgentsDir,
+      '--out-root',
+      args.outRoot,
+    ],
+    env,
+    ...(args.timeoutSeconds !== undefined
+      ? { timeoutSeconds: args.timeoutSeconds }
+      : {}),
+    ...(args.onPid !== undefined ? { onPid: args.onPid } : {}),
   });
 }
 

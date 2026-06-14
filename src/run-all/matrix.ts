@@ -18,6 +18,23 @@ export interface BuildMatrixArgs {
   readonly includeDrafts?: boolean;
 }
 
+// Validate that an option's path exists and is a directory, mirroring Python's
+// click.Path(exists=True, file_okay=False) for --scenarios-root /
+// --coding-agents-dir. Without this a missing/non-dir root surfaces only later
+// as a raw ENOENT/ENOTDIR thrown from readdirSync; this produces a clean,
+// actionable error that names the offending option and path upfront.
+function requireDirectory(option: string, path: string): void {
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(path);
+  } catch {
+    throw new Error(`${option}: directory does not exist: ${path}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${option}: not a directory: ${path}`);
+  }
+}
+
 // Sorted *.yaml stems under coding_agents_dir (_discover_agents).
 function discoverAgents(codingAgentsDir: string): string[] {
   const out: string[] = [];
@@ -70,6 +87,12 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     tierFilter = null,
     includeDrafts = false,
   } = args;
+
+  // Validate both roots upfront (parity with Python's click.Path(exists=True,
+  // file_okay=False)) so a missing/non-dir root fails with a clear message
+  // instead of a raw ENOENT from readdirSync.
+  requireDirectory('--scenarios-root', scenariosRoot);
+  requireDirectory('--coding-agents-dir', codingAgentsDir);
 
   const available = discoverAgents(codingAgentsDir);
   let agents: string[];
