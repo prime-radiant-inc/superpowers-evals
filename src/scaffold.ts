@@ -145,7 +145,7 @@ function validateChecksSh(scenarioDir: string): string[] {
   // function definition is a top-level statement and is disallowed. We track
   // brace depth; function-declaration lines (pre/post) open a scope.
   let inFn = 0;
-  for (const line of text.split('\n')) {
+  for (const line of pySplitlines(text)) {
     const s = line.trim();
     if (!s || s.startsWith('#')) continue;
     const isFnDecl = /^(pre|post)\s*\(\)/.test(s);
@@ -178,7 +178,7 @@ function validateChecksSh(scenarioDir: string): string[] {
     problems.push('checks.sh missing post() function');
   }
   // Concurrency-unsupported lint: warn on backgrounded check invocations.
-  const lines = text.split('\n');
+  const lines = pySplitlines(text);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (/(?<!&)&(?!&)\s*(#|$)/.test(line) && !/^\s*#/.test(line)) {
@@ -208,6 +208,38 @@ function countChar(s: string, ch: string): number {
     if (c === ch) n += 1;
   }
   return n;
+}
+
+// The Unicode line boundaries Python's str.splitlines() breaks on: LF, CR,
+// CRLF (one boundary), VT (U+000B), FF (U+000C), FS/GS/RS (U+001C-U+001E),
+// NEL (U+0085), LS (U+2028), PS (U+2029). \r\n is listed first so it is
+// consumed as a single boundary rather than two. The control-character escapes
+// are deliberate (str.splitlines parity), so the noControlCharactersInRegex
+// lint is suppressed.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: splitlines() parity requires the full Unicode line-boundary set
+const LINE_BOUNDARY = /\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]/g;
+
+// Port of Python str.splitlines(): split on every line boundary above, drop
+// the separators, and emit NO trailing empty element. text.split('\n')
+// diverges by keeping \r/\v/etc. attached, adding a trailing empty line, and
+// not breaking on bare \r or the other Unicode boundaries.
+function pySplitlines(text: string): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  LINE_BOUNDARY.lastIndex = 0;
+  for (
+    let m = LINE_BOUNDARY.exec(text);
+    m !== null;
+    m = LINE_BOUNDARY.exec(text)
+  ) {
+    lines.push(text.slice(start, m.index));
+    start = m.index + m[0].length;
+  }
+  // A boundary at end-of-string leaves start === text.length; splitlines()
+  // emits no trailing empty line, so push a final segment only when one
+  // remains.
+  if (start < text.length) lines.push(text.slice(start));
+  return lines;
 }
 
 // Reproduce Python's repr() for the short top-level-statement snippet: wrap in

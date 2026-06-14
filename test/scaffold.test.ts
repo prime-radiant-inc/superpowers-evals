@@ -232,6 +232,27 @@ test('checkScenario flags a $QUORUM_WORKDIR reference', () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test('checkScenario splits checks.sh on Unicode line boundaries (splitlines parity)', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  // A functions-only, bash-valid checks.sh where a vertical tab (\v, U+000B)
+  // separates two statements inside post(). bash -n treats \v as whitespace and
+  // accepts the script, so validation proceeds past the syntax gate. Python's
+  // str.splitlines() treats \v as a line boundary, putting `git-repo &` on its
+  // own (line 6) and flagging the backgrounded check there. text.split('\n')
+  // keeps `  echo a\vgit-repo &` as a single line (line 5), so the reported line
+  // number and the (\v-laden) line text both diverge from Python.
+  writeFileSync(
+    join(dir, 'checks.sh'),
+    'pre() {\n  git-repo\n}\npost() {\n  echo agit-repo &\n}\n',
+  );
+  const problems = checkScenario(dir);
+  expect(problems).toContain(
+    'checks.sh:6: backgrounded check (`&`) is unsupported',
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('fixExecutableBits flips a cleared setup.sh bit and returns ["setup.sh"]', () => {
   const root = scenariosRoot();
   const dir = scenario(root, 's');
