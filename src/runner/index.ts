@@ -18,7 +18,7 @@ import {
   captureToolCallsWithRetry,
   snapshotDir,
 } from '../capture/index.ts';
-import { runPhase } from '../checks/index.ts';
+import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
 import {
   CodingAgentConfigError,
@@ -27,6 +27,7 @@ import {
 } from '../contracts/agent-config.ts';
 import { GauntletResultSchema } from '../contracts/gauntlet.ts';
 import type {
+  CheckRecord,
   FinalVerdict,
   GauntletLayer,
   RunError,
@@ -240,6 +241,31 @@ export interface RunScenarioResult {
 // without a type assertion (4.1).
 const OpaqueEconomicsSchema = z.record(z.unknown());
 
+// setup.sh may override the agent's launch cwd by writing this sentinel into the
+// workdir (parity with quorum LAUNCH_CWD_SENTINEL).
+const LAUNCH_CWD_SENTINEL = '.quorum-launch-cwd';
+
+// Build an indeterminate verdict directly (NOT via compose, whose error path
+// prefixes "quorum error (stage): …"). Mirrors Python _write_indeterminate so
+// every early/cascade short-circuit carries its exact final_reason. The verdict
+// is identity-stamped + persisted by runScenario.
+function writeIndeterminate(a: {
+  finalReason: string;
+  gauntlet?: GauntletLayer | null;
+  checks?: readonly CheckRecord[];
+  error?: RunError | null;
+}): FinalVerdict {
+  return {
+    schema: 1,
+    final: 'indeterminate',
+    final_reason: a.finalReason,
+    gauntlet: a.gauntlet ?? null,
+    checks: a.checks ? [...a.checks] : [],
+    error: a.error ?? null,
+    economics: null,
+  };
+}
+
 // Run one scenario end to end. Always allocates a run dir and always writes
 // verdict.json; a thrown invariant maps to an indeterminate verdict via the
 // composer (6.1) rather than escaping.
@@ -310,12 +336,106 @@ function errorStage(err: unknown): RunErrorStage {
   return 'unknown';
 }
 
+// Claude-family binary PATH preflight (parity with quorum
+// _preflight_coding_agent_binary): a claude run whose CLI is not installed fails
+// fast at setup, not deep in the gauntlet drive. Other families are launched by
+// gauntlet's own resolution, so this is claude-only. PATH is read through the
+// sanctioned env snapshot, never process.env directly.
+function preflightCodingAgentBinary(cfg: {
+  runtime_family?: string | undefined;
+  name: string;
+  binary: string;
+}): void {
+  const family = cfg.runtime_family ?? cfg.name;
+  if (family !== 'claude') {
+    return;
+  }
+  const path = envSnapshot()['PATH'] ?? '';
+  if (Bun.which(cfg.binary, { PATH: path }) === null) {
+    throw new RunnerError(
+      `Claude Code is not on PATH: '${cfg.binary}'`,
+      'setup',
+    );
+  }
+}
+
+// Resolve the agent launch cwd from the workdir's .quorum-launch-cwd sentinel
+// (parity with quorum _resolve_launch_cwd). No sentinel -> the workdir. A
+// sentinel whose named path does not exist is a runner error, so a stale/typo
+// sentinel fails up front rather than launching gauntlet from a missing dir.
+function resolveLaunchCwd(workdir: string): string {
+  const sentinel = join(workdir, LAUNCH_CWD_SENTINEL);
+  if (!existsSync(sentinel)) {
+    return workdir;
+  }
+  const resolved = readFileSync(sentinel, 'utf8').trim();
+  if (!existsSync(resolved)) {
+    throw new RunnerError(
+      `setup.sh wrote ${LAUNCH_CWD_SENTINEL}=${resolved} but that path doesn't exist`,
+      'setup',
+    );
+  }
+  return resolved;
+}
+
 async function runInner(
   a: RunScenarioArgs,
   runDir: string,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup');
+  // Early guards run in strict parity-order with quorum _run_scenario_inner,
+  // BEFORE any side effect (workdir creation, provisioning, setup.sh, gauntlet).
+
+  // 1. Unknown coding-agent: a missing yaml gets a clean runner error rather
+  //    than a leaked raw ENOENT from loadAgentConfig's readFileSync.
+  const codingAgentPath = join(a.codingAgentsDir, `${a.codingAgent}.yaml`);
+  if (!existsSync(codingAgentPath)) {
+    throw new RunnerError(
+      `unknown coding-agent '${a.codingAgent}': no ${codingAgentPath}`,
+      'setup',
+    );
+  }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+
+  // 2. story.md is required (gauntlet needs it); a missing file is a clean
+  //    setup error, not a deferred ENOENT from readQuorumMaxTime.
+  const storyPath = join(a.scenarioDir, 'story.md');
+  if (!existsSync(storyPath)) {
+    throw new RunnerError(`${a.scenarioDir}: story.md missing`, 'setup');
+  }
+
+  // 3. Per-scenario duration override (StoryMetaError -> setup runner error).
+  let storyMaxTime: string | null;
+  try {
+    storyMaxTime = readQuorumMaxTime(storyPath);
+  } catch (e: unknown) {
+    throw new RunnerError(e instanceof Error ? e.message : String(e), 'setup');
+  }
+  const maxTime = storyMaxTime ?? cfg.max_time ?? undefined;
+
+  // 4. checks.sh is REQUIRED. If absent, short-circuit to a setup indeterminate
+  //    BEFORE provisioning or the (costly) agent run.
+  const checksSh = join(a.scenarioDir, 'checks.sh');
+  if (!existsSync(checksSh)) {
+    return writeIndeterminate({
+      finalReason: 'scenario missing checks.sh',
+      error: { stage: 'setup', message: 'checks.sh not found' },
+    });
+  }
+
+  // 5. Coding-agent gating: honor the `# coding-agents:` directive before any
+  //    side effect, so a direct `quorum run` against an excluded agent skips.
+  const allowed = parseCodingAgentsDirective(checksSh);
+  if (allowed && !allowed.includes(a.codingAgent)) {
+    return writeIndeterminate({
+      finalReason: `requires coding-agents: ${allowed.join(', ')}`,
+    });
+  }
+
+  // 6. Claude-family binary PATH preflight: fail fast at setup if the CLI is
+  //    not installed, rather than deep in the gauntlet run.
+  preflightCodingAgentBinary(cfg);
+
   for (const key of cfg.required_env) {
     if (!getEnv(key)) {
       throw new RunnerError(
@@ -347,14 +467,17 @@ async function runInner(
   //   run_setup(scenario_dir, workdir, env_extra=env_extra)
   runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
 
-  const checksSh = join(a.scenarioDir, 'checks.sh');
-  const hasChecks = existsSync(checksSh);
   const quorumBin = join(process.cwd(), 'bin');
 
   // pre-checks: a crash is an error stage; a failed assertion is a verdict.
-  const pre = hasChecks
-    ? await runPhase({ checksSh, phase: 'pre', workdir, quorumBin, runDir })
-    : { records: [], exitCode: 0 };
+  // checks.sh is guaranteed present (the missing-checks guard returned early).
+  const pre = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    quorumBin,
+    runDir,
+  });
   if (pre.exitCode !== 0) {
     return compose({
       gauntlet: null,
@@ -380,13 +503,10 @@ async function runInner(
   const snapshot = snapshotDir(logDir, cfg.session_log_glob);
 
   // drive gauntlet. launch cwd honors a .quorum-launch-cwd sentinel written by
-  // setup.sh (parity with Python _resolve_launch_cwd), else the workdir.
-  const storyPath = join(a.scenarioDir, 'story.md');
-  const maxTime = readQuorumMaxTime(storyPath) ?? cfg.max_time ?? undefined;
-  const launchCwdFile = join(workdir, '.quorum-launch-cwd');
-  const launchCwd = existsSync(launchCwdFile)
-    ? readFileSync(launchCwdFile, 'utf8').trim()
-    : workdir;
+  // setup.sh (parity with Python _resolve_launch_cwd), else the workdir. A
+  // sentinel naming a path that does not exist is a runner error, not a silent
+  // launch from a nonexistent cwd.
+  const launchCwd = resolveLaunchCwd(workdir);
 
   // Populate <runDir>/gauntlet-agent/context/ with the per-agent HOWTO +
   // launcher, burning resolved absolute paths into every $… placeholder. tmux
@@ -529,16 +649,14 @@ async function runInner(
 
   // post-checks: again a crash is an error stage, a failure flows to compose.
   writePhase(runDir, 'checks');
-  const post = hasChecks
-    ? await runPhase({
-        checksSh,
-        phase: 'post',
-        workdir,
-        quorumBin,
-        transcriptPath: capture.path,
-        runDir,
-      })
-    : { records: [], exitCode: 0 };
+  const post = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    quorumBin,
+    transcriptPath: capture.path,
+    runDir,
+  });
   if (post.exitCode !== 0) {
     return compose({
       gauntlet: gauntlet ?? null,
@@ -558,10 +676,26 @@ async function runInner(
     captureEmpty,
     error: null,
   });
-  const economics = await buildRunEconomics(runDir);
+  // Economics is measurement, never worth losing a verdict over: a wrong-typed
+  // artifact (version skew, tampering, a legacy pre-obol usage file) degrades to
+  // a null economics block rather than crashing the composed verdict (PRI-2130,
+  // parity with quorum's try/except around build_run_economics).
+  const economics = await safeBuildRunEconomics(runDir);
   return {
     ...verdict,
     economics:
       economics === null ? null : OpaqueEconomicsSchema.parse(economics),
   };
+}
+
+// build_run_economics, isolated: any throw degrades to a null economics block so
+// it cannot destroy an already-composed verdict (K-x-economics-call-site-guard).
+async function safeBuildRunEconomics(
+  runDir: string,
+): Promise<Awaited<ReturnType<typeof buildRunEconomics>> | null> {
+  try {
+    return await buildRunEconomics(runDir);
+  } catch {
+    return null;
+  }
 }
