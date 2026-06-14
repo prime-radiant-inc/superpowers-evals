@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-uv run setup-helpers run scaffold_sdd_broken_plan
+setup-helpers run scaffold_sdd_broken_plan

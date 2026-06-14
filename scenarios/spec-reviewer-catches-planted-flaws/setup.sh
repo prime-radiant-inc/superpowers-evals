@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-uv run setup-helpers run create_base_repo add_flawed_spec_for_review
+setup-helpers run create_base_repo add_flawed_spec_for_review

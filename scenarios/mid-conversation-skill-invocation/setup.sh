@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-uv run setup-helpers run create_base_repo add_sdd_auth_plan
+setup-helpers run create_base_repo add_sdd_auth_plan
