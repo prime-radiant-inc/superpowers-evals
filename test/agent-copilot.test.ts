@@ -11,7 +11,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CopilotAgent, scanCopilotSecretLeaks } from '../src/agents/copilot.ts';
+import {
+  CopilotAgent,
+  copilotGauntletEnv,
+  scanCopilotSecretLeaks,
+} from '../src/agents/copilot.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
@@ -592,4 +596,34 @@ test('provision runs no provisioning subprocess beyond the binary/auth probes', 
     cleanup();
     sp.cleanup();
   }
+});
+
+test('copilotGauntletEnv projects host env onto the allowlist and drops the rest', () => {
+  const env = copilotGauntletEnv({
+    PATH: '/usr/bin',
+    TERM: 'xterm',
+    ANTHROPIC_API_KEY: 'sk-allowed',
+    // Not on the allowlist: must be dropped.
+    COPILOT_GITHUB_TOKEN: 'ghp_secret',
+    SOME_RANDOM_VAR: 'nope',
+    // Undefined values are skipped, not written as the string "undefined".
+    LANG: undefined,
+  });
+  expect(env).toEqual({
+    PATH: '/usr/bin',
+    TERM: 'xterm',
+    ANTHROPIC_API_KEY: 'sk-allowed',
+  });
+});
+
+test('copilotGauntletEnv passes a clean proxy URL and rejects a credentialed one', () => {
+  // A bare host:port proxy is fine.
+  expect(
+    copilotGauntletEnv({ HTTPS_PROXY: 'http://proxy.example:8080' }),
+  ).toEqual({ HTTPS_PROXY: 'http://proxy.example:8080' });
+  // user:pass@ in the authority must be rejected so the proxy password never
+  // reaches the agent process (oracle _proxy_url_has_userinfo).
+  expect(() =>
+    copilotGauntletEnv({ HTTPS_PROXY: 'http://user:pass@proxy.example:8080' }),
+  ).toThrow(/credentialed proxy URL/);
 });
