@@ -658,6 +658,23 @@ test("unknown verb exits 127 (non-invertible) with a fail record (E2E)", async (
   expect(r.lastRecord?.["passed"]).toBe(false);
 });
 
+test("missing required arg exits 127, not a vacuous pass (E2E)", async () => {
+  // skill-before-tool needs <skill> <tool>; omitting <tool> previously set
+  // tool="" → matched nothing → vacuous pass. Now it's a broken check.
+  const r = await runCLI(
+    ["skill-before-tool", "superpowers:writing-plans"],
+    [call("Skill", { skill: "superpowers:writing-plans" })],
+  );
+  expect(r.exitCode).toBe(127);
+  expect(r.lastRecord?.["passed"]).toBe(false);
+});
+
+test("tool-arg-match with no matcher flag exits 127 (E2E)", async () => {
+  const r = await runCLI(["tool-arg-match", "Write"], [call("Write", { file_path: "x" })]);
+  expect(r.exitCode).toBe(127);
+  expect(r.lastRecord?.["passed"]).toBe(false);
+});
+
 // ---------------------------------------------------------------------------
 // Record shape verification
 // ---------------------------------------------------------------------------

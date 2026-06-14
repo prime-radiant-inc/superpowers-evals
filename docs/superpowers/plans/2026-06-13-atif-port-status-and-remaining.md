@@ -63,11 +63,24 @@ tool-match-before-tool-match, tool-arg-match.
   transcript"; both read as empty. Fine for the negative-assertion contract;
   add a distinct diagnostic if this becomes load-bearing.
 
-## Separate, higher-priority bug (B1, not part of this port)
+## Known pre-existing latent issues (surfaced by review; NOT cutover regressions)
 
-The claude capture B1 issue is a **launcher** bug, not a transcript-location
-bug: claude 2.1.177 writes the legacy `projects/<munged>/<uuid>.jsonl` where
-the harness globs, but a quorum-launched claude did not persist the transcript
-in the reproduction. See
-`docs/audits/2026-06-13-claude-2.1.x-transcript-location.md`. Needs the
-launcher internals (Jesse's domain).
+These existed before the port (old shell tools / Python normalizers had them);
+the TS port faithfully carried them. Tracked, not yet fixed:
+
+- **Codex `apply_patch` implementation-path blindness** (`ts/src/normalize/codex.ts`):
+  codex `apply_patch` → `Edit{patch}` with no `file_path`, so
+  `skill-before-implementation-tool` / `implementation-tool-not-called` can't
+  see codex implementation edits and may pass vacuously for codex. The old
+  Python `normalize_codex_logs` had the same gap. Fix: parse the patch header
+  for `file_path`/`file_paths` (as the copilot/opencode normalizers do).
+
+## B1 (claude capture) — RESOLVED on main, in this branch via rebase
+
+B1 was a **launcher** bug, not a transcript-location change: claude 2.1.177
+writes the legacy `projects/<munged>/<uuid>.jsonl` where the harness globs, but
+the launcher inherited a nested-session marker that made claude suppress the
+transcript. Fixed on `main` via `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` in
+`coding-agents/claude-context/launch-agent` (in this branch by rebase) and
+**live-verified** — claude captures real transcripts again; the 2.1.175 pin is
+moot. See `docs/audits/2026-06-13-claude-2.1.x-transcript-location.md`.

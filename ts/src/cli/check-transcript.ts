@@ -47,6 +47,25 @@ if (!verb) {
   brokenCheck("usage: check-transcript <verb> [args...]", "check-transcript");
 }
 
+// Minimum required positional args per verb. A missing arg must NOT silently
+// pass: e.g. `skill-before-tool <skill>` with no <tool> would set tool="" ,
+// match nothing, and vacuously pass. Arity is validated before dispatch and
+// routes through the non-invertible 127 path.
+const REQUIRED_ARGS: Record<string, number> = {
+  "tool-called": 1,
+  "tool-not-called": 1,
+  "tool-count": 3,
+  "tool-before": 2,
+  "skill-called": 1,
+  "skill-not-called": 1,
+  "skill-before-tool": 2,
+  "skill-before-implementation-tool": 2,
+  "implementation-tool-not-called": 1,
+  "investigated": 0,
+  "worktree-created": 0,
+  "tool-match-before-tool-match": 4,
+};
+
 const { calls, empty } = loadCalls();
 
 function dispatch(): void {
@@ -59,6 +78,23 @@ function dispatch(): void {
 }
 
 function dispatchInner(): void {
+  const need = REQUIRED_ARGS[verb!];
+  if (need !== undefined && cliArgs.length < need) {
+    brokenCheck(
+      `check-transcript ${verb}: expected ${need} argument(s), got ${cliArgs.length}`,
+      verb!,
+    );
+  }
+  if (
+    verb === "tool-arg-match" &&
+    (cliArgs.length < 1 || !cliArgs.some((a) => a === "--eq" || a === "--matches"))
+  ) {
+    brokenCheck(
+      "check-transcript tool-arg-match: needs <tool> and at least one --eq/--matches",
+      verb,
+    );
+  }
+
   switch (verb) {
     case "tool-called": {
       const r = verbToolCalled(calls, empty, cliArgs);
