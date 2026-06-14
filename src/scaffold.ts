@@ -19,57 +19,10 @@ import {
 } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
 
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
 const VALID_TIERS = ['sentinel', 'full', 'adhoc'] as const;
-
-// Known setup-helpers registry keys. Mirrors HELPER_REGISTRY in
-// setup_helpers/__init__.py — these are the registry KEYS, which differ from
-// the module/function names (e.g. add_sdd_auth_plan is registered under that
-// key, not the file stem). The registry is statically defined, so this is an
-// exact copy of the keys, not the file-stem fallback.
-// keep-in-sync-until-Spec-6: when setup_helpers moves to TS (Spec 6), import
-// the registry instead of duplicating its keys here.
-const KNOWN_HELPERS = new Set<string>([
-  'create_base_repo',
-  'add_worktree',
-  'detach_head',
-  'symlink_superpowers',
-  'install_codex_superpowers_plugin_hooks',
-  'add_existing_worktree',
-  'detach_worktree_head',
-  'link_gemini_extension',
-  'create_caller_consent_plan',
-  'create_spec_writing_blind_spot',
-  'create_claim_without_verification',
-  'create_phantom_completion',
-  'create_review_pushback',
-  'create_spec_targets_wrong_component',
-  'create_spec_targets_wrong_component_with_checkpoint',
-  'add_stub_executing_plan',
-  'create_writing_plans_skeleton',
-  'create_code_review_planted_bugs',
-  'add_flawed_spec_for_review',
-  'add_sdd_auth_plan',
-  'scaffold_sdd_broken_plan',
-  'scaffold_sdd_go_fractals',
-  'scaffold_sdd_go_fractals_crisp',
-  'scaffold_sdd_go_fractals_coarse',
-  'scaffold_sdd_go_fractals_control_plan',
-  'scaffold_sdd_go_fractals_critical_plan',
-  'scaffold_sdd_go_fractals_elicited',
-  'scaffold_sdd_go_fractals_stripped',
-  'scaffold_sdd_svelte_todo',
-  'scaffold_sdd_svelte_todo_elicited',
-  'scaffold_sdd_quality_defect_plan',
-  'scaffold_sdd_yagni_plan',
-  'setup_pressure_worktree_conditions',
-  'create_cost_checkbox_page',
-  'create_cost_clean_repo',
-  'create_cost_trivial_plan',
-  'create_cost_large_files',
-  'record_head',
-]);
 
 // _STORY_TEMPLATE — verbatim from scaffold.py 21-38 ({name} interpolated).
 const STORY_TEMPLATE = `---
@@ -304,7 +257,7 @@ export function checkScenario(scenarioDir: string): string[] {
     for (const match of setupText.matchAll(re)) {
       const group = match[1] ?? '';
       for (const helper of group.split(/\s+/).filter((h) => h !== '')) {
-        if (!KNOWN_HELPERS.has(helper)) {
+        if (!KNOWN_HELPER_NAMES.has(helper)) {
           problems.push(`setup.sh references unknown helper '${helper}'`);
         }
       }
