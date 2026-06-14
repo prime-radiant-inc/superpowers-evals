@@ -1,12 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Glob } from 'bun';
-import { z } from 'zod';
-import {
-  type PerModelUsageSchema,
-  type TokenUsage,
-  TokenUsageSchema,
-} from './contracts/economics.ts';
+import type { z } from 'zod';
+import type { PerModelUsageSchema, TokenUsage } from './contracts/economics.ts';
 import { estimateUsageSidecar } from './obol/index.ts';
 
 /** Token totals exposed in each economics block (mirrors Python's shell). */
@@ -18,14 +14,17 @@ interface TokenShell {
   readonly total: number;
 }
 
-/** obol provenance carried alongside a priced block (null when unpriced). */
+/** obol provenance carried alongside a priced block. Present whenever the
+ *  source usage object carries a `pricing_as_of` key — even when its value is
+ *  null (an all-unpriced sidecar). Absent (null) only for pre-obol legacy
+ *  frozen files that never had the key. Mirrors Python `_obol_provenance`. */
 interface ObolProvenance {
   readonly per_model: Readonly<
     Record<string, z.infer<typeof PerModelUsageSchema>>
   >;
   readonly unpriced_models: readonly string[];
   readonly approximations: readonly { kind: string; detail: string | null }[];
-  readonly pricing_as_of: string;
+  readonly pricing_as_of: string | null;
 }
 
 interface PerModelEntry {
@@ -72,21 +71,14 @@ const ZERO_TOKENS: TokenShell = {
 
 const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
 
-/** Tolerant zod view over gauntlet result.json: every field optional so a
- *  partial/loose result still parses (parity with Python economics._read_json,
- *  which never throws on a malformed result). */
-const GauntletResultLooseSchema = z
-  .object({
-    duration_ms: z.number(),
-    config: z.object({ model: z.string() }).partial().passthrough(),
-  })
-  .partial()
-  .passthrough();
+/** A plain JSON object (parity with Python's dict). All economics reads are
+ *  schema-less: every field is fetched via tolerant accessors with defaults so
+ *  a malformed or legacy artifact degrades per-field rather than crashing. */
+type JsonObject = Record<string, unknown>;
 
-/** Read + tolerantly parse a JSON file; null on missing/malformed/non-object. */
-function readResultLoose(
-  path: string,
-): z.infer<typeof GauntletResultLooseSchema> | null {
+/** Read + parse a JSON file; null on missing/malformed/non-object (mirrors
+ *  Python economics._read_json: isinstance(data, dict) else None). */
+function readJsonObject(path: string): JsonObject | null {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
@@ -99,11 +91,107 @@ function readResultLoose(
   } catch {
     return null;
   }
-  const parsed = GauntletResultLooseSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as JsonObject)
+    : null;
 }
 
-function tokensShell(u: TokenUsage): TokenShell {
+function numField(o: JsonObject, key: string): number {
+  const v = o[key];
+  return typeof v === 'number' ? v : 0;
+}
+
+function strOrNull(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+
+function tokensShell(o: JsonObject): TokenShell {
+  return {
+    input: numField(o, 'total_input'),
+    output: numField(o, 'total_output'),
+    cache_create: numField(o, 'total_cache_create'),
+    cache_read: numField(o, 'total_cache_read'),
+    total: numField(o, 'total_tokens'),
+  };
+}
+
+function asJsonObject(v: unknown): JsonObject | null {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    ? (v as JsonObject)
+    : null;
+}
+
+/** Cost field: a number stays, anything else (missing/null/wrong-type) -> null,
+ *  parity with Python `.get("est_cost_usd")` reading a number-or-null field. */
+function costField(o: JsonObject, key: string): number | null {
+  const v = o[key];
+  return typeof v === 'number' ? v : null;
+}
+
+function stringList(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === 'string')
+    : [];
+}
+
+function approximationsList(
+  v: unknown,
+): { kind: string; detail: string | null }[] {
+  if (!Array.isArray(v)) return [];
+  const out: { kind: string; detail: string | null }[] = [];
+  for (const item of v) {
+    const o = asJsonObject(item);
+    if (o === null) continue;
+    out.push({
+      kind: strOrNull(o['kind']) ?? '',
+      detail: strOrNull(o['detail']),
+    });
+  }
+  return out;
+}
+
+function perModelMap(
+  v: unknown,
+): Record<string, z.infer<typeof PerModelUsageSchema>> {
+  const obj = asJsonObject(v);
+  return obj === null
+    ? {}
+    : (obj as Record<string, z.infer<typeof PerModelUsageSchema>>);
+}
+
+/** The nested obol provenance block, or null for pre-obol legacy frozen files.
+ *  Mirrors Python `_obol_provenance`: null ONLY when the `pricing_as_of` key is
+ *  ABSENT; a present-but-null value still yields a provenance block. */
+function obolProvenance(u: JsonObject): ObolProvenance | null {
+  if (!('pricing_as_of' in u)) {
+    return null;
+  }
+  return {
+    per_model: perModelMap(u['models']),
+    unpriced_models: stringList(u['unpriced_models']),
+    approximations: approximationsList(u['approximations']),
+    pricing_as_of: strOrNull(u['pricing_as_of']),
+  };
+}
+
+/** First sorted results dir carrying a result.json OR a usage.jsonl. Python's
+ *  economics._gauntlet_results_dir prefers the first dir with artifacts; a
+ *  usage.jsonl-only dir must still be selected so its sidecar gets priced. */
+function gauntletResultsDir(runDir: string): string | null {
+  const base = join(runDir, 'gauntlet-agent', 'results');
+  if (!existsSync(base)) {
+    return null;
+  }
+  const hits = [
+    ...new Glob('*/result.json').scanSync({ cwd: base, absolute: true }),
+    ...new Glob('*/usage.jsonl').scanSync({ cwd: base, absolute: true }),
+  ].map(dirname);
+  return [...new Set(hits)].sort()[0] ?? null;
+}
+
+/** Token shell from a typed obol `TokenUsage` (gauntlet sidecar always carries
+ *  every field, unlike the schema-less frozen file). */
+function tokensShellFromUsage(u: TokenUsage): TokenShell {
   return {
     input: u.total_input,
     output: u.total_output,
@@ -113,102 +201,98 @@ function tokensShell(u: TokenUsage): TokenShell {
   };
 }
 
-function obolProvenance(u: TokenUsage): ObolProvenance | null {
-  if (u.pricing_as_of === null) {
-    return null;
-  }
-  return {
-    per_model: u.models,
-    unpriced_models: u.unpriced_models,
-    approximations: u.approximations,
-    pricing_as_of: u.pricing_as_of,
-  };
-}
-
-/** First sorted results dir carrying a result.json. Python's
- *  economics._gauntlet_results_dir uses `next(sorted(...))` — first, not
- *  newest; Spec 1 has exactly one per run. */
-function gauntletResultPath(runDir: string): string | null {
-  const base = join(runDir, 'gauntlet-agent', 'results');
-  if (!existsSync(base)) {
-    return null;
-  }
-  const hits = [
-    ...new Glob('*/result.json').scanSync({ cwd: base, absolute: true }),
-  ].sort();
-  return hits[0] ?? null;
-}
-
 function buildGauntletBlock(
-  result: z.infer<typeof GauntletResultLooseSchema> | null,
+  result: JsonObject | null,
   usage: TokenUsage | null,
 ): GauntletBlock {
-  const dur = result?.duration_ms;
-  const configModel = result?.config?.model ?? null;
+  const r = result ?? {};
+  const dur = r['duration_ms'];
+  const config = asJsonObject(r['config']);
+  const configModel = config !== null ? strOrNull(config['model']) : null;
   return {
-    duration_ms: dur === undefined ? null : Math.trunc(dur),
-    model: usage?.model ?? configModel,
-    tokens: usage ? tokensShell(usage) : ZERO_TOKENS,
+    duration_ms: typeof dur === 'number' ? Math.trunc(dur) : null,
+    model: (usage?.model ?? null) || configModel,
+    tokens: usage ? tokensShellFromUsage(usage) : ZERO_TOKENS,
     est_cost_usd: usage?.est_cost_usd ?? null,
     has_unpriced_model: (usage?.unpriced_models.length ?? 0) > 0,
-    obol: usage ? obolProvenance(usage) : null,
+    obol: usage
+      ? {
+          per_model: usage.models,
+          unpriced_models: usage.unpriced_models,
+          approximations: usage.approximations,
+          pricing_as_of: usage.pricing_as_of,
+        }
+      : null,
   };
 }
 
-function buildCodingAgentBlock(usage: TokenUsage): CodingAgentBlock {
-  const models: PerModelEntry[] = Object.entries(usage.models)
-    .map(([model, m]) => ({
-      model,
-      tokens: {
-        input: m.total_input,
-        output: m.total_output,
-        cache_create: m.total_cache_create,
-        cache_read: m.total_cache_read,
-        total: m.total_tokens,
-      },
-      est_cost_usd: m.est_cost_usd,
-    }))
-    .sort((a, b) => (b.est_cost_usd ?? -1) - (a.est_cost_usd ?? -1));
+function buildCodingAgentBlock(usage: JsonObject): CodingAgentBlock {
+  const rawModels = asJsonObject(usage['models']) ?? {};
+  const models: PerModelEntry[] = Object.entries(rawModels)
+    .map(([model, raw]) => {
+      const m = asJsonObject(raw) ?? {};
+      return {
+        model,
+        tokens: tokensShell(m),
+        est_cost_usd: costField(m, 'est_cost_usd'),
+      };
+    })
+    // Python: key=lambda m: m["est_cost_usd"] or 0, reverse=True — None maps to
+    // 0 and ties (stably) with a genuine $0-priced free-tier model.
+    .sort((a, b) => (b.est_cost_usd ?? 0) - (a.est_cost_usd ?? 0));
   const hasUnpriced =
-    usage.unpriced_models.length > 0 ||
+    stringList(usage['unpriced_models']).length > 0 ||
     models.some((m) => m.est_cost_usd === null);
   return {
-    duration_ms: usage.duration_ms ?? null,
-    model: usage.model,
+    duration_ms: costField(usage, 'duration_ms'),
+    model: strOrNull(usage['model']),
     models,
     tokens: tokensShell(usage),
-    est_cost_usd: usage.est_cost_usd,
-    tool_result_total_bytes: usage.tool_result_total_bytes ?? 0,
+    est_cost_usd: costField(usage, 'est_cost_usd'),
+    tool_result_total_bytes: numField(usage, 'tool_result_total_bytes'),
     has_unpriced_model: hasUnpriced,
     obol: obolProvenance(usage),
   };
 }
 
+/** Sidecar pricing seam: defaults to the real obol estimator. Injected in
+ *  tests so the gauntlet path can be exercised without shelling out to obol. */
+export type SidecarEstimator = (path: string) => Promise<TokenUsage | null>;
+
 /** Compose the run-level economics block from the frozen coding-agent usage
  *  file and the gauntlet sidecar. Returns null only when neither source exists.
- *  The gauntlet block is built whenever result.json OR its usage exists. */
+ *  The gauntlet block is built whenever result.json OR its usage exists.
+ *
+ *  Every read is best-effort: a malformed/legacy artifact degrades per-field to
+ *  null + `partial:true` rather than throwing (mirrors Python economics.py).
+ *  The runner additionally guards the call site (Wave 2b) so even an unexpected
+ *  throw never destroys a composed verdict. */
 export async function buildRunEconomics(
   runDir: string,
+  sidecarEstimator: SidecarEstimator = estimateUsageSidecar,
 ): Promise<RunEconomics | null> {
   // Gauntlet block — built whenever result.json OR usage exists.
   let gauntlet: GauntletBlock | null = null;
-  const resultPath = gauntletResultPath(runDir);
-  const gResult = resultPath ? readResultLoose(resultPath) : null;
-  const gUsage = resultPath
-    ? await estimateUsageSidecar(join(resultPath, '..', 'usage.jsonl'))
+  const resultsDir = gauntletResultsDir(runDir);
+  const gResult = resultsDir
+    ? readJsonObject(join(resultsDir, 'result.json'))
+    : null;
+  const gUsage = resultsDir
+    ? await sidecarEstimator(join(resultsDir, 'usage.jsonl'))
     : null;
   if (gResult !== null || gUsage !== null) {
     gauntlet = buildGauntletBlock(gResult, gUsage);
   }
 
-  // Coding-agent block — frozen, already priced at capture time.
+  // Coding-agent block — frozen, already priced at capture time. Read
+  // schema-less (Python _read_json): a legacy pre-obol file lacking obol keys
+  // still builds a block with obol=null instead of crashing.
   let coding: CodingAgentBlock | null = null;
-  const codingPath = join(runDir, 'coding-agent-token-usage.json');
-  if (existsSync(codingPath)) {
-    const usage = TokenUsageSchema.parse(
-      JSON.parse(readFileSync(codingPath, 'utf8')),
-    );
-    coding = buildCodingAgentBlock(usage);
+  const codingUsage = readJsonObject(
+    join(runDir, 'coding-agent-token-usage.json'),
+  );
+  if (codingUsage !== null) {
+    coding = buildCodingAgentBlock(codingUsage);
   }
 
   if (gauntlet === null && coding === null) {
@@ -230,9 +314,16 @@ export async function buildRunEconomics(
     gCost === null ||
     cCost === null ||
     anyUnpriced;
-  // Python iterates (coding, gauntlet) — coding first.
-  const pricingAsof =
-    coding?.obol?.pricing_as_of ?? gauntlet?.obol?.pricing_as_of ?? null;
+  // Python iterates (coding, gauntlet) and takes the first truthy
+  // pricing_as_of, so a present-but-null (falsy) value falls through.
+  let pricingAsof: string | null = null;
+  for (const block of [coding, gauntlet]) {
+    const candidate = block?.obol?.pricing_as_of;
+    if (candidate) {
+      pricingAsof = candidate;
+      break;
+    }
+  }
 
   return {
     pricing_asof: pricingAsof,
