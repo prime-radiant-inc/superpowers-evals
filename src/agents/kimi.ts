@@ -66,6 +66,19 @@ const KIMI_CONFIG_SUMMARY_ENV: ReadonlySet<string> = new Set<string>([
 // kimi-runtime.env basename in write_kimi_runtime_env_file).
 const KIMI_RUNTIME_ENV_FILE_NAME = 'kimi-runtime.env';
 
+// Substrings (uppercased) that mark an env var name as sensitive, and the
+// minimum value length worth redacting (mirrors _SENSITIVE_ENV_NAME_PARTS /
+// _MIN_SENSITIVE_VALUE_LEN). sanitizeKimiDiagnostic uses these to scrub secret
+// values out of provisioning/preflight error diagnostics before they reach a
+// verdict or log.
+const SENSITIVE_ENV_NAME_PARTS: readonly string[] = [
+  'KEY',
+  'TOKEN',
+  'SECRET',
+  'PASSWORD',
+];
+const MIN_SENSITIVE_VALUE_LEN = 6;
+
 // The minimal Superpowers Kimi plugin manifest surface validate_superpowers_kimi_root
 // asserts. Everything else passes through (the manifest can evolve).
 const KimiManifestSchema = z
@@ -186,6 +199,41 @@ export class KimiAgent implements CodingAgent {
     // - cleanup_dirs teardown tracking (the env-file parent temp dir) belongs to
     //   the runner's AgentRuntime cleanup, not provision().
   }
+}
+
+// sanitize_kimi_diagnostic (SECURITY): scrub secret values out of a diagnostic
+// message before it reaches a RunnerError / verdict / log. Redacts the
+// KIMI_MODEL_API_KEY value plus any env value >=6 chars whose name (uppercased)
+// contains KEY/TOKEN/SECRET/PASSWORD. Redaction runs longest-value-first so a
+// shorter secret that is a substring of a longer one cannot survive as a tail.
+//
+// The runner is expected to wrap the whole kimi provisioning/preflight motion in
+// this (parity with quorum/runner.py:688 and run_all.py:627); exported so
+// Wave-2b can wire it at those call sites.
+export function sanitizeKimiDiagnostic(
+  message: unknown,
+  env: Readonly<Record<string, string | undefined>> = envSnapshot(),
+): string {
+  let text = String(message);
+  const values = new Set<string>();
+  const apiKey = env['KIMI_MODEL_API_KEY'];
+  if (apiKey) {
+    values.add(apiKey);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (
+      value &&
+      value.length >= MIN_SENSITIVE_VALUE_LEN &&
+      SENSITIVE_ENV_NAME_PARTS.some((part) => key.toUpperCase().includes(part))
+    ) {
+      values.add(value);
+    }
+  }
+  const ordered = [...values].sort((a, b) => b.length - a.length);
+  for (const value of ordered) {
+    text = text.split(value).join('<redacted>');
+  }
+  return text;
 }
 
 // resolve_kimi_binary: PATH lookup. node has no shutil.which; probe via the

@@ -10,7 +10,7 @@ import {
 import { join } from 'node:path';
 import type { CommandResult } from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
-import { KimiAgent } from '../src/agents/kimi.ts';
+import { KimiAgent, sanitizeKimiDiagnostic } from '../src/agents/kimi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -615,4 +615,66 @@ test('provision throws ProvisionError when the manifest name is wrong', () => {
   } finally {
     cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeKimiDiagnostic (SECURITY)
+// ---------------------------------------------------------------------------
+
+test('sanitizeKimiDiagnostic redacts the KIMI_MODEL_API_KEY value', () => {
+  const secret = 'kimi-model-key-abcdef';
+  const env = { KIMI_MODEL_API_KEY: secret };
+  const message = `kimi auth preflight failed; stderr: invalid token ${secret}`;
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain(secret);
+  expect(out).toContain('<redacted>');
+});
+
+test('sanitizeKimiDiagnostic redacts any env value >=6 chars whose name contains KEY/TOKEN/SECRET/PASSWORD', () => {
+  const env = {
+    MY_API_KEY: 'topsecretvalue',
+    SERVICE_TOKEN: 'abcdef',
+    DB_SECRET: 'hunter22',
+    LOGIN_PASSWORD: 'p@ssword1',
+    SAFE_VAR: 'plainvalue',
+  };
+  const message =
+    'leak topsecretvalue and abcdef and hunter22 and p@ssword1 and plainvalue';
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain('topsecretvalue');
+  expect(out).not.toContain('abcdef');
+  expect(out).not.toContain('hunter22');
+  expect(out).not.toContain('p@ssword1');
+  // A non-sensitive var name is NOT redacted.
+  expect(out).toContain('plainvalue');
+});
+
+test('sanitizeKimiDiagnostic leaves short (<6 char) sensitive values alone', () => {
+  const env = { API_KEY: 'short' };
+  const message = 'value short here';
+  const out = sanitizeKimiDiagnostic(message, env);
+  // 5-char value below the min length is not redacted.
+  expect(out).toContain('short');
+});
+
+test('sanitizeKimiDiagnostic redacts longest-first to avoid partial survivors', () => {
+  // One secret is a substring of another; longest-first redaction prevents
+  // leaking the suffix of the longer value.
+  const env = {
+    SHORT_TOKEN: 'abcdef',
+    LONG_TOKEN: 'abcdefghij',
+  };
+  const message = 'saw abcdefghij in the response';
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain('abcdefghij');
+  expect(out).not.toContain('abcdef');
+  expect(out).toBe('saw <redacted> in the response');
+});
+
+test('sanitizeKimiDiagnostic stringifies non-string messages', () => {
+  const env = { API_KEY: 'sensitive-value' };
+  const err = new Error('boom sensitive-value');
+  const out = sanitizeKimiDiagnostic(err, env);
+  expect(out).not.toContain('sensitive-value');
+  expect(out).toContain('boom');
 });
