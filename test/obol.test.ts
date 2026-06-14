@@ -141,6 +141,18 @@ test('estimateSessionLogs does not add tool_result_total_bytes for non-kimi', as
   ).toBeUndefined();
 });
 
+test('keeps the first TRUTHY pricing_as_of (empty string from earlier est is skipped)', () => {
+  // Parity with Python `pricing_as_of = pricing_as_of or est.pricing_as_of`:
+  // an empty-string pricing_as_of from the first estimate must NOT win over a
+  // later real date. (`??` would have kept the '' since it is non-null.)
+  const merged = mergeEstimates([
+    est({ pricing_as_of: '' }),
+    est({ pricing_as_of: '2026-06-09' }),
+  ]);
+  const m = merged as NonNullable<typeof merged>;
+  expect(m.pricing_as_of).toBe('2026-06-09');
+});
+
 test('dedupes approximations by (kind, detail) tuple; undefined detail -> null', () => {
   const a = est({ approximations: [{ kind: 'rounded', detail: 'x' }] });
   const b = est({ approximations: [{ kind: 'rounded', detail: 'x' }] });

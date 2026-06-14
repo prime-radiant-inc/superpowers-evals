@@ -53,7 +53,9 @@ export function mergeEstimates(
   let pricingAsOf: string | null = null;
 
   for (const est of estimates) {
-    pricingAsOf = pricingAsOf ?? est.pricing_as_of;
+    // Keep the first TRUTHY pricing_as_of (parity with Python's `or`): an
+    // empty-string from an earlier estimate is skipped for a later real date.
+    pricingAsOf = pricingAsOf || est.pricing_as_of;
     for (const m of est.unpriced_models) {
       unpriced.add(m);
     }
