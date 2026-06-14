@@ -203,6 +203,54 @@ test('provision copies subscription auth and stages the trusted plugin hook', ()
   }
 });
 
+test('plugin copy drops only evals/results, keeping a results dir elsewhere', () => {
+  // Mirrors _ignore_codex_plugin_copy: `results` is excluded ONLY when the
+  // directory being copied is named `evals`. A legitimate `results` dir nested
+  // under a skill must survive into the staged plugin.
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  // A non-evals `results` dir that MUST be copied.
+  mkdirSync(join(spRoot, 'skills', 'my-skill', 'results'), { recursive: true });
+  writeFileSync(join(spRoot, 'skills', 'my-skill', 'results', 'keep.txt'), 'k');
+  // An `evals/results` dir that MUST be dropped.
+  mkdirSync(join(spRoot, 'evals', 'results'), { recursive: true });
+  writeFileSync(join(spRoot, 'evals', 'results', 'drop.txt'), 'd');
+  // A real file under evals (not results) that MUST be copied.
+  writeFileSync(join(spRoot, 'evals', 'keep-evals.txt'), 'e');
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG);
+      agent.provision(home, runner);
+      const pluginRoot = join(
+        home.configDir,
+        'plugins',
+        'cache',
+        'debug',
+        'superpowers',
+        'local',
+      );
+      // The skill's results dir survives (only evals/results is special).
+      expect(
+        existsSync(
+          join(pluginRoot, 'skills', 'my-skill', 'results', 'keep.txt'),
+        ),
+      ).toBe(true);
+      // evals/results is dropped, but other evals content survives.
+      expect(existsSync(join(pluginRoot, 'evals', 'results'))).toBe(false);
+      expect(existsSync(join(pluginRoot, 'evals', 'keep-evals.txt'))).toBe(
+        true,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 test('provision copies a codex-home-skeleton when one is staged', () => {
   // skeletonRoot holding codex-home-skeleton/seed.txt — proves the skeleton is
   // seeded before the auth copy (the file survives into configDir).

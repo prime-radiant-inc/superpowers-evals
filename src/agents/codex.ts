@@ -66,11 +66,8 @@ const CodexAuthSchema = z
   .passthrough();
 
 // Dirs under SUPERPOWERS_ROOT that the Python copytree ignores when staging the
-// plugin (mirrors _ignore_codex_plugin_copy). `results` is dropped only inside
-// the `evals` submodule; cpSync has no per-dir filter hook, so we filter the
-// always-ignored set globally and additionally always drop `results` — the
-// staged plugin never needs run artifacts. This matches intent (never stage
-// transcripts) without porting the path-sensitive special case.
+// plugin (mirrors _ignore_codex_plugin_copy). These are excluded by basename
+// anywhere in the tree.
 const PLUGIN_COPY_IGNORE = new Set<string>([
   '.git',
   '.mypy_cache',
@@ -80,8 +77,24 @@ const PLUGIN_COPY_IGNORE = new Set<string>([
   '.venv',
   '__pycache__',
   'node_modules',
-  'results',
 ]);
+
+// `results` is path-sensitive: Python's _ignore_codex_plugin_copy adds it to the
+// ignore set ONLY when the directory being copied is named `evals` (i.e. it
+// drops `evals/results`, the run-artifact dir, but keeps a legitimate `results`
+// dir nested elsewhere — e.g. inside a skill). cpSync's filter receives the
+// full source path, so we reproduce the per-parent context by dropping a
+// `results` entry only when its parent dir basename is `evals`.
+function isCodexPluginCopyExcluded(src: string): boolean {
+  const name = basename(src);
+  if (PLUGIN_COPY_IGNORE.has(name)) {
+    return true;
+  }
+  if (name === 'results' && basename(dirname(src)) === 'evals') {
+    return true;
+  }
+  return false;
+}
 
 export class CodexAgent implements CodingAgent {
   readonly config: AgentConfig;
@@ -211,7 +224,7 @@ export class CodexAgent implements CodingAgent {
     mkdirSync(dirname(pluginRoot), { recursive: true });
     cpSync(superpowersRoot, pluginRoot, {
       recursive: true,
-      filter: (src: string) => !PLUGIN_COPY_IGNORE.has(basename(src)),
+      filter: (src: string) => !isCodexPluginCopyExcluded(src),
     });
 
     const configPath = join(configDir, 'config.toml');
