@@ -25,9 +25,29 @@ const GEMINI_TOOL_MAP: Record<string, string> = {
 
 interface GeminiMessage {
   type?: string;
-  timestamp?: string;
+  timestamp?: string | number;
+  createdAt?: string | number;
+  time?: string | number;
   toolCalls?: GeminiToolCall[];
   [key: string]: unknown;
+}
+
+/**
+ * Extract an ISO-8601 step timestamp from a Gemini message.
+ *
+ * Accepts `timestamp`, `createdAt`, or `time` (in that priority order).
+ * String values are used verbatim; numeric values (epoch milliseconds) are
+ * converted to an ISO-8601 string so the merge in quorum/capture.py can
+ * order steps from multiple logs by event time.
+ */
+function extractTimestamp(message: GeminiMessage): string | undefined {
+  const raw = message["timestamp"] ?? message["createdAt"] ?? message["time"];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (typeof raw === "number" && isFinite(raw)) {
+    return new Date(raw).toISOString();
+  }
+  return undefined;
 }
 
 interface GeminiToolCall {
@@ -113,7 +133,7 @@ export function normalizeGemini(raw: string, version: string): AtifTrajectory {
     if (message["type"] !== "gemini") continue;
     const toolCalls = message["toolCalls"];
     if (!Array.isArray(toolCalls)) continue;
-    const timestamp = typeof message["timestamp"] === "string" ? message["timestamp"] : undefined;
+    const timestamp = extractTimestamp(message);
 
     for (const tc of toolCalls) {
       if (typeof tc !== "object" || tc === null) continue;
