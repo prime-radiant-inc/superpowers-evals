@@ -100,13 +100,16 @@ function costBarHtml(slots: readonly SlotView[]): string {
 function cardHtml(card: CardView): string {
   const rows = card.rows
     .map(
+      // Columns flow date · nonce · cost · wall · status. The nonce is the only
+      // run id shown; the full dir name is the title (copy-on-hover) so it stays
+      // recoverable without cluttering the row.
       (row) =>
         `<div class="cell-card-row">` +
-        `<span class="ccr-verdict v-${esc(row.verdict)}">${esc(row.verdict)}</span>` +
+        `<span class="ccr-time">${esc(row.timestamp)}</span>` +
+        `<span class="ccr-nonce" title="${esc(row.run_id)}">${esc(row.nonce)}</span>` +
         `<span class="ccr-cost">${esc(row.cost)}</span>` +
         `<span class="ccr-wall">${esc(row.wall)}</span>` +
-        `<span class="ccr-time">${esc(row.timestamp)}</span>` +
-        `<span class="ccr-id">${esc(row.run_id)}</span>` +
+        `<span class="ccr-verdict v-${esc(row.verdict)}">${esc(row.verdict)}</span>` +
         `</div>`,
     )
     .join('');

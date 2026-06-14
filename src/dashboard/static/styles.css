@@ -146,9 +146,10 @@ html[data-metric="wall"] .cb-slot { height: calc(2px + var(--hw, 0) * 12px); }
 }
 .cell-card-age { color: var(--text-label); font-weight: 600; margin-bottom: 8px; }
 .cell-card-rows { display: flex; flex-direction: column; gap: 5px; }
-/* The card shows cost AND wall side by side (detail view, both metrics): verdict
-   · cost · wall · time, with the run id spanning the full row beneath. */
-.cell-card-row { display: grid; grid-template-columns: auto auto auto 1fr; gap: 4px 10px; align-items: baseline; }
+/* One row per prior run, flowing date · nonce · cost · wall · status. The card
+   shows cost AND wall together (detail view, both metrics). The nonce stands in
+   for the full run id (which is the span's title), so the row stays one line. */
+.cell-card-row { display: grid; grid-template-columns: auto auto auto auto auto; gap: 4px 12px; align-items: baseline; justify-content: start; }
 .ccr-verdict { font-weight: 600; }
 .v-pass { color: var(--verdict-pass); }
 .v-fail { color: var(--verdict-fail); }
@@ -156,5 +157,5 @@ html[data-metric="wall"] .cb-slot { height: calc(2px + var(--hw, 0) * 12px); }
 .ccr-cost { color: var(--text-primary); }
 .ccr-wall { color: var(--accent); }
 .ccr-time { color: var(--text-label); }
-.ccr-id { grid-column: 1 / -1; color: var(--text-label); font-size: 11px; user-select: all; word-break: break-all; }
+.ccr-nonce { color: var(--text-label); font-size: 11px; user-select: all; }
 .card-drift { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border-grid); color: var(--verdict-fail); }

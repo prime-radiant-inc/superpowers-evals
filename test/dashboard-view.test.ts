@@ -546,6 +546,8 @@ test('cellView: card rows carry compact timestamp + run id', () => {
   expect(row?.cost).toBe('$1.50');
   expect(row?.timestamp).toBe('2026-06-12 13:30');
   expect(row?.run_id).toBe('s-claude-20260612T133000Z-aaaa');
+  // the short nonce (final dir-name segment) is shown in place of the full id.
+  expect(row?.nonce).toBe('aaaa');
 });
 
 test('cellView: card rows carry the wall figure (— when no finished_at)', () => {

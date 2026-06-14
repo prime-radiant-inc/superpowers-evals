@@ -50,10 +50,10 @@ export const DashboardVerdictSchema = z.object({
   economics: z
     .object({
       total_est_cost_usd: z.number().nullable().optional().catch(null),
-      // The Gauntlet-Agent's session span. Empirically ≈ the run's end-to-end
-      // wall-clock (within ~1s, since the Gauntlet-Agent is alive for the whole
-      // run), and far more widely populated than the top-level finished_at — so
-      // it's the walltime fallback when finished_at is absent. `.catch`-guarded
+      // The Gauntlet-Agent's session span — the walltime fallback when the
+      // top-level finished_at is absent (see view.runWallMs). Close to end-to-end
+      // on light-setup runs, but undercounts the setup+capture overhead outside
+      // the gauntlet; far more widely populated than finished_at. `.catch`-guarded
       // like the rest: a malformed value degrades to null, never sinks the parse.
       gauntlet: z
         .object({
@@ -130,14 +130,17 @@ export interface SlotView {
   readonly wallHeight: number;
 }
 
-// One row in the detail hover card (one prior run). The card shows cost AND wall
-// side by side (detail view — both metrics, not toggled), so each row carries
-// both a cost string ('$X.XX' | '$—') and a wall string ('1m18s' | '—').
+// One row in the detail hover card (one prior run). Rendered left-to-right as
+// date · nonce · cost · wall · status. The card shows cost AND wall side by side
+// (detail view — both metrics, not toggled). `nonce` is the short run
+// disambiguator shown in the row; `run_id` is the full dir name, carried for a
+// copy-on-hover title only (not shown inline).
 export interface CardRow {
   readonly verdict: RunFinal;
   readonly cost: string;
   readonly wall: string;
   readonly timestamp: string;
+  readonly nonce: string;
   readonly run_id: string;
 }
 

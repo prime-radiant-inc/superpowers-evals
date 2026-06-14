@@ -280,14 +280,16 @@ test('cellHtml renders the detail card markup when card is present', () => {
             cost: '$1.25',
             wall: '1m18s',
             timestamp: '2026-06-12 00:00',
-            run_id: '20260612T000000Z-1a2b',
+            nonce: '1a2b',
+            run_id: 's-claude-20260612T000000Z-1a2b',
           },
           {
             verdict: 'fail',
             cost: '$0.90',
             wall: '2m04s',
             timestamp: '2026-06-12 01:00',
-            run_id: '20260612T010000Z-3c4d',
+            nonce: '3c4d',
+            run_id: 's-claude-20260612T010000Z-3c4d',
           },
         ],
         drift_line: 'last run cost 1.6× the prior median',
@@ -302,7 +304,14 @@ test('cellHtml renders the detail card markup when card is present', () => {
   expect(html).toContain('class="ccr-cost">$1.25<');
   expect(html).toContain('class="ccr-wall">1m18s<');
   expect(html).toContain('class="ccr-wall">2m04s<');
-  expect(html).toContain('20260612T000000Z-1a2b');
+  // the nonce stands in for the run id; the full id is the copy-on-hover title.
+  expect(html).toContain(
+    'class="ccr-nonce" title="s-claude-20260612T000000Z-1a2b">1a2b<',
+  );
+  // columns flow date · nonce · cost · wall · status, left to right.
+  expect(html.indexOf('ccr-time')).toBeLessThan(html.indexOf('ccr-nonce'));
+  expect(html.indexOf('ccr-nonce')).toBeLessThan(html.indexOf('ccr-cost'));
+  expect(html.indexOf('ccr-wall')).toBeLessThan(html.indexOf('ccr-verdict'));
   expect(html).toContain(
     'class="card-drift">last run cost 1.6× the prior median<',
   );
@@ -325,6 +334,7 @@ test('cellHtml escapes card row run_id and drift_line', () => {
             cost: '$1.25',
             wall: '1m18s',
             timestamp: 't',
+            nonce: 'aaaa',
             run_id: '<script>',
           },
         ],

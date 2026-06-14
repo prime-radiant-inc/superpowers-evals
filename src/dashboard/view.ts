@@ -94,9 +94,12 @@ export function formatWall(ms: number): string {
 //   1. PRECISE: dir-stamp started_at -> verdict finished_at. Survives the no-cost
 //      case (timing is independent of obol pricing), but the top-level timestamps
 //      are a recent schema addition (~18% of verdicts).
-//   2. FALLBACK: economics.gauntlet.duration_ms — the Gauntlet-Agent's span, which
-//      brackets the run within ~1s of the precise value and is populated for ~71%
-//      of verdicts, so most historical runs still get a duration instead of "—".
+//   2. FALLBACK: economics.gauntlet.duration_ms — the Gauntlet-Agent's span. It
+//      UNDER-reports end-to-end by the quorum-side setup before the gauntlet runs
+//      and the capture/post-checks after it: ≈1s on warm light-setup runs, but up
+//      to tens of seconds on cold venv/plugin-provision runs. Still an honest
+//      coarse signal, and populated for ~71% of verdicts (vs ~18% for finished_at)
+//      — far better than "—" for the bulk of historical runs.
 // null only when neither is available (e.g. an errored run with no timing).
 export function runWallMs(rec: RunRecord): number | null {
   const start = parseDirStamp(rec.started_at);
@@ -269,6 +272,14 @@ function rowWall(rec: RunRecord): string {
   return ms !== null ? formatWall(ms) : '—';
 }
 
+// The short run nonce — the final `-`-delimited segment of the run id
+// (`<scenario>-<agent>-<stamp>-<nonce>`), e.g. `1e55`. Shown in the card row in
+// place of the full quad; the full id rides along as a copy-on-hover title.
+function runNonce(runId: string): string {
+  const i = runId.lastIndexOf('-');
+  return i === -1 ? runId : runId.slice(i + 1);
+}
+
 // Compact card-row timestamp. Prefers the dir-name started_at (always present)
 // rendered as `YYYY-MM-DD HH:MM`; falls back to finished_at when the stamp is
 // unparseable.
@@ -303,6 +314,7 @@ function cardView(
     cost: rowCost(r.cost_usd),
     wall: rowWall(r),
     timestamp: rowTimestamp(r),
+    nonce: runNonce(r.run_id),
     run_id: r.run_id,
   }));
   const age = formatAge(latestAgeDays(cell, now));
