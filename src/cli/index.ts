@@ -53,6 +53,16 @@ function basename(path: string): string {
   return last !== undefined && last !== '' ? last : path;
 }
 
+// Fail fast (exit 1) when a scenarios-root does not exist or is not a directory
+// — parity with click.Path(exists=True, file_okay=False) on list/check, where a
+// typo'd root is a hard error rather than a silent empty result.
+function requireScenariosRoot(root: string): void {
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    process.stderr.write(`error: --scenarios-root does not exist: ${root}\n`);
+    process.exit(1);
+  }
+}
+
 // Immediate child dir names of `root` that hold a story.md, sorted (mirrors
 // `quorum list` / the run-all scenario discovery — only dirs can hold the file).
 function scenarioNames(root: string): string[] {
@@ -185,7 +195,9 @@ program
   .command('list')
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((opts: { scenariosRoot: string }) => {
-    for (const name of scenarioNames(resolve(opts.scenariosRoot))) {
+    const root = resolve(opts.scenariosRoot);
+    requireScenariosRoot(root);
+    for (const name of scenarioNames(root)) {
       process.stdout.write(`${name}\n`);
     }
     process.exit(0);
@@ -220,6 +232,9 @@ program
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((names: string[], opts: { fix: boolean; scenariosRoot: string }) => {
     const root = opts.scenariosRoot;
+    // Parity with click.Path(exists=True) on --scenarios-root: a missing root is
+    // a hard error before any scenario work, not a silent empty run.
+    requireScenariosRoot(resolve(root));
     let targets: string[];
     if (names.length > 0) {
       // Each name resolves via the shared rule — a bare name or a path/prefixed
