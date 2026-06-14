@@ -26,13 +26,20 @@ import type {
 // body. Ampersand first so existing entities are not double-broken on the wrong
 // side (we escape the `&` once, intentionally, rather than skip it). Matches the
 // escaping the reference relied on Jinja autoescape for.
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+// Escape the five HTML metacharacters. A single regex `.replace` over the
+// metacharacter class (not a `.replaceAll` chain) so CodeQL's XSS sanitizer
+// model recognizes it as a complete HTML escaper. The `?? ch` is unreachable
+// (every matched char is a key) but satisfies noUncheckedIndexedAccess.
 export function esc(s: string): string {
-  return s
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  return s.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] ?? ch);
 }
 
 // Three-decimal fixed format, matching the Python `'%.3f'|format(...)` used for
