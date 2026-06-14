@@ -57,6 +57,26 @@ test('newScenario writes the three files with the right modes and content', () =
   rmSync(root, { recursive: true, force: true });
 });
 
+test('newScenario stamps the story id from the raw name, not just the basename', () => {
+  const root = scenariosRoot();
+  // Python new_scenario(scenarios_root, name) stamps the story `id:` with the
+  // RAW name argument, so a path-separator name like `foo/bar` yields
+  // `id: foo/bar` — not `id: bar` (the final path segment). The directory is
+  // still scenarios_root/foo/bar.
+  const dir = newScenario(join(root, 'foo', 'bar'), 'foo/bar');
+  const story = readFileSync(join(dir, 'story.md'), 'utf8');
+  expect(story).toContain('id: foo/bar');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('newScenario defaults the story id to the directory basename when no name is given', () => {
+  const root = scenariosRoot();
+  const dir = newScenario(join(root, 'plain'));
+  const story = readFileSync(join(dir, 'story.md'), 'utf8');
+  expect(story).toContain('id: plain');
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('a fresh scenario round-trips through checkScenario with zero problems', () => {
   const root = scenariosRoot();
   const dir = newScenario(join(root, 'fresh'));

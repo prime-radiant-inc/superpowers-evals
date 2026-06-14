@@ -75,18 +75,24 @@ export class ScaffoldError extends Error {
   }
 }
 
-/** Create a structurally-valid scenario skeleton; return its directory. */
-export function newScenario(scenarioDir: string): string {
+/**
+ * Create a structurally-valid scenario skeleton; return its directory.
+ *
+ * `name` is the scenario's name as the user supplied it, stamped verbatim into
+ * the story `id:` (Python new_scenario stamps the raw name, so `foo/bar` yields
+ * `id: foo/bar`, not just the final segment). When omitted it defaults to the
+ * directory's basename.
+ */
+export function newScenario(scenarioDir: string, name?: string): string {
   if (existsSync(scenarioDir)) {
     throw new ScaffoldError(`scenario already exists: ${scenarioDir}`);
   }
   mkdirSync(scenarioDir, { recursive: true });
 
-  // The story `id` is the scenario's final path segment (its name).
-  const name = basename(scenarioDir);
+  const storyId = name ?? basename(scenarioDir);
   writeFileSync(
     join(scenarioDir, 'story.md'),
-    STORY_TEMPLATE.replace('{name}', name),
+    STORY_TEMPLATE.replace('{name}', storyId),
   );
 
   const setup = join(scenarioDir, 'setup.sh');
