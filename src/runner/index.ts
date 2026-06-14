@@ -14,7 +14,7 @@ import {
 } from '../agents/index.ts';
 import {
   captureTokenUsage,
-  captureToolCalls,
+  captureToolCallsWithRetry,
   snapshotDir,
 } from '../capture/index.ts';
 import { runPhase } from '../checks/index.ts';
@@ -44,6 +44,14 @@ import { writePhase } from './phase.ts';
 // runner<->context import cycle. Re-export it here to preserve the existing
 // public surface (src/runner/index.ts exported it before this split).
 export { RunnerError };
+
+// Empty-capture retry/guard (PRI-2081). A transient flush race between the
+// Coding-Agent exiting and the capture diff reading its session log used to
+// become a permanent stage="capture" indeterminate. Bounded re-diff: worst
+// case adds (attempts - 1) * delay ms to a genuinely-empty run before the
+// per-backend diagnostic cascade proceeds unchanged.
+const CAPTURE_RETRY_ATTEMPTS = 3;
+const CAPTURE_RETRY_DELAY_MS = 2000;
 
 // Create and return the per-run output dir
 // <outRoot>/<scenario>-<agent>-<stamp>-<nonce>/.
@@ -484,15 +492,21 @@ async function runInner(
     });
   }
 
-  // capture tool calls + token usage from the new session logs.
-  const capture = captureToolCalls({
-    logDir,
-    logGlob: cfg.session_log_glob,
-    snapshot,
-    normalizer: cfg.normalizer,
-    runDir,
-    launchCwd,
-  });
+  // capture tool calls + token usage from the new session logs. The
+  // empty-capture retry/guard (PRI-2081) re-diffs a session log still being
+  // flushed when the post-drive diff runs, so a transient race does not become
+  // a permanent capture indeterminate.
+  const capture = captureToolCallsWithRetry(
+    {
+      logDir,
+      logGlob: cfg.session_log_glob,
+      snapshot,
+      normalizer: cfg.normalizer,
+      runDir,
+      launchCwd,
+    },
+    { attempts: CAPTURE_RETRY_ATTEMPTS, delayMs: CAPTURE_RETRY_DELAY_MS },
+  );
   // captureTokenUsage writes coding-agent-token-usage.json as a side effect
   // (null when obol cannot price); economics reads that file, so the returned
   // path is not needed here, but the promise still has an owner (6.2).
