@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
@@ -119,6 +119,34 @@ test('a bash spawn failure throws instead of reporting a clean empty phase', asy
     // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
     process.env['PATH'] = savedPath;
   }
+});
+
+// E-path-empty-fallback: Python composes the child PATH as
+// `{quorum_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}` (quorum/checks.py:82),
+// so an UNSET PATH still resolves system utilities. TS fell back to '' — yielding
+// `{quorumBin}:` whose trailing empty component means CWD on POSIX, and no
+// /usr/bin or /bin. Parity: an unset PATH falls back to /usr/bin:/bin.
+test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-PATH empty component)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  // bash lives under /bin or /usr/bin, so the fallback is what makes this run at
+  // all once PATH is unset. Capture the child's PATH for inspection.
+  const out = join(workdir, 'path.txt');
+  const checksSh = checksShWith(
+    `pre() {\n  printf '%s' "$PATH" > '${out}'\n}\npost() { :; }\n`,
+  );
+  // biome-ignore lint/style/noProcessEnv: must unset inherited PATH to exercise the fallback
+  const savedPath = process.env['PATH'];
+  // biome-ignore lint/style/noProcessEnv: must unset inherited PATH to exercise the fallback
+  process.env['PATH'] = undefined;
+  let childPath: string;
+  try {
+    await runPhase({ checksSh, phase: 'pre', workdir, quorumBin: BIN });
+    childPath = readFileSync(out, 'utf8');
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
+    process.env['PATH'] = savedPath;
+  }
+  expect(childPath).toBe(`${BIN}:/usr/bin:/bin`);
 });
 
 test('parseCodingAgentsDirective reads a leading "# coding-agents:" csv', () => {

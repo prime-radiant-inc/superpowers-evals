@@ -49,7 +49,10 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   // directly. undefined values are simply absent in the child's environment.
   // Assembled as one literal (conditional spreads for the optional keys) so the
   // names are object properties, not index-signature reads/writes.
-  const path = getEnv('PATH') ?? '';
+  // Match quorum/checks.py:82 — an unset PATH falls back to the system default,
+  // not '' (a '' fallback yields `{quorumBin}:` whose trailing empty component is
+  // CWD on POSIX and drops /usr/bin:/bin, so even bash itself fails to resolve).
+  const path = getEnv('PATH') ?? '/usr/bin:/bin';
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
     PATH: `${args.quorumBin}:${path}`,
