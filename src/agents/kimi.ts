@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
+  type Dirent,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -188,16 +192,12 @@ export class KimiAgent implements CodingAgent {
       KIMI_BINARY: kimiBinary,
     };
 
-    // NOTE (DEFER to B3, capture/post-run; do NOT implement here):
-    // - run_kimi_auth_preflight's session_index.jsonl workDir attribution +
-    //   sessionDir/wire.jsonl verification: the synchronous one-shot
-    //   CommandRunner cannot observe the on-disk session_index the live kimi
-    //   process writes, so the workdir-attribution leg of the preflight is a
-    //   B3 capture concern (streamingRisk: the live preflight is a one-shot
-    //   subprocess here — same single-run modeling/caveat as the codex
-    //   app-server step).
+    // NOTE (DEFER to capture/post-run / Wave-2b; do NOT implement here):
     // - kimi_logs_have_superpowers_session_start: a capture-time assertion over
-    //   sessions/**/wire.jsonl that the Superpowers session-start injection fired.
+    //   sessions/**/wire.jsonl that the Superpowers session-start injection fired
+    //   during the REAL eval run (not the preflight). This reads the run's own
+    //   session logs, which provision() never sees, so it belongs to the capture
+    //   stage.
     // - cleanup_dirs teardown tracking (the env-file parent temp dir) belongs to
     //   the runner's AgentRuntime cleanup, not provision().
   }
@@ -357,34 +357,132 @@ function validateKimiPreflightSentinel(
 
 // run_kimi_auth_preflight: drive the LIVE one-shot auth probe through the runner
 // seam. The Python runs `kimi -p "Reply with EXACTLY OK." --output-format=
-// stream-json` in a throwaway home and then verifies session_index workdir
-// attribution; the synchronous one-shot CommandRunner can model only the
-// subprocess + stdout scan (kimi_stream_json_reply_ok). The session_index /
-// wire.jsonl verification is deferred to B3 (see the NOTE in provision()).
+// stream-json` in a throwaway home (with cwd set), checks the stream-json reply,
+// then PROVES home isolation took effect by reading the on-disk session_index:
+// a row whose realpath(workDir) == the preflight cwd, whose sessionDir resolves
+// under <kimiHome>/sessions, and whose sessionDir contains a **/wire.jsonl.
+// Mirrors quorum/kimi.py:run_kimi_auth_preflight (306-342). The CommandRunner
+// runs the subprocess; the file verification reads what that process wrote.
 function runKimiAuthPreflight(
   runner: CommandRunner,
   ctx: PreflightContext,
 ): void {
-  const env = buildKimiSubprocessEnv({
-    kimiHome: join(tmpdir(), 'quorum-kimi-preflight'),
-    kimiModelEnv: ctx.kimiModelEnv,
-  });
-  const result = runner.run(
-    ctx.kimiBinary,
-    ['-p', 'Reply with EXACTLY OK.', '--output-format=stream-json'],
-    { env },
-  );
-  if (result.status !== 0) {
-    const stderr = result.stderr.trim().slice(0, 300);
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'quorum-kimi-preflight-'));
+  try {
+    const kimiHome = join(tmpRoot, 'kimi-home');
+    const cwd = join(tmpRoot, 'cwd');
+    mkdirSync(cwd, { recursive: true });
+    const env = buildKimiSubprocessEnv({
+      kimiHome,
+      kimiModelEnv: ctx.kimiModelEnv,
+    });
+    const result = runner.run(
+      ctx.kimiBinary,
+      ['-p', 'Reply with EXACTLY OK.', '--output-format=stream-json'],
+      { cwd, env },
+    );
+    if (result.status !== 0) {
+      const stderr = result.stderr.trim().slice(0, 300);
+      throw new ProvisionError(
+        `kimi auth preflight failed (exit ${result.status}); stderr: ${stderr}`,
+      );
+    }
+    if (!kimiStreamJsonReplyOk(result.stdout)) {
+      throw new ProvisionError(
+        `kimi auth preflight did not return OK; stdout: ${result.stdout.trim().slice(0, 300)}`,
+      );
+    }
+    verifyKimiPreflightSession(kimiHome, cwd);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+// The session-attribution leg of run_kimi_auth_preflight: read session_index.jsonl
+// and prove the live kimi process ran inside the isolated home — a row whose
+// realpath(workDir) == the preflight cwd, whose sessionDir resolves under
+// <kimiHome>/sessions, and whose sessionDir holds a **/wire.jsonl.
+function verifyKimiPreflightSession(kimiHome: string, cwd: string): void {
+  const indexPath = join(kimiHome, 'session_index.jsonl');
+  if (!existsSync(indexPath) || !statSync(indexPath).isFile()) {
     throw new ProvisionError(
-      `kimi auth preflight failed (exit ${result.status}); stderr: ${stderr}`,
+      'kimi auth preflight produced no session_index.jsonl',
     );
   }
-  if (!kimiStreamJsonReplyOk(result.stdout)) {
+  const target = realpathSync(cwd);
+  const sessionsRoot = resolveMaybe(join(kimiHome, 'sessions'));
+  let matchedWorkdir = false;
+  let outsideSessionDir = false;
+  const matchingSessionDirs: string[] = [];
+  for (const line of readFileSync(indexPath, 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(row)) continue;
+    const workDir = row['workDir'];
+    if (typeof workDir !== 'string') continue;
+    if (resolveMaybe(workDir) !== target) continue;
+    matchedWorkdir = true;
+    const sessionDir = row['sessionDir'];
+    if (typeof sessionDir !== 'string' || sessionDir === '') continue;
+    const resolvedSessionDir = resolveMaybe(sessionDir);
+    if (!isInsideOrEqual(resolvedSessionDir, sessionsRoot)) {
+      outsideSessionDir = true;
+      continue;
+    }
+    matchingSessionDirs.push(resolvedSessionDir);
+  }
+  if (!matchedWorkdir) {
     throw new ProvisionError(
-      `kimi auth preflight did not return OK; stdout: ${result.stdout.trim().slice(0, 300)}`,
+      'kimi auth preflight session_index workDir did not match cwd',
     );
   }
+  if (matchingSessionDirs.length === 0) {
+    if (outsideSessionDir) {
+      throw new ProvisionError(
+        'kimi auth preflight sessionDir outside Kimi home/sessions',
+      );
+    }
+    throw new ProvisionError(
+      'kimi auth preflight session_index matched no sessionDir',
+    );
+  }
+  if (!matchingSessionDirs.some((dir) => hasWireJsonl(dir))) {
+    throw new ProvisionError(
+      'kimi auth preflight matching sessionDir produced no wire.jsonl',
+    );
+  }
+}
+
+// realpath when the path exists (resolves symlinks like os.path.realpath /
+// Path.resolve), else a plain absolute resolve. Mirrors the Python which uses
+// realpath/resolve on session-index paths that should already exist on disk.
+function resolveMaybe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+// Recursively search for any wire.jsonl under a directory (mirrors
+// Path.glob("**/wire.jsonl")).
+function hasWireJsonl(dir: string): boolean {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === 'wire.jsonl') return true;
+    if (entry.isDirectory() && hasWireJsonl(join(dir, entry.name))) return true;
+  }
+  return false;
 }
 
 // _normalized_ok: strip trailing punctuation/whitespace, uppercase, compare OK.
