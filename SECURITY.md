@@ -19,7 +19,7 @@ Never commit:
 
 - `.env` files or API keys
 - `results/` output
-- raw `session.log`, `tool_calls.jsonl`, `filesystem.json`, `verdict.json`, or
+- raw `session.log`, `trajectory.json`, `filesystem.json`, `verdict.json`, or
   `meta.json` from real runs
 - local agent config directories such as `.claude/`, `.codex/`, or `.gemini/`
 

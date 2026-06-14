@@ -6,7 +6,7 @@ import type {
 } from './contracts/verdict.ts';
 
 // Every check-transcript verb (the record's `check` field is the verb name).
-// A non-empty capture is meaningless for any trace check, so the composer forces
+// An empty capture is meaningless for any trace check, so the composer forces
 // `indeterminate` when capture was empty and any of these ran. Must stay in sync
 // with src/cli/check-transcript.ts's dispatch table.
 //
