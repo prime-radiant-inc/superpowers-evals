@@ -51,3 +51,36 @@ jobs:
       - name: Pytest
         working-directory: ${{ github.workspace }}/repo
         run: uv run pytest
+
+  ts:
+    name: ts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE/repo"
+          cd "$GITHUB_WORKSPACE/repo"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Install Bun
+        run: |
+          set -euo pipefail
+          curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: ${{ github.workspace }}/repo
+        run: bun install --frozen-lockfile
+
+      - name: Check (biome + tsc + bun test)
+        working-directory: ${{ github.workspace }}/repo
+        run: bun run check
+
+      - name: quorum scenario check
+        working-directory: ${{ github.workspace }}/repo
+        run: bun run quorum check
