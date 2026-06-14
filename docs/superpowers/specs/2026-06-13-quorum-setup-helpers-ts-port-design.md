@@ -196,7 +196,7 @@ Conform to `docs/superpowers/specs/2026-06-12-typescript-coding-standard.md`
 (`biome ci . && tsc --noEmit && bun test`).
 
 Reuse existing infra: `paths.ts` (`repoRoot`, `nowStampUtc`, `hexNonce`),
-`command-runner.ts` (`CommandRunner`/`SpawnCommandRunner`), `env.ts`
+`src/agents/command-runner.ts` (`CommandRunner`/`SpawnCommandRunner`), `env.ts`
 (`getEnv`/`envSnapshot`/`superpowersRoot`).
 
 ## Out of scope (the purge PR)
