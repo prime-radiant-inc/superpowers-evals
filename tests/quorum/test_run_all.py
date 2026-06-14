@@ -967,9 +967,7 @@ def test_run_batch_kimi_preflight_failure_redacts_secret_in_verdict(tmp_path, mo
             use_cursor=False,
         )
 
-    [record] = [
-        json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()
-    ]
+    [record] = [json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()]
     verdict_text = (out_root / record["run_id"] / "verdict.json").read_text()
     assert "fake-secret" not in verdict_text
     assert "<redacted>" in verdict_text

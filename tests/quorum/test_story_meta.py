@@ -15,15 +15,7 @@ def _story(tmp_path, body: str):
     return p
 
 
-FM = (
-    "---\n"
-    "id: x\n"
-    "title: y\n"
-    "tags: sdd\n"
-    "{extra}"
-    "---\n"
-    "\nBody text.\n"
-)
+FM = "---\nid: x\ntitle: y\ntags: sdd\n{extra}---\n\nBody text.\n"
 
 
 def test_no_frontmatter_returns_none(tmp_path):
@@ -63,6 +55,7 @@ def test_malformed_value_raises(tmp_path):
 
 
 # --- read_quorum_tier + read_story_status ---
+
 
 def _simple_story(tmp_path, frontmatter):
     p = tmp_path / "story.md"

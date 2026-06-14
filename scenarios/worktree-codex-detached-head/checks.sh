@@ -1,5 +1,3 @@
-# coding-agents: codex
-
 pre() {
     git-repo
     command-succeeds 'git -C ../coding-agent-workdir-existing-worktree rev-parse --is-inside-work-tree'

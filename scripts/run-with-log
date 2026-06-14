@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -u
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: scripts/run-with-log --log <path> -- <command> [args...]
+
+Runs a command, mirrors combined stdout/stderr to the terminal and log file,
+and records COMMAND, START_UTC, END_UTC, and EXIT_STATUS metadata.
+USAGE
+}
+
+if [[ $# -lt 3 || "${1:-}" != "--log" ]]; then
+  usage
+  exit 2
+fi
+
+log_path=$2
+shift 2
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 2
+fi
+
+mkdir -p "$(dirname "$log_path")"
+
+{
+  printf 'COMMAND:'
+  printf ' %q' "$@"
+  printf '\n'
+  printf 'START_UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "$@"
+  exit_status=$?
+  printf 'END_UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'EXIT_STATUS: %s\n' "$exit_status"
+  exit "$exit_status"
+} 2>&1 | tee "$log_path"
+
+command_status=${PIPESTATUS[0]}
+exit "$command_status"

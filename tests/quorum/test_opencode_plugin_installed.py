@@ -43,15 +43,11 @@ def test_opencode_plugin_installed_fails_when_plugin_missing(tmp_path):
     assert "plugin missing" in records[0]["detail"]
 
 
-def test_opencode_plugin_installed_uses_current_run_dir_over_ambient_home(
-    tmp_path, monkeypatch
-):
+def test_opencode_plugin_installed_uses_current_run_dir_over_ambient_home(tmp_path, monkeypatch):
     ambient = tmp_path / "ambient"
     ambient_cfg = ambient / ".config" / "opencode"
     ambient_plugin = ambient_cfg / "plugins" / "superpowers.js"
-    ambient_skill = (
-        ambient_cfg / "superpowers" / "skills" / "using-superpowers" / "SKILL.md"
-    )
+    ambient_skill = ambient_cfg / "superpowers" / "skills" / "using-superpowers" / "SKILL.md"
     ambient_plugin.parent.mkdir(parents=True)
     ambient_skill.parent.mkdir(parents=True)
     ambient_plugin.write_text("export {};")

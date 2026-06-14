@@ -178,10 +178,7 @@ class TestNormalizeCodexLogs:
         link.symlink_to(real)
         rollout = tmp_path / "rollout.jsonl"
         rollout.write_text(
-            json.dumps(
-                {"type": "session_meta", "payload": {"cwd": str(scratch.resolve())}}
-            )
-            + "\n"
+            json.dumps({"type": "session_meta", "payload": {"cwd": str(scratch.resolve())}}) + "\n"
         )
         assert find_misplaced_codex_rollouts(
             [rollout], run_dir=link, launch_cwd=link / "coding-agent-workdir"
@@ -321,9 +318,7 @@ class TestNormalizePiLogs:
         link = tmp_path / "linked-workdir"
         link.symlink_to(real)
         session = tmp_path / "session.jsonl"
-        session.write_text(
-            json.dumps({"type": "session", "cwd": os.path.realpath(real)}) + "\n"
-        )
+        session.write_text(json.dumps({"type": "session", "cwd": os.path.realpath(real)}) + "\n")
         assert filter_pi_logs_by_cwd([session], str(link)) == [session]
 
     def test_find_misplaced_pi_sessions_reports_any_new_wrong_cwd(self, tmp_path):
@@ -666,6 +661,33 @@ class TestNormalizeGeminiLogs:
             assert rows[-1]["args"]["command"] == "git status"
             assert rows[-1]["source"] == "shell"
 
+    def test_normalizes_activate_skill_name_argument_to_skill_name(self):
+        raw = json.dumps(
+            {
+                "type": "gemini",
+                "toolCalls": [
+                    {
+                        "id": "skill-1",
+                        "name": "activate_skill",
+                        "args": {"name": "test-driven-development"},
+                    }
+                ],
+            }
+        )
+
+        rows = normalize_gemini_logs(raw)
+
+        assert rows == [
+            {
+                "tool": "Skill",
+                "args": {
+                    "name": "test-driven-development",
+                    "skill": "superpowers:test-driven-development",
+                },
+                "source": "native",
+            }
+        ]
+
 
 class TestNormalizeOpenCodeLogs:
     def test_normalizes_tool_parts_from_export_json(self):
@@ -802,8 +824,7 @@ class TestNormalizeOpenCodeLogs:
     def test_ignores_non_json_and_non_tool_parts(self):
         assert normalize_opencode_logs("not json") == []
         assert (
-            normalize_opencode_logs(json.dumps({"messages": [{"parts": [{"type": "text"}]}]}))
-            == []
+            normalize_opencode_logs(json.dumps({"messages": [{"parts": [{"type": "text"}]}]})) == []
         )
 
 
@@ -1108,9 +1129,7 @@ class TestNormalizeAntigravityLogs:
         assert [r["tool"] for r in rows] == ["Bash", "Read", "Glob"]
         assert rows[0]["args"]["command"] == "pytest -q"
         assert rows[0]["args"]["raw_args"] == {"CommandLine": "pytest -q"}
-        assert rows[1]["args"]["file_path"].endswith(
-            "/skills/test-driven-development/SKILL.md"
-        )
+        assert rows[1]["args"]["file_path"].endswith("/skills/test-driven-development/SKILL.md")
         assert rows[1]["args"]["is_skill_file"] is True
         assert rows[1]["args"]["raw_args"]["IsSkillFile"] is True
         assert rows[2]["args"]["path"] == "src"
@@ -1144,8 +1163,7 @@ class TestNormalizeAntigravityLogs:
         rows = normalize_antigravity_logs(raw)
 
         assert rows[0]["args"]["file_path"] == (
-            "/tmp/run/.gemini/config/plugins/superpowers/"
-            "skills/brainstorming/SKILL.md"
+            "/tmp/run/.gemini/config/plugins/superpowers/skills/brainstorming/SKILL.md"
         )
         assert rows[0]["args"]["raw_args"]["AbsolutePath"].startswith('"')
         assert rows[1]["args"]["command"] == "pytest -q"
@@ -1327,8 +1345,5 @@ class TestNormalizeAntigravityLogs:
         rows = normalize_antigravity_logs(raw)
 
         assert rows[0]["tool"] == "Read"
-        assert (
-            rows[0]["args"]["file_path"]
-            == "/x/skills/superpowers/brainstorming/SKILL.md"
-        )
+        assert rows[0]["args"]["file_path"] == "/x/skills/superpowers/brainstorming/SKILL.md"
         assert rows[0]["args"]["is_skill_file"] is True

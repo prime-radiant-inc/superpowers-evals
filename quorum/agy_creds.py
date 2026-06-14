@@ -6,6 +6,7 @@ unparseable, permanently locking the account (A4 of the agy reliability spec).
 Backup before the run; read-back after: if the file is corrupt, restore it.
 A legitimate token refresh changes bytes but stays valid JSON — leave it alone.
 """
+
 from __future__ import annotations
 
 import contextlib

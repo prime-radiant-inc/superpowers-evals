@@ -5,13 +5,16 @@ from pathlib import Path
 
 HELPER = Path("bin/_record").resolve()
 
+
 def _run(snippet: str, sink: Path) -> subprocess.CompletedProcess:
     """Run a bash snippet with the helper sourced and QUORUM_RECORD_SINK set."""
     script = f"set -u; export QUORUM_RECORD_SINK={sink}; source {HELPER}\n{snippet}"
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
 
+
 def _records(sink: Path) -> list[dict]:
     return [json.loads(line) for line in sink.read_text().splitlines() if line.strip()]
+
 
 def test_record_pass_emits_one_record(tmp_path: Path):
     sink = tmp_path / "sink.jsonl"
@@ -33,6 +36,7 @@ def test_record_pass_emits_one_record(tmp_path: Path):
         "detail": None,
     }
 
+
 def test_record_fail_carries_detail(tmp_path: Path):
     sink = tmp_path / "sink.jsonl"
     snippet = """
@@ -44,6 +48,7 @@ def test_record_fail_carries_detail(tmp_path: Path):
     rs = _records(sink)
     assert rs[0]["passed"] is False
     assert rs[0]["detail"] == "no path matched"
+
 
 def test_record_negated_inverts_and_marks(tmp_path: Path):
     sink = tmp_path / "sink.jsonl"
@@ -60,6 +65,7 @@ def test_record_negated_inverts_and_marks(tmp_path: Path):
     assert r["negated"] is True
     assert r["passed"] is False
 
+
 def test_err_trap_emits_record_on_crash(tmp_path: Path):
     sink = tmp_path / "sink.jsonl"
     # A tool body that crashes (set -E lets the trap inherit)
@@ -75,25 +81,28 @@ def test_err_trap_emits_record_on_crash(tmp_path: Path):
     assert rs[0]["passed"] is False
     assert "tool error" in rs[0]["detail"]
 
+
 def test_err_trap_fires_inside_installed_tool(tmp_path: Path):
     """A real tool that crashes mid-body (not just a snippet) must still emit one record."""
     sink = tmp_path / "sink.jsonl"
     fake_tool = tmp_path / "boom-tool"
     fake_tool.write_text(
-        '#!/usr/bin/env bash\n'
+        "#!/usr/bin/env bash\n"
         f'_RECORD_CHECK=boom-tool\n_RECORD_ARGS=("$@")\nsource {HELPER}\n'
         'jq -e "this is not valid jq" /dev/null  # crashes\n'
-        'record_pass\n'
+        "record_pass\n"
     )
     fake_tool.chmod(0o755)
     proc = subprocess.run(
         [str(fake_tool)],
         env={**__import__("os").environ, "QUORUM_RECORD_SINK": str(sink)},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode != 0
     rs = _records(sink)
     assert len(rs) == 1 and rs[0]["passed"] is False and "tool error" in (rs[0]["detail"] or "")
+
 
 def test_no_sink_no_emission(tmp_path: Path):
     snippet = """

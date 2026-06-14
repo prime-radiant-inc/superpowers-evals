@@ -5,6 +5,7 @@ Sibling directories (worktrees, codex-home) must be computed relative to
 workdir.parent so they all land under the same run dir, not escaped to some
 hardcoded location.
 """
+
 from pathlib import Path
 
 from setup_helpers.worktree import _sibling_path

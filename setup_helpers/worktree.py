@@ -265,8 +265,7 @@ def _select_codex_superpowers_hook(response: dict[str, Any]) -> dict[str, str]:
     matcher = hook.get("matcher") or ""
     if "startup" not in matcher.split("|"):
         raise RuntimeError(
-            f"Superpowers Codex hook does not fire on session startup "
-            f"(matcher: {matcher!r})"
+            f"Superpowers Codex hook does not fire on session startup (matcher: {matcher!r})"
         )
     command = hook.get("command") or ""
     # Confirm the hook goes through the Superpowers run-hook.cmd wrapper.

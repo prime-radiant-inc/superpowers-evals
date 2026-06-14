@@ -4,6 +4,7 @@ These tests drive a real subprocess (a fake `gauntlet` script) so the Popen +
 watcher wiring is exercised end-to-end, with the teardown injected as a fast
 stub. The real teardown (kill the gauntlet tmux server) is covered by Task 3.
 """
+
 import os
 import stat
 import sys
@@ -71,9 +72,7 @@ def test_antigravity_midrun_rate_limit_trips_and_kills(tmp_path, monkeypatch):
     bin_dir.mkdir()
     teardown_signal = tmp_path / "teardown.flag"
     fake = bin_dir / "gauntlet"
-    _write_fake_gauntlet(
-        fake, _gauntlet_429_then_wait_for_teardown(run_dir, teardown_signal)
-    )
+    _write_fake_gauntlet(fake, _gauntlet_429_then_wait_for_teardown(run_dir, teardown_signal))
     _put_on_path(monkeypatch, fake)
 
     killed: list[Path] = []
@@ -119,7 +118,7 @@ def test_antigravity_clean_run_does_not_trip(tmp_path, monkeypatch):
         max_time=None,
         coding_agent="antigravity",
         extra_env={"ANTIGRAVITY_CONFIG_DIR": str(run_dir / "coding-agent-config")},
-        teardown=lambda sd: (killed.append(sd) or True),
+        teardown=lambda sd: killed.append(sd) or True,
     )
 
     assert result.status == "pass"
@@ -145,7 +144,7 @@ def test_non_antigravity_run_has_no_watcher(tmp_path, monkeypatch):
         max_time=None,
         coding_agent="claude",
         extra_env={"CLAUDE_CONFIG_DIR": str(run_dir / "coding-agent-config")},
-        teardown=lambda sd: (killed.append(sd) or True),
+        teardown=lambda sd: killed.append(sd) or True,
     )
 
     assert result.status == "fail"

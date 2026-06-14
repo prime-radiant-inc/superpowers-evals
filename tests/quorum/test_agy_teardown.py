@@ -45,9 +45,7 @@ def test_kills_the_server_under_the_scratch_dir(tmp_path, monkeypatch):
 
 
 def test_no_match_returns_false(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "quorum.agy_teardown._list_gauntlet_sockets", lambda: []
-    )
+    monkeypatch.setattr("quorum.agy_teardown._list_gauntlet_sockets", lambda: [])
     assert kill_run_tmux_server(tmp_path, runner=lambda *a, **k: None) is False
 
 

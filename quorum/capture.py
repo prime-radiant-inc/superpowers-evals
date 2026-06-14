@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +18,7 @@ from quorum.normalizers import (
     find_misplaced_codex_rollouts,
     find_misplaced_pi_sessions,
     find_unusable_pi_sessions,
+    normalize_gemini_logs_with_order,
 )
 from quorum.obol_capture import estimate_session_logs
 from quorum.timing import session_logs_duration_ms
@@ -26,6 +29,9 @@ class CaptureResult:
     path: Path
     source_logs: tuple[Path, ...]
     row_count: int
+    # How many capture passes ran (PRI-2081): 1 = first pass succeeded;
+    # >1 = the empty-capture retry re-diffed after a delay.
+    attempts: int = 1
 
 
 @dataclass(frozen=True)
@@ -93,11 +99,77 @@ def capture_tool_calls(
     out_path = run_dir / "coding-agent-tool-calls.jsonl"
     row_count = 0
     with out_path.open("w") as f:
-        for path in new:
-            for row in fn(path.read_text()):
+        if normalizer == "gemini":
+            ordered_rows: list[tuple[bool, str, int, int, dict[str, object]]] = []
+            for source_index, path in enumerate(new):
+                for row_index, (timestamp, row) in enumerate(
+                    normalize_gemini_logs_with_order(path.read_text())
+                ):
+                    ordered_rows.append(
+                        (not bool(timestamp), timestamp, source_index, row_index, row)
+                    )
+            ordered_rows.sort(key=lambda item: item[:4])
+            for *_order, row in ordered_rows:
                 f.write(json.dumps(row) + "\n")
                 row_count += 1
+        else:
+            for path in new:
+                for row in fn(path.read_text()):
+                    f.write(json.dumps(row) + "\n")
+                    row_count += 1
     return CaptureResult(path=out_path, source_logs=tuple(new), row_count=row_count)
+
+
+def capture_tool_calls_with_retry(
+    *,
+    log_dir: Path,
+    log_glob: str,
+    snapshot: set[str],
+    normalizer: str,
+    run_dir: Path,
+    launch_cwd: Path | None = None,
+    attempts: int = 3,
+    delay_s: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> CaptureResult:
+    """capture_tool_calls with an empty-capture retry/guard (PRI-2081).
+
+    A run that produced no new source logs — or logs that normalize to zero
+    rows — is usually a real failure, but it is sometimes a transient race:
+    the Coding-Agent's session log is still being flushed (or renamed into
+    place) when the post-drive diff runs. Those races turned whole runs into
+    permanent stage="capture" indeterminates, paying full Gauntlet + subject
+    spend for no verdict.
+
+    Re-run the same snapshot diff up to `attempts` times, `delay_s` apart,
+    until something normalizes. Each pass rewrites
+    coding-agent-tool-calls.jsonl, so the artifact always reflects the final
+    capture. The returned `attempts` field records how many passes ran;
+    a genuinely-empty run still comes back empty (and the runner's
+    per-backend diagnostic cascade proceeds unchanged), just `delay_s *
+    (attempts - 1)` seconds later.
+    """
+    result = capture_tool_calls(
+        log_dir=log_dir,
+        log_glob=log_glob,
+        snapshot=snapshot,
+        normalizer=normalizer,
+        run_dir=run_dir,
+        launch_cwd=launch_cwd,
+    )
+    used = 1
+    while result.row_count == 0 and used < attempts:
+        sleep(delay_s)
+        used += 1
+        result = capture_tool_calls(
+            log_dir=log_dir,
+            log_glob=log_glob,
+            snapshot=snapshot,
+            normalizer=normalizer,
+            run_dir=run_dir,
+            launch_cwd=launch_cwd,
+        )
+    return replace(result, attempts=used)
 
 
 def detect_misplaced_codex_rollouts(

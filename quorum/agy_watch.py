@@ -4,6 +4,7 @@ agy.log is the only deterministic continuous rate-limit signal: gauntlet does
 not stream the agy tmux pane, so polling the log is the sole way to detect
 RESOURCE_EXHAUSTED / 429 while the agy run is in flight.
 """
+
 from __future__ import annotations
 
 import threading

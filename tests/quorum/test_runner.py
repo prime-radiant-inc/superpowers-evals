@@ -27,6 +27,7 @@ from quorum.runner import (
     _cleanup_agent_runtime,
     _copilot_gauntlet_env,
     _exclude_antigravity_project_marker,
+    _gemini_extension_list_shows_superpowers,
     _gemini_transcripts,
     _gh_auth_token,
     _populate_context_dir,
@@ -85,9 +86,7 @@ def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path
     if name in {"claude", "claude-haiku"}:
         doc["runtime_family"] = "claude"
         doc["model"] = "opus" if name == "claude" else "claude-haiku-4-5-20251001"
-    (coding_agents_dir / f"{name}.yaml").write_text(
-        yaml.safe_dump(doc)
-    )
+    (coding_agents_dir / f"{name}.yaml").write_text(yaml.safe_dump(doc))
 
 
 def _make_antigravity_agent(
@@ -666,7 +665,87 @@ def test_gemini_launch_agent_is_substituted(tmp_path):
     assert "$GEMINI_ENV_FILE" not in content
     assert "GEMINI_CLI_HOME=" in content
     assert ".gemini-env" in content
+    assert "GEMINI_DEFAULT_AUTH_TYPE='gemini-api-key'" in content
     assert "--skip-trust --approval-mode=yolo" in content
+
+
+def test_claude_launch_agent_forces_session_persistence(tmp_path):
+    """Regression (B1): the generated claude launcher must export
+    CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1.
+
+    claude >= 2.1.176 skips transcript persistence when it detects a nested
+    interactive Claude Code session; the `env -u CLAUDECODE -u
+    CLAUDE_CODE_SESSION_ID` strip no longer covers every nested-detection signal
+    (e.g. CLAUDE_CODE_CHILD_SESSION). Without the FORCE override the transcript
+    is never written, capture comes back empty, and every claude run launched
+    from inside Claude Code is a loud indeterminate(stage=capture). The override
+    forces persistence regardless of nested-session detection.
+    """
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    session_log_dir = tmp_path / "logs"
+    session_log_dir.mkdir()
+    _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+    (coding_agents_dir / "claude-context").mkdir(parents=True)
+    (coding_agents_dir / "claude-context" / "HOWTO.md").write_text("invoke `claude`")
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "claude-context" / "launch-agent",
+        coding_agents_dir / "claude-context" / "launch-agent",
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    out_root = tmp_path / "results"
+
+    with patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="claude",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = next(out_root.iterdir())
+    shim = rd / "gauntlet-agent" / "context" / "launch-agent"
+    assert shim.exists()
+    content = shim.read_text()
+    # The nested-session identity strip is necessary but not sufficient on >=2.1.176 ...
+    assert "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID" in content
+    # ... so the launcher must also force transcript persistence.
+    assert "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" in content
+
+
+def test_gemini_launch_agent_substitutes_oauth_auth_type(tmp_path, monkeypatch):
+    coding_agents_dir = tmp_path / "coding-agents"
+    scenarios_dir = tmp_path / "scenarios"
+    session_log_dir = tmp_path / "logs"
+    session_log_dir.mkdir()
+    _make_gemini_agent(coding_agents_dir, session_log_dir)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "gemini-context" / "launch-agent",
+        coding_agents_dir / "gemini-context" / "launch-agent",
+    )
+    sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+    (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+    out_root = tmp_path / "results"
+    monkeypatch.setenv("GEMINI_AUTH_TYPE", "oauth-personal")
+
+    with (
+        patch("quorum.runner._seed_gemini_config"),
+        patch("quorum.runner.invoke_gauntlet", side_effect=_stub_gauntlet_pass),
+    ):
+        run_scenario(
+            scenario_dir=sd,
+            coding_agent="gemini",
+            coding_agents_dir=coding_agents_dir,
+            out_root=out_root,
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+    rd = next(out_root.iterdir())
+    content = (rd / "gauntlet-agent" / "context" / "launch-agent").read_text()
+    assert "GEMINI_DEFAULT_AUTH_TYPE='oauth-personal'" in content
+    assert "GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key" not in content
 
 
 def test_gemini_launch_agent_handles_shell_sensitive_paths(tmp_path):
@@ -1037,6 +1116,170 @@ def test_copilot_launch_agent_is_substituted_and_uses_env_i(tmp_path):
     ]
 
 
+def test_codex_launch_agent_scrubs_openai_api_key_env(tmp_path, monkeypatch):
+    coding_agents_dir = tmp_path / "coding-agents"
+    codex_context = coding_agents_dir / "codex-context"
+    codex_context.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "launch-agent",
+        codex_context / "launch-agent",
+    )
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "HOWTO.md",
+        codex_context / "HOWTO.md",
+    )
+    run_dir = tmp_path / "run"
+    launch_cwd = tmp_path / "workdir"
+    codex_home = run_dir / "coding-agent-config"
+    launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
+    launch_cwd.mkdir()
+
+    _populate_context_dir(
+        coding_agents_dir,
+        "codex",
+        run_dir,
+        substitutions={
+            "$QUORUM_AGENT_CWD": str(launch_cwd),
+            "$QUORUM_AGENT_CWD_SH": _shell_single_quote(str(launch_cwd)),
+            "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
+            "$QUORUM_LAUNCH_AGENT_SH": _shell_single_quote(str(launch_agent_path)),
+            "$CODEX_HOME": str(codex_home),
+            "$CODEX_HOME_SH": _shell_single_quote(str(codex_home)),
+        },
+    )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    capture_path = tmp_path / "codex-capture.json"
+    _exec(
+        fake_bin / "codex",
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        f"Path({json.dumps(str(capture_path))}).write_text(json.dumps({{\n"
+        "    'argv': sys.argv[1:],\n"
+        "    'cwd': os.getcwd(),\n"
+        "    'env': dict(os.environ),\n"
+        "}, sort_keys=True))\n",
+    )
+
+    launch_env_path = str(fake_bin) + os.pathsep + os.environ["PATH"]
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "PATH="
+            + _shell_single_quote(launch_env_path)
+            + " "
+            + _shell_single_quote(str(launch_agent_path)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": os.environ["PATH"],
+            "OPENAI_API_KEY": "sk-should-not-reach-codex",
+            "OPENAI_BASE_URL": "https://api-key-proxy.example",
+            "OPENAI_ORG_ID": "org-key-mode",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    captured = json.loads(capture_path.read_text())
+    assert captured["cwd"] == str(launch_cwd)
+    assert captured["env"]["CODEX_HOME"] == str(codex_home)
+    assert "OPENAI_API_KEY" not in captured["env"]
+    assert "OPENAI_BASE_URL" not in captured["env"]
+    assert "OPENAI_ORG_ID" not in captured["env"]
+
+
+def test_codex_launch_agent_isolates_home(tmp_path):
+    # Codex discovers user-scope skills/plugins from $HOME/.agents (resolved via
+    # $HOME, NOT $CODEX_HOME). If HOME is left at the host's, a host
+    # ~/.agents/skills symlink bleeds host skills into the run. The launcher must
+    # pin HOME to a per-run dir so Codex uses the staged superpowers@debug skills.
+    coding_agents_dir = tmp_path / "coding-agents"
+    codex_context = coding_agents_dir / "codex-context"
+    codex_context.mkdir(parents=True)
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "launch-agent",
+        codex_context / "launch-agent",
+    )
+    shutil.copy2(
+        Path(__file__).resolve().parents[2] / "coding-agents" / "codex-context" / "HOWTO.md",
+        codex_context / "HOWTO.md",
+    )
+    run_dir = tmp_path / "run"
+    launch_cwd = tmp_path / "workdir"
+    codex_home = run_dir / "coding-agent-config"
+    launch_agent_path = run_dir / "gauntlet-agent" / "context" / "launch-agent"
+    launch_cwd.mkdir()
+
+    _populate_context_dir(
+        coding_agents_dir,
+        "codex",
+        run_dir,
+        substitutions={
+            "$QUORUM_AGENT_CWD": str(launch_cwd),
+            "$QUORUM_AGENT_CWD_SH": _shell_single_quote(str(launch_cwd)),
+            "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
+            "$QUORUM_LAUNCH_AGENT_SH": _shell_single_quote(str(launch_agent_path)),
+            "$CODEX_HOME": str(codex_home),
+            "$CODEX_HOME_SH": _shell_single_quote(str(codex_home)),
+        },
+    )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    capture_path = tmp_path / "codex-capture.json"
+    _exec(
+        fake_bin / "codex",
+        "#!/usr/bin/env python3\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        f"Path({json.dumps(str(capture_path))}).write_text(json.dumps({{\n"
+        "    'env': dict(os.environ),\n"
+        "}, sort_keys=True))\n",
+    )
+
+    host_home = tmp_path / "host-home-should-not-leak"
+    host_home.mkdir()
+    launch_env_path = str(fake_bin) + os.pathsep + os.environ["PATH"]
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "PATH="
+            + _shell_single_quote(launch_env_path)
+            + " "
+            + _shell_single_quote(str(launch_agent_path)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": str(host_home),
+            "OPENAI_API_KEY": "sk-should-not-reach-codex",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    captured = json.loads(capture_path.read_text())
+    agent_home = codex_home / "agent-home"
+    # HOME is pinned inside the per-run home, not the inherited host HOME, so
+    # Codex's $HOME/.agents/{skills,plugins} discovery stays in-isolation.
+    assert captured["env"]["HOME"] == str(agent_home)
+    assert captured["env"]["HOME"] != str(host_home)
+    assert captured["env"]["HOME"].startswith(str(codex_home))
+    # XDG + TMPDIR isolated too, and the dirs were created.
+    assert captured["env"]["XDG_CONFIG_HOME"] == str(agent_home / ".config")
+    assert captured["env"]["TMPDIR"] == str(agent_home / ".tmp")
+    assert agent_home.is_dir()
+    # CODEX_HOME still set so config/sessions/plugins stay isolated.
+    assert captured["env"]["CODEX_HOME"] == str(codex_home)
+
+
 def test_copilot_context_gets_runtime_substitutions(tmp_path):
     coding_agents_dir = tmp_path / "coding-agents"
     scenarios_dir = tmp_path / "scenarios"
@@ -1202,9 +1445,7 @@ class TestSeedAgentConfigDir:
         entry = cfg["projects"][str(workdir.resolve())]
         assert entry["hasTrustDialogAccepted"] is True
 
-    def test_claude_family_variant_uses_claude_skeleton_and_auth(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claude_family_variant_uses_claude_skeleton_and_auth(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         skel = tmp_path / "claude-home-skeleton"
         skel.mkdir()
@@ -1242,13 +1483,9 @@ class TestSeedAgentConfigDir:
         assert env_path.read_text() == "ANTHROPIC_API_KEY='sk-test-key'\n"
         assert oct(env_path.stat().st_mode & 0o777) == "0o600"
         assert runtime.substitutions["$CLAUDE_ENV_FILE"] == str(env_path)
-        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(
-            str(env_path)
-        )
+        assert runtime.substitutions["$CLAUDE_ENV_FILE_SH"] == _shell_single_quote(str(env_path))
 
-    def test_claude_target_writes_api_key_env_file_when_required(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claude_target_writes_api_key_env_file_when_required(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         cfg = CodingAgentConfig(
             name="claude",
@@ -1330,17 +1567,34 @@ class TestSeedAgentConfigDir:
         assert (dest / "config.toml").exists()
         assert not (dest / ".claude.json").exists()
 
-    def test_codex_target_seeds_auth_via_codex_login(self, tmp_path, monkeypatch):
-        # Codex's auth picker is gated on auth.json, not on $OPENAI_API_KEY,
-        # so the runner pipes the env key through `codex login --with-api-key`
-        # into the fresh per-run CODEX_HOME.
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    def test_codex_target_seeds_subscription_auth_from_signed_in_home(self, tmp_path, monkeypatch):
+        # Codex evals should use ChatGPT subscription auth, not Platform API-key
+        # auth. The per-run CODEX_HOME copies the signed-in account auth state.
+        home = tmp_path / "home"
+        source = home / ".codex" / "auth.json"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            json.dumps(
+                {
+                    "auth_mode": "chatgpt",
+                    "OPENAI_API_KEY": None,
+                    "tokens": {
+                        "access_token": "access",
+                        "refresh_token": "refresh",
+                        "id_token": "id",
+                        "account_id": "acct",
+                    },
+                    "last_refresh": "2026-06-12T00:00:00.000Z",
+                }
+            )
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-be-used")
         dest = tmp_path / "agent-config"
         with (
             patch("quorum.runner.subprocess.run") as mock_run,
             patch("quorum.runner._seed_codex_plugin_hooks"),
         ):
-            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             _seed_agent_config_dir(
                 _tcfg("codex"),
                 tmp_path,
@@ -1348,34 +1602,35 @@ class TestSeedAgentConfigDir:
                 tmp_path / "wd",
                 run_dir=tmp_path / "run-dir",
             )
-        (cmd, *_), kwargs = mock_run.call_args
-        assert cmd == ["codex", "login", "--with-api-key"]
-        assert kwargs["input"] == "sk-test-key"
-        assert kwargs["env"]["CODEX_HOME"] == str(dest)
+        mock_run.assert_not_called()
+        assert json.loads((dest / "auth.json").read_text())["auth_mode"] == "chatgpt"
+        assert (dest / "auth.json").stat().st_mode & 0o777 == 0o600
 
-    def test_codex_seed_raises_on_login_failure(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    def test_codex_seed_rejects_api_key_auth_state(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        source = home / ".codex" / "auth.json"
+        source.parent.mkdir(parents=True)
+        source.write_text(json.dumps({"auth_mode": "api_key", "OPENAI_API_KEY": "sk-test-key"}))
+        monkeypatch.setenv("HOME", str(home))
         dest = tmp_path / "agent-config"
         with (
-            patch("quorum.runner.subprocess.run") as mock_run,
             patch("quorum.runner._seed_codex_plugin_hooks"),
+            pytest.raises(RunnerError, match="ChatGPT subscription auth"),
         ):
-            mock_run.return_value = subprocess.CompletedProcess([], 1, "", "bad key")
-            with pytest.raises(RunnerError, match="codex login"):
-                _seed_agent_config_dir(
-                    _tcfg("codex"),
-                    tmp_path,
-                    dest,
-                    tmp_path / "wd",
-                    run_dir=tmp_path / "run-dir",
-                )
+            _seed_agent_config_dir(
+                _tcfg("codex"),
+                tmp_path,
+                dest,
+                tmp_path / "wd",
+                run_dir=tmp_path / "run-dir",
+            )
 
-    def test_codex_seed_raises_without_api_key(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    def test_codex_seed_raises_without_signed_in_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
         dest = tmp_path / "agent-config"
         with (
             patch("quorum.runner._seed_codex_plugin_hooks"),
-            pytest.raises(RunnerError, match="OPENAI_API_KEY"),
+            pytest.raises(RunnerError, match="Codex ChatGPT subscription auth"),
         ):
             _seed_agent_config_dir(
                 _tcfg("codex"),
@@ -1990,6 +2245,43 @@ class TestSeedAgentConfigDir:
         assert (cfg / ".gemini-env").exists()
         assert _gemini_transcripts(cfg) == []
 
+    def test_gemini_seed_oauth_copies_credentials_and_uses_oauth_auth(self, tmp_path, monkeypatch):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        source_home = tmp_path / "source-gemini"
+        source_home.mkdir()
+        (source_home / "oauth_creds.json").write_text('{"refresh_token":"test-refresh"}')
+        (source_home / "google_accounts.json").write_text('{"active":"me@example.test"}')
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setenv("GEMINI_AUTH_TYPE", "oauth-personal")
+        monkeypatch.setenv("GEMINI_OAUTH_HOME", str(source_home))
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+        cfg = tmp_path / "cfg"
+
+        def fake_run(cmd, **kwargs):
+            assert kwargs["cwd"] == cfg
+            assert kwargs["env"]["GEMINI_CLI_HOME"] == str(cfg)
+            assert kwargs["env"]["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+            assert kwargs["env"]["GEMINI_DEFAULT_AUTH_TYPE"] == "oauth-personal"
+            if cmd[:3] == ["gemini", "extensions", "link"]:
+                _write_gemini_extension_metadata(cfg)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            assert cmd == ["gemini", "extensions", "list"]
+            return subprocess.CompletedProcess(cmd, 0, "", "✓ superpowers (5.1.0)\n")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_gemini_config(cfg, tmp_path / "wd")
+
+        settings = json.loads((cfg / ".gemini" / "settings.json").read_text())
+        assert settings["security"]["auth"]["selectedType"] == "oauth-personal"
+        copied_creds = cfg / ".gemini" / "oauth_creds.json"
+        copied_accounts = cfg / ".gemini" / "google_accounts.json"
+        assert copied_creds.read_text() == '{"refresh_token":"test-refresh"}'
+        assert copied_accounts.read_text() == '{"active":"me@example.test"}'
+        assert stat.S_IMODE(copied_creds.stat().st_mode) == 0o600
+        assert stat.S_IMODE(copied_accounts.stat().st_mode) == 0o600
+        assert (cfg / ".gemini-env").read_text() == ""
+
     def test_gemini_seed_redacts_api_key_from_link_failure(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
@@ -2101,6 +2393,27 @@ class TestSeedAgentConfigDir:
         assert excinfo.value.stage == "setup"
         assert "expected metadata files are missing" in str(excinfo.value)
         assert "test-secret-key" not in str(excinfo.value)
+
+    def test_gemini_extension_list_accepts_status_icon_prefix(self):
+        output = "✓ superpowers (5.1.0)\n ID: ext_123\n"
+
+        assert _gemini_extension_list_shows_superpowers(output)
+
+    def test_gemini_seed_accepts_extension_list_on_stderr(self, tmp_path, monkeypatch):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+        cfg = tmp_path / "cfg"
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[:3] == ["gemini", "extensions", "link"]:
+                _write_gemini_extension_metadata(cfg)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "✓ superpowers (5.1.0)\n")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_gemini_config(cfg, tmp_path / "wd")
 
     def test_gemini_seed_fails_when_provisioning_creates_transcripts(self, tmp_path, monkeypatch):
         sp = _make_gemini_superpowers_root(tmp_path)
@@ -2842,9 +3155,7 @@ class TestAntigravityProjectMarkerExclusion:
 
 
 class TestRunScenario:
-    def test_claude_family_missing_binary_fails_before_writing_env(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claude_family_missing_binary_fails_before_writing_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
         monkeypatch.setattr("quorum.runner.shutil.which", lambda _binary: None)
@@ -4412,8 +4723,7 @@ class TestRunScenario:
             'run "$QUORUM_LAUNCH_AGENT" with model "$CLAUDE_MODEL"\n'
         )
         (claude_context / "launch-agent").write_text(
-            "#!/usr/bin/env bash\n"
-            'exec "$QUORUM_LAUNCH_AGENT" --model "$CLAUDE_MODEL"\n'
+            '#!/usr/bin/env bash\nexec "$QUORUM_LAUNCH_AGENT" --model "$CLAUDE_MODEL"\n'
         )
         sd = _make_scenario(scenarios_dir, "x")
         out_root = tmp_path / "results"

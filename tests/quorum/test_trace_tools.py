@@ -14,6 +14,15 @@ def _trace(tmp_path: Path, *records: dict) -> Path:
     return p
 
 
+def _empty_trace(tmp_path: Path) -> Path:
+    """A capture file that exists but is empty — the condition produced when
+    transcript capture bitrots (the agent ran but no tool-call records were
+    recovered). Negative assertions must NOT vacuously pass on this."""
+    p = tmp_path / "coding-agent-tool-calls.jsonl"
+    p.write_text("")
+    return p
+
+
 def _run(tool: str, *args: str, trace: Path, cwd: Path, sink: Path) -> int:
     return subprocess.run(
         [str(BIN / tool), *args],
@@ -208,9 +217,7 @@ def test_gemini_extension_linked_check(tmp_path):
     parent = tmp_path / "rundir"
     root = parent / "coding-agent-config" / ".gemini"
     (root / "extensions" / "superpowers").mkdir(parents=True)
-    (root / "extensions" / "superpowers" / ".gemini-extension-install.json").write_text(
-        "{}"
-    )
+    (root / "extensions" / "superpowers" / ".gemini-extension-install.json").write_text("{}")
     (root / "extensions" / "extension-enablement.json").write_text("{}")
     (root / "extension_integrity.json").write_text("{}")
     workdir = parent / "coding-agent-workdir"
@@ -341,8 +348,7 @@ def test_skill_before_implementation_tool_ignores_antigravity_artifacts(tmp_path
             "tool": "Write",
             "args": {
                 "file_path": (
-                    str(parent)
-                    + "/coding-agent-config/.gemini/antigravity-cli/brain/tasks.md"
+                    str(parent) + "/coding-agent-config/.gemini/antigravity-cli/brain/tasks.md"
                 )
             },
         },
@@ -350,8 +356,7 @@ def test_skill_before_implementation_tool_ignores_antigravity_artifacts(tmp_path
             "tool": "Write",
             "args": {
                 "file_path": (
-                    str(workdir)
-                    + "/docs/superpowers/specs/2026-06-01-email-validation-design.md"
+                    str(workdir) + "/docs/superpowers/specs/2026-06-01-email-validation-design.md"
                 )
             },
         },
@@ -546,14 +551,7 @@ def test_antigravity_plugin_installed_passes_when_required_files_exist(tmp_path)
     run_dir = tmp_path / "run"
     workdir = run_dir / "coding-agent-workdir"
     workdir.mkdir(parents=True)
-    plugin_root = (
-        run_dir
-        / "coding-agent-config"
-        / ".gemini"
-        / "config"
-        / "plugins"
-        / "superpowers"
-    )
+    plugin_root = run_dir / "coding-agent-config" / ".gemini" / "config" / "plugins" / "superpowers"
     (plugin_root / "skills" / "using-superpowers").mkdir(parents=True)
     (plugin_root / "plugin.json").write_text("{}")
     (plugin_root / "hooks.json").write_text("{}")
@@ -581,14 +579,7 @@ def test_antigravity_plugin_installed_fails_when_skill_missing(tmp_path):
     run_dir = tmp_path / "run"
     workdir = run_dir / "coding-agent-workdir"
     workdir.mkdir(parents=True)
-    plugin_root = (
-        run_dir
-        / "coding-agent-config"
-        / ".gemini"
-        / "config"
-        / "plugins"
-        / "superpowers"
-    )
+    plugin_root = run_dir / "coding-agent-config" / ".gemini" / "config" / "plugins" / "superpowers"
     plugin_root.mkdir(parents=True)
     (plugin_root / "plugin.json").write_text("{}")
     (plugin_root / "hooks.json").write_text("{}")
@@ -632,8 +623,7 @@ def _write_kimi_installed_entries(run_dir: Path, plugins: list[dict]) -> None:
     plugins_dir = run_dir / "coding-agent-config" / "plugins"
     plugins_dir.mkdir(parents=True)
     (plugins_dir / "installed.json").write_text(
-        json.dumps({"version": 1, "plugins": plugins})
-        + "\n"
+        json.dumps({"version": 1, "plugins": plugins}) + "\n"
     )
 
 
@@ -830,9 +820,7 @@ def test_kimi_plugin_installed_fails_when_managed_copy_exists(tmp_path):
     superpowers = tmp_path / "superpowers"
     _make_kimi_superpowers_root(superpowers)
     _write_kimi_installed(run_dir, superpowers)
-    (run_dir / "coding-agent-config" / "plugins" / "managed" / "superpowers").mkdir(
-        parents=True
-    )
+    (run_dir / "coding-agent-config" / "plugins" / "managed" / "superpowers").mkdir(parents=True)
     sink = tmp_path / "s"
 
     result = _run_kimi_plugin_installed(run_dir, workdir, sink, superpowers)
@@ -877,11 +865,7 @@ def test_copilot_bootstrap_native_skill_before_write_rejects_shell_read_only_ord
         parent,
         {
             "tool": "Bash",
-            "args": {
-                "command": (
-                    "cat plugins/superpowers/skills/brainstorming/SKILL.md"
-                )
-            },
+            "args": {"command": ("cat plugins/superpowers/skills/brainstorming/SKILL.md")},
         },
         {"tool": "Write", "args": {"file_path": str(workdir / "src/App.jsx")}},
         {"tool": "Skill", "args": {"skill": "superpowers:brainstorming"}},
@@ -1236,3 +1220,89 @@ def test_investigated_does_not_false_match_grep_substring(tmp_path):
     )
     sink = tmp_path / "s"
     assert _run("investigated", trace=trace, cwd=workdir, sink=sink) != 0
+
+
+# Negative-assertion tools (tool-not-called / skill-not-called) must
+# distinguish "agent demonstrably did not do X" from "we have no transcript to
+# judge". On an empty capture (the bitrot condition) they previously reported
+# PASS — a silent false-pass that made cost/over-trigger scenarios green when
+# the harness was actually blind. Their guarded sibling
+# implementation-tool-not-called already fails on empty; these pin the same
+# contract for the other two.
+
+
+def test_tool_not_called_passes_when_tool_absent(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Read", "args": {}})
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) == 0
+    assert _r(sink)["passed"]
+
+
+def test_tool_not_called_fails_when_tool_present(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Edit", "args": {}})
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) != 0
+    assert not _r(sink)["passed"]
+
+
+def test_tool_not_called_fails_on_empty_capture(tmp_path):
+    """Empty capture must not vacuously pass a negative assertion."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _empty_trace(parent)
+    sink = tmp_path / "s"
+    assert _run("tool-not-called", "Edit", trace=trace, cwd=workdir, sink=sink) != 0
+    assert not _r(sink)["passed"]
+
+
+def test_skill_not_called_passes_when_skill_absent(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Edit", "args": {}})
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        == 0
+    )
+    assert _r(sink)["passed"]
+
+
+def test_skill_not_called_fails_when_skill_present(tmp_path):
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _trace(parent, {"tool": "Skill", "args": {"skill": "superpowers:foo"}})
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        != 0
+    )
+    assert not _r(sink)["passed"]
+
+
+def test_skill_not_called_fails_on_empty_capture(tmp_path):
+    """Empty capture must not vacuously pass a negative assertion."""
+    parent = tmp_path / "rundir"
+    parent.mkdir()
+    workdir = parent / "coding-agent-workdir"
+    workdir.mkdir()
+    trace = _empty_trace(parent)
+    sink = tmp_path / "s"
+    assert (
+        _run("skill-not-called", "superpowers:foo", trace=trace, cwd=workdir, sink=sink)
+        != 0
+    )
+    assert not _r(sink)["passed"]

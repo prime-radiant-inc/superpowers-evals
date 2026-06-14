@@ -49,7 +49,7 @@ from quorum import agy_creds
 from quorum.agy_teardown import kill_run_tmux_server
 from quorum.capture import (
     capture_token_usage,
-    capture_tool_calls,
+    capture_tool_calls_with_retry,
     detect_misplaced_codex_rollouts,
     detect_misplaced_pi_sessions,
     detect_unusable_pi_sessions,
@@ -94,11 +94,23 @@ from quorum.setup_step import SetupError, run_setup
 from quorum.story_meta import StoryMetaError, read_quorum_max_time
 from setup_helpers.worktree import install_codex_superpowers_plugin_hooks
 
+# Empty-capture retry/guard (PRI-2081). A transient flush race between the
+# Coding-Agent exiting and the capture diff reading its session log used to
+# become a permanent stage="capture" indeterminate. Bounded re-diff: worst
+# case adds (attempts - 1) * delay seconds to a genuinely-empty run before
+# the per-backend diagnostic cascade proceeds unchanged.
+CAPTURE_RETRY_ATTEMPTS = 3
+CAPTURE_RETRY_DELAY_S = 2.0
+
+
 LAUNCH_CWD_SENTINEL = ".quorum-launch-cwd"
 CODING_AGENT_CONFIG_SUBDIR = "coding-agent-config"
 ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV = "QUORUM_ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT"
 ANTIGRAVITY_VISIBLE_LAUNCH_RECORD = "antigravity-visible-launch-cwd.json"
 GEMINI_ENV_FILE_NAME = ".gemini-env"
+GEMINI_AUTH_TYPE_API_KEY = "gemini-api-key"
+GEMINI_AUTH_TYPE_OAUTH = "oauth-personal"
+GEMINI_AUTH_TYPES = (GEMINI_AUTH_TYPE_API_KEY, GEMINI_AUTH_TYPE_OAUTH)
 CLAUDE_ENV_FILE_NAME = ".claude-env"
 COPILOT_ENV_FILE_NAME = ".copilot-env"
 GEMINI_REQUIRED_SUPERPOWERS_FILES = (
@@ -295,29 +307,36 @@ def _cleanup_agent_runtime(runtime: AgentRuntime) -> None:
 
 
 def _seed_codex_auth(codex_home: Path) -> None:
-    """Seed codex auth.json so the agent boots past the sign-in picker.
-
-    Codex gates its TUI auth picker on auth.json, not on $OPENAI_API_KEY:
-    `codex login status` reports "Not logged in" for an env-var-only
-    setup. Piping the key through `codex login --with-api-key` writes a
-    logged-in auth.json into CODEX_HOME. Seeded per-run from the env
-    rather than from a checked-in fixture, so the API key is never
-    persisted outside the environment and the gitignored run dir.
-    """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RunnerError("OPENAI_API_KEY not set; cannot seed codex auth")
-    result = subprocess.run(
-        ["codex", "login", "--with-api-key"],
-        input=api_key,
-        text=True,
-        capture_output=True,
-        env={**os.environ, "CODEX_HOME": str(codex_home)},
-    )
-    if result.returncode != 0:
+    """Seed ChatGPT subscription auth into the isolated per-run CODEX_HOME."""
+    source = Path.home() / ".codex" / "auth.json"
+    if not source.exists():
         raise RunnerError(
-            f"codex login --with-api-key failed (exit {result.returncode}): {result.stderr.strip()}"
+            "Codex ChatGPT subscription auth not found at ~/.codex/auth.json; "
+            "run `codex login` before Codex evals",
+            stage="setup",
         )
+    try:
+        auth = json.loads(source.read_text())
+    except json.JSONDecodeError as e:
+        raise RunnerError(
+            "Codex ChatGPT subscription auth at ~/.codex/auth.json is not valid JSON",
+            stage="setup",
+        ) from e
+    if auth.get("auth_mode") != "chatgpt" or auth.get("OPENAI_API_KEY") is not None:
+        raise RunnerError(
+            "Codex evals require ChatGPT subscription auth in ~/.codex/auth.json, not API-key auth",
+            stage="setup",
+        )
+    tokens = auth.get("tokens")
+    if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
+        raise RunnerError(
+            "Codex ChatGPT subscription auth is missing a refresh token; run `codex login` again",
+            stage="setup",
+        )
+    codex_home.mkdir(parents=True, exist_ok=True)
+    dest = codex_home / "auth.json"
+    shutil.copy2(source, dest)
+    dest.chmod(0o600)
 
 
 def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
@@ -342,12 +361,24 @@ def _gemini_transcripts(config_dir: Path) -> list[Path]:
     return sorted(tmp_dir.glob("**/chats/**/*.json*"))
 
 
-def _write_gemini_settings(gemini_home: Path) -> None:
+def _gemini_auth_type(env: Mapping[str, str] = os.environ) -> str:
+    auth_type = env.get("GEMINI_AUTH_TYPE", GEMINI_AUTH_TYPE_API_KEY).strip()
+    if not auth_type:
+        auth_type = GEMINI_AUTH_TYPE_API_KEY
+    if auth_type not in GEMINI_AUTH_TYPES:
+        raise RunnerError(
+            f"GEMINI_AUTH_TYPE must be one of {', '.join(GEMINI_AUTH_TYPES)}; got {auth_type!r}",
+            stage="setup",
+        )
+    return auth_type
+
+
+def _write_gemini_settings(gemini_home: Path, auth_type: str | None = None) -> None:
     settings_path = gemini_home / ".gemini" / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     security = settings.setdefault("security", {})
     auth = security.setdefault("auth", {})
-    auth["selectedType"] = "gemini-api-key"
+    auth["selectedType"] = auth_type or _gemini_auth_type()
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(settings, indent=2))
 
@@ -366,14 +397,15 @@ def _gemini_stderr_excerpt(stderr: str) -> str:
 
 def _gemini_extension_list_shows_superpowers(stdout: str) -> bool:
     return any(
-        re.match(r"^\s*superpowers(?:\s|\(|$)", line, flags=re.IGNORECASE)
+        re.match(r"^\s*(?:[^\w\s]+\s+)?superpowers(?:\s|\(|$)", line, flags=re.IGNORECASE)
         for line in stdout.splitlines()
     )
 
 
-def _write_gemini_env_file(gemini_home: Path) -> Path:
+def _write_gemini_env_file(gemini_home: Path, auth_type: str | None = None) -> Path:
+    auth_type = auth_type or _gemini_auth_type()
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
+    if auth_type == GEMINI_AUTH_TYPE_API_KEY and not api_key:
         raise RunnerError("GEMINI_API_KEY not set; cannot seed Gemini auth", stage="setup")
     env_file = gemini_home / GEMINI_ENV_FILE_NAME
     env_file.parent.mkdir(parents=True, exist_ok=True)
@@ -382,10 +414,37 @@ def _write_gemini_env_file(gemini_home: Path) -> Path:
         flags |= os.O_NOFOLLOW
     fd = os.open(env_file, flags, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write("GEMINI_API_KEY=" + _shell_single_quote(api_key) + "\n")
+        if auth_type == GEMINI_AUTH_TYPE_API_KEY:
+            f.write("GEMINI_API_KEY=" + _shell_single_quote(api_key) + "\n")
         f.flush()
         os.fchmod(f.fileno(), 0o600)
     return env_file
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+        f.flush()
+        os.fchmod(f.fileno(), 0o600)
+
+
+def _copy_gemini_oauth_credentials(gemini_home: Path) -> None:
+    source_home = Path(
+        os.environ.get("GEMINI_OAUTH_HOME", str(Path.home() / ".gemini"))
+    ).expanduser()
+    for name in ("oauth_creds.json", "google_accounts.json"):
+        source = source_home / name
+        if not source.is_file():
+            raise RunnerError(
+                f"Gemini OAuth credential file not found: {source}",
+                stage="setup",
+            )
+        _write_private_text(gemini_home / ".gemini" / name, source.read_text())
 
 
 def _write_claude_env_file(claude_config_dir: Path) -> Path:
@@ -526,15 +585,18 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             stage="setup",
         )
 
+    auth_type = _gemini_auth_type()
     gemini_home.mkdir(parents=True, exist_ok=True)
-    _write_gemini_settings(gemini_home)
-    _write_gemini_env_file(gemini_home)
+    _write_gemini_settings(gemini_home, auth_type)
+    _write_gemini_env_file(gemini_home, auth_type)
+    if auth_type == GEMINI_AUTH_TYPE_OAUTH:
+        _copy_gemini_oauth_credentials(gemini_home)
 
     env = {
         **os.environ,
         "GEMINI_CLI_HOME": str(gemini_home),
         "GEMINI_CLI_TRUST_WORKSPACE": "true",
-        "GEMINI_DEFAULT_AUTH_TYPE": "gemini-api-key",
+        "GEMINI_DEFAULT_AUTH_TYPE": auth_type,
     }
     link_cmd = ["gemini", "extensions", "link", str(superpowers_root), "--consent"]
     link = subprocess.run(
@@ -565,7 +627,7 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
             f"(exit {listing.returncode}); stderr: {_gemini_stderr_excerpt(listing.stderr)}",
             stage="setup",
         )
-    if not _gemini_extension_list_shows_superpowers(listing.stdout):
+    if not _gemini_extension_list_shows_superpowers(f"{listing.stdout}\n{listing.stderr}"):
         raise RunnerError(
             "gemini extensions list did not show Superpowers extension",
             stage="setup",
@@ -1333,11 +1395,10 @@ def _seed_agent_config_dir(
     runner seeds that approval for the per-run key. The claude skeleton itself
     carries onboarding dialog-bypass state (see bin/refresh-claude-home-skeleton).
 
-    For codex, _seed_codex_auth runs `codex login --with-api-key` against
-    the fresh dir so the agent boots past the "Welcome to Codex / Sign in"
-    picker, then _seed_codex_plugin_hooks stages Superpowers as a trusted
-    plugin hook — the codex equivalent of the Superpowers access every
-    claude run gets.
+    For codex, _seed_codex_auth copies local ChatGPT subscription auth into the
+    fresh dir so the agent boots past the "Welcome to Codex / Sign in" picker,
+    then _seed_codex_plugin_hooks stages Superpowers as a trusted plugin hook —
+    the codex equivalent of the Superpowers access every claude run gets.
 
     For kimi, _seed_kimi_config keeps auth/model env and plugins isolated while
     registering the local Superpowers checkout as the only enabled plugin.
@@ -1894,10 +1955,13 @@ def _run_scenario_inner(
             **agent_runtime.substitutions,
         }
         if tcfg.name == "gemini":
+            gemini_auth_type = _gemini_auth_type()
             substitutions["$GEMINI_ENV_FILE"] = str(agent_config_dir / GEMINI_ENV_FILE_NAME)
             substitutions["$GEMINI_ENV_FILE_SH"] = _shell_single_quote(
                 str(agent_config_dir / GEMINI_ENV_FILE_NAME)
             )
+            substitutions["$GEMINI_AUTH_TYPE"] = gemini_auth_type
+            substitutions["$GEMINI_AUTH_TYPE_SH"] = _shell_single_quote(gemini_auth_type)
         if tcfg.name == "copilot":
             if copilot_provisioning is None:
                 raise RunnerError(
@@ -1919,9 +1983,7 @@ def _run_scenario_inner(
             run_dir,
             substitutions=substitutions,
             required=tcfg.runtime_family == "claude",
-            forbidden_placeholders=(
-                ("$CLAUDE_MODEL",) if tcfg.runtime_family == "claude" else ()
-            ),
+            forbidden_placeholders=(("$CLAUDE_MODEL",) if tcfg.runtime_family == "claude" else ()),
         )
 
         # 7. Snapshot session-log dir.
@@ -2001,14 +2063,18 @@ def _run_scenario_inner(
                     error=RunError(stage="capture", message=str(e)),
                 )
 
-        # 9. Capture + normalize logs.
-        capture_result = capture_tool_calls(
+        # 9. Capture + normalize logs, with the empty-capture retry/guard
+        #    (PRI-2081): a session log still being flushed when the diff runs
+        #    must not turn the run into a permanent capture indeterminate.
+        capture_result = capture_tool_calls_with_retry(
             log_dir=session_log_dir,
             log_glob=tcfg.session_log_glob,
             snapshot=snap,
             normalizer=tcfg.normalizer,
             run_dir=run_dir,
             launch_cwd=launch_cwd,
+            attempts=CAPTURE_RETRY_ATTEMPTS,
+            delay_s=CAPTURE_RETRY_DELAY_S,
         )
 
         # 9b. Capture token usage — measurement only, written to

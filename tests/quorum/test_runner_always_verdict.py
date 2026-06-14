@@ -4,6 +4,7 @@
 A setup.sh that exits non-zero must still produce a verdict.json with
 final=indeterminate and error.stage=setup.  Same for unexpected quorum errors.
 """
+
 import json
 import stat
 from pathlib import Path
@@ -17,6 +18,7 @@ from quorum.runner import run_scenario
 # ---------------------------------------------------------------------------
 # Helpers (shared with test_runner_gating pattern)
 # ---------------------------------------------------------------------------
+
 
 def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
     coding_agents_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +73,7 @@ def _invoke(
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_coding_agent_config_error_is_setup_indeterminate(monkeypatch, tmp_path):
     monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
 
@@ -119,9 +122,7 @@ class TestAlwaysVerdict:
         with final=indeterminate, error.stage=setup."""
         scen = tmp_path / "s"
         scen.mkdir()
-        (scen / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 1\n")
         # No checks.sh — old path; setup failure raises RunnerError wrapping SetupError.
 
@@ -139,9 +140,7 @@ class TestAlwaysVerdict:
         """The returned verdict object must match what was written to disk."""
         scen = tmp_path / "s"
         scen.mkdir()
-        (scen / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 1\n")
 
         run_dir, verdict = _invoke(tmp_path, scen)
@@ -154,9 +153,7 @@ class TestAlwaysVerdict:
         """run_dir must be the first return value and must exist on disk."""
         scen = tmp_path / "s"
         scen.mkdir()
-        (scen / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(scen / "setup.sh", "#!/usr/bin/env bash\necho 'boom'; exit 1\n")
 
         run_dir, verdict = _invoke(tmp_path, scen)
@@ -187,9 +184,7 @@ class TestAlwaysVerdict:
         """An unexpected exception from _run_scenario_inner is caught by the wrapper."""
         scen = tmp_path / "s"
         scen.mkdir()
-        (scen / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 0\n")
 
         def _boom(**kwargs):
@@ -210,9 +205,7 @@ class TestAlwaysVerdict:
         """verdict.json must exist on disk regardless of which exception fires."""
         scen = tmp_path / "s"
         scen.mkdir()
-        (scen / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (scen / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(scen / "setup.sh", "#!/usr/bin/env bash\nexit 1\n")
 
         run_dir, _verdict = _invoke(tmp_path, scen)

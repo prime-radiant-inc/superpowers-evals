@@ -36,7 +36,8 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
-- Gemini uses `--skip-trust --approval-mode=yolo` and API-key auth.
+- Gemini uses `--skip-trust --approval-mode=yolo`; API-key auth is default,
+  with opt-in OAuth auth for trusted local runs.
 - Kimi uses `--yolo`.
 - OpenCode uses `--dangerously-skip-permissions`.
 - Pi uses explicit tool allowlists and API-key auth in a run-local config dir.
@@ -123,6 +124,49 @@ bun run quorum run-all --coding-agents claude,codex --jobs 2
 scenario's `# coding-agents:` directive. View the resulting matrix with
 `bun run quorum show <batch-id>`.
 
+For all-harness trusted-maintainer sweeps, do not put every Coding-Agent in one
+`run-all --jobs N` command when you need a hard global concurrency cap. Agents
+with `max_concurrency: 1` in `coding-agents/*.yaml` run in dedicated lanes beside
+the shared `--jobs` pool, so one broad batch can exceed `N` live cells.
+
+Prefer grouped batches:
+
+```bash
+set -a; source .env; set +a
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+export GEMINI_AUTH_TYPE=oauth-personal
+export SCENARIOS="scenario-a,scenario-b"
+export LOGDIR="results/runlogs/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$LOGDIR"
+
+# Use the repo-owned logger instead of hand-written shell wrappers. It runs
+# under bash even when launched from zsh and records exit status in the log.
+
+# Uncapped targets share the --jobs pool.
+scripts/run-with-log --log "$LOGDIR/uncapped.log" -- uv run quorum run-all \
+  --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+  --scenarios "$SCENARIOS" \
+  --jobs 4 \
+  --no-cursor
+
+# Capped or fragile targets run one serial column per batch. Launch several
+# single-column batches in parallel only when their backends do not interfere.
+scripts/run-with-log --log "$LOGDIR/copilot.log" -- \
+  uv run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/opencode.log" -- \
+  uv run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/pi.log" -- \
+  uv run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+scripts/run-with-log --log "$LOGDIR/gemini.log" -- \
+  uv run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+wait
+
+# Keep Antigravity separate from Gemini to avoid Google/Gemini auth or quota
+# noise while collecting clean capture.
+scripts/run-with-log --log "$LOGDIR/antigravity.log" -- \
+  uv run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
+```
+
 Trusted-maintainer Antigravity sweep:
 
 ```bash
@@ -140,6 +184,11 @@ export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 bun run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
 bun run quorum show <run-dir>
 ```
+
+To use an existing Gemini OAuth login instead of API-key auth, set
+`GEMINI_AUTH_TYPE=oauth-personal`. quorum copies `oauth_creds.json` and
+`google_accounts.json` from `GEMINI_OAUTH_HOME` or `~/.gemini` into the
+isolated per-run Gemini home.
 
 Do not wire Gemini live evals to public CI; they launch `gemini` with
 `--approval-mode=yolo` and preserve secret-bearing run artifacts.
@@ -356,8 +405,9 @@ A Coding-Agent is one agent CLI under test. Its config is
 `coding-agents/<name>-context/HOWTO.md`, is prose the Gauntlet-Agent reads to
 learn how to launch and observe that CLI. Claude additionally has a home
 skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
-per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run via
-`codex login --with-api-key`; Antigravity and Gemini provision isolated
+per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run by
+copying local ChatGPT subscription auth from `~/.codex/auth.json`;
+Antigravity and Gemini provision isolated
 `.gemini` state fresh per run; Kimi provisions an isolated `KIMI_CODE_HOME`;
 OpenCode stages the local Superpowers plugin and skills into isolated XDG
 dirs; Pi provisions run-local auth and settings; Copilot stages the local
@@ -370,9 +420,9 @@ runtime/context and the same `ANTHROPIC_API_KEY` path as `claude`.
 | --- | --- | --- |
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
 | `claude-haiku` | Claude Code (Haiku target variant) | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
-| `codex` | Codex CLI | `OPENAI_API_KEY`, `SUPERPOWERS_ROOT` |
+| `codex` | Codex CLI | `SUPERPOWERS_ROOT`; local ChatGPT subscription login via `codex login` |
 | `antigravity` | Google Antigravity CLI (`agy`) | `SUPERPOWERS_ROOT` |
-| `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY`, `SUPERPOWERS_ROOT` |
+| `gemini` | Gemini CLI (`gemini`) | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY`, `SUPERPOWERS_ROOT` |
 | `opencode` | OpenCode CLI | `SUPERPOWERS_ROOT`, provider credentials for the selected OpenCode model |
 | `pi` | Pi CLI (`pi`) | `SUPERPOWERS_ROOT`, `PI_PROVIDER`, `PI_MODEL`, `PI_API_KEY` |
@@ -397,9 +447,8 @@ modified superpowers skill text.
 
 `coding-agents/gemini.yaml` launches Gemini CLI as `gemini`. quorum creates an
 isolated per-run `GEMINI_CLI_HOME` under `<run>/coding-agent-config`, writes a
-chmod-0600 runtime env file containing `GEMINI_API_KEY`, seeds API-key auth in
-`.gemini/settings.json`, and links Superpowers from local `SUPERPOWERS_ROOT`
-with:
+chmod-0600 runtime env file, seeds auth in `.gemini/settings.json`, and links
+Superpowers from local `SUPERPOWERS_ROOT` with:
 
 ```bash
 gemini extensions link "$SUPERPOWERS_ROOT" --consent
@@ -409,14 +458,21 @@ The generated launcher starts interactive Gemini from the scenario workdir with:
 
 ```bash
 GEMINI_CLI_HOME="$GEMINI_CLI_HOME" \
-GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key \
+GEMINI_DEFAULT_AUTH_TYPE=<gemini-api-key|oauth-personal> \
 GEMINI_CLI_TRUST_WORKSPACE=true \
 gemini --skip-trust --approval-mode=yolo
 ```
 
+By default, Gemini uses `GEMINI_AUTH_TYPE=gemini-api-key`; quorum requires
+`GEMINI_API_KEY` and writes it into the run-local `.gemini-env` file. For a
+trusted local OAuth run, set `GEMINI_AUTH_TYPE=oauth-personal`; quorum copies
+`oauth_creds.json` and `google_accounts.json` from `GEMINI_OAUTH_HOME` or
+`~/.gemini` into the isolated run home and leaves `.gemini-env` empty.
+
 Gemini run artifacts are secret-bearing live-eval artifacts because the
-isolated config dir contains the per-run `.gemini-env` file. Do not commit,
-paste, or publish Gemini run directories without scrubbing them.
+isolated config dir can contain the per-run `.gemini-env` file or copied OAuth
+credentials. Do not commit, paste, or publish Gemini run directories without
+scrubbing them.
 
 Provisioning verifies that Gemini linked and enabled Superpowers by checking:
 
@@ -441,6 +497,15 @@ export GEMINI_API_KEY=...
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 bun run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
 bun run quorum show <run-dir>
+```
+
+OAuth smoke:
+
+```bash
+export GEMINI_AUTH_TYPE=oauth-personal
+export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
+uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+uv run quorum show <run-dir>
 ```
 
 ### Antigravity
@@ -763,10 +828,10 @@ git commit coding-agents/claude-home-skeleton/ -m "quorum: refresh Claude skelet
 ```
 
 Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot need no committed
-home skeleton. Codex provisions a fresh per-run home from your
-`OPENAI_API_KEY`; Antigravity provisions an isolated per-run
+home skeleton. Codex provisions a fresh per-run home from your local
+ChatGPT subscription login in `~/.codex/auth.json`; Antigravity provisions an isolated per-run
 `ANTIGRAVITY_CONFIG_DIR`, runs its auth preflight, and installs the Superpowers
-plugin from `SUPERPOWERS_ROOT`; Gemini seeds API-key auth and links the local
+plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local auth and links the local
 extension; Kimi provisions a fresh per-run `KIMI_CODE_HOME` and installs only
 the local-path Superpowers plugin from `SUPERPOWERS_ROOT`; OpenCode stages the
 plugin and skills from `SUPERPOWERS_ROOT` into isolated XDG dirs; Pi provisions

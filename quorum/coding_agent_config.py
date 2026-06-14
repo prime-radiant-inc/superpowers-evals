@@ -87,17 +87,22 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
     if not isinstance(raw, dict):
         raise CodingAgentConfigError(f"{path}: top-level must be a mapping")
 
-    required = ("name", "binary", "agent_config_env", "session_log_dir",
-                "session_log_glob", "normalizer", "required_env")
+    required = (
+        "name",
+        "binary",
+        "agent_config_env",
+        "session_log_dir",
+        "session_log_glob",
+        "normalizer",
+        "required_env",
+    )
     missing = [k for k in required if k not in raw]
     if missing:
         raise CodingAgentConfigError(f"{path}: missing required fields: {missing}")
 
     name = raw["name"]
     if name != path.stem:
-        raise CodingAgentConfigError(
-            f"{path}: name must match file stem; got name {name!r}"
-        )
+        raise CodingAgentConfigError(f"{path}: name must match file stem; got name {name!r}")
 
     runtime_family = raw.get("runtime_family", name)
     if runtime_family not in KNOWN_RUNTIME_FAMILIES:
@@ -114,16 +119,12 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
     if isinstance(model, str) and not model.strip():
         raise CodingAgentConfigError(f"{path}: model must not be blank")
     if runtime_family != "claude" and runtime_family != name:
-        raise CodingAgentConfigError(
-            f"{path}: non-Claude variants are not supported in v1"
-        )
+        raise CodingAgentConfigError(f"{path}: non-Claude variants are not supported in v1")
 
     required_env = tuple(raw["required_env"])
     missing_env = [v for v in required_env if not os.environ.get(v)]
     if missing_env:
-        raise CodingAgentConfigError(
-            f"{path}: required env vars not set: {missing_env}"
-        )
+        raise CodingAgentConfigError(f"{path}: required env vars not set: {missing_env}")
 
     normalizer = raw["normalizer"]
     if normalizer not in NORMALIZERS:
@@ -136,9 +137,7 @@ def load_coding_agent_config(path: Path) -> CodingAgentConfig:
     if project_prompt_raw:
         candidate = (path.parent / project_prompt_raw).resolve()
         if not candidate.is_file():
-            raise CodingAgentConfigError(
-                f"{path}: project_prompt path does not exist: {candidate}"
-            )
+            raise CodingAgentConfigError(f"{path}: project_prompt path does not exist: {candidate}")
         project_prompt = candidate
 
     return CodingAgentConfig(

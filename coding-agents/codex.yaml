@@ -5,6 +5,5 @@ session_log_dir: "${CODEX_HOME}/sessions"
 session_log_glob: "**/rollout-*.jsonl"
 normalizer: codex
 required_env:
-  - OPENAI_API_KEY
   - SUPERPOWERS_ROOT
 max_time: 10m

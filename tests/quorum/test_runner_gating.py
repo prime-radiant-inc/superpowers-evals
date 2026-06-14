@@ -6,6 +6,7 @@ BEFORE setup.sh, _seed_agent_config_dir, or any other side effect. A
 mismatched Coding-Agent returns final=indeterminate with a final_reason that
 names the required agents. Compatible agents (or absent directive) proceed.
 """
+
 import json
 import stat
 from pathlib import Path
@@ -19,6 +20,7 @@ from quorum.runner import run_scenario
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_coding_agent(coding_agents_dir: Path, name: str, session_log_dir: Path) -> None:
     coding_agents_dir.mkdir(parents=True, exist_ok=True)
@@ -50,16 +52,16 @@ def _scenario(
 ) -> Path:
     """Build a minimal scenario dir with story.md, setup.sh, and checks.sh."""
     d.mkdir(parents=True)
-    (d / "story.md").write_text(
-        "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-    )
+    (d / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
     _exec(d / "setup.sh", setup_body)
     (d / "checks.sh").write_text(checks_body)
     return d
 
 
 def _run(
-    tmp_path: Path, scenario_dir: Path, coding_agent: str = "claude",
+    tmp_path: Path,
+    scenario_dir: Path,
+    coding_agent: str = "claude",
 ) -> FinalVerdict:
     """Invoke run_scenario with minimal fixture wiring. Returns the FinalVerdict."""
     coding_agents_dir = tmp_path / "coding-agents"
@@ -88,6 +90,7 @@ def _run(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestCodingAgentGating:
     def test_incompatible_coding_agent_returns_indeterminate(self, tmp_path):
@@ -159,6 +162,7 @@ class TestCodingAgentGating:
     def test_compatible_agent_proceeds_normally(self, tmp_path):
         """A matching directive does NOT bail — gauntlet is invoked."""
         from quorum.composer import FinalVerdict
+
         scen = _scenario(
             tmp_path / "s",
             checks_body="# coding-agents: claude\npre() { :; }\npost() { :; }\n",
@@ -229,6 +233,7 @@ class TestCodingAgentGating:
     def test_no_directive_proceeds_for_any_agent(self, tmp_path):
         """Absent directive → compatible with every Coding-Agent."""
         from quorum.composer import FinalVerdict
+
         scen = _scenario(
             tmp_path / "s",
             checks_body="# no directive here\npre() { :; }\npost() { :; }\n",
@@ -253,9 +258,7 @@ class TestCodingAgentGating:
         """A scenario without checks.sh → final=indeterminate (checks.sh is required)."""
         d = tmp_path / "s"
         d.mkdir(parents=True)
-        (d / "story.md").write_text(
-            "---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n"
-        )
+        (d / "story.md").write_text("---\nid: x\ntitle: t\n---\n## Acceptance Criteria\n- a\n")
         _exec(d / "setup.sh", "#!/usr/bin/env bash\necho ok\n")
         # No checks.sh at all
 
@@ -269,6 +272,7 @@ class TestCodingAgentGating:
     def test_multi_agent_directive_matches_any_listed(self, tmp_path):
         """# coding-agents: codex, claude → claude is allowed."""
         from quorum.composer import FinalVerdict
+
         scen = _scenario(
             tmp_path / "s",
             checks_body="# coding-agents: codex, claude\npre() { :; }\npost() { :; }\n",

@@ -108,9 +108,7 @@ def find_misplaced_codex_rollouts(
         if not cwd:
             continue
         cwd_real = os.path.realpath(cwd)
-        inside_run_dir = (
-            cwd_real == run_dir_real or cwd_real.startswith(run_dir_real + os.sep)
-        )
+        inside_run_dir = cwd_real == run_dir_real or cwd_real.startswith(run_dir_real + os.sep)
         if inside_run_dir and cwd_real != launch_cwd_real:
             misplaced.append(path)
     return misplaced
@@ -218,8 +216,8 @@ def filter_kimi_logs_by_cwd(paths: list[Path], target_cwd: str) -> list[Path]:
             if not session_dir or not work_dir:
                 continue
             session_real = os.path.realpath(session_dir)
-            inside_session = (
-                path_real == session_real or path_real.startswith(session_real + os.sep)
+            inside_session = path_real == session_real or path_real.startswith(
+                session_real + os.sep
             )
             if inside_session and os.path.realpath(work_dir) == target:
                 matched.append(path)
@@ -320,9 +318,7 @@ def normalize_codex_logs(raw_content: str) -> list[dict[str, Any]]:
             else:
                 canonical = CODEX_TOOL_MAP.get(name, name)
                 source = "native" if canonical in NATIVE_TOOLS else "shell"
-                results.append(
-                    {"tool": canonical, "args": {"input": raw_input}, "source": source}
-                )
+                results.append({"tool": canonical, "args": {"input": raw_input}, "source": source})
         elif payload_type == "local_shell_call":
             action = payload.get("action", {})
             cmd = action.get("command", [])
@@ -454,15 +450,7 @@ GEMINI_TOOL_MAP: dict[str, str] = {
 }
 
 
-def normalize_gemini_logs(raw_content: str) -> list[dict[str, Any]]:
-    """Normalize Gemini CLI session logs.
-
-    Gemini logs may be a single JSON file with a messages array, or JSONL
-    session files in newer CLI versions. Each "gemini" message may have a
-    toolCalls array:
-    {"name": "run_shell_command", "args": {"command": "..."}, "status": "success"}
-    """
-    results: list[dict[str, Any]] = []
+def _gemini_messages(raw_content: str) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     try:
         data = json.loads(raw_content)
@@ -483,9 +471,37 @@ def normalize_gemini_logs(raw_content: str) -> list[dict[str, Any]]:
             messages = [data]
         elif isinstance(data, list):
             messages = [m for m in data if isinstance(m, dict)]
+    return messages
+
+
+def _gemini_timestamp(message: dict[str, Any]) -> str:
+    timestamp = message.get("timestamp") or message.get("createdAt") or message.get("time")
+    if isinstance(timestamp, str):
+        return timestamp
+    if isinstance(timestamp, int | float):
+        return str(timestamp)
+    return ""
+
+
+def _normalize_gemini_tool_call(tc: dict[str, Any]) -> dict[str, Any]:
+    gemini_name = tc.get("name", "")
+    canonical = GEMINI_TOOL_MAP.get(gemini_name, gemini_name)
+    raw_args = tc.get("args", {})
+    args = dict(raw_args) if isinstance(raw_args, dict) else {"raw_args": raw_args}
+    if canonical == "Skill":
+        skill_name = args.get("skill") or args.get("name")
+        if isinstance(skill_name, str) and skill_name:
+            args["skill"] = skill_name if ":" in skill_name else f"superpowers:{skill_name}"
+    source = "native" if canonical in NATIVE_TOOLS else "shell"
+    return {"tool": canonical, "args": args, "source": source}
+
+
+def normalize_gemini_logs_with_order(raw_content: str) -> list[tuple[str, dict[str, Any]]]:
+    """Normalize Gemini CLI session logs with per-message timestamp metadata."""
+    results: list[tuple[str, dict[str, Any]]] = []
 
     seen_tool_calls: set[str] = set()
-    for message in messages:
+    for message in _gemini_messages(raw_content):
         if message.get("type") != "gemini":
             continue
         for tc in message.get("toolCalls", []):
@@ -494,12 +510,19 @@ def normalize_gemini_logs(raw_content: str) -> list[dict[str, Any]]:
                 continue
             if tool_call_id:
                 seen_tool_calls.add(tool_call_id)
-            gemini_name = tc.get("name", "")
-            canonical = GEMINI_TOOL_MAP.get(gemini_name, gemini_name)
-            args = tc.get("args", {})
-            source = "native" if canonical in NATIVE_TOOLS else "shell"
-            results.append({"tool": canonical, "args": args, "source": source})
+            results.append((_gemini_timestamp(message), _normalize_gemini_tool_call(tc)))
     return results
+
+
+def normalize_gemini_logs(raw_content: str) -> list[dict[str, Any]]:
+    """Normalize Gemini CLI session logs.
+
+    Gemini logs may be a single JSON file with a messages array, or JSONL
+    session files in newer CLI versions. Each "gemini" message may have a
+    toolCalls array:
+    {"name": "run_shell_command", "args": {"command": "..."}, "status": "success"}
+    """
+    return [row for _timestamp, row in normalize_gemini_logs_with_order(raw_content)]
 
 
 OPENCODE_TOOL_MAP: dict[str, str] = {
@@ -806,9 +829,7 @@ def _normalize_antigravity_args(name: str, raw_args: Any) -> dict[str, Any]:
         if cwd is not _MISSING:
             args["cwd"] = _antigravity_canonical_value(cwd)
     elif name == "view_file":
-        file_path = _first_arg(
-            raw_args, ("AbsolutePath", "Path", "path", "file_path", "filePath")
-        )
+        file_path = _first_arg(raw_args, ("AbsolutePath", "Path", "path", "file_path", "filePath"))
         if file_path is not _MISSING:
             args["file_path"] = _antigravity_canonical_value(file_path)
 

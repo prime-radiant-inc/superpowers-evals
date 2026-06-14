@@ -66,9 +66,7 @@ class TestCheckScenario:
 
     def test_missing_frontmatter_key_is_caught(self, tmp_path):
         sd = self._valid(tmp_path)
-        (sd / "story.md").write_text(
-            "---\nid: demo\n---\n## Acceptance Criteria\n- x\n"
-        )
+        (sd / "story.md").write_text("---\nid: demo\n---\n## Acceptance Criteria\n- x\n")
         assert any("missing 'title'" in p for p in check_scenario(sd))
 
     def test_unknown_setup_helper_is_caught(self, tmp_path):
@@ -184,10 +182,7 @@ class TestChecksShValidation:
     def test_check_scenario_flags_harness_workdir_ref(self, tmp_path):
         """$QUORUM_WORKDIR is not set in the new model — flag stale refs."""
         body = (
-            "pre() {\n"
-            "    command-succeeds 'grep -q foo \"$QUORUM_WORKDIR/x\"'\n"
-            "}\n"
-            "post() { :; }\n"
+            "pre() {\n    command-succeeds 'grep -q foo \"$QUORUM_WORKDIR/x\"'\n}\npost() { :; }\n"
         )
         s = self._make_scenario(tmp_path / "s", body=body)
         problems = check_scenario(s)
@@ -197,7 +192,7 @@ class TestChecksShValidation:
         """Catch the ${QUORUM_WORKDIR} variant too."""
         body = (
             "pre() {\n"
-            '    command-succeeds \'grep -q foo "${QUORUM_WORKDIR}/x"\'\n'
+            "    command-succeeds 'grep -q foo \"${QUORUM_WORKDIR}/x\"'\n"
             "}\n"
             "post() { :; }\n"
         )
@@ -210,7 +205,7 @@ def test_opencode_bootstrap_requires_native_skill_call():
     root = Path(__file__).resolve().parents[2]
     checks = (root / "scenarios" / "opencode-superpowers-bootstrap" / "checks.sh").read_text()
 
-    assert 'tool-arg-match Skill \'.skill == "superpowers:brainstorming"\'' in checks
+    assert "tool-arg-match Skill '.skill == \"superpowers:brainstorming\"'" in checks
 
 
 def test_copilot_bootstrap_requires_native_skill_call():
@@ -218,14 +213,12 @@ def test_copilot_bootstrap_requires_native_skill_call():
     checks = (root / "scenarios" / "copilot-superpowers-bootstrap" / "checks.sh").read_text()
 
     assert "copilot-plugin-installed" in checks
-    assert 'tool-arg-match Skill \'.skill == "superpowers:brainstorming"\'' in checks
+    assert "tool-arg-match Skill '.skill == \"superpowers:brainstorming\"'" in checks
     assert (
-        "tool-match-before-tool-match "
-        "Skill '\"skill\":\"superpowers:brainstorming\"' Edit '.*'"
+        "tool-match-before-tool-match Skill '\"skill\":\"superpowers:brainstorming\"' Edit '.*'"
     ) in checks
     assert (
-        "tool-match-before-tool-match "
-        "Skill '\"skill\":\"superpowers:brainstorming\"' Write '.*'"
+        "tool-match-before-tool-match Skill '\"skill\":\"superpowers:brainstorming\"' Write '.*'"
     ) in checks
     assert "skill-before-tool superpowers:brainstorming" not in checks
 

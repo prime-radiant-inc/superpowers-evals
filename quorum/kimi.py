@@ -301,8 +301,7 @@ def run_kimi_auth_preflight(
             )
         if not kimi_stream_json_reply_ok(result.stdout):
             raise KimiConfigError(
-                "kimi auth preflight did not return OK; stdout: "
-                + result.stdout.strip()[:300]
+                "kimi auth preflight did not return OK; stdout: " + result.stdout.strip()[:300]
             )
         index_path = kimi_home / "session_index.jsonl"
         if not index_path.is_file():
@@ -334,17 +333,13 @@ def run_kimi_auth_preflight(
             raise KimiConfigError("kimi auth preflight session_index workDir did not match cwd")
         if not matching_session_dirs:
             if outside_session_dir:
-                raise KimiConfigError(
-                    "kimi auth preflight sessionDir outside Kimi home/sessions"
-                )
+                raise KimiConfigError("kimi auth preflight sessionDir outside Kimi home/sessions")
             raise KimiConfigError("kimi auth preflight session_index matched no sessionDir")
         for session_dir in matching_session_dirs:
             if any(session_dir.glob("**/wire.jsonl")):
                 break
         else:
-            raise KimiConfigError(
-                "kimi auth preflight matching sessionDir produced no wire.jsonl"
-            )
+            raise KimiConfigError("kimi auth preflight matching sessionDir produced no wire.jsonl")
 
 
 def _shell_assignment(key: str, value: str) -> str:

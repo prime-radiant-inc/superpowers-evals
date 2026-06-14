@@ -13,6 +13,7 @@ parses the records and returns CheckRecord values. The phase is stamped here.
 The script's *exit code* is the crash signal — non-zero means the script did
 not run to completion. Pass/fail comes from the records.
 """
+
 from __future__ import annotations
 
 import json
@@ -90,14 +91,22 @@ def run_phase(
     try:
         proc = subprocess.run(
             ["bash", "-c", f"source '{checks_sh}'; {phase}"],
-            cwd=workdir, env=env, capture_output=True, text=True,
+            cwd=workdir,
+            env=env,
+            capture_output=True,
+            text=True,
         )
         records = [
             CheckRecord(
-                check=d["check"], args=d["args"], negated=d["negated"],
-                passed=d["passed"], detail=d.get("detail"), phase=phase,
+                check=d["check"],
+                args=d["args"],
+                negated=d["negated"],
+                passed=d["passed"],
+                detail=d.get("detail"),
+                phase=phase,
             )
-            for line in sink.read_text().splitlines() if line.strip()
+            for line in sink.read_text().splitlines()
+            if line.strip()
             for d in [json.loads(line)]
         ]
         # The exit code is the crash signal (spec §7). Distinguishing a

@@ -181,9 +181,9 @@ def _fmt_bytes(n) -> str:
     if not isinstance(n, (int, float)) or n == 0:
         return "—"
     if n >= 1_000_000:
-        return f"{n/1_000_000:.1f}MB"
+        return f"{n / 1_000_000:.1f}MB"
     if n >= 1_000:
-        return f"{n/1_000:.0f}KB"
+        return f"{n / 1_000:.0f}KB"
     return f"{int(n)}B"
 
 

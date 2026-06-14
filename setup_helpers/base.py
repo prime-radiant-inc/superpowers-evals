@@ -73,11 +73,7 @@ def record_head(workdir: Path) -> None:
     present) to prove a checkout's HEAD did not move during a run.
     """
     workdir = Path(workdir)
-    git_dir = (
-        _git(["git", "rev-parse", "--absolute-git-dir"], cwd=workdir)
-        .stdout.decode()
-        .strip()
-    )
+    git_dir = _git(["git", "rev-parse", "--absolute-git-dir"], cwd=workdir).stdout.decode().strip()
     head = _git(["git", "rev-parse", "HEAD"], cwd=workdir).stdout.decode().strip()
     (Path(git_dir) / "quorum-recorded-head").write_text(head + "\n")
 

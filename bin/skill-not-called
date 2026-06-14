@@ -18,6 +18,14 @@ SKILL_NAME="$1"
 SKILL_DIR="${SKILL_NAME##*:}"
 FILE="${QUORUM_TOOL_CALLS_PATH:-coding-agent-tool-calls.jsonl}"
 
+# A negative assertion can't be verified without a transcript: an empty/missing
+# capture means "we don't know", not "the skill wasn't called". Fail rather than
+# vacuously pass (mirrors implementation-tool-not-called).
+if [ ! -s "$FILE" ]; then
+    record_fail "tool-calls file missing or empty"
+    exit 1
+fi
+
 COUNT=$(
     jq -L "$(dirname "$0")" -s \
         --arg name "$SKILL_NAME" --arg dir "$SKILL_DIR" \

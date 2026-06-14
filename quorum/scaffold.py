@@ -131,9 +131,7 @@ def _validate_checks_sh(scenario_dir: Path) -> list[str]:
             in_fn = max(0, in_fn - 1)
             continue
         if in_fn == 0:
-            problems.append(
-                f"checks.sh must be functions-only (top-level statement: {s[:60]!r})"
-            )
+            problems.append(f"checks.sh must be functions-only (top-level statement: {s[:60]!r})")
             break
     if not re.search(r"^pre\s*\(\)", text, re.M):
         problems.append("checks.sh missing pre() function")
@@ -184,9 +182,7 @@ def check_scenario(scenario_dir: Path) -> list[str]:
         for match in re.finditer(r"setup-helpers\s+run\s+(.+)", setup.read_text()):
             for helper in match.group(1).split():
                 if helper not in HELPER_REGISTRY:
-                    problems.append(
-                        f"setup.sh references unknown helper '{helper}'"
-                    )
+                    problems.append(f"setup.sh references unknown helper '{helper}'")
 
     problems.extend(_validate_checks_sh(scenario_dir))
 

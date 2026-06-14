@@ -10,7 +10,39 @@
 # tmux strips env from new sessions).
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox
+#   cd "$QUORUM_AGENT_CWD" && HOME="$CODEX_HOME/agent-home" CODEX_HOME="$CODEX_HOME" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#
+# HOME isolation: Codex discovers user-scope skills and plugin marketplaces from
+# $HOME/.agents/{skills,plugins}, resolved via $HOME directly — NOT $CODEX_HOME
+# (codex core-skills loader adds an "$HOME/.agents/skills" user skill root via
+# home_dir(), with no off switch). Left at the host's HOME, a host
+# ~/.agents/skills/* symlink (e.g. into a host superpowers checkout) bleeds host
+# skills into the run and overrides the staged superpowers@debug plugin. Pinning
+# HOME (and XDG/TMPDIR) to a per-run dir under $CODEX_HOME forces Codex to load
+# the staged skills — the version actually under test. Codex auth lives in
+# $CODEX_HOME/auth.json (seeded by the runner), so isolating HOME does not affect
+# login; the scenario repo carries local git identity, so commits are unaffected.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
-exec env CODEX_HOME="$CODEX_HOME" codex --dangerously-bypass-approvals-and-sandbox "$@"
+
+codex_agent_home="$CODEX_HOME/agent-home"
+mkdir -p \
+  "$codex_agent_home/.config" \
+  "$codex_agent_home/.local/share" \
+  "$codex_agent_home/.local/state" \
+  "$codex_agent_home/.cache" \
+  "$codex_agent_home/.tmp"
+
+exec env \
+  -u OPENAI_API_KEY \
+  -u OPENAI_BASE_URL \
+  -u OPENAI_ORG_ID \
+  -u OPENAI_PROJECT \
+  HOME="$codex_agent_home" \
+  XDG_CONFIG_HOME="$codex_agent_home/.config" \
+  XDG_DATA_HOME="$codex_agent_home/.local/share" \
+  XDG_STATE_HOME="$codex_agent_home/.local/state" \
+  XDG_CACHE_HOME="$codex_agent_home/.cache" \
+  TMPDIR="$codex_agent_home/.tmp" \
+  CODEX_HOME="$CODEX_HOME" \
+  codex --dangerously-bypass-approvals-and-sandbox "$@"

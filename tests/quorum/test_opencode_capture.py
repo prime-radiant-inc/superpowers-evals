@@ -28,9 +28,7 @@ def test_opencode_env_isolates_home_and_xdg(tmp_path):
     }
 
 
-def test_opencode_run_env_scrubs_harness_paths_and_preserves_provider_env(
-    tmp_path, monkeypatch
-):
+def test_opencode_run_env_scrubs_harness_paths_and_preserves_provider_env(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("SUPERPOWERS_ROOT", "/real/superpowers")
     monkeypatch.setenv("QUORUM_AGENT_CWD", "/real/workdir")
@@ -74,9 +72,7 @@ def test_snapshot_opencode_sessions_filters_by_launch_cwd(tmp_path, monkeypatch)
 
     monkeypatch.setattr("quorum.opencode_capture.subprocess.run", fake_run)
 
-    assert snapshot_opencode_sessions(opencode_home=home, launch_cwd=launch_cwd) == {
-        "ses_old"
-    }
+    assert snapshot_opencode_sessions(opencode_home=home, launch_cwd=launch_cwd) == {"ses_old"}
 
 
 def test_export_opencode_sessions_exports_only_new_matching_sessions_and_manifest(
@@ -176,12 +172,15 @@ def test_export_opencode_sessions_returns_empty_when_no_matching_session(tmp_pat
 
     monkeypatch.setattr("quorum.opencode_capture.subprocess.run", fake_run)
 
-    assert export_opencode_sessions(
-        opencode_home=home,
-        export_dir=home / ".quorum" / "session-exports",
-        launch_cwd=launch_cwd,
-        snapshot=set(),
-    ) == ()
+    assert (
+        export_opencode_sessions(
+            opencode_home=home,
+            export_dir=home / ".quorum" / "session-exports",
+            launch_cwd=launch_cwd,
+            snapshot=set(),
+        )
+        == ()
+    )
 
 
 def test_export_opencode_sessions_orders_by_exported_created_when_list_lacks_created(
@@ -209,9 +208,7 @@ def test_export_opencode_sessions_orders_by_exported_created_when_list_lacks_cre
         return _completed(
             cmd,
             kwargs,
-            json.dumps(
-                {"info": {"id": session_id, "time": {"created": created}}, "messages": []}
-            ),
+            json.dumps({"info": {"id": session_id, "time": {"created": created}}, "messages": []}),
         )
 
     monkeypatch.setattr("quorum.opencode_capture.subprocess.run", fake_run)

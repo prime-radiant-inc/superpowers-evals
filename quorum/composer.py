@@ -1,5 +1,6 @@
 """Compose the three-valued verdict from the Gauntlet-Agent layer and the
 deterministic checks layer."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -19,9 +20,15 @@ RunErrorStage = Literal[
     "unknown",
 ]
 TRACE_PRIMITIVES = {
-    "tool-called", "tool-not-called", "tool-count", "tool-before",
-    "tool-arg-match", "tool-match-before-tool-match",
-    "skill-called", "skill-not-called", "skill-before-tool",
+    "tool-called",
+    "tool-not-called",
+    "tool-count",
+    "tool-before",
+    "tool-arg-match",
+    "tool-match-before-tool-match",
+    "skill-called",
+    "skill-not-called",
+    "skill-before-tool",
     "skill-before-tool-match",
 }
 
@@ -58,8 +65,12 @@ class FinalVerdict:
             "gauntlet": asdict(self.gauntlet) if self.gauntlet else None,
             "checks": [
                 {
-                    "check": c.check, "args": c.args, "negated": c.negated,
-                    "passed": c.passed, "detail": c.detail, "phase": c.phase,
+                    "check": c.check,
+                    "args": c.args,
+                    "negated": c.negated,
+                    "passed": c.passed,
+                    "detail": c.detail,
+                    "phase": c.phase,
                 }
                 for c in self.checks
             ],
@@ -85,7 +96,9 @@ def compose(
         return FinalVerdict(
             final="indeterminate",
             final_reason=f"quorum error ({error.stage}): {error.message}",
-            gauntlet=gauntlet, checks=checks, error=error,
+            gauntlet=gauntlet,
+            checks=checks,
+            error=error,
         )
     # Pre-check failure
     failed_pre = [c for c in checks if c.phase == "pre" and not c.passed]
@@ -94,27 +107,35 @@ def compose(
         return FinalVerdict(
             final="indeterminate",
             final_reason=f"pre-check(s) failed: {names}",
-            gauntlet=gauntlet, checks=checks, error=None,
+            gauntlet=gauntlet,
+            checks=checks,
+            error=None,
         )
     # Gauntlet investigate/errored
     if gauntlet is None:
         return FinalVerdict(
             final="indeterminate",
             final_reason="no Gauntlet-Agent verdict",
-            gauntlet=None, checks=checks, error=None,
+            gauntlet=None,
+            checks=checks,
+            error=None,
         )
     if gauntlet.status in ("investigate", "errored"):
         return FinalVerdict(
             final="indeterminate",
             final_reason=f"Gauntlet-Agent did not complete (status: {gauntlet.status})",
-            gauntlet=gauntlet, checks=checks, error=None,
+            gauntlet=gauntlet,
+            checks=checks,
+            error=None,
         )
     # Empty trace with trace checks
     if capture_empty and _any_trace_check(checks):
         return FinalVerdict(
             final="indeterminate",
             final_reason="tool-call capture was empty; trace checks meaningless",
-            gauntlet=gauntlet, checks=checks, error=None,
+            gauntlet=gauntlet,
+            checks=checks,
+            error=None,
         )
     # Post-check evaluation
     failed_post = [c for c in checks if c.phase == "post" and not c.passed]
@@ -122,11 +143,15 @@ def compose(
         n = sum(1 for c in checks if c.phase == "post")
         reason = (
             f"Gauntlet-Agent passed; {n} post-check(s) passed"
-            if n else "Gauntlet-Agent passed; no deterministic checks"
+            if n
+            else "Gauntlet-Agent passed; no deterministic checks"
         )
         return FinalVerdict(
-            final="pass", final_reason=reason,
-            gauntlet=gauntlet, checks=checks, error=None,
+            final="pass",
+            final_reason=reason,
+            gauntlet=gauntlet,
+            checks=checks,
+            error=None,
         )
     reason_bits: list[str] = []
     if gauntlet.status != "pass":
@@ -134,6 +159,9 @@ def compose(
     if failed_post:
         reason_bits.append(f"{len(failed_post)} post-check(s) failed")
     return FinalVerdict(
-        final="fail", final_reason="; ".join(reason_bits) or "fail",
-        gauntlet=gauntlet, checks=checks, error=None,
+        final="fail",
+        final_reason="; ".join(reason_bits) or "fail",
+        gauntlet=gauntlet,
+        checks=checks,
+        error=None,
     )

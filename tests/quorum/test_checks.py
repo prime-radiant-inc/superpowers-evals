@@ -12,10 +12,12 @@ def test_parse_coding_agents_present(tmp_path: Path):
     p.write_text("# coding-agents: codex, gemini\npre() { :; }\npost() { :; }\n")
     assert parse_coding_agents_directive(p) == ["codex", "gemini"]
 
+
 def test_parse_coding_agents_absent(tmp_path: Path):
     p = tmp_path / "checks.sh"
     p.write_text("pre() { :; }\npost() { :; }\n")
     assert parse_coding_agents_directive(p) is None
+
 
 def test_run_phase_collects_records(tmp_path: Path):
     workdir = tmp_path / "wd"
@@ -27,7 +29,9 @@ def test_run_phase_collects_records(tmp_path: Path):
         "post() { file-exists 'x.md'; file-exists 'missing.md'; }\n"
     )
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
     )
     assert exit_code == 0
@@ -36,13 +40,16 @@ def test_run_phase_collects_records(tmp_path: Path):
     assert records[1].check == "file-exists" and not records[1].passed
     assert all(r.phase == "post" for r in records)
 
+
 def test_run_phase_nonzero_exit_signals_crash(tmp_path: Path):
     workdir = tmp_path / "wd"
     workdir.mkdir()
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text("pre() { :; }\npost() { undefined_function_blam; }\n")
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
     )
     assert exit_code != 0
@@ -60,19 +67,18 @@ def test_run_phase_crash_after_record_still_reports_crash(tmp_path: Path):
     (workdir / "x.md").write_text("hi")
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text(
-        "pre() { :; }\n"
-        "post() { file-exists 'x.md'; tools_called_typo; }\n"  # typo'd helper
+        "pre() { :; }\npost() { file-exists 'x.md'; tools_called_typo; }\n"  # typo'd helper
     )
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
     )
     # The file-exists record was emitted before the crash. Old code:
     # exit_code = 0 here. New code: exit_code reflects the 127.
     assert len(records) >= 1, "file-exists record should still be captured"
-    assert exit_code == 127, (
-        f"command-not-found crash should propagate as 127; got {exit_code}"
-    )
+    assert exit_code == 127, f"command-not-found crash should propagate as 127; got {exit_code}"
 
 
 def test_run_phase_tool_failure_does_not_look_like_crash(tmp_path: Path):
@@ -84,7 +90,9 @@ def test_run_phase_tool_failure_does_not_look_like_crash(tmp_path: Path):
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text("pre() { :; }\npost() { file-exists 'missing.md'; }\n")
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
     )
     assert exit_code == 0
@@ -102,11 +110,12 @@ def test_run_phase_exports_harness_run_dir(tmp_path: Path):
     (run_dir / "sibling.txt").write_text("ok")
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text(
-        "pre() { :; }\n"
-        "post() { command-succeeds 'test -f \"$QUORUM_RUN_DIR/sibling.txt\"'; }\n"
+        "pre() { :; }\npost() { command-succeeds 'test -f \"$QUORUM_RUN_DIR/sibling.txt\"'; }\n"
     )
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
         run_dir=run_dir,
     )
@@ -121,11 +130,12 @@ def test_run_phase_omits_harness_run_dir_when_none(tmp_path: Path):
     workdir.mkdir()
     checks_sh = tmp_path / "checks.sh"
     checks_sh.write_text(
-        "pre() { :; }\n"
-        "post() { command-succeeds 'test -z \"${QUORUM_RUN_DIR:-}\"'; }\n"
+        "pre() { :; }\npost() { command-succeeds 'test -z \"${QUORUM_RUN_DIR:-}\"'; }\n"
     )
     records, exit_code = run_phase(
-        checks_sh=checks_sh, phase="post", workdir=workdir,
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
         quorum_bin=Path("bin").resolve(),
     )
     assert exit_code == 0

@@ -12,6 +12,7 @@ exactly the run's scratch directory is THIS run's server.  Equality on resolved
 paths (not substring) guards against false-matching a sibling directory such as
 `scratch-extra`.
 """
+
 from __future__ import annotations
 
 import os
