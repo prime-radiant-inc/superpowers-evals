@@ -9,6 +9,8 @@ from quorum.checks import (
     run_phase,
 )
 
+from tests.quorum.conftest import requires_bun
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -185,6 +187,7 @@ def test_run_phase_sets_transcript_path_even_when_file_absent(tmp_path: Path):
     assert len(records) == 1 and records[0].passed
 
 
+@requires_bun
 def test_check_transcript_shim_runs_and_writes_record(tmp_path: Path):
     # The bin/check-transcript shim execs the bun CLI, resolving ts/ relative
     # to its own location. Invoke it via PATH from an arbitrary cwd with a

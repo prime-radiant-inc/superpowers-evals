@@ -1,8 +1,13 @@
+import shutil
 from pathlib import Path
 
 import pytest
 
 import quorum.agy_creds
+
+# Shared skip guard for tests that shell out to bun (ATIF normalizer or
+# check-transcript). Tests that only build ATIF dicts in Python do not need it.
+requires_bun = pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
 
 
 @pytest.fixture(autouse=True)
