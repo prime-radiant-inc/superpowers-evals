@@ -8,7 +8,13 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { CodexAgent } from '../src/agents/codex.ts';
-import type { CommandResult } from '../src/agents/command-runner.ts';
+import {
+  type AppServerClient,
+  type AppServerHook,
+  type AppServerSpawn,
+  type ReadHookArgs,
+  SpawnAppServerClient,
+} from '../src/agents/codex-app-server.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
@@ -29,7 +35,9 @@ const CODEX_CONFIG: AgentConfig = {
 };
 
 // A canned app-server hooks/list response carrying exactly one superpowers@debug
-// SessionStart hook with the shape selectSuperpowersHook accepts.
+// SessionStart hook with the shape selectSuperpowersHook accepts. Used to drive
+// the real SpawnAppServerClient through a fake spawn (selector + config-write
+// integration), so provision exercises the genuine app-server read path.
 function appServerStdout(): string {
   const initializeReply = { jsonrpc: '2.0', id: 1, result: {} };
   const hooksListReply = {
@@ -55,6 +63,42 @@ function appServerStdout(): string {
     },
   };
   return `${JSON.stringify(initializeReply)}\n${JSON.stringify(hooksListReply)}\n`;
+}
+
+// The hook the happy-path FakeAppServerClient returns.
+const HAPPY_HOOK: AppServerHook = {
+  key: 'superpowers@debug:sessionStart',
+  currentHash: 'abc123def456',
+};
+
+// Test double for the bounded app-server read seam. Records every readHook call
+// (so tests can assert the configDir/workdir/timeout the agent passes) and
+// returns a canned hook — or throws, to model a selection/timeout failure.
+class FakeAppServerClient implements AppServerClient {
+  readonly calls: ReadHookArgs[] = [];
+  private readonly outcome: AppServerHook | (() => never);
+  constructor(outcome: AppServerHook | (() => never) = HAPPY_HOOK) {
+    this.outcome = outcome;
+  }
+  readHook(args: ReadHookArgs): AppServerHook {
+    this.calls.push(args);
+    if (typeof this.outcome === 'function') {
+      return this.outcome();
+    }
+    return this.outcome;
+  }
+}
+
+// A real SpawnAppServerClient backed by a fake spawn returning `stdout`, so the
+// genuine parse/select + config-write path runs without spawning codex.
+function spawnBackedClient(stdout: string): SpawnAppServerClient {
+  const spawn: AppServerSpawn = () => ({
+    status: 0,
+    stdout,
+    stderr: '',
+    timedOut: false,
+  });
+  return new SpawnAppServerClient(spawn);
 }
 
 // Stage a SUPERPOWERS_ROOT the adapter can copytree (one staged file proves the
@@ -115,16 +159,12 @@ function withHostAuth(
   }
 }
 
-// Responder for the happy path: codex app-server emits the canned hooks/list
-// response, everything else is a default success.
-function happyResponder(
-  command: string,
-  args: readonly string[],
-): CommandResult {
-  if (command === 'codex' && args[0] === 'app-server') {
-    return { status: 0, stdout: appServerStdout(), stderr: '' };
-  }
-  return { status: 0, stdout: '', stderr: '' };
+// The shared CommandRunner is unused by codex provisioning (auth is a file copy;
+// the app-server has its own timed seam), but provision() requires the argument
+// per the CodingAgent contract — so every test passes a recording runner and
+// asserts it received zero calls.
+function unusedRunner(): FakeCommandRunner {
+  return new FakeCommandRunner();
 }
 
 test('provision copies subscription auth and stages the trusted plugin hook', () => {
@@ -133,11 +173,14 @@ test('provision copies subscription auth and stages the trusted plugin hook', ()
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  // Drive the REAL SpawnAppServerClient via a fake spawn so the genuine
+  // parse/select + trusted_hash config-write integration runs.
+  const appServer = spawnBackedClient(appServerStdout());
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       const env = agent.provision(home, runner);
 
       // Returned env: at minimum CODEX_HOME -> configDir.
@@ -187,16 +230,35 @@ test('provision copies subscription auth and stages the trusted plugin hook', ()
       );
       expect(configToml).toContain('trusted_hash = "abc123def456"');
 
-      // Exactly one subprocess call: app-server (no login). Auth is a file copy.
-      expect(runner.calls.length).toBe(1);
-      const appServer = runner.calls[0];
-      expect(appServer?.command).toBe('codex');
-      expect(appServer?.args).toEqual(['app-server', '--listen', 'stdio://']);
-      expect(appServer?.options?.cwd).toBe(home.workdir);
-      expect(appServer?.options?.env?.['CODEX_HOME']).toBe(home.configDir);
-      const sentInput = appServer?.options?.input ?? '';
-      expect(sentInput).toContain('"method":"initialize"');
-      expect(sentInput).toContain('"method":"hooks/list"');
+      // Codex provisioning never touches the shared CommandRunner: auth is a
+      // file copy and the app-server has its own bounded seam.
+      expect(runner.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision drives the app-server with the run cwd, CODEX_HOME, and a bounded deadline', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      agent.provision(home, runner);
+      // Exactly one bounded app-server read, scoped to the run's CODEX_HOME and
+      // workdir, with a non-zero per-handshake deadline (no infinite block).
+      expect(appServer.calls.length).toBe(1);
+      const call = appServer.calls[0];
+      expect(call?.configDir).toBe(home.configDir);
+      expect(call?.workdir).toBe(home.workdir);
+      expect(call?.timeoutMs).toBeGreaterThan(0);
     });
   } finally {
     cleanup();
@@ -220,11 +282,11 @@ test('plugin copy drops only evals/results, keeping a results dir elsewhere', ()
   writeFileSync(join(spRoot, 'evals', 'results', 'drop.txt'), 'd');
   // A real file under evals (not results) that MUST be copied.
   writeFileSync(join(spRoot, 'evals', 'keep-evals.txt'), 'e');
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
       agent.provision(home, runner);
       const pluginRoot = join(
         home.configDir,
@@ -265,11 +327,11 @@ test('provision copies a codex-home-skeleton when one is staged', () => {
   const spRoot = join(base.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
       agent.provision(home, runner);
       const seeded = join(home.configDir, 'seed.txt');
       expect(existsSync(seeded)).toBe(true);
@@ -286,7 +348,11 @@ test('provision throws when host auth is API-key auth, not subscription', () => 
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  // The app-server must never be reached — fail loudly if it is.
+  const appServer = new FakeAppServerClient(() => {
+    throw new Error('app-server should not be reached');
+  });
 
   // api_key mode (and a present OPENAI_API_KEY) must be rejected — never copied.
   const apiKeyAuth = {
@@ -297,11 +363,12 @@ test('provision throws when host auth is API-key auth, not subscription', () => 
 
   try {
     withHostAuth(authParent, spRoot, apiKeyAuth, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() => agent.provision(home, runner)).toThrow(
         /ChatGPT subscription auth/,
       );
-      // No subprocess calls: the adapter aborts before the app-server step.
+      // The adapter aborts before the app-server step (and never the runner).
+      expect(appServer.calls.length).toBe(0);
       expect(runner.calls.length).toBe(0);
     });
   } finally {
@@ -315,13 +382,17 @@ test('provision throws when host auth.json is missing', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient(() => {
+    throw new Error('app-server should not be reached');
+  });
 
   try {
     // auth === undefined -> .codex/ exists but no auth.json file.
     withHostAuth(authParent, spRoot, undefined, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() => agent.provision(home, runner)).toThrow(/not found/);
+      expect(appServer.calls.length).toBe(0);
       expect(runner.calls.length).toBe(0);
     });
   } finally {
@@ -335,12 +406,16 @@ test('provision throws when host auth.json is not valid JSON', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient(() => {
+    throw new Error('app-server should not be reached');
+  });
 
   try {
     withHostAuth(authParent, spRoot, '{not json', () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() => agent.provision(home, runner)).toThrow(/not valid JSON/);
+      expect(appServer.calls.length).toBe(0);
       expect(runner.calls.length).toBe(0);
     });
   } finally {
@@ -354,7 +429,10 @@ test('provision throws when subscription auth is missing a refresh token', () =>
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient(() => {
+    throw new Error('app-server should not be reached');
+  });
 
   const noRefresh = {
     auth_mode: 'chatgpt',
@@ -364,10 +442,11 @@ test('provision throws when subscription auth is missing a refresh token', () =>
 
   try {
     withHostAuth(authParent, spRoot, noRefresh, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() => agent.provision(home, runner)).toThrow(
         /missing a refresh token/,
       );
+      expect(appServer.calls.length).toBe(0);
       expect(runner.calls.length).toBe(0);
     });
   } finally {
@@ -381,18 +460,15 @@ test('provision throws ProvisionError when app-server reports no superpowers hoo
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  // auth OK, but hooks/list returns an empty hook set.
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'codex' && args[0] === 'app-server') {
-      const reply = { jsonrpc: '2.0', id: 2, result: { data: [] } };
-      return { status: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '' };
-    }
-    return { status: 0, stdout: '', stderr: '' };
-  });
+  const runner = unusedRunner();
+  // auth OK, but hooks/list returns an empty hook set — drive the REAL
+  // SpawnAppServerClient so the genuine selector raises.
+  const emptyReply = { jsonrpc: '2.0', id: 2, result: { data: [] } };
+  const appServer = spawnBackedClient(`${JSON.stringify(emptyReply)}\n`);
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
     });
   } finally {
@@ -409,11 +485,12 @@ test('provision does not write the refresh token into config.toml', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  const appServer = spawnBackedClient(appServerStdout());
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       agent.provision(home, runner);
       const configToml = readFileSync(
         join(home.configDir, 'config.toml'),
@@ -435,11 +512,12 @@ test('config.toml is a regular readable file after provision', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
-      const agent = new CodexAgent(CODEX_CONFIG);
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
       agent.provision(home, runner);
       const st = statSync(join(home.configDir, 'config.toml'));
       expect(st.isFile()).toBe(true);
