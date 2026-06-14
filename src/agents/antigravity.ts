@@ -331,13 +331,15 @@ function rstripDotBang(s: string): string {
 }
 
 // Post-run rate-limit detection for the verdict layer. quorum writes the run's
-// agy log to <configDir>/agy.log (parity with quorum/runner.py). spawnSync
-// blocks, so the live AgyRateLimitWatcher's early tmux teardown is deferred
-// (live-efficiency only); scanning the log after the run yields the same
-// indeterminate VERDICT. Returns the reason string when rate-limited, else null.
-// NOTE (live validation): confirm the gauntlet antigravity launcher routes the
-// run's agy log to <configDir>/agy.log; the early-teardown watcher and OAuth
-// creds restore / tmux reap remain B3/live work.
+// agy log to <configDir>/agy.log (parity with quorum/runner.py). Scanning the
+// log after the run yields the indeterminate VERDICT. Returns the reason string
+// when rate-limited, else null.
+//
+// The live counterparts now exist as modules awaiting runner (Wave 2b) wiring:
+// AgyRateLimitWatcher (agy-watch.ts) tails the log mid-run and fires
+// killRunTmuxServer (agy-teardown.ts) on the first signal for early teardown;
+// backupCredential/verifyOrRestore (agy-creds.ts) guard the shared OAuth token
+// around the mid-run kill. This post-run scan stays as the verdict-layer signal.
 export function antigravityRateLimitReason(configDir: string): string | null {
   const agyLog = join(configDir, 'agy.log');
   if (!existsSync(agyLog)) {
