@@ -306,15 +306,29 @@ interface CodexDeps {
   setEnv(key: string, value: string): void;
 }
 
-// Port of worktree.py:install_codex_superpowers_plugin_hooks (drill-owned,
-// isolated-home branch — the TS dispatch CLI never fills codex_home). Build an
-// isolated Codex home next to the workdir, log it in, stage Superpowers as a
-// plugin, trust its SessionStart hook, and export DRILL_CODEX_HOME. The three
-// non-hermetic steps (login, app-server query, env write) route through CodexDeps
-// so the gate injects fakes.
+// Options for the dual-mode codex install (Python's codex_home: Path | None).
+interface CodexInstallOptions {
+  // Caller-supplied, pre-existing, already-logged-in CODEX_HOME. When given,
+  // install into it directly and skip the isolated-home build, login, and the
+  // DRILL_CODEX_HOME export (the quorum-runner call path). When omitted, the
+  // helper is drill-owned: build the isolated sibling home, log in, and export.
+  readonly codexHome?: string;
+}
+
+// Port of worktree.py:install_codex_superpowers_plugin_hooks. Dual-mode via
+// opts.codexHome (Python's `codex_home: Path | None`):
+//   - drill call (codexHome omitted, the CLI dispatch path): build an isolated
+//     Codex home next to the workdir, log it in, and export DRILL_CODEX_HOME.
+//   - quorum call (codexHome given): install into the runner's per-run CODEX_HOME,
+//     which already exists and is already logged in, so the isolated-home build,
+//     the login, and the DRILL_CODEX_HOME export are all skipped.
+// Either way: stage Superpowers as a plugin and trust its SessionStart hook. The
+// three non-hermetic steps (login, app-server query, env write) route through
+// CodexDeps so the gate injects fakes.
 export async function installCodexSuperpowersPluginHooks(
   ctx: HelperContext,
   deps?: Partial<CodexDeps>,
+  opts?: CodexInstallOptions,
 ): Promise<void> {
   if (ctx.superpowersRoot === undefined) {
     throw new Error(
@@ -329,12 +343,15 @@ export async function installCodexSuperpowersPluginHooks(
     ...deps,
   };
 
-  const codexHome = siblingPath(ctx.workdir, 'codex-home');
-  if (existsSync(codexHome)) {
-    rmSync(codexHome, { recursive: true, force: true });
+  const drillOwned = opts?.codexHome === undefined;
+  const codexHome = opts?.codexHome ?? siblingPath(ctx.workdir, 'codex-home');
+  if (drillOwned) {
+    if (existsSync(codexHome)) {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+    mkdirSync(codexHome, { recursive: true });
+    d.login(codexHome);
   }
-  mkdirSync(codexHome, { recursive: true });
-  d.login(codexHome);
 
   const pluginRoot = join(
     codexHome,
@@ -352,7 +369,9 @@ export async function installCodexSuperpowersPluginHooks(
   const hook = await d.queryHook({ codexHome, workdir: ctx.workdir });
   appendCodexTrustedHook(configPath, hook.key, hook.currentHash);
 
-  d.setEnv('DRILL_CODEX_HOME', codexHome);
+  if (drillOwned) {
+    d.setEnv('DRILL_CODEX_HOME', codexHome);
+  }
 }
 
 // Port of worktree.py:create_caller_consent_plan. Adds a committed
