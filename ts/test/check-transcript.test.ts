@@ -239,9 +239,10 @@ test("tool-count: unknown op returns null", () => {
   expect(result).toBeNull();
 });
 
-test("tool-count: unknown op exits 2 (E2E)", async () => {
+test("tool-count: unknown op exits 127 (non-invertible) with a fail record (E2E)", async () => {
   const r = await runCLI(["tool-count", "Read", "bogus", "1"], [call("Read")]);
-  expect(r.exitCode).toBe(2);
+  expect(r.exitCode).toBe(127);
+  expect(r.lastRecord?.["passed"]).toBe(false);
 });
 
 // ---------------------------------------------------------------------------
@@ -649,9 +650,12 @@ test("tool-match-before-tool-match: fail on empty transcript (C1 contract)", () 
 // Unknown verb
 // ---------------------------------------------------------------------------
 
-test("unknown verb exits 2 (E2E)", async () => {
+test("unknown verb exits 127 (non-invertible) with a fail record (E2E)", async () => {
+  // 127 is in bin/not's crash range so `not check-transcript <typo>` cannot
+  // invert a broken check into a silent pass.
   const r = await runCLI(["totally-unknown-verb"], []);
-  expect(r.exitCode).toBe(2);
+  expect(r.exitCode).toBe(127);
+  expect(r.lastRecord?.["passed"]).toBe(false);
 });
 
 // ---------------------------------------------------------------------------

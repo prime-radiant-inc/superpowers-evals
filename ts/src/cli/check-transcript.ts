@@ -3,9 +3,13 @@
 // Usage: bun run check-transcript.ts <verb> [args...]
 //
 // Exit codes:
-//   0 — check passed
-//   1 — check failed
-//   2 — usage error (unknown verb or bad args)
+//   0   — check passed
+//   1   — check failed (an honest pass/fail verdict; `not` may invert it)
+//   127 — usage error (no/unknown verb, bad args) OR a tool crash. This is in
+//         bin/not's crash range (>=126) ON PURPOSE: a broken/typo'd check must
+//         NOT be invertible. If it exited 2 or 1, `not check-transcript <typo>`
+//         would treat it as an intentional failure and INVERT it to a silent
+//         pass — green-lighting a check that never actually ran.
 
 import { loadCalls } from "../check/transcript.ts";
 import { recordPass, recordFail } from "../check/record.ts";
@@ -26,22 +30,31 @@ import {
 } from "../check/verbs.ts";
 
 const [, , verb, ...rest] = Bun.argv;
+const cliArgs = rest;
+
+// Non-invertible exit: usage errors and crashes must land in bin/not's crash
+// range (>=126) so `not check-transcript ...` can't silently invert a broken
+// check into a pass. Always emit a fail record too, so the direct (non-`not`)
+// path and the composer see a failed check rather than a missing one.
+const NONINVERTIBLE_EXIT = 127;
+function brokenCheck(message: string, check: string): never {
+  console.error(message);
+  recordFail(check, cliArgs, message);
+  process.exit(NONINVERTIBLE_EXIT);
+}
 
 if (!verb) {
-  console.error("usage: check-transcript <verb> [args...]");
-  process.exit(2);
+  brokenCheck("usage: check-transcript <verb> [args...]", "check-transcript");
 }
 
 const { calls, empty } = loadCalls();
-const cliArgs = rest;
 
 function dispatch(): void {
   try {
     dispatchInner();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    recordFail(verb!, cliArgs, `tool error: ${message}`);
-    process.exit(1);
+    brokenCheck(`tool error: ${message}`, verb!);
   }
 }
 
@@ -64,10 +77,10 @@ function dispatchInner(): void {
     case "tool-count": {
       const r = verbToolCount(calls, empty, cliArgs);
       if (r === null) {
-        console.error(
+        brokenCheck(
           `Unknown operator: ${cliArgs[1] ?? ""} (expected: eq, gt, gte, lt, lte)`,
+          verb,
         );
-        process.exit(2);
       }
       r.passed
         ? recordPass(verb, cliArgs, r.detail)
@@ -145,9 +158,7 @@ function dispatchInner(): void {
       process.exit(r.passed ? 0 : 1);
     }
     default:
-      console.error(`check-transcript: unknown verb '${verb}'`);
-      console.error("usage: check-transcript <verb> [args...]");
-      process.exit(2);
+      brokenCheck(`check-transcript: unknown verb '${verb}'`, verb ?? "check-transcript");
   }
 }
 

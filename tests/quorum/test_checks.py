@@ -239,6 +239,50 @@ def test_check_transcript_shim_runs_and_writes_record(tmp_path: Path):
     assert rec["check"] == "tool-called" and rec["passed"] is True
 
 
+@requires_bun
+def test_not_check_transcript_typo_does_not_silently_pass(tmp_path: Path):
+    # A typo'd verb under `not` must NOT invert into a pass. check-transcript
+    # exits 127 (in bin/not's crash range) on a usage error, so `not` treats it
+    # as a crash → records a fail and exits non-zero, surfacing the broken check
+    # instead of green-lighting a check that never ran.
+    traj = {
+        "schema_version": "ATIF-v1.7",
+        "agent": {"name": "test", "version": "1.0"},
+        "steps": [
+            {
+                "step_id": 1,
+                "source": "agent",
+                "tool_calls": [
+                    {"tool_call_id": "c1", "function_name": "Write", "arguments": {}}
+                ],
+            }
+        ],
+    }
+    traj_path = tmp_path / "trajectory.json"
+    traj_path.write_text(json.dumps(traj))
+    sink = tmp_path / "sink.jsonl"
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    env = {
+        **os.environ,
+        "PATH": f"{REPO / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "QUORUM_TRANSCRIPT_PATH": str(traj_path),
+        "QUORUM_RECORD_SINK": str(sink),
+    }
+    proc = subprocess.run(
+        ["not", "check-transcript", "totally-bogus-verb"],
+        cwd=workdir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0, "a typo'd verb under `not` silently passed (rc=0)"
+    lines = [ln for ln in sink.read_text().splitlines() if ln.strip()]
+    assert lines, "no record emitted for the broken check"
+    rec = json.loads(lines[-1])
+    assert rec["passed"] is False, f"broken check inverted to a pass: {rec}"
+
+
 def test_run_phase_omits_harness_run_dir_when_none(tmp_path: Path):
     # Without run_dir, the env var is unset — checks that need it must
     # fail gracefully rather than silently inherit a stale value.
