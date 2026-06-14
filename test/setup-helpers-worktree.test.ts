@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { lstatSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import type {
+  CommandResult,
+  CommandRunner,
+} from '../src/agents/command-runner.ts';
 import { repoRoot } from '../src/paths.ts';
 import { createBaseRepo } from '../src/setup-helpers/base.ts';
 import { runGit } from '../src/setup-helpers/git.ts';
@@ -9,6 +13,7 @@ import {
   addExistingWorktree,
   createCallerConsentPlan,
   detachWorktreeHead,
+  linkGeminiExtension,
   setupPressureWorktreeConditions,
   symlinkSuperpowers,
 } from '../src/setup-helpers/worktree.ts';
@@ -86,4 +91,37 @@ describe('worktree fixtures (tier 1)', () => {
       rmSync(parent, { recursive: true, force: true });
     }
   });
+});
+
+class GeminiRunner implements CommandRunner {
+  calls: Array<readonly string[]> = [];
+  run(command: string, args: readonly string[]): CommandResult {
+    this.calls.push([command, ...args]);
+    return { status: 0, stdout: '', stderr: '' };
+  }
+}
+
+test('linkGeminiExtension writes GEMINI.md and calls gemini twice', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'sh-gem-'));
+  const run = new GeminiRunner();
+  try {
+    const wd = join(parent, 'wd');
+    linkGeminiExtension({
+      workdir: wd,
+      superpowersRoot: '/sp',
+      run,
+    } as never);
+    expect(await Bun.file(join(wd, 'GEMINI.md')).text()).toContain(
+      '@/sp/skills/using-superpowers/SKILL.md',
+    );
+    expect(run.calls[0]).toEqual([
+      'gemini',
+      'extensions',
+      'uninstall',
+      'superpowers',
+    ]);
+    expect(run.calls[1]?.slice(0, 3)).toEqual(['gemini', 'extensions', 'link']);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
 });
