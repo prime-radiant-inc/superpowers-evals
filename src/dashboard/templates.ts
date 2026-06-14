@@ -31,7 +31,8 @@ export function esc(s: string): string {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 // Three-decimal fixed format, matching the Python `'%.3f'|format(...)` used for

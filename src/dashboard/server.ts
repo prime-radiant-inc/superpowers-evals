@@ -15,6 +15,7 @@ import {
 import { readDashboardVerdict, scanResults } from './scan.ts';
 import {
   cellHtml,
+  esc,
   gridHtml,
   layoutHtml,
   runStripHtml,
@@ -464,7 +465,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       }
       const message = err instanceof Error ? err.message : String(err);
       return new Response(
-        `<div class="runbar">launch error: ${message}</div>`,
+        `<div class="runbar">launch error: ${esc(message)}</div>`,
         {
           status: 400,
           headers: { 'content-type': 'text/html; charset=utf-8' },

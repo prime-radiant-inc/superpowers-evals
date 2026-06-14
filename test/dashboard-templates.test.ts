@@ -51,6 +51,10 @@ test('esc escapes HTML metacharacters', () => {
   expect(esc('a&b<c>"d"')).toBe('a&amp;b&lt;c&gt;&quot;d&quot;');
 });
 
+test('esc escapes the single quote (complete sanitizer; CodeQL XSS guard)', () => {
+  expect(esc("it's <a href='x'>")).toBe('it&#39;s &lt;a href=&#39;x&#39;&gt;');
+});
+
 test('esc escapes ampersand first (no double-encoding)', () => {
   expect(esc('&lt;')).toBe('&amp;lt;');
 });
