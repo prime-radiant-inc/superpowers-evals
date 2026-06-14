@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -14,6 +13,7 @@ import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Gemini-family provisioning (mirrors quorum/runner.py _seed_gemini_config):
 // install the Superpowers CLI extension into an isolated GEMINI_CLI_HOME without
@@ -112,12 +112,11 @@ function geminiStderrExcerpt(stderr: string): string {
 }
 
 // Write `content` to `path` at mode 0600, creating parent dirs (Python:
-// _write_private_text). writeFileSync's `mode` only applies on create, so chmod
-// after to enforce 0600 even when the file already existed.
+// _write_private_text). The write goes through the shared O_NOFOLLOW writer so a
+// pre-placed symlink at the destination cannot redirect the secret.
 function writePrivateText(path: string, content: string): void {
   mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(path, content, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  writePrivateFileNoFollow(path, content);
 }
 
 // Verify the `gemini` binary resolves on PATH before provisioning (Python:
@@ -268,8 +267,7 @@ export class GeminiAgent implements CodingAgent {
       authType === GEMINI_AUTH_TYPE_API_KEY
         ? `GEMINI_API_KEY=${shellSingleQuote(apiKey)}\n`
         : '';
-    writeFileSync(envFile, envContent, { mode: 0o600 });
-    chmodSync(envFile, 0o600);
+    writePrivateFileNoFollow(envFile, envContent);
     if (authType === GEMINI_AUTH_TYPE_OAUTH) {
       copyGeminiOauthCredentials(configDir);
     }

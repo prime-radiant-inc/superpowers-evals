@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -18,6 +17,7 @@ import { GeminiAgent } from './gemini.ts';
 import { KimiAgent } from './kimi.ts';
 import { OpenCodeAgent } from './opencode.ts';
 import { PiAgent } from './pi.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 /** The isolated home a run hands an agent to provision. Absence is undefined
  *  (§5.5): a missing skeleton root is undefined, never null. */
@@ -144,16 +144,13 @@ class ClaudeAgent implements CodingAgent {
         );
       }
       const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
-      // writeFileSync's `mode` only applies on create; chmod after to enforce
-      // 0600 even when the file already existed (Python double-fchmods).
-      writeFileSync(
+      // The mode-0600 secret env file goes through the shared O_NOFOLLOW writer
+      // so a pre-placed symlink at the destination cannot redirect the API key
+      // (Python double-fchmods 0600 around an O_NOFOLLOW open).
+      writePrivateFileNoFollow(
         envFile,
         `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`,
-        {
-          mode: 0o600,
-        },
       );
-      chmodSync(envFile, 0o600);
       approveClaudeApiKey(claudeJsonPath, apiKey);
     }
     return { [this.config.agent_config_env]: configDir };
