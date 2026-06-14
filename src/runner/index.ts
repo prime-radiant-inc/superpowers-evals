@@ -6,6 +6,7 @@ import { Glob } from 'bun';
 import { z } from 'zod';
 import { antigravityRateLimitReason } from '../agents/antigravity.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
+import { geminiAuthType } from '../agents/gemini.ts';
 import {
   CLAUDE_ENV_FILE_NAME,
   ProvisionError,
@@ -426,6 +427,12 @@ async function runInner(
     const geminiEnvFile = join(configDir, '.gemini-env');
     substitutions['$GEMINI_ENV_FILE'] = geminiEnvFile;
     substitutions['$GEMINI_ENV_FILE_SH'] = shellSingleQuote(geminiEnvFile);
+    // The gemini launcher's GEMINI_DEFAULT_AUTH_TYPE reads $GEMINI_AUTH_TYPE_SH;
+    // resolve it the same way GeminiAgent.provision does (Python: the gemini
+    // branch in _run_scenario_inner). Mirrors the $CLAUDE_MODEL pattern.
+    const geminiAuth = geminiAuthType();
+    substitutions['$GEMINI_AUTH_TYPE'] = geminiAuth;
+    substitutions['$GEMINI_AUTH_TYPE_SH'] = shellSingleQuote(geminiAuth);
   }
   if (cfg.name === 'pi') {
     substitutions['$PI_ENV_FILE'] = join(configDir, 'pi.env');

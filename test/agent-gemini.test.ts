@@ -206,6 +206,56 @@ test('provision seeds config dir, settings, env file, manifests, and returns env
   }
 });
 
+test('provision accepts a decorated superpowers row printed to stderr', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  try {
+    withEnv(
+      { GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: superpowersRoot },
+      () => {
+        // Newer gemini prints the extensions list to stderr and decorates the
+        // row with a checkmark + version (Python: merge stdout+stderr, regex
+        // tolerates a leading non-word glyph). stdout is empty.
+        const runner = new FakeCommandRunner((command, args) => {
+          if (
+            command === 'gemini' &&
+            args[0] === 'extensions' &&
+            args[1] === 'link'
+          ) {
+            for (const rel of EXTENSION_MANIFESTS) {
+              const path = join(home.configDir, rel);
+              mkdirSync(join(path, '..'), { recursive: true });
+              writeFileSync(path, '{}\n');
+            }
+            return { status: 0, stdout: '', stderr: '' };
+          }
+          if (
+            command === 'gemini' &&
+            args[0] === 'extensions' &&
+            args[1] === 'list'
+          ) {
+            return {
+              status: 0,
+              stdout: '',
+              stderr: '✓ superpowers (5.1.0)\n',
+            };
+          }
+          return { status: 0, stdout: '', stderr: '' };
+        });
+        // Must not throw despite stdout being empty.
+        new GeminiAgent(CONFIG).provision(home, runner);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+  }
+});
+
 test('provision merges into an existing settings.json without clobbering', () => {
   const { home, cleanup } = makeTempHome();
   const { home: spHome, cleanup: spCleanup } = makeTempHome();
@@ -334,6 +384,140 @@ test('provision throws ProvisionError when extensions list omits superpowers', (
   } finally {
     cleanup();
     spCleanup();
+  }
+});
+
+test('provision in oauth mode copies credentials and omits the api key', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const { home: oauthHome, cleanup: oauthCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  // Seed the OAuth credential files the adapter copies (Python:
+  // _copy_gemini_oauth_credentials reads from GEMINI_OAUTH_HOME).
+  const oauthSource = oauthHome.configDir;
+  mkdirSync(oauthSource, { recursive: true });
+  writeFileSync(
+    join(oauthSource, 'oauth_creds.json'),
+    '{"access_token":"tok"}',
+  );
+  writeFileSync(
+    join(oauthSource, 'google_accounts.json'),
+    '{"active":"me@example.com"}',
+  );
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: superpowersRoot,
+        GEMINI_AUTH_TYPE: 'oauth-personal',
+        GEMINI_OAUTH_HOME: oauthSource,
+        GEMINI_API_KEY: undefined,
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const env = new GeminiAgent(CONFIG).provision(home, runner);
+
+        // settings.json selects oauth-personal.
+        const settings: unknown = JSON.parse(
+          readFileSync(
+            join(home.configDir, '.gemini', 'settings.json'),
+            'utf8',
+          ),
+        );
+        expect(settings).toEqual({
+          security: { auth: { selectedType: 'oauth-personal' } },
+        });
+
+        // Credentials copied at 0600 into the run's .gemini dir.
+        for (const name of ['oauth_creds.json', 'google_accounts.json']) {
+          const dst = join(home.configDir, '.gemini', name);
+          expect(existsSync(dst)).toBe(true);
+          expect(readFileSync(dst, 'utf8')).toBe(
+            readFileSync(join(oauthSource, name), 'utf8'),
+          );
+          expect(statSync(dst).mode & 0o777).toBe(0o600);
+        }
+
+        // .gemini-env is empty in oauth mode (no GEMINI_API_KEY line), 0600.
+        const envFile = join(home.configDir, '.gemini-env');
+        expect(readFileSync(envFile, 'utf8')).toBe('');
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+
+        // Returned env advertises the oauth auth type.
+        expect(env['GEMINI_DEFAULT_AUTH_TYPE']).toBe('oauth-personal');
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+    oauthCleanup();
+  }
+});
+
+test('provision throws on a bogus GEMINI_AUTH_TYPE before any subprocess', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: superpowersRoot,
+        GEMINI_API_KEY: API_KEY,
+        GEMINI_AUTH_TYPE: 'totally-bogus',
+      },
+      () => {
+        const runner = new FakeCommandRunner();
+        const agent = new GeminiAgent(CONFIG);
+        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+        expect(runner.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+  }
+});
+
+test('provision in oauth mode throws when a credential file is missing', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const { home: oauthHome, cleanup: oauthCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  // Only seed one of the two required credential files.
+  const oauthSource = oauthHome.configDir;
+  mkdirSync(oauthSource, { recursive: true });
+  writeFileSync(
+    join(oauthSource, 'oauth_creds.json'),
+    '{"access_token":"tok"}',
+  );
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: superpowersRoot,
+        GEMINI_AUTH_TYPE: 'oauth-personal',
+        GEMINI_OAUTH_HOME: oauthSource,
+        GEMINI_API_KEY: undefined,
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const agent = new GeminiAgent(CONFIG);
+        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+    oauthCleanup();
   }
 });
 
