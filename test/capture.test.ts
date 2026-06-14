@@ -1,20 +1,46 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { flattenToolCalls } from '../src/atif/project.ts';
+import type { AtifTrajectory } from '../src/atif/types.ts';
+import { validateTrajectory } from '../src/atif/validate.ts';
 import {
+  ATIF_TRAJECTORY_FILENAME,
   captureToolCalls,
   captureToolCallsWithRetry,
   newFilesSince,
   snapshotDir,
 } from '../src/capture/index.ts';
 
-// A valid single-tool-call claude session log line.
+// A valid single-tool-call claude session log line (the real assistant-turn
+// envelope: a message whose content carries a tool_use block).
 const CLAUDE_LOG_LINE = JSON.stringify({
-  type: 'tool_use',
-  name: 'Bash',
-  input: { command: 'ls' },
+  type: 'assistant',
+  message: {
+    content: [
+      {
+        type: 'tool_use',
+        id: 'call-1',
+        name: 'Bash',
+        input: { command: 'ls' },
+      },
+    ],
+  },
 });
+
+/** Read and parse the emitted ATIF trajectory.json from a run dir. */
+function readTrajectory(runDir: string): AtifTrajectory {
+  return JSON.parse(
+    readFileSync(join(runDir, ATIF_TRAJECTORY_FILENAME), 'utf8'),
+  ) as AtifTrajectory;
+}
 
 test('snapshot then diff finds only new files', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
@@ -25,18 +51,11 @@ test('snapshot then diff finds only new files', () => {
   expect(fresh.map((p) => p.split('/').pop())).toEqual(['new.jsonl']);
 });
 
-test('captureToolCalls writes coding-agent-tool-calls.jsonl from claude logs', () => {
+test('captureToolCalls writes a valid ATIF trajectory.json from claude logs', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const snap = snapshotDir(logDir, '**/*.jsonl');
-  writeFileSync(
-    join(logDir, 's.jsonl'),
-    JSON.stringify({
-      type: 'tool_use',
-      name: 'Bash',
-      input: { command: 'ls' },
-    }),
-  );
+  writeFileSync(join(logDir, 's.jsonl'), CLAUDE_LOG_LINE);
   const res = captureToolCalls({
     logDir,
     logGlob: '**/*.jsonl',
@@ -46,22 +65,22 @@ test('captureToolCalls writes coding-agent-tool-calls.jsonl from claude logs', (
     launchCwd: runDir,
   });
   expect(res.rowCount).toBe(1);
-  const written = readFileSync(
-    join(runDir, 'coding-agent-tool-calls.jsonl'),
-    'utf8',
-  ).trim();
-  expect(JSON.parse(written)).toEqual({
-    tool: 'Bash',
-    args: { command: 'ls' },
-    source: 'shell',
-  });
+  expect(res.path).toBe(join(runDir, ATIF_TRAJECTORY_FILENAME));
+
+  const traj = readTrajectory(runDir);
+  expect(validateTrajectory(traj).ok).toBe(true);
+  expect(traj.schema_version).toBe('ATIF-v1.7');
+  expect(traj.agent.name).toBe('claude-code');
+  expect(flattenToolCalls(traj)).toEqual([
+    { tool: 'Bash', args: { command: 'ls' } },
+  ]);
 });
 
-test('captureToolCalls orders gemini rows by message timestamp, not path', () => {
+test('captureToolCalls merges gemini logs by message timestamp, not path', () => {
   // Two gemini session logs: the path-earlier subagent log carries a LATER
-  // message timestamp than the path-later main log. Output must be in timestamp
-  // order (main's Skill first, subagent's Edit second), not path order. Mirrors
-  // quorum/test_capture.py::test_gemini_capture_orders_rows_by_message_timestamp.
+  // message timestamp than the path-later main log. The merged trajectory must
+  // be in timestamp order (main's Skill first, subagent's Edit second), not path
+  // order. The merge subsumes the old gemini-specific ordering special case.
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const snap = snapshotDir(logDir, '**/chats/**/*.jsonl');
@@ -105,21 +124,15 @@ test('captureToolCalls orders gemini rows by message timestamp, not path', () =>
     launchCwd: runDir,
   });
 
-  const rows = readFileSync(
-    join(runDir, 'coding-agent-tool-calls.jsonl'),
-    'utf8',
-  )
-    .trim()
-    .split('\n')
-    .map(
-      (line) => JSON.parse(line) as { tool: string; args: { skill?: string } },
-    );
-  expect(rows.map((r) => r.tool)).toEqual(['Skill', 'Edit']);
-  expect(rows[0]?.args.skill).toBe('superpowers:writing-plans');
+  const traj = readTrajectory(runDir);
+  expect(validateTrajectory(traj).ok).toBe(true);
+  const calls = flattenToolCalls(traj);
+  expect(calls.map((c) => c.tool)).toEqual(['Skill', 'Edit']);
+  expect(calls[0]?.args['skill']).toBe('superpowers:writing-plans');
   expect(res.rowCount).toBe(2);
 });
 
-test('captureToolCalls writes an empty file when there are no new logs', () => {
+test('captureToolCalls writes no trajectory when there are no new logs', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const res = captureToolCalls({
@@ -131,9 +144,28 @@ test('captureToolCalls writes an empty file when there are no new logs', () => {
     launchCwd: runDir,
   });
   expect(res.rowCount).toBe(0);
-  expect(
-    readFileSync(join(runDir, 'coding-agent-tool-calls.jsonl'), 'utf8'),
-  ).toBe('');
+  expect(existsSync(join(runDir, ATIF_TRAJECTORY_FILENAME))).toBe(false);
+});
+
+test('captureToolCalls removes a stale trajectory on a zero-row recapture', () => {
+  // A trajectory written by an earlier pass must not survive a later pass that
+  // captures nothing — downstream loaders must see "nothing captured".
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  writeFileSync(
+    join(runDir, ATIF_TRAJECTORY_FILENAME),
+    JSON.stringify({ stale: true }),
+  );
+  const res = captureToolCalls({
+    logDir,
+    logGlob: '**/*.jsonl',
+    snapshot: new Set(),
+    normalizer: 'claude',
+    runDir,
+    launchCwd: runDir,
+  });
+  expect(res.rowCount).toBe(0);
+  expect(existsSync(join(runDir, ATIF_TRAJECTORY_FILENAME))).toBe(false);
 });
 
 test('captureToolCalls records attempts === 1', () => {

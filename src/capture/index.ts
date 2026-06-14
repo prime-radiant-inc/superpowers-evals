@@ -1,10 +1,39 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { Glob } from 'bun';
-import { normalizeGeminiLogsWithOrder } from '../normalizers/gemini.ts';
-import { NORMALIZERS } from '../normalizers/index.ts';
+import { flattenToolCalls } from '../atif/project.ts';
+import type { AtifStep, AtifTrajectory } from '../atif/types.ts';
+import { normalizeAntigravity } from '../normalize/antigravity.ts';
+import { normalizeClaudeLegacy } from '../normalize/claude.ts';
+import { normalizeCodex } from '../normalize/codex.ts';
+import { normalizeCopilot } from '../normalize/copilot.ts';
+import { normalizeGemini } from '../normalize/gemini.ts';
+import { normalizeKimi } from '../normalize/kimi.ts';
+import { normalizeOpencode } from '../normalize/opencode.ts';
+import { normalizePi } from '../normalize/pi.ts';
 import { estimateSessionLogs } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
+
+// Backend (coding-agent name) -> ATIF normalizer. Mirrors the cli/normalize.ts
+// dispatch table; all eight dialects produce an ATIF Trajectory. Replaces the
+// old flat ToolCall[] NORMALIZERS registry.
+type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
+
+const NORMALIZERS: Record<string, AtifNormalizer> = {
+  antigravity: normalizeAntigravity,
+  claude: normalizeClaudeLegacy,
+  codex: normalizeCodex,
+  copilot: normalizeCopilot,
+  gemini: normalizeGemini,
+  kimi: normalizeKimi,
+  opencode: normalizeOpencode,
+  pi: normalizePi,
+};
+
+// The agent.version carried into ATIF when capture has no version to thread.
+const ATIF_AGENT_VERSION = 'unknown';
+
+export const ATIF_TRAJECTORY_FILENAME = 'trajectory.json';
 
 /** Map each matched log to its (relative path -> absolute path). Empty when the
  *  log dir does not exist. */
@@ -56,6 +85,9 @@ function capturedLogs(args: CaptureArgs): string[] {
 }
 
 export interface CaptureResult {
+  // Path to the emitted ATIF trajectory.json. The file may be absent on a
+  // zero-row capture: emission failures and trajectories with no tool calls
+  // leave no file (so downstream loaders fail closed and the retry fires).
   readonly path: string;
   readonly sourceLogs: readonly string[];
   readonly rowCount: number;
@@ -64,73 +96,153 @@ export interface CaptureResult {
   readonly attempts: number;
 }
 
-// A gemini row tagged with its sort key (Python: the (not bool(timestamp),
-// timestamp, source_index, row_index) tuple). `untimestamped` sinks rows with no
-// timestamp to the end; ties break by source-log order then within-log order.
-interface GeminiOrderedRow {
-  readonly untimestamped: boolean;
+// A normalized trajectory tagged with its source-file order, carried into the
+// merge so untimestamped steps fall back to (file, in-file) input order.
+interface OrderedStep {
+  readonly noTimestamp: boolean;
   readonly timestamp: string;
-  readonly sourceIndex: number;
-  readonly rowIndex: number;
-  readonly line: string;
+  readonly fileIndex: number;
+  readonly inFileIndex: number;
+  readonly step: AtifStep;
 }
 
-// Normalize gemini session logs across all new files and serialize them in
-// per-message timestamp order rather than path order (Python: the
-// normalizer == "gemini" branch in capture_tool_calls). Subagent and main logs
-// interleave by the timestamp each toolCall's message carries.
-function geminiOrderedLines(newLogs: readonly string[]): string[] {
-  const rows: GeminiOrderedRow[] = [];
-  newLogs.forEach((log, sourceIndex) => {
-    normalizeGeminiLogsWithOrder(readFileSync(log, 'utf8')).forEach(
-      ([timestamp, rec], rowIndex) => {
-        rows.push({
-          untimestamped: timestamp === '',
-          timestamp,
-          sourceIndex,
-          rowIndex,
-          line: JSON.stringify(rec),
-        });
-      },
-    );
-  });
-  rows.sort((a, b) => {
-    if (a.untimestamped !== b.untimestamped) {
-      return a.untimestamped ? 1 : -1;
+/**
+ * Merge one ATIF trajectory per source file into a single trajectory.
+ *
+ * A run can produce more than one session log (gemini main + subagent chats;
+ * any agent's subagent runs). Emitting from only the first log silently drops
+ * every tool call recorded in the others. This merges the steps of all files
+ * into one trajectory:
+ *
+ * - Steps are ordered by their ISO-8601 `timestamp` where present, with a STABLE
+ *   fallback (file order = the input order, then in-file order) for steps that
+ *   carry no timestamp. The sort key is `(noTimestamp, ts, fileIndex,
+ *   inFileIndex)` — untimestamped steps sink to the end and keep their relative
+ *   input position. This subsumes the old gemini timestamp-ordering special case.
+ * - `step_id` is renumbered sequentially from 1 across the merged set.
+ * - Each step's `tool_calls`/`observation` are kept intact; observations already
+ *   reference tool_call_ids in their own step, so renumbering step_ids preserves
+ *   validateTrajectory's same-step observation invariant.
+ *
+ * Returns null when no file yielded a trajectory with steps. The envelope
+ * (schema_version, agent) is taken from the first file that has steps.
+ */
+function mergeTrajectories(perFile: AtifTrajectory[]): AtifTrajectory | null {
+  let envelope: AtifTrajectory | undefined;
+  const ordered: OrderedStep[] = [];
+
+  for (let fileIndex = 0; fileIndex < perFile.length; fileIndex++) {
+    const traj = perFile[fileIndex] as AtifTrajectory;
+    const steps = traj.steps;
+    if (!Array.isArray(steps) || steps.length === 0) {
+      continue;
+    }
+    if (envelope === undefined) {
+      envelope = traj;
+    }
+    for (let inFileIndex = 0; inFileIndex < steps.length; inFileIndex++) {
+      const step = steps[inFileIndex] as AtifStep;
+      const timestamp =
+        typeof step.timestamp === 'string' ? step.timestamp : '';
+      ordered.push({
+        noTimestamp: timestamp === '',
+        timestamp,
+        fileIndex,
+        inFileIndex,
+        step,
+      });
+    }
+  }
+
+  if (envelope === undefined || ordered.length === 0) {
+    return null;
+  }
+
+  ordered.sort((a, b) => {
+    if (a.noTimestamp !== b.noTimestamp) {
+      return a.noTimestamp ? 1 : -1;
     }
     if (a.timestamp !== b.timestamp) {
       return a.timestamp < b.timestamp ? -1 : 1;
     }
-    if (a.sourceIndex !== b.sourceIndex) {
-      return a.sourceIndex - b.sourceIndex;
+    if (a.fileIndex !== b.fileIndex) {
+      return a.fileIndex - b.fileIndex;
     }
-    return a.rowIndex - b.rowIndex;
+    return a.inFileIndex - b.inFileIndex;
   });
-  return rows.map((row) => row.line);
+
+  const mergedSteps = ordered.map((item, i) => ({
+    ...item.step,
+    step_id: i + 1,
+  }));
+
+  return { ...envelope, steps: mergedSteps };
 }
 
-/** Normalize each new session log into tool calls and write
- *  coding-agent-tool-calls.jsonl. The file is always written, even when empty,
- *  so downstream consumers can assume it exists. */
+/**
+ * Normalize one source log to an ATIF trajectory in-process, or null on any
+ * failure — missing/unreadable log or a normalizer throw. The same fail-closed
+ * signal a missing log gives, which keeps the empty-capture retry intact.
+ */
+function emitTrajectory(
+  sourceLog: string,
+  normalize: AtifNormalizer,
+): AtifTrajectory | null {
+  let raw: string;
+  try {
+    raw = readFileSync(sourceLog, 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    return normalize(raw, ATIF_AGENT_VERSION);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize each new session log into an ATIF trajectory, merge them into one,
+ * and write run_dir/trajectory.json.
+ *
+ * A run can produce more than one session log; capture normalizes EVERY new log
+ * and merges their steps into a single trajectory ordered by step timestamp (see
+ * mergeTrajectories). rowCount is the number of tool calls in the merged
+ * trajectory. When there is no source log, all emissions fail, or the merge has
+ * no tool calls, rowCount is 0 and any stale trajectory.json is removed — so
+ * downstream loaders fail closed and the empty-capture retry (PRI-2081) fires.
+ */
 export function captureToolCalls(args: CaptureArgs): CaptureResult {
   const { normalizer, runDir } = args;
-  const newLogs = capturedLogs(args);
-  const fn = NORMALIZERS[normalizer];
-  if (fn === undefined) {
+  const normalize = NORMALIZERS[normalizer];
+  if (normalize === undefined) {
     throw new Error(`unknown normalizer: ${normalizer}`);
   }
-  const lines: string[] =
-    normalizer === 'gemini'
-      ? geminiOrderedLines(newLogs)
-      : newLogs.flatMap((log) =>
-          fn(readFileSync(log, 'utf8')).map((rec) => JSON.stringify(rec)),
-        );
-  const outPath = join(runDir, 'coding-agent-tool-calls.jsonl');
-  writeFileSync(outPath, lines.length > 0 ? `${lines.join('\n')}\n` : '');
+  const newLogs = capturedLogs(args);
+  const outPath = join(runDir, ATIF_TRAJECTORY_FILENAME);
+
+  const perFile: AtifTrajectory[] = [];
+  for (const log of newLogs) {
+    const traj = emitTrajectory(log, normalize);
+    if (traj !== null) {
+      perFile.push(traj);
+    }
+  }
+
+  const merged = mergeTrajectories(perFile);
+  const rowCount = merged === null ? 0 : flattenToolCalls(merged).length;
+  if (merged !== null && rowCount > 0) {
+    writeFileSync(outPath, `${JSON.stringify(merged, null, 2)}\n`);
+  } else {
+    // A zero-row capture must not leave a stale trajectory behind: a later
+    // retry pass (or a downstream loader) must see "nothing captured".
+    rmSync(outPath, { force: true });
+  }
+
   return {
     path: outPath,
     sourceLogs: newLogs,
-    rowCount: lines.length,
+    rowCount,
     attempts: 1,
   };
 }
@@ -138,18 +250,18 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
 /** captureToolCalls with an empty-capture retry/guard (PRI-2081).
  *
  *  A run that produced no new source logs — or logs that normalize to zero
- *  rows — is usually a real failure, but it is sometimes a transient race: the
- *  Coding-Agent's session log is still being flushed (or renamed into place)
- *  when the post-drive diff runs. Those races turned whole runs into permanent
- *  stage="capture" indeterminates, paying full Gauntlet + subject spend for no
- *  verdict.
+ *  tool calls — is usually a real failure, but it is sometimes a transient
+ *  race: the Coding-Agent's session log is still being flushed (or renamed into
+ *  place) when the post-drive diff runs. Those races turned whole runs into
+ *  permanent stage="capture" indeterminates, paying full Gauntlet + subject
+ *  spend for no verdict.
  *
  *  Re-run the same snapshot diff up to `attempts` times, `delayMs` apart, until
- *  something normalizes. Each pass rewrites coding-agent-tool-calls.jsonl, so
- *  the artifact always reflects the final capture. The returned `attempts`
- *  field records how many passes ran; a genuinely-empty run still comes back
- *  empty (and the runner's per-backend diagnostic cascade proceeds unchanged),
- *  just `delayMs * (attempts - 1)` ms later. The sleep is synchronous
+ *  something normalizes. Each pass rewrites trajectory.json, so the artifact
+ *  always reflects the final capture. The returned `attempts` field records how
+ *  many passes ran; a genuinely-empty run still comes back empty (and the
+ *  runner's per-backend diagnostic cascade proceeds unchanged), just
+ *  `delayMs * (attempts - 1)` ms later. The sleep is synchronous
  *  (Bun.sleepSync) so the runner stays sync; tests inject a spy. */
 export function captureToolCallsWithRetry(
   args: CaptureArgs,
