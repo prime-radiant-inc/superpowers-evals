@@ -98,6 +98,12 @@ test('populateContextDir substitutes every placeholder in the claude context', (
   // The HOWTO points at the generated launcher's absolute path.
   expect(howto).toContain(join(ctxDir, 'launch-agent'));
 
+  // Nested-session capture defenses survive substitution (oracle da4846d/ea6a231).
+  // The launcher both strips the nested-detection env (env -u …) AND forces
+  // transcript persistence; losing either empties capture -> indeterminate(capture).
+  expect(launcher).toContain('env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID');
+  expect(launcher).toContain('CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1');
+
   // The shebang'd launcher is executable after substitution (mode & 0o111).
   const mode = statSync(join(ctxDir, 'launch-agent')).mode;
   expect(mode & 0o111).not.toBe(0);

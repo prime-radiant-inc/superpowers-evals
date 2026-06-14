@@ -80,3 +80,107 @@ test('parseCodingAgentsDirective returns undefined when no directive present', (
   writeFileSync(checksSh, 'pre() { :; }\npost() { :; }\n');
   expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
 });
+
+// Negative-assertion empty-capture guard (oracle 0f6af56, lives in
+// bin/tool-not-called + bin/skill-not-called). A negative assertion cannot be
+// verified without a transcript: an empty/missing capture means "we don't know",
+// not "it wasn't called". The guard must emit a FAIL record rather than vacuously
+// pass. These drive both negative tools through runPhase so a regression in the
+// shared bash is caught from the TS side. The load-bearing signal is the FAIL
+// record (passed:false): the bin tool exits 1, but runPhase's crash heuristic
+// normalizes a record-bearing assertion-fail to exitCode 0 — the record, not the
+// exit code, is what flips RED if the guard ever vacuously passes again.
+
+test('tool-not-called FAILs against an empty tool-calls capture (no vacuous pass)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const toolCallsPath = join(workdir, 'coding-agent-tool-calls.jsonl');
+  writeFileSync(toolCallsPath, '');
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  tool-not-called Edit\n}\n',
+  );
+  const { records } = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    quorumBin: BIN,
+    toolCallsPath,
+  });
+  expect(records[0]).toMatchObject({
+    check: 'tool-not-called',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('skill-not-called FAILs against an empty tool-calls capture (no vacuous pass)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const toolCallsPath = join(workdir, 'coding-agent-tool-calls.jsonl');
+  writeFileSync(toolCallsPath, '');
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  skill-not-called superpowers:foo\n}\n',
+  );
+  const { records } = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    quorumBin: BIN,
+    toolCallsPath,
+  });
+  expect(records[0]).toMatchObject({
+    check: 'skill-not-called',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('tool-not-called PASSes on a non-empty trace that lacks the tool (positive control)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const toolCallsPath = join(workdir, 'coding-agent-tool-calls.jsonl');
+  writeFileSync(toolCallsPath, '{"tool":"Read","args":{}}\n');
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  tool-not-called Edit\n}\n',
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    quorumBin: BIN,
+    toolCallsPath,
+  });
+  expect(exitCode).toBe(0);
+  expect(records[0]).toMatchObject({
+    check: 'tool-not-called',
+    negated: false,
+    passed: true,
+  });
+});
+
+test('skill-not-called PASSes on a non-empty trace that lacks the skill (positive control)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const toolCallsPath = join(workdir, 'coding-agent-tool-calls.jsonl');
+  writeFileSync(toolCallsPath, '{"tool":"Read","args":{}}\n');
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  skill-not-called superpowers:foo\n}\n',
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    quorumBin: BIN,
+    toolCallsPath,
+  });
+  expect(exitCode).toBe(0);
+  expect(records[0]).toMatchObject({
+    check: 'skill-not-called',
+    negated: false,
+    passed: true,
+  });
+});
