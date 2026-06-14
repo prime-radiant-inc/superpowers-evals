@@ -304,7 +304,7 @@ function rstripDotBang(s: string): string {
 
 // Port of _agy_log_shows_rate_limit: join the candidate texts, lowercase, and
 // look for an unambiguous Code Assist throttle signal.
-export function agyLogShowsRateLimit(...texts: string[]): boolean {
+function agyLogShowsRateLimit(...texts: string[]): boolean {
   const blob = texts
     .filter((t) => t !== '')
     .join('\n')
