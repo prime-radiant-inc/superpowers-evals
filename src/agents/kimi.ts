@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
 import {
+  type Dirent,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
@@ -65,6 +70,19 @@ const KIMI_CONFIG_SUMMARY_ENV: ReadonlySet<string> = new Set<string>([
 // Name of the secret runtime env file the launcher sources (mirrors the
 // kimi-runtime.env basename in write_kimi_runtime_env_file).
 const KIMI_RUNTIME_ENV_FILE_NAME = 'kimi-runtime.env';
+
+// Substrings (uppercased) that mark an env var name as sensitive, and the
+// minimum value length worth redacting (mirrors _SENSITIVE_ENV_NAME_PARTS /
+// _MIN_SENSITIVE_VALUE_LEN). sanitizeKimiDiagnostic uses these to scrub secret
+// values out of provisioning/preflight error diagnostics before they reach a
+// verdict or log.
+const SENSITIVE_ENV_NAME_PARTS: readonly string[] = [
+  'KEY',
+  'TOKEN',
+  'SECRET',
+  'PASSWORD',
+];
+const MIN_SENSITIVE_VALUE_LEN = 6;
 
 // The minimal Superpowers Kimi plugin manifest surface validate_superpowers_kimi_root
 // asserts. Everything else passes through (the manifest can evolve).
@@ -151,13 +169,14 @@ export class KimiAgent implements CodingAgent {
     });
 
     // write_kimi_runtime_env_file: mode-0600 secret file of sorted shell
-    // assignments. NOTE: the Python places this file OUTSIDE the run artifact
-    // root (write_kimi_runtime_env_file -> _kimi_runtime_env_temp_parent mkdtemp
-    // keyed on run_dir.name, with cleanup_dirs teardown) so capture never
-    // snapshots the secret. RunHome carries no run_dir, so we write it under an
-    // OS-temp dir (still outside configDir/workdir) and return its path; the
-    // integrator can relocate to a run-scoped temp parent if it threads run_dir.
-    const envFilePath = writeKimiRuntimeEnvFile(runtimeEnv);
+    // assignments, placed OUTSIDE the run artifact root (via
+    // _kimi_runtime_env_temp_parent + a run-scoped mkdtemp keyed on run_dir.name)
+    // so capture never snapshots the secret. RunHome carries no explicit run_dir,
+    // but the per-run dir IS configDir's parent (runner.py builds configDir =
+    // run_dir/coding-agent-config), so we derive run_dir from configDir and the
+    // escape guard keeps the secret out of the artifact root.
+    const runDir = dirname(configDir);
+    const envFilePath = writeKimiRuntimeEnvFile(runtimeEnv, { runDir });
 
     // write_effective_kimi_config: redacted summary (KIMI_MODEL_API_KEY ->
     // "<present>"). Written into the kimi home (configDir).
@@ -173,19 +192,50 @@ export class KimiAgent implements CodingAgent {
       KIMI_BINARY: kimiBinary,
     };
 
-    // NOTE (DEFER to B3, capture/post-run; do NOT implement here):
-    // - run_kimi_auth_preflight's session_index.jsonl workDir attribution +
-    //   sessionDir/wire.jsonl verification: the synchronous one-shot
-    //   CommandRunner cannot observe the on-disk session_index the live kimi
-    //   process writes, so the workdir-attribution leg of the preflight is a
-    //   B3 capture concern (streamingRisk: the live preflight is a one-shot
-    //   subprocess here — same single-run modeling/caveat as the codex
-    //   app-server step).
+    // NOTE (DEFER to capture/post-run / Wave-2b; do NOT implement here):
     // - kimi_logs_have_superpowers_session_start: a capture-time assertion over
-    //   sessions/**/wire.jsonl that the Superpowers session-start injection fired.
+    //   sessions/**/wire.jsonl that the Superpowers session-start injection fired
+    //   during the REAL eval run (not the preflight). This reads the run's own
+    //   session logs, which provision() never sees, so it belongs to the capture
+    //   stage.
     // - cleanup_dirs teardown tracking (the env-file parent temp dir) belongs to
     //   the runner's AgentRuntime cleanup, not provision().
   }
+}
+
+// sanitize_kimi_diagnostic (SECURITY): scrub secret values out of a diagnostic
+// message before it reaches a RunnerError / verdict / log. Redacts the
+// KIMI_MODEL_API_KEY value plus any env value >=6 chars whose name (uppercased)
+// contains KEY/TOKEN/SECRET/PASSWORD. Redaction runs longest-value-first so a
+// shorter secret that is a substring of a longer one cannot survive as a tail.
+//
+// The runner is expected to wrap the whole kimi provisioning/preflight motion in
+// this (parity with quorum/runner.py:688 and run_all.py:627); exported so
+// Wave-2b can wire it at those call sites.
+export function sanitizeKimiDiagnostic(
+  message: unknown,
+  env: Readonly<Record<string, string | undefined>> = envSnapshot(),
+): string {
+  let text = String(message);
+  const values = new Set<string>();
+  const apiKey = env['KIMI_MODEL_API_KEY'];
+  if (apiKey) {
+    values.add(apiKey);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (
+      value &&
+      value.length >= MIN_SENSITIVE_VALUE_LEN &&
+      SENSITIVE_ENV_NAME_PARTS.some((part) => key.toUpperCase().includes(part))
+    ) {
+      values.add(value);
+    }
+  }
+  const ordered = [...values].sort((a, b) => b.length - a.length);
+  for (const value of ordered) {
+    text = text.split(value).join('<redacted>');
+  }
+  return text;
 }
 
 // resolve_kimi_binary: PATH lookup. node has no shutil.which; probe via the
@@ -307,34 +357,132 @@ function validateKimiPreflightSentinel(
 
 // run_kimi_auth_preflight: drive the LIVE one-shot auth probe through the runner
 // seam. The Python runs `kimi -p "Reply with EXACTLY OK." --output-format=
-// stream-json` in a throwaway home and then verifies session_index workdir
-// attribution; the synchronous one-shot CommandRunner can model only the
-// subprocess + stdout scan (kimi_stream_json_reply_ok). The session_index /
-// wire.jsonl verification is deferred to B3 (see the NOTE in provision()).
+// stream-json` in a throwaway home (with cwd set), checks the stream-json reply,
+// then PROVES home isolation took effect by reading the on-disk session_index:
+// a row whose realpath(workDir) == the preflight cwd, whose sessionDir resolves
+// under <kimiHome>/sessions, and whose sessionDir contains a **/wire.jsonl.
+// Mirrors quorum/kimi.py:run_kimi_auth_preflight (306-342). The CommandRunner
+// runs the subprocess; the file verification reads what that process wrote.
 function runKimiAuthPreflight(
   runner: CommandRunner,
   ctx: PreflightContext,
 ): void {
-  const env = buildKimiSubprocessEnv({
-    kimiHome: join(tmpdir(), 'quorum-kimi-preflight'),
-    kimiModelEnv: ctx.kimiModelEnv,
-  });
-  const result = runner.run(
-    ctx.kimiBinary,
-    ['-p', 'Reply with EXACTLY OK.', '--output-format=stream-json'],
-    { env },
-  );
-  if (result.status !== 0) {
-    const stderr = result.stderr.trim().slice(0, 300);
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'quorum-kimi-preflight-'));
+  try {
+    const kimiHome = join(tmpRoot, 'kimi-home');
+    const cwd = join(tmpRoot, 'cwd');
+    mkdirSync(cwd, { recursive: true });
+    const env = buildKimiSubprocessEnv({
+      kimiHome,
+      kimiModelEnv: ctx.kimiModelEnv,
+    });
+    const result = runner.run(
+      ctx.kimiBinary,
+      ['-p', 'Reply with EXACTLY OK.', '--output-format=stream-json'],
+      { cwd, env },
+    );
+    if (result.status !== 0) {
+      const stderr = result.stderr.trim().slice(0, 300);
+      throw new ProvisionError(
+        `kimi auth preflight failed (exit ${result.status}); stderr: ${stderr}`,
+      );
+    }
+    if (!kimiStreamJsonReplyOk(result.stdout)) {
+      throw new ProvisionError(
+        `kimi auth preflight did not return OK; stdout: ${result.stdout.trim().slice(0, 300)}`,
+      );
+    }
+    verifyKimiPreflightSession(kimiHome, cwd);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+// The session-attribution leg of run_kimi_auth_preflight: read session_index.jsonl
+// and prove the live kimi process ran inside the isolated home — a row whose
+// realpath(workDir) == the preflight cwd, whose sessionDir resolves under
+// <kimiHome>/sessions, and whose sessionDir holds a **/wire.jsonl.
+function verifyKimiPreflightSession(kimiHome: string, cwd: string): void {
+  const indexPath = join(kimiHome, 'session_index.jsonl');
+  if (!existsSync(indexPath) || !statSync(indexPath).isFile()) {
     throw new ProvisionError(
-      `kimi auth preflight failed (exit ${result.status}); stderr: ${stderr}`,
+      'kimi auth preflight produced no session_index.jsonl',
     );
   }
-  if (!kimiStreamJsonReplyOk(result.stdout)) {
+  const target = realpathSync(cwd);
+  const sessionsRoot = resolveMaybe(join(kimiHome, 'sessions'));
+  let matchedWorkdir = false;
+  let outsideSessionDir = false;
+  const matchingSessionDirs: string[] = [];
+  for (const line of readFileSync(indexPath, 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(row)) continue;
+    const workDir = row['workDir'];
+    if (typeof workDir !== 'string') continue;
+    if (resolveMaybe(workDir) !== target) continue;
+    matchedWorkdir = true;
+    const sessionDir = row['sessionDir'];
+    if (typeof sessionDir !== 'string' || sessionDir === '') continue;
+    const resolvedSessionDir = resolveMaybe(sessionDir);
+    if (!isInsideOrEqual(resolvedSessionDir, sessionsRoot)) {
+      outsideSessionDir = true;
+      continue;
+    }
+    matchingSessionDirs.push(resolvedSessionDir);
+  }
+  if (!matchedWorkdir) {
     throw new ProvisionError(
-      `kimi auth preflight did not return OK; stdout: ${result.stdout.trim().slice(0, 300)}`,
+      'kimi auth preflight session_index workDir did not match cwd',
     );
   }
+  if (matchingSessionDirs.length === 0) {
+    if (outsideSessionDir) {
+      throw new ProvisionError(
+        'kimi auth preflight sessionDir outside Kimi home/sessions',
+      );
+    }
+    throw new ProvisionError(
+      'kimi auth preflight session_index matched no sessionDir',
+    );
+  }
+  if (!matchingSessionDirs.some((dir) => hasWireJsonl(dir))) {
+    throw new ProvisionError(
+      'kimi auth preflight matching sessionDir produced no wire.jsonl',
+    );
+  }
+}
+
+// realpath when the path exists (resolves symlinks like os.path.realpath /
+// Path.resolve), else a plain absolute resolve. Mirrors the Python which uses
+// realpath/resolve on session-index paths that should already exist on disk.
+function resolveMaybe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+// Recursively search for any wire.jsonl under a directory (mirrors
+// Path.glob("**/wire.jsonl")).
+function hasWireJsonl(dir: string): boolean {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === 'wire.jsonl') return true;
+    if (entry.isDirectory() && hasWireJsonl(join(dir, entry.name))) return true;
+  }
+  return false;
 }
 
 // _normalized_ok: strip trailing punctuation/whitespace, uppercase, compare OK.
@@ -526,13 +674,51 @@ function validateSuperpowersKimiRoot(rootArg: string): string {
   return resolved;
 }
 
-// write_kimi_runtime_env_file: mode-0600 file of sorted `KEY='value'` shell
-// assignments. See the provision() NOTE on why this lands under an OS-temp dir
-// here rather than a run-scoped temp parent.
-function writeKimiRuntimeEnvFile(
-  env: Readonly<Record<string, string>>,
+// _kimi_runtime_env_temp_parent: compute a temp-dir parent that is NOT inside the
+// run artifact root, so the capture snapshot never sweeps up the mode-0600 secret
+// env file. The artifact root is run_dir's parent. If the OS tmpdir (or override)
+// resolves inside the artifact root, walk one level above the artifact root. As a
+// last-line guard, RAISE if the chosen parent still resolves inside the artifact
+// root. Mirrors quorum/kimi.py:_kimi_runtime_env_temp_parent.
+function kimiRuntimeEnvTempParent(
+  runDir: string,
+  tmpDirOverride?: string,
 ): string {
-  const secretDir = mkdtempSync(join(tmpdir(), 'quorum-kimi-env-'));
+  const runDirResolved = realpathSync(resolve(runDir));
+  const artifactRootResolved = dirname(runDirResolved);
+  let tempParent = realpathSync(resolve(tmpDirOverride ?? tmpdir()));
+  if (isInsideOrEqual(tempParent, artifactRootResolved)) {
+    tempParent = dirname(artifactRootResolved);
+  }
+  mkdirSync(tempParent, { recursive: true });
+  if (isInsideOrEqual(realpathSync(tempParent), artifactRootResolved)) {
+    throw new ProvisionError(
+      'Kimi runtime env temp directory resolved inside artifact root',
+    );
+  }
+  return tempParent;
+}
+
+// Path.is_relative_to semantics: is `candidate` the same as or nested under
+// `ancestor`?
+function isInsideOrEqual(candidate: string, ancestor: string): boolean {
+  return candidate === ancestor || candidate.startsWith(`${ancestor}${sep}`);
+}
+
+// write_kimi_runtime_env_file: mode-0600 file of sorted `KEY='value'` shell
+// assignments, placed in a run-scoped mkdtemp under a temp parent that is kept
+// OUTSIDE the run artifact root (so capture never snapshots the secret). The
+// run_dir is threaded so the temp parent and the secret-dir prefix are
+// run-scoped. tmpDirOverride exists only for hermetic testing (mirrors the
+// Python's tempfile.tempdir monkeypatch). Mirrors write_kimi_runtime_env_file.
+export function writeKimiRuntimeEnvFile(
+  env: Readonly<Record<string, string>>,
+  opts: { readonly runDir: string; readonly tmpDirOverride?: string },
+): string {
+  const tempParent = kimiRuntimeEnvTempParent(opts.runDir, opts.tmpDirOverride);
+  const secretDir = mkdtempSync(
+    join(tempParent, `quorum-kimi-env-${basename(opts.runDir)}-`),
+  );
   const path = join(secretDir, KIMI_RUNTIME_ENV_FILE_NAME);
   const keys = Object.keys(env).sort();
   const body = keys

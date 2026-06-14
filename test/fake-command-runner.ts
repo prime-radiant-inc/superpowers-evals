@@ -11,7 +11,14 @@ export interface RecordedCommand {
   readonly options: CommandOptions | undefined;
 }
 
-type Responder = (command: string, args: readonly string[]) => CommandResult;
+// The responder also receives the run options so a fake can model on-disk side
+// effects keyed on cwd/env (e.g. the kimi preflight writing session_index.jsonl
+// into KIMI_CODE_HOME). Existing responders that ignore the 3rd arg keep working.
+type Responder = (
+  command: string,
+  args: readonly string[],
+  options: CommandOptions | undefined,
+) => CommandResult;
 
 const OK: CommandResult = { status: 0, stdout: '', stderr: '' };
 
@@ -32,6 +39,6 @@ export class FakeCommandRunner implements CommandRunner {
     options?: CommandOptions,
   ): CommandResult {
     this.calls.push({ command, args: [...args], options });
-    return this.responder(command, args);
+    return this.responder(command, args, options);
   }
 }

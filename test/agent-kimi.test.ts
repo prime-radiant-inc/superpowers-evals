@@ -3,14 +3,24 @@ import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CommandResult } from '../src/agents/command-runner.ts';
+import type {
+  CommandOptions,
+  CommandResult,
+} from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
-import { KimiAgent } from '../src/agents/kimi.ts';
+import {
+  KimiAgent,
+  sanitizeKimiDiagnostic,
+  writeKimiRuntimeEnvFile,
+} from '../src/agents/kimi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -107,16 +117,60 @@ function withEnv(
   }
 }
 
+// Write the on-disk session attribution the live kimi process would produce: a
+// session_index.jsonl row whose workDir == the preflight cwd, pointing at a
+// sessionDir under <kimiHome>/sessions that contains a wire.jsonl. The preflight
+// reads these from the throwaway kimiHome it created (KIMI_CODE_HOME in the env).
+function writeKimiPreflightSession(
+  options: CommandOptions | undefined,
+  overrides?: {
+    readonly workDir?: string;
+    readonly sessionDir?: string;
+    readonly omitWire?: boolean;
+    readonly omitIndex?: boolean;
+  },
+): void {
+  const env = options?.env ?? {};
+  const kimiHome = env['KIMI_CODE_HOME'];
+  const cwd = options?.cwd;
+  if (kimiHome === undefined || cwd === undefined) {
+    return;
+  }
+  // The live kimi process creates its own home; model that so session_index.jsonl
+  // can be written even when the sessionDir is staged elsewhere.
+  mkdirSync(kimiHome, { recursive: true });
+  if (overrides?.omitIndex) {
+    return;
+  }
+  const sessionDir =
+    overrides?.sessionDir ?? join(kimiHome, 'sessions', 'session-0001');
+  mkdirSync(sessionDir, { recursive: true });
+  if (!overrides?.omitWire) {
+    writeFileSync(join(sessionDir, 'wire.jsonl'), '{"event":"start"}\n');
+  }
+  const row = {
+    workDir: overrides?.workDir ?? cwd,
+    sessionDir,
+  };
+  writeFileSync(
+    join(kimiHome, 'session_index.jsonl'),
+    `${JSON.stringify(row)}\n`,
+  );
+}
+
 // Happy preflight responder: `command -v kimi` resolves the binary; the kimi
-// auth preflight replies with a stream-json assistant "OK" line.
+// auth preflight replies with a stream-json assistant "OK" line and writes the
+// expected on-disk session attribution into the throwaway kimi home.
 function happyResponder(
   command: string,
   args: readonly string[],
+  options: CommandOptions | undefined,
 ): CommandResult {
   if (command === 'command' && args[0] === '-v') {
     return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
   }
   if (command === RESOLVED_BINARY) {
+    writeKimiPreflightSession(options);
     const reply = { role: 'assistant', content: 'OK' };
     return { status: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '' };
   }
@@ -615,4 +669,199 @@ test('provision throws ProvisionError when the manifest name is wrong', () => {
   } finally {
     cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeKimiDiagnostic (SECURITY)
+// ---------------------------------------------------------------------------
+
+test('sanitizeKimiDiagnostic redacts the KIMI_MODEL_API_KEY value', () => {
+  const secret = 'kimi-model-key-abcdef';
+  const env = { KIMI_MODEL_API_KEY: secret };
+  const message = `kimi auth preflight failed; stderr: invalid token ${secret}`;
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain(secret);
+  expect(out).toContain('<redacted>');
+});
+
+test('sanitizeKimiDiagnostic redacts any env value >=6 chars whose name contains KEY/TOKEN/SECRET/PASSWORD', () => {
+  const env = {
+    MY_API_KEY: 'topsecretvalue',
+    SERVICE_TOKEN: 'abcdef',
+    DB_SECRET: 'hunter22',
+    LOGIN_PASSWORD: 'p@ssword1',
+    SAFE_VAR: 'plainvalue',
+  };
+  const message =
+    'leak topsecretvalue and abcdef and hunter22 and p@ssword1 and plainvalue';
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain('topsecretvalue');
+  expect(out).not.toContain('abcdef');
+  expect(out).not.toContain('hunter22');
+  expect(out).not.toContain('p@ssword1');
+  // A non-sensitive var name is NOT redacted.
+  expect(out).toContain('plainvalue');
+});
+
+test('sanitizeKimiDiagnostic leaves short (<6 char) sensitive values alone', () => {
+  const env = { API_KEY: 'short' };
+  const message = 'value short here';
+  const out = sanitizeKimiDiagnostic(message, env);
+  // 5-char value below the min length is not redacted.
+  expect(out).toContain('short');
+});
+
+test('sanitizeKimiDiagnostic redacts longest-first to avoid partial survivors', () => {
+  // One secret is a substring of another; longest-first redaction prevents
+  // leaking the suffix of the longer value.
+  const env = {
+    SHORT_TOKEN: 'abcdef',
+    LONG_TOKEN: 'abcdefghij',
+  };
+  const message = 'saw abcdefghij in the response';
+  const out = sanitizeKimiDiagnostic(message, env);
+  expect(out).not.toContain('abcdefghij');
+  expect(out).not.toContain('abcdef');
+  expect(out).toBe('saw <redacted> in the response');
+});
+
+test('sanitizeKimiDiagnostic stringifies non-string messages', () => {
+  const env = { API_KEY: 'sensitive-value' };
+  const err = new Error('boom sensitive-value');
+  const out = sanitizeKimiDiagnostic(err, env);
+  expect(out).not.toContain('sensitive-value');
+  expect(out).toContain('boom');
+});
+
+// ---------------------------------------------------------------------------
+// writeKimiRuntimeEnvFile artifact-root-escape guard + run-scoped naming
+// ---------------------------------------------------------------------------
+
+test('writeKimiRuntimeEnvFile writes a run-scoped 0600 file outside the artifact root', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    // runDir is the per-run artifact dir (parent of configDir); artifact root is
+    // its parent. The OS tmpdir is outside both, so the guard accepts it.
+    const runDir = join(home.configDir, '..');
+    const path = writeKimiRuntimeEnvFile(
+      { KIMI_MODEL_API_KEY: API_KEY, KIMI_DISABLE_TELEMETRY: '1' },
+      { runDir },
+    );
+    expect(existsSync(path)).toBe(true);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Run-scoped naming: the secret dir prefix embeds the run dir's basename.
+    expect(path).toContain('quorum-kimi-env-');
+    // The secret file is NOT placed inside the artifact root.
+    const artifactRoot = realpathSync(join(home.configDir, '..', '..'));
+    expect(path.startsWith(`${artifactRoot}/`)).toBe(false);
+    const body = readFileSync(path, 'utf8');
+    expect(body).toContain(`KIMI_MODEL_API_KEY='${API_KEY}'`);
+    expect(body).toContain("KIMI_DISABLE_TELEMETRY='1'");
+  } finally {
+    cleanup();
+  }
+});
+
+test('writeKimiRuntimeEnvFile walks the temp parent out when tmpdir is inside the artifact root', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    const runDir = join(home.configDir, '..');
+    // Force the temp parent override to sit INSIDE the artifact root; the guard
+    // must walk it out so the resulting file lands outside the artifact root.
+    const artifactRoot = join(runDir, '..');
+    const insideTmp = join(artifactRoot, 'tmp-inside');
+    mkdirSync(insideTmp, { recursive: true });
+    const path = writeKimiRuntimeEnvFile(
+      { KIMI_MODEL_API_KEY: API_KEY },
+      { runDir, tmpDirOverride: insideTmp },
+    );
+    expect(existsSync(path)).toBe(true);
+    expect(path.startsWith(`${realpathSync(insideTmp)}/`)).toBe(false);
+    // The escaped file is not under the artifact root either.
+    expect(path.startsWith(`${realpathSync(artifactRoot)}/`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Live preflight session_index / workDir / sessionDir / wire.jsonl attribution
+// ---------------------------------------------------------------------------
+
+// Drive provision() with a responder that emits an OK reply but controls the
+// on-disk session attribution the preflight verifies.
+function provisionWithAttribution(
+  attribution: (options: CommandOptions | undefined) => void,
+): () => Record<string, string> {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner((command, args, options) => {
+    if (command === 'command' && args[0] === '-v') {
+      return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
+    }
+    if (command === RESOLVED_BINARY) {
+      attribution(options);
+      const reply = { role: 'assistant', content: 'OK' };
+      return { status: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  });
+  return () => {
+    let result: Record<string, string> = {};
+    try {
+      withEnv(
+        {
+          SUPERPOWERS_ROOT: spRoot,
+          KIMI_MODEL_API_KEY: API_KEY,
+          KIMI_MODEL_NAME: undefined,
+          QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        },
+        () => {
+          const agent = new KimiAgent(KIMI_CONFIG);
+          result = agent.provision(home, runner);
+        },
+      );
+    } finally {
+      cleanup();
+    }
+    return result;
+  };
+}
+
+test('preflight passes when session_index attributes the cwd to a sessionDir with wire.jsonl', () => {
+  const run = provisionWithAttribution((options) => {
+    writeKimiPreflightSession(options);
+  });
+  expect(() => run()).not.toThrow();
+});
+
+test('preflight throws when the live kimi process wrote no session_index.jsonl', () => {
+  const run = provisionWithAttribution((options) => {
+    writeKimiPreflightSession(options, { omitIndex: true });
+  });
+  expect(() => run()).toThrow(ProvisionError);
+});
+
+test('preflight throws when no session_index row workDir matches the preflight cwd', () => {
+  const run = provisionWithAttribution((options) => {
+    writeKimiPreflightSession(options, { workDir: '/some/other/dir' });
+  });
+  expect(() => run()).toThrow(ProvisionError);
+});
+
+test('preflight throws when the matching sessionDir resolves outside the kimi home/sessions', () => {
+  const run = provisionWithAttribution((options) => {
+    const escaped = mkdtempSync(join(tmpdir(), 'quorum-kimi-escaped-'));
+    writeKimiPreflightSession(options, { sessionDir: escaped });
+  });
+  expect(() => run()).toThrow(ProvisionError);
+});
+
+test('preflight throws when the matching sessionDir contains no wire.jsonl', () => {
+  const run = provisionWithAttribution((options) => {
+    writeKimiPreflightSession(options, { omitWire: true });
+  });
+  expect(() => run()).toThrow(ProvisionError);
 });
