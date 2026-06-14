@@ -17,8 +17,8 @@ verification reflexes, review quality, and cost-shaping patterns.
 
 quorum has two very different execution modes:
 
-- **Static/unit checks** are safe for public CI. They run `ruff`, `ty`, and
-  `pytest`. They do not call model APIs and do not launch agent CLIs.
+- **Static/unit checks** are safe for public CI. They run `biome`, `tsc`, and
+  `bun test`. They do not call model APIs and do not launch agent CLIs.
 - **Live evals** are trusted-maintainer operations. They launch Claude Code,
   Codex CLI, Antigravity CLI, Gemini CLI, Kimi Code, OpenCode CLI, Pi CLI, or
   Copilot CLI in permissive modes and collect raw transcripts, tool calls,
@@ -71,13 +71,13 @@ Run live evals only from a trusted local environment:
 Install:
 
 ```bash
-uv sync --extra dev
+bun install
 ```
 
 Run one scenario:
 
 ```bash
-uv run quorum run scenarios/triggering-writing-plans --coding-agent claude
+bun run quorum run scenarios/triggering-writing-plans --coding-agent claude
 ```
 
 Agent names are `claude`, `claude-haiku`, `codex`, `antigravity`, `gemini`,
@@ -89,10 +89,10 @@ Trusted-maintainer Claude Haiku smoke:
 ```bash
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 export ANTHROPIC_API_KEY=...
-uv run quorum run scenarios/00-quorum-smoke-hello-world \
+bun run quorum run scenarios/00-quorum-smoke-hello-world \
   --coding-agent claude-haiku \
   --out-root results/claude-haiku-smoke
-uv run quorum show <run-dir>
+bun run quorum show <run-dir>
 ```
 
 Do not wire Claude Haiku live evals to public CI; it uses the same Anthropic
@@ -101,14 +101,14 @@ API-key path and broad Claude Code execution permissions as the `claude` target.
 List scenarios:
 
 ```bash
-uv run quorum list
+bun run quorum list
 ```
 
 Scaffold and validate a new scenario:
 
 ```bash
-uv run quorum new my-new-scenario
-uv run quorum check my-new-scenario
+bun run quorum new my-new-scenario
+bun run quorum check my-new-scenario
 ```
 
 `quorum check` with no arguments validates every scenario.
@@ -116,17 +116,17 @@ uv run quorum check my-new-scenario
 Run the full matrix:
 
 ```bash
-uv run quorum run-all --coding-agents claude,codex --jobs 2
+bun run quorum run-all --coding-agents claude,codex --jobs 2
 ```
 
 `run-all` runs every scenario against every Coding-Agent, filtered by each
 scenario's `# coding-agents:` directive. View the resulting matrix with
-`uv run quorum show <batch-id>`.
+`bun run quorum show <batch-id>`.
 
 Trusted-maintainer Antigravity sweep:
 
 ```bash
-SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run-all --coding-agents antigravity --jobs 1
+SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers bun run quorum run-all --coding-agents antigravity --jobs 1
 ```
 
 Do not wire Antigravity live evals to public CI; they launch `agy` with
@@ -137,8 +137,8 @@ Trusted-maintainer Gemini smoke:
 ```bash
 export GEMINI_API_KEY=...
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
-uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
-uv run quorum show <run-dir>
+bun run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+bun run quorum show <run-dir>
 ```
 
 Do not wire Gemini live evals to public CI; they launch `gemini` with
@@ -149,13 +149,13 @@ Trusted-maintainer Kimi smoke:
 ```bash
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 export KIMI_MODEL_API_KEY=...
-uv run quorum run scenarios/kimi-superpowers-bootstrap --coding-agent kimi
+bun run quorum run scenarios/kimi-superpowers-bootstrap --coding-agent kimi
 ```
 
 For a Kimi-only sweep:
 
 ```bash
-uv run quorum run-all --coding-agents kimi --jobs 1
+bun run quorum run-all --coding-agents kimi --jobs 1
 ```
 
 Kimi runs use a fresh per-run `KIMI_CODE_HOME` and do not read or symlink local
@@ -170,7 +170,7 @@ scenarios until Kimi tool-subprocess env scrubbing has been verified.
 Trusted-maintainer OpenCode bootstrap smoke:
 
 ```bash
-SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run scenarios/opencode-superpowers-bootstrap --coding-agent opencode
+SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers bun run quorum run scenarios/opencode-superpowers-bootstrap --coding-agent opencode
 ```
 
 Do not wire OpenCode live evals to public CI; they launch `opencode` with
@@ -183,8 +183,8 @@ export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 export PI_PROVIDER=openai
 export PI_MODEL=gpt-5.5
 export PI_API_KEY=...
-uv run quorum run scenarios/pi-superpowers-bootstrap --coding-agent pi
-uv run quorum show <run-dir>
+bun run quorum run scenarios/pi-superpowers-bootstrap --coding-agent pi
+bun run quorum show <run-dir>
 ```
 
 Do not wire Pi live evals to public CI; they launch `pi` with broad tool
@@ -193,7 +193,7 @@ allowlists and preserve secret-bearing run artifacts.
 Trusted-maintainer Copilot bootstrap smoke:
 
 ```bash
-SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run scenarios/copilot-superpowers-bootstrap --coding-agent copilot
+SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers bun run quorum run scenarios/copilot-superpowers-bootstrap --coding-agent copilot
 ```
 
 Do not wire Copilot live evals to public CI; they launch `copilot` with
@@ -210,7 +210,7 @@ messages.
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
 | **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Claude Haiku**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
-| **Quorum** | The Python wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/quorum/`; `<run>/verdict.json` |
+| **Quorum** | The TypeScript/Bun wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/src/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
 **Coding-Agent** (subject). Separate models, separate logs, separate token
@@ -439,8 +439,8 @@ Live smoke:
 ```bash
 export GEMINI_API_KEY=...
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
-uv run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
-uv run quorum show <run-dir>
+bun run quorum run scenarios/gemini-superpowers-bootstrap --coding-agent gemini
+bun run quorum show <run-dir>
 ```
 
 ### Antigravity
@@ -671,7 +671,7 @@ plugins for the staged root.
 Live smoke:
 
 ```bash
-SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers uv run quorum run scenarios/copilot-superpowers-bootstrap --coding-agent copilot
+SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers bun run quorum run scenarios/copilot-superpowers-bootstrap --coding-agent copilot
 ```
 
 ## How a Run Works
@@ -721,18 +721,18 @@ A `quorum run` drives one scenario against one Coding-Agent:
 
 ## Writing a Scenario
 
-1. `uv run quorum new <name>` stamps a structurally-valid skeleton.
+1. `bun run quorum new <name>` stamps a structurally-valid skeleton.
 2. Write `story.md`: brief the Gauntlet-Agent on the role it plays, the exact
    message to send the Coding-Agent, and when it is done — plus
    evidence-demanding acceptance criteria. Follow the
    `writing-gauntlet-stories` skill.
 3. Write `setup.sh` to build the fixture. Prefer
-   `uv run setup-helpers run <helper>` over inline Python; if you need a new
-   fixture, add a helper to `setup_helpers/` and register it in
-   `setup_helpers/__init__.py`.
+   `setup-helpers run <helper>` over inline shell; if you need a new fixture,
+   add a helper to `src/setup-helpers/` and register it in
+   `src/setup-helpers/registry.ts`.
 4. Write `checks.sh` with `pre()` and `post()` functions using the
    `bin/` vocabulary. No exec bit.
-5. `uv run quorum check <name>` to validate structure, then run it against a
+5. `bun run quorum check <name>` to validate structure, then run it against a
    Coding-Agent.
 
 Setup scripts run with `$QUORUM_WORKDIR` pointing at the fixture workdir.
@@ -778,48 +778,86 @@ stages the plugin from `SUPERPOWERS_ROOT` into isolated `COPILOT_HOME`.
 These are the checks expected in CI and on routine PRs:
 
 ```bash
-uv run ruff check
-uv run ty check
-uv run quorum check
-uv run pytest
+bun run check          # biome ci . && tsc --noEmit && bun test — the full gate
+bun run quorum check   # validate every scenario directory
 ```
 
-## Project Map
+`bun run check` is the single gate (Biome lint/format + full-strict `tsc` +
+`bun test`); individual steps are `bun run lint`, `bun run typecheck`, and
+`bun test`.
+
+## Architecture
+
+quorum is **TypeScript on Bun**. The console is `bun run quorum <cmd>` (a
+[commander](https://github.com/tj/commander.js) CLI at `src/cli/index.ts`, also
+exposed as the `quorum` bin); the gate is `bun run check`
+(Biome + full-strict `tsc` + `bun test`).
+
+The shapes that cross process and file boundaries — `verdict.json`, batch
+indices, economics, the Gauntlet result, agent YAML — are **zod schemas** in
+`src/contracts/`, validated at every boundary, so a malformed external file
+fails loudly instead of corrupting a verdict. The `cli/` layer parses commands
+and dispatches into the `runner/` pipeline (one scenario × one Coding-Agent) or
+`run-all/` (the matrix). Per-Coding-Agent differences live in two parallel
+fan-outs keyed by agent name: `agents/` provisions a fresh isolated config home,
+and `normalizers/` turns that agent's session log into a uniform tool-call
+trace. Live agent-CLI calls and other non-hermetic subprocesses go through the
+`agents/command-runner.ts` seam, so the unit suite injects fakes and never
+launches a real CLI. `scheduler/` is the shared concurrency engine under both
+`run-all/` and the `dashboard/`. `env.ts` is the only module that reads
+`process.env`.
 
 ```text
-quorum/                   quorum CLI and runtime
-  cli.py                `quorum run`, `list`, `new`, `check`, `show`, `run-all`
-  runner.py             per-run orchestration (one scenario, one coding-agent)
-  coding_agent_config.py  per-coding-agent YAML loader
-  setup_step.py         runs scenario setup.sh
-  checks.py             sources checks.sh, runs pre()/post(), collects records
-  capture.py            session-log snapshot/diff + obol-priced token capture
-  normalizers.py        per-coding-agent session-log normalization
-  composer.py           three-valued verdict from gauntlet + checks layers
-  scaffold.py           `quorum new` / `quorum check`
-  show.py               verdict renderer for triage
-  run_all.py            matrix runner across scenarios × coding-agents
-  obol_capture.py       all obol calls: session-log + gauntlet-sidecar cost estimation
-  timing.py             session-log wall-clock span (duration_ms)
-bin/                    check-tool vocabulary (_record, file-exists, file-contains,
+src/
+  cli/                  commander CLI: run, list, new, check, show, run-all, dashboard
+    index.ts              command wiring + the run / run-all / dashboard actions
+    render.ts             verdict renderer for triage (quorum show)
+    render-batch.ts       batch-matrix renderer (quorum show <batch>)
+    resolve-target.ts     run/batch target resolution; scenario.ts scenario loading
+  runner/               per-run orchestration (one scenario × one Coding-Agent)
+    index.ts              setup → pre-checks → gauntlet drive → capture → post-checks → compose
+    context.ts            populate the Gauntlet-Agent context dir (HOWTO + launch-agent shim)
+    phase.ts              phase.json (setup/agent/checks) for the dashboard
+    stopped.ts            SIGINT → stopped (indeterminate) verdict; errors.ts staged run-error stages
+  agents/               per-Coding-Agent provisioning (resolveAgent dispatch)
+    index.ts              agent registry + dispatch (incl. the inline Claude/Default adapters)
+    command-runner.ts     injectable subprocess seam (live CLIs faked in tests)
+    <agent>.ts            codex/gemini/kimi/opencode/pi/copilot/antigravity adapters
+  normalizers/          session-log → normalized tool-call trace, one module per dialect
+  capture/              session-log snapshot/diff + tool-call capture + token usage; cwd-filter
+  obol/                 obol cost estimation (session-log + gauntlet sidecar)
+  economics.ts          token-cost composition → coding-agent-token-usage.json
+  composer.ts           three-valued verdict from the gauntlet + checks layers
+  checks/               sources checks.sh, runs pre()/post(), collects check records (bin/ on PATH)
+  scheduler/            central concurrency dispatcher (one global slot pool, per-harness limits + spacing)
+  run-all/              scenario × Coding-Agent matrix over the scheduler; batch index
+  dashboard/            web matrix UI: read-side scan/view, typed HTML templates, SSE bus, orchestrator, Bun.serve
+  setup-helpers/        scenario fixture builders + the `setup-helpers` CLI (dispatch registry)
+  contracts/            zod schemas at the JSON boundaries (verdict, batch, economics, gauntlet, agent-config)
+  scaffold.ts           `quorum new` / `quorum check`
+  setup-step.ts         runs scenario setup.sh (puts bin-ts/ on PATH so setup-helpers resolves)
+  story-meta.ts         story.md frontmatter (quorum_max_time, quorum_tier, status)
+  env.ts                the single process.env boundary
+  paths.ts              repo root, UTC stamps, nonces
+  invariant.ts          assertNever exhaustiveness guard for closed unions
+bin/                    check-tool vocabulary (bash): _record, file-exists, file-contains,
                         command-succeeds, git-repo, git-branch, git-clean, git-count,
-                        tool-called, tool-count, tool-before, tool-arg-match,
-                        skill-called, skill-before-tool, not, worktree-created,
-                        and more); refresh-claude-home-skeleton operator script
+                        tool-called, tool-count, tool-before, tool-arg-match, skill-called,
+                        skill-before-tool, not, and more; refresh-claude-home-skeleton operator script
+bin-ts/                 the `setup-helpers` shim → the TypeScript CLI
 coding-agents/          per-Coding-Agent material:
   <name>.yaml             CLI config
   <name>-context/         HOWTO prose for the Gauntlet-Agent
-  <name>-home-skeleton/   committed config skeletons where needed (claude only)
+  <name>-home-skeleton/   committed config skeleton where needed (claude only)
 scenarios/              scenarios (one directory each)
-setup_helpers/          scenario fixture builders + `setup-helpers` CLI
-fixtures/               shared static fixture repos (e.g. template-repo/)
-docs/                   design notes, spec, testing protocols, baselines
-tests/                  pytest suite (tests/quorum/ covers the package)
+fixtures/               shared static fixture repos (e.g. template-repo/, sdd-*/)
+test/                   bun test suite
+docs/                   design notes, specs, plans, testing protocols, baselines
 ```
 
 ## Triage
 
-Triaging a non-passing run: `uv run quorum show [<target>]` and see
+Triaging a non-passing run: `bun run quorum show [<target>]` and see
 [docs/superpowers/skills/triaging-a-failing-eval.md](docs/superpowers/skills/triaging-a-failing-eval.md)
 for the attribution atlas.
 
@@ -840,7 +878,7 @@ When an Antigravity run is non-passing or indeterminate:
    `<run>/coding-agent-config/.gemini/antigravity-cli/brain/**/transcript.jsonl`.
 6. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`; plugin
    files alone do not prove hook or skill behavior.
-7. Render the verdict with `uv run quorum show <run-or-batch-id>`.
+7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 8. For broad sweep triage, classify failures with
    [docs/baselines/antigravity-sweeps/README.md](docs/baselines/antigravity-sweeps/README.md).
 
@@ -859,7 +897,7 @@ When an OpenCode run is non-passing or indeterminate:
    `<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json`.
 6. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`; plugin
    files alone do not prove hook or skill behavior.
-7. Render the verdict with `uv run quorum show <run-or-batch-id>`.
+7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 
 ### Pi Troubleshooting
 
@@ -884,7 +922,7 @@ When a Pi run is non-passing or indeterminate:
 9. If the verdict says `unusable Pi session header`, inspect the first line of
    each new Pi session for malformed JSON or missing `cwd`.
 10. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`.
-11. Render the verdict with `uv run quorum show <run-or-batch-id>`.
+11. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 
 ### Copilot Troubleshooting
 
@@ -902,7 +940,7 @@ When a Copilot run is non-passing or indeterminate:
    `copilot plugin list`.
 6. If setup fails on a proxy variable, remove embedded credentials from the
    proxy URL and retry.
-7. Render the verdict with `uv run quorum show <run-or-batch-id>`.
+7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 
 ## Contribution Rules
 
