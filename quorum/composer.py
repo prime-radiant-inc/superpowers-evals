@@ -19,6 +19,11 @@ RunErrorStage = Literal[
     "qa-agent-misconfigured",
     "unknown",
 ]
+# Every transcript verb the check-transcript CLI emits. An empty tool-call
+# capture makes all of these meaningless, so the capture-empty guard
+# (_any_trace_check) must recognize every one of them to force indeterminate
+# rather than a false pass/fail. Keep this in sync with the `case` verbs in
+# ts/src/cli/check-transcript.ts.
 TRACE_PRIMITIVES = {
     "tool-called",
     "tool-not-called",
@@ -29,6 +34,10 @@ TRACE_PRIMITIVES = {
     "skill-called",
     "skill-not-called",
     "skill-before-tool",
+    "skill-before-implementation-tool",
+    "implementation-tool-not-called",
+    "investigated",
+    "worktree-created",
 }
 
 

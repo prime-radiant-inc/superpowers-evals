@@ -1,4 +1,6 @@
 # tests/quorum/test_composer.py (replace existing content)
+import pytest
+
 from quorum.checks import CheckRecord
 from quorum.composer import GauntletLayer, compose
 
@@ -80,6 +82,25 @@ def test_capture_empty_without_trace_check_passes():
         gauntlet=_gl("pass"), checks=[_ck("file-exists", True)], capture_empty=True, error=None
     )
     assert v.final == "pass"
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        # Every transcript verb the check-transcript CLI emits must count as a
+        # trace check, so an empty capture forces indeterminate rather than a
+        # false pass/fail. These four were previously missing from
+        # TRACE_PRIMITIVES (scenarios using only them, e.g.
+        # cost-tool-result-bloat and worktree-creation-from-main).
+        "investigated",
+        "worktree-created",
+        "implementation-tool-not-called",
+        "skill-before-implementation-tool",
+    ],
+)
+def test_capture_empty_with_transcript_verb_yields_indeterminate(verb):
+    v = compose(gauntlet=_gl("pass"), checks=[_ck(verb, True)], capture_empty=True, error=None)
+    assert v.final == "indeterminate"
 
 
 def test_error_yields_indeterminate():
