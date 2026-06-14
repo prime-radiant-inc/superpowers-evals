@@ -58,6 +58,9 @@ export interface CaptureResult {
   readonly path: string;
   readonly sourceLogs: readonly string[];
   readonly rowCount: number;
+  // How many capture passes ran (PRI-2081): 1 = first pass succeeded;
+  // >1 = the empty-capture retry re-diffed after a delay.
+  readonly attempts: number;
 }
 
 /** Normalize each new session log into tool calls and write
@@ -78,7 +81,49 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
   }
   const outPath = join(runDir, 'coding-agent-tool-calls.jsonl');
   writeFileSync(outPath, lines.length > 0 ? `${lines.join('\n')}\n` : '');
-  return { path: outPath, sourceLogs: newLogs, rowCount: lines.length };
+  return {
+    path: outPath,
+    sourceLogs: newLogs,
+    rowCount: lines.length,
+    attempts: 1,
+  };
+}
+
+/** captureToolCalls with an empty-capture retry/guard (PRI-2081).
+ *
+ *  A run that produced no new source logs — or logs that normalize to zero
+ *  rows — is usually a real failure, but it is sometimes a transient race: the
+ *  Coding-Agent's session log is still being flushed (or renamed into place)
+ *  when the post-drive diff runs. Those races turned whole runs into permanent
+ *  stage="capture" indeterminates, paying full Gauntlet + subject spend for no
+ *  verdict.
+ *
+ *  Re-run the same snapshot diff up to `attempts` times, `delayMs` apart, until
+ *  something normalizes. Each pass rewrites coding-agent-tool-calls.jsonl, so
+ *  the artifact always reflects the final capture. The returned `attempts`
+ *  field records how many passes ran; a genuinely-empty run still comes back
+ *  empty (and the runner's per-backend diagnostic cascade proceeds unchanged),
+ *  just `delayMs * (attempts - 1)` ms later. The sleep is synchronous
+ *  (Bun.sleepSync) so the runner stays sync; tests inject a spy. */
+export function captureToolCallsWithRetry(
+  args: CaptureArgs,
+  opts: {
+    attempts?: number;
+    delayMs?: number;
+    sleep?: (ms: number) => void;
+  } = {},
+): CaptureResult {
+  const attempts = opts.attempts ?? 3;
+  const delayMs = opts.delayMs ?? 2000;
+  const sleep = opts.sleep ?? ((ms) => Bun.sleepSync(ms));
+  let result = captureToolCalls(args);
+  let used = 1;
+  while (result.rowCount === 0 && used < attempts) {
+    sleep(delayMs);
+    used += 1;
+    result = captureToolCalls(args);
+  }
+  return { ...result, attempts: used };
 }
 
 /** First-to-last timestamp span across the given session logs. Spec 1 cannot
