@@ -1,11 +1,15 @@
 import {
+  chmodSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
@@ -18,14 +22,20 @@ import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 // it seeds the per-run CODEX_HOME so the agent boots past the sign-in picker
 // with Superpowers staged as a trusted SessionStart plugin hook.
 //
-// The Python ceremony has two subprocess interactions, both driven through the
-// injected CommandRunner so the hermetic gate stubs them:
-//   1. `codex login --with-api-key` (OPENAI_API_KEY piped to stdin) -> auth.json
-//   2. `codex app-server --listen stdio://` JSON-RPC (initialize + hooks/list)
-//      to read the staged Superpowers hook's key + currentHash, which we then
-//      record as a trusted_hash in config.toml.
-// Everything else (skeleton copy, plugin copytree, config.toml) is deterministic
-// file generation, which the gate asserts directly.
+// Auth is a validated file copy, not a login subprocess (oracle d9ccf4e):
+// _seed_codex_auth copies the host's ChatGPT subscription auth.json from
+// ~/.codex/auth.json into the per-run CODEX_HOME (mode 0600), after asserting it
+// is subscription auth (not API-key auth) and carries a refresh token. The
+// OPENAI_API_KEY env path is gone; the launch-agent scrubs OpenAI env so Codex
+// uses the copied subscription auth.
+//
+// That leaves exactly ONE subprocess interaction, driven through the injected
+// CommandRunner so the hermetic gate stubs it:
+//   - `codex app-server --listen stdio://` JSON-RPC (initialize + hooks/list)
+//     to read the staged Superpowers hook's key + currentHash, which we then
+//     record as a trusted_hash in config.toml.
+// Everything else (skeleton copy, auth copy, plugin copytree, config.toml) is
+// deterministic file generation, which the gate asserts directly.
 
 // The compact JSON-RPC requests piped to `codex app-server` stdin: initialize
 // (id 1) then hooks/list (id 2) for the run's workdir. Mirrors
@@ -36,6 +46,24 @@ interface AppServerHook {
 }
 
 const PLUGIN_ID = 'superpowers@debug';
+
+// Narrowing schema for the host ~/.codex/auth.json (standard §4.1). Permissive:
+// auth.json carries many other fields, and a non-object `tokens` (Python's
+// `not isinstance(tokens, dict)`) must surface as a missing-refresh-token error,
+// not a schema crash. So `tokens` is coerced to undefined when absent or
+// non-object, and unknown top-level keys pass through.
+const CodexTokensSchema = z
+  .object({ refresh_token: z.string().nullish() })
+  .nullish()
+  .catch(undefined);
+
+const CodexAuthSchema = z
+  .object({
+    auth_mode: z.string().nullish(),
+    OPENAI_API_KEY: z.string().nullish(),
+    tokens: CodexTokensSchema,
+  })
+  .passthrough();
 
 // Dirs under SUPERPOWERS_ROOT that the Python copytree ignores when staging the
 // plugin (mirrors _ignore_codex_plugin_copy). `results` is dropped only inside
@@ -66,12 +94,6 @@ export class CodexAgent implements CodingAgent {
     const { configDir, workdir, skeletonRoot } = home;
     const family = this.config.runtime_family ?? 'codex';
 
-    const apiKey = getEnv('OPENAI_API_KEY');
-    if (apiKey === undefined || apiKey === '') {
-      throw new ProvisionError(
-        'OPENAI_API_KEY not set; cannot seed codex auth',
-      );
-    }
     const superpowersRoot = getEnv('SUPERPOWERS_ROOT');
     if (superpowersRoot === undefined || superpowersRoot === '') {
       throw new ProvisionError(
@@ -91,23 +113,74 @@ export class CodexAgent implements CodingAgent {
       mkdirSync(configDir, { recursive: true });
     }
 
-    // 1. Auth ceremony: pipe the key to `codex login --with-api-key` against the
-    //    fresh CODEX_HOME so it writes a logged-in auth.json (_seed_codex_auth).
-    const loginResult = runner.run('codex', ['login', '--with-api-key'], {
-      input: apiKey,
-      env: { ...envSnapshot(), CODEX_HOME: configDir },
-    });
-    if (loginResult.status !== 0) {
-      throw new ProvisionError(
-        `codex login --with-api-key failed (exit ${loginResult.status}): ${loginResult.stderr.trim()}`,
-      );
-    }
+    // 1. Copy the host's ChatGPT subscription auth into the fresh CODEX_HOME so
+    //    the agent boots past the sign-in picker (_seed_codex_auth, oracle
+    //    d9ccf4e). Validates and copies a file — no login subprocess.
+    this.seedCodexAuth(configDir);
 
     // 2. Stage Superpowers as a trusted Codex plugin hook
     //    (install_codex_superpowers_plugin_hooks, quorum/codex_home path).
     this.installPluginHooks(configDir, workdir, superpowersRoot, runner);
 
     return { [this.config.agent_config_env]: configDir };
+  }
+
+  // Seed ChatGPT subscription auth into the isolated per-run CODEX_HOME
+  // (_seed_codex_auth, oracle d9ccf4e). Reads the host's ~/.codex/auth.json,
+  // asserts it is subscription auth (auth_mode === 'chatgpt' and no API key)
+  // carrying a refresh token, then copies it to configDir/auth.json at 0600. The
+  // parsed JSON is unknown until narrowed by CodexAuthSchema (standard §4.1).
+  private seedCodexAuth(configDir: string): void {
+    // Host subscription auth lives at ~/.codex/auth.json (Python: Path.home() /
+    // ".codex"). CODEX_AUTH_HOME overrides the parent dir so the hermetic gate
+    // can point it at a temp dir — the same seam the gemini adapter uses for
+    // GEMINI_OAUTH_HOME, since homedir() ignores a mid-process $HOME change.
+    const authHome = getEnv('CODEX_AUTH_HOME') ?? join(homedir(), '.codex');
+    const source = join(authHome, 'auth.json');
+    if (!existsSync(source)) {
+      throw new ProvisionError(
+        'Codex ChatGPT subscription auth not found at ~/.codex/auth.json; run `codex login` before Codex evals',
+      );
+    }
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(source, 'utf8'));
+    } catch {
+      throw new ProvisionError(
+        'Codex ChatGPT subscription auth at ~/.codex/auth.json is not valid JSON',
+      );
+    }
+    const auth = CodexAuthSchema.parse(raw);
+
+    // Subscription auth only: auth_mode 'chatgpt' AND no embedded API key
+    // (mirrors `auth.get("auth_mode") != "chatgpt" or auth.get("OPENAI_API_KEY")
+    // is not None`).
+    if (
+      auth.auth_mode !== 'chatgpt' ||
+      (auth.OPENAI_API_KEY !== null && auth.OPENAI_API_KEY !== undefined)
+    ) {
+      throw new ProvisionError(
+        'Codex evals require ChatGPT subscription auth in ~/.codex/auth.json, not API-key auth',
+      );
+    }
+    const tokens = auth.tokens;
+    if (
+      tokens === undefined ||
+      tokens === null ||
+      tokens.refresh_token === undefined ||
+      tokens.refresh_token === null ||
+      tokens.refresh_token === ''
+    ) {
+      throw new ProvisionError(
+        'Codex ChatGPT subscription auth is missing a refresh token; run `codex login` again',
+      );
+    }
+
+    mkdirSync(configDir, { recursive: true });
+    const dest = join(configDir, 'auth.json');
+    copyFileSync(source, dest);
+    chmodSync(dest, 0o600);
   }
 
   // Port of install_codex_superpowers_plugin_hooks for the quorum-owned

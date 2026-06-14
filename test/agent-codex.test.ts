@@ -15,7 +15,8 @@ import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
 // A codex.yaml-shaped config (mirrors coding-agents/codex.yaml). The fields the
-// adapter reads are agent_config_env (CODEX_HOME) and required_env.
+// adapter reads are agent_config_env (CODEX_HOME) and required_env. required_env
+// no longer carries OPENAI_API_KEY (codex uses ChatGPT subscription auth).
 const CODEX_CONFIG: AgentConfig = {
   name: 'codex',
   binary: 'codex',
@@ -23,11 +24,9 @@ const CODEX_CONFIG: AgentConfig = {
   session_log_dir: '${CODEX_HOME}/sessions',
   session_log_glob: '**/rollout-*.jsonl',
   normalizer: 'codex',
-  required_env: ['OPENAI_API_KEY', 'SUPERPOWERS_ROOT'],
+  required_env: ['SUPERPOWERS_ROOT'],
   max_time: '10m',
 };
-
-const API_KEY = 'sk-codex-test';
 
 // A canned app-server hooks/list response carrying exactly one superpowers@debug
 // SessionStart hook with the shape selectSuperpowersHook accepts.
@@ -69,20 +68,44 @@ function stageSuperpowers(root: string): void {
   writeFileSync(join(root, 'node_modules', 'pkg.txt'), 'x\n');
 }
 
-// Set OPENAI_API_KEY + SUPERPOWERS_ROOT around `body`, restoring prior values
-// even on throw (mirrors runner-e2e.test.ts's env save/restore).
-function withEnv(superpowersRoot: string, body: () => void): void {
-  const prevKey = process.env['OPENAI_API_KEY'];
+// Default ChatGPT subscription auth.json contents the adapter accepts.
+const SUBSCRIPTION_AUTH = {
+  auth_mode: 'chatgpt',
+  OPENAI_API_KEY: null,
+  tokens: { refresh_token: 'r' },
+} as const;
+
+// Stage a host auth dir <authParent>/.codex/auth.json holding `auth`, point the
+// adapter at it via CODEX_AUTH_HOME, set SUPERPOWERS_ROOT, and restore prior env
+// even on throw. CODEX_AUTH_HOME is the adapter's test seam for the host
+// ~/.codex location (homedir() ignores a mid-process $HOME change). When `auth`
+// is undefined the .codex dir is created but no auth.json is written (missing
+// case); a string is written verbatim (invalid-JSON case).
+function withHostAuth(
+  authParent: string,
+  superpowersRoot: string,
+  auth: unknown,
+  body: () => void,
+): void {
+  const codexDir = join(authParent, '.codex');
+  mkdirSync(codexDir, { recursive: true });
+  if (auth !== undefined) {
+    writeFileSync(
+      join(codexDir, 'auth.json'),
+      typeof auth === 'string' ? auth : `${JSON.stringify(auth)}\n`,
+    );
+  }
+  const prevAuthHome = process.env['CODEX_AUTH_HOME'];
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
-  process.env['OPENAI_API_KEY'] = API_KEY;
+  process.env['CODEX_AUTH_HOME'] = codexDir;
   process.env['SUPERPOWERS_ROOT'] = superpowersRoot;
   try {
     body();
   } finally {
-    if (prevKey === undefined) {
-      delete process.env['OPENAI_API_KEY'];
+    if (prevAuthHome === undefined) {
+      delete process.env['CODEX_AUTH_HOME'];
     } else {
-      process.env['OPENAI_API_KEY'] = prevKey;
+      process.env['CODEX_AUTH_HOME'] = prevAuthHome;
     }
     if (prevRoot === undefined) {
       delete process.env['SUPERPOWERS_ROOT'];
@@ -92,8 +115,8 @@ function withEnv(superpowersRoot: string, body: () => void): void {
   }
 }
 
-// Responder for the happy path: codex login succeeds, codex app-server emits the
-// canned hooks/list response, everything else is a default success.
+// Responder for the happy path: codex app-server emits the canned hooks/list
+// response, everything else is a default success.
 function happyResponder(
   command: string,
   args: readonly string[],
@@ -104,23 +127,34 @@ function happyResponder(
   return { status: 0, stdout: '', stderr: '' };
 }
 
-test('provision seeds CODEX_HOME, logs in, and stages the trusted plugin hook', () => {
+test('provision copies subscription auth and stages the trusted plugin hook', () => {
   const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
       const env = agent.provision(home, runner);
 
       // Returned env: at minimum CODEX_HOME -> configDir.
       expect(env).toEqual({ CODEX_HOME: home.configDir });
 
-      // Config dir + the staged plugin tree exist.
+      // Config dir exists and the host subscription auth was copied in, 0600.
       expect(existsSync(home.configDir)).toBe(true);
+      const seeded = join(home.configDir, 'auth.json');
+      expect(existsSync(seeded)).toBe(true);
+      expect(JSON.parse(readFileSync(seeded, 'utf8'))).toEqual({
+        auth_mode: 'chatgpt',
+        OPENAI_API_KEY: null,
+        tokens: { refresh_token: 'r' },
+      });
+      expect(statSync(seeded).mode & 0o777).toBe(0o600);
+
+      // The staged plugin tree exists.
       const pluginRoot = join(
         home.configDir,
         'plugins',
@@ -153,17 +187,9 @@ test('provision seeds CODEX_HOME, logs in, and stages the trusted plugin hook', 
       );
       expect(configToml).toContain('trusted_hash = "abc123def456"');
 
-      // Subprocess calls: login (key on stdin, CODEX_HOME in env) then
-      // app-server (workdir cwd, both JSON-RPC requests on stdin).
-      expect(runner.calls.length).toBe(2);
-
-      const login = runner.calls[0];
-      expect(login?.command).toBe('codex');
-      expect(login?.args).toEqual(['login', '--with-api-key']);
-      expect(login?.options?.input).toBe(API_KEY);
-      expect(login?.options?.env?.['CODEX_HOME']).toBe(home.configDir);
-
-      const appServer = runner.calls[1];
+      // Exactly one subprocess call: app-server (no login). Auth is a file copy.
+      expect(runner.calls.length).toBe(1);
+      const appServer = runner.calls[0];
       expect(appServer?.command).toBe('codex');
       expect(appServer?.args).toEqual(['app-server', '--listen', 'stdio://']);
       expect(appServer?.options?.cwd).toBe(home.workdir);
@@ -178,54 +204,123 @@ test('provision seeds CODEX_HOME, logs in, and stages the trusted plugin hook', 
 });
 
 test('provision copies a codex-home-skeleton when one is staged', () => {
-  // skeletonRoot holding codex-home-skeleton/auth.json — proves the skeleton is
-  // seeded before the login ceremony (the file survives into configDir).
+  // skeletonRoot holding codex-home-skeleton/seed.txt — proves the skeleton is
+  // seeded before the auth copy (the file survives into configDir).
   const { home: base, cleanup } = makeTempHome();
   const skeletonRoot = join(base.workdir, '..', 'skeletons');
   const skeleton = join(skeletonRoot, 'codex-home-skeleton');
   mkdirSync(skeleton, { recursive: true });
-  writeFileSync(join(skeleton, 'auth.json'), '{"seeded":true}\n');
+  writeFileSync(join(skeleton, 'seed.txt'), 'seeded\n');
   const home = { ...base, skeletonRoot };
 
+  const authParent = join(base.workdir, '..', 'host-auth');
   const spRoot = join(base.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
       agent.provision(home, runner);
-      const seeded = join(home.configDir, 'auth.json');
+      const seeded = join(home.configDir, 'seed.txt');
       expect(existsSync(seeded)).toBe(true);
-      expect(JSON.parse(readFileSync(seeded, 'utf8'))).toEqual({
-        seeded: true,
-      });
+      expect(readFileSync(seeded, 'utf8')).toBe('seeded\n');
     });
   } finally {
     cleanup();
   }
 });
 
-test('provision throws ProvisionError when codex login exits non-zero', () => {
+test('provision throws when host auth is API-key auth, not subscription', () => {
   const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  // login fails; the adapter must abort before the app-server step.
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'codex' && args[0] === 'login') {
-      return { status: 1, stdout: '', stderr: 'bad api key' };
-    }
-    return { status: 0, stdout: '', stderr: '' };
-  });
+  const runner = new FakeCommandRunner(happyResponder);
+
+  // api_key mode (and a present OPENAI_API_KEY) must be rejected — never copied.
+  const apiKeyAuth = {
+    auth_mode: 'api_key',
+    OPENAI_API_KEY: 'sk-host',
+    tokens: { refresh_token: 'r' },
+  };
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, apiKeyAuth, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-      // Only the login was attempted (no app-server call after the failure).
-      expect(runner.calls.length).toBe(1);
+      expect(() => agent.provision(home, runner)).toThrow(
+        /ChatGPT subscription auth/,
+      );
+      // No subprocess calls: the adapter aborts before the app-server step.
+      expect(runner.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws when host auth.json is missing', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    // auth === undefined -> .codex/ exists but no auth.json file.
+    withHostAuth(authParent, spRoot, undefined, () => {
+      const agent = new CodexAgent(CODEX_CONFIG);
+      expect(() => agent.provision(home, runner)).toThrow(/not found/);
+      expect(runner.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws when host auth.json is not valid JSON', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withHostAuth(authParent, spRoot, '{not json', () => {
+      const agent = new CodexAgent(CODEX_CONFIG);
+      expect(() => agent.provision(home, runner)).toThrow(/not valid JSON/);
+      expect(runner.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws when subscription auth is missing a refresh token', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  const noRefresh = {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {},
+  };
+
+  try {
+    withHostAuth(authParent, spRoot, noRefresh, () => {
+      const agent = new CodexAgent(CODEX_CONFIG);
+      expect(() => agent.provision(home, runner)).toThrow(
+        /missing a refresh token/,
+      );
+      expect(runner.calls.length).toBe(0);
     });
   } finally {
     cleanup();
@@ -234,10 +329,11 @@ test('provision throws ProvisionError when codex login exits non-zero', () => {
 
 test('provision throws ProvisionError when app-server reports no superpowers hook', () => {
   const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  // login OK, but hooks/list returns an empty hook set.
+  // auth OK, but hooks/list returns an empty hook set.
   const runner = new FakeCommandRunner((command, args) => {
     if (command === 'codex' && args[0] === 'app-server') {
       const reply = { jsonrpc: '2.0', id: 2, result: { data: [] } };
@@ -247,7 +343,7 @@ test('provision throws ProvisionError when app-server reports no superpowers hoo
   });
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
       expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
     });
@@ -256,76 +352,45 @@ test('provision throws ProvisionError when app-server reports no superpowers hoo
   }
 });
 
-test('provision throws ProvisionError when OPENAI_API_KEY is unset', () => {
+// The copied auth.json is the only secret-bearing quorum-written file under
+// CODEX_HOME, and it is mode-0600. The adapter never writes the host's
+// (subscription) auth into config.toml — assert the config carries no token.
+test('provision does not write the refresh token into config.toml', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
-  mkdirSync(spRoot, { recursive: true });
-  stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner(happyResponder);
-
-  const prevKey = process.env['OPENAI_API_KEY'];
-  const prevRoot = process.env['SUPERPOWERS_ROOT'];
-  delete process.env['OPENAI_API_KEY'];
-  process.env['SUPERPOWERS_ROOT'] = spRoot;
-  try {
-    const agent = new CodexAgent(CODEX_CONFIG);
-    expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-    expect(runner.calls.length).toBe(0);
-  } finally {
-    if (prevKey === undefined) {
-      delete process.env['OPENAI_API_KEY'];
-    } else {
-      process.env['OPENAI_API_KEY'] = prevKey;
-    }
-    if (prevRoot === undefined) {
-      delete process.env['SUPERPOWERS_ROOT'];
-    } else {
-      process.env['SUPERPOWERS_ROOT'] = prevRoot;
-    }
-    cleanup();
-  }
-});
-
-// A mode-0600 secret env file: codex writes its secret into auth.json via the
-// login subprocess (not a quorum-written file), so there is no quorum-authored
-// secret file to assert mode on here. This test documents that and asserts the
-// adapter does NOT leak the key into a world-readable quorum-written file in
-// CODEX_HOME (parity: the key only reaches codex via stdin).
-test('provision does not write the OPENAI_API_KEY into any config file', () => {
-  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
       agent.provision(home, runner);
       const configToml = readFileSync(
         join(home.configDir, 'config.toml'),
         'utf8',
       );
-      expect(configToml).not.toContain(API_KEY);
+      expect(configToml).not.toContain('refresh_token');
     });
   } finally {
     cleanup();
   }
 });
 
-// statSync is imported for parity with the spec's mode-0600 guidance; codex has
-// no quorum-written secret file, so this guards that if config.toml ever gains a
-// secret, the mode contract is visible. Asserts config.toml exists and is a
+// statSync is imported for the auth.json mode-0600 guard above; codex's only
+// non-secret quorum-written file is config.toml. Assert it exists and is a
 // regular file (mode bits are filesystem-default for non-secret config).
 test('config.toml is a regular readable file after provision', () => {
   const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
-    withEnv(spRoot, () => {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG);
       agent.provision(home, runner);
       const st = statSync(join(home.configDir, 'config.toml'));
@@ -334,4 +399,26 @@ test('config.toml is a regular readable file after provision', () => {
   } finally {
     cleanup();
   }
+});
+
+// Guards the inherited 74e4a2d HOME isolation: the codex launch-agent template
+// scrubs OpenAI env, pins HOME under $CODEX_HOME, and isolates XDG/TMPDIR so the
+// staged superpowers@debug plugin is the version under test (no host bleed).
+test('codex launch-agent isolates HOME, XDG, TMPDIR and scrubs OPENAI_API_KEY', () => {
+  const launcher = readFileSync(
+    join(
+      import.meta.dir,
+      '..',
+      'coding-agents',
+      'codex-context',
+      'launch-agent',
+    ),
+    'utf8',
+  );
+  expect(launcher).toContain('HOME="$codex_agent_home"');
+  expect(launcher).toContain('XDG_CONFIG_HOME=');
+  expect(launcher).toContain('XDG_DATA_HOME=');
+  expect(launcher).toContain('TMPDIR=');
+  expect(launcher).toContain('-u OPENAI_API_KEY');
+  expect(launcher).toContain('CODEX_HOME="$CODEX_HOME"');
 });
