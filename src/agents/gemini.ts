@@ -1,10 +1,13 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
@@ -22,6 +25,38 @@ import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 // Name of the secret env file written into GEMINI_CLI_HOME (Python:
 // GEMINI_ENV_FILE_NAME). Shell-quoted like ClaudeAgent's .claude-env.
 const GEMINI_ENV_FILE_NAME = '.gemini-env';
+
+// Gemini auth-type values (Python: GEMINI_AUTH_TYPE_{API_KEY,OAUTH},
+// GEMINI_AUTH_TYPES). api-key mode seeds GEMINI_API_KEY; oauth-personal copies
+// the local OAuth credential files instead.
+const GEMINI_AUTH_TYPE_API_KEY = 'gemini-api-key';
+const GEMINI_AUTH_TYPE_OAUTH = 'oauth-personal';
+const GEMINI_AUTH_TYPES: readonly string[] = [
+  GEMINI_AUTH_TYPE_API_KEY,
+  GEMINI_AUTH_TYPE_OAUTH,
+];
+
+// OAuth credential files the adapter copies from GEMINI_OAUTH_HOME (Python:
+// _copy_gemini_oauth_credentials).
+const GEMINI_OAUTH_CREDENTIAL_FILES: readonly string[] = [
+  'oauth_creds.json',
+  'google_accounts.json',
+];
+
+// Resolve the requested Gemini auth type (Python: _gemini_auth_type). An empty
+// or unset GEMINI_AUTH_TYPE defaults to api-key; anything outside the known set
+// is a setup error. Exported so the runner can mirror it into the launcher's
+// $GEMINI_AUTH_TYPE substitutions without duplicating the resolution.
+export function geminiAuthType(): string {
+  const raw = getEnv('GEMINI_AUTH_TYPE')?.trim();
+  const authType = raw ? raw : GEMINI_AUTH_TYPE_API_KEY;
+  if (!GEMINI_AUTH_TYPES.includes(authType)) {
+    throw new ProvisionError(
+      `GEMINI_AUTH_TYPE must be one of ${GEMINI_AUTH_TYPES.join(', ')}; got '${authType}'`,
+    );
+  }
+  return authType;
+}
 
 // Files that must exist under SUPERPOWERS_ROOT for the extension to install
 // (Python: GEMINI_REQUIRED_SUPERPOWERS_FILES).
@@ -63,12 +98,43 @@ function shellSingleQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
-// Detect a `superpowers` row in `gemini extensions list` stdout (Python:
-// _gemini_extension_list_shows_superpowers): a line beginning with
+// Write `content` to `path` at mode 0600, creating parent dirs (Python:
+// _write_private_text). writeFileSync's `mode` only applies on create, so chmod
+// after to enforce 0600 even when the file already existed.
+function writePrivateText(path: string, content: string): void {
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, content, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+// Copy the Gemini OAuth credential files from GEMINI_OAUTH_HOME (default
+// ~/.gemini) into the run's .gemini dir at 0600 (Python:
+// _copy_gemini_oauth_credentials). A missing source file is a setup error.
+function copyGeminiOauthCredentials(configDir: string): void {
+  const sourceHome = getEnv('GEMINI_OAUTH_HOME') ?? join(homedir(), '.gemini');
+  for (const name of GEMINI_OAUTH_CREDENTIAL_FILES) {
+    const source = join(sourceHome, name);
+    if (!statSync(source, { throwIfNoEntry: false })?.isFile()) {
+      throw new ProvisionError(
+        `Gemini OAuth credential file not found: ${source}`,
+      );
+    }
+    writePrivateText(
+      join(configDir, '.gemini', name),
+      readFileSync(source, 'utf8'),
+    );
+  }
+}
+
+// Detect a `superpowers` row in `gemini extensions list` output (Python:
+// _gemini_extension_list_shows_superpowers): a line whose first word is
 // `superpowers` (case-insensitive) optionally followed by whitespace or `(`.
-function extensionListShowsSuperpowers(stdout: string): boolean {
-  for (const line of stdout.split('\n')) {
-    if (/^\s*superpowers(\s|\(|$)/i.test(line)) {
+// A leading non-word glyph + space is tolerated so a decorated row like
+// "✓ superpowers (5.1.0)" matches. Callers pass stdout+stderr merged because
+// newer gemini prints the listing to stderr.
+function extensionListShowsSuperpowers(output: string): boolean {
+  for (const line of output.split('\n')) {
+    if (/^\s*([^\w\s]+\s+)?superpowers(\s|\(|$)/i.test(line)) {
       return true;
     }
   }
@@ -124,10 +190,15 @@ export class GeminiAgent implements CodingAgent {
       );
     }
 
-    // GEMINI_API_KEY seeds the secret env file (Python: _write_gemini_env_file
-    // raises before any subprocess if it is empty).
+    // Resolve the auth type once (Python: _gemini_auth_type resolved in
+    // _seed_gemini_config). A bogus value raises here, before any subprocess.
+    const authType = geminiAuthType();
+
+    // GEMINI_API_KEY seeds the secret env file, but only in api-key mode
+    // (Python: _write_gemini_env_file guards on auth_type). In oauth mode the
+    // key is absent by design.
     const apiKey = getEnv('GEMINI_API_KEY') ?? '';
-    if (!apiKey) {
+    if (authType === GEMINI_AUTH_TYPE_API_KEY && !apiKey) {
       throw new ProvisionError(
         'GEMINI_API_KEY not set; cannot seed Gemini auth',
       );
@@ -136,7 +207,7 @@ export class GeminiAgent implements CodingAgent {
     mkdirSync(configDir, { recursive: true });
 
     // .gemini/settings.json: merge into any existing file and set
-    // security.auth.selectedType = "gemini-api-key" (Python:
+    // security.auth.selectedType to the resolved auth type (Python:
     // _write_gemini_settings). JSON.stringify with indent 2, no trailing newline.
     const settingsPath = join(configDir, '.gemini', 'settings.json');
     const settings = existsSync(settingsPath)
@@ -148,24 +219,32 @@ export class GeminiAgent implements CodingAgent {
     const auth: Record<string, unknown> = {
       ...(security['auth'] as Record<string, unknown> | undefined),
     };
-    auth['selectedType'] = 'gemini-api-key';
+    auth['selectedType'] = authType;
     security['auth'] = auth;
     const merged: Record<string, unknown> = { ...settings, security };
     mkdirSync(join(configDir, '.gemini'), { recursive: true });
     writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
 
-    // .gemini-env carries GEMINI_API_KEY for the launcher; mode 0600 (Python:
-    // _write_gemini_env_file). Shell-quoted like ClaudeAgent's .claude-env.
+    // .gemini-env carries GEMINI_API_KEY for the launcher in api-key mode;
+    // oauth mode writes an empty file (still 0600) and copies the OAuth
+    // credentials into .gemini instead (Python: _write_gemini_env_file +
+    // _copy_gemini_oauth_credentials).
     const envFile = join(configDir, GEMINI_ENV_FILE_NAME);
-    writeFileSync(envFile, `GEMINI_API_KEY=${shellSingleQuote(apiKey)}\n`, {
-      mode: 0o600,
-    });
+    const envContent =
+      authType === GEMINI_AUTH_TYPE_API_KEY
+        ? `GEMINI_API_KEY=${shellSingleQuote(apiKey)}\n`
+        : '';
+    writeFileSync(envFile, envContent, { mode: 0o600 });
+    chmodSync(envFile, 0o600);
+    if (authType === GEMINI_AUTH_TYPE_OAUTH) {
+      copyGeminiOauthCredentials(configDir);
+    }
 
     // Env passed to the gemini subprocesses (Python: the `env` dict).
     const agentVars: Record<string, string> = {
       GEMINI_CLI_HOME: configDir,
       GEMINI_CLI_TRUST_WORKSPACE: 'true',
-      GEMINI_DEFAULT_AUTH_TYPE: 'gemini-api-key',
+      GEMINI_DEFAULT_AUTH_TYPE: authType,
     };
     const subprocessEnv = { ...envSnapshot(), ...agentVars };
 
@@ -191,7 +270,9 @@ export class GeminiAgent implements CodingAgent {
         `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${listing.stderr.trim().slice(0, 300)}`,
       );
     }
-    if (!extensionListShowsSuperpowers(listing.stdout)) {
+    if (
+      !extensionListShowsSuperpowers(`${listing.stdout}\n${listing.stderr}`)
+    ) {
       throw new ProvisionError(
         'gemini extensions list did not show Superpowers extension',
       );
