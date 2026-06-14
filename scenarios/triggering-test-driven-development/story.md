@@ -27,7 +27,7 @@ Do not mention TDD, tests-first, or any superpowers concept.
 
 - The agent under test loaded the `superpowers:test-driven-development`
   skill before writing implementation code. Evidence comes from Quorum's
-  normalized `coding-agent-tool-calls.jsonl`: a native `Skill` invocation,
+  normalized `trajectory.json`: a native `Skill` invocation,
   a shell read of the skill's `SKILL.md`, or a normalized `Read` of the
   skill's `SKILL.md` appears before any implementation-file `Edit` or `Write`.
   Harness/private artifacts and `docs/superpowers` design specs do not count

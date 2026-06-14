@@ -340,16 +340,21 @@ check failed; the record carries a `detail` string explaining why.
 - `git-count worktrees|commits <op> <n>` — the count satisfies the comparison (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`).
 - `assert-checkout-clean <path>` — passes iff `<path>` is a git work tree whose `git status --porcelain` is empty (`.quorum-launch-cwd` is ignored) and, when `record_head` recorded a HEAD at setup, HEAD is unmoved. Fails closed if `git status` errors. Pair with the `record_head` setup helper for drift detection.
 
-**Trace surface** — the Coding-Agent's normalized tool-call log (`coding-agent-tool-calls.jsonl`):
-- `tool-called <tool>` — the tool appears in the trace at least once.
-- `tool-count <tool> <op> <n>` — the call count satisfies the comparison.
-- `tool-before <a> <b>` — tool `a` was called before tool `b`.
-- `tool-arg-match <tool> <jq>` — at least one call to `tool` has args matching the jq filter.
-- `tool-match-before-tool-match <tool-a> <jq-a> <tool-b> <jq-b>` — a matching call to `a` precedes a matching call to `b`.
-- `skill-called <skill>` — a `Skill` invocation names the given skill.
-- `skill-not-called <skill>` — no `Skill` invocation names the given skill.
-- `skill-before-tool <skill> <tool>` — the skill was invoked before the tool.
-- `skill-before-tool-match <skill> <tool> <jq>` — the skill was invoked before a matching call to `tool`.
+**Trace surface** — the Coding-Agent's normalized ATIF trajectory (`trajectory.json`),
+read by the `check-transcript <verb>` tool. The 13 verbs:
+- `check-transcript tool-called <tool>` — the tool appears in the trace at least once.
+- `check-transcript tool-not-called <tool>` — the tool never appears in the trace.
+- `check-transcript tool-count <tool> <op> <n>` — the call count satisfies the comparison.
+- `check-transcript tool-before <a> <b>` — tool `a` was called before tool `b`.
+- `check-transcript tool-arg-match <tool> --eq key=value | --matches key=regex [--ignore-case]` — at least one call to `tool` has args matching every matcher.
+- `check-transcript tool-match-before-tool-match <tool-a> <regex-a> <tool-b> <regex-b>` — a matching call to `a` precedes a matching call to `b`.
+- `check-transcript skill-called <skill>` — a `Skill` invocation (native or via SKILL.md read) names the given skill.
+- `check-transcript skill-not-called <skill>` — no `Skill` invocation names the given skill.
+- `check-transcript skill-before-tool <skill> <tool>` — the skill was invoked before the tool.
+- `check-transcript skill-before-implementation-tool <skill> <tool>` — the skill was invoked before an implementation-path call to `tool`.
+- `check-transcript implementation-tool-not-called <tool>` — no implementation-path call to `tool` occurred.
+- `check-transcript investigated` — at least one investigation (native Read/Grep, or `grep`/`rg` via Bash) occurred.
+- `check-transcript worktree-created` — a worktree was created (native `EnterWorktree`, or `git worktree add` via Bash).
 
 **Negation:**
 - `not <check> [args…]` — runs the inner check without emitting a record, inverts the result, and emits one negated record. Always use `not` rather than bash's bare `!`.
@@ -391,7 +396,7 @@ results/<scenario>-<coding-agent>-<timestamp>/
 │       └── captures/
 ├── coding-agent-workdir/            the Coding-Agent's file output
 ├── coding-agent-config/             the Coding-Agent's isolated config home
-├── coding-agent-tool-calls.jsonl    the Coding-Agent's normalized trace
+├── trajectory.json                 the Coding-Agent's normalized ATIF trace
 └── coding-agent-token-usage.json    the Coding-Agent's token cost
 ```
 
@@ -484,7 +489,7 @@ Provisioning verifies that Gemini linked and enabled Superpowers by checking:
 
 Those files prove the extension was linked. They do not prove Gemini honored
 Superpowers behavior. Behavioral evidence comes from normalized transcript rows
-in `<run>/coding-agent-tool-calls.jsonl` and from raw Gemini transcripts at:
+in `<run>/trajectory.json` and from raw Gemini transcripts at:
 
 ```text
 <run>/coding-agent-config/.gemini/tmp/**/chats/**/*.json*
@@ -548,7 +553,7 @@ Provisioning verifies that `plugin.json`, `hooks.json`, and
 
 Those files prove the plugin was installed. They do not prove hook or skill
 behavior. Behavioral evidence comes from normalized transcript rows in
-`<run>/coding-agent-tool-calls.jsonl` and from raw Antigravity transcripts at:
+`<run>/trajectory.json` and from raw Antigravity transcripts at:
 
 ```text
 <run>/coding-agent-config/.gemini/antigravity-cli/brain/**/transcript.jsonl
@@ -586,7 +591,7 @@ kimi --yolo
 ```
 
 Kimi run artifacts are sensitive. In addition to the normalized
-`<run>/coding-agent-tool-calls.jsonl`, raw Kimi wire logs may appear at:
+`<run>/trajectory.json`, raw Kimi wire logs may appear at:
 
 ```text
 <run>/coding-agent-config/**/wire.jsonl
@@ -725,7 +730,7 @@ Copilot's primary trace is strict session state:
 <run>/coding-agent-config/session-state/<run-session-id>/events.jsonl
 ```
 
-quorum normalizes that file into `<run>/coding-agent-tool-calls.jsonl` and
+quorum normalizes that file into `<run>/trajectory.json` and
 fails closed if the expected session-state file is missing, empty after
 normalization, or accompanied by unexpected session-state files. Plugin staging
 is validated by files under `plugins/superpowers`, but behavioral validation
@@ -774,7 +779,7 @@ A `quorum run` drives one scenario against one Coding-Agent:
    log via bash, role-plays the user, and issues a verdict against the story's
    `## Acceptance Criteria`.
 8. **Capture** — the Coding-Agent's session-log dir is diffed, normalized into
-   `coding-agent-tool-calls.jsonl`, and token usage is written to
+   `trajectory.json`, and token usage is written to
    `coding-agent-token-usage.json` (measurement only). OpenCode exports matching
    new sessions before this diff step. Antigravity, Gemini, Kimi, OpenCode, Pi,
    and Copilot runs fail closed as `indeterminate` if no transcript/session
@@ -941,7 +946,7 @@ When an Antigravity run is non-passing or indeterminate:
    `<run>/coding-agent-config/.gemini/config/plugins/superpowers/`.
 5. Confirm raw transcripts exist under
    `<run>/coding-agent-config/.gemini/antigravity-cli/brain/**/transcript.jsonl`.
-6. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`; plugin
+6. Inspect normalized behavior in `<run>/trajectory.json`; plugin
    files alone do not prove hook or skill behavior.
 7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 8. For broad sweep triage, classify failures with
@@ -960,7 +965,7 @@ When an OpenCode run is non-passing or indeterminate:
    `<run>/coding-agent-config/.config/opencode/superpowers/skills/`.
 5. Inspect the export manifest at
    `<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json`.
-6. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`; plugin
+6. Inspect normalized behavior in `<run>/trajectory.json`; plugin
    files alone do not prove hook or skill behavior.
 7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 
@@ -986,7 +991,7 @@ When a Pi run is non-passing or indeterminate:
    whose header `cwd` is outside `<run>/coding-agent-workdir`.
 9. If the verdict says `unusable Pi session header`, inspect the first line of
    each new Pi session for malformed JSON or missing `cwd`.
-10. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`.
+10. Inspect normalized behavior in `<run>/trajectory.json`.
 11. Render the verdict with `bun run quorum show <run-or-batch-id>`.
 
 ### Copilot Troubleshooting
@@ -1000,7 +1005,7 @@ When a Copilot run is non-passing or indeterminate:
    `<run>/coding-agent-config/plugins/superpowers/`.
 4. Confirm the expected session-state trace exists at
    `<run>/coding-agent-config/session-state/<run-session-id>/events.jsonl`.
-5. Inspect normalized behavior in `<run>/coding-agent-tool-calls.jsonl`;
+5. Inspect normalized behavior in `<run>/trajectory.json`;
    behavioral validation comes from native `Skill` rows, not
    `copilot plugin list`.
 6. If setup fails on a proxy variable, remove embedded credentials from the

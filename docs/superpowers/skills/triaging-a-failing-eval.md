@@ -79,7 +79,7 @@ re-run the failing check against a known-good fixture or invoke it directly
 against a workdir where the artifact exists. If the check correctly passes
 in the good case, this is genuinely Pattern 2 — the agent described doing
 the work without actually running the command, or ran it in the wrong
-directory. Inspect `coding-agent-tool-calls.jsonl` for the missing
+directory. Inspect `trajectory.json` for the missing
 invocation.
 
 ---
@@ -261,7 +261,7 @@ If a Pi run is indeterminate before post-checks, distinguish:
 - new `*.jsonl` whose first-row `cwd` differs from the launch cwd:
   `qa-agent-misconfigured`; the QA agent likely skipped the generated
   launcher;
-- matching first-row `cwd` but empty `coding-agent-tool-calls.jsonl`: Pi ran
+- matching first-row `cwd` but empty `trajectory.json`: Pi ran
   but produced no normalized tool calls, or the normalizer no longer matches
   Pi's JSONL shape.
 

@@ -43,7 +43,7 @@ $OPENCODE_QUORUM_HOME/.quorum/session-exports/[0-9]*-ses_*.json
 ```
 
 Those exported JSON files are the ground truth for tool calls and are what
-quorum normalizes into `coding-agent-tool-calls.jsonl`.
+quorum normalizes into `trajectory.json`.
 
 ## Waiting for OpenCode to work
 

@@ -51,7 +51,7 @@ $COPILOT_HOME/logs
 ```
 
 The session-state `events.jsonl` files are the ground truth for tool calls and
-are what quorum normalizes into `coding-agent-tool-calls.jsonl`. The log
+are what quorum normalizes into `trajectory.json`. The log
 directory is useful for CLI lifecycle and debugging details.
 
 ## Waiting for Copilot to work
