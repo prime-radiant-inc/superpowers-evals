@@ -4,10 +4,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
@@ -164,13 +165,14 @@ export class KimiAgent implements CodingAgent {
     });
 
     // write_kimi_runtime_env_file: mode-0600 secret file of sorted shell
-    // assignments. NOTE: the Python places this file OUTSIDE the run artifact
-    // root (write_kimi_runtime_env_file -> _kimi_runtime_env_temp_parent mkdtemp
-    // keyed on run_dir.name, with cleanup_dirs teardown) so capture never
-    // snapshots the secret. RunHome carries no run_dir, so we write it under an
-    // OS-temp dir (still outside configDir/workdir) and return its path; the
-    // integrator can relocate to a run-scoped temp parent if it threads run_dir.
-    const envFilePath = writeKimiRuntimeEnvFile(runtimeEnv);
+    // assignments, placed OUTSIDE the run artifact root (via
+    // _kimi_runtime_env_temp_parent + a run-scoped mkdtemp keyed on run_dir.name)
+    // so capture never snapshots the secret. RunHome carries no explicit run_dir,
+    // but the per-run dir IS configDir's parent (runner.py builds configDir =
+    // run_dir/coding-agent-config), so we derive run_dir from configDir and the
+    // escape guard keeps the secret out of the artifact root.
+    const runDir = dirname(configDir);
+    const envFilePath = writeKimiRuntimeEnvFile(runtimeEnv, { runDir });
 
     // write_effective_kimi_config: redacted summary (KIMI_MODEL_API_KEY ->
     // "<present>"). Written into the kimi home (configDir).
@@ -574,13 +576,51 @@ function validateSuperpowersKimiRoot(rootArg: string): string {
   return resolved;
 }
 
-// write_kimi_runtime_env_file: mode-0600 file of sorted `KEY='value'` shell
-// assignments. See the provision() NOTE on why this lands under an OS-temp dir
-// here rather than a run-scoped temp parent.
-function writeKimiRuntimeEnvFile(
-  env: Readonly<Record<string, string>>,
+// _kimi_runtime_env_temp_parent: compute a temp-dir parent that is NOT inside the
+// run artifact root, so the capture snapshot never sweeps up the mode-0600 secret
+// env file. The artifact root is run_dir's parent. If the OS tmpdir (or override)
+// resolves inside the artifact root, walk one level above the artifact root. As a
+// last-line guard, RAISE if the chosen parent still resolves inside the artifact
+// root. Mirrors quorum/kimi.py:_kimi_runtime_env_temp_parent.
+function kimiRuntimeEnvTempParent(
+  runDir: string,
+  tmpDirOverride?: string,
 ): string {
-  const secretDir = mkdtempSync(join(tmpdir(), 'quorum-kimi-env-'));
+  const runDirResolved = realpathSync(resolve(runDir));
+  const artifactRootResolved = dirname(runDirResolved);
+  let tempParent = realpathSync(resolve(tmpDirOverride ?? tmpdir()));
+  if (isInsideOrEqual(tempParent, artifactRootResolved)) {
+    tempParent = dirname(artifactRootResolved);
+  }
+  mkdirSync(tempParent, { recursive: true });
+  if (isInsideOrEqual(realpathSync(tempParent), artifactRootResolved)) {
+    throw new ProvisionError(
+      'Kimi runtime env temp directory resolved inside artifact root',
+    );
+  }
+  return tempParent;
+}
+
+// Path.is_relative_to semantics: is `candidate` the same as or nested under
+// `ancestor`?
+function isInsideOrEqual(candidate: string, ancestor: string): boolean {
+  return candidate === ancestor || candidate.startsWith(`${ancestor}${sep}`);
+}
+
+// write_kimi_runtime_env_file: mode-0600 file of sorted `KEY='value'` shell
+// assignments, placed in a run-scoped mkdtemp under a temp parent that is kept
+// OUTSIDE the run artifact root (so capture never snapshots the secret). The
+// run_dir is threaded so the temp parent and the secret-dir prefix are
+// run-scoped. tmpDirOverride exists only for hermetic testing (mirrors the
+// Python's tempfile.tempdir monkeypatch). Mirrors write_kimi_runtime_env_file.
+export function writeKimiRuntimeEnvFile(
+  env: Readonly<Record<string, string>>,
+  opts: { readonly runDir: string; readonly tmpDirOverride?: string },
+): string {
+  const tempParent = kimiRuntimeEnvTempParent(opts.runDir, opts.tmpDirOverride);
+  const secretDir = mkdtempSync(
+    join(tempParent, `quorum-kimi-env-${basename(opts.runDir)}-`),
+  );
   const path = join(secretDir, KIMI_RUNTIME_ENV_FILE_NAME);
   const keys = Object.keys(env).sort();
   const body = keys

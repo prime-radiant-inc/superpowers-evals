@@ -4,13 +4,18 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandResult } from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
-import { KimiAgent, sanitizeKimiDiagnostic } from '../src/agents/kimi.ts';
+import {
+  KimiAgent,
+  sanitizeKimiDiagnostic,
+  writeKimiRuntimeEnvFile,
+} from '../src/agents/kimi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -677,4 +682,55 @@ test('sanitizeKimiDiagnostic stringifies non-string messages', () => {
   const out = sanitizeKimiDiagnostic(err, env);
   expect(out).not.toContain('sensitive-value');
   expect(out).toContain('boom');
+});
+
+// ---------------------------------------------------------------------------
+// writeKimiRuntimeEnvFile artifact-root-escape guard + run-scoped naming
+// ---------------------------------------------------------------------------
+
+test('writeKimiRuntimeEnvFile writes a run-scoped 0600 file outside the artifact root', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    // runDir is the per-run artifact dir (parent of configDir); artifact root is
+    // its parent. The OS tmpdir is outside both, so the guard accepts it.
+    const runDir = join(home.configDir, '..');
+    const path = writeKimiRuntimeEnvFile(
+      { KIMI_MODEL_API_KEY: API_KEY, KIMI_DISABLE_TELEMETRY: '1' },
+      { runDir },
+    );
+    expect(existsSync(path)).toBe(true);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Run-scoped naming: the secret dir prefix embeds the run dir's basename.
+    expect(path).toContain('quorum-kimi-env-');
+    // The secret file is NOT placed inside the artifact root.
+    const artifactRoot = realpathSync(join(home.configDir, '..', '..'));
+    expect(path.startsWith(`${artifactRoot}/`)).toBe(false);
+    const body = readFileSync(path, 'utf8');
+    expect(body).toContain(`KIMI_MODEL_API_KEY='${API_KEY}'`);
+    expect(body).toContain("KIMI_DISABLE_TELEMETRY='1'");
+  } finally {
+    cleanup();
+  }
+});
+
+test('writeKimiRuntimeEnvFile walks the temp parent out when tmpdir is inside the artifact root', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    const runDir = join(home.configDir, '..');
+    // Force the temp parent override to sit INSIDE the artifact root; the guard
+    // must walk it out so the resulting file lands outside the artifact root.
+    const artifactRoot = join(runDir, '..');
+    const insideTmp = join(artifactRoot, 'tmp-inside');
+    mkdirSync(insideTmp, { recursive: true });
+    const path = writeKimiRuntimeEnvFile(
+      { KIMI_MODEL_API_KEY: API_KEY },
+      { runDir, tmpDirOverride: insideTmp },
+    );
+    expect(existsSync(path)).toBe(true);
+    expect(path.startsWith(`${realpathSync(insideTmp)}/`)).toBe(false);
+    // The escaped file is not under the artifact root either.
+    expect(path.startsWith(`${realpathSync(artifactRoot)}/`)).toBe(false);
+  } finally {
+    cleanup();
+  }
 });
