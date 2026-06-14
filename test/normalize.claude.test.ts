@@ -213,6 +213,26 @@ test('real 2.1.177 fixture with tool_use: noise rows ignored, tool_call and obse
   expect(traj.steps.length).toBe(2); // user + agent only
 });
 
+// ---------------------------------------------------------------------------
+// Fix: flat top-level tool_use entry (a line that is itself a tool_use block)
+// ---------------------------------------------------------------------------
+
+test('flat top-level tool_use entry becomes an agent step with one tool_call', () => {
+  const line =
+    '{"type":"tool_use","id":"x","name":"Bash","input":{"command":"ls"}}';
+  const traj = normalizeClaudeLegacy(line, '2.1.175');
+  expect(traj.steps.length).toBe(1);
+  const step = traj.steps[0]!;
+  expect(step.source).toBe('agent');
+  expect(step.tool_calls).toBeDefined();
+  expect(step.tool_calls!.length).toBe(1);
+  expect(step.tool_calls![0]).toEqual({
+    tool_call_id: 'x',
+    function_name: 'Bash',
+    arguments: { command: 'ls' },
+  });
+});
+
 // Note: the per-agent `src/cli/normalize-claude.ts` shim and the unified
 // `src/cli/normalize.ts` dispatcher are intentionally not grafted onto this
 // branch — capture invokes the normalizers in-process, not via a CLI — so their

@@ -80,6 +80,24 @@ export function normalizeClaudeLegacy(
       continue;
     }
 
+    if (type === 'tool_use') {
+      // A flat top-level entry that is itself a tool_use block. Mirrors the
+      // assistant-nested tool_use mapping.
+      const step: AtifStep = { step_id: steps.length + 1, source: 'agent' };
+      if (typeof entry['timestamp'] === 'string')
+        step.timestamp = entry['timestamp'];
+      const call: AtifToolCall = {
+        tool_call_id: (entry['id'] as string | undefined) ?? '',
+        function_name: (entry['name'] as string | undefined) ?? '',
+        arguments:
+          (entry['input'] as Record<string, unknown> | undefined) ?? {},
+      };
+      step.tool_calls = [call];
+      callIndex.set(call.tool_call_id, step);
+      steps.push(step);
+      continue;
+    }
+
     if (type === 'user') {
       // String-form content: the initial human prompt in 2.1.177+ logs.
       const ts =
