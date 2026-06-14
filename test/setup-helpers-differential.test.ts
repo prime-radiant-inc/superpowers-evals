@@ -45,6 +45,7 @@ const HERMETIC: readonly string[] = [
   'scaffold_sdd_svelte_todo_elicited',
   'scaffold_sdd_broken_plan',
   'scaffold_sdd_quality_defect_plan',
+  'scaffold_sdd_spec_constraint_plan',
   'scaffold_sdd_yagni_plan',
   'create_base_repo',
 ];

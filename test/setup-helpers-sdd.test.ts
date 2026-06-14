@@ -1,6 +1,6 @@
 // test/setup-helpers-sdd.test.ts
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runGit } from '../src/setup-helpers/git.ts';
@@ -9,6 +9,7 @@ import {
   scaffoldSddBrokenPlan,
   scaffoldSddGoFractals,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddSpecConstraintPlan,
   scaffoldSddYagniPlan,
 } from '../src/setup-helpers/sdd-fixtures.ts';
 
@@ -79,6 +80,33 @@ describe('sdd fixtures', () => {
         dir,
       );
       expect(plan).toContain('lines.join("\\n")'); // literal backslash-n, not a newline
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Mirrors tests/test_sdd_neutral_setup_helper.py: the plan cites the spec by
+  // path (the "quartz" marker lives only in the spec), and the repo lands on a
+  // clean `main` with no implementation present.
+  test('scaffoldSddSpecConstraintPlan: plan cites spec, quartz only in spec, clean main', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddSpecConstraintPlan({ workdir: dir } as never);
+
+      const specRel = 'docs/superpowers/specs/2026-06-12-priority-design.md';
+      const planRel = 'docs/superpowers/plans/2026-06-12-priority.md';
+      expect(existsSync(join(dir, specRel))).toBe(true);
+      expect(existsSync(join(dir, planRel))).toBe(true);
+
+      const spec = runGit(['show', `HEAD:${specRel}`], dir);
+      const plan = runGit(['show', `HEAD:${planRel}`], dir);
+      expect(spec).toContain('quartz');
+      expect(plan).toContain(specRel);
+      expect(plan).not.toContain('quartz');
+
+      expect(runGit(['branch', '--show-current'], dir).trim()).toBe('main');
+      expect(runGit(['status', '--short'], dir).trim()).toBe('');
+      expect(existsSync(join(dir, 'src', 'priority.js'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

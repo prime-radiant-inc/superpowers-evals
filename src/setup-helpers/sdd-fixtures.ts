@@ -1,10 +1,12 @@
 // src/setup-helpers/sdd-fixtures.ts
 // SDD-fixture helpers ported from sdd_real_projects.py, sdd_auth_plan.py,
-// sdd_broken_plan.py, sdd_quality_defect_plan.py, and sdd_yagni_plan.py.
-// The nine scaffoldSdd* helpers copy design.md + plan.md out of fixtures/ and
-// commit a clean-slate repo; the four plan helpers embed their plan bodies
-// verbatim. The PLAN_BODY constants carry literal backslash-n sequences and
-// literal ${...} interpolations that must reach the file unchanged.
+// sdd_broken_plan.py, sdd_quality_defect_plan.py, sdd_yagni_plan.py, and
+// sdd_spec_constraint_plan.py. The nine scaffoldSdd* fixture-reading helpers
+// copy design.md + plan.md out of fixtures/ and commit a clean-slate repo; the
+// five embedded-body helpers (auth/broken/quality/yagni/spec-constraint) write
+// their plan bodies verbatim. The PLAN_BODY constants carry literal backslash-n
+// sequences and literal ${...} interpolations that must reach the file
+// unchanged.
 import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repoRoot } from '../paths.ts';
@@ -435,4 +437,132 @@ export function scaffoldSddYagniPlan(ctx: HelperContext): void {
 
   runGit(['add', '-A'], ctx.workdir);
   runGit(['commit', '-m', 'initial: math YAGNI plan'], ctx.workdir);
+}
+
+// Verbatim from sdd_spec_constraint_plan.py:PACKAGE_JSON.
+const SPEC_PACKAGE_JSON = `{
+  "name": "priority-formatting",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
+`;
+
+// Verbatim from sdd_spec_constraint_plan.py:README.
+const SPEC_README = `# Priority formatting fixture
+
+Small fixture for a neutral SDD comparison scenario.
+`;
+
+// Verbatim from sdd_spec_constraint_plan.py:SPEC_BODY. The literal backticks
+// (\`src/priority.js\`, \`P<n> :: quartz\`, etc.) are escaped so they reach the
+// file unchanged; this body carries the "quartz" marker the scenario asserts.
+const SPEC_BODY = `# Priority Formatting Design
+
+## Priority Rules
+
+The module exposes three functions from \`src/priority.js\`:
+
+- \`normalizePriority(value)\` returns an integer priority from 1 to 5.
+- \`priorityLabel(value)\` returns the normalized priority as a display label.
+- \`formatTicket(ticket)\` returns a compact ticket summary string.
+
+Normalization rules:
+
+- The strings \`urgent\` and \`later\` are accepted case-insensitively and map to
+  priorities 1 and 5.
+- Numeric strings and numbers from 1 through 5 map to their integer value.
+- Missing, blank, unknown, or out-of-range values map to priority 3.
+
+Display rules:
+
+- \`priorityLabel(value)\` returns \`P<n> :: quartz\`, where \`<n>\` is the normalized
+  priority.
+- \`formatTicket({ id, title, priority })\` returns
+  \`#<id> [<priority label>] <title>\`.
+- \`formatTicket\` trims surrounding whitespace from \`id\` and \`title\`.
+`;
+
+// Verbatim from sdd_spec_constraint_plan.py:PLAN_BODY. Cites the spec path and
+// deliberately omits "quartz"; the literal backticks (\`- [ ]\`, \`npm test\`,
+// \`src/priority.js\`, etc.) are escaped so they reach the file unchanged.
+const SPEC_PLAN_BODY = `# Priority Formatting Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (\`- [ ]\`) syntax for tracking.
+
+**Goal:** Implement the priority formatting module described by the design spec.
+
+**Design context:** \`docs/superpowers/specs/2026-06-12-priority-design.md\`
+contains the exact priority, display, and ticket formatting rules. Read that
+spec before writing code or tests. Do not infer missing rules from this plan.
+
+**Architecture:** Plain Node ESM. Create \`src/priority.js\` and
+\`test/priority.test.js\`. Export the public functions from \`src/priority.js\`.
+
+## Task 1: Priority Normalization and Labels
+
+Implement the priority normalization and display-label functions from the spec.
+
+**Files:**
+- Create: \`src/priority.js\`
+- Create: \`test/priority.test.js\`
+
+**Steps:**
+- [ ] Read the design spec's priority and display rules.
+- [ ] Write failing \`node:test\` coverage for normal values, aliases, defaults,
+  and the exact display suffix required by the spec.
+- [ ] Run \`npm test\` and confirm the new tests fail before implementation.
+- [ ] Implement \`normalizePriority(value)\` and \`priorityLabel(value)\`.
+- [ ] Run \`npm test\` and confirm the tests pass.
+
+## Task 2: Ticket Summary Formatter
+
+Implement the ticket summary function from the spec.
+
+**Files:**
+- Modify: \`src/priority.js\`
+- Modify: \`test/priority.test.js\`
+
+**Steps:**
+- [ ] Read the design spec's ticket formatting rule.
+- [ ] Add failing \`node:test\` coverage for \`formatTicket(ticket)\`, including
+  trimming behavior.
+- [ ] Run \`npm test\` and confirm the new formatter tests fail before
+  implementation.
+- [ ] Implement \`formatTicket(ticket)\` and export it.
+- [ ] Run \`npm test\` and confirm the full suite passes.
+`;
+
+// Port of sdd_spec_constraint_plan.py:scaffold_sdd_spec_constraint_plan. Inits
+// a Node project whose plan cites a separate spec (carrying the "quartz"
+// marker) rather than restating the rules; the scenario measures whether an
+// SDD run preserves the cited constraints.
+export function scaffoldSddSpecConstraintPlan(ctx: HelperContext): void {
+  runGit(['init', '-b', 'main'], ctx.workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
+  runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'package.json', SPEC_PACKAGE_JSON);
+  writeFixtureFile(ctx.workdir, 'README.md', SPEC_README);
+  writeFixtureFile(
+    ctx.workdir,
+    'docs/superpowers/specs/2026-06-12-priority-design.md',
+    SPEC_BODY,
+  );
+  writeFixtureFile(
+    ctx.workdir,
+    'docs/superpowers/plans/2026-06-12-priority.md',
+    SPEC_PLAN_BODY,
+  );
+
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'initial: priority formatting spec and plan'],
+    ctx.workdir,
+  );
 }

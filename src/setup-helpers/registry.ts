@@ -1,11 +1,11 @@
 // src/setup-helpers/registry.ts
 //
 // The dispatch table for `setup-helpers run <helper>`. Mirrors Python's
-// HELPER_REGISTRY (setup_helpers/__init__.py) but holds only the 36
+// HELPER_REGISTRY (setup_helpers/__init__.py) but holds only the 37
 // dispatchable (workdir-style) helpers; the two library-only entries
 // add_worktree/detach_head are intentionally absent (no scenario dispatches
 // them). KNOWN_HELPER_NAMES re-adds those two so `quorum check` validates
-// against the same 38-name set Python's registry exposes.
+// against the same 39-name set Python's registry exposes.
 
 import { createBaseRepo, recordHead } from './base.ts';
 import {
@@ -32,6 +32,7 @@ import {
   scaffoldSddGoFractalsElicited,
   scaffoldSddGoFractalsStripped,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddSpecConstraintPlan,
   scaffoldSddSvelteTodo,
   scaffoldSddSvelteTodoElicited,
   scaffoldSddYagniPlan,
@@ -121,6 +122,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   scaffold_sdd_svelte_todo: { fn: scaffoldSddSvelteTodo },
   scaffold_sdd_svelte_todo_elicited: { fn: scaffoldSddSvelteTodoElicited },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
+  scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
   scaffold_sdd_yagni_plan: { fn: scaffoldSddYagniPlan },
   setup_pressure_worktree_conditions: {
     fn: setupPressureWorktreeConditions,
@@ -132,7 +134,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   record_head: { fn: recordHeadHelper },
 };
 
-// The full Python HELPER_REGISTRY key set (38) — the 36 dispatchable plus the
+// The full Python HELPER_REGISTRY key set (39) — the 37 dispatchable plus the
 // two library-only names. This is the validation set `quorum check` uses, so it
 // must match Python's keys exactly (which include add_worktree/detach_head).
 export const KNOWN_HELPER_NAMES: ReadonlySet<string> = new Set<string>([

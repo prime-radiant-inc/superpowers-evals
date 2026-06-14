@@ -3,16 +3,16 @@ import { describe, expect, test } from 'bun:test';
 import { KNOWN_HELPER_NAMES, REGISTRY } from '../src/setup-helpers/registry.ts';
 
 describe('registry', () => {
-  test('has 36 dispatchable helpers', () => {
-    expect(Object.keys(REGISTRY).length).toBe(36);
+  test('has 37 dispatchable helpers', () => {
+    expect(Object.keys(REGISTRY).length).toBe(37);
   });
   test('library-only fns are not dispatchable', () => {
     expect(REGISTRY['add_worktree']).toBeUndefined();
     expect(REGISTRY['detach_head']).toBeUndefined();
   });
-  test('KNOWN_HELPER_NAMES has all 38 keys incl. the 2 library names', () => {
+  test('KNOWN_HELPER_NAMES has all 39 keys incl. the 2 library names', () => {
     // Validation parity with Python HELPER_REGISTRY (used by `quorum check`).
-    expect(KNOWN_HELPER_NAMES.size).toBe(38);
+    expect(KNOWN_HELPER_NAMES.size).toBe(39);
     expect(KNOWN_HELPER_NAMES.has('add_worktree')).toBe(true);
     expect(KNOWN_HELPER_NAMES.has('detach_head')).toBe(true);
     for (const k of Object.keys(REGISTRY)) {
