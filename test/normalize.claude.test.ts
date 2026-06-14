@@ -213,22 +213,7 @@ test('real 2.1.177 fixture with tool_use: noise rows ignored, tool_call and obse
   expect(traj.steps.length).toBe(2); // user + agent only
 });
 
-// Skipped on this branch: this exercises the per-agent `src/cli/normalize-claude.ts`
-// CLI shim, which was deliberately not grafted (capture invokes the normalizers
-// in-process, not via a CLI). Same rationale as the skipped normalize.unified-cli
-// test. The in-process normalizer behaviour is covered verbatim above.
-test.skip('CLI reads a session file and prints valid ATIF JSON', async () => {
-  const fixture = new URL(
-    './fixtures/claude-legacy-basic.jsonl',
-    import.meta.url,
-  ).pathname;
-  const cli = new URL('../src/cli/normalize-claude.ts', import.meta.url)
-    .pathname;
-  const proc = Bun.spawn(['bun', 'run', cli, fixture, '--version', '2.1.175']);
-  const out = await new Response(proc.stdout).text();
-  const code = await proc.exited;
-  expect(code).toBe(0);
-  const traj = JSON.parse(out);
-  expect(traj.schema_version).toBe('ATIF-v1.7');
-  expect(validateTrajectory(traj).ok).toBe(true);
-});
+// Note: the per-agent `src/cli/normalize-claude.ts` shim and the unified
+// `src/cli/normalize.ts` dispatcher are intentionally not grafted onto this
+// branch — capture invokes the normalizers in-process, not via a CLI — so their
+// CLI tests are omitted. The in-process normalizer behaviour is covered above.
