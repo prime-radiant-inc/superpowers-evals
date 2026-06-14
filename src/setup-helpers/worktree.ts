@@ -6,14 +6,22 @@
 // (linkGeminiExtension, installCodexSuperpowersPluginHooks) are added in
 // Tasks 12-13.
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
+import { envSnapshot, getEnv, setProcessEnv } from '../env.ts';
+import {
+  type CodexSessionStartHook,
+  queryCodexSessionStartHook,
+} from './codex-app-server.ts';
 import type { HelperContext } from './context.ts';
 import { writeFixtureFile } from './fs.ts';
 import { runGit, runGitAllowFail } from './git.ts';
@@ -165,6 +173,186 @@ function readGeminiExtensionName(
     return parsed.data.name;
   }
   return fallback;
+}
+
+// Dirs ignored in EVERY directory during the plugin copytree
+// (port of _ignore_codex_plugin_copy's base set).
+const CODEX_PLUGIN_IGNORE_ALWAYS: ReadonlySet<string> = new Set<string>([
+  '.git',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.ty',
+  '.venv',
+  '__pycache__',
+  'node_modules',
+]);
+
+// Port of _ignore_codex_plugin_copy: the always-ignored set, plus `results`
+// only when the directory being walked is itself named `evals` (at any depth).
+// Invoked per-directory with that directory's absolute path + its entry names,
+// mirroring shutil.copytree's ignore(src, names) contract.
+function ignoreCodexPluginCopy(src: string, names: string[]): Set<string> {
+  const ignored = new Set<string>();
+  for (const name of names) {
+    if (CODEX_PLUGIN_IGNORE_ALWAYS.has(name)) {
+      ignored.add(name);
+    }
+  }
+  if (basename(src) === 'evals') {
+    if (names.includes('results')) {
+      ignored.add('results');
+    }
+  }
+  return ignored;
+}
+
+// Recursive copy honoring a per-directory ignore predicate, mirroring
+// shutil.copytree(..., ignore=...). The predicate is consulted with each
+// source directory's absolute path and its entry names; matched names are
+// skipped entirely (their subtrees are never walked).
+function copyTreeWithIgnore(src: string, dest: string): void {
+  mkdirSync(dest, { recursive: true });
+  const entries = readdirSync(src, { withFileTypes: true });
+  const names = entries.map((e) => e.name);
+  const ignored = ignoreCodexPluginCopy(src, names);
+  for (const entry of entries) {
+    if (ignored.has(entry.name)) {
+      continue;
+    }
+    const srcPath = join(src, entry.name);
+    const destPath = join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyTreeWithIgnore(srcPath, destPath);
+    } else if (entry.isSymbolicLink()) {
+      // copytree copies symlinks as files by default (follow_symlinks=True);
+      // copyFileSync follows the link and copies the target's contents.
+      copyFileSync(srcPath, destPath);
+    } else {
+      copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+// Port of _toml_basic_string: escape `\` -> `\\` then `"` -> `\"`.
+function tomlBasicString(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+// Port of _write_codex_plugin_hooks_config: enable plugins/hooks and the
+// superpowers@debug plugin (verbatim TOML body).
+function writeCodexPluginHooksConfig(configPath: string): void {
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    `[features]
+plugins = true
+hooks = true
+plugin_hooks = true
+
+[plugins."superpowers@debug"]
+enabled = true
+`,
+    'utf8',
+  );
+}
+
+// Port of _append_codex_trusted_hook: append the trusted-hash block, with both
+// the key and hash TOML-escaped.
+function appendCodexTrustedHook(
+  configPath: string,
+  key: string,
+  currentHash: string,
+): void {
+  const existing = readFileSync(configPath, 'utf8');
+  writeFileSync(
+    configPath,
+    `${existing}\n[hooks.state."${tomlBasicString(key)}"]\ntrusted_hash = "${tomlBasicString(currentHash)}"\n`,
+    'utf8',
+  );
+}
+
+// Port of _login_codex_home_with_api_key: pipe OPENAI_API_KEY (trailing
+// newline) to `codex login --with-api-key` against the isolated CODEX_HOME.
+// Throws when the key is missing (OSError parity) or the login fails.
+function loginCodexHomeWithApiKey(
+  codexHome: string,
+  run: HelperContext['run'],
+): void {
+  const apiKey = getEnv('OPENAI_API_KEY');
+  if (apiKey === undefined || apiKey === '') {
+    throw new Error(
+      'OPENAI_API_KEY is required to log in the isolated Codex home',
+    );
+  }
+  const result = run.run('codex', ['login', '--with-api-key'], {
+    input: `${apiKey}\n`,
+    env: { ...envSnapshot(), CODEX_HOME: codexHome },
+  });
+  if ((result.status ?? 1) !== 0) {
+    throw new Error(`codex login --with-api-key failed: ${result.stderr}`);
+  }
+}
+
+// Injectable seam for the three non-hermetic codex interactions, so the gate
+// can exercise the copytree/config/escaping/DRILL_CODEX_HOME logic without a
+// real codex CLI or app-server.
+interface CodexDeps {
+  login(codexHome: string): void;
+  queryHook(a: {
+    codexHome: string;
+    workdir: string;
+  }): Promise<CodexSessionStartHook>;
+  setEnv(key: string, value: string): void;
+}
+
+// Port of worktree.py:install_codex_superpowers_plugin_hooks (drill-owned,
+// isolated-home branch — the TS dispatch CLI never fills codex_home). Build an
+// isolated Codex home next to the workdir, log it in, stage Superpowers as a
+// plugin, trust its SessionStart hook, and export DRILL_CODEX_HOME. The three
+// non-hermetic steps (login, app-server query, env write) route through CodexDeps
+// so the gate injects fakes.
+export async function installCodexSuperpowersPluginHooks(
+  ctx: HelperContext,
+  deps?: Partial<CodexDeps>,
+): Promise<void> {
+  if (ctx.superpowersRoot === undefined) {
+    throw new Error(
+      'superpowersRoot is required for install_codex_superpowers_plugin_hooks',
+    );
+  }
+  const superpowersRoot = ctx.superpowersRoot;
+  const d: CodexDeps = {
+    login: (home) => loginCodexHomeWithApiKey(home, ctx.run),
+    queryHook: queryCodexSessionStartHook,
+    setEnv: (k, v) => setProcessEnv(k, v),
+    ...deps,
+  };
+
+  const codexHome = siblingPath(ctx.workdir, 'codex-home');
+  if (existsSync(codexHome)) {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+  mkdirSync(codexHome, { recursive: true });
+  d.login(codexHome);
+
+  const pluginRoot = join(
+    codexHome,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  mkdirSync(dirname(pluginRoot), { recursive: true });
+  copyTreeWithIgnore(superpowersRoot, pluginRoot);
+
+  const configPath = join(codexHome, 'config.toml');
+  writeCodexPluginHooksConfig(configPath);
+  const hook = await d.queryHook({ codexHome, workdir: ctx.workdir });
+  appendCodexTrustedHook(configPath, hook.key, hook.currentHash);
+
+  d.setEnv('DRILL_CODEX_HOME', codexHome);
 }
 
 // Port of worktree.py:create_caller_consent_plan. Adds a committed

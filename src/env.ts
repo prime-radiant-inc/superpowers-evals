@@ -30,3 +30,12 @@ export function superpowersRoot(): string {
   if (!env.SUPERPOWERS_ROOT) throw new Error('SUPERPOWERS_ROOT is not set');
   return env.SUPERPOWERS_ROOT;
 }
+
+/**
+ * The single sanctioned process.env WRITE (§6.5). The drill-owned codex hook
+ * install exports DRILL_CODEX_HOME; route that write through here rather than
+ * touching process.env at the call site, keeping env.ts the only boundary.
+ */
+export function setProcessEnv(key: string, value: string): void {
+  process.env[key] = value;
+}
