@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { isBatchDir } from './render-batch.ts';
 
 // A target that cannot be resolved to a run dir is an expected failure of the
@@ -64,11 +64,20 @@ export function resolveTarget(
     return target;
   }
 
-  if (existsSync(join(target, 'verdict.json'))) {
-    return target;
+  // An existing non-batch directory must contain verdict.json; if it doesn't,
+  // fail here rather than falling through to prefix matching (parity with
+  // show.py rule 2 — a named dir is never reinterpreted as a prefix).
+  if (existsSync(target) && statSync(target).isDirectory()) {
+    if (existsSync(join(target, 'verdict.json'))) {
+      return target;
+    }
+    throw new ShowError(`no verdict.json in ${target}`);
   }
 
-  if (target.endsWith('verdict.json') && existsSync(target)) {
+  // A verdict.json file resolves to its parent — but only when the basename is
+  // exactly "verdict.json" (show.py rule 3 uses p.name == "verdict.json", so a
+  // file like "oldverdict.json" is rejected).
+  if (basename(target) === 'verdict.json' && existsSync(target)) {
     return dirname(target);
   }
 

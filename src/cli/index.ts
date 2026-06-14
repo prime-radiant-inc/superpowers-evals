@@ -1,5 +1,11 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
@@ -47,6 +53,16 @@ function basename(path: string): string {
   return last !== undefined && last !== '' ? last : path;
 }
 
+// Fail fast (exit 1) when a scenarios-root does not exist or is not a directory
+// — parity with click.Path(exists=True, file_okay=False) on list/check, where a
+// typo'd root is a hard error rather than a silent empty result.
+function requireScenariosRoot(root: string): void {
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    process.stderr.write(`error: --scenarios-root does not exist: ${root}\n`);
+    process.exit(1);
+  }
+}
+
 // Immediate child dir names of `root` that hold a story.md, sorted (mirrors
 // `quorum list` / the run-all scenario discovery — only dirs can hold the file).
 function scenarioNames(root: string): string[] {
@@ -56,6 +72,18 @@ function scenarioNames(root: string): string[] {
   return readdirSync(root)
     .filter((name) => existsSync(join(root, name, 'story.md')))
     .sort();
+}
+
+// Strict integer parse for a numeric option. Parity with click's IntRange,
+// which rejects any non-integer token: Number.parseInt truncates (`3.5` -> 3,
+// `8x` -> 8), so it can't gate the flag. Returns undefined for any token that
+// is not a pure decimal integer (optionally signed).
+function parseIntegerOption(value: string): number | undefined {
+  if (!/^[+-]?\d+$/.test(value)) {
+    return undefined;
+  }
+  const n = Number(value);
+  return Number.isInteger(n) ? n : undefined;
 }
 
 // Parse a CSV filter flag: undefined/empty -> undefined (no filter, = all);
@@ -167,7 +195,9 @@ program
   .command('list')
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((opts: { scenariosRoot: string }) => {
-    for (const name of scenarioNames(resolve(opts.scenariosRoot))) {
+    const root = resolve(opts.scenariosRoot);
+    requireScenariosRoot(root);
+    for (const name of scenarioNames(root)) {
       process.stdout.write(`${name}\n`);
     }
     process.exit(0);
@@ -202,6 +232,9 @@ program
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((names: string[], opts: { fix: boolean; scenariosRoot: string }) => {
     const root = opts.scenariosRoot;
+    // Parity with click.Path(exists=True) on --scenarios-root: a missing root is
+    // a hard error before any scenario work, not a silent empty run.
+    requireScenariosRoot(resolve(root));
     let targets: string[];
     if (names.length > 0) {
       // Each name resolves via the shared rule — a bare name or a path/prefixed
@@ -262,8 +295,8 @@ program
     // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
     // -> foo), symmetric with run/check.
     const scenarioFilter = csvList(opts.scenarios)?.map(scenarioName);
-    const jobs = Number.parseInt(opts.jobs, 10);
-    if (!Number.isInteger(jobs) || jobs < 1) {
+    const jobs = parseIntegerOption(opts.jobs);
+    if (jobs === undefined || jobs < 1) {
       process.stderr.write('error: --jobs must be an integer >= 1\n');
       process.exit(1);
     }
@@ -276,6 +309,18 @@ program
     ) {
       process.stderr.write('error: --tier must be sentinel|full|adhoc\n');
       process.exit(1);
+    }
+    // Validate the input roots exist at the CLI boundary (parity with Python's
+    // click.Path(exists=True, file_okay=False)): a typo'd root fails fast here
+    // rather than depending on runBatch's internal directory walk.
+    for (const [flag, dir] of [
+      ['--scenarios-root', opts.scenariosRoot],
+      ['--coding-agents-dir', opts.codingAgentsDir],
+    ] as const) {
+      if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+        process.stderr.write(`error: ${flag} does not exist: ${dir}\n`);
+        process.exit(1);
+      }
     }
     mkdirSync(resolve(opts.outRoot), { recursive: true });
     try {
@@ -387,6 +432,21 @@ program
       process.exit(0);
     }
 
+    // --json never schema-validates (parity with Python's json.loads ->
+    // json.dumps): a parseable-but-off-schema verdict is dumped verbatim, and
+    // unknown top-level keys survive. Only unparseable JSON exits 2.
+    if (opts.json) {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8'));
+      } catch {
+        process.stderr.write('malformed verdict.json\n');
+        process.exit(2);
+      }
+      process.stdout.write(`${JSON.stringify(raw, null, 2)}\n`);
+      process.exit(0);
+    }
+
     let verdict: FinalVerdict;
     try {
       verdict = FinalVerdictSchema.parse(
@@ -399,7 +459,7 @@ program
       process.exit(2);
     }
 
-    const mode: ShowMode = opts.json ? 'json' : opts.quiet ? 'quiet' : 'full';
+    const mode: ShowMode = opts.quiet ? 'quiet' : 'full';
     process.stdout.write(
       render(verdict, runDir, {
         color: opts.color && (process.stdout.isTTY ?? false),

@@ -124,6 +124,56 @@ test('show --json emits the raw verdict and never recolors', () => {
   expect(parsed.schema).toBe(1);
 });
 
+test('show --json dumps a schema-deviant but JSON-valid verdict verbatim (exit 0)', () => {
+  // Parity with Python: the --json path does json.loads + json.dumps; it never
+  // schema-validates, so a parseable-but-off-schema verdict is inspectable.
+  const root = mkdtempSync(join(tmpdir(), 'results-'));
+  const dir = join(root, 'scn-claude-20260612T010101Z-abcd');
+  mkdirSync(dir, { recursive: true });
+  const deviant = { final: 'maybe', note: 'no schema key here' };
+  writeFileSync(join(dir, 'verdict.json'), JSON.stringify(deviant));
+  const proc = spawnSync('bun', [CLI, 'show', dir, '--json'], {
+    encoding: 'utf8',
+  });
+  expect(proc.status).toBe(0);
+  const parsed = JSON.parse(proc.stdout) as Record<string, unknown>;
+  expect(parsed).toEqual(deviant);
+});
+
+test('show --json preserves unknown top-level keys (does not strip them)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'results-'));
+  const dir = join(root, 'scn-claude-20260612T010101Z-abcd');
+  mkdirSync(dir, { recursive: true });
+  const onDisk = {
+    schema: 1,
+    final: 'pass',
+    final_reason: 'because',
+    gauntlet: null,
+    checks: [],
+    error: null,
+    economics: null,
+    diagnostic_extra: 'must survive',
+  };
+  writeFileSync(join(dir, 'verdict.json'), JSON.stringify(onDisk));
+  const proc = spawnSync('bun', [CLI, 'show', dir, '--json'], {
+    encoding: 'utf8',
+  });
+  expect(proc.status).toBe(0);
+  const parsed = JSON.parse(proc.stdout) as Record<string, unknown>;
+  expect(parsed['diagnostic_extra']).toBe('must survive');
+});
+
+test('show --json still exits 2 on unparseable JSON', () => {
+  const root = mkdtempSync(join(tmpdir(), 'results-'));
+  const dir = join(root, 'scn-claude-20260612T010101Z-abcd');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'verdict.json'), '{ not valid json');
+  const proc = spawnSync('bun', [CLI, 'show', dir, '--json'], {
+    encoding: 'utf8',
+  });
+  expect(proc.status).toBe(2);
+});
+
 test('show full mode renders the run-dir, final, and reason header', () => {
   const { dir } = runDirWithVerdict('pass');
   const proc = spawnSync('bun', [CLI, 'show', dir, '--no-color'], {

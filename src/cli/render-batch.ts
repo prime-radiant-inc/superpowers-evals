@@ -72,12 +72,15 @@ const BatchHeaderSchema = z.object({
 });
 
 // One results.jsonl record. run_id may be null (no run produced); skipped is a
-// truthy directive marker. Both optional/nullable per the oracle's r.get().
+// truthy directive marker. The oracle (show.py:render_batch) reads skipped with
+// pure truthiness (`if r.get("skipped")`) and never type-checks it, so it is
+// accepted as unknown here — a non-string skipped degrades one cell rather than
+// aborting the whole matrix with a schema error.
 const BatchResultSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
   run_id: z.string().nullable().optional(),
-  skipped: z.string().optional(),
+  skipped: z.unknown().optional(),
 });
 
 // verdict.json is opaque here apart from .final; narrow only that field. An
@@ -167,7 +170,10 @@ export function renderBatch(args: RenderBatchArgs): string {
 
   for (const r of rows) {
     const key = cellKey(r.scenario, r.coding_agent);
-    if (r.skipped !== undefined && r.skipped !== '') {
+    // Truthiness gate, mirroring show.py's `if r.get("skipped")`: any truthy
+    // value (a directive string, true, ...) marks the cell skipped; falsy or
+    // absent does not.
+    if (r.skipped) {
       cellVerdicts.set(key, 'skipped');
       counts.skipped += 1;
       continue;

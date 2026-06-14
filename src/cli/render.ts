@@ -88,8 +88,12 @@ function label(text: string, color: boolean): string {
 
 // ---------- formatting helpers (quorum/show.py _fmt_*) -------------------
 
-function fmtMs(ms: number | null | undefined): string {
-  if (!ms) {
+// The _fmt_* helpers take `unknown` and degrade per-field on an off-type value
+// (parity with show.py, where _fmt_cost/_fmt_tokens/_fmt_bytes use isinstance
+// and return 'n/a'/'—' rather than crashing). This keeps a single off-type
+// economics field from dropping the whole pane.
+function fmtMs(ms: unknown): string {
+  if (typeof ms !== 'number' || ms === 0 || Number.isNaN(ms)) {
     return '—';
   }
   const s = Math.trunc(ms / 1000);
@@ -102,11 +106,11 @@ function fmtMs(ms: number | null | undefined): string {
     : `${m}m ${String(sec).padStart(2, '0')}s`;
 }
 
-function fmtCost(c: number | null | undefined): string {
+function fmtCost(c: unknown): string {
   return typeof c === 'number' ? `$${c.toFixed(2)}` : 'n/a';
 }
 
-function fmtTokens(n: number | null | undefined): string {
+function fmtTokens(n: unknown): string {
   if (typeof n !== 'number' || n === 0) {
     return '—';
   }
@@ -115,7 +119,7 @@ function fmtTokens(n: number | null | undefined): string {
     : `${(n / 1_000).toFixed(0)}K`;
 }
 
-function fmtBytes(n: number | null | undefined): string {
+function fmtBytes(n: unknown): string {
   if (typeof n !== 'number' || n === 0) {
     return '—';
   }
@@ -128,7 +132,7 @@ function fmtBytes(n: number | null | undefined): string {
   return `${Math.trunc(n)}B`;
 }
 
-function shortModel(modelId: string | null | undefined): string {
+function shortModel(modelId: unknown): string {
   if (typeof modelId !== 'string') {
     return '—';
   }
@@ -180,32 +184,34 @@ function wrapIndent(text: string, indent: number, width: number): string {
 
 // ---------- economics pane (quorum/show.py _format_economics_pane) -------
 
+// The economics view schemas are deliberately TOLERANT: every leaf field is
+// `unknown` so safeParse succeeds for any economics shape. The renderer mirrors
+// show.py, whose only gate is `if not econ` — off-type fields degrade per-cell
+// via the _fmt_* helpers rather than dropping the whole pane.
 const ObolViewSchema = z
   .object({
-    pricing_as_of: z.string().nullish(),
+    pricing_as_of: z.unknown(),
     approximations: z
-      .array(z.object({ kind: z.string().nullish() }).passthrough())
+      .array(z.object({ kind: z.unknown() }).passthrough())
       .nullish(),
   })
   .passthrough();
-const TokensViewSchema = z
-  .object({ total: z.number().nullish() })
-  .passthrough();
+const TokensViewSchema = z.object({ total: z.unknown() }).passthrough();
 const ModelViewSchema = z
   .object({
-    model: z.string().nullish(),
+    model: z.unknown(),
     tokens: TokensViewSchema.nullish(),
-    est_cost_usd: z.number().nullish(),
+    est_cost_usd: z.unknown(),
   })
   .passthrough();
 const BlockViewSchema = z
   .object({
-    duration_ms: z.number().nullish(),
+    duration_ms: z.unknown(),
     tokens: TokensViewSchema.nullish(),
-    est_cost_usd: z.number().nullish(),
-    model: z.string().nullish(),
+    est_cost_usd: z.unknown(),
+    model: z.unknown(),
     models: z.array(ModelViewSchema).nullish(),
-    tool_result_total_bytes: z.number().nullish(),
+    tool_result_total_bytes: z.unknown(),
     obol: ObolViewSchema.nullish(),
   })
   .passthrough();
@@ -213,8 +219,8 @@ const EconViewSchema = z
   .object({
     gauntlet: BlockViewSchema.nullish(),
     coding_agent: BlockViewSchema.nullish(),
-    total_est_cost_usd: z.number().nullish(),
-    partial: z.boolean().nullish(),
+    total_est_cost_usd: z.unknown(),
+    partial: z.unknown(),
   })
   .passthrough();
 type BlockView = z.infer<typeof BlockViewSchema>;
@@ -300,7 +306,7 @@ function formatEconomicsPane(
     for (const block of [coding, econ.gauntlet]) {
       for (const a of block?.obol?.approximations ?? []) {
         const kind = a.kind;
-        if (kind && !kinds.includes(kind)) {
+        if (typeof kind === 'string' && kind && !kinds.includes(kind)) {
           kinds.push(kind);
         }
       }
