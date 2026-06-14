@@ -1,8 +1,14 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { Glob } from 'bun';
 import { z } from 'zod';
 import { antigravityRateLimitReason } from '../agents/antigravity.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
@@ -25,11 +31,11 @@ import {
   loadAgentConfig,
   substituteEnv,
 } from '../contracts/agent-config.ts';
-import { GauntletResultSchema } from '../contracts/gauntlet.ts';
 import type {
   CheckRecord,
   FinalVerdict,
   GauntletLayer,
+  GauntletStatus,
   RunError,
   RunErrorStage,
 } from '../contracts/verdict.ts';
@@ -103,25 +109,76 @@ export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
   return argv;
 }
 
-// Newest gauntlet-agent results result.json under runDir, or undefined when
-// none exists. Sorted lexically (the run-id stamps order correctly) and the
-// last element checked (noUncheckedIndexedAccess).
-function discoverGauntletResult(runDir: string): string | undefined {
-  const base = join(runDir, 'gauntlet-agent', 'results');
-  if (!existsSync(base)) {
-    return undefined;
-  }
-  const hits = [
-    ...new Glob('*/result.json').scanSync({ cwd: base, absolute: true }),
-  ].sort();
-  return hits.length > 0 ? hits[hits.length - 1] : undefined;
+// The valid gauntlet statuses quorum acts on. Anything else (incl. 'errored',
+// schema drift) coerces to 'investigate' — parity with Python's _valid set,
+// which is exactly {pass, fail, investigate}.
+const VALID_GAUNTLET_STATUSES = new Set<GauntletStatus>([
+  'pass',
+  'fail',
+  'investigate',
+]);
+
+function coerceGauntletStatus(raw: unknown): GauntletStatus {
+  return typeof raw === 'string' &&
+    VALID_GAUNTLET_STATUSES.has(raw as GauntletStatus)
+    ? (raw as GauntletStatus)
+    : 'investigate';
 }
 
-// Discriminated outcome of an attempted gauntlet drive (6.1): a layer on
-// success, a staged error on failure. Exactly one of the two is present.
+// Build a GauntletLayer from the run dir's gauntlet-agent/results/<runId>/
+// result.json (parity with Python _build_gauntlet_layer_from_run_dir). Iterates
+// the run-id subdirs sorted-then-reversed and, on a missing/unreadable/malformed
+// result.json, skips to the next-newest candidate. run_id is the DIRECTORY NAME
+// (always concrete when a result exists), not result.json's optional runId
+// field. Status outside {pass,fail,investigate} coerces to investigate. Returns
+// null when no candidate yields a parseable result.
+export function gauntletLayerFromRunDir(runDir: string): GauntletLayer | null {
+  const root = join(runDir, 'gauntlet-agent', 'results');
+  if (!existsSync(root)) {
+    return null;
+  }
+  const dirs = readdirSync(root)
+    .filter((name) => {
+      try {
+        return statSync(join(root, name)).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+  for (const runId of dirs.reverse()) {
+    const resultPath = join(root, runId, 'result.json');
+    if (!existsSync(resultPath)) {
+      continue;
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(readFileSync(resultPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (typeof data !== 'object' || data === null) {
+      continue;
+    }
+    const record = data as Record<string, unknown>;
+    const summary = record['summary'];
+    const reasoning = record['reasoning'];
+    return {
+      status: coerceGauntletStatus(record['status']),
+      summary: typeof summary === 'string' ? summary : '',
+      reasoning: typeof reasoning === 'string' ? reasoning : '',
+      run_id: runId,
+    };
+  }
+  return null;
+}
+
+// Outcome of a gauntlet drive: always a layer, derived from the run dir's
+// result.json (synthesized 'investigate' when none parses). The exit code is
+// not surfaced as a verdict error — parity with Python invoke_gauntlet, which
+// discards it. A spawn-level failure rejects from spawnGauntlet instead.
 export interface InvokeGauntletResult {
-  readonly gauntlet: GauntletLayer | undefined;
-  readonly error: RunError | undefined;
+  readonly gauntlet: GauntletLayer;
 }
 
 export interface InvokeGauntletArgs extends GauntletArgvArgs {
@@ -179,42 +236,27 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   });
 }
 
-// Spawn the gauntlet CLI, then discover and parse its result.json. The
-// subprocess env is the sanctioned snapshot (6.5) overlaid with the launch cwd
-// and the agent's extra env.
+// Spawn the gauntlet CLI, then derive the gauntlet layer from its run dir. Parity
+// with Python invoke_gauntlet: the exit code is DISCARDED — status always comes
+// from result.json under gauntlet-agent/results/, falling back to a synthesized
+// 'investigate' layer when no parseable result exists (a gauntlet that exited
+// non-zero but wrote a valid result still yields that pass/fail; a non-zero exit
+// with no/garbled result becomes investigate -> composer indeterminate, not a
+// gauntlet-stage error). The subprocess env is the sanctioned snapshot (6.5)
+// overlaid with the launch cwd and the agent's extra env. A spawn-level failure
+// (gauntlet not on PATH) still rejects from spawnGauntlet and surfaces as an
+// 'unknown'-stage crash, matching the un-catchable case in Python.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
-  const proc = await spawnGauntlet(a);
-  const status = proc.status ?? 0;
-  if (status !== 0) {
-    return {
-      gauntlet: undefined,
-      error: {
-        stage: 'gauntlet',
-        message: `gauntlet exited ${proc.status}\n${proc.stderr}`,
-      },
-    };
-  }
-  const resultPath = discoverGauntletResult(a.runDir);
-  if (resultPath === undefined) {
-    return {
-      gauntlet: undefined,
-      error: { stage: 'gauntlet', message: 'no gauntlet result.json found' },
-    };
-  }
-  const result = GauntletResultSchema.parse(
-    JSON.parse(readFileSync(resultPath, 'utf8')),
-  );
-  return {
-    gauntlet: {
-      status: result.status,
-      summary: result.summary,
-      reasoning: result.reasoning,
-      run_id: result.runId ?? null,
-    },
-    error: undefined,
+  await spawnGauntlet(a);
+  const gauntlet = gauntletLayerFromRunDir(a.runDir) ?? {
+    status: 'investigate' as const,
+    summary: '',
+    reasoning: '',
+    run_id: null,
   };
+  return { gauntlet };
 }
 
 export interface RunScenarioArgs {
@@ -583,7 +625,7 @@ async function runInner(
   });
 
   writePhase(runDir, 'agent');
-  const { gauntlet, error } = await invokeGauntlet({
+  const { gauntlet } = await invokeGauntlet({
     storyPath,
     targetBinary: cfg.binary,
     runDir,
@@ -597,26 +639,17 @@ async function runInner(
   // indeterminate, not pass/fail (parity with quorum/runner.py, which maps it
   // ahead of the generic empty-trace path). spawnSync blocks, so we scan the
   // post-run agy.log rather than tailing it live; the early-teardown watcher is
-  // deferred. This precedes the gauntlet-error and capture handling.
+  // deferred. This precedes the capture handling.
   if (cfg.normalizer === 'antigravity') {
     const reason = antigravityRateLimitReason(configDir);
     if (reason !== null) {
       return compose({
-        gauntlet: gauntlet ?? null,
+        gauntlet,
         checks: [...pre.records],
         captureEmpty: false,
         error: { stage: 'gauntlet', message: reason },
       });
     }
-  }
-
-  if (error !== undefined) {
-    return compose({
-      gauntlet: gauntlet ?? null,
-      checks: [...pre.records],
-      captureEmpty: false,
-      error,
-    });
   }
 
   // capture tool calls + token usage from the new session logs. The
