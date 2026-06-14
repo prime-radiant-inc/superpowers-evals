@@ -42,7 +42,24 @@ const ToolCallEntrySchema = z.object({
 const MessageSchema = z.object({
   type: z.string().catch(''),
   toolCalls: z.array(z.unknown()).catch([]).default([]),
+  timestamp: z.unknown().optional(),
+  createdAt: z.unknown().optional(),
+  time: z.unknown().optional(),
 });
+
+// Per-message timestamp, stringified (Python: _gemini_timestamp). Falls back
+// through timestamp -> createdAt -> time; a string passes through, a number is
+// stringified, anything else (or absent) yields ''.
+function messageTimestamp(message: z.infer<typeof MessageSchema>): string {
+  const value = message.timestamp ?? message.createdAt ?? message.time;
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  return '';
+}
 
 // The whole-input JSON document may be an object with a `messages` array, a bare
 // object, or an array. We narrow each shape and collect only the object members.
@@ -99,21 +116,43 @@ function parseMessages(raw: string): unknown[] {
   return collectMessages(data);
 }
 
-// Normalize Gemini CLI session logs into `ToolCall[]`. Input is EITHER a single
+// Normalize a single gemini tool-call entry into a ToolCall (Python:
+// _normalize_gemini_tool_call). Skill canonicalization: gemini's activate_skill
+// carries the skill under `name` (or `skill`); clone args and mint a namespaced
+// `skill` arg so downstream matches Claude's shape. A skill that already carries
+// a ':' namespace is passed through verbatim.
+function normalizeToolCall(
+  name: string,
+  rawArgs: Record<string, unknown>,
+): ToolCall {
+  const canonical = canonicalName(name);
+  const args: Record<string, unknown> = { ...rawArgs };
+  if (canonical === 'Skill') {
+    const skill = args['skill'] ?? args['name'];
+    if (typeof skill === 'string' && skill) {
+      args['skill'] = skill.includes(':') ? skill : `superpowers:${skill}`;
+    }
+  }
+  return { tool: canonical, args, source: classifySource(canonical) };
+}
+
+// Normalize Gemini CLI session logs into `[timestamp, ToolCall][]`, carrying the
+// per-message timestamp so capture can interleave subagent + main logs in event
+// order (Python: normalize_gemini_logs_with_order). Input is EITHER a single
 // JSON document (optionally `{messages: [...]}`) OR JSONL. Only messages with
 // type === 'gemini' contribute; their toolCalls are deduped by id (a call whose
-// id was already seen is skipped; a call without an id is never skipped). The
-// canonical name comes from GEMINI_TOOL_MAP, args default to {}, and source is
-// the GLOBAL NATIVE_TOOLS classification of the canonical name. SOURCE OF TRUTH:
-// quorum/normalizers.py normalize_gemini_logs + GEMINI_TOOL_MAP.
-export function normalizeGeminiLogs(raw: string): ToolCall[] {
-  const out: ToolCall[] = [];
+// id was already seen is skipped; a call without an id is never skipped).
+export function normalizeGeminiLogsWithOrder(
+  raw: string,
+): [string, ToolCall][] {
+  const out: [string, ToolCall][] = [];
   const seen = new Set<unknown>();
   for (const rawMessage of parseMessages(raw)) {
     const message = MessageSchema.safeParse(rawMessage);
     if (!message.success || message.data.type !== 'gemini') {
       continue;
     }
+    const timestamp = messageTimestamp(message.data);
     for (const rawCall of message.data.toolCalls) {
       const call = ToolCallEntrySchema.safeParse(rawCall);
       if (!call.success) {
@@ -134,13 +173,15 @@ export function normalizeGeminiLogs(raw: string): ToolCall[] {
         }
         seen.add(id);
       }
-      const canonical = canonicalName(call.data.name);
-      out.push({
-        tool: canonical,
-        args: call.data.args,
-        source: classifySource(canonical),
-      });
+      out.push([timestamp, normalizeToolCall(call.data.name, call.data.args)]);
     }
   }
   return out;
+}
+
+// Normalize Gemini CLI session logs into `ToolCall[]` (drops the per-message
+// timestamps). SOURCE OF TRUTH: quorum/normalizers.py normalize_gemini_logs +
+// GEMINI_TOOL_MAP.
+export function normalizeGeminiLogs(raw: string): ToolCall[] {
+  return normalizeGeminiLogsWithOrder(raw).map(([, row]) => row);
 }

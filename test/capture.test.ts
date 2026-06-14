@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -55,6 +55,68 @@ test('captureToolCalls writes coding-agent-tool-calls.jsonl from claude logs', (
     args: { command: 'ls' },
     source: 'shell',
   });
+});
+
+test('captureToolCalls orders gemini rows by message timestamp, not path', () => {
+  // Two gemini session logs: the path-earlier subagent log carries a LATER
+  // message timestamp than the path-later main log. Output must be in timestamp
+  // order (main's Skill first, subagent's Edit second), not path order. Mirrors
+  // quorum/test_capture.py::test_gemini_capture_orders_rows_by_message_timestamp.
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/chats/**/*.jsonl');
+  // Path-earlier (sorts first by relative path): later timestamp.
+  const subagentDir = join(logDir, 'workdir', 'chats', 'abc');
+  mkdirSync(subagentDir, { recursive: true });
+  writeFileSync(
+    join(subagentDir, 'subagent.jsonl'),
+    `${JSON.stringify({ kind: 'subagent' })}\n${JSON.stringify({
+      type: 'gemini',
+      timestamp: '2026-06-12T00:20:31.453Z',
+      toolCalls: [
+        { id: 'edit-1', name: 'replace', args: { file_path: 'app.js' } },
+      ],
+    })}\n`,
+  );
+  // Path-later: earlier timestamp.
+  const mainDir = join(logDir, 'workdir', 'chats');
+  mkdirSync(mainDir, { recursive: true });
+  writeFileSync(
+    join(mainDir, 'session-20260612.jsonl'),
+    `${JSON.stringify({ kind: 'main' })}\n${JSON.stringify({
+      type: 'gemini',
+      timestamp: '2026-06-12T00:19:23.695Z',
+      toolCalls: [
+        {
+          id: 'skill-1',
+          name: 'activate_skill',
+          args: { name: 'writing-plans' },
+        },
+      ],
+    })}\n`,
+  );
+
+  const res = captureToolCalls({
+    logDir,
+    logGlob: '**/chats/**/*.jsonl',
+    snapshot: snap,
+    normalizer: 'gemini',
+    runDir,
+    launchCwd: runDir,
+  });
+
+  const rows = readFileSync(
+    join(runDir, 'coding-agent-tool-calls.jsonl'),
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map(
+      (line) => JSON.parse(line) as { tool: string; args: { skill?: string } },
+    );
+  expect(rows.map((r) => r.tool)).toEqual(['Skill', 'Edit']);
+  expect(rows[0]?.args.skill).toBe('superpowers:writing-plans');
+  expect(res.rowCount).toBe(2);
 });
 
 test('captureToolCalls writes an empty file when there are no new logs', () => {

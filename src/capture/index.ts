@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { Glob } from 'bun';
+import { normalizeGeminiLogsWithOrder } from '../normalizers/gemini.ts';
 import { NORMALIZERS } from '../normalizers/index.ts';
 import { estimateSessionLogs } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
@@ -63,6 +64,51 @@ export interface CaptureResult {
   readonly attempts: number;
 }
 
+// A gemini row tagged with its sort key (Python: the (not bool(timestamp),
+// timestamp, source_index, row_index) tuple). `untimestamped` sinks rows with no
+// timestamp to the end; ties break by source-log order then within-log order.
+interface GeminiOrderedRow {
+  readonly untimestamped: boolean;
+  readonly timestamp: string;
+  readonly sourceIndex: number;
+  readonly rowIndex: number;
+  readonly line: string;
+}
+
+// Normalize gemini session logs across all new files and serialize them in
+// per-message timestamp order rather than path order (Python: the
+// normalizer == "gemini" branch in capture_tool_calls). Subagent and main logs
+// interleave by the timestamp each toolCall's message carries.
+function geminiOrderedLines(newLogs: readonly string[]): string[] {
+  const rows: GeminiOrderedRow[] = [];
+  newLogs.forEach((log, sourceIndex) => {
+    normalizeGeminiLogsWithOrder(readFileSync(log, 'utf8')).forEach(
+      ([timestamp, rec], rowIndex) => {
+        rows.push({
+          untimestamped: timestamp === '',
+          timestamp,
+          sourceIndex,
+          rowIndex,
+          line: JSON.stringify(rec),
+        });
+      },
+    );
+  });
+  rows.sort((a, b) => {
+    if (a.untimestamped !== b.untimestamped) {
+      return a.untimestamped ? 1 : -1;
+    }
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.sourceIndex !== b.sourceIndex) {
+      return a.sourceIndex - b.sourceIndex;
+    }
+    return a.rowIndex - b.rowIndex;
+  });
+  return rows.map((row) => row.line);
+}
+
 /** Normalize each new session log into tool calls and write
  *  coding-agent-tool-calls.jsonl. The file is always written, even when empty,
  *  so downstream consumers can assume it exists. */
@@ -73,12 +119,12 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
   if (fn === undefined) {
     throw new Error(`unknown normalizer: ${normalizer}`);
   }
-  const lines: string[] = [];
-  for (const log of newLogs) {
-    for (const rec of fn(readFileSync(log, 'utf8'))) {
-      lines.push(JSON.stringify(rec));
-    }
-  }
+  const lines: string[] =
+    normalizer === 'gemini'
+      ? geminiOrderedLines(newLogs)
+      : newLogs.flatMap((log) =>
+          fn(readFileSync(log, 'utf8')).map((rec) => JSON.stringify(rec)),
+        );
   const outPath = join(runDir, 'coding-agent-tool-calls.jsonl');
   writeFileSync(outPath, lines.length > 0 ? `${lines.join('\n')}\n` : '');
   return {
