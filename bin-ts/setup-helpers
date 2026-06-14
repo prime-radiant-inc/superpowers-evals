@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Resolve setup-helpers to the TS implementation. Repo root is one dir up
+# from bin-ts/. `exec` so signals propagate.
+here="$(cd "$(dirname "$0")/.." && pwd)"
+exec bun run "$here/src/setup-helpers/cli.ts" "$@"

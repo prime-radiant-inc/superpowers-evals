@@ -100,7 +100,8 @@
         "test/runner-e2e.test.ts",
         "test/cli-run.test.ts",
         "test/cli-run-sigint.test.ts",
-        "test/agent-*.test.ts"
+        "test/agent-*.test.ts",
+        "test/setup-helpers-shim.test.ts"
       ],
       "linter": {
         "rules": {

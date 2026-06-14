@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { envSnapshot } from './env.ts';
+import { envSnapshot, getEnv } from './env.ts';
+import { repoRoot } from './paths.ts';
 
 /** Raised when a scenario's `setup.sh` exits non-zero; carries its output. */
 export class SetupError extends Error {}
@@ -19,7 +20,12 @@ export function runSetup(
   const script = join(scenarioDir, 'setup.sh');
   const proc = spawnSync(script, [], {
     cwd: workdir,
-    env: { ...envSnapshot(), QUORUM_WORKDIR: workdir, ...envExtra },
+    env: {
+      ...envSnapshot(),
+      PATH: `${join(repoRoot(), 'bin-ts')}:${getEnv('PATH') ?? ''}`,
+      QUORUM_WORKDIR: workdir,
+      ...envExtra,
+    },
     encoding: 'utf8',
   });
   if ((proc.status ?? 0) !== 0) {
