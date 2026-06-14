@@ -78,6 +78,27 @@ function must(
   }
 }
 
+// Python's no-uv branch builds the venv with `sys.executable` — a SPECIFIC,
+// present interpreter resolved to an absolute path, version-consistent with the
+// uv branch's `--python 3.12`. The TS harness runs under Bun, not Python, so
+// there is no "running interpreter" to mirror; instead resolve the same kind of
+// interpreter Python guarantees: an absolute path to a present python, preferring
+// 3.12 (the uv-branch standard) then 3.x, rather than a bare PATH `python3` that
+// may be a different interpreter or absent (which would defer an opaque ENOENT).
+const PYTHON_CANDIDATES = ['python3.12', 'python3', 'python'] as const;
+
+function resolvePython(): string {
+  for (const candidate of PYTHON_CANDIDATES) {
+    const resolved = Bun.which(candidate);
+    if (resolved !== null) {
+      return resolved;
+    }
+  }
+  throw new Error(
+    `no python interpreter found on PATH (tried ${PYTHON_CANDIDATES.join(', ')})`,
+  );
+}
+
 // Port of setup_helpers/base.py:provision_venv. Creates <workdir>/.venv with
 // pytest + the workdir package installed editable. Uses uv when available
 // (fast), else stdlib venv + pip. Routed through CommandRunner for testability.
@@ -105,7 +126,7 @@ export function provisionVenv(
     );
     return;
   }
-  const python = opts.python ?? 'python3';
+  const python = opts.python ?? resolvePython();
   must(
     run.run(python, ['-m', 'venv', venv], { cwd: workdir }),
     'python -m venv',

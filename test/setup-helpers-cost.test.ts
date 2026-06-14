@@ -98,4 +98,26 @@ describe('cost fixtures', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Python parity (L-helper-missing-workdir-mkdir): every create-from-scratch
+  // helper calls workdir.mkdir(parents=True, exist_ok=True) as its first action,
+  // so it is self-sufficient when $QUORUM_WORKDIR does not yet exist.
+  test('each cost helper creates the workdir when it does not exist', () => {
+    const base = tmp();
+    try {
+      const cases: Array<[string, (ctx: never) => void]> = [
+        ['checkbox', createCostCheckboxPage],
+        ['clean', createCostCleanRepo],
+        ['large', createCostLargeFiles],
+        ['trivial', createCostTrivialPlan],
+      ];
+      for (const [name, helper] of cases) {
+        const missing = join(base, name, 'nested', 'workdir');
+        helper({ workdir: missing } as never);
+        expect(runGit(['rev-parse', 'HEAD'], missing).trim().length).toBe(40);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

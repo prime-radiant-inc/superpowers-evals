@@ -73,6 +73,26 @@ describe('spec fixtures', () => {
     }
   });
 
+  // Python parity (L-helper-missing-workdir-mkdir): the scratch-building spec
+  // helpers must create $QUORUM_WORKDIR before `git init` when it is absent.
+  test('each scratch spec helper creates the workdir when it does not exist', () => {
+    const base = tmp();
+    try {
+      const cases: Array<[string, (ctx: never) => void]> = [
+        ['blind-spot', createSpecWritingBlindSpot],
+        ['wrong-component', createSpecTargetsWrongComponent],
+        ['checkpoint', createSpecTargetsWrongComponentWithCheckpoint],
+      ];
+      for (const [name, helper] of cases) {
+        const missing = join(base, name, 'nested', 'workdir');
+        helper({ workdir: missing } as never);
+        expect(runGit(['rev-parse', 'HEAD'], missing).trim().length).toBe(40);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('addFlawedSpecForReview layers one commit onto an existing repo', () => {
     const dir = tmp();
     try {

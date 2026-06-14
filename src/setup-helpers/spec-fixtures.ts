@@ -4,7 +4,7 @@
 // and spec_review_planted_flaws.py. The shared Pulse Dashboard source constants
 // live in pulse-dashboard.ts so the dashboard-building helpers cannot drift.
 import type { HelperContext } from './context.ts';
-import { writeFixtureFile } from './fs.ts';
+import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 import {
   ADMIN_PANEL_TEST_TSX,
@@ -128,6 +128,7 @@ Tests will be written to cover the main functionality.
 // create_spec_writing_blind_spot and create_spec_targets_wrong_component. Both
 // Python helpers emit byte-identical commits 1-4; centralizing prevents drift.
 function buildDashboard(workdir: string): void {
+  ensureWorkdir(workdir);
   runGit(['init', '-b', 'main'], workdir);
   runGit(['config', 'user.email', 'drill@test.local'], workdir);
   runGit(['config', 'user.name', 'Drill Test'], workdir);

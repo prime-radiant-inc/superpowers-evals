@@ -5,7 +5,7 @@
 // self-contained Express skeleton (does its own git init). Embedded source
 // constants are ported verbatim from the corresponding Python module.
 import type { HelperContext } from './context.ts';
-import { writeFixtureFile } from './fs.ts';
+import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
 // Verbatim from triggering_executing_plans.py:PLAN_BODY.
@@ -81,6 +81,7 @@ const PACKAGE_JSON = `{
 // Port of triggering_writing_plans.py:create_writing_plans_skeleton. A
 // self-contained Express skeleton (own git init + config); `git add -A`.
 export function createWritingPlansSkeleton(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);

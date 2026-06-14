@@ -70,4 +70,53 @@ describe('installCodexSuperpowersPluginHooks', () => {
       rmSync(sp, { recursive: true, force: true });
     }
   });
+
+  // Python parity (L-x-codex-install-quorum-branch-unported): the codex_home-given
+  // branch (worktree.py:108-145) installs into the caller's pre-existing,
+  // already-logged-in CODEX_HOME and SKIPS the isolated-home build, the codex
+  // login, and the DRILL_CODEX_HOME export.
+  test('codexHome-given branch installs into the given home, skips login/sibling-build/export', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'sh-cx2-'));
+    const sp = fakeSuperpowers();
+    const wd = join(parent, 'wd');
+    mkdirSync(wd, { recursive: true });
+    // Caller-owned, pre-existing, already-logged-in CODEX_HOME.
+    const givenHome = join(parent, 'run-codex-home');
+    mkdirSync(givenHome, { recursive: true });
+    let loginCalls = 0;
+    const captured: Record<string, string> = {};
+    try {
+      await installCodexSuperpowersPluginHooks(
+        { workdir: wd, superpowersRoot: sp, run: new CodexRunner() } as never,
+        {
+          login: () => {
+            loginCalls += 1;
+          },
+          queryHook: async () => ({ key: 'k', currentHash: 'h' }),
+          setEnv: (k, v) => {
+            captured[k] = v;
+          },
+        },
+        { codexHome: givenHome },
+      );
+      // Installed into the GIVEN home, not a sibling.
+      const pluginRoot = join(
+        givenHome,
+        'plugins/cache/debug/superpowers/local',
+      );
+      expect(existsSync(join(pluginRoot, 'skills/x.md'))).toBe(true);
+      const config = await Bun.file(join(givenHome, 'config.toml')).text();
+      expect(config).toContain('plugin_hooks = true');
+      expect(config).toContain('trusted_hash = "h"');
+      // No sibling isolated-home built.
+      const sibling = join(dirname(wd), `${basename(wd)}-codex-home`);
+      expect(existsSync(sibling)).toBe(false);
+      // Login and DRILL_CODEX_HOME export both skipped.
+      expect(loginCalls).toBe(0);
+      expect(captured['DRILL_CODEX_HOME']).toBeUndefined();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+      rmSync(sp, { recursive: true, force: true });
+    }
+  });
 });

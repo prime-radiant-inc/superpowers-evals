@@ -13,3 +13,10 @@ export function writeFixtureFile(
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, 'utf8');
 }
+
+// Port of the `workdir.mkdir(parents=True, exist_ok=True)` first action every
+// Python create-from-scratch helper runs immediately before `git init -b main`,
+// so each helper is self-sufficient when $QUORUM_WORKDIR does not yet exist.
+export function ensureWorkdir(workdir: string): void {
+  mkdirSync(workdir, { recursive: true });
+}

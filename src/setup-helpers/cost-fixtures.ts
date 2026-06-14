@@ -5,7 +5,7 @@
 // whole point of that fixture (it is the token-bloat measurement), so the
 // literal ${id} stays escaped and the comment/throw shape is exact.
 import type { HelperContext } from './context.ts';
-import { writeFixtureFile } from './fs.ts';
+import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
 // Verbatim from cost_checkbox_page.py:PAGE.
@@ -25,6 +25,7 @@ const PAGE = `<!doctype html>
 // Port of cost_checkbox_page.py:create_cost_checkbox_page. Single-page fixture
 // with an empty <main>; scoped `git add index.html`.
 export function createCostCheckboxPage(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -44,6 +45,7 @@ This is intentionally a sketch - there's no implementation yet.
 // Port of cost_clean_repo.py:create_cost_clean_repo. Clean repo with a vague
 // README; scoped `git add README.md`.
 export function createCostCleanRepo(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -81,6 +83,7 @@ That's the entire change.
 // Port of cost_trivial_plan.py:create_cost_trivial_plan. App stub + dated plan;
 // `git add -A`.
 export function createCostTrivialPlan(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -148,6 +151,7 @@ function renderModule(module: string, entity: string): string {
 // Port of cost_large_files.py:create_cost_large_files. Writes the 5 synthetic
 // CRUD modules to src/<module>.js; `git add -A`.
 export function createCostLargeFiles(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);

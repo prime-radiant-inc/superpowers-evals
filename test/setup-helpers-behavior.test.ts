@@ -111,4 +111,25 @@ describe('behavior fixtures', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Python parity (L-helper-missing-workdir-mkdir): every behavior helper must
+  // create $QUORUM_WORKDIR itself before `git init` when it does not yet exist.
+  test('each behavior helper creates the workdir when it does not exist', () => {
+    const base = tmp();
+    try {
+      const cases: Array<[string, (c: ReturnType<typeof ctx>) => void]> = [
+        ['claim', createClaimWithoutVerification],
+        ['planted', createCodeReviewPlantedBugs],
+        ['phantom', createPhantomCompletion],
+        ['pushback', createReviewPushback],
+      ];
+      for (const [name, helper] of cases) {
+        const missing = join(base, name, 'nested', 'workdir');
+        helper(ctx(missing, new FakeRunner()));
+        expect(runGit(['rev-parse', 'HEAD'], missing).trim().length).toBe(40);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

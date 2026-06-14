@@ -112,6 +112,29 @@ describe('sdd fixtures', () => {
     }
   });
 
+  // Python parity (L-helper-missing-workdir-mkdir): the scratch-building sdd
+  // helpers (fixture-reading scaffold + embedded-body) must create
+  // $QUORUM_WORKDIR before `git init` when it is absent.
+  test('each scratch sdd helper creates the workdir when it does not exist', () => {
+    const base = tmp();
+    try {
+      const cases: Array<[string, (ctx: never) => void]> = [
+        ['go-fractals', scaffoldSddGoFractals],
+        ['broken', scaffoldSddBrokenPlan],
+        ['quality', scaffoldSddQualityDefectPlan],
+        ['yagni', scaffoldSddYagniPlan],
+        ['spec-constraint', scaffoldSddSpecConstraintPlan],
+      ];
+      for (const [name, helper] of cases) {
+        const missing = join(base, name, 'nested', 'workdir');
+        helper({ workdir: missing } as never);
+        expect(runGit(['rev-parse', 'HEAD'], missing).trim().length).toBe(40);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('addSddAuthPlan layers onto an existing repo (no init)', () => {
     const dir = tmp();
     try {

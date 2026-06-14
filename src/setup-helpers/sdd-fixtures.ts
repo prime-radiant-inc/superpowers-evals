@@ -11,7 +11,7 @@ import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repoRoot } from '../paths.ts';
 import type { HelperContext } from './context.ts';
-import { writeFixtureFile } from './fs.ts';
+import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
 const FIXTURES_DIR = join(repoRoot(), 'fixtures');
@@ -21,6 +21,7 @@ const FIXTURES_DIR = join(repoRoot(), 'fixtures');
 // Mirrors sdd_real_projects.py:_scaffold_from_fixture (git add -A, single
 // "initial: design + plan" commit).
 function scaffoldFromFixture(workdir: string, fixtureName: string): void {
+  ensureWorkdir(workdir);
   runGit(['init', '-b', 'main'], workdir);
   runGit(['config', 'user.email', 'drill@test.local'], workdir);
   runGit(['config', 'user.name', 'Drill Test'], workdir);
@@ -227,6 +228,7 @@ export function formatAdminReport(admin) {
 // whose 2-task plan's Task 2 (30-char banner) contradicts the Global
 // Constraints (40-char banner); the scenario measures escalation.
 export function scaffoldSddBrokenPlan(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -332,6 +334,7 @@ export function formatAdminReport(admin) {
 
 // Port of sdd_quality_defect_plan.py:scaffold_sdd_quality_defect_plan.
 export function scaffoldSddQualityDefectPlan(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -424,6 +427,7 @@ export function multiply(a, b) {
 // Port of sdd_yagni_plan.py:scaffold_sdd_yagni_plan. Inits a Node project whose
 // Task 2 explicitly forbids over-implementation (the YAGNI check).
 export function scaffoldSddYagniPlan(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -543,6 +547,7 @@ Implement the ticket summary function from the spec.
 // marker) rather than restating the rules; the scenario measures whether an
 // SDD run preserves the cited constraints.
 export function scaffoldSddSpecConstraintPlan(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);

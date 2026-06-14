@@ -30,6 +30,19 @@ describe('triggering fixtures', () => {
     }
   });
 
+  // Python parity (L-helper-missing-workdir-mkdir): the scratch-building
+  // skeleton helper must create $QUORUM_WORKDIR before `git init` when absent.
+  test('createWritingPlansSkeleton creates the workdir when it does not exist', () => {
+    const base = tmp();
+    try {
+      const missing = join(base, 'nested', 'workdir');
+      createWritingPlansSkeleton({ workdir: missing } as never);
+      expect(runGit(['rev-parse', 'HEAD'], missing).trim().length).toBe(40);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('addStubExecutingPlan: layers a plan commit onto an existing repo', () => {
     const dir = tmp();
     try {

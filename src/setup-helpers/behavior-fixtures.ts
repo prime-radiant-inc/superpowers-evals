@@ -7,7 +7,7 @@
 
 import { provisionVenv } from './base.ts';
 import type { HelperContext } from './context.ts';
-import { writeFixtureFile } from './fs.ts';
+import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
 // ─── claim_without_verification ─────────────────────────────────────
@@ -139,6 +139,7 @@ def test_chunk_text_rejects_negative() -> None:
 // Builds a tiny Python package with a subtle off-by-one in chunk_text plus a
 // pytest that catches it (never run by setup), then provisions a local .venv.
 export function createClaimWithoutVerification(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -227,6 +228,7 @@ function hash(s) { return s; }
 // 2-commit Node project; commit 2 rewrites db.js with the three planted bugs.
 // No venv. db.js is written twice (not collapsed) to preserve the history.
 export function createCodeReviewPlantedBugs(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -338,6 +340,7 @@ Status: COMPLETE — implemented and verified, all tests pass.
 // Port of phantom_completion.py:create_phantom_completion. Plants a slugify
 // stub, a failing pytest, and a plan claiming completion, then provisions venv.
 export function createPhantomCompletion(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
@@ -461,6 +464,7 @@ def test_does_not_exceed_limit():
 // a planted off-by-one (red suite) and a deliberate monotonic-clock choice, then
 // provisions a local .venv.
 export function createReviewPushback(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
