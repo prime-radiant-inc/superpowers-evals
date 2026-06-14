@@ -22,9 +22,15 @@ messages.
 A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 **Coding-Agent** (subject). Separate models, logs, and token costs.
 
+## Requirements
+
+- **Python**: 3.11+, managed with uv
+- **bun**: ≥1.3 — required for ATIF capture (shells to the TS normalizers) and
+  `bin/check-transcript`. Install: https://bun.sh · After install: `cd ts && bun install`
+
 ## Commands
 
-- **install**: `uv sync --extra dev`
+- **install**: `uv sync --extra dev && cd ts && bun install`
 - **test**: `uv run pytest`
 - **test single**: `uv run pytest tests/quorum/test_runner.py -x -q`
 - **lint**: `uv run ruff check`

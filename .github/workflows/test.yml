@@ -25,6 +25,11 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
 
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install uv
         working-directory: ${{ github.workspace }}/repo
         run: |
@@ -35,6 +40,18 @@ jobs:
       - name: Sync dependencies
         working-directory: ${{ github.workspace }}/repo
         run: uv sync --extra dev --locked
+
+      - name: TS install
+        working-directory: ${{ github.workspace }}/repo/ts
+        run: bun install --frozen-lockfile
+
+      - name: TS test
+        working-directory: ${{ github.workspace }}/repo/ts
+        run: bun test
+
+      - name: TS typecheck
+        working-directory: ${{ github.workspace }}/repo/ts
+        run: bun run typecheck
 
       - name: Ruff
         working-directory: ${{ github.workspace }}/repo
