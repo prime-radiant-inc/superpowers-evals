@@ -1,111 +1,73 @@
-# ATIF port — status & remaining work (handoff)
+# ATIF port — status (handoff)
 
-Branch: `feat/atif-port` (pushed). As of 2026-06-13, built autonomously while
-Jesse was out. **Nothing live was cut over** — the Python harness + shell check
-tools run unchanged; all new code is additive under `ts/` (isolated, tested).
+Branch: `feat/atif-port`. The cutover is **complete on this branch**: capture
+now produces the ATIF `trajectory.json` and checks run via the
+`check-transcript` CLI. The legacy flat tool-call JSONL layer, the Python
+normalizers, and the legacy shell check tools are removed.
 
-## DONE (built, tested, reviewed)
-
-A complete, self-contained ATIF v1.7 pipeline in `ts/` (bun, zero runtime deps),
-**115 tests pass, `tsc --noEmit` clean**, two-stage reviewed (final review by
-opus: "ready to continue", high fidelity to the shell originals):
+## DONE — the ATIF pipeline (`ts/`, bun, zero runtime deps)
 
 - `ts/src/atif/types.ts` — ATIF v1.7 interfaces, pinned `schema_version`.
 - `ts/src/atif/validate.ts` — structural validator (schema_version, sequential
   step_id, agent-only-field scoping, same-step `source_call_id`, dup tool ids).
-- `ts/src/normalize/claude.ts` — Claude Code session log → ATIF. **Validated
-  against a REAL claude 2.1.177 transcript** (handles string- and array-form
-  message content; ignores `queue-operation`/`attachment`/`ai-title` rows).
+- `ts/src/normalize/*.ts` — one normalizer per agent, all eight TS-backed:
+  `claude`, `codex`, `gemini`, `copilot`, `opencode`, `pi`, `kimi`,
+  `antigravity`. The `claude` normalizer was validated against a real claude
+  2.1.177 transcript. claude and gemini steps carry the source `timestamp`
+  where present (the multi-log merge orders by it — see below).
+- `ts/src/cli/normalize.ts` — unified dispatcher: `bun run normalize.ts
+  <normalizer> <session-log> [--version v]`.
 - `ts/src/atif/project.ts` — `flattenToolCalls` → ordered `{tool,args}[]`.
-- `ts/src/detect/{skill,implementation}.ts` — faithful TS ports of
-  `bin/_skill_predicate.jq` and `bin/_implementation_path.jq`.
-- `ts/src/check/{record,transcript,verbs}.ts` + `ts/src/cli/check-transcript.ts`
-  — the `check-transcript <verb>` CLI. Record output is byte-compatible with
-  `bin/_record` (`{check,args,negated,passed,detail}`). The C1 empty-capture
-  guard is preserved (negative assertions FAIL on empty/missing transcript).
-- **End-to-end proven**: real claude transcript → `normalize-claude` → ATIF →
-  `check-transcript` verbs produce correct pass/fail records, and a missing
-  transcript correctly fails negative assertions.
+- `ts/src/detect/{skill,implementation}.ts` — skill/implementation predicates.
+- `ts/src/check/*` + `ts/src/cli/check-transcript.ts` — the `check-transcript
+  <verb>` CLI. Record output is `{check,args,negated,passed,detail}`. The
+  empty-capture guard is preserved (negative assertions FAIL on
+  empty/missing transcript).
 
-**Verbs ported (12):** tool-called, tool-not-called, tool-count, tool-before,
+**Verbs (13):** tool-called, tool-not-called, tool-count, tool-before,
 skill-called, skill-not-called, skill-before-tool, skill-before-implementation-tool,
 implementation-tool-not-called, investigated, worktree-created,
-tool-match-before-tool-match.
+tool-match-before-tool-match, tool-arg-match.
 
-## Post-review hardening (roborev + adversarial /par review)
+## Cutover (DONE on this branch)
 
-Two adversarial reviewers + a roborev branch review found a real **Critical** and
-several lesser issues — all now fixed (TDD), suite at **133 pass**, typecheck
-clean via a declared `typescript` dep:
+- **Capture emits ATIF.** `quorum/capture.py` diffs the run's new session
+  logs, normalizes them via the bun CLI (`quorum/atif.py`), and writes
+  `run_dir/trajectory.json`; checks read it via `QUORUM_TRANSCRIPT_PATH`.
+  `row_count` is the trajectory's tool_call count; a zero-row/failed/empty
+  capture removes any stale `trajectory.json` so loaders fail closed and the
+  empty-capture retry (PRI-2081) still fires.
+- **Multi-log merge.** A run can produce more than one session log (gemini
+  main + subagent chats; any agent's subagent runs each write their own file).
+  Capture normalizes EVERY new log and merges their steps into ONE trajectory,
+  ordered by step `timestamp` (ISO-8601) with a stable fallback to (file order,
+  then in-file order) for steps without a timestamp; `step_id` is renumbered
+  sequentially from 1. Observations still reference tool_call_ids in their own
+  step, so `validateTrajectory` stays satisfied. (Emitting from only the first
+  log silently dropped every tool call in the others — a data-loss regression
+  that this merge fixes.)
+- **Python normalizers removed.** `quorum/normalizers.py` is gone; the
+  log-location / cwd-attribution helpers live in `quorum/log_filters.py`.
+- **Flat-JSONL layer removed.** Capture no longer writes
+  `coding-agent-tool-calls.jsonl`; `QUORUM_TOOL_CALLS_PATH` is no longer set.
+- **Legacy shell check tools deleted**; scenarios use `check-transcript`.
+- **Composer trace-check guard** (`TRACE_PRIMITIVES`) lists every verb the
+  `check-transcript` CLI emits, so an empty capture forces `indeterminate`
+  rather than a false pass/fail for any trace scenario.
 
-1. **[Critical, fixed]** `tool-match-before-tool-match` compiled caller-supplied
-   jq/Oniguruma regexes (e.g. `git[[:space:]]+commit`) with JS `RegExp`, which
-   doesn't grok POSIX classes → silent mismatch → **vacuous PASS**, flipping
-   `verification-phantom-completion` / `claim-without-verification-naive`
-   FAIL→PASS once migrated. Fix: `ts/src/check/regex.ts` `posixToJsRegex`
-   translates POSIX classes before `RegExp`; regression-tested
-   (commit-before-pytest now FAILs).
-2. **[Important, fixed]** an invalid-in-JS caller regex threw uncaught → **no
-   record written** (shell `_record` emits a fail record via its ERR trap). Fix:
-   the CLI now catches verb errors and emits `{passed:false, detail:"tool
-   error…"}` before exiting.
-3. **[Medium, fixed]** `typecheck` needed `tsc` but `typescript` wasn't a
-   dependency → added as a devDep.
-4. **[Minor, fixed]** normalizer dropped a `tool_result` when a user turn mixed
-   text + tool_result → now attaches the observation and still emits the text step.
-5. **[Minor, fixed]** the committed "real 2.1.177" fixture was truncated and had
-   no tool_use rows (so real tool_use mapping wasn't committed-tested, and the
-   doc below overstated it). Added `claude-2.1.177-with-tooluse.jsonl` (real
-   on-disk shape incl. noise rows + assistant tool_use + user tool_result) with
-   a test proving real-shape tool_use mapping.
+## Open decisions (not bugs)
 
-Still-open from review (decisions, not bugs): `tool-arg-match` contract (arbitrary
-jq → TS); the caller-migration allow-list must include ONLY the ported verbs;
-`loadCalls` can't yet distinguish a corrupt trajectory from "no transcript".
+- `tool-arg-match` contract: the TS verb exists; confirm the caller-side arg
+  shape is what all ~6 scenarios need.
+- `loadCalls()` still can't distinguish a corrupt trajectory from "no
+  transcript"; both read as empty. Fine for the negative-assertion contract;
+  add a distinct diagnostic if this becomes load-bearing.
 
-## CORRECTION: B1 (claude capture) root cause was wrong
+## Separate, higher-priority bug (B1, not part of this port)
 
-Reproduction (Task 7, see `docs/audits/2026-06-13-claude-2.1.x-transcript-location.md`)
-**refuted** the "claude moved to `sessions/history.jsonl`" hypothesis. claude
-2.1.177 writes the legacy `projects/<munged>/<uuid>.jsonl` — exactly where the
-harness globs. B1 is a bug in **how quorum/gauntlet launches claude** (a direct
-`claude -p` persists the transcript; the quorum run did not). The **2.1.175 pin
-may not fix it** — never verified with a real `quorum run --coding-agent claude`.
-Separate, higher-priority bug; needs the launcher internals (Jesse's domain).
-
-## REMAINING (the 2b cutover — NOT done; needs review/decisions)
-
-1. **Other-agent normalizers** (`codex`, `gemini`, `copilot`, `opencode`, `pi`,
-   `antigravity`, `kimi` → ATIF). Mechanical — port from `quorum/normalizers.py`
-   (`normalize_codex_logs` etc.). They only need to populate
-   `step.tool_calls[].function_name`/`arguments` + string/array `message`; the
-   predicates already key off codex/antigravity arg shapes (`cmd`,
-   `LocalShellCall`, alternate path aliases). Watch the validator's strict
-   `step_id`/agent-only rules for interleaved subagent logs.
-
-2. **Runner integration** (Python side). The runner must emit `trajectory.json`
-   and set `QUORUM_TRANSCRIPT_PATH` for `check-transcript`. Decide how: Python
-   shells out to `bun run normalize-<agent>` to produce ATIF from the captured
-   session log. NOTE: `loadCalls()` currently treats *any* read/parse failure as
-   `empty:true` — fine for the negative-assertion contract, but a genuinely
-   corrupt trajectory is then indistinguishable from "no transcript". Add a
-   distinct diagnostic before this is load-bearing.
-
-3. **Scenario caller migration (~50 `checks.sh`).** Rewrite `skill-called X` →
-   `check-transcript skill-called X` **only for the 12 ported verbs**. A naive
-   sed WILL break: `skill-before-tool-match`, the `not` wrapper, `tool-arg-match`,
-   and the non-capture-family checks (`file-exists`, `git-*`, `*-plugin-installed`)
-   must stay on the shell tools (`check-transcript` exits 2 on un-ported verbs).
-   Allow-list the 12 explicitly.
-
-4. **DECISION NEEDED — `tool-arg-match` contract.** The shell version takes an
-   arbitrary jq expression (`tool-arg-match Read '.path == "X"'`), used by ~6
-   scenarios. There's no jq in the TS world. Options: (a) a small safe
-   expression DSL; (b) JSONPath/structured matchers; (c) a fixed set of
-   `--arg-equals key=value` / `--arg-matches key=regex` flags and rewrite the
-   callers. Until decided, those scenarios keep using the shell `tool-arg-match`.
-
-## Suggested next order
-B1 launch bug (claude is the primary agent and currently unevaluable) →
-runner integration (so ATIF is actually produced) → codex normalizer + a few
-scenarios as a migration pilot → decide `tool-arg-match` → full caller migration.
+The claude capture B1 issue is a **launcher** bug, not a transcript-location
+bug: claude 2.1.177 writes the legacy `projects/<munged>/<uuid>.jsonl` where
+the harness globs, but a quorum-launched claude did not persist the transcript
+in the reproduction. See
+`docs/audits/2026-06-13-claude-2.1.x-transcript-location.md`. Needs the
+launcher internals (Jesse's domain).

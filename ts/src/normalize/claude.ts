@@ -60,6 +60,7 @@ export function normalizeClaudeLegacy(raw: string, version: string): AtifTraject
         }
       }
       const step: AtifStep = { step_id: steps.length + 1, source: "agent" };
+      if (typeof entry["timestamp"] === "string") step.timestamp = entry["timestamp"];
       if (texts.length) step.message = texts.join("\n");
       if (thinking.length) step.reasoning_content = thinking.join("\n");
       if (toolCalls.length) {
@@ -72,9 +73,12 @@ export function normalizeClaudeLegacy(raw: string, version: string): AtifTraject
 
     if (type === "user") {
       // String-form content: the initial human prompt in 2.1.177+ logs.
+      const ts = typeof entry["timestamp"] === "string" ? entry["timestamp"] : undefined;
       const message = (entry["message"] as { content?: unknown } | undefined)?.content;
       if (typeof message === "string" && message.length > 0) {
-        steps.push({ step_id: steps.length + 1, source: "user", message });
+        const userStep: AtifStep = { step_id: steps.length + 1, source: "user", message };
+        if (ts) userStep.timestamp = ts;
+        steps.push(userStep);
         continue;
       }
 
@@ -96,7 +100,13 @@ export function normalizeClaudeLegacy(raw: string, version: string): AtifTraject
         }
       }
       if (texts.length) {
-        steps.push({ step_id: steps.length + 1, source: "user", message: texts.join("\n") });
+        const userStep: AtifStep = {
+          step_id: steps.length + 1,
+          source: "user",
+          message: texts.join("\n"),
+        };
+        if (ts) userStep.timestamp = ts;
+        steps.push(userStep);
       } else if (!results.length) {
         // Pure empty user turn — skip.
       }

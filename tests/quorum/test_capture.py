@@ -159,11 +159,132 @@ class TestCaptureToolCalls:
         )
 
         assert result.path == run_dir / "trajectory.json"
-        # Both files are located as source logs; the trajectory is emitted from
-        # the first new source log (capture passes new[0] to the normalizer).
+        # Both files are located as source logs; the second carries no tool
+        # calls, so the merged trajectory only contains the first's.
         assert result.source_logs == (first, second)
         assert result.row_count == 2
         assert _tool_names(result.path) == ["Read", "Edit"]
+
+    def test_merges_tool_calls_from_all_source_logs(self, tmp_path):
+        # A run can produce >=2 session logs (gemini main+subagent, or any
+        # agent's subagent runs). Capture must merge tool calls from EVERY
+        # new log into one trajectory; dropping all but the first silently
+        # corrupts trace checks. Each file here carries a DISTINCT tool call.
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        snap = snapshot_dir(log_dir, "*.jsonl")
+        first = log_dir / "a-first.jsonl"
+        first.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "s1",
+                                "name": "Skill",
+                                "input": {"command": "writing-plans"},
+                            }
+                        ]
+                    },
+                }
+            )
+            + "\n"
+        )
+        second = log_dir / "b-second.jsonl"
+        second.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "e1",
+                                "name": "Edit",
+                                "input": {"file_path": "app.js"},
+                            }
+                        ]
+                    },
+                }
+            )
+            + "\n"
+        )
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        result = capture_tool_calls(
+            log_dir=log_dir,
+            log_glob="*.jsonl",
+            snapshot=snap,
+            normalizer="claude",
+            run_dir=run_dir,
+        )
+
+        assert result.source_logs == (first, second)
+        # Both files' tool calls survive the merge; neither is dropped.
+        assert sorted(_tool_names(result.path)) == ["Edit", "Skill"]
+        assert result.row_count == 2
+
+    def test_merge_orders_steps_by_timestamp_across_files(self, tmp_path):
+        # Restores the intent of the deleted
+        # test_gemini_capture_orders_rows_by_message_timestamp: when a run
+        # produces two logs whose steps interleave by timestamp, the merged
+        # trajectory's steps must be timestamp-sorted, not file-concatenated.
+        # The earlier-timestamped Skill (in the file that sorts SECOND by name)
+        # must precede the later-timestamped Edit (in the file that sorts first).
+        log_dir = tmp_path / "gemini-home" / ".gemini" / "tmp"
+        subagent = log_dir / "workdir" / "chats" / "abc" / "subagent.jsonl"
+        main = log_dir / "workdir" / "chats" / "session-20260612.jsonl"
+        subagent.parent.mkdir(parents=True)
+        main.parent.mkdir(parents=True, exist_ok=True)
+        snap = snapshot_dir(log_dir, "**/chats/**/*.jsonl")
+        # subagent.jsonl sorts first by name but carries the LATER timestamp.
+        subagent.write_text(
+            json.dumps(
+                {
+                    "type": "gemini",
+                    "timestamp": "2026-06-12T00:20:31.453Z",
+                    "toolCalls": [
+                        {"id": "edit-1", "name": "replace", "args": {"file_path": "app.js"}}
+                    ],
+                }
+            )
+            + "\n"
+        )
+        # session-*.jsonl sorts second by name but carries the EARLIER timestamp.
+        main.write_text(
+            json.dumps(
+                {
+                    "type": "gemini",
+                    "timestamp": "2026-06-12T00:19:23.695Z",
+                    "toolCalls": [
+                        {
+                            "id": "skill-1",
+                            "name": "activate_skill",
+                            "args": {"name": "writing-plans"},
+                        }
+                    ],
+                }
+            )
+            + "\n"
+        )
+        run_dir = _mkdir(tmp_path / "run")
+
+        result = capture_tool_calls(
+            log_dir=log_dir,
+            log_glob="**/chats/**/*.jsonl",
+            snapshot=snap,
+            normalizer="gemini",
+            run_dir=run_dir,
+        )
+
+        assert _tool_names(result.path) == ["Skill", "Edit"]
+        assert result.row_count == 2
+        # Merged step_ids are renumbered sequentially from 1.
+        data = json.loads(result.path.read_text())
+        assert [s["step_id"] for s in data["steps"]] == [1, 2]
 
     def test_codex_filter_uses_launch_cwd(self, tmp_path):
         # capture_tool_calls attributes codex rollouts by the launch cwd
