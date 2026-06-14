@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CommandRunner } from '../agents/command-runner.ts';
 import { runGit } from './git.ts';
 
 function copyIfPresent(src: string, dest: string): void {
@@ -54,4 +55,67 @@ export function recordHead(workdir: string): void {
   const gitDir = runGit(['rev-parse', '--absolute-git-dir'], workdir).trim();
   const head = runGit(['rev-parse', 'HEAD'], workdir).trim();
   writeFileSync(join(gitDir, 'quorum-recorded-head'), `${head}\n`, 'utf8');
+}
+
+interface ProvisionOpts {
+  readonly uvAvailable?: boolean;
+  readonly python?: string;
+}
+
+// Mirror Python's `shutil.which('uv')` — a PATH lookup, NOT a subprocess. Using
+// Bun.which (vs spawning `uv --version` through the seam) means no extra
+// recorded call, so Task 9's behavior tests see `run.calls[0]` == the venv call.
+function uvOnPath(): boolean {
+  return Bun.which('uv') !== null;
+}
+
+function must(
+  result: { status: number | null; stderr: string },
+  label: string,
+): void {
+  if ((result.status ?? 1) !== 0) {
+    throw new Error(`${label} failed: ${result.stderr}`);
+  }
+}
+
+// Port of setup_helpers/base.py:provision_venv. Creates <workdir>/.venv with
+// pytest + the workdir package installed editable. Uses uv when available
+// (fast), else stdlib venv + pip. Routed through CommandRunner for testability.
+export function provisionVenv(
+  workdir: string,
+  run: CommandRunner,
+  opts: ProvisionOpts = {},
+): void {
+  const venv = join(workdir, '.venv');
+  const venvPython = join(venv, 'bin', 'python');
+  const uvAvailable = opts.uvAvailable ?? uvOnPath();
+
+  if (uvAvailable) {
+    must(
+      run.run('uv', ['venv', '--python', '3.12', venv], { cwd: workdir }),
+      'uv venv',
+    );
+    must(
+      run.run(
+        'uv',
+        ['pip', 'install', '--python', venvPython, 'pytest', '-e', '.'],
+        { cwd: workdir },
+      ),
+      'uv pip install',
+    );
+    return;
+  }
+  const python = opts.python ?? 'python3';
+  must(
+    run.run(python, ['-m', 'venv', venv], { cwd: workdir }),
+    'python -m venv',
+  );
+  must(
+    run.run(
+      venvPython,
+      ['-m', 'pip', 'install', '--quiet', 'pytest', '-e', '.'],
+      { cwd: workdir },
+    ),
+    'pip install',
+  );
 }
