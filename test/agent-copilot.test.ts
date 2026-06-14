@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -197,6 +198,37 @@ test('provision honors the GH_TOKEN fallback chain and quotes embedded quotes', 
     // _shell_single_quote turns ' into '\'' .
     expect(readFileSync(envFile, 'utf8')).toBe(
       "COPILOT_GITHUB_TOKEN='tok'\\''with'\\''quotes'\n",
+    );
+    expect(mode(envFile)).toBe(0o600);
+  } finally {
+    cleanup();
+    sp.cleanup();
+  }
+});
+
+test('provision re-enforces 0600 on a pre-existing loose-perm .copilot-env', () => {
+  const sp = makeSuperpowersRoot();
+  const { home, cleanup } = makeTempHome();
+  try {
+    // A pre-existing env file with world-readable perms. writeFileSync's `mode`
+    // option is ignored when the file already exists, so without a follow-up
+    // chmod the loose mode would survive (oracle _write_copilot_env_file
+    // fchmods 0600 both before and after writing).
+    mkdirSync(home.configDir, { recursive: true });
+    const envFile = join(home.configDir, '.copilot-env');
+    writeFileSync(envFile, 'STALE=1\n', { mode: 0o644 });
+    chmodSync(envFile, 0o644);
+    expect(mode(envFile)).toBe(0o644);
+
+    withEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: sp.root,
+        COPILOT_GITHUB_TOKEN: 'ghp_test_token',
+      },
+      () => {
+        new CopilotAgent(CONFIG).provision(home, new FakeCommandRunner());
+      },
     );
     expect(mode(envFile)).toBe(0o600);
   } finally {

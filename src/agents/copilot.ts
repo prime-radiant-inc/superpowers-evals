@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -233,6 +234,9 @@ function resolveCopilotAuthEnv(): CopilotAuthEnv {
 
 // Port of _write_copilot_env_file: write COPILOT_HOME/.copilot-env at mode 0600
 // with sorted KEY='value' lines (shell-quoted). Returns the file path.
+// writeFileSync's `mode` is ignored when the file already exists, so chmod after
+// to enforce 0600 even when a pre-existing .copilot-env had looser perms (the
+// oracle fchmods 0600 both before and after writing).
 function writeCopilotEnvFile(
   copilotHome: string,
   values: Readonly<Record<string, string>>,
@@ -244,6 +248,7 @@ function writeCopilotEnvFile(
     .map((key) => `${key}=${shellSingleQuote(values[key] ?? '')}\n`)
     .join('');
   writeFileSync(envFile, lines, { mode: 0o600 });
+  chmodSync(envFile, 0o600);
   return envFile;
 }
 
