@@ -58,6 +58,18 @@ test("tolerates blank and unparseable lines", () => {
   expect(traj.steps[0]!.message).toBe("hi");
 });
 
+test("step timestamp is carried from the source entry when present", () => {
+  // The multi-log merge in quorum/capture.py orders steps by this timestamp,
+  // so the normalizer must surface the source entry's timestamp on its step.
+  const line = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-06-13T19:37:26.300Z",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  });
+  const traj = normalizeClaudeLegacy(line, "2.1.177");
+  expect(traj.steps[0]!.timestamp).toBe("2026-06-13T19:37:26.300Z");
+});
+
 // --- string-content user message tests (2.1.177 real-format) ---
 
 test("string-content user record becomes a user step", () => {

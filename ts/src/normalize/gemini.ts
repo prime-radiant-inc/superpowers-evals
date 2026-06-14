@@ -25,6 +25,7 @@ const GEMINI_TOOL_MAP: Record<string, string> = {
 
 interface GeminiMessage {
   type?: string;
+  timestamp?: string;
   toolCalls?: GeminiToolCall[];
   [key: string]: unknown;
 }
@@ -112,6 +113,7 @@ export function normalizeGemini(raw: string, version: string): AtifTrajectory {
     if (message["type"] !== "gemini") continue;
     const toolCalls = message["toolCalls"];
     if (!Array.isArray(toolCalls)) continue;
+    const timestamp = typeof message["timestamp"] === "string" ? message["timestamp"] : undefined;
 
     for (const tc of toolCalls) {
       if (typeof tc !== "object" || tc === null) continue;
@@ -123,11 +125,13 @@ export function normalizeGemini(raw: string, version: string): AtifTrajectory {
       }
 
       const atifTc = normalizeGeminiToolCall(gtc);
-      steps.push({
+      const step: AtifStep = {
         step_id: stepId++,
         source: "agent",
         tool_calls: [atifTc],
-      });
+      };
+      if (timestamp) step.timestamp = timestamp;
+      steps.push(step);
     }
   }
 

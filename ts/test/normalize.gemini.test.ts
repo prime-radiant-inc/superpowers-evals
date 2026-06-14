@@ -174,3 +174,15 @@ test("write_file maps to Write", () => {
   expect(writeStep).toBeDefined();
   expect(writeStep!.tool_calls![0]!.arguments["file_path"]).toBe("notes.md");
 });
+
+test("step timestamp is carried from the source message when present", () => {
+  // The multi-log merge in quorum/capture.py orders steps by this timestamp,
+  // so the normalizer must surface it where the source has it.
+  const raw = JSON.stringify({
+    type: "gemini",
+    timestamp: "2026-06-12T00:19:23.695Z",
+    toolCalls: [{ id: "skill-1", name: "activate_skill", args: { name: "writing-plans" } }],
+  });
+  const traj = normalizeGemini(raw, "0.1.18");
+  expect(traj.steps[0]!.timestamp).toBe("2026-06-12T00:19:23.695Z");
+});
