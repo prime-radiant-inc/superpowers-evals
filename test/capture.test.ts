@@ -132,6 +132,55 @@ test('captureToolCalls merges gemini logs by message timestamp, not path', () =>
   expect(res.rowCount).toBe(2);
 });
 
+test('captureToolCalls merges claude logs by message timestamp, not path', () => {
+  // Two claude session logs whose steps interleave by timestamp. The
+  // path-earlier "main" log carries Bash@t1 and Edit@t3; the path-later
+  // "subagent" log carries Read@t2. File order alone would emit
+  // [Bash, Edit, Read]; timestamp order interleaves to [Bash, Read, Edit].
+  // The Read landing BETWEEN main's two calls proves the merge is
+  // timestamp-ordered for claude, not just gemini.
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+
+  const assistant = (ts: string, id: string, name: string) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: ts,
+      message: { content: [{ type: 'tool_use', id, name, input: {} }] },
+    });
+
+  // Path-earlier file ("a-main"): Bash@t1, Edit@t3.
+  writeFileSync(
+    join(logDir, 'a-main.jsonl'),
+    `${assistant('2026-06-13T19:00:00.000Z', 'c1', 'Bash')}\n${assistant(
+      '2026-06-13T19:00:02.000Z',
+      'c3',
+      'Edit',
+    )}\n`,
+  );
+  // Path-later file ("b-subagent"): Read@t2 (between main's two calls).
+  writeFileSync(
+    join(logDir, 'b-subagent.jsonl'),
+    `${assistant('2026-06-13T19:00:01.000Z', 'c2', 'Read')}\n`,
+  );
+
+  const res = captureToolCalls({
+    logDir,
+    logGlob: '**/*.jsonl',
+    snapshot: snap,
+    normalizer: 'claude',
+    runDir,
+    launchCwd: runDir,
+  });
+
+  const traj = readTrajectory(runDir);
+  expect(validateTrajectory(traj).ok).toBe(true);
+  const calls = flattenToolCalls(traj);
+  expect(calls.map((c) => c.tool)).toEqual(['Bash', 'Read', 'Edit']);
+  expect(res.rowCount).toBe(3);
+});
+
 test('captureToolCalls writes no trajectory when there are no new logs', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));

@@ -113,11 +113,13 @@ interface OrderedStep {
  * every tool call recorded in the others. This merges the steps of all files
  * into one trajectory:
  *
- * - Steps are ordered by their ISO-8601 `timestamp` where present, with a STABLE
- *   fallback (file order = the input order, then in-file order) for steps that
- *   carry no timestamp. The sort key is `(noTimestamp, ts, fileIndex,
- *   inFileIndex)` — untimestamped steps sink to the end and keep their relative
- *   input position. This subsumes the old gemini timestamp-ordering special case.
+ * - Steps from ALL dialects are ordered by their ISO-8601 `timestamp` where
+ *   present, with a STABLE fallback (file order = the input order, then in-file
+ *   order) for steps that carry no timestamp. The sort key is
+ *   `(noTimestamp, ts, fileIndex, inFileIndex)` — untimestamped steps sink to
+ *   the end and keep their relative input position. This is uniform across
+ *   dialects; it is not gemini-specific (it subsumes the old gemini-only
+ *   timestamp-ordering special case).
  * - `step_id` is renumbered sequentially from 1 across the merged set.
  * - Each step's `tool_calls`/`observation` are kept intact; observations already
  *   reference tool_call_ids in their own step, so renumbering step_ids preserves
