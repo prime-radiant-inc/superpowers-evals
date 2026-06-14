@@ -70,6 +70,45 @@ export function costBarHeights(costs: readonly number[]): number[] {
   return costs.map((c) => c / peak);
 }
 
+// Compact wall-clock label from a millisecond span. `<60s -> "42s"`; `<60m ->
+// "5m"` (exact minute) or `"1m17s"` (keeps the seconds part, so a 77s run is not
+// a lossy "1m"); `>=60m -> "1h19m"` (drops seconds at the hour scale, minutes
+// zero-padded). Parallels rowCost: the cell-bottom analogue of "$X.XX".
+export function formatWall(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    const secs = totalSeconds % 60;
+    return secs === 0 ? `${totalMinutes}m` : `${totalMinutes}m${secs}s`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  return `${hours}h${mins.toString().padStart(2, '0')}m`;
+}
+
+// End-to-end run wall-clock in ms: the dir-stamp started_at (always present) to
+// the verdict's finished_at. null when finished_at is missing/unparseable or the
+// span is negative (clock skew). This is the only walltime source that survives
+// the no-cost case (timing is captured independently of obol pricing), and it
+// needs no new RunRecord field — both ends already live on the record.
+export function runWallMs(rec: RunRecord): number | null {
+  if (rec.finished_at === null) {
+    return null;
+  }
+  const start = parseDirStamp(rec.started_at);
+  if (start === null) {
+    return null;
+  }
+  const end = Date.parse(rec.finished_at);
+  if (Number.isNaN(end) || end < start) {
+    return null;
+  }
+  return end - start;
+}
+
 // Human-coarse single-unit age: `45s`, `12m`, `3h`, `21d`. Sub-minute reads in
 // seconds; the unit steps up at each natural boundary. Each unit is an integer
 // floor (data.py `int()`). Negative/zero clamps to `0s`.
@@ -219,6 +258,14 @@ function rowCost(costUsd: number | null): string {
   return costUsd !== null ? `$${costUsd.toFixed(2)}` : '$—';
 }
 
+// A wall-clock figure for a run, or "—" when its span can't be computed. The
+// walltime analogue of rowCost's "$—": "—" reads as an unknown duration, never a
+// misleading "0s".
+function rowWall(rec: RunRecord): string {
+  const ms = runWallMs(rec);
+  return ms !== null ? formatWall(ms) : '—';
+}
+
 // Compact card-row timestamp. Prefers the dir-name started_at (always present)
 // rendered as `YYYY-MM-DD HH:MM`; falls back to finished_at when the stamp is
 // unparseable.
@@ -251,6 +298,7 @@ function cardView(
   const rows: CardRow[] = cell.window.map((r) => ({
     verdict: r.final,
     cost: rowCost(r.cost_usd),
+    wall: rowWall(r),
     timestamp: rowTimestamp(r),
     run_id: r.run_id,
   }));
@@ -292,6 +340,7 @@ export function cellView(
       state: 'queued',
       slots,
       bottom: 'queued',
+      bottomWall: 'queued',
       drift: false,
       opacity: QUEUED_OPACITY,
       card: cardView(cell, false, now),
@@ -301,7 +350,7 @@ export function cellView(
   if (cell.running !== null && cell.window.length === 0) {
     // Pure running cell (no resolved history yet): shimmer the newest slot.
     const slots: SlotView[] = ghostSlots(4);
-    slots.push({ kind: 'running', height: 0 });
+    slots.push({ kind: 'running', height: 0, wallHeight: 0 });
     return {
       cell_id: id,
       scenario,
@@ -309,6 +358,7 @@ export function cellView(
       state: 'running',
       slots,
       bottom: cell.running.phase,
+      bottomWall: cell.running.phase,
       drift: false,
       opacity: 1.0,
       card: null,
@@ -323,6 +373,7 @@ export function cellView(
       state: 'empty',
       slots: [],
       bottom: '—',
+      bottomWall: '—',
       drift: false,
       opacity: 1.0,
       card: null,
@@ -331,15 +382,18 @@ export function cellView(
 
   let slots = paddedSlots(cell.window);
   let bottom: string;
+  let bottomWall: string;
   let drift: boolean;
   if (cell.running !== null) {
-    // In-flight on top of history: newest slot shimmers, no latest $ yet.
-    slots = [...slots.slice(1), { kind: 'running', height: 0 }];
+    // In-flight on top of history: newest slot shimmers, no latest $/wall yet.
+    slots = [...slots.slice(1), { kind: 'running', height: 0, wallHeight: 0 }];
     bottom = cell.running.phase;
+    bottomWall = cell.running.phase;
     drift = false;
   } else {
     const latest = cell.window[cell.window.length - 1] as RunRecord;
     bottom = latest.cost_usd !== null ? `$${latest.cost_usd.toFixed(2)}` : '$—';
+    bottomWall = rowWall(latest);
     drift = driftFlag(cellCosts(cell));
   }
   const state = cell.running !== null ? 'running' : 'done';
@@ -352,6 +406,7 @@ export function cellView(
     state,
     slots,
     bottom,
+    bottomWall,
     drift,
     opacity,
     card: cardView(cell, drift, now),
@@ -361,19 +416,22 @@ export function cellView(
 function ghostSlots(n: number): SlotView[] {
   const out: SlotView[] = [];
   for (let i = 0; i < n; i++) {
-    out.push({ kind: 'ghost', height: 0 });
+    out.push({ kind: 'ghost', height: 0, wallHeight: 0 });
   }
   return out;
 }
 
-// Real slots for the window, ghost-padded on the left to length 5. Cost-bar
-// heights normalize to the window peak (missing costs count as 0).
+// Real slots for the window, ghost-padded on the left to length 5. Each slot
+// carries BOTH a cost-bar height and a wall-bar height, each normalized to its
+// own window peak (missing cost / uncomputable wall count as 0). The active
+// metric's bar is selected in CSS, so a cell never re-fetches to switch.
 function paddedSlots(window: readonly RunRecord[]): SlotView[] {
-  const costsAll = window.map((r) => r.cost_usd ?? 0);
-  const heights = costBarHeights(costsAll);
+  const costHeights = costBarHeights(window.map((r) => r.cost_usd ?? 0));
+  const wallHeights = costBarHeights(window.map((r) => runWallMs(r) ?? 0));
   const real: SlotView[] = window.map((r, i) => ({
     kind: r.final,
-    height: heights[i] as number,
+    height: costHeights[i] as number,
+    wallHeight: wallHeights[i] as number,
   }));
   const pad = 5 - real.length;
   return [...ghostSlots(pad), ...real];

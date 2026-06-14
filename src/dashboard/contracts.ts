@@ -104,16 +104,24 @@ export function cellId(scenario: string, agent: string): string {
   return `cell-${scenario}-${agent}`;
 }
 
-// One verdict ribbon slot: a kind plus a normalized cost-bar height (0..1).
+// One verdict ribbon slot: a kind plus two normalized bar heights (0..1), one
+// per metric. Both are rendered in every cell so the client-side cost/walltime
+// toggle (an SSE swap keeps it) can pick which bar to show without a re-fetch.
 export interface SlotView {
   readonly kind: SlotKind;
+  // Cost-bar height, normalized to the window's peak cost.
   readonly height: number;
+  // Walltime-bar height, normalized to the window's peak run wall-clock.
+  readonly wallHeight: number;
 }
 
-// One row in the detail hover card (one prior run).
+// One row in the detail hover card (one prior run). The card shows cost AND wall
+// side by side (detail view — both metrics, not toggled), so each row carries
+// both a cost string ('$X.XX' | '$—') and a wall string ('1m18s' | '—').
 export interface CardRow {
   readonly verdict: RunFinal;
   readonly cost: string;
+  readonly wall: string;
   readonly timestamp: string;
   readonly run_id: string;
 }
@@ -127,15 +135,21 @@ export interface CardView {
 }
 
 // The render-ready cell. `slots` is always length 5 (ghost-padded left, newest
-// rightmost). `bottom` is '$X.XX' | '—' | 'queued' | a phase word. `opacity` is
-// 1.0 (running) | 0.5 (queued) | stale-fade (done).
+// rightmost). `bottom`/`bottomWall` are the cost/walltime figures (see fields).
+// `opacity` is 1.0 (running) | 0.5 (queued) | stale-fade (done).
 export interface CellView {
   readonly cell_id: string;
   readonly scenario: string;
   readonly agent: string;
   readonly state: CellState;
   readonly slots: readonly SlotView[];
+  // The cost bottom line: '$X.XX' | '$—' | 'queued' | a phase word | '—'.
   readonly bottom: string;
+  // The walltime bottom line: '1m18s' | '—' | 'queued' | a phase word. For
+  // non-done states it mirrors `bottom` (the same phase/queued/em-dash word);
+  // only on a resolved cell do the two diverge ($ vs duration). Both are
+  // rendered; CSS shows one based on the active metric.
+  readonly bottomWall: string;
   readonly drift: boolean;
   readonly opacity: number;
   readonly card: CardView | null;
