@@ -15,8 +15,7 @@ import { estimateSessionLogs } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
 
 // Backend (coding-agent name) -> ATIF normalizer. Mirrors the cli/normalize.ts
-// dispatch table; all eight dialects produce an ATIF Trajectory. Replaces the
-// old flat ToolCall[] NORMALIZERS registry.
+// dispatch table; all eight dialects produce an ATIF Trajectory.
 type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
 
 const NORMALIZERS: Record<string, AtifNormalizer> = {

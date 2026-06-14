@@ -24,13 +24,6 @@ export type FinalStatus = (typeof FINAL_STATUSES)[number];
 export type RunErrorStage = (typeof RUN_ERROR_STAGES)[number];
 export type CheckPhase = (typeof CHECK_PHASES)[number];
 
-export const ToolCallSchema = z.object({
-  tool: z.string(),
-  args: z.record(z.unknown()),
-  source: z.enum(['native', 'shell']),
-});
-export type ToolCall = z.infer<typeof ToolCallSchema>;
-
 export const CheckRecordSchema = z.object({
   check: z.string(),
   args: z.array(z.string()),
