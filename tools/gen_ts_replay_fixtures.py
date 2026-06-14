@@ -68,9 +68,7 @@ def pi_cases() -> list[tuple[str, str]]:
                 "type": "message",
                 "message": {
                     "role": "assistant",
-                    "content": [
-                        {"type": "toolCall", "name": "subagent", "arguments": arguments}
-                    ],
+                    "content": [{"type": "toolCall", "name": "subagent", "arguments": arguments}],
                 },
             }
         )
@@ -192,7 +190,11 @@ def pi_cases() -> list[tuple[str, str]]:
                         "role": "assistant",
                         "content": [
                             {"type": "toolCall", "name": "subagent"},
-                            {"type": "toolCall", "name": "subagent", "arguments": {"action": "list"}},
+                            {
+                                "type": "toolCall",
+                                "name": "subagent",
+                                "arguments": {"action": "list"},
+                            },
                             {"type": "toolCall", "name": "subagent", "arguments": {"agent": "x"}},
                         ],
                     },
@@ -205,7 +207,10 @@ def pi_cases() -> list[tuple[str, str]]:
         ("assistant tool calls (read/bash/subagent)", "\n".join([session, assistant_tool_calls])),
         ("subagent execution vs management calls", subagent_variants),
         ("live-style session with model rows and tool result", live_style),
-        ("subagent alias on key presence: missing args -> Agent, action -> subagent", subagent_presence),
+        (
+            "subagent alias on key presence: missing args -> Agent, action -> subagent",
+            subagent_presence,
+        ),
     ]
 
 
@@ -384,7 +389,11 @@ def opencode_cases() -> list[tuple[str, str]]:
                         "tool": "write",
                         "state": {"input": {"path": "app.py", "content": "x"}},
                     },
-                    {"type": "tool", "tool": "edit", "state": {"input": {"filePath": "src/app.py"}}},
+                    {
+                        "type": "tool",
+                        "tool": "edit",
+                        "state": {"input": {"filePath": "src/app.py"}},
+                    },
                     {
                         "type": "tool",
                         "tool": "apply_patch",
@@ -683,7 +692,10 @@ def antigravity_cases() -> list[tuple[str, str]]:
                         "toolSummary": '"Read brainstorming skill"',
                     },
                 },
-                {"name": "run_command", "args": {"CommandLine": '"pytest -q"', "Cwd": '"/tmp/run"'}},
+                {
+                    "name": "run_command",
+                    "args": {"CommandLine": '"pytest -q"', "Cwd": '"/tmp/run"'},
+                },
                 {"name": "list_dir", "args": {"DirectoryPath": '"/tmp/run/src"'}},
             ]
         }
