@@ -7,8 +7,8 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:receiving-code-review
-    investigated
+    check-transcript skill-called superpowers:receiving-code-review
+    check-transcript investigated
     command-succeeds './.venv/bin/pytest -q'
     file-contains src/ratelimit/limiter.py 'time\.monotonic'
     # Call-site / definition anchors: a compliant agent may MENTION

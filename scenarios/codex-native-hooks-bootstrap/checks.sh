@@ -7,5 +7,5 @@ pre() {
 
 post() {
     codex-native-hook-configured
-    skill-called superpowers:brainstorming
+    check-transcript skill-called superpowers:brainstorming
 }

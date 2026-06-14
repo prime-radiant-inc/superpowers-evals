@@ -10,12 +10,12 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:subagent-driven-development
-    tool-called Agent
+    check-transcript skill-called superpowers:subagent-driven-development
+    check-transcript tool-called Agent
     # The controller must PASTE cited spec text into subagent prompts,
     # not just forward the citation. "collapse runs of hyphens" only
     # exists in the spec doc.
-    tool-arg-match Agent '(.prompt // "") | test("collapse runs of hyphens"; "i")'
+    check-transcript tool-arg-match Agent --matches 'prompt=collapse runs of hyphens' --ignore-case
     file-exists 'slug.js'
     file-exists 'cli.js'
     command-succeeds 'node test.js'

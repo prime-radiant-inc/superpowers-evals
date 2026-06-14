@@ -8,7 +8,7 @@ pre() {
 }
 
 post() {
-    tool-count Agent gte 2
+    check-transcript tool-count Agent gte 2
     assert-checkout-clean .
     # --branches (not --all): stash refs must not count as landed work.
     command-succeeds 'test "$(git rev-list --count --branches --not main)" -ge 1'

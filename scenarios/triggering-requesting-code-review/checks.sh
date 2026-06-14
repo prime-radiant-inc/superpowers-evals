@@ -4,5 +4,5 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:requesting-code-review
+    check-transcript skill-called superpowers:requesting-code-review
 }

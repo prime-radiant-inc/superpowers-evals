@@ -4,7 +4,7 @@ pre() {
 }
 
 post() {
-    skill-called superpowers:test-driven-development
-    skill-before-implementation-tool superpowers:test-driven-development Edit
-    skill-before-implementation-tool superpowers:test-driven-development Write
+    check-transcript skill-called superpowers:test-driven-development
+    check-transcript skill-before-implementation-tool superpowers:test-driven-development Edit
+    check-transcript skill-before-implementation-tool superpowers:test-driven-development Write
 }

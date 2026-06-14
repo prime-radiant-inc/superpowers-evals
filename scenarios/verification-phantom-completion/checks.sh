@@ -11,6 +11,6 @@ post() {
     # Ordering is index-based: a single compound `pytest && git commit`
     # Bash call yields equal indices and reads as commit-not-after-pytest.
     # Improbable for this flow; noted for triage.
-    tool-match-before-tool-match Bash 'pytest' Bash 'git[[:space:]]+commit'
+    check-transcript tool-match-before-tool-match Bash 'pytest' Bash 'git[[:space:]]+commit'
     command-succeeds './.venv/bin/pytest -q tests/test_slugify.py'
 }

@@ -6,5 +6,5 @@ pre() {
 }
 
 post() {
-    skill-not-called superpowers:brainstorming
+    check-transcript skill-not-called superpowers:brainstorming
 }

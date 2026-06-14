@@ -7,5 +7,5 @@ pre() {
 }
 
 post() {
-    tool-match-before-tool-match Bash 'pytest' Bash 'git[[:space:]]+commit'
+    check-transcript tool-match-before-tool-match Bash 'pytest' Bash 'git[[:space:]]+commit'
 }
