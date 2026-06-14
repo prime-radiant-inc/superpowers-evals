@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   type CostEstimate,
   type Dialect,
@@ -139,8 +139,56 @@ export function mergeEstimates(
   };
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Sum the UTF-8 byte length of every tool.result output string in a kimi wire
+ *  log: context.append_loop_event rows whose event.type is "tool.result" and
+ *  whose result.output is a string. Unreadable files, blank/non-JSON lines, and
+ *  rows of any other shape contribute zero. Ports
+ *  quorum/obol_capture.py _kimi_tool_result_total_bytes. */
+function kimiToolResultTotalBytes(file: string): number {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') {
+      continue;
+    }
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(row) || row['type'] !== 'context.append_loop_event') {
+      continue;
+    }
+    const event = row['event'];
+    if (!isObject(event) || event['type'] !== 'tool.result') {
+      continue;
+    }
+    const result = event['result'];
+    if (!isObject(result)) {
+      continue;
+    }
+    const output = result['output'];
+    if (typeof output === 'string') {
+      total += Buffer.byteLength(output, 'utf8');
+    }
+  }
+  return total;
+}
+
 /** Price each new session log with obol and merge. Maps `family` to its obol
- *  dialect; returns null for unknown families, empty input, or any ObolError. */
+ *  dialect; returns null for unknown families, empty input, or any ObolError.
+ *  For the kimi family, also stamps `tool_result_total_bytes` (the UTF-8 byte
+ *  total of every tool.result output across the logs). */
 export async function estimateSessionLogs(
   family: string,
   files: readonly string[],
@@ -160,7 +208,17 @@ export async function estimateSessionLogs(
     }
     throw e;
   }
-  return mergeEstimates(estimates);
+  const usage = mergeEstimates(estimates);
+  if (usage !== null && family === 'kimi') {
+    return {
+      ...usage,
+      tool_result_total_bytes: files.reduce(
+        (sum, f) => sum + kimiToolResultTotalBytes(f),
+        0,
+      ),
+    };
+  }
+  return usage;
 }
 
 /** Price the gauntlet usage sidecar (obol's own `obol` dialect). Returns null
