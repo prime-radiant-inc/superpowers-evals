@@ -1,7 +1,8 @@
 """Smoke tests for the obol binding itself — pricing resolution both ways."""
 
-import obol
 import pytest
+
+import obol
 
 
 def test_fixture_snapshot_prices_exactly(tmp_path):
