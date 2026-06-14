@@ -51,3 +51,46 @@ test('rejects unknown quorum_tier', () => {
   const p = story('---\nquorum_tier: turbo\n---\nbody');
   expect(() => readQuorumTier(p)).toThrow(StoryMetaError);
 });
+
+// K-frontmatter-trailing-newline: Python's regex requires a newline AFTER the
+// closing fence (\n---\n). A body-less file ending exactly in '\n---' (no
+// trailing newline) must therefore be treated as having NO frontmatter, so
+// every field falls to its default.
+test('frontmatter-only file with no trailing newline has no frontmatter', () => {
+  // Closing fence present but NO trailing newline after it. Python's regex
+  // (\n---\n) requires the trailing newline, so it sees NO frontmatter.
+  const p = story('---\nquorum_tier: sentinel\nstatus: draft\n---');
+  expect(readQuorumTier(p)).toBe('full');
+  expect(readStoryStatus(p)).toBe('ready');
+  expect(readQuorumMaxTime(p)).toBeNull();
+});
+
+test('frontmatter with trailing newline after closing fence parses', () => {
+  const p = story('---\nquorum_tier: sentinel\n---\n');
+  expect(readQuorumTier(p)).toBe('sentinel');
+});
+
+// K-frontmatter-quote-stripping: Python strips ALL surrounding double quotes
+// then ALL single quotes (greedy, both types), handling double-double, mixed,
+// and mismatched quoting. TS stripped exactly one matched same-char pair.
+test('strips greedily: doubled double-quotes', () => {
+  const p = story('---\nstatus: ""draft""\n---\nbody');
+  expect(readStoryStatus(p)).toBe('draft');
+});
+
+test('strips greedily: mixed double-then-single quotes', () => {
+  const p = story(`---\nstatus: "'draft'"\n---\nbody`);
+  expect(readStoryStatus(p)).toBe('draft');
+});
+
+test('strips greedily: mismatched leading/trailing quotes', () => {
+  // Python: v.strip().strip('"').strip("'") on `'draft"` => strip('"') removes
+  // the trailing ", then strip("'") removes the leading ' => 'draft'.
+  const p = story(`---\nstatus: 'draft"\n---\nbody`);
+  expect(readStoryStatus(p)).toBe('draft');
+});
+
+test('single clean-quoted value behaves identically', () => {
+  const p = story(`---\nstatus: "draft"\n---\nbody`);
+  expect(readStoryStatus(p)).toBe('draft');
+});

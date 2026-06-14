@@ -3,28 +3,33 @@ import { readFileSync } from 'node:fs';
 /** Raised when a story's frontmatter holds a value that fails validation. */
 export class StoryMetaError extends Error {}
 
+/** Strip every leading/trailing occurrence of `ch` (Python str.strip(ch)). */
+function stripChar(s: string, ch: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s[start] === ch) start++;
+  while (end > start && s[end - 1] === ch) end--;
+  return s.slice(start, end);
+}
+
 /**
- * Lenient frontmatter parse (not full YAML): match a leading `---\n...\n---`
- * block, split each line on its first `:`, and strip whitespace plus a single
- * pair of surrounding quotes. Missing or malformed frontmatter yields an empty
- * map rather than an error.
+ * Lenient frontmatter parse (not full YAML): match a leading `---\n...\n---\n`
+ * block (the closing fence must be followed by a newline, mirroring Python's
+ * `_FRONTMATTER` regex), split each line on its first `:`, then strip
+ * whitespace and greedily strip ALL surrounding double quotes followed by ALL
+ * surrounding single quotes (Python `v.strip().strip('"').strip("'")`). Missing
+ * or malformed frontmatter yields an empty map rather than an error.
  */
 function frontmatter(storyPath: string): Map<string, string> {
   const text = readFileSync(storyPath, 'utf8');
-  const body = text.match(/^---\n([\s\S]*?)\n---/)?.[1];
+  const body = text.match(/^---\n([\s\S]*?)\n---\n/)?.[1];
   const out = new Map<string, string>();
   if (body === undefined) return out;
   for (const line of body.split('\n')) {
     const i = line.indexOf(':');
     if (i === -1) continue;
     const key = line.slice(0, i).trim();
-    let val = line.slice(i + 1).trim();
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
+    const val = stripChar(stripChar(line.slice(i + 1).trim(), '"'), "'");
     if (key) out.set(key, val);
   }
   return out;

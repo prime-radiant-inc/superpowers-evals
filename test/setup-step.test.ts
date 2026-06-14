@@ -61,6 +61,28 @@ test('envExtra is passed through to setup.sh', () => {
   );
 });
 
+// K-setup-spawn-error-swallowed: Python _run_scenario_script returns early when
+// setup.sh is absent (no-op) and lets subprocess.run raise on a spawn-level
+// failure (e.g. a non-executable file). TS must not silently succeed: it must
+// no-op on missing and throw on an un-spawnable script.
+test('missing setup.sh is a no-op (parity with Python early-return)', () => {
+  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const wd = mkdtempSync(join(tmpdir(), 'wd-'));
+  // no setup.sh written
+  expect(() => runSetup(scn, wd)).not.toThrow();
+});
+
+test('non-executable setup.sh throws instead of silently succeeding', () => {
+  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const wd = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    '#!/usr/bin/env bash\necho should-not-run\n',
+  );
+  // deliberately NOT chmod +x => spawnSync sets proc.error (EACCES), status null
+  expect(() => runSetup(scn, wd)).toThrow(SetupError);
+});
+
 test('runSetup plumbs QUORUM_REPO_ROOT into setup.sh', () => {
   const scn = mkdtempSync(join(tmpdir(), 'scn-'));
   const wd = mkdtempSync(join(tmpdir(), 'wd-'));
