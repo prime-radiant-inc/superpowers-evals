@@ -72,6 +72,40 @@ function parseArgs(raw: string | Record<string, unknown> | undefined): Record<st
   return {};
 }
 
+// Extract target paths from an apply_patch body (same header format the
+// copilot/opencode normalizers parse). Without this, codex apply_patch edits
+// carry only `{patch}` and are invisible to the implementation-path checks
+// (implementation-tool-not-called / skill-before-implementation-tool).
+function applyPatchPaths(patchText: unknown): string[] {
+  if (typeof patchText !== "string") return [];
+  const paths: string[] = [];
+  const prefixes = ["*** Add File: ", "*** Update File: ", "*** Delete File: "];
+  for (const line of patchText.split("\n")) {
+    for (const pre of prefixes) {
+      if (line.startsWith(pre)) {
+        paths.push(line.slice(pre.length).trim());
+        break;
+      }
+    }
+  }
+  return paths;
+}
+
+function withPatchPaths(args: Record<string, unknown>): Record<string, unknown> {
+  if ("file_path" in args) return args;
+  const patchText =
+    typeof args["patch"] === "string"
+      ? args["patch"]
+      : typeof args["input"] === "string"
+        ? args["input"]
+        : undefined;
+  const paths = applyPatchPaths(patchText);
+  if (paths.length > 0) {
+    return { ...args, file_path: paths[0], file_paths: paths };
+  }
+  return args;
+}
+
 function normalizePayload(payload: CodexPayload): AtifToolCall | null {
   if (payload.type === "function_call") {
     const p = payload as CodexFunctionCallPayload;
@@ -89,7 +123,7 @@ function normalizePayload(payload: CodexPayload): AtifToolCall | null {
       return {
         tool_call_id: callId,
         function_name: "Edit",
-        arguments: args,
+        arguments: withPatchPaths(args),
       };
     }
     const canonical = CODEX_TOOL_MAP[name] ?? name;
@@ -108,7 +142,7 @@ function normalizePayload(payload: CodexPayload): AtifToolCall | null {
       return {
         tool_call_id: callId,
         function_name: "Edit",
-        arguments: { patch: p.input ?? "" },
+        arguments: withPatchPaths({ patch: p.input ?? "" }),
       };
     }
     const canonical = CODEX_TOOL_MAP[name] ?? name;

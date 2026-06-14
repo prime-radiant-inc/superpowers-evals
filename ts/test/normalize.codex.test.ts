@@ -1,6 +1,45 @@
 import { test, expect } from "bun:test";
 import { normalizeCodex } from "../src/normalize/codex.ts";
 import { validateTrajectory } from "../src/atif/validate.ts";
+import { flattenToolCalls } from "../src/atif/project.ts";
+import { isImplementationPath } from "../src/detect/implementation.ts";
+
+test("codex apply_patch (function_call) exposes file paths for implementation-path checks", () => {
+  const line = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "apply_patch",
+      arguments: JSON.stringify({
+        patch:
+          "*** Begin Patch\n*** Update File: src/auth.js\n@@\n-old\n+new\n*** End Patch\n",
+      }),
+      call_id: "c1",
+    },
+  });
+  const traj = normalizeCodex(line, "test");
+  expect(validateTrajectory(traj).ok).toBe(true);
+  const call = flattenToolCalls(traj).find((c) => c.tool === "Edit")!;
+  expect(call.args["file_path"]).toBe("src/auth.js");
+  expect(call.args["file_paths"]).toEqual(["src/auth.js"]);
+  // The whole point: codex implementation edits are no longer invisible.
+  expect(isImplementationPath(call)).toBe(true);
+});
+
+test("codex apply_patch (custom_tool_call) also exposes file paths", () => {
+  const line = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "custom_tool_call",
+      name: "apply_patch",
+      input: "*** Begin Patch\n*** Add File: src/new.ts\n+content\n*** End Patch\n",
+      call_id: "c2",
+    },
+  });
+  const call = flattenToolCalls(normalizeCodex(line, "test")).find((c) => c.tool === "Edit")!;
+  expect(call.args["file_path"]).toBe("src/new.ts");
+  expect(isImplementationPath(call)).toBe(true);
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures — derived from quorum/normalizers.py and tests/quorum/test_normalizers.py

@@ -63,17 +63,16 @@ tool-match-before-tool-match, tool-arg-match.
   transcript"; both read as empty. Fine for the negative-assertion contract;
   add a distinct diagnostic if this becomes load-bearing.
 
-## Known pre-existing latent issues (surfaced by review; NOT cutover regressions)
+## Fixed beyond parity (review-driven)
 
-These existed before the port (old shell tools / Python normalizers had them);
-the TS port faithfully carried them. Tracked, not yet fixed:
-
-- **Codex `apply_patch` implementation-path blindness** (`ts/src/normalize/codex.ts`):
-  codex `apply_patch` → `Edit{patch}` with no `file_path`, so
-  `skill-before-implementation-tool` / `implementation-tool-not-called` can't
-  see codex implementation edits and may pass vacuously for codex. The old
-  Python `normalize_codex_logs` had the same gap. Fix: parse the patch header
-  for `file_path`/`file_paths` (as the copilot/opencode normalizers do).
+- **Codex `apply_patch` implementation-path detection** (`ts/src/normalize/codex.ts`):
+  codex `apply_patch` now parses the patch header (`*** Add/Update/Delete File:`)
+  and populates `file_path`/`file_paths` — same as the copilot/opencode
+  normalizers — so `skill-before-implementation-tool` /
+  `implementation-tool-not-called` see codex implementation edits instead of
+  passing vacuously. (The old Python `normalize_codex_logs` lacked this; this is
+  an improvement over the pre-port behavior.) Covered by tests in
+  `ts/test/normalize.codex.test.ts`.
 
 ## B1 (claude capture) — RESOLVED on main, in this branch via rebase
 
