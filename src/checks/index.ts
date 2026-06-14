@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type CheckPhase,
@@ -66,7 +66,20 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
       ['-c', `source '${args.checksSh}'; ${args.phase}`],
       { cwd: args.workdir, env, encoding: 'utf8' },
     );
-    const rc = proc.status ?? 0;
+    // Python's subprocess.run raises FileNotFoundError when bash cannot be
+    // spawned; that exception propagates out of run_phase. Node's spawnSync does
+    // NOT throw on spawn failure — it returns {status:null, error:<Error>}. Mirror
+    // the raise rather than swallowing it into a clean, empty phase.
+    if (proc.error) {
+      throw proc.error;
+    }
+    // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
+    // status:null with proc.signal set. Python's subprocess.run returns the
+    // negative returncode (-9), a nonzero crash; map a signal kill to the POSIX
+    // 128+signo crash code so it lands in the >=128 band below rather than being
+    // coerced to a clean rc 0 by `?? 0`.
+    const rc =
+      proc.status ?? (proc.signal ? 128 + signalNumber(proc.signal) : 0);
     const records = readRecords(sink, args.phase);
 
     // Crash heuristic (parity with quorum/checks.py):
@@ -85,6 +98,11 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   } finally {
     rmSync(sinkDir, { recursive: true, force: true });
   }
+}
+
+/** Map a signal name (e.g. "SIGKILL") to its number; SIGKILL (9) if unknown. */
+function signalNumber(signal: NodeJS.Signals): number {
+  return constants.signals[signal] ?? constants.signals.SIGKILL;
 }
 
 /** Parse every sink line as a CheckRecord, injecting the phase. */

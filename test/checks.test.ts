@@ -72,6 +72,55 @@ test('a bash crash (unbound command) with no records surfaces as a nonzero exitC
   expect(exitCode).toBe(127);
 });
 
+// E-signal-killed-status-null: when the bash child running a phase is killed by a
+// signal (OOM-killer, timeout SIGKILL), spawnSync returns status:null + a signal.
+// TS used to do `proc.status ?? 0`, coercing the crash to a clean rc 0 with
+// whatever partial records exist. Python's subprocess.run returns a negative
+// returncode (-9), which the crash heuristic treats as nonzero. Parity: a
+// signal-killed phase with no records must surface a nonzero (crash) exitCode.
+test('a signal-killed bash phase (status null) surfaces a nonzero crash exitCode', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  // No records emitted, then kill the running bash with SIGKILL.
+  const checksSh = checksShWith('pre() {\n  kill -KILL $$\n}\npost() { :; }\n');
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    quorumBin: BIN,
+  });
+  expect(records).toEqual([]);
+  expect(exitCode).not.toBe(0);
+  // Signal kills land in the >=128 crash band (POSIX 128+signo convention).
+  expect(exitCode).toBeGreaterThanOrEqual(128);
+});
+
+// E-spawn-failure-swallowed: Python `subprocess.run(['bash', ...])` raises
+// FileNotFoundError when bash cannot be spawned, propagating out of run_phase.
+// Node's spawnSync does NOT throw — it returns {status:null, error:<ENOENT>}.
+// TS used to ignore proc.error and report a clean, empty phase. Parity: a spawn
+// failure must throw rather than silently swallow into {records:[], exitCode:0}.
+test('a bash spawn failure throws instead of reporting a clean empty phase', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const emptyDir = mkdtempSync(join(tmpdir(), 'nobin-'));
+  const checksSh = checksShWith('pre() { :; }\npost() { :; }\n');
+  // Compose an env where neither quorumBin nor the inherited PATH can resolve
+  // `bash`, forcing spawnSync to fail with ENOENT (status:null, error set).
+  // runPhase composes the child PATH from envSnapshot() (a live process.env view),
+  // so we set it to a bash-less dir for the duration of this one assertion.
+  // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
+  const savedPath = process.env['PATH'];
+  // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
+  process.env['PATH'] = emptyDir;
+  try {
+    await expect(
+      runPhase({ checksSh, phase: 'pre', workdir, quorumBin: emptyDir }),
+    ).rejects.toThrow();
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
+    process.env['PATH'] = savedPath;
+  }
+});
+
 test('parseCodingAgentsDirective reads a leading "# coding-agents:" csv', () => {
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
   writeFileSync(
