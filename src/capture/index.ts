@@ -1,5 +1,11 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { Glob } from 'bun';
 import { flattenToolCalls } from '../atif/project.ts';
 import type { AtifStep, AtifTrajectory } from '../atif/types.ts';
@@ -304,6 +310,271 @@ export function captureToolCallsWithRetry(
     result = captureToolCalls(args);
   }
   return { ...result, attempts: used };
+}
+
+// ---------------------------------------------------------------------------
+// qa-agent-misconfigured detectors
+//
+// codex/pi/kimi write sessions into a shared home tree. cwd-filter.ts narrows a
+// post-drive diff to the run's own logs; these detectors flag the logs that were
+// EXCLUDED because they landed in the wrong cwd — the smoking gun that the QA
+// agent skipped `cd $QUORUM_AGENT_CWD` before launching the coding-agent. The
+// Wave-2b runner uses a non-empty return to compose an indeterminate verdict
+// with stage="qa-agent-misconfigured" instead of a generic capture failure.
+// Each detector returns only file PATHS (never log contents), so they cannot
+// leak secrets from a session log into a verdict. Ports the find_misplaced_* /
+// find_unusable_* / diagnose_kimi_* helpers from quorum/{normalizers,capture}.py.
+// ---------------------------------------------------------------------------
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Resolve symlinks like Python os.path.realpath; falls back to a plain resolve
+ *  when the path does not exist, so a recorded-but-absent cwd still compares. */
+function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** Parse the first line of a log as JSON, or undefined on any read/parse error.
+ *  The cwd-bearing header is always the first line for codex/pi. */
+function firstLineEntry(path: string): unknown {
+  let content: string;
+  try {
+    content = readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  const nl = content.indexOf('\n');
+  const firstLine = nl === -1 ? content : content.slice(0, nl);
+  try {
+    return JSON.parse(firstLine);
+  } catch {
+    return undefined;
+  }
+}
+
+export interface DetectMisplacedCodexRolloutsArgs {
+  readonly logDir: string;
+  readonly logGlob: string;
+  readonly snapshot: ReadonlySet<string>;
+  readonly runDir: string;
+  readonly launchCwd: string;
+}
+
+/** Codex rollouts whose session_meta cwd is inside runDir but != launchCwd. */
+export function detectMisplacedCodexRollouts(
+  args: DetectMisplacedCodexRolloutsArgs,
+): string[] {
+  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  const runDirReal = realPath(args.runDir);
+  const launchCwdReal = realPath(args.launchCwd);
+  const misplaced: string[] = [];
+  for (const path of newLogs) {
+    const entry = firstLineEntry(path);
+    if (!isObject(entry) || entry['type'] !== 'session_meta') {
+      continue;
+    }
+    const payload = entry['payload'];
+    const cwd = isObject(payload) ? payload['cwd'] : undefined;
+    if (typeof cwd !== 'string' || cwd === '') {
+      continue;
+    }
+    const cwdReal = realPath(cwd);
+    const insideRunDir =
+      cwdReal === runDirReal || cwdReal.startsWith(runDirReal + sep);
+    if (insideRunDir && cwdReal !== launchCwdReal) {
+      misplaced.push(path);
+    }
+  }
+  return misplaced;
+}
+
+/** The cwd from a Pi session header, or null when not present/parseable. */
+function piSessionHeaderCwd(path: string): string | null {
+  const entry = firstLineEntry(path);
+  if (!isObject(entry) || entry['type'] !== 'session') {
+    return null;
+  }
+  const cwd = entry['cwd'];
+  return typeof cwd === 'string' && cwd !== '' ? cwd : null;
+}
+
+export interface DetectMisplacedPiSessionsArgs {
+  readonly logDir: string;
+  readonly logGlob: string;
+  readonly snapshot: ReadonlySet<string>;
+  readonly launchCwd: string;
+}
+
+/** New Pi sessions whose header cwd realpath != launchCwd realpath. */
+export function detectMisplacedPiSessions(
+  args: DetectMisplacedPiSessionsArgs,
+): string[] {
+  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  const launchCwdReal = realPath(args.launchCwd);
+  const misplaced: string[] = [];
+  for (const path of newLogs) {
+    const cwd = piSessionHeaderCwd(path);
+    if (cwd === null) {
+      continue;
+    }
+    if (realPath(cwd) !== launchCwdReal) {
+      misplaced.push(path);
+    }
+  }
+  return misplaced;
+}
+
+export interface DetectUnusablePiSessionsArgs {
+  readonly logDir: string;
+  readonly logGlob: string;
+  readonly snapshot: ReadonlySet<string>;
+}
+
+/** New Pi session files whose first row cannot identify a session cwd. */
+export function detectUnusablePiSessions(
+  args: DetectUnusablePiSessionsArgs,
+): string[] {
+  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  return newLogs.filter((path) => piSessionHeaderCwd(path) === null);
+}
+
+// The kimi home for a wire log is the parent of the nearest ancestor dir named
+// "sessions". Mirrors _kimi_home_for_log.
+function kimiHomeForLog(path: string): string | undefined {
+  let dir = dirname(path);
+  for (;;) {
+    if (basename(dir) === 'sessions') {
+      return dirname(dir);
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
+  }
+}
+
+interface KimiIndexEntry {
+  readonly sessionDir: string;
+  readonly workDir: string;
+}
+
+function readKimiIndex(kimiHome: string): KimiIndexEntry[] {
+  const entries: KimiIndexEntry[] = [];
+  let content: string;
+  try {
+    content = readFileSync(join(kimiHome, 'session_index.jsonl'), 'utf8');
+  } catch {
+    return entries;
+  }
+  for (const line of content.split('\n')) {
+    if (!line.trim()) {
+      continue;
+    }
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isObject(entry)) {
+      entries.push({
+        sessionDir: String(entry['sessionDir'] ?? ''),
+        workDir: String(entry['workDir'] ?? ''),
+      });
+    }
+  }
+  return entries;
+}
+
+/** Kimi wire logs attributable (via session_index) to a workDir whose realpath
+ *  is NOT the launch cwd — the wrong-cwd half of the kimi diagnosis. Mirrors the
+ *  inclusion filter's per-home index cache but flips the workDir test. */
+function indexedWrongCwdKimiLogs(paths: string[], launchCwd: string): string[] {
+  const target = realPath(launchCwd);
+  const indexCache = new Map<string, KimiIndexEntry[]>();
+  const mismatched: string[] = [];
+  for (const path of paths) {
+    const kimiHome = kimiHomeForLog(path);
+    if (kimiHome === undefined) {
+      continue;
+    }
+    let index = indexCache.get(kimiHome);
+    if (index === undefined) {
+      index = readKimiIndex(kimiHome);
+      indexCache.set(kimiHome, index);
+    }
+    const pathReal = realPath(path);
+    for (const entry of index) {
+      if (!entry.sessionDir || !entry.workDir) {
+        continue;
+      }
+      const sessionReal = realPath(entry.sessionDir);
+      const inside =
+        pathReal === sessionReal || pathReal.startsWith(sessionReal + sep);
+      if (inside && realPath(entry.workDir) !== target) {
+        mismatched.push(path);
+        break;
+      }
+    }
+  }
+  return mismatched;
+}
+
+export interface KimiUnmatchedLogsDiagnostic {
+  readonly paths: string[];
+  readonly reason: 'wrong-cwd' | 'unmapped';
+  readonly stage: 'capture' | 'qa-agent-misconfigured';
+}
+
+export interface DiagnoseKimiUnmatchedLogsArgs {
+  readonly logDir: string;
+  readonly logGlob: string;
+  readonly snapshot: ReadonlySet<string>;
+  readonly launchCwd: string;
+}
+
+/** When new kimi logs exist but none match the launch cwd, distinguish
+ *  reason="wrong-cwd" (stage qa-agent-misconfigured: a log attributable to a
+ *  different workDir) from reason="unmapped" (stage capture: no index entry
+ *  attributes it). Returns null when there are no new logs or one matches. */
+export function diagnoseKimiUnmatchedLogs(
+  args: DiagnoseKimiUnmatchedLogsArgs,
+): KimiUnmatchedLogsDiagnostic | null {
+  const newLogs = newFilesSince(args.logDir, args.logGlob, args.snapshot);
+  if (newLogs.length === 0) {
+    return null;
+  }
+  const matched = filterLogsByCwd('kimi', newLogs, args.launchCwd);
+  if (matched.length > 0) {
+    return null;
+  }
+  const mismatched = indexedWrongCwdKimiLogs(newLogs, args.launchCwd);
+  if (mismatched.length > 0) {
+    return {
+      paths: mismatched,
+      reason: 'wrong-cwd',
+      stage: 'qa-agent-misconfigured',
+    };
+  }
+  return { paths: newLogs, reason: 'unmapped', stage: 'capture' };
+}
+
+/** Just the wrong-cwd kimi log paths (empty unless the diagnosis is wrong-cwd). */
+export function detectKimiCwdMismatch(
+  args: DiagnoseKimiUnmatchedLogsArgs,
+): string[] {
+  const diagnostic = diagnoseKimiUnmatchedLogs(args);
+  if (diagnostic === null || diagnostic.reason !== 'wrong-cwd') {
+    return [];
+  }
+  return diagnostic.paths;
 }
 
 /** Parse an ISO-8601 timestamp string to epoch milliseconds, treating a `Z`

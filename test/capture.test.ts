@@ -15,6 +15,11 @@ import {
   ATIF_TRAJECTORY_FILENAME,
   captureToolCalls,
   captureToolCallsWithRetry,
+  detectKimiCwdMismatch,
+  detectMisplacedCodexRollouts,
+  detectMisplacedPiSessions,
+  detectUnusablePiSessions,
+  diagnoseKimiUnmatchedLogs,
   newFilesSince,
   sessionDurationMs,
   snapshotDir,
@@ -396,4 +401,236 @@ test('captureToolCallsWithRetry: non-empty first pass does not retry', () => {
   expect(res.rowCount).toBe(1);
   expect(res.attempts).toBe(1);
   expect(sleeps).toBe(0);
+});
+
+// --- qa-agent-misconfigured detectors (consumed by the Wave-2b runner) ------
+
+test('detectMisplacedCodexRollouts flags rollouts inside run_dir at a wrong cwd', () => {
+  // A rollout whose session_meta cwd is INSIDE run_dir but != launch_cwd is the
+  // smoking gun that the QA agent skipped `cd $QUORUM_AGENT_CWD`. A rollout AT
+  // the launch cwd, or one OUTSIDE run_dir, is not misplaced.
+  const logDir = mkdtempSync(join(tmpdir(), 'codex-logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const launchCwd = join(runDir, 'workdir');
+  mkdirSync(launchCwd, { recursive: true });
+  const wrongInside = join(runDir, 'somewhere-else');
+  mkdirSync(wrongInside, { recursive: true });
+
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  const misplaced = join(logDir, 'misplaced.jsonl');
+  const correct = join(logDir, 'correct.jsonl');
+  const outside = join(logDir, 'outside.jsonl');
+  writeFileSync(
+    misplaced,
+    `${JSON.stringify({ type: 'session_meta', payload: { cwd: wrongInside } })}\n`,
+  );
+  writeFileSync(
+    correct,
+    `${JSON.stringify({ type: 'session_meta', payload: { cwd: launchCwd } })}\n`,
+  );
+  writeFileSync(
+    outside,
+    `${JSON.stringify({ type: 'session_meta', payload: { cwd: mkdtempSync(join(tmpdir(), 'elsewhere-')) } })}\n`,
+  );
+
+  expect(
+    detectMisplacedCodexRollouts({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      runDir,
+      launchCwd,
+    }),
+  ).toEqual([misplaced]);
+});
+
+test('detectMisplacedPiSessions flags sessions whose header cwd != launch cwd', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'pi-logs-'));
+  const launchCwd = mkdtempSync(join(tmpdir(), 'launch-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  const wrong = join(logDir, 'wrong.jsonl');
+  const right = join(logDir, 'right.jsonl');
+  writeFileSync(
+    wrong,
+    `${JSON.stringify({ type: 'session', cwd: mkdtempSync(join(tmpdir(), 'other-')) })}\n`,
+  );
+  writeFileSync(
+    right,
+    `${JSON.stringify({ type: 'session', cwd: launchCwd })}\n`,
+  );
+
+  expect(
+    detectMisplacedPiSessions({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      launchCwd,
+    }),
+  ).toEqual([wrong]);
+});
+
+test('detectUnusablePiSessions flags sessions with no identifiable cwd', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'pi-logs-'));
+  const launchCwd = mkdtempSync(join(tmpdir(), 'launch-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  const usable = join(logDir, 'usable.jsonl');
+  const noType = join(logDir, 'no-type.jsonl');
+  const noCwd = join(logDir, 'no-cwd.jsonl');
+  const malformed = join(logDir, 'malformed.jsonl');
+  writeFileSync(
+    usable,
+    `${JSON.stringify({ type: 'session', cwd: launchCwd })}\n`,
+  );
+  writeFileSync(
+    noType,
+    `${JSON.stringify({ type: 'response', cwd: launchCwd })}\n`,
+  );
+  writeFileSync(noCwd, `${JSON.stringify({ type: 'session' })}\n`);
+  writeFileSync(malformed, 'not json\n');
+
+  expect(
+    detectUnusablePiSessions({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+    }).sort(),
+  ).toEqual([malformed, noCwd, noType].sort());
+});
+
+function buildKimiHome(target: string): {
+  logDir: string;
+  match: string;
+  wrong: string;
+} {
+  const home = mkdtempSync(join(tmpdir(), 'kimi-home-'));
+  const matchDir = join(home, 'sessions', 'wd_target', 'session_match');
+  const wrongDir = join(home, 'sessions', 'wd_wrong', 'session_wrong');
+  mkdirSync(matchDir, { recursive: true });
+  mkdirSync(wrongDir, { recursive: true });
+  const match = join(matchDir, 'wire.jsonl');
+  const wrong = join(wrongDir, 'wire.jsonl');
+  writeFileSync(match, '{}\n');
+  writeFileSync(wrong, '{}\n');
+  const otherCwd = mkdtempSync(join(tmpdir(), 'kimi-other-'));
+  writeFileSync(
+    join(home, 'session_index.jsonl'),
+    `${JSON.stringify({ sessionDir: matchDir, workDir: target })}\n${JSON.stringify(
+      { sessionDir: wrongDir, workDir: otherCwd },
+    )}\n`,
+  );
+  return { logDir: home, match, wrong };
+}
+
+test('diagnoseKimiUnmatchedLogs reports wrong-cwd when an indexed log mismatches', () => {
+  // The only new log is the one in session_wrong, whose index workDir != target.
+  // No new log matches the launch cwd, but this one IS attributable (to a
+  // different workDir), so the diagnosis is wrong-cwd / qa-agent-misconfigured.
+  const target = mkdtempSync(join(tmpdir(), 'kimi-target-'));
+  const { logDir, wrong } = buildKimiHome(target);
+  const diag = diagnoseKimiUnmatchedLogs({
+    logDir,
+    logGlob: '**/wd_wrong/**/*.jsonl',
+    snapshot: new Set(),
+    launchCwd: target,
+  });
+  expect(diag).not.toBeNull();
+  expect((diag as NonNullable<typeof diag>).reason).toBe('wrong-cwd');
+  expect((diag as NonNullable<typeof diag>).stage).toBe(
+    'qa-agent-misconfigured',
+  );
+  expect((diag as NonNullable<typeof diag>).paths).toEqual([wrong]);
+});
+
+test('diagnoseKimiUnmatchedLogs reports unmapped when no index entry attributes the log', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kimi-home-'));
+  const sessDir = join(home, 'sessions', 'wd_x', 'session_x');
+  mkdirSync(sessDir, { recursive: true });
+  const orphan = join(sessDir, 'wire.jsonl');
+  const snap = snapshotDir(home, '**/wire.jsonl');
+  writeFileSync(orphan, '{}\n');
+  // No session_index.jsonl exists, so the log cannot be attributed at all.
+  const target = mkdtempSync(join(tmpdir(), 'kimi-target-'));
+
+  const diag = diagnoseKimiUnmatchedLogs({
+    logDir: home,
+    logGlob: '**/wire.jsonl',
+    snapshot: snap,
+    launchCwd: target,
+  });
+  expect(diag).not.toBeNull();
+  expect((diag as NonNullable<typeof diag>).reason).toBe('unmapped');
+  expect((diag as NonNullable<typeof diag>).stage).toBe('capture');
+  expect((diag as NonNullable<typeof diag>).paths).toEqual([orphan]);
+});
+
+test('diagnoseKimiUnmatchedLogs returns null when a log matches the launch cwd', () => {
+  const target = mkdtempSync(join(tmpdir(), 'kimi-target-'));
+  const { logDir } = buildKimiHome(target);
+  const snap = new Set<string>(); // everything is new
+  expect(
+    diagnoseKimiUnmatchedLogs({
+      logDir,
+      logGlob: '**/wd_target/**/*.jsonl',
+      snapshot: snap,
+      launchCwd: target,
+    }),
+  ).toBeNull();
+});
+
+test('diagnoseKimiUnmatchedLogs returns null when there are no new logs', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'kimi-home-'));
+  expect(
+    diagnoseKimiUnmatchedLogs({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: new Set(),
+      launchCwd: mkdtempSync(join(tmpdir(), 'kimi-target-')),
+    }),
+  ).toBeNull();
+});
+
+test('detectKimiCwdMismatch returns wrong-cwd paths only, never log contents (no secret leak)', () => {
+  const target = mkdtempSync(join(tmpdir(), 'kimi-target-'));
+  const home = mkdtempSync(join(tmpdir(), 'kimi-home-'));
+  const wrongDir = join(home, 'sessions', 'wd_wrong', 'session_wrong');
+  mkdirSync(wrongDir, { recursive: true });
+  const wrong = join(wrongDir, 'wire.jsonl');
+  // The wire log body carries a secret that must NEVER surface in diagnostics —
+  // detectors return file PATHS only.
+  const secret = 'sk-SUPER-SECRET-API-KEY-DO-NOT-LEAK';
+  writeFileSync(
+    wrong,
+    `${JSON.stringify({ type: 'usage.record', note: secret })}\n`,
+  );
+  const otherCwd = mkdtempSync(join(tmpdir(), 'kimi-other-'));
+  writeFileSync(
+    join(home, 'session_index.jsonl'),
+    `${JSON.stringify({ sessionDir: wrongDir, workDir: otherCwd })}\n`,
+  );
+  const snap = new Set<string>();
+
+  const mismatch = detectKimiCwdMismatch({
+    logDir: home,
+    logGlob: '**/wire.jsonl',
+    snapshot: snap,
+    launchCwd: target,
+  });
+  expect(mismatch).toEqual([wrong]);
+  // The secret in the log body must not appear anywhere in the returned value.
+  expect(JSON.stringify(mismatch).includes(secret)).toBe(false);
+});
+
+test('detectKimiCwdMismatch returns [] when reason is not wrong-cwd', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kimi-home-'));
+  const sessDir = join(home, 'sessions', 'wd_x', 'session_x');
+  mkdirSync(sessDir, { recursive: true });
+  writeFileSync(join(sessDir, 'wire.jsonl'), '{}\n');
+  expect(
+    detectKimiCwdMismatch({
+      logDir: home,
+      logGlob: '**/wire.jsonl',
+      snapshot: new Set(),
+      launchCwd: mkdtempSync(join(tmpdir(), 'kimi-target-')),
+    }),
+  ).toEqual([]);
 });
