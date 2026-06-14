@@ -1,11 +1,60 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import type { CommandResult } from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import { PiAgent } from '../src/agents/pi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
+
+// The Pi support files the oracle (_require_pi_superpowers_source) requires under
+// SUPERPOWERS_ROOT before provisioning. A checkout missing any of these is a
+// setup failure, not a silent meaningless run.
+const PI_SUPPORT_FILES = [
+  'package.json',
+  '.pi/extensions/superpowers.ts',
+  'skills/using-superpowers/SKILL.md',
+  'skills/using-superpowers/references/pi-tools.md',
+] as const;
+
+// Build a throwaway SUPERPOWERS_ROOT that contains every Pi support file, so the
+// source-validation guard passes. Returns the root plus a cleanup().
+function makeSuperpowersRoot(): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'quorum-pi-sproot-'));
+  for (const rel of PI_SUPPORT_FILES) {
+    const path = join(root, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '');
+  }
+  return {
+    root,
+    cleanup: () => {
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+// A runner that resolves `command -v pi` to a path (so the PATH guard passes)
+// and returns success for everything else. Mirrors the kimi resolveKimiBinary
+// probe contract: status 0 + non-empty stdout means "found".
+function piOnPathRunner(): FakeCommandRunner {
+  return new FakeCommandRunner((command, args): CommandResult => {
+    if (command === 'command' && args[0] === '-v' && args[1] === 'pi') {
+      return { status: 0, stdout: '/usr/local/bin/pi\n', stderr: '' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  });
+}
 
 // The pi.yaml shape (coding-agents/pi.yaml), inlined so the test is hermetic.
 function piConfig(): AgentConfig {
@@ -22,11 +71,13 @@ function piConfig(): AgentConfig {
   };
 }
 
-// The env keys provision() reads. SUPERPOWERS_ROOT is required but unvalidated
-// by the adapter (the oracle's filesystem/PATH checks are runner-side and out
-// of scope here), so any non-empty value satisfies it. Typed as a plain record
-// so it (and its spreads) flow into withEnv's Record<string, string | undefined>
-// parameter — an interface would lack the implicit index signature.
+// The env keys provision() reads. The placeholder SUPERPOWERS_ROOT here only
+// satisfies the require-non-empty check; success-path tests override it with a
+// makeSuperpowersRoot() fixture so the source-file validation passes, and
+// negative-path tests that throw before that validation keep the placeholder.
+// Typed as a plain record so it (and its spreads) flow into withEnv's
+// Record<string, string | undefined> parameter — an interface would lack the
+// implicit index signature.
 const BASE_ENV: Readonly<Record<string, string>> = {
   SUPERPOWERS_ROOT: '/tmp/superpowers',
   PI_PROVIDER: 'anthropic',
@@ -85,9 +136,10 @@ function mode600(path: string): number {
 
 test('provision seeds the config dir, sessions subdir, and all config files', () => {
   const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
   try {
-    withEnv(BASE_ENV, () => {
-      const runner = new FakeCommandRunner();
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
+      const runner = piOnPathRunner();
       const agent = new PiAgent(piConfig());
       const returned = agent.provision(home, runner);
 
@@ -136,20 +188,29 @@ test('provision seeds the config dir, sessions subdir, and all config files', ()
       // secrets leak into the returned env.
       expect(returned).toEqual({ PI_CODING_AGENT_DIR: home.configDir });
 
-      // No subprocess calls (pi provisioning is declarative).
-      expect(runner.calls).toEqual([]);
+      // The only subprocess is the PATH probe for the pi binary
+      // (requirePiOnPath); provisioning is otherwise declarative.
+      expect(runner.calls).toEqual([
+        {
+          command: 'command',
+          args: ['-v', 'pi'],
+          options: { env: expect.anything() },
+        },
+      ]);
     });
   } finally {
+    sp.cleanup();
     cleanup();
   }
 });
 
 test('files with secrets carry trailing-newline JSON + correct mode', () => {
   const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
   try {
-    withEnv(BASE_ENV, () => {
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
       const agent = new PiAgent(piConfig());
-      agent.provision(home, new FakeCommandRunner());
+      agent.provision(home, piOnPathRunner());
       // JSON files end with a newline (indent=2 + "\n" in the oracle).
       const authRaw = readFileSync(join(home.configDir, 'auth.json'), 'utf8');
       const settingsRaw = readFileSync(
@@ -160,16 +221,19 @@ test('files with secrets carry trailing-newline JSON + correct mode', () => {
       expect(settingsRaw.endsWith('}\n')).toBe(true);
     });
   } finally {
+    sp.cleanup();
     cleanup();
   }
 });
 
 test('azure-openai-responses provider folds sorted azure extras into pi.env', () => {
   const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
   try {
     withEnv(
       {
         ...BASE_ENV,
+        SUPERPOWERS_ROOT: sp.root,
         PI_PROVIDER: 'azure-openai-responses',
         PI_MODEL: 'gpt-4o',
         PI_API_KEY: 'azure key with spaces',
@@ -178,7 +242,7 @@ test('azure-openai-responses provider folds sorted azure extras into pi.env', ()
       },
       () => {
         const agent = new PiAgent(piConfig());
-        agent.provision(home, new FakeCommandRunner());
+        agent.provision(home, piOnPathRunner());
         const envPath = join(home.configDir, 'pi.env');
         // Extras emitted sorted by name; provider/model/key first. The spaced
         // API key is single-quoted (shlex.quote semantics).
@@ -195,6 +259,7 @@ test('azure-openai-responses provider folds sorted azure extras into pi.env', ()
       },
     );
   } finally {
+    sp.cleanup();
     cleanup();
   }
 });
@@ -227,25 +292,99 @@ test('missing required env throws ProvisionError', () => {
   }
 });
 
-// The CommandRunner seam is exercised even though pi provisioning is
-// declarative: a responder that returns a failure status must NOT cause a
-// throw, because the adapter never calls the runner. This documents the
-// no-subprocess contract against the same seam other adapters use.
-test('a failing responder does not affect pi provisioning (no subprocess seam)', () => {
+// B2-pi-superpowers-source-validation-missing: SUPERPOWERS_ROOT must actually
+// contain the Pi support files (package.json, .pi/extensions/superpowers.ts,
+// skills/using-superpowers/SKILL.md + references/pi-tools.md). A checkout
+// missing any of them is a setup failure naming the absent paths, not a silent
+// meaningless run. Mirrors _require_pi_superpowers_source (runner.py:1277-1289).
+test('missing Pi support files under SUPERPOWERS_ROOT throws naming the absent paths', () => {
   const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  // Remove one required file so validation must fail.
+  const removed = join(
+    sp.root,
+    'skills/using-superpowers/references/pi-tools.md',
+  );
+  rmSync(removed);
   try {
-    withEnv(BASE_ENV, () => {
-      const failing = new FakeCommandRunner(() => ({
-        status: 1,
-        stdout: '',
-        stderr: 'boom',
-      }));
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
       const agent = new PiAgent(piConfig());
-      const returned = agent.provision(home, failing);
-      expect(returned).toEqual({ PI_CODING_AGENT_DIR: home.configDir });
-      expect(failing.calls).toEqual([]);
+      expect(() => agent.provision(home, piOnPathRunner())).toThrow(
+        new RegExp(
+          `SUPERPOWERS_ROOT is missing Pi support files:.*${removed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+        ),
+      );
     });
   } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// A complete SUPERPOWERS_ROOT (with ~ expansion via HOME) passes validation.
+test('a complete SUPERPOWERS_ROOT passes source validation', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  try {
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
+      const agent = new PiAgent(piConfig());
+      expect(() => agent.provision(home, piOnPathRunner())).not.toThrow();
+    });
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// B2-pi-which-guard-missing: a `pi` binary absent from PATH is a setup-stage
+// failure with a precise message, not an opaque downstream launch failure.
+// The probe is routed through the injected runner (`command -v pi`) so the
+// hermetic gate can stub it, mirroring resolveKimiBinary. Mirrors
+// runner.py:1345-1346 (shutil.which("pi") is None).
+test('pi not on PATH throws a precise setup error', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  try {
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
+      // Runner reports `command -v pi` failure (not found): status 1, no stdout.
+      const noPi = new FakeCommandRunner(() => ({
+        status: 1,
+        stdout: '',
+        stderr: '',
+      }));
+      const agent = new PiAgent(piConfig());
+      expect(() => agent.provision(home, noPi)).toThrow(
+        /pi not found on PATH; cannot run Pi evals/,
+      );
+    });
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// The which-guard probes PATH via the injected runner: a single
+// `command -v pi` call is recorded, and a resolved path lets provisioning
+// proceed (returns the agent_config_env mapping).
+test('pi present on PATH is probed via the runner and provisions', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  try {
+    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
+      const runner = piOnPathRunner();
+      const agent = new PiAgent(piConfig());
+      const returned = agent.provision(home, runner);
+      expect(returned).toEqual({ PI_CODING_AGENT_DIR: home.configDir });
+      expect(runner.calls).toEqual([
+        {
+          command: 'command',
+          args: ['-v', 'pi'],
+          options: { env: expect.anything() },
+        },
+      ]);
+    });
+  } finally {
+    sp.cleanup();
     cleanup();
   }
 });
