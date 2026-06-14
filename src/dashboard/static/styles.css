@@ -40,19 +40,43 @@
 body {
   margin: 0;
   padding: 24px;
+  box-sizing: border-box;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-page);
   color: var(--text-primary);
   font-family: var(--font);
 }
 
-.pghead { font-size: 13px; color: var(--text-label); margin-bottom: 12px; }
+.pghead { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-label); margin-bottom: 12px; }
+#tally { min-width: 0; }
+
+/* cost / walltime metric toggle (right of the tally) */
+.metric-toggle { margin-left: auto; flex: none; display: inline-flex; border: 1px solid var(--border-grid); border-radius: 7px; overflow: hidden; }
+.mt-btn { font: inherit; font-size: 12px; line-height: 1; color: var(--text-label); background: transparent; border: 0; padding: 4px 11px; cursor: pointer; }
+.mt-btn + .mt-btn { border-left: 1px solid var(--border-grid); }
+.mt-btn:hover { color: var(--text-primary); }
+html[data-metric="cost"] .mt-btn[data-metric="cost"],
+html[data-metric="wall"] .mt-btn[data-metric="wall"] { color: var(--accent); background: var(--accent-wash); }
+
+/* Metric visibility. Every cell renders both the $ and the ⏱ figure; the active
+   metric (html[data-metric]) decides which shows, so an SSE cell swap keeps the
+   toggle. Default is cost. The drift ▲ is a cost anomaly — hidden in wall mode. */
+.m-wall { display: none; }
+html[data-metric="wall"] .m-cost { display: none; }
+html[data-metric="wall"] .m-wall { display: inline; }
+html[data-metric="wall"] .drift { display: none; }
 .pghead b { color: var(--text-primary); font-weight: 600; font-size: 15px; }
 .pghead .sep { color: var(--border-grid); margin: 0 8px; }
 .kpass { color: var(--verdict-pass); }
 .kfail { color: var(--verdict-fail); }
 .kindet { color: var(--verdict-indet); }
 
-.mxwrap { background: var(--surface-panel); border-radius: 8px; padding: 16px 18px; overflow: auto; max-height: 80vh; }
+/* The grid panel flexes to fill the viewport below the header (body is a 100vh
+   flex column). It stays the scroll container (overflow:auto + min-height:0) so
+   the sticky <th> header keeps working. */
+.mxwrap { background: var(--surface-panel); border-radius: 8px; padding: 16px 18px; overflow: auto; flex: 1; min-height: 0; }
 .mx { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .mx th {
   color: var(--text-label); font-weight: 600; padding: 6px 0 10px; font-size: 12px;
@@ -86,6 +110,7 @@ body {
 
 .cb { display: flex; align-items: flex-end; gap: 3px; height: 14px; }
 .cb-slot { display: inline-block; width: 11px; background: var(--cost-bar); border-radius: 1px 1px 0 0; height: calc(2px + var(--h, 0) * 12px); }
+html[data-metric="wall"] .cb-slot { height: calc(2px + var(--hw, 0) * 12px); }
 .cb-slot.gh { background: var(--cost-bar-none); }
 
 .dc { font-size: 12px; color: var(--text-primary); white-space: nowrap; text-align: right; }
@@ -121,12 +146,16 @@ body {
 }
 .cell-card-age { color: var(--text-label); font-weight: 600; margin-bottom: 8px; }
 .cell-card-rows { display: flex; flex-direction: column; gap: 5px; }
-.cell-card-row { display: grid; grid-template-columns: auto auto 1fr; gap: 4px 10px; align-items: baseline; }
+/* One row per prior run, flowing date · nonce · cost · wall · status. The card
+   shows cost AND wall together (detail view, both metrics). The nonce stands in
+   for the full run id (which is the span's title), so the row stays one line. */
+.cell-card-row { display: grid; grid-template-columns: auto auto auto auto auto; gap: 4px 12px; align-items: baseline; justify-content: start; }
 .ccr-verdict { font-weight: 600; }
 .v-pass { color: var(--verdict-pass); }
 .v-fail { color: var(--verdict-fail); }
 .v-indeterminate, .v-unknown { color: var(--verdict-indet); }
 .ccr-cost { color: var(--text-primary); }
+.ccr-wall { color: var(--accent); }
 .ccr-time { color: var(--text-label); }
-.ccr-id { grid-column: 1 / -1; color: var(--text-label); font-size: 11px; user-select: all; word-break: break-all; }
+.ccr-nonce { color: var(--text-label); font-size: 11px; user-select: all; }
 .card-drift { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border-grid); color: var(--verdict-fail); }

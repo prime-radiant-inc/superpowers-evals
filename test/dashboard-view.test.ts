@@ -6,10 +6,12 @@ import {
   costBarHeights,
   driftFlag,
   formatAge,
+  formatWall,
   headerTally,
   latestAgeDays,
   launchEstimate,
   median,
+  runWallMs,
   staleOpacity,
 } from '../src/dashboard/view.ts';
 
@@ -22,6 +24,7 @@ function rec(over: Partial<RunRecord> = {}): RunRecord {
     final: 'pass',
     cost_usd: 1,
     finished_at: null,
+    gauntlet_duration_ms: null,
     ...over,
   };
 }
@@ -108,6 +111,107 @@ test('formatAge boundaries (integer floor, matching data.py int())', () => {
 
 test('formatAge clamps negatives to 0s', () => {
   expect(formatAge(-5)).toBe('0s');
+});
+
+// --- formatWall --------------------------------------------------------------
+
+test('formatWall: seconds below a minute (rounded)', () => {
+  expect(formatWall(0)).toBe('0s');
+  expect(formatWall(42_000)).toBe('42s');
+  expect(formatWall(59_400)).toBe('59s'); // 59.4s rounds down
+});
+
+test('formatWall: minutes keep a seconds part unless exact', () => {
+  expect(formatWall(60_000)).toBe('1m'); // exact minute drops seconds
+  expect(formatWall(77_000)).toBe('1m17s'); // a 77s run is not a lossy "1m"
+  expect(formatWall(300_000)).toBe('5m');
+});
+
+test('formatWall: hours drop seconds, minutes zero-padded', () => {
+  expect(formatWall(3_600_000)).toBe('1h00m');
+  expect(formatWall(4_781_335)).toBe('1h19m'); // the sdd-svelte-todo haiku run
+});
+
+test('formatWall clamps negative spans to 0s', () => {
+  expect(formatWall(-1000)).toBe('0s');
+});
+
+// --- runWallMs ---------------------------------------------------------------
+
+test('runWallMs is null when neither finished_at nor a gauntlet span is present', () => {
+  expect(
+    runWallMs(rec({ finished_at: null, gauntlet_duration_ms: null })),
+  ).toBeNull();
+});
+
+test('runWallMs falls back to the gauntlet span when finished_at is absent', () => {
+  const ms = runWallMs(
+    rec({ finished_at: null, gauntlet_duration_ms: 144_696 }),
+  );
+  expect(ms).toBe(144_696);
+  expect(formatWall(ms as number)).toBe('2m25s');
+});
+
+test('runWallMs prefers the precise span over the gauntlet fallback', () => {
+  // finished_at − started_at = 78s; gauntlet says 90s. Precise wins.
+  const ms = runWallMs(
+    rec({
+      started_at: '20260612T000000Z',
+      finished_at: '2026-06-12T00:01:18Z',
+      gauntlet_duration_ms: 90_000,
+    }),
+  );
+  expect(ms).toBe(78_000);
+});
+
+test('runWallMs falls through to the gauntlet span on a negative precise span', () => {
+  const ms = runWallMs(
+    rec({
+      started_at: '20260613T230000Z',
+      finished_at: '2026-06-13T22:00:00Z', // before start -> skip
+      gauntlet_duration_ms: 50_000,
+    }),
+  );
+  expect(ms).toBe(50_000);
+});
+
+test('runWallMs ignores a negative gauntlet span', () => {
+  expect(
+    runWallMs(rec({ finished_at: null, gauntlet_duration_ms: -5 })),
+  ).toBeNull();
+});
+
+test('runWallMs spans the dir-stamp started_at to the verdict finished_at', () => {
+  // 21:03:13.000 (stamp, second-truncated) -> 22:22:54.335 = 4781335 ms.
+  const ms = runWallMs(
+    rec({
+      started_at: '20260613T210313Z',
+      finished_at: '2026-06-13T22:22:54.335Z',
+    }),
+  );
+  expect(ms).toBe(4_781_335);
+  expect(formatWall(ms as number)).toBe('1h19m');
+});
+
+test('runWallMs is null for a negative span (clock skew)', () => {
+  const ms = runWallMs(
+    rec({
+      started_at: '20260613T230000Z',
+      finished_at: '2026-06-13T22:00:00Z',
+    }),
+  );
+  expect(ms).toBeNull();
+});
+
+test('runWallMs is null when the dir stamp or finished_at is unparseable', () => {
+  expect(
+    runWallMs(
+      rec({ started_at: 'not-a-stamp', finished_at: '2026-06-13T22:00:00Z' }),
+    ),
+  ).toBeNull();
+  expect(
+    runWallMs(rec({ started_at: '20260613T210313Z', finished_at: 'garbage' })),
+  ).toBeNull();
 });
 
 // --- latestAgeDays -----------------------------------------------------------
@@ -298,6 +402,64 @@ test('cellView: done cell with unknown cost shows "$—" (never "$0.00")', () =>
   expect(v.bottom).toBe('$—');
 });
 
+test('cellView: done cell carries bottomWall from finished_at − started_at', () => {
+  const c = cell({
+    window: [
+      rec({
+        started_at: '20260612T000000Z',
+        finished_at: '2026-06-12T00:01:18Z', // 78s
+        cost_usd: 0.21,
+        final: 'pass',
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude');
+  expect(v.bottom).toBe('$0.21');
+  expect(v.bottomWall).toBe('1m18s');
+});
+
+test('cellView: done cell with no finished_at shows wall "—" (never "0s")', () => {
+  const c = cell({ window: [rec({ cost_usd: 1, finished_at: null })] });
+  const v = cellView(c, 's', 'claude');
+  expect(v.bottom).toBe('$1.00');
+  expect(v.bottomWall).toBe('—');
+});
+
+test('cellView: done cell with only a gauntlet span still shows a wall figure', () => {
+  // The common historical case: no top-level finished_at, but economics carries
+  // the Gauntlet-Agent span. The cell shows it instead of "—".
+  const c = cell({
+    window: [
+      rec({ cost_usd: 1, finished_at: null, gauntlet_duration_ms: 77_000 }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude');
+  expect(v.bottomWall).toBe('1m17s');
+});
+
+test('cellView: slots carry wall-bar heights normalized to the window wall peak', () => {
+  const c = cell({
+    window: [
+      rec({
+        started_at: '20260612T000000Z',
+        finished_at: '2026-06-12T00:00:30Z', // 30s
+        cost_usd: 4,
+      }),
+      rec({
+        started_at: '20260612T000100Z',
+        finished_at: '2026-06-12T00:02:00Z', // 60s
+        cost_usd: 1,
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude');
+  // cost heights normalize to peak 4: [1, 0.25]; wall heights to peak 60s: [0.5, 1].
+  expect(v.slots[3]?.height).toBe(1);
+  expect(v.slots[4]?.height).toBe(0.25);
+  expect(v.slots[3]?.wallHeight).toBe(0.5);
+  expect(v.slots[4]?.wallHeight).toBe(1);
+});
+
 test('cellView: running on top of history shimmers newest, phase bottom', () => {
   const c = cell({
     window: [rec({ cost_usd: 1, final: 'pass' })],
@@ -384,4 +546,22 @@ test('cellView: card rows carry compact timestamp + run id', () => {
   expect(row?.cost).toBe('$1.50');
   expect(row?.timestamp).toBe('2026-06-12 13:30');
   expect(row?.run_id).toBe('s-claude-20260612T133000Z-aaaa');
+  // the short nonce (final dir-name segment) is shown in place of the full id.
+  expect(row?.nonce).toBe('aaaa');
+});
+
+test('cellView: card rows carry the wall figure (— when no finished_at)', () => {
+  const c = cell({
+    window: [
+      rec({
+        started_at: '20260612T000000Z',
+        finished_at: '2026-06-12T00:00:45Z', // 45s
+        cost_usd: 1,
+      }),
+      rec({ finished_at: null, cost_usd: 1 }), // no end -> wall unknown
+    ],
+  });
+  const v = cellView(c, 's', 'claude');
+  expect(v.card?.rows[0]?.wall).toBe('45s');
+  expect(v.card?.rows[1]?.wall).toBe('—');
 });

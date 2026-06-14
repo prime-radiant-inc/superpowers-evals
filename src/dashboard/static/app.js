@@ -146,4 +146,19 @@
       fetch("/stop", { method: "POST" });
     }
   });
+
+  // Cost / walltime metric toggle. Flip html[data-metric] (CSS shows the matching
+  // figure + bar across every cell) and persist so the choice survives reloads;
+  // the FOUC-free read happens in the inline <head> script at layout.html.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".mt-btn");
+    if (!btn) return;
+    const metric = btn.dataset.metric === "wall" ? "wall" : "cost";
+    document.documentElement.dataset.metric = metric;
+    try {
+      localStorage.setItem("quorum-metric", metric);
+    } catch (_e) {
+      // localStorage can throw in private mode; the in-session toggle still works.
+    }
+  });
 })();

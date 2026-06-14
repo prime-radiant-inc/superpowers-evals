@@ -50,6 +50,18 @@ export const DashboardVerdictSchema = z.object({
   economics: z
     .object({
       total_est_cost_usd: z.number().nullable().optional().catch(null),
+      // The Gauntlet-Agent's session span — the walltime fallback when the
+      // top-level finished_at is absent (see view.runWallMs). Close to end-to-end
+      // on light-setup runs, but undercounts the setup+capture overhead outside
+      // the gauntlet; far more widely populated than finished_at. `.catch`-guarded
+      // like the rest: a malformed value degrades to null, never sinks the parse.
+      gauntlet: z
+        .object({
+          duration_ms: z.number().nullable().optional().catch(null),
+        })
+        .nullable()
+        .optional()
+        .catch(null),
     })
     .nullable()
     .optional()
@@ -69,6 +81,9 @@ export interface RunRecord {
   readonly final: RunFinal;
   readonly cost_usd: number | null;
   readonly finished_at: string | null;
+  // The Gauntlet-Agent's span (ms), or null. The walltime fallback used when the
+  // precise finished_at − started_at span can't be computed (see view.runWallMs).
+  readonly gauntlet_duration_ms: number | null;
 }
 
 // An in-flight run: a dir with phase.json + a live pid and no verdict yet.
@@ -104,17 +119,28 @@ export function cellId(scenario: string, agent: string): string {
   return `cell-${scenario}-${agent}`;
 }
 
-// One verdict ribbon slot: a kind plus a normalized cost-bar height (0..1).
+// One verdict ribbon slot: a kind plus two normalized bar heights (0..1), one
+// per metric. Both are rendered in every cell so the client-side cost/walltime
+// toggle (an SSE swap keeps it) can pick which bar to show without a re-fetch.
 export interface SlotView {
   readonly kind: SlotKind;
+  // Cost-bar height, normalized to the window's peak cost.
   readonly height: number;
+  // Walltime-bar height, normalized to the window's peak run wall-clock.
+  readonly wallHeight: number;
 }
 
-// One row in the detail hover card (one prior run).
+// One row in the detail hover card (one prior run). Rendered left-to-right as
+// date · nonce · cost · wall · status. The card shows cost AND wall side by side
+// (detail view — both metrics, not toggled). `nonce` is the short run
+// disambiguator shown in the row; `run_id` is the full dir name, carried for a
+// copy-on-hover title only (not shown inline).
 export interface CardRow {
   readonly verdict: RunFinal;
   readonly cost: string;
+  readonly wall: string;
   readonly timestamp: string;
+  readonly nonce: string;
   readonly run_id: string;
 }
 
@@ -127,15 +153,21 @@ export interface CardView {
 }
 
 // The render-ready cell. `slots` is always length 5 (ghost-padded left, newest
-// rightmost). `bottom` is '$X.XX' | '—' | 'queued' | a phase word. `opacity` is
-// 1.0 (running) | 0.5 (queued) | stale-fade (done).
+// rightmost). `bottom`/`bottomWall` are the cost/walltime figures (see fields).
+// `opacity` is 1.0 (running) | 0.5 (queued) | stale-fade (done).
 export interface CellView {
   readonly cell_id: string;
   readonly scenario: string;
   readonly agent: string;
   readonly state: CellState;
   readonly slots: readonly SlotView[];
+  // The cost bottom line: '$X.XX' | '$—' | 'queued' | a phase word | '—'.
   readonly bottom: string;
+  // The walltime bottom line: '1m18s' | '—' | 'queued' | a phase word. For
+  // non-done states it mirrors `bottom` (the same phase/queued/em-dash word);
+  // only on a resolved cell do the two diverge ($ vs duration). Both are
+  // rendered; CSS shows one based on the active metric.
+  readonly bottomWall: string;
   readonly drift: boolean;
   readonly opacity: number;
   readonly card: CardView | null;

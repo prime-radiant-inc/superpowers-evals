@@ -10,6 +10,7 @@ function rec(runId: string): RunRecord {
     final: 'pass',
     cost_usd: 1,
     finished_at: null,
+    gauntlet_duration_ms: null,
   };
 }
 

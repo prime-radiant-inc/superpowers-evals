@@ -78,16 +78,18 @@ function ribbonHtml(slots: readonly SlotView[]): string {
     .join('');
 }
 
-// The cost-bar row (`.cb`): ghost/running slots use the 0.18 height floor via the
-// `gh` class; resolved slots carry their normalized height in the inline `--h`
-// custom property the CSS reads (height: calc(2px + var(--h) * 12px)).
+// The cost/walltime bar row (`.cb`): ghost/running slots use the 0.18 height floor
+// via the `gh` class; resolved slots carry BOTH normalized heights in inline
+// custom properties — `--h` (cost) and `--hw` (wall). CSS reads `--h` by default
+// and `--hw` under html[data-metric="wall"], so the bar follows the active metric
+// with no re-fetch (height: calc(2px + var(--h|--hw) * 12px)).
 function costBarHtml(slots: readonly SlotView[]): string {
   return slots
     .map((slot) => {
       if (slot.kind === 'ghost' || slot.kind === 'running') {
-        return '<i class="cb-slot gh" style="--h:0.180"></i>';
+        return '<i class="cb-slot gh" style="--h:0.180;--hw:0.180"></i>';
       }
-      return `<i class="cb-slot" style="--h:${f3(slot.height)}"></i>`;
+      return `<i class="cb-slot" style="--h:${f3(slot.height)};--hw:${f3(slot.wallHeight)}"></i>`;
     })
     .join('');
 }
@@ -98,12 +100,16 @@ function costBarHtml(slots: readonly SlotView[]): string {
 function cardHtml(card: CardView): string {
   const rows = card.rows
     .map(
+      // Columns flow date · nonce · cost · wall · status. The nonce is the only
+      // run id shown; the full dir name is the title (copy-on-hover) so it stays
+      // recoverable without cluttering the row.
       (row) =>
         `<div class="cell-card-row">` +
-        `<span class="ccr-verdict v-${esc(row.verdict)}">${esc(row.verdict)}</span>` +
-        `<span class="ccr-cost">${esc(row.cost)}</span>` +
         `<span class="ccr-time">${esc(row.timestamp)}</span>` +
-        `<span class="ccr-id">${esc(row.run_id)}</span>` +
+        `<span class="ccr-nonce" title="${esc(row.run_id)}">${esc(row.nonce)}</span>` +
+        `<span class="ccr-cost">${esc(row.cost)}</span>` +
+        `<span class="ccr-wall">${esc(row.wall)}</span>` +
+        `<span class="ccr-verdict v-${esc(row.verdict)}">${esc(row.verdict)}</span>` +
         `</div>`,
     )
     .join('');
@@ -158,7 +164,7 @@ export function cellHtml(view: CellView): string {
     `<div class="inner">` +
     `<div class="vs">${ribbonHtml(view.slots)}</div>` +
     `<div class="cb">${costBarHtml(view.slots)}</div>` +
-    `<div class="dc">${drift}${esc(view.bottom)}</div>` +
+    `<div class="dc">${drift}<span class="m-cost">${esc(view.bottom)}</span><span class="m-wall">${esc(view.bottomWall)}</span></div>` +
     `</div>` +
     card +
     `</div>` +
@@ -265,6 +271,7 @@ export function gridHtml(args: GridArgs): string {
               state: 'empty',
               slots: [],
               bottom: '—',
+              bottomWall: '—',
               drift: false,
               opacity: 1,
               card: null,
@@ -294,6 +301,19 @@ export function gridHtml(args: GridArgs): string {
   );
 }
 
+// The cost/walltime metric toggle (header, right-aligned). Two segmented buttons
+// keyed by data-metric; app.js flips html[data-metric] + persists to localStorage
+// on click, and CSS lights the active button. Static markup — never SSE-swapped —
+// so the control itself survives cell/strip swaps.
+function metricToggleHtml(): string {
+  return (
+    `<span class="metric-toggle" role="group" aria-label="cost or walltime">` +
+    `<button type="button" class="mt-btn" data-metric="cost" title="show cost" aria-label="cost">$</button>` +
+    `<button type="button" class="mt-btn" data-metric="wall" title="show walltime" aria-label="walltime">⏱</button>` +
+    `</span>`
+  );
+}
+
 // The full page (`layout.html.j2`). References the vendored static assets and
 // wires the SSE extension on <body> (hx-ext="sse" + sse-connect="/events"). The
 // tally + grid bodies are already-rendered HTML inlined unescaped (the Jinja
@@ -306,17 +326,21 @@ export interface LayoutArgs {
 export function layoutHtml(args: LayoutArgs): string {
   return (
     `<!doctype html>\n` +
-    `<html lang="en" data-theme="dark">\n` +
+    `<html lang="en" data-theme="dark" data-metric="cost">\n` +
     `<head>\n` +
     `  <meta charset="utf-8">\n` +
     `  <meta name="viewport" content="width=device-width, initial-scale=1">\n` +
     `  <title>quorum dashboard</title>\n` +
+    // Apply the saved metric before first paint so the toggle never flashes the
+    // default $ view for users who left it on walltime. Static literal — no user
+    // data interpolated, so no XSS surface.
+    `  <script>try{var m=localStorage.getItem('quorum-metric');if(m==='cost'||m==='wall'){document.documentElement.dataset.metric=m;}}catch(e){}</script>\n` +
     `  <link rel="stylesheet" href="/static/styles.css">\n` +
     `  <script src="/static/htmx.min.js" defer></script>\n` +
     `  <script src="/static/htmx-ext-sse.js" defer></script>\n` +
     `</head>\n` +
     `<body hx-ext="sse" sse-connect="/events">\n` +
-    `  <div class="pghead" id="tally">${args.tallyHtml}</div>\n` +
+    `  <div class="pghead"><span id="tally">${args.tallyHtml}</span>${metricToggleHtml()}</div>\n` +
     `  <div class="runbar-slot" id="runbar" sse-swap="strip" hx-swap="innerHTML"></div>\n` +
     `  <div class="mxwrap">${args.gridHtml}</div>\n` +
     `  <div id="confirm-host"></div>\n` +

@@ -21,7 +21,11 @@ import {
 // --- small helpers to build views without IO ----------------------------------
 
 function ghostSlots(): SlotView[] {
-  return Array.from({ length: 5 }, () => ({ kind: 'ghost', height: 0.18 }));
+  return Array.from({ length: 5 }, () => ({
+    kind: 'ghost',
+    height: 0.18,
+    wallHeight: 0.18,
+  }));
 }
 
 function doneView(over: Partial<CellView> = {}): CellView {
@@ -31,13 +35,14 @@ function doneView(over: Partial<CellView> = {}): CellView {
     agent: 'claude',
     state: 'done',
     slots: [
-      { kind: 'ghost', height: 0.18 },
-      { kind: 'ghost', height: 0.18 },
-      { kind: 'pass', height: 0.25 },
-      { kind: 'fail', height: 0.5 },
-      { kind: 'pass', height: 1 },
+      { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+      { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+      { kind: 'pass', height: 0.25, wallHeight: 0.6 },
+      { kind: 'fail', height: 0.5, wallHeight: 0.3 },
+      { kind: 'pass', height: 1, wallHeight: 0.4 },
     ],
     bottom: '$1.25',
+    bottomWall: '1m18s',
     drift: false,
     opacity: 0.84,
     card: null,
@@ -93,6 +98,7 @@ test('empty cell renders the em-dash placeholder and no inner ribbon', () => {
     state: 'empty',
     slots: ghostSlots(),
     bottom: '—',
+    bottomWall: '—',
     drift: false,
     opacity: 1,
     card: null,
@@ -111,6 +117,7 @@ test('not-applicable cell (title set) renders dimmed n/a + tooltip, not the em-d
     state: 'empty',
     slots: ghostSlots(),
     bottom: '—',
+    bottomWall: '—',
     drift: false,
     opacity: 0.3,
     card: null,
@@ -128,11 +135,25 @@ test('done cell carries solid bands, a cost-bar with --h, and the cost bottom', 
   expect(html).toContain('class="vs-slot b-pass"');
   expect(html).toContain('class="vs-slot b-fail"'); // fail hatch band
   expect(html).toContain('class="vs-slot ghost"'); // left padding
-  // cost-bar slots: ghosts use the 0.18 floor, real slots carry their height.
-  expect(html).toContain('class="cb-slot gh" style="--h:0.180"');
-  expect(html).toContain('class="cb-slot" style="--h:1.000"');
-  expect(html).toContain('$1.25');
+  // cost-bar slots: ghosts use the 0.18 floor, real slots carry BOTH heights
+  // (--h cost, --hw wall) so the bar follows the active metric without a refetch.
+  expect(html).toContain('class="cb-slot gh" style="--h:0.180;--hw:0.180"');
+  expect(html).toContain('class="cb-slot" style="--h:1.000;--hw:0.400"');
+  // the cost figure lives in the m-cost span; the wall figure in m-wall.
+  expect(html).toContain('<span class="m-cost">$1.25</span>');
+  expect(html).toContain('<span class="m-wall">1m18s</span>');
   expect(html).not.toContain('class="drift"'); // no drift marker
+});
+
+test('done cell renders both metric bars and both bottom figures (toggle-ready)', () => {
+  // A real slot carries --h (cost) and --hw (wall) so CSS can pick per metric.
+  const html = cellHtml(doneView());
+  expect(html).toContain('--h:0.250;--hw:0.600');
+  expect(html).toContain('--h:0.500;--hw:0.300');
+  // Both figures are always in the DOM; CSS shows one by html[data-metric].
+  expect(html.indexOf('class="m-cost"')).toBeLessThan(
+    html.indexOf('class="m-wall"'),
+  );
 });
 
 test('done cell with drift shows the ▲ marker before the cost', () => {
@@ -154,21 +175,22 @@ test('running cell carries the running class, a shimmer runslot, and the phase b
     agent: 'claude',
     state: 'running',
     slots: [
-      { kind: 'ghost', height: 0.18 },
-      { kind: 'ghost', height: 0.18 },
-      { kind: 'pass', height: 0.5 },
-      { kind: 'pass', height: 1 },
-      { kind: 'running', height: 0.18 },
+      { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+      { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+      { kind: 'pass', height: 0.5, wallHeight: 0.5 },
+      { kind: 'pass', height: 1, wallHeight: 1 },
+      { kind: 'running', height: 0.18, wallHeight: 0.18 },
     ],
     bottom: 'agent',
+    bottomWall: 'agent',
     drift: false,
     opacity: 1,
     card: null,
   });
   expect(html).toContain('class="cell running"');
   expect(html).toContain('class="vs-slot runslot"'); // shimmer band
-  // the running slot in the cost-bar also uses the gh/0.18 floor.
-  expect(html).toContain('class="cb-slot gh" style="--h:0.180"');
+  // the running slot in the cost-bar also uses the gh/0.18 floor (both metrics).
+  expect(html).toContain('class="cb-slot gh" style="--h:0.180;--hw:0.180"');
   expect(html).toContain('agent'); // phase word, not a cost
   expect(html).not.toContain('$'); // no cost while in flight
 });
@@ -182,6 +204,7 @@ test('running cell renders the queued-phase word verbatim for each phase', () =>
       state: 'running',
       slots: ghostSlots(),
       bottom: phase,
+      bottomWall: phase,
       drift: false,
       opacity: 1,
       card: null,
@@ -198,6 +221,7 @@ test('queued cell carries the queued class and the queued bottom word', () => {
     state: 'queued',
     slots: ghostSlots(),
     bottom: 'queued',
+    bottomWall: 'queued',
     drift: false,
     opacity: 0.5,
     card: null,
@@ -213,11 +237,11 @@ test('a padded <5-window cell left-pads ghosts (newest rightmost)', () => {
   const html = cellHtml(
     doneView({
       slots: [
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'pass', height: 0.4 },
-        { kind: 'pass', height: 1 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'pass', height: 0.4, wallHeight: 0.4 },
+        { kind: 'pass', height: 1, wallHeight: 1 },
       ],
     }),
   );
@@ -231,11 +255,11 @@ test('indeterminate and unknown bands map to b-indet / b-unknown', () => {
   const html = cellHtml(
     doneView({
       slots: [
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'ghost', height: 0.18 },
-        { kind: 'indeterminate', height: 0.5 },
-        { kind: 'unknown', height: 1 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'ghost', height: 0.18, wallHeight: 0.18 },
+        { kind: 'indeterminate', height: 0.5, wallHeight: 0.5 },
+        { kind: 'unknown', height: 1, wallHeight: 1 },
       ],
     }),
   );
@@ -254,14 +278,18 @@ test('cellHtml renders the detail card markup when card is present', () => {
           {
             verdict: 'pass',
             cost: '$1.25',
+            wall: '1m18s',
             timestamp: '2026-06-12 00:00',
-            run_id: '20260612T000000Z-1a2b',
+            nonce: '1a2b',
+            run_id: 's-claude-20260612T000000Z-1a2b',
           },
           {
             verdict: 'fail',
             cost: '$0.90',
+            wall: '2m04s',
             timestamp: '2026-06-12 01:00',
-            run_id: '20260612T010000Z-3c4d',
+            nonce: '3c4d',
+            run_id: 's-claude-20260612T010000Z-3c4d',
           },
         ],
         drift_line: 'last run cost 1.6× the prior median',
@@ -272,7 +300,18 @@ test('cellHtml renders the detail card markup when card is present', () => {
   expect(html).toContain('class="cell-card-age">3h<');
   expect(html).toContain('class="ccr-verdict v-pass">pass<');
   expect(html).toContain('class="ccr-verdict v-fail">fail<');
-  expect(html).toContain('20260612T000000Z-1a2b');
+  // the card shows cost AND wall columns (both metrics, always — detail view).
+  expect(html).toContain('class="ccr-cost">$1.25<');
+  expect(html).toContain('class="ccr-wall">1m18s<');
+  expect(html).toContain('class="ccr-wall">2m04s<');
+  // the nonce stands in for the run id; the full id is the copy-on-hover title.
+  expect(html).toContain(
+    'class="ccr-nonce" title="s-claude-20260612T000000Z-1a2b">1a2b<',
+  );
+  // columns flow date · nonce · cost · wall · status, left to right.
+  expect(html.indexOf('ccr-time')).toBeLessThan(html.indexOf('ccr-nonce'));
+  expect(html.indexOf('ccr-nonce')).toBeLessThan(html.indexOf('ccr-cost'));
+  expect(html.indexOf('ccr-wall')).toBeLessThan(html.indexOf('ccr-verdict'));
   expect(html).toContain(
     'class="card-drift">last run cost 1.6× the prior median<',
   );
@@ -293,7 +332,9 @@ test('cellHtml escapes card row run_id and drift_line', () => {
           {
             verdict: 'pass',
             cost: '$1.25',
+            wall: '1m18s',
             timestamp: 't',
+            nonce: 'aaaa',
             run_id: '<script>',
           },
         ],
@@ -454,4 +495,24 @@ test('layoutHtml wires htmx + the SSE extension and references the static assets
   // the slotted bodies are inlined unescaped (already-rendered HTML).
   expect(html).toContain('<b>quorum</b>');
   expect(html).toContain('<table></table>');
+});
+
+test('layoutHtml wires the cost/walltime metric toggle, default cost, FOUC-free init', () => {
+  const html = layoutHtml({
+    tallyHtml: '<b>quorum</b>',
+    gridHtml: '<table></table>',
+  });
+  // metric lives on <html> so the inline head script can set it before paint.
+  expect(html).toContain('data-metric="cost"');
+  // the saved-metric init runs in <head>, before the stylesheet, no FOUC.
+  expect(html).toContain("localStorage.getItem('quorum-metric')");
+  expect(html.indexOf('quorum-metric')).toBeLessThan(
+    html.indexOf('href="/static/styles.css"'),
+  );
+  // the toggle: two segmented buttons keyed by data-metric.
+  expect(html).toContain('class="metric-toggle"');
+  expect(html).toContain('class="mt-btn" data-metric="cost"');
+  expect(html).toContain('class="mt-btn" data-metric="wall"');
+  // tally keeps its swap-target id, now wrapped in a span beside the toggle.
+  expect(html).toContain('<span id="tally"><b>quorum</b></span>');
 });
