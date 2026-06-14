@@ -12,6 +12,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
+    "@primeradianthq/obol": "^0.4.1",
     "yaml": "^2.9.0"
   }
 }
