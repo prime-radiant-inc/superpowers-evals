@@ -186,3 +186,45 @@ test("step timestamp is carried from the source message when present", () => {
   const traj = normalizeGemini(raw, "0.1.18");
   expect(traj.steps[0]!.timestamp).toBe("2026-06-12T00:19:23.695Z");
 });
+
+test("step timestamp falls back to createdAt when timestamp is absent", () => {
+  const raw = JSON.stringify({
+    type: "gemini",
+    createdAt: "2026-06-12T01:00:00.000Z",
+    toolCalls: [{ id: "t1", name: "read_file", args: { file_path: "a.md" } }],
+  });
+  const traj = normalizeGemini(raw, "0.1.18");
+  expect(traj.steps[0]!.timestamp).toBe("2026-06-12T01:00:00.000Z");
+});
+
+test("step timestamp falls back to time when timestamp and createdAt are absent", () => {
+  const raw = JSON.stringify({
+    type: "gemini",
+    time: "2026-06-12T02:00:00.000Z",
+    toolCalls: [{ id: "t2", name: "read_file", args: { file_path: "b.md" } }],
+  });
+  const traj = normalizeGemini(raw, "0.1.18");
+  expect(traj.steps[0]!.timestamp).toBe("2026-06-12T02:00:00.000Z");
+});
+
+test("step timestamp accepts a numeric epoch (milliseconds) and converts to ISO-8601", () => {
+  // Some log formats emit timestamps as epoch-ms numbers rather than strings.
+  // The normalizer must convert these so the Python merge can sort steps by time.
+  const epochMs = 1749686400000; // 2025-06-12T00:00:00.000Z
+  const raw = JSON.stringify({
+    type: "gemini",
+    timestamp: epochMs,
+    toolCalls: [{ id: "t3", name: "read_file", args: { file_path: "c.md" } }],
+  });
+  const traj = normalizeGemini(raw, "0.1.18");
+  expect(traj.steps[0]!.timestamp).toBe(new Date(epochMs).toISOString());
+});
+
+test("step timestamp is undefined when no timestamp field exists on the message", () => {
+  const raw = JSON.stringify({
+    type: "gemini",
+    toolCalls: [{ id: "t4", name: "read_file", args: { file_path: "d.md" } }],
+  });
+  const traj = normalizeGemini(raw, "0.1.18");
+  expect(traj.steps[0]!.timestamp).toBeUndefined();
+});

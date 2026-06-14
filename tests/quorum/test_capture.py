@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,8 @@ from quorum.capture import (
     new_files_since,
     snapshot_dir,
 )
+
+requires_bun = pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
 
 
 def _mkdir(p: Path) -> Path:
@@ -79,6 +82,7 @@ class TestCaptureToolCalls:
     These are integration tests against the real cli/normalize.ts dispatcher.
     """
 
+    @requires_bun
     def test_emits_trajectory_from_session_log(self, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
@@ -116,6 +120,7 @@ class TestCaptureToolCalls:
         assert result.row_count == 1
         assert _tool_names(result.path) == ["Bash"]
 
+    @requires_bun
     def test_returns_source_logs_and_row_count(self, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
@@ -165,6 +170,7 @@ class TestCaptureToolCalls:
         assert result.row_count == 2
         assert _tool_names(result.path) == ["Read", "Edit"]
 
+    @requires_bun
     def test_merges_tool_calls_from_all_source_logs(self, tmp_path):
         # A run can produce >=2 session logs (gemini main+subagent, or any
         # agent's subagent runs). Capture must merge tool calls from EVERY
@@ -227,6 +233,7 @@ class TestCaptureToolCalls:
         assert sorted(_tool_names(result.path)) == ["Edit", "Skill"]
         assert result.row_count == 2
 
+    @requires_bun
     def test_merge_orders_steps_by_timestamp_across_files(self, tmp_path):
         # Restores the intent of the deleted
         # test_gemini_capture_orders_rows_by_message_timestamp: when a run
@@ -286,6 +293,7 @@ class TestCaptureToolCalls:
         data = json.loads(result.path.read_text())
         assert [s["step_id"] for s in data["steps"]] == [1, 2]
 
+    @requires_bun
     def test_codex_filter_uses_launch_cwd(self, tmp_path):
         # capture_tool_calls attributes codex rollouts by the launch cwd
         # passed in. A scenario may launch the agent in a subdir via
@@ -333,6 +341,7 @@ class TestCaptureToolCalls:
         assert dropped.row_count == 0
         assert not dropped.path.exists()
 
+    @requires_bun
     def test_kimi_filter_uses_launch_cwd(self, tmp_path):
         log_dir = tmp_path / "sessions"
         match_dir = log_dir / "wd_target" / "session_match" / "agents" / "main"
@@ -537,6 +546,7 @@ class TestCaptureToolCallsWithRetry:
     simulation hook in these tests.
     """
 
+    @requires_bun
     def test_no_retry_when_first_capture_has_rows(self, tmp_path):
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -588,6 +598,7 @@ class TestCaptureToolCallsWithRetry:
         assert result.attempts == 2
         assert sleeps == [2.0]
 
+    @requires_bun
     def test_retries_pick_up_a_late_appearing_log(self, tmp_path):
         log_dir = _mkdir(tmp_path / "logs")
         snap = snapshot_dir(log_dir, "*.jsonl")
@@ -611,6 +622,7 @@ class TestCaptureToolCallsWithRetry:
         # The artifact reflects the final (successful) capture.
         assert _tool_names(result.path) == ["Read"]
 
+    @requires_bun
     def test_retries_pick_up_a_late_filling_log(self, tmp_path):
         # The file exists but yields zero tool calls (still mid-flush);
         # content arrives during the retry delay.
