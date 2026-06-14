@@ -102,8 +102,7 @@
         "test/cli-run-sigint.test.ts",
         "test/agent-*.test.ts",
         "test/setup-helpers-shim.test.ts",
-        "test/setup-helpers-differential.test.ts",
-        "test/atif-graft-differential.test.ts"
+        "test/setup-helpers-differential.test.ts"
       ],
       "linter": {
         "rules": {

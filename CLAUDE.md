@@ -52,10 +52,13 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `src/checks/` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records (the `bin/` tools emit them to `QUORUM_RECORD_SINK`).
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`.
-- `src/capture/` — session-log snapshot/diff + normalized tool-call capture (`index.ts`), per-backend cwd filtering (`cwd-filter.ts`).
+- `src/capture/` — session-log snapshot/diff + ATIF capture (`index.ts`): normalizes each new log to an ATIF `Trajectory`, merges them by step timestamp, and writes `trajectory.json`; per-backend cwd filtering (`cwd-filter.ts`).
 - `src/obol/` — all obol calls: session-log + gauntlet-sidecar cost estimation, per-file merge.
 - `src/economics.ts` — assembles the economics block carried in the verdict.
-- `src/normalizers/` — per-Coding-Agent session-log normalizers (8 dialects + `index.ts` registry + `native-tools.ts`).
+- `src/atif/` — ATIF v1.7 canonical transcript: `types.ts` (the `Trajectory` shape), `project.ts` (`flattenToolCalls` → `{tool,args}` view), `validate.ts`.
+- `src/normalize/` — per-Coding-Agent session-log → ATIF `Trajectory` normalizers (8 dialects).
+- `src/detect/` — skill-invocation and implementation-path detectors used by the transcript checks.
+- `src/check/` + `src/cli/check-transcript.ts` — the `check-transcript <verb>` CLI: loads `QUORUM_TRANSCRIPT_PATH`, flattens the trajectory, runs one of the 13 trace verbs, and emits a `{check,args,negated,passed,detail}` record (`bin/check-transcript` is the shim).
 - `src/agents/` — per-Coding-Agent provisioning adapters (one per agent) over the `command-runner.ts` subprocess seam.
 - `src/scaffold.ts` — `quorum new` / `quorum check` implementation.
 - `src/scheduler/` — central concurrency dispatcher (global slot cap, per-harness cap + launch spacing) over an injectable `clock.ts`; shared by `run-all` and the dashboard.

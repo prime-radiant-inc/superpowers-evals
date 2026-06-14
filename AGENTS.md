@@ -26,8 +26,9 @@ inline prose all use lowercase `quorum`.
 - `src/checks/` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records.
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types (`verdict.ts`, `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`).
-- `src/capture/` — session-log snapshot/diff, normalized tool-call capture; `src/obol/` prices token usage.
-- `src/normalizers/` — Coding-Agent session-log normalizers (8 dialects + registry).
+- `src/capture/` — session-log snapshot/diff + ATIF capture: normalizes each new log to an ATIF `Trajectory`, merges by timestamp, writes `trajectory.json`; `src/obol/` prices token usage.
+- `src/atif/` + `src/normalize/` + `src/detect/` — ATIF v1.7 transcript (types/project/validate), the 8 per-Coding-Agent → ATIF normalizers, and the skill/implementation-path detectors.
+- `src/check/` + `src/cli/check-transcript.ts` — the `check-transcript <verb>` CLI (reads `QUORUM_TRANSCRIPT_PATH`, runs the 13 trace verbs, emits one record).
 - `src/agents/` — per-Coding-Agent provisioning adapters over the `command-runner.ts` seam.
 - `src/scaffold.ts` — `quorum new` / `quorum check` implementation.
 - `src/cli/` — the `quorum` CLI; `src/run-all/` the batch matrix driver; `src/scheduler/` the concurrency dispatcher; `src/dashboard/` the web matrix.
