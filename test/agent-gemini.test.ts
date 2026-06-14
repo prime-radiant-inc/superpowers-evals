@@ -321,6 +321,96 @@ test('provision throws ProvisionError when extensions link exits non-zero', () =
   }
 });
 
+test('provision redacts GEMINI_API_KEY from the link-failure stderr excerpt', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  try {
+    withEnv(
+      { GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: superpowersRoot },
+      () => {
+        // The CLI echoes the API key into its stderr on failure; the excerpt
+        // baked into the error must not leak it (Python: _gemini_stderr_excerpt).
+        const runner = new FakeCommandRunner((command, args) => {
+          if (command === 'gemini' && args[1] === 'link') {
+            return {
+              status: 1,
+              stdout: '',
+              stderr: `auth failed using key ${API_KEY} aborting`,
+            };
+          }
+          return { status: 0, stdout: '', stderr: '' };
+        });
+        const agent = new GeminiAgent(CONFIG);
+        let message = '';
+        try {
+          agent.provision(home, runner);
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        expect(message).toContain('gemini extensions link failed');
+        expect(message).not.toContain(API_KEY);
+        expect(message).toContain('[redacted]');
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+  }
+});
+
+test('provision redacts GEMINI_API_KEY from the list-failure stderr excerpt', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  try {
+    withEnv(
+      { GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: superpowersRoot },
+      () => {
+        // link succeeds (manifests written) but `list` fails with the key in
+        // stderr; the list-failure excerpt must redact it too.
+        const runner = new FakeCommandRunner((command, args) => {
+          if (command === 'gemini' && args[1] === 'link') {
+            for (const rel of EXTENSION_MANIFESTS) {
+              const path = join(home.configDir, rel);
+              mkdirSync(join(path, '..'), { recursive: true });
+              writeFileSync(path, '{}\n');
+            }
+            return { status: 0, stdout: '', stderr: '' };
+          }
+          if (command === 'gemini' && args[1] === 'list') {
+            return {
+              status: 1,
+              stdout: '',
+              stderr: `listing failed using key ${API_KEY}`,
+            };
+          }
+          return { status: 0, stdout: '', stderr: '' };
+        });
+        const agent = new GeminiAgent(CONFIG);
+        let message = '';
+        try {
+          agent.provision(home, runner);
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        expect(message).toContain('gemini extensions list failed');
+        expect(message).not.toContain(API_KEY);
+        expect(message).toContain('[redacted]');
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+  }
+});
+
 test('provision throws ProvisionError when a manifest file is missing', () => {
   const { home, cleanup } = makeTempHome();
   const { home: spHome, cleanup: spCleanup } = makeTempHome();

@@ -98,6 +98,19 @@ function shellSingleQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
+// Build the stderr excerpt baked into a gemini link/list failure error (Python:
+// _gemini_stderr_excerpt). Strip, replace any occurrence of GEMINI_API_KEY with
+// '[redacted]' so a CLI that echoes the key into stderr cannot leak it into the
+// error text (and thence verdict.json / logs), then truncate to 300 chars.
+function geminiStderrExcerpt(stderr: string): string {
+  const apiKey = getEnv('GEMINI_API_KEY') ?? '';
+  let excerpt = stderr.trim();
+  if (apiKey) {
+    excerpt = excerpt.replaceAll(apiKey, '[redacted]');
+  }
+  return excerpt.slice(0, 300);
+}
+
 // Write `content` to `path` at mode 0600, creating parent dirs (Python:
 // _write_private_text). writeFileSync's `mode` only applies on create, so chmod
 // after to enforce 0600 even when the file already existed.
@@ -256,7 +269,7 @@ export class GeminiAgent implements CodingAgent {
     );
     if (link.status !== 0) {
       throw new ProvisionError(
-        `gemini extensions link failed (exit ${String(link.status)}); stderr: ${link.stderr.trim().slice(0, 300)}`,
+        `gemini extensions link failed (exit ${String(link.status)}); stderr: ${geminiStderrExcerpt(link.stderr)}`,
       );
     }
 
@@ -267,7 +280,7 @@ export class GeminiAgent implements CodingAgent {
     });
     if (listing.status !== 0) {
       throw new ProvisionError(
-        `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${listing.stderr.trim().slice(0, 300)}`,
+        `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${geminiStderrExcerpt(listing.stderr)}`,
       );
     }
     if (
