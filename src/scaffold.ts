@@ -10,7 +10,9 @@
 
 import { spawnSync } from 'node:child_process';
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -316,9 +318,18 @@ function pyReprValue(value: unknown): string {
   return String(value);
 }
 
-// statSync(path).mode & 0o111 !== 0 — any execute bit (owner/group/other) set.
+// os.access(path, os.X_OK) parity: executability is resolved against the
+// caller's euid/ownership, not by OR-ing all three execute bits. As the file's
+// non-root owner this consults the OWNER execute bit specifically; a file whose
+// only execute bits are group/other (e.g. 0o011) is NOT executable to its owner,
+// matching Python's check_scenario and fix_executable_bits.
 function isExecutable(path: string): boolean {
-  return (statSync(path).mode & 0o111) !== 0;
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

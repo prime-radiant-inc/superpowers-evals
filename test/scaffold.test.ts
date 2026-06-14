@@ -253,6 +253,36 @@ test('checkScenario splits checks.sh on Unicode line boundaries (splitlines pari
   rmSync(root, { recursive: true, force: true });
 });
 
+test('checkScenario flags a setup.sh with only group/other exec bits (os.access parity)', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  const setup = join(dir, 'setup.sh');
+  // Owner-execute bit clear, group/other-execute set. Python decides
+  // executability with os.access(X_OK), which (as the file's non-root owner)
+  // consults the OWNER execute bit specifically and reports it as NOT
+  // executable. A bare `mode & 0o111` test sees the group/other bits and wrongly
+  // calls it executable.
+  chmodSync(setup, 0o411);
+  expect(checkScenario(dir)).toContain('setup.sh is not executable');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('fixExecutableBits chmods a setup.sh with only group/other exec bits (os.access parity)', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  const setup = join(dir, 'setup.sh');
+  chmodSync(setup, 0o411);
+  // os.access(X_OK) is false for the owner, so Python --fix chmods it (adds the
+  // 0o111 bits) and reports the path fixed.
+  const fixed = fixExecutableBits(dir);
+  expect(fixed).toEqual(['setup.sh']);
+  // Owner-execute bit is now set.
+  expect(statSync(setup).mode & 0o100).not.toBe(0);
+  // And a second pass is now a no-op.
+  expect(fixExecutableBits(dir)).toEqual([]);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('fixExecutableBits flips a cleared setup.sh bit and returns ["setup.sh"]', () => {
   const root = scenariosRoot();
   const dir = scenario(root, 's');
