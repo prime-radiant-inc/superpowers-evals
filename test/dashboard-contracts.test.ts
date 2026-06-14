@@ -68,6 +68,27 @@ test('DashboardVerdictSchema: a non-object economics degrades to null', () => {
   expect(v.economics).toBeNull();
 });
 
+test('DashboardVerdictSchema reads economics.gauntlet.duration_ms (wall fallback)', () => {
+  const v = DashboardVerdictSchema.parse({
+    final: 'pass',
+    economics: {
+      total_est_cost_usd: 1.25,
+      gauntlet: { duration_ms: 144_696 },
+    },
+  });
+  expect(v.economics?.gauntlet?.duration_ms).toBe(144_696);
+});
+
+test('DashboardVerdictSchema: a malformed gauntlet duration degrades to null', () => {
+  const v = DashboardVerdictSchema.parse({
+    final: 'pass',
+    economics: { total_est_cost_usd: 1, gauntlet: { duration_ms: 'nope' } },
+  });
+  // The bad field degrades but the verdict still reads as present.
+  expect(v.economics?.gauntlet?.duration_ms).toBeNull();
+  expect(v.economics?.total_est_cost_usd).toBe(1);
+});
+
 test('cellKey + cellId form the composite key and DOM id', () => {
   expect(cellKey('s', 'claude')).toBe('s\tclaude');
   expect(cellId('s', 'claude')).toBe('cell-s-claude');

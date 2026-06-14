@@ -189,6 +189,7 @@ export function scanResults(
           final: finalOf(verdict),
           cost_usd: economics?.total_est_cost_usd ?? null,
           finished_at: verdict.finished_at ?? null,
+          gauntlet_duration_ms: economics?.gauntlet?.duration_ms ?? null,
         });
         continue;
       }

@@ -50,6 +50,18 @@ export const DashboardVerdictSchema = z.object({
   economics: z
     .object({
       total_est_cost_usd: z.number().nullable().optional().catch(null),
+      // The Gauntlet-Agent's session span. Empirically ≈ the run's end-to-end
+      // wall-clock (within ~1s, since the Gauntlet-Agent is alive for the whole
+      // run), and far more widely populated than the top-level finished_at — so
+      // it's the walltime fallback when finished_at is absent. `.catch`-guarded
+      // like the rest: a malformed value degrades to null, never sinks the parse.
+      gauntlet: z
+        .object({
+          duration_ms: z.number().nullable().optional().catch(null),
+        })
+        .nullable()
+        .optional()
+        .catch(null),
     })
     .nullable()
     .optional()
@@ -69,6 +81,9 @@ export interface RunRecord {
   readonly final: RunFinal;
   readonly cost_usd: number | null;
   readonly finished_at: string | null;
+  // The Gauntlet-Agent's span (ms), or null. The walltime fallback used when the
+  // precise finished_at − started_at span can't be computed (see view.runWallMs).
+  readonly gauntlet_duration_ms: number | null;
 }
 
 // An in-flight run: a dir with phase.json + a live pid and no verdict yet.

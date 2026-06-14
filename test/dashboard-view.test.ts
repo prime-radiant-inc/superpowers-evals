@@ -24,6 +24,7 @@ function rec(over: Partial<RunRecord> = {}): RunRecord {
     final: 'pass',
     cost_usd: 1,
     finished_at: null,
+    gauntlet_duration_ms: null,
     ...over,
   };
 }
@@ -137,8 +138,47 @@ test('formatWall clamps negative spans to 0s', () => {
 
 // --- runWallMs ---------------------------------------------------------------
 
-test('runWallMs is null when finished_at is absent', () => {
-  expect(runWallMs(rec({ finished_at: null }))).toBeNull();
+test('runWallMs is null when neither finished_at nor a gauntlet span is present', () => {
+  expect(
+    runWallMs(rec({ finished_at: null, gauntlet_duration_ms: null })),
+  ).toBeNull();
+});
+
+test('runWallMs falls back to the gauntlet span when finished_at is absent', () => {
+  const ms = runWallMs(
+    rec({ finished_at: null, gauntlet_duration_ms: 144_696 }),
+  );
+  expect(ms).toBe(144_696);
+  expect(formatWall(ms as number)).toBe('2m25s');
+});
+
+test('runWallMs prefers the precise span over the gauntlet fallback', () => {
+  // finished_at − started_at = 78s; gauntlet says 90s. Precise wins.
+  const ms = runWallMs(
+    rec({
+      started_at: '20260612T000000Z',
+      finished_at: '2026-06-12T00:01:18Z',
+      gauntlet_duration_ms: 90_000,
+    }),
+  );
+  expect(ms).toBe(78_000);
+});
+
+test('runWallMs falls through to the gauntlet span on a negative precise span', () => {
+  const ms = runWallMs(
+    rec({
+      started_at: '20260613T230000Z',
+      finished_at: '2026-06-13T22:00:00Z', // before start -> skip
+      gauntlet_duration_ms: 50_000,
+    }),
+  );
+  expect(ms).toBe(50_000);
+});
+
+test('runWallMs ignores a negative gauntlet span', () => {
+  expect(
+    runWallMs(rec({ finished_at: null, gauntlet_duration_ms: -5 })),
+  ).toBeNull();
 });
 
 test('runWallMs spans the dir-stamp started_at to the verdict finished_at', () => {
@@ -383,6 +423,18 @@ test('cellView: done cell with no finished_at shows wall "—" (never "0s")', ()
   const v = cellView(c, 's', 'claude');
   expect(v.bottom).toBe('$1.00');
   expect(v.bottomWall).toBe('—');
+});
+
+test('cellView: done cell with only a gauntlet span still shows a wall figure', () => {
+  // The common historical case: no top-level finished_at, but economics carries
+  // the Gauntlet-Agent span. The cell shows it instead of "—".
+  const c = cell({
+    window: [
+      rec({ cost_usd: 1, finished_at: null, gauntlet_duration_ms: 77_000 }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude');
+  expect(v.bottomWall).toBe('1m17s');
 });
 
 test('cellView: slots carry wall-bar heights normalized to the window wall peak', () => {

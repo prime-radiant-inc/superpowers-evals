@@ -159,6 +159,27 @@ test('scanResults reads final/cost/finished_at off the verdict', () => {
   expect(rec?.started_at).toBe('20260612T000000Z');
 });
 
+test('scanResults surfaces economics.gauntlet.duration_ms onto the record', () => {
+  const root = mkdtempSync(join(tmpdir(), 'res-'));
+  writeRun(root, 's-claude-20260612T000000Z-aaaa', {
+    verdict: {
+      final: 'pass',
+      economics: { total_est_cost_usd: 1, gauntlet: { duration_ms: 77_000 } },
+    },
+  });
+  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  expect(cell?.window[0]?.gauntlet_duration_ms).toBe(77_000);
+});
+
+test('scanResults: a verdict with no gauntlet span yields a null duration', () => {
+  const root = mkdtempSync(join(tmpdir(), 'res-'));
+  writeRun(root, 's-claude-20260612T000000Z-aaaa', {
+    verdict: { final: 'pass', economics: { total_est_cost_usd: 1 } },
+  });
+  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  expect(cell?.window[0]?.gauntlet_duration_ms).toBeNull();
+});
+
 test('scanResults collapses an unknown final to "unknown"', () => {
   const root = mkdtempSync(join(tmpdir(), 'res-'));
   writeRun(root, 's-claude-20260612T000000Z-aaaa', {

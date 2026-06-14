@@ -89,24 +89,27 @@ export function formatWall(ms: number): string {
   return `${hours}h${mins.toString().padStart(2, '0')}m`;
 }
 
-// End-to-end run wall-clock in ms: the dir-stamp started_at (always present) to
-// the verdict's finished_at. null when finished_at is missing/unparseable or the
-// span is negative (clock skew). This is the only walltime source that survives
-// the no-cost case (timing is captured independently of obol pricing), and it
-// needs no new RunRecord field — both ends already live on the record.
+// Run wall-clock in ms, by a two-step cascade (both express the same thing — how
+// long the run took — so the metric stays consistent across cells):
+//   1. PRECISE: dir-stamp started_at -> verdict finished_at. Survives the no-cost
+//      case (timing is independent of obol pricing), but the top-level timestamps
+//      are a recent schema addition (~18% of verdicts).
+//   2. FALLBACK: economics.gauntlet.duration_ms — the Gauntlet-Agent's span, which
+//      brackets the run within ~1s of the precise value and is populated for ~71%
+//      of verdicts, so most historical runs still get a duration instead of "—".
+// null only when neither is available (e.g. an errored run with no timing).
 export function runWallMs(rec: RunRecord): number | null {
-  if (rec.finished_at === null) {
-    return null;
-  }
   const start = parseDirStamp(rec.started_at);
-  if (start === null) {
-    return null;
+  if (rec.finished_at !== null && start !== null) {
+    const end = Date.parse(rec.finished_at);
+    if (!Number.isNaN(end) && end >= start) {
+      return end - start;
+    }
   }
-  const end = Date.parse(rec.finished_at);
-  if (Number.isNaN(end) || end < start) {
-    return null;
+  if (rec.gauntlet_duration_ms !== null && rec.gauntlet_duration_ms >= 0) {
+    return rec.gauntlet_duration_ms;
   }
-  return end - start;
+  return null;
 }
 
 // Human-coarse single-unit age: `45s`, `12m`, `3h`, `21d`. Sub-minute reads in
