@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -107,27 +107,38 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
   return records;
 }
 
-const DIRECTIVE_RE = /^#\s*coding-agents:\s*(.+)$/;
+// Mirror of quorum/checks.py:_DIRECTIVE_RE — `^\s*#\s*coding-agents:\s*(.+?)\s*$`.
+// Leading whitespace before the `#` is allowed; the trailing `\s*$` plus the
+// non-greedy `(.+?)` mean a bare `# coding-agents:` (no value) does NOT match.
+const DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
 
 /**
  * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
- * trimmed CSV members. Internal absence is undefined (§5.5), not null.
+ * trimmed CSV members. A line that matches the directive but lists only
+ * separators (e.g. `# coding-agents: ,`) is a *matched-but-empty* directive and
+ * returns `[]` (parity with quorum/checks.py:56) — the matrix gate reads `[]` as
+ * skip-all-agents, whereas a true absence (no matching line, or a missing
+ * checks.sh) returns `undefined` (§5.5).
  */
 export function parseCodingAgentsDirective(
   checksSh: string,
 ): string[] | undefined {
-  const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 20);
+  // Python guards `if not checks_sh.exists(): return None` (quorum/checks.py:49)
+  // before reading; a story-only scenario dir has no checks.sh and must be
+  // treated as un-gated rather than crashing the matrix build.
+  if (!existsSync(checksSh)) {
+    return undefined;
+  }
+  // Python scans line indices 0..20 inclusive (`if i > 20: break`) — 21 lines.
+  const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 21);
   for (const line of head) {
     const match = DIRECTIVE_RE.exec(line);
     const csv = match?.[1];
     if (csv !== undefined) {
-      const members = csv
+      return csv
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      if (members.length > 0) {
-        return members;
-      }
     }
   }
   return undefined;

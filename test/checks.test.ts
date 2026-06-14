@@ -6,6 +6,12 @@ import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
 
 const BIN = resolve(import.meta.dir, '..', 'bin');
 
+function checksShWith(body: string): string {
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(checksSh, body);
+  return checksSh;
+}
+
 test('pre() emitting a passing file-exists record is collected', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   writeFileSync(join(workdir, 'present.txt'), 'x');
@@ -79,6 +85,58 @@ test('parseCodingAgentsDirective returns undefined when no directive present', (
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
   writeFileSync(checksSh, 'pre() { :; }\npost() { :; }\n');
   expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
+});
+
+// E-directive-missing-file-crash: Python guards `if not checks_sh.exists():
+// return None` (quorum/checks.py:49-50). The TS bridge unconditionally read the
+// file, throwing ENOENT — which crashes the whole matrix/run-all build for a
+// story-only scenario dir. Parity: a missing checks.sh is un-gated (undefined).
+test('parseCodingAgentsDirective returns undefined for a missing checks.sh (no crash)', () => {
+  const missing = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  expect(parseCodingAgentsDirective(missing)).toBeUndefined();
+});
+
+// E-directive-leading-whitespace: Python's regex `^\s*#\s*coding-agents:`
+// (quorum/checks.py:41) allows leading whitespace before the `#`. The TS regex
+// anchored on `^#`, silently dropping an indented directive.
+test('parseCodingAgentsDirective honors a leading-whitespace directive line', () => {
+  const checksSh = checksShWith(
+    '   # coding-agents: claude, codex\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude', 'codex']);
+});
+
+// E-directive-empty-returns-undefined: a directive line whose value is only
+// separators (`# coding-agents: ,`) is a *matched-but-empty* directive. Python
+// returns `[]` (quorum/checks.py:56), which the matrix gate treats as
+// skip-ALL-agents. TS used to fall through to `undefined` (run-all). Parity
+// requires `[]` (matched) here — distinct from `undefined` (no match).
+test('parseCodingAgentsDirective returns [] for a degenerate (separators-only) directive', () => {
+  const checksSh = checksShWith(
+    '# coding-agents: ,\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual([]);
+});
+
+// A bare `# coding-agents:` with nothing after the colon does NOT match Python's
+// `(.+?)` (quorum/checks.py:41 requires at least one char), so it keeps scanning
+// and ultimately returns None/undefined — distinct from the degenerate `,` case.
+test('parseCodingAgentsDirective returns undefined for a bare "# coding-agents:" (no value)', () => {
+  const checksSh = checksShWith(
+    '# coding-agents:\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
+});
+
+// E-directive-line-window-offbyone: Python scans line indices 0..20 inclusive
+// (`if i > 20: break`, quorum/checks.py:51-53) — 21 lines. TS sliced [0,20) — 20
+// lines. A directive on the 21st physical line (index 20) must be honored.
+test('parseCodingAgentsDirective honors a directive on the 21st physical line', () => {
+  const filler = Array.from({ length: 20 }, () => '#').join('\n');
+  const checksSh = checksShWith(
+    `${filler}\n# coding-agents: claude\npre() { :; }\npost() { :; }\n`,
+  );
+  expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude']);
 });
 
 // Negative-assertion empty-capture guard (oracle 0f6af56, lives in
