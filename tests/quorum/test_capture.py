@@ -1,11 +1,10 @@
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import yaml
-
-from tests.quorum.conftest import requires_bun
 
 from quorum.capture import (
     CaptureResult,
@@ -18,6 +17,8 @@ from quorum.capture import (
     new_files_since,
     snapshot_dir,
 )
+
+requires_bun = pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
 
 
 def _mkdir(p: Path) -> Path:

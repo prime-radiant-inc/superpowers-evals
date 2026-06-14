@@ -1,15 +1,18 @@
 # tests/quorum/test_checks.py
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from quorum.checks import (
     parse_coding_agents_directive,
     run_phase,
 )
 
-from tests.quorum.conftest import requires_bun
+requires_bun = pytest.mark.skipif(shutil.which("bun") is None, reason="bun not installed")
 
 REPO = Path(__file__).resolve().parents[2]
 
