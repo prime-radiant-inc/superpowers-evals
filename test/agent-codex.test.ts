@@ -1,13 +1,15 @@
 import { expect, test } from 'bun:test';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { CodexAgent } from '../src/agents/codex.ts';
+import { CodexAgent, writePrivateFileNoFollow } from '../src/agents/codex.ts';
 import {
   type AppServerClient,
   type AppServerHook,
@@ -522,6 +524,78 @@ test('config.toml is a regular readable file after provision', () => {
       const st = statSync(join(home.configDir, 'config.toml'));
       expect(st.isFile()).toBe(true);
     });
+  } finally {
+    cleanup();
+  }
+});
+
+// The auth.json write must not follow a symlink at the destination: a
+// pre-placed symlink at <CODEX_HOME>/auth.json must NOT be used to redirect the
+// host's subscription credential to an attacker-controlled path (mirrors the
+// O_NOFOLLOW protection on every Python secret write).
+test('provision refuses to write the subscription auth through a dest symlink', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth');
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  // An attacker-controlled file the symlink points at; it must stay untouched.
+  const victimDir = join(home.workdir, '..', 'victim');
+  mkdirSync(victimDir, { recursive: true });
+  const victim = join(victimDir, 'secret-sink.json');
+  writeFileSync(victim, 'ORIGINAL');
+
+  // Pre-place CODEX_HOME/auth.json as a symlink to the victim before provision.
+  mkdirSync(home.configDir, { recursive: true });
+  symlinkSync(victim, join(home.configDir, 'auth.json'));
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      // The symlinked destination must be rejected, not followed.
+      expect(() => agent.provision(home, runner)).toThrow();
+      // The victim file the symlink targeted is never overwritten...
+      expect(readFileSync(victim, 'utf8')).toBe('ORIGINAL');
+      // ...and the destination is still a symlink, not a regular secret file.
+      expect(
+        lstatSync(join(home.configDir, 'auth.json')).isSymbolicLink(),
+      ).toBe(true);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// The exported writePrivateFileNoFollow building block (reused by Wave-2b's
+// gemini/claude/copilot env-file writers): writes a 0600 file when the
+// destination is fresh, and refuses to follow a symlink at the destination.
+test('writePrivateFileNoFollow writes a fresh file at mode 0600', () => {
+  const { home, cleanup } = makeTempHome();
+  mkdirSync(home.configDir, { recursive: true });
+  const dest = join(home.configDir, 'secret.env');
+  try {
+    writePrivateFileNoFollow(dest, "API_KEY='sk-xxx'\n");
+    expect(readFileSync(dest, 'utf8')).toBe("API_KEY='sk-xxx'\n");
+    expect(statSync(dest).mode & 0o777).toBe(0o600);
+  } finally {
+    cleanup();
+  }
+});
+
+test('writePrivateFileNoFollow refuses to write through a dest symlink', () => {
+  const { home, cleanup } = makeTempHome();
+  mkdirSync(home.configDir, { recursive: true });
+  const victim = join(home.configDir, 'victim');
+  writeFileSync(victim, 'ORIGINAL');
+  const dest = join(home.configDir, 'secret.env');
+  symlinkSync(victim, dest);
+  try {
+    expect(() => writePrivateFileNoFollow(dest, 'SECRET')).toThrow();
+    // The symlink target is never overwritten.
+    expect(readFileSync(victim, 'utf8')).toBe('ORIGINAL');
   } finally {
     cleanup();
   }

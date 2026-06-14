@@ -1,11 +1,14 @@
 import {
-  chmodSync,
-  copyFileSync,
+  closeSync,
   cpSync,
   existsSync,
+  fchmodSync,
+  constants as fsConstants,
   mkdirSync,
+  openSync,
   readFileSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -27,10 +30,11 @@ import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 // it seeds the per-run CODEX_HOME so the agent boots past the sign-in picker
 // with Superpowers staged as a trusted SessionStart plugin hook.
 //
-// Auth is a validated file copy, not a login subprocess (oracle d9ccf4e):
+// Auth is a validated file write, not a login subprocess (oracle d9ccf4e):
 // _seed_codex_auth copies the host's ChatGPT subscription auth.json from
-// ~/.codex/auth.json into the per-run CODEX_HOME (mode 0600), after asserting it
-// is subscription auth (not API-key auth) and carries a refresh token. The
+// ~/.codex/auth.json into the per-run CODEX_HOME (mode 0600, O_NOFOLLOW so a
+// pre-placed symlink can't redirect the secret), after asserting it is
+// subscription auth (not API-key auth) and carries a refresh token. The
 // OPENAI_API_KEY env path is gone; the launch-agent scrubs OpenAI env so Codex
 // uses the copied subscription auth.
 //
@@ -133,7 +137,7 @@ export class CodexAgent implements CodingAgent {
 
     // 1. Copy the host's ChatGPT subscription auth into the fresh CODEX_HOME so
     //    the agent boots past the sign-in picker (_seed_codex_auth, oracle
-    //    d9ccf4e). Validates and copies a file — no login subprocess.
+    //    d9ccf4e). Validates and writes a file (O_NOFOLLOW) — no login subprocess.
     this.seedCodexAuth(configDir);
 
     // 2. Stage Superpowers as a trusted Codex plugin hook
@@ -146,8 +150,9 @@ export class CodexAgent implements CodingAgent {
   // Seed ChatGPT subscription auth into the isolated per-run CODEX_HOME
   // (_seed_codex_auth, oracle d9ccf4e). Reads the host's ~/.codex/auth.json,
   // asserts it is subscription auth (auth_mode === 'chatgpt' and no API key)
-  // carrying a refresh token, then copies it to configDir/auth.json at 0600. The
-  // parsed JSON is unknown until narrowed by CodexAuthSchema (standard §4.1).
+  // carrying a refresh token, then writes it to configDir/auth.json at 0600
+  // through an O_NOFOLLOW-protected open. The parsed JSON is unknown until
+  // narrowed by CodexAuthSchema (standard §4.1).
   private seedCodexAuth(configDir: string): void {
     // Host subscription auth lives at ~/.codex/auth.json (Python: Path.home() /
     // ".codex"). CODEX_AUTH_HOME overrides the parent dir so the hermetic gate
@@ -195,10 +200,14 @@ export class CodexAgent implements CodingAgent {
       );
     }
 
+    // Write the credential through an O_NOFOLLOW-protected open so a pre-placed
+    // symlink at <CODEX_HOME>/auth.json cannot redirect the host's subscription
+    // auth to an attacker-controlled path (mirrors the O_NOFOLLOW posture on
+    // every Python secret write). Re-read the source bytes (the earlier read was
+    // text for JSON validation) and write them verbatim at mode 0600.
     mkdirSync(configDir, { recursive: true });
     const dest = join(configDir, 'auth.json');
-    copyFileSync(source, dest);
-    chmodSync(dest, 0o600);
+    writePrivateFileNoFollow(dest, readFileSync(source));
   }
 
   // Port of install_codex_superpowers_plugin_hooks for the quorum-owned
@@ -293,4 +302,31 @@ function appendTrustedHook(
 
 function tomlBasicString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+// Write `data` to `path` at mode 0600 through an O_NOFOLLOW-protected open, so a
+// pre-placed symlink at the destination cannot redirect the (secret) write to an
+// attacker-controlled path. Mirrors the Python secret writers, which all open
+// with O_CREAT|O_TRUNC|O_NOFOLLOW and fchmod 0600 (quorum/runner.py
+// _write_private_text / _write_gemini_env_file / _write_claude_env_file /
+// _write_copilot_env_file). Exported so Wave-2b's gemini/claude/copilot env-file
+// writers reuse the same protection. O_NOFOLLOW makes the open fail (ELOOP) when
+// the final path component is a symlink, surfacing as a thrown error rather than
+// a redirected secret.
+export function writePrivateFileNoFollow(
+  path: string,
+  data: string | Buffer,
+): void {
+  const flags =
+    fsConstants.O_WRONLY |
+    fsConstants.O_CREAT |
+    fsConstants.O_TRUNC |
+    fsConstants.O_NOFOLLOW;
+  const fd = openSync(path, flags, 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeSync(fd, typeof data === 'string' ? Buffer.from(data) : data);
+  } finally {
+    closeSync(fd);
+  }
 }
