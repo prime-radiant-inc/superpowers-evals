@@ -9,7 +9,14 @@ import type {
 // A non-empty capture is meaningless for any trace check, so the composer forces
 // `indeterminate` when capture was empty and any of these ran. Must stay in sync
 // with src/cli/check-transcript.ts's dispatch table.
+//
+// `check-transcript` (the wrapper name, not a verb) is also included: a record
+// whose `check` is the bare wrapper name only ever arises from a negated check
+// (`not check-transcript <verb>`), which bin/not/bin/_record record under the
+// wrapped tool name rather than the verb. Guarding it keeps negated transcript
+// checks from reaching a verdict on an empty capture.
 const TRACE_PRIMITIVES = new Set([
+  'check-transcript',
   'tool-called',
   'tool-not-called',
   'tool-count',

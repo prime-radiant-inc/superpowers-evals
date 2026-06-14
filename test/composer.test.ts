@@ -141,6 +141,29 @@ for (const verb of CHECK_TRANSCRIPT_VERBS) {
   });
 }
 
+// A negated transcript check (`not check-transcript <verb>`) is recorded by
+// bin/not / bin/_record with `check: "check-transcript"` (the wrapped tool
+// name), NOT the verb. On an empty capture its pass/fail is still meaningless,
+// so the guard must catch it via the wrapper name.
+test('empty capture + negated check-transcript -> indeterminate', () => {
+  const trace: CheckRecord = {
+    check: 'check-transcript',
+    args: ['tool-arg-match', 'Bash', '--matches', 'x=y'],
+    negated: true,
+    passed: true,
+    detail: null,
+    phase: 'post',
+  };
+  expect(
+    compose({
+      gauntlet: G('pass'),
+      checks: [trace],
+      captureEmpty: true,
+      error: null,
+    }).final,
+  ).toBe('indeterminate');
+});
+
 // A non-transcript check (git/fs state) is NOT a trace primitive: an empty
 // capture says nothing about it, so it must NOT trigger the guard.
 test('empty capture + non-trace check (file-exists) -> not guarded', () => {
