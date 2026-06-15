@@ -119,15 +119,25 @@ function writePrivateText(path: string, content: string): void {
   writePrivateFileNoFollow(path, content);
 }
 
+// Expand a leading ~ to HOME (mirrors Path.expanduser for the common case the
+// oracle hits at runner.py:577). Reads HOME only through env.ts.
+function expanduser(p: string): string {
+  if (p === '~' || p.startsWith('~/')) {
+    const home = getEnv('HOME');
+    if (home !== undefined && home !== '') {
+      return p === '~' ? home : join(home, p.slice(2));
+    }
+  }
+  return p;
+}
+
 // Verify the `gemini` binary resolves on PATH before provisioning (Python:
-// _seed_gemini_config's `shutil.which("gemini") is None` fail-fast). node has no
-// shutil.which; probe via the injected runner (`command -v gemini`) so the
-// hermetic gate can stub the lookup, mirroring resolveKimiBinary.
-function requireGeminiBinaryOnPath(runner: CommandRunner): void {
-  const probe = runner.run('command', ['-v', 'gemini'], {
-    env: { ...envSnapshot() },
-  });
-  if (probe.status !== 0 || probe.stdout.trim() === '') {
+// _seed_gemini_config's `shutil.which("gemini") is None` fail-fast). Use
+// Bun.which against the sanctioned PATH snapshot — `command -v` would have to run
+// through a shell, and the subprocess seam's spawnSync has none, so on Linux that
+// probe ENOENTs and falsely reports the binary missing.
+function requireGeminiBinaryOnPath(): void {
+  if (Bun.which('gemini', { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     throw new ProvisionError(
       'gemini not found on PATH; cannot run Gemini evals',
     );
@@ -201,13 +211,15 @@ export class GeminiAgent implements CodingAgent {
     const { configDir } = home;
 
     // SUPERPOWERS_ROOT must be set and carry the required extension files
-    // (Python: _require_gemini_superpowers_root).
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT') ?? '';
-    if (!superpowersRoot) {
+    // (Python: _require_gemini_superpowers_root, which Path(...).expanduser()s
+    // the raw value before every filesystem touch).
+    const superpowersRaw = getEnv('SUPERPOWERS_ROOT') ?? '';
+    if (!superpowersRaw) {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install Gemini Superpowers extension',
       );
     }
+    const superpowersRoot = expanduser(superpowersRaw);
     const missingRoot = GEMINI_REQUIRED_SUPERPOWERS_FILES.filter(
       (rel) => !existsSync(join(superpowersRoot, rel)),
     );
@@ -221,7 +233,7 @@ export class GeminiAgent implements CodingAgent {
     // _seed_gemini_config's shutil.which check, right after the SUPERPOWERS_ROOT
     // validation). Without this a missing binary surfaces later as a confusing
     // 'gemini extensions link failed (exit null)'.
-    requireGeminiBinaryOnPath(runner);
+    requireGeminiBinaryOnPath();
 
     // Resolve the auth type once (Python: _gemini_auth_type resolved in
     // _seed_gemini_config). A bogus value raises here, before any subprocess.
