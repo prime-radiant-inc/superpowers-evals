@@ -33,15 +33,15 @@ Ground truth for "is X a real parity gap" = the **flat-JSONL Python frozen on `o
 > NOTE on a hazard that was found & fixed: the Wave 2b worktree agent's `git reset --hard` had moved the **local** `atif-graft` branch forward to the parity commits (origin/atif-graft was untouched at `21f1a8a`). Left alone, a stray `git push` from the atif-graft worktree would have fast-forwarded the PR branch with parity commits. Local `atif-graft` was reset back to `origin/atif-graft`.
 
 ## WAVE 3 — the net-new LOW findings (from the colleague reconciliation, `~/2026-06-14-reconciled-missing-findings.md`)
-RX-6 is DONE (folded into the Wave 2b runner fixes above). **RX-1..5 REMAIN** — all LOW, all in the agent-config loader (`src/contracts/agent-config.ts` + `substituteEnv`). They touch ONE file, so do them sequentially in a single pass (not a parallel fan-out — same-file conflicts). In scope ("everything except cosmetic"). Strict red-green TDD.
-- **RX-1** — validate `runtime_family` against the known set (`src/contracts/agent-config.ts`); unknown family currently falls through to `DefaultAgent` silently. Python rejects.
-- **RX-2** — claude `model` required + reject blank (avoid `claude --model ''`).
-- **RX-3** — `name == file-stem` check on load.
-- **RX-4** — `required_env` load-time missing-key rejection (runtime presence check still exists, so narrow).
-- **RX-5** — `substituteEnv` handles only `${VAR}`; add bare `$VAR` + leading `~` expansion (Python uses `string.Template` + `expanduser`). Find `substituteEnv` (agent-config / env).
-- **RX-6** — DONE. Wave 2b did NOT do it; closed by F2 above (`de0ad57`): runner `cleanup_dirs` + cleanup-failure→indeterminate `finally`.
-- Borderline (NOT counted, skip unless asked): `run-dir-collision-tolerance` (`mkdir exist_ok=False` vs `recursive:true`) — real but no realistic exposure.
-- RX-1..5 touch `src/contracts/agent-config.ts` (+ substituteEnv); small enough for ONE agent (or do directly), TDD. RX-6 is runner-lifecycle (fold with/after Wave 2b).
+**WAVE 3 DONE** — RX-1..6 all landed (`e323677` for RX-1..5 in `src/contracts/agent-config.ts`; RX-6 in the Wave 2b fixes). All are CodingAgentConfigError → setup indeterminate; `loadAgentConfig` is called only from the runner so `quorum check` is unaffected.
+- **RX-1** ✅ `runtime_family` defaults to name, must be a known family (validate-only; returned shape unchanged since readers already default via `?? name`).
+- **RX-2** ✅ claude family requires a model; any declared model must be non-blank.
+- **RX-3** ✅ `name == file-stem`.
+- **RX-4** ✅ `required_env` set at load time (present-but-empty counts as missing).
+- **RX-5** ✅ `substituteEnv` now also does bare `$VAR` + `$$`→`$`; new `resolveSessionLogDir` substitutes then expands leading `~`; runner uses it.
+- **RX-6** ✅ closed by F2 (`de0ad57`).
+- Intentionally SKIPPED (sanctioned divergence): Python's "non-Claude variants not supported in v1" check — TS is multi-agent and the rule is redundant for every real config (runtime_family == name).
+- Borderline (NOT done, skip unless asked): `run-dir-collision-tolerance` (`mkdir exist_ok=False` vs `recursive:true`) — real but no realistic exposure.
 
 ## LATER — review & finish
 1. **Consolidated adversarial review** of the whole parity branch once Wave 2b + Wave 3 are in: `/par` (2 competing adversarial reviewers, disqualified for inflated findings) **and** `roborev review --branch --wait --base atif-graft` (diff vs `atif-graft` to isolate the parity delta; use `--base origin/main` for the full stack). Triage real findings, fix (TDD), re-verify. Converge (≤1 clean round).
