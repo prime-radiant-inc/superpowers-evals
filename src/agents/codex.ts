@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
@@ -77,21 +77,51 @@ const PLUGIN_COPY_IGNORE = new Set<string>([
   'node_modules',
 ]);
 
-// `results` is path-sensitive: Python's _ignore_codex_plugin_copy adds it to the
-// ignore set ONLY when the directory being copied is named `evals` (i.e. it
-// drops `evals/results`, the run-artifact dir, but keeps a legitimate `results`
-// dir nested elsewhere — e.g. inside a skill). cpSync's filter receives the
-// full source path, so we reproduce the per-parent context by dropping a
-// `results` entry only when its parent dir basename is `evals`.
-function isCodexPluginCopyExcluded(src: string): boolean {
-  const name = basename(src);
-  if (PLUGIN_COPY_IGNORE.has(name)) {
+// Decide whether a source path is excluded from the staged Codex plugin copy.
+//
+// Two rules, applied in order:
+//   1. Always drop the PLUGIN_COPY_IGNORE basenames (.git, node_modules, …)
+//      anywhere in the tree.
+//   2. Drop the ENTIRE `evals/` submodule at the superpowers root — `src`
+//      resolving to `<superpowersRoot>/evals` (basename `evals` AND parent is
+//      the root). Excluding the directory prunes its whole subtree (results/,
+//      worktrees/, node_modules/, …), none of which belongs in the staged
+//      plugin. The parent-is-root guard means a legitimate nested `evals` dir
+//      deeper in the tree (e.g. inside a skill fixture) is still copied.
+//
+// Python parity note: the frozen Python (_ignore_codex_plugin_copy in
+// setup_helpers/worktree.py) excluded only `evals/results`, keyed on the parent
+// dir being named `evals`. This DIVERGES on purpose: live evals run from a
+// superpowers checkout whose `evals/` submodule carries results/, per-run
+// worktrees, and node_modules — all wasteful and fragile to stage. We exclude
+// the whole `<root>/evals` subtree instead of just `evals/results`.
+export function isCodexPluginCopyExcluded(
+  src: string,
+  superpowersRoot: string,
+): boolean {
+  if (PLUGIN_COPY_IGNORE.has(basename(src))) {
     return true;
   }
-  if (name === 'results' && basename(dirname(src)) === 'evals') {
+  if (
+    basename(src) === 'evals' &&
+    resolve(src) === resolve(superpowersRoot, 'evals')
+  ) {
     return true;
   }
   return false;
+}
+
+// Realpath-safe directory containment: true when `child` is `parent` itself or
+// strictly under it. Resolves both to absolute paths and compares with a
+// trailing separator so `/a/bc` does not count as under `/a/b` (no false-prefix
+// match). Used by the self-copy fail-fast guard.
+export function isUnderDir(child: string, parent: string): boolean {
+  const resolvedChild = resolve(child);
+  const resolvedParent = resolve(parent);
+  if (resolvedChild === resolvedParent) {
+    return true;
+  }
+  return resolvedChild.startsWith(resolvedParent + sep);
 }
 
 export class CodexAgent implements CodingAgent {
@@ -230,10 +260,21 @@ export class CodexAgent implements CodingAgent {
       'superpowers',
       'local',
     );
+
+    // Fail-fast self-copy guard: when the eval out-root is INSIDE
+    // SUPERPOWERS_ROOT, pluginRoot (dest) is a subdirectory of the copy source,
+    // and cpSync dies with a cryptic "cannot copy X to a subdirectory of self".
+    // Surface a clear, actionable error before the copy instead.
+    if (isUnderDir(pluginRoot, superpowersRoot)) {
+      throw new ProvisionError(
+        `Codex plugin copy would recurse into itself: the eval out-root resolves under SUPERPOWERS_ROOT (${superpowersRoot}). Pass --out-root pointing OUTSIDE SUPERPOWERS_ROOT.`,
+      );
+    }
+
     mkdirSync(dirname(pluginRoot), { recursive: true });
     cpSync(superpowersRoot, pluginRoot, {
       recursive: true,
-      filter: (src: string) => !isCodexPluginCopyExcluded(src),
+      filter: (src: string) => !isCodexPluginCopyExcluded(src, superpowersRoot),
     });
 
     const configPath = join(configDir, 'config.toml');

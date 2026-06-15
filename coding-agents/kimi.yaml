@@ -1,5 +1,5 @@
 name: kimi
-binary: kimi
+binary: kimi-code
 agent_config_env: KIMI_CODE_HOME
 session_log_dir: "${KIMI_CODE_HOME}/sessions"
 session_log_glob: "**/wire.jsonl"

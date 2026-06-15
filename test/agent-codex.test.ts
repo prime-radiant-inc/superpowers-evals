@@ -267,10 +267,10 @@ test('provision drives the app-server with the run cwd, CODEX_HOME, and a bounde
   }
 });
 
-test('plugin copy drops only evals/results, keeping a results dir elsewhere', () => {
-  // Mirrors _ignore_codex_plugin_copy: `results` is excluded ONLY when the
-  // directory being copied is named `evals`. A legitimate `results` dir nested
-  // under a skill must survive into the staged plugin.
+test('plugin copy drops the whole evals subtree at the root, keeping a results dir elsewhere', () => {
+  // The ENTIRE `<root>/evals` submodule is excluded (results/, worktrees/,
+  // node_modules/, and any other content), but a legitimate `results` dir
+  // nested under a skill — whose parent is NOT the root — must survive.
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
@@ -279,10 +279,10 @@ test('plugin copy drops only evals/results, keeping a results dir elsewhere', ()
   // A non-evals `results` dir that MUST be copied.
   mkdirSync(join(spRoot, 'skills', 'my-skill', 'results'), { recursive: true });
   writeFileSync(join(spRoot, 'skills', 'my-skill', 'results', 'keep.txt'), 'k');
-  // An `evals/results` dir that MUST be dropped.
+  // An `evals/results` dir that MUST be dropped (part of the evals subtree).
   mkdirSync(join(spRoot, 'evals', 'results'), { recursive: true });
   writeFileSync(join(spRoot, 'evals', 'results', 'drop.txt'), 'd');
-  // A real file under evals (not results) that MUST be copied.
+  // Any other file under evals MUST now also be dropped — the whole subtree goes.
   writeFileSync(join(spRoot, 'evals', 'keep-evals.txt'), 'e');
   const runner = unusedRunner();
 
@@ -298,17 +298,14 @@ test('plugin copy drops only evals/results, keeping a results dir elsewhere', ()
         'superpowers',
         'local',
       );
-      // The skill's results dir survives (only evals/results is special).
+      // The skill's results dir survives (only the root-level evals is special).
       expect(
         existsSync(
           join(pluginRoot, 'skills', 'my-skill', 'results', 'keep.txt'),
         ),
       ).toBe(true);
-      // evals/results is dropped, but other evals content survives.
-      expect(existsSync(join(pluginRoot, 'evals', 'results'))).toBe(false);
-      expect(existsSync(join(pluginRoot, 'evals', 'keep-evals.txt'))).toBe(
-        true,
-      );
+      // The entire root-level evals/ subtree is dropped.
+      expect(existsSync(join(pluginRoot, 'evals'))).toBe(false);
     });
   } finally {
     cleanup();
