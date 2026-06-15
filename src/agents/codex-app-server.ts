@@ -13,6 +13,23 @@
 // seam carries a `timeout`, and a timed-out spawn surfaces the same diagnostic
 // the Python deadline path raises (with the captured stderr for triage).
 //
+// 0.133.0 EOF-race fix: codex-cli 0.133.0's stdio transport
+// (app-server-transport/src/transport/stdio.rs:50-79) closes the connection the
+// moment stdin reaches EOF, and the stdio path runs in single_client_mode
+// (app-server/src/lib.rs:631-632) where shutdown_when_no_connections tears the
+// whole process down on that close (lib.rs:878). hooks/list is dispatched
+// asynchronously — process_request enqueues it and returns without awaiting the
+// response (app-server/src/message_processor.rs:736-797) — so a plain
+// spawnSync-with-`input`, which closes the child's stdin immediately after
+// writing, races the async response and usually loses: the harness saw "no
+// response for request 2" (and frequently nothing at all). The fix is to keep
+// codex's stdin pipe OPEN for a short grace after the requests are written, so
+// the queued hooks/list response is flushed before EOF triggers shutdown. We do
+// this by wrapping the codex invocation in a shell that relays our stdin (cat)
+// to codex and then holds the pipe open (sleep) before EOF. Verified live
+// against codex-cli 0.133.0: with the grace, id-2 responds; without it, EOF
+// shutdown eats the response.
+//
 // The spawn is injected (AppServerSpawn) so the hermetic gate stubs it; live
 // runs use SpawnAppServerClient's default spawnSync-backed spawn.
 import { spawnSync } from 'node:child_process';
@@ -23,6 +40,12 @@ const PLUGIN_ID = 'superpowers@debug';
 
 // Default per-handshake deadline, matching worktree.py's 15s selector deadline.
 export const APP_SERVER_TIMEOUT_MS = 15_000;
+
+// Seconds to hold codex's stdin pipe open after writing the requests, before the
+// EOF that ends the single-client stdio session. Long enough for the async
+// hooks/list response to flush under a busy live run, comfortably under
+// APP_SERVER_TIMEOUT_MS (15s). See the EOF-race note above.
+export const APP_SERVER_STDIN_GRACE_SECONDS = 3;
 
 export interface AppServerHook {
   readonly key: string;
@@ -65,10 +88,31 @@ export type AppServerSpawn = (
   options: AppServerSpawnOptions,
 ) => AppServerSpawnResult;
 
+// The shell-wrapped codex invocation that keeps stdin open past EOF (0.133.0
+// EOF-race fix; see the module note). spawnSync writes our requests to the
+// shell's stdin and closes it; `cat` relays them to codex and exits on that EOF,
+// then `sleep` holds codex's stdin pipe open for the grace before codex sees EOF
+// and flushes the queued hooks/list response. The command/args are pure (no
+// spawning) so the handshake test can assert the shape.
+export function buildAppServerSpawnArgv(): {
+  command: string;
+  args: readonly string[];
+} {
+  return {
+    command: 'sh',
+    args: [
+      '-c',
+      `{ cat; sleep ${APP_SERVER_STDIN_GRACE_SECONDS}; } | codex app-server --listen stdio://`,
+    ],
+  };
+}
+
 // Real bounded spawn: spawnSync with the deadline forwarded as `timeout`, so a
 // non-flushing/hung app-server is killed instead of blocking provisioning.
 // spawnSync reports a deadline kill via `error.code === 'ETIMEDOUT'` (or, on
-// some platforms, a null status with a signal); both map to timedOut.
+// some platforms, a null status with a signal); both map to timedOut. The
+// command/args carry the stdin-grace shell wrapper, so a clean run takes ~grace
+// seconds (codex exits promptly once stdin EOFs after the sleep).
 const defaultSpawn: AppServerSpawn = (command, args, options) => {
   const proc = spawnSync(command, [...args], {
     cwd: options.cwd,
@@ -98,7 +142,8 @@ export class SpawnAppServerClient implements AppServerClient {
   readHook(args: ReadHookArgs): AppServerHook {
     const { configDir, workdir, timeoutMs } = args;
     const input = buildHandshakeInput(workdir);
-    const result = this.spawn('codex', ['app-server', '--listen', 'stdio://'], {
+    const { command, args: spawnArgs } = buildAppServerSpawnArgv();
+    const result = this.spawn(command, spawnArgs, {
       cwd: workdir,
       env: { ...envSnapshot(), CODEX_HOME: configDir },
       input,
@@ -125,7 +170,7 @@ export class SpawnAppServerClient implements AppServerClient {
 // The compact JSON-RPC requests piped to `codex app-server` stdin: initialize
 // (id 1) then hooks/list (id 2) for the run's workdir. Mirrors
 // _read_codex_superpowers_hook's two requests.
-function buildHandshakeInput(workdir: string): string {
+export function buildHandshakeInput(workdir: string): string {
   const initialize = {
     jsonrpc: '2.0',
     id: 1,
@@ -166,7 +211,7 @@ interface HooksListResponse {
 // Scan newline-delimited JSON-RPC lines for the response with the given id,
 // surfacing an `error` member as a ProvisionError (mirrors
 // _read_codex_app_server_response's id-match + error branch).
-function parseAppServerResponse(
+export function parseAppServerResponse(
   stdout: string,
   requestId: number,
 ): HooksListResponse {
