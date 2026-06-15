@@ -68,8 +68,14 @@ Criteria` heading; a `setup.sh` (executable) that calls
 ### Validate
 
 ```
-bun run quorum check        # validate ALL scenarios
+bun run quorum check                   # validate ALL scenarios
+bun run quorum check <name> [<name>…]  # validate only the named scenario(s)
 ```
+
+`quorum check` takes the same scenario-name forms as `run` — a bare `foo` or a
+`scenarios/foo` path both resolve (`src/cli/index.ts`) — so you can tighten the
+loop to the one scenario you are editing. It is a **static** validator: it never
+launches an agent and needs only the scenarios root, not `SUPERPOWERS_ROOT`.
 
 `checkScenario` (`src/scaffold.ts`) verifies, per scenario: `story.md` has `id`
 and `title` frontmatter and a `## Acceptance Criteria` section; `quorum_tier` (if
@@ -85,7 +91,12 @@ checks.sh — see §4).
 bun run quorum run scenarios/<name> --coding-agent <claude|codex|…>
 ```
 
-`--coding-agent` is required. See the run-dir layout in §5.
+`--coding-agent` is required. Unlike `quorum check`, **running** a scenario needs
+`SUPERPOWERS_ROOT` set: provisioning stages the plugin from it, and every
+`needsSuperpowersRoot` setup-helper resolves it. If it is unset, provisioning
+fails fast with `SUPERPOWERS_ROOT not set; cannot install …` (per harness in
+`src/agents/*`). Export it to your `superpowers` checkout before a run
+(`export SUPERPOWERS_ROOT=/path/to/superpowers`). See the run-dir layout in §5.
 
 ### Where the verbs and helpers actually live
 
@@ -127,6 +138,18 @@ an `## Acceptance Criteria` heading. Optional frontmatter (`src/story-meta.ts`,
 | `quorum_tier` | `sentinel` \| `full` \| `adhoc`. Anything else fails validation. | `readQuorumTier`; `VALID_TIERS` in `src/scaffold.ts` |
 | `quorum_max_time` | Per-scenario duration cap, e.g. `90m`, `30s`, `120`. Regex: `^\d+(ms|s|m|h)?$`. | `readQuorumMaxTime` |
 | `status`, `tags` | Informational; `status` defaults to `ready`. | `readStoryStatus` |
+
+#### Choosing a `quorum_tier`
+
+The tier is a **batch filter**, not a behavior switch — it only decides whether
+`quorum run-all --tier <t>` includes the scenario (`src/run-all/matrix.ts`;
+precedence is directive > draft > tier). It defaults to `full`. Pick:
+
+- **`sentinel`** — a fast, high-signal smoke meant to run on every quick sweep
+  (e.g. a single skill-auto-triggering check). Keep these cheap and deterministic.
+- **`full`** — the default; part of the comprehensive suite but not the fast lane.
+- **`adhoc`** — a one-off or experiment you do NOT want a default `--tier full`
+  batch to sweep up; run it explicitly by name.
 
 ### The body briefs a QA agent — it is not a task description
 
@@ -207,6 +230,21 @@ captured token economics; the AC's job is to keep the two arms of a comparison
 honest. Calibration pairs (e.g. `cost-checkbox-over-trigger` vs
 `brainstorming-resists-jump-to-implementation`) exist to bracket a behavior from
 both sides.
+
+### Where the trigger lives: story prose vs fixture state
+
+For an auto-triggering scenario, decide what the skill keys off and put the
+trigger there. Some skills key off the **conversation**:
+`triggering-finishing-a-development-branch` fires on the request "I finished …
+help me wrap it up and get it integrated," so its fixture is a bare
+`create_base_repo` and the premise lives entirely in the story prose. Others key
+off **repo state** — a skill about a feature branch only makes sense if `setup.sh`
+actually leaves the fixture on a branch with commits ahead of `main`. Match the
+fixture's git state to the story's premise: a story that says "I'm mid-rebase"
+over a pristine `main` checkout hands the grader a contradiction and muddies the
+result. When no helper builds the state you need, create it inline in `setup.sh`
+with plain git commands (the git fixtures commit under the "Drill Test"
+identity — see `src/setup-helpers/git.ts`).
 
 ### Anti-patterns
 
