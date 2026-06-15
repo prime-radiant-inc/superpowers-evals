@@ -53,6 +53,7 @@ import {
 import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
 import {
+  agentConfigDir,
   CodingAgentConfigError,
   loadAgentConfig,
   resolveSessionLogDir,
@@ -987,7 +988,6 @@ async function runInnerBody(
   const agent = resolveAgent(cfg);
 
   // setup: isolated config + workdir, claude provisioning, then setup.sh.
-  const configDir = join(runDir, 'coding-agent-config');
   const workdir = join(runDir, 'coding-agent-workdir');
   mkdirSync(workdir, { recursive: true });
   // Throwaway $HOME for the coding agent under test — always on, every agent.
@@ -999,6 +999,11 @@ async function runInnerBody(
   for (const dir of [runHomeDir, ...xdgHomeSubdirs(runHomeDir)]) {
     mkdirSync(dir, { recursive: true });
   }
+  // The agent's isolated config dir: rooted under the throwaway home when the
+  // agent declares home_config_subdir (it then finds config via its $HOME
+  // default and the launcher omits the config-dir env var), else the legacy
+  // standalone <runDir>/coding-agent-config.
+  const configDir = agentConfigDir(cfg, runDir, runHomeDir);
   const home = {
     configDir,
     workdir,
