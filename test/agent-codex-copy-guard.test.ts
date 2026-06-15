@@ -96,6 +96,21 @@ test('isCodexPluginCopyExcluded keeps <root>/skills, <root>/hooks, <root>/docs',
   expect(isCodexPluginCopyExcluded(join(root, 'docs'), root)).toBe(false);
 });
 
+test('isCodexPluginCopyExcluded excludes <root>/.claude (dev worktrees) but keeps .claude-plugin', () => {
+  const root = '/some/superpowers';
+  // .claude at root holds dev worktrees — each a full checkout with its own
+  // evals/results — and is not part of the plugin.
+  expect(isCodexPluginCopyExcluded(join(root, '.claude'), root)).toBe(true);
+  // .claude-plugin (the plugin manifest dir) must survive.
+  expect(isCodexPluginCopyExcluded(join(root, '.claude-plugin'), root)).toBe(
+    false,
+  );
+  // a nested (non-root) .claude is NOT excluded by the root rule.
+  expect(isCodexPluginCopyExcluded(join(root, 'skills', '.claude'), root)).toBe(
+    false,
+  );
+});
+
 test('isCodexPluginCopyExcluded does not exclude a nested evals dir whose parent is not the root', () => {
   const root = '/some/superpowers';
   expect(

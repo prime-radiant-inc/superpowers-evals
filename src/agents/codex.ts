@@ -102,9 +102,14 @@ export function isCodexPluginCopyExcluded(
   if (PLUGIN_COPY_IGNORE.has(basename(src))) {
     return true;
   }
+  // Top-level non-plugin trees: the `evals` submodule and `.claude` (dev
+  // worktrees — each a full checkout with its own evals/results). `.claude-plugin`
+  // (the plugin manifest) is a different name and is preserved; a nested `.claude`
+  // / `evals` deeper in the tree is still copied (the parent-is-root guard).
+  const name = basename(src);
   if (
-    basename(src) === 'evals' &&
-    resolve(src) === resolve(superpowersRoot, 'evals')
+    (name === 'evals' || name === '.claude') &&
+    resolve(src) === resolve(superpowersRoot, name)
   ) {
     return true;
   }
