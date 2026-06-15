@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /workspace/evals
+
+if [[ -f /run/evals/credentials.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /run/evals/credentials.env
+  set +a
+fi
+
+export SUPERPOWERS_ROOT=/workspace/superpowers
+
+if [[ -d /auth/codex ]]; then
+  export CODEX_AUTH_HOME=/auth/codex
+fi
+
+if [[ -d /auth/gemini ]]; then
+  export GEMINI_OAUTH_HOME=/auth/gemini
+  export AGY_OAUTH_HOME=/auth/gemini
+fi
+
+if [[ -d /auth/kimi-code ]]; then
+  export KIMI_OAUTH_HOME=/auth/kimi-code
+fi
+
+if [[ -d /auth/pi ]]; then
+  export PI_OAUTH_HOME=/auth/pi
+fi
+
+exec bun run src/cli/index.ts "$@"

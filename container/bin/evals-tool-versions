@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+core_tools=(
+  bash
+  zsh
+  git
+  gh
+  node
+  npm
+  bun
+  python3
+  uv
+  go
+  rustc
+  cargo
+  ruby
+  mise
+  quorum
+)
+
+agent_tools=(
+  claude
+  codex
+  gemini
+  opencode
+  pi
+  copilot
+  droid
+  qodercli
+  qwen
+  kilo
+  openclaw
+  amp
+  auggie
+  cn
+  cline
+  cursor-agent
+  aider
+  goose
+  agy
+  kimi
+)
+
+print_version() {
+  local tool output first_line status
+  local args=(--version)
+  tool=$1
+
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf '%s: missing\n' "$tool"
+    return 0
+  fi
+
+  case "$tool" in
+    go)
+      args=(version)
+      ;;
+  esac
+
+  if output=$("$tool" "${args[@]}" 2>&1); then
+    first_line=${output%%$'\n'*}
+    if [[ -z "$first_line" ]]; then
+      first_line='present (no version output)'
+    fi
+    printf '%s: %s\n' "$tool" "$first_line"
+    return 0
+  else
+    status=$?
+  fi
+
+  first_line=${output%%$'\n'*}
+  if [[ -n "$first_line" ]]; then
+    printf '%s: present (version check failed with exit %s): %s\n' "$tool" "$status" "$first_line"
+  else
+    printf '%s: present (version check failed with exit %s)\n' "$tool" "$status"
+  fi
+}
+
+printf 'Core tools:\n'
+for tool in "${core_tools[@]}"; do
+  print_version "$tool"
+done
+
+printf '\nAgent CLIs:\n'
+for tool in "${agent_tools[@]}"; do
+  print_version "$tool"
+done
