@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getEnv } from '../env.ts';
@@ -27,6 +27,20 @@ export interface KillRunTmuxServerOptions {
   readonly runner?: CommandRunner;
   /** Injectable gauntlet-socket lister. Defaults to globbing the socket dir. */
   readonly listSockets?: () => string[];
+}
+
+// Mirror Python pathlib.Path(...).resolve(): resolve symlinks but never throw on
+// a missing path (fs.realpathSync throws ENOENT; fall back to a non-resolving
+// resolve()). Both the scratch dir and the tmux-reported pane path must be
+// resolved this way: on macOS /tmp -> /private/tmp, so a purely lexical resolve()
+// would false-negative when one side reports the realpath and the other the
+// symlinked path, silently skipping the kill.
+function realpathSafe(value: string): string {
+  try {
+    return realpathSync(value);
+  } catch {
+    return resolve(value);
+  }
 }
 
 /** The tmux socket directory: $TMUX_TMPDIR (or /tmp) / tmux-<uid>. */
@@ -79,14 +93,14 @@ export function killRunTmuxServer(
   const runner = opts.runner ?? defaultCommandRunner;
   const listSockets = opts.listSockets ?? listGauntletSockets;
 
-  const target = resolve(scratchDir);
+  const target = realpathSafe(scratchDir);
   for (const name of listSockets()) {
     for (const line of panePath(name, runner).split('\n')) {
       const trimmed = line.trim();
       if (trimmed === '') {
         continue;
       }
-      if (resolve(trimmed) === target) {
+      if (realpathSafe(trimmed) === target) {
         runner.run('tmux', ['-L', name, 'kill-server']);
         return true;
       }

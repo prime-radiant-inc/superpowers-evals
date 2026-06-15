@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { killRunTmuxServer } from '../src/agents/agy-teardown.ts';
 import type {
@@ -98,6 +105,38 @@ describe('killRunTmuxServer', () => {
       ]);
     } finally {
       cleanup();
+    }
+  });
+
+  test('matches a pane path by realpath across a symlinked scratch dir', () => {
+    // The antigravity visible-workspace lives under tmpdir(); on macOS
+    // /tmp -> /private/tmp, so tmux may report the realpath while quorum holds
+    // the symlinked path (or vice versa). The kill must still fire. resolve()
+    // is purely lexical and would miss this; realpath resolution must not.
+    const base = mkdtempSync(join(realpathSync(tmpdir()), 'agy-teardown-'));
+    try {
+      const realScratch = join(base, 'real-scratch');
+      mkdirSync(realScratch, { recursive: true });
+      const linkScratch = join(base, 'link-scratch');
+      symlinkSync(realScratch, linkScratch);
+
+      // quorum holds the symlinked path; tmux reports the realpath.
+      const { runner, calls } = makeRunner({
+        'gauntlet-1-aaaaaa': `${realScratch}\n`,
+      });
+      const killed = killRunTmuxServer(linkScratch, {
+        runner,
+        listSockets: () => ['gauntlet-1-aaaaaa'],
+      });
+      expect(killed).toBe(true);
+      expect(calls).toContainEqual([
+        'tmux',
+        '-L',
+        'gauntlet-1-aaaaaa',
+        'kill-server',
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 

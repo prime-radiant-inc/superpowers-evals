@@ -564,6 +564,30 @@ test('excludeAntigravityProjectMarker adds .antigravitycli/ to a git work tree i
   }
 });
 
+// L6: the git-path probe's exit status must not be discarded. Python runs it
+// with check=True (raises on non-zero); a silently-ignored failure makes
+// gitPath "" and collapses excludePath to launchCwd, so writeFileSync targets a
+// directory (EISDIR). Inject a fake probe whose second call fails.
+test('excludeAntigravityProjectMarker throws when the git-path probe fails', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    const repo = join(home.workdir, 'repo');
+    mkdirSync(repo, { recursive: true });
+    const fakeGitProbe = (_cwd: string, args: readonly string[]) => {
+      if (args.includes('--is-inside-work-tree')) {
+        return { status: 0, stdout: 'true' };
+      }
+      // The --git-path info/exclude probe fails (e.g. corrupt repo state).
+      return { status: 128, stdout: '' };
+    };
+    expect(() => excludeAntigravityProjectMarker(repo, fakeGitProbe)).toThrow();
+    // Must not have silently written into the repo directory itself.
+    expect(existsSync(join(repo, '.antigravitycli/'))).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
 test('excludeAntigravityProjectMarker is a noop outside a git work tree', () => {
   const { home, cleanup } = makeTempHome();
   try {

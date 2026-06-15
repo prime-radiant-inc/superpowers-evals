@@ -394,13 +394,15 @@ function pathHasHiddenComponent(path: string): boolean {
 // exit status. Used only for the info/exclude marker bookkeeping below; this is
 // not an agent-CLI invocation, so it does not route through the CommandRunner
 // provisioning seam (matching how setup-helpers/git.ts shells git directly).
-function gitProbe(
+export type GitProbe = (
   cwd: string,
-  args: string[],
-): { status: number | null; stdout: string } {
+  args: readonly string[],
+) => { status: number | null; stdout: string };
+
+const gitProbe: GitProbe = (cwd, args) => {
   const proc = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
   return { status: proc.status, stdout: (proc.stdout ?? '').trim() };
-}
+};
 
 /**
  * Ignore Antigravity's project marker in the launch repo when one exists.
@@ -412,17 +414,31 @@ function gitProbe(
  * eval repo's git status / dirty-tree assertions. Port of
  * _exclude_antigravity_project_marker. Exported for the runner (Wave 2b).
  */
-export function excludeAntigravityProjectMarker(launchCwd: string): void {
-  const inside = gitProbe(launchCwd, ['rev-parse', '--is-inside-work-tree']);
+export function excludeAntigravityProjectMarker(
+  launchCwd: string,
+  probe: GitProbe = gitProbe,
+): void {
+  const inside = probe(launchCwd, ['rev-parse', '--is-inside-work-tree']);
   if (inside.status !== 0 || inside.stdout !== 'true') {
     return;
   }
 
-  const gitPath = gitProbe(launchCwd, [
+  // Python runs this probe with check=True. A non-zero exit must raise rather
+  // than yield "" — an empty git-path collapses excludePath to launchCwd, so the
+  // later writeFileSync would target a directory (EISDIR) instead of failing
+  // cleanly here.
+  const gitPathProbe = probe(launchCwd, [
     'rev-parse',
     '--git-path',
     'info/exclude',
-  ]).stdout;
+  ]);
+  if (gitPathProbe.status !== 0) {
+    throw new Error(
+      `git rev-parse --git-path info/exclude failed in ${launchCwd} ` +
+        `(exit ${gitPathProbe.status})`,
+    );
+  }
+  const gitPath = gitPathProbe.stdout;
   let excludePath = gitPath;
   if (!isAbsolute(excludePath)) {
     excludePath = join(launchCwd, excludePath);
