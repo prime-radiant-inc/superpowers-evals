@@ -1,11 +1,15 @@
-import { expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandResult } from '../src/agents/command-runner.ts';
 import { GeminiAgent } from '../src/agents/gemini.ts';
@@ -56,6 +60,49 @@ function seedSuperpowersRoot(root: string): void {
     writeFileSync(path, 'fixture\n');
   }
 }
+
+// Build an isolated directory to use as PATH. When `withGemini` is true it lays
+// down an executable `gemini` shim so Bun.which('gemini') resolves there; when
+// false the dir is empty so the binary is genuinely absent. Returns the dir plus
+// a cleanup(). Used by the PATH-probe tests, which exercise the real Bun.which
+// lookup rather than faking it through the runner.
+function makePathDir(withGemini: boolean): {
+  dir: string;
+  cleanup: () => void;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'quorum-gemini-path-'));
+  if (withGemini) {
+    const shim = join(dir, 'gemini');
+    writeFileSync(shim, '#!/bin/sh\nexit 0\n');
+    chmodSync(shim, 0o755);
+  }
+  return {
+    dir,
+    cleanup: () => {
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+// The adapter resolves `gemini` via Bun.which against the PATH snapshot. To make
+// every "binary present" test hermetic (independent of whether a real gemini is
+// installed on the host), prepend a dir holding a `gemini` shim to PATH for the
+// whole file. The genuinely-absent test overrides PATH to an empty dir.
+let geminiShimDir: { dir: string; cleanup: () => void };
+let savedPath: string | undefined;
+beforeAll(() => {
+  geminiShimDir = makePathDir(true);
+  savedPath = process.env['PATH'];
+  process.env['PATH'] = `${geminiShimDir.dir}:${savedPath ?? ''}`;
+});
+afterAll(() => {
+  if (savedPath === undefined) {
+    delete process.env['PATH'];
+  } else {
+    process.env['PATH'] = savedPath;
+  }
+  geminiShimDir.cleanup();
+});
 
 // The adapter probes `command -v gemini` to confirm the binary is on PATH
 // (Python: shutil.which("gemini")). A responder must resolve it for any later
@@ -203,20 +250,14 @@ test('provision seeds config dir, settings, env file, manifests, and returns env
           GEMINI_DEFAULT_AUTH_TYPE: 'gemini-api-key',
         });
 
-        // Subprocess calls: PATH probe, then link, then list with trust env.
-        expect(runner.calls.length).toBe(3);
-        const probeCall = runner.calls[0];
-        const linkCall = runner.calls[1];
-        const listCall = runner.calls[2];
-        if (
-          probeCall === undefined ||
-          linkCall === undefined ||
-          listCall === undefined
-        ) {
-          throw new Error('expected three recorded calls');
+        // Subprocess calls: link then list with trust env. The PATH probe goes
+        // through Bun.which now, not the runner, so it records no call.
+        expect(runner.calls.length).toBe(2);
+        const linkCall = runner.calls[0];
+        const listCall = runner.calls[1];
+        if (linkCall === undefined || listCall === undefined) {
+          throw new Error('expected two recorded calls');
         }
-        expect(probeCall.command).toBe('command');
-        expect(probeCall.args).toEqual(['-v', 'gemini']);
         expect(linkCall.command).toBe('gemini');
         expect(linkCall.args).toEqual([
           'extensions',
@@ -643,11 +684,9 @@ test('provision throws on a bogus GEMINI_AUTH_TYPE before any subprocess', () =>
         const runner = new FakeCommandRunner(probeOnlyResponder);
         const agent = new GeminiAgent(CONFIG);
         expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-        // The auth-type guard fires after the PATH probe but before any
-        // `gemini extensions` subprocess.
-        for (const call of runner.calls) {
-          expect(call.command).toBe('command');
-        }
+        // The auth-type guard fires after the Bun.which PATH probe but before
+        // any `gemini extensions` subprocess, so the runner records nothing.
+        expect(runner.calls.length).toBe(0);
       },
     );
   } finally {
@@ -709,54 +748,9 @@ test('provision throws ProvisionError when GEMINI_API_KEY is unset', () => {
         const runner = new FakeCommandRunner(probeOnlyResponder);
         const agent = new GeminiAgent(CONFIG);
         expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-        // The empty-key guard fires after the PATH probe but before any
-        // `gemini extensions` subprocess.
-        for (const call of runner.calls) {
-          expect(call.command).toBe('command');
-        }
-      },
-    );
-  } finally {
-    cleanup();
-    spCleanup();
-  }
-});
-
-test('provision throws ProvisionError when the gemini binary is not on PATH', () => {
-  const { home, cleanup } = makeTempHome();
-  const { home: spHome, cleanup: spCleanup } = makeTempHome();
-  const superpowersRoot = spHome.configDir;
-  mkdirSync(superpowersRoot, { recursive: true });
-  seedSuperpowersRoot(superpowersRoot);
-
-  try {
-    withEnv(
-      { GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: superpowersRoot },
-      () => {
-        // `command -v gemini` reports the binary missing (non-zero, empty
-        // stdout); provisioning must fail fast before any extensions subprocess
-        // (Python: shutil.which("gemini") is None -> RunnerError).
-        const runner = new FakeCommandRunner((command, args) => {
-          if (command === 'command' && args[0] === '-v') {
-            return { status: 1, stdout: '', stderr: '' };
-          }
-          return { status: 0, stdout: '', stderr: '' };
-        });
-        const agent = new GeminiAgent(CONFIG);
-        let message = '';
-        expect(() => {
-          try {
-            agent.provision(home, runner);
-          } catch (err) {
-            message = err instanceof Error ? err.message : String(err);
-            throw err;
-          }
-        }).toThrow(ProvisionError);
-        expect(message).toContain('gemini not found on PATH');
-        // No extensions link/list ran; only the PATH probe.
-        for (const call of runner.calls) {
-          expect(call.command).toBe('command');
-        }
+        // The empty-key guard fires after the Bun.which PATH probe but before
+        // any `gemini extensions` subprocess, so the runner records nothing.
+        expect(runner.calls.length).toBe(0);
       },
     );
   } finally {
@@ -785,5 +779,134 @@ test('provision throws ProvisionError when SUPERPOWERS_ROOT is missing files', (
   } finally {
     cleanup();
     spCleanup();
+  }
+});
+
+// H3: the PATH probe must use Bun.which, not `command -v` through the runner —
+// `command` is a shell builtin and the runner's spawnSync has no shell, so on
+// Linux the probe ENOENTs and falsely reports "not found". This test points PATH
+// at an empty dir (gemini genuinely absent) and does NOT fake any probe; the
+// adapter must fail fast with the precise message before any extensions call.
+test('provision throws when gemini is genuinely absent from PATH (Bun.which)', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+  const path = makePathDir(false);
+
+  try {
+    withEnv(
+      {
+        GEMINI_API_KEY: API_KEY,
+        SUPERPOWERS_ROOT: superpowersRoot,
+        PATH: path.dir,
+      },
+      () => {
+        // Responder would happily succeed on every call; the point is that the
+        // PATH check must fire from Bun.which, so no extensions subprocess runs.
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const agent = new GeminiAgent(CONFIG);
+        let message = '';
+        expect(() => {
+          try {
+            agent.provision(home, runner);
+          } catch (err) {
+            message = err instanceof Error ? err.message : String(err);
+            throw err;
+          }
+        }).toThrow(ProvisionError);
+        expect(message).toContain('gemini not found on PATH');
+        // The Bun.which probe does not touch the runner; the SUPERPOWERS_ROOT
+        // check passed, so the only thing that could have run is extensions —
+        // and it must not have.
+        expect(runner.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+    path.cleanup();
+  }
+});
+
+// H3 positive: a real `gemini` executable on PATH resolves via Bun.which and
+// provisioning proceeds to the extensions link/list calls (no probe faking).
+test('provision resolves a real gemini on PATH via Bun.which', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+  const path = makePathDir(true);
+
+  try {
+    withEnv(
+      {
+        GEMINI_API_KEY: API_KEY,
+        SUPERPOWERS_ROOT: superpowersRoot,
+        PATH: path.dir,
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const agent = new GeminiAgent(CONFIG);
+        expect(() => agent.provision(home, runner)).not.toThrow();
+        // Bun.which handled the probe; the runner only saw link + list.
+        expect(runner.calls.map((c) => c.command)).toEqual([
+          'gemini',
+          'gemini',
+        ]);
+        expect(runner.calls[0]?.args).toEqual([
+          'extensions',
+          'link',
+          superpowersRoot,
+          '--consent',
+        ]);
+        expect(runner.calls[1]?.args).toEqual(['extensions', 'list']);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+    path.cleanup();
+  }
+});
+
+// L2: SUPERPOWERS_ROOT is tilde-expanded before existsSync / `gemini extensions
+// link` (Python: Path(superpowers_root).expanduser()). A `~`-prefixed value must
+// resolve under HOME for the required-files check to pass and the link arg to
+// carry the absolute path.
+test('provision expands a ~-prefixed SUPERPOWERS_ROOT under HOME', () => {
+  const { home, cleanup } = makeTempHome();
+  // Seed the required extension files under an absolute subdir of HOME, then
+  // hand provision() the ~-relative form of that same dir.
+  const home0 = homedir();
+  const rel = `quorum-gemini-tilde-${process.pid}-${Date.now()}`;
+  const absRoot = join(home0, rel);
+  mkdirSync(absRoot, { recursive: true });
+  seedSuperpowersRoot(absRoot);
+  const path = makePathDir(true);
+
+  try {
+    withEnv(
+      {
+        GEMINI_API_KEY: API_KEY,
+        SUPERPOWERS_ROOT: `~/${rel}`,
+        PATH: path.dir,
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const agent = new GeminiAgent(CONFIG);
+        // Must not throw: the required-files check sees the expanded path.
+        expect(() => agent.provision(home, runner)).not.toThrow();
+        // The `extensions link` arg is the expanded absolute path, not `~/...`.
+        const linkCall = runner.calls.find((c) => c.args[1] === 'link');
+        expect(linkCall?.args[2]).toBe(absRoot);
+      },
+    );
+  } finally {
+    cleanup();
+    rmSync(absRoot, { recursive: true, force: true });
+    path.cleanup();
   }
 });

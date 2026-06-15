@@ -2,7 +2,6 @@ import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
-import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 
 // Pi azure-openai-responses provider passes through these env vars into pi.env
@@ -142,26 +141,24 @@ function requirePiSuperpowersSource(superpowersRoot: string): void {
 }
 
 // Require the `pi` binary on PATH (mirrors `shutil.which("pi") is None`,
-// runner.py:1345-1346). node has no shutil.which; probe via the injected runner
-// (`command -v pi`) so the hermetic gate can stub the lookup, matching
-// resolveKimiBinary. A failed probe (non-zero status or empty stdout) is a
-// setup failure with a precise message instead of an opaque downstream launch
-// error.
-function requirePiOnPath(runner: CommandRunner): void {
-  const probe = runner.run('command', ['-v', 'pi'], {
-    env: { ...envSnapshot() },
-  });
-  if (probe.status !== 0 || probe.stdout.trim() === '') {
+// runner.py:1345-1346). Use Bun.which against the sanctioned PATH snapshot — a
+// `command -v` probe would have to run through a shell, and a shell-less
+// spawnSync ENOENTs on Linux and falsely reports the binary missing. A missing
+// binary is a setup failure with a precise message instead of an opaque
+// downstream launch error.
+function requirePiOnPath(): void {
+  if (Bun.which('pi', { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     throw new ProvisionError('pi not found on PATH; cannot run Pi evals');
   }
 }
 
 // Pi-family provisioning (mirrors _seed_pi_config in quorum/runner.py). Setup
-// only — it shells out to nothing, so `runner` is unused. It creates the
-// isolated config dir and a sessions/ subdir, then writes auth.json (the API
-// key is the literal placeholder "$PI_API_KEY", expanded later by the launcher
-// from pi.env), settings.json, and pi.env. The returned env map carries only
-// the agent_config_env -> configDir mapping; every secret lives in the written
+// only — it shells out to nothing (the PATH probe is a Bun.which lookup, not a
+// subprocess), so no CommandRunner is needed. It creates the isolated config dir
+// and a sessions/ subdir, then writes auth.json (the API key is the literal
+// placeholder "$PI_API_KEY", expanded later by the launcher from pi.env),
+// settings.json, and pi.env. The returned env map carries only the
+// agent_config_env -> configDir mapping; every secret lives in the written
 // files, never in the returned env.
 export class PiAgent implements CodingAgent {
   readonly config: AgentConfig;
@@ -169,7 +166,7 @@ export class PiAgent implements CodingAgent {
     this.config = config;
   }
 
-  provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+  provision(home: RunHome): Record<string, string> {
     const { configDir } = home;
 
     // _require_env order in the oracle: SUPERPOWERS_ROOT, PI_PROVIDER,
@@ -187,7 +184,7 @@ export class PiAgent implements CodingAgent {
     // binary is on PATH — both before any filesystem mutation (oracle order:
     // runner.py:1342-1346).
     requirePiSuperpowersSource(expanduser(superpowersRaw));
-    requirePiOnPath(runner);
+    requirePiOnPath();
 
     mkdirSync(configDir, { recursive: true });
     mkdirSync(join(configDir, 'sessions'), { recursive: true });
