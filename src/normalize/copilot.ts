@@ -125,10 +125,12 @@ function numberOrUndefined(value: unknown): number | undefined {
  * `inputTokens` (which INCLUDES `cacheReadTokens`) and `cacheReadTokens`; the
  * non-cached prompt count is `tokenDetails.input`.
  *
- * Completion is intentionally NOT taken from the shutdown total: it is already
- * accounted per-step from each assistant.message's `outputTokens` (every
- * message carries it, including text-only turns). Carrying it here too would
- * double-count completion when downstream sums step.metrics + final_metrics.
+ * Copilot reports ALL usage at shutdown (prompt, completion, cached); ATIF carries
+ * it ENTIRELY in `final_metrics` (no per-step metrics). This keeps copilot a
+ * single-source agent — the obol `atif` dialect skips `final_metrics` whenever any
+ * step has metrics, so a hybrid (completion per-step + prompt/cached in
+ * final_metrics) would silently drop the final_metrics buckets. The shutdown
+ * `output` total equals the sum of per-message `outputTokens`, so nothing is lost.
  */
 function shutdownFinalMetrics(data: Record<string, unknown>): {
   finalMetrics?: AtifFinalMetrics | undefined;
@@ -146,9 +148,12 @@ function shutdownFinalMetrics(data: Record<string, unknown>): {
 
   const prompt = countOf('input');
   const cached = countOf('cache_read');
+  const completion = countOf('output');
 
   const finalMetrics: AtifFinalMetrics = {};
   if (prompt !== undefined) finalMetrics.total_prompt_tokens = prompt;
+  if (completion !== undefined)
+    finalMetrics.total_completion_tokens = completion;
   if (cached !== undefined)
     finalMetrics.extra = { total_cached_tokens: cached };
 
@@ -201,28 +206,11 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
     const toolRequests = data['toolRequests'];
     if (!Array.isArray(toolRequests)) continue;
 
-    // Per-message usage. Copilot logs only the completion count
-    // (`outputTokens`) and `model` per assistant message; the full
-    // input/cache breakdown lands at session.shutdown → final_metrics.
-    // Attach the message metrics to the FIRST step it produces so a
-    // multi-toolRequest message does not double-count its tokens.
-    const d = data as Record<string, unknown>;
-    const messageModel =
-      typeof d['model'] === 'string' ? d['model'] : undefined;
-    const completion = numberOrUndefined(d['outputTokens']);
-    let messageUsageAttached = false;
-
-    const attachUsage = (step: AtifStep): void => {
-      if (messageUsageAttached) return;
-      if (messageModel) step.model_name = messageModel;
-      if (completion !== undefined) {
-        step.metrics = { completion_tokens: completion };
-      }
-      if (messageModel || completion !== undefined) {
-        messageUsageAttached = true;
-      }
-    };
-
+    // Usage is NOT taken per-message: copilot reports the full prompt/completion/
+    // cached totals at session.shutdown → final_metrics (single source; see
+    // shutdownFinalMetrics). Per-message `outputTokens` summed to the same total,
+    // but mixing it into step.metrics made copilot a hybrid the obol atif dialect
+    // mishandles. Steps here carry only tool calls.
     for (const request of toolRequests) {
       if (!request || typeof request !== 'object') continue;
       const req = request as CopilotToolRequest;
@@ -249,17 +237,6 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
         tool_calls: [tc],
       };
 
-      attachUsage(step);
-      steps.push(step);
-    }
-
-    // A text-only assistant message (no tool requests) still carries its
-    // outputTokens. Emit a dedicated metrics-only agent step so its completion
-    // is not dropped — completion is sourced ONLY per-step (final_metrics
-    // carries no completion), so dropping it here would lose those tokens.
-    if (!messageUsageAttached && completion !== undefined) {
-      const step: AtifStep = { step_id: stepId++, source: 'agent' };
-      attachUsage(step);
       steps.push(step);
     }
   }

@@ -258,26 +258,27 @@ const usageLog = [
   }),
 ].join('\n');
 
-test('assistant.message step carries model_name and completion_tokens from outputTokens', () => {
+test('copilot tool steps carry only tool_calls; usage is final_metrics-only', () => {
   const traj = normalizeCopilot(usageLog, '1.0.0');
-  const r = validateTrajectory(traj);
-  expect(r.errors).toEqual([]);
+  expect(validateTrajectory(traj).errors).toEqual([]);
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
-  expect(agentSteps[0]!.model_name).toBe('gpt-5.4');
-  expect(agentSteps[0]!.metrics).toEqual({ completion_tokens: 234 });
-  expect(agentSteps[1]!.model_name).toBe('gpt-5.4');
-  expect(agentSteps[1]!.metrics).toEqual({ completion_tokens: 55 });
+  // Single-source agent: no per-step metrics/model_name (mixing per-step
+  // completion with final_metrics prompt/cached made copilot a hybrid the obol
+  // atif dialect mishandles by skipping final_metrics).
+  for (const s of agentSteps) {
+    expect(s.metrics).toBeUndefined();
+    expect(s.model_name).toBeUndefined();
+  }
 });
 
-test('session.shutdown totals populate final_metrics and agent.model_name', () => {
+test('session.shutdown totals populate final_metrics (prompt+completion+cached) and agent.model_name', () => {
   const traj = normalizeCopilot(usageLog, '1.0.0');
-  // prompt = non-cached input (tokenDetails.input); cache-read carried in
-  // final_metrics.extra (no top-level cached field). Completion is NOT carried
-  // in final_metrics: it is already accounted per-step (data.outputTokens), so
-  // putting it here too would double-count it when downstream sums step.metrics
-  // + final_metrics.
+  // Copilot reports ALL usage at shutdown; ATIF carries it entirely in
+  // final_metrics: prompt = non-cached input, completion = shutdown output total,
+  // cached in extra. (Single source — no per-step metrics.)
   expect(traj.final_metrics).toEqual({
     total_prompt_tokens: 26055,
+    total_completion_tokens: 571,
     extra: { total_cached_tokens: 58880 },
   });
   expect(traj.agent.model_name).toBe('gpt-5.4');
@@ -360,14 +361,12 @@ test('copilot disjoint buckets conserve the session total (no completion double-
   expect(prompt + cached + completion + cacheWrite).toBe(85506);
 });
 
-test('copilot text-only assistant message keeps its completion (metrics-only step)', () => {
+test('copilot completion comes from the shutdown total (covers the text-only turn too)', () => {
   const traj = normalizeCopilot(realCopilotLog, '1.0.0');
-  const completions = traj.steps
-    .map((s) => s.metrics?.completion_tokens)
-    .filter((v): v is number => typeof v === 'number');
-  // 15-token text-only turn (empty toolRequests) must contribute a step.
-  expect(completions).toContain(15);
-  expect(completions.reduce((a, b) => a + b, 0)).toBe(571);
+  // 234+267+55+15 = 571 output total, incl. the text-only final turn — captured
+  // once in final_metrics, not per-step (so nothing is dropped or double-counted).
+  expect(traj.final_metrics?.total_completion_tokens).toBe(571);
+  for (const s of traj.steps) expect(s.metrics).toBeUndefined();
 });
 
 test('logs without usage produce no metrics or final_metrics', () => {
@@ -379,7 +378,7 @@ test('logs without usage produce no metrics or final_metrics', () => {
   }
 });
 
-test('multi-toolRequest message: completion_tokens attach to first step only (no double-count)', () => {
+test('multi-toolRequest message produces one step per tool call, no per-step usage', () => {
   const raw = JSON.stringify({
     type: 'assistant.message',
     data: {
@@ -394,7 +393,6 @@ test('multi-toolRequest message: completion_tokens attach to first step only (no
   const traj = normalizeCopilot(raw, '1.0.0');
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
   expect(agentSteps.length).toBe(2);
-  expect(agentSteps[0]!.metrics).toEqual({ completion_tokens: 99 });
-  expect(agentSteps[0]!.model_name).toBe('gpt-5.4');
-  expect(agentSteps[1]!.metrics).toBeUndefined();
+  // Usage is final_metrics-only (from shutdown); tool steps carry no metrics.
+  for (const s of agentSteps) expect(s.metrics).toBeUndefined();
 });
