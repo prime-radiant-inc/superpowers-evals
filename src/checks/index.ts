@@ -67,7 +67,17 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     const proc = spawnSync(
       'bash',
       ['-c', `source '${args.checksSh}'; ${args.phase}`],
-      { cwd: args.workdir, env, encoding: 'utf8' },
+      {
+        cwd: args.workdir,
+        env,
+        encoding: 'utf8',
+        // Python's subprocess.run has no output cap. spawnSync defaults maxBuffer
+        // to 1 MB of stdout+stderr; a verbose pre()/post() body would otherwise
+        // return {status:null, error:{code:'ENOBUFS'}}, tripping the spawn-error
+        // guard below and discarding records the check tools already wrote to the
+        // sink. Uncap to match Python and preserve those records.
+        maxBuffer: Number.POSITIVE_INFINITY,
+      },
     );
     // Python's subprocess.run raises FileNotFoundError when bash cannot be
     // spawned; that exception propagates out of run_phase. Node's spawnSync does
@@ -77,18 +87,20 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
       throw proc.error;
     }
     // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
-    // status:null with proc.signal set. Python's subprocess.run returns the
-    // negative returncode (-9), a nonzero crash; map a signal kill to the POSIX
-    // 128+signo crash code so it lands in the >=128 band below rather than being
-    // coerced to a clean rc 0 by `?? 0`.
-    const rc =
-      proc.status ?? (proc.signal ? 128 + signalNumber(proc.signal) : 0);
+    // status:null with proc.signal set. Python's subprocess.run returns a
+    // NEGATIVE returncode for a signal (-9 for SIGKILL), which does NOT land in
+    // the >=128 crash band — so Python subjects a signal kill to the same
+    // records-based clean-out as an ordinary 1..125 exit (quorum/checks.py:
+    // 134-143). Map a signal kill to -signo to match: a killed phase that
+    // already emitted records is treated as clean, one with none stays nonzero.
+    const rc = proc.status ?? (proc.signal ? -signalNumber(proc.signal) : 0);
     const records = readRecords(sink, args.phase);
 
-    // Crash heuristic (parity with quorum/checks.py):
+    // Crash heuristic (parity with quorum/checks.py:134-143):
     //   rc 0                  -> ok
-    //   rc 126/127 or >= 128  -> crash (not-executable / not-found / killed by signal)
-    //   rc 1..125             -> ok iff at least one record was emitted, else crash
+    //   rc 126/127 or >= 128  -> crash (not-executable / not-found)
+    //   else (1..125, or a negative signal code)
+    //                         -> ok iff at least one record was emitted, else crash
     let exitCode: number;
     if (rc === 0) {
       exitCode = 0;

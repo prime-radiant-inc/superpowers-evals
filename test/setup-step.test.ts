@@ -83,6 +83,24 @@ test('non-executable setup.sh throws instead of silently succeeding', () => {
   expect(() => runSetup(scn, wd)).toThrow(SetupError);
 });
 
+// H4-setup-large-output-enobuf: spawnSync's default maxBuffer is 1 MB of
+// stdout+stderr. A verbose-but-successful setup.sh (git clone / bun install /
+// uv sync routinely exceed 1 MB) returns {status:null, error:{code:'ENOBUFS'}},
+// which the spawn-error guard then throws as a SetupError — mislabeling success
+// as a spawn failure. Python's subprocess.run has no output cap. Parity: a
+// setup.sh that emits >1 MB to stdout then exits 0 must succeed (no throw).
+test('a setup.sh emitting >1 MB then exiting 0 succeeds (no ENOBUFS mislabel)', () => {
+  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const wd = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    // ~2 MB of stdout (2M chars), well past Node's 1 MB default maxBuffer.
+    "#!/usr/bin/env bash\nhead -c 2000000 /dev/zero | tr '\\0' 'x'\nexit 0\n",
+  );
+  chmodSync(join(scn, 'setup.sh'), 0o755);
+  expect(() => runSetup(scn, wd)).not.toThrow();
+});
+
 test('runSetup plumbs QUORUM_REPO_ROOT into setup.sh', () => {
   const scn = mkdtempSync(join(tmpdir(), 'scn-'));
   const wd = mkdtempSync(join(tmpdir(), 'wd-'));

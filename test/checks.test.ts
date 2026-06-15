@@ -75,10 +75,11 @@ test('a bash crash (unbound command) with no records surfaces as a nonzero exitC
 // E-signal-killed-status-null: when the bash child running a phase is killed by a
 // signal (OOM-killer, timeout SIGKILL), spawnSync returns status:null + a signal.
 // TS used to do `proc.status ?? 0`, coercing the crash to a clean rc 0 with
-// whatever partial records exist. Python's subprocess.run returns a negative
-// returncode (-9), which the crash heuristic treats as nonzero. Parity: a
-// signal-killed phase with no records must surface a nonzero (crash) exitCode.
-test('a signal-killed bash phase (status null) surfaces a nonzero crash exitCode', async () => {
+// whatever partial records exist. Python's subprocess.run returns a NEGATIVE
+// returncode (-9), which the crash heuristic treats as nonzero when no records
+// were emitted. Parity: a signal-killed phase with no records must surface a
+// nonzero (crash) exitCode.
+test('a signal-killed bash phase with no records surfaces a nonzero crash exitCode', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   // No records emitted, then kill the running bash with SIGKILL.
   const checksSh = checksShWith('pre() {\n  kill -KILL $$\n}\npost() { :; }\n');
@@ -90,8 +91,36 @@ test('a signal-killed bash phase (status null) surfaces a nonzero crash exitCode
   });
   expect(records).toEqual([]);
   expect(exitCode).not.toBe(0);
-  // Signal kills land in the >=128 crash band (POSIX 128+signo convention).
-  expect(exitCode).toBeGreaterThanOrEqual(128);
+});
+
+// L4-signal-killed-with-records-is-clean: Python's subprocess.run returns a
+// NEGATIVE returncode for a signal (-9 for SIGKILL), so its crash band test
+// (`== 126 || == 127 || >= 128`) is False and it falls through to
+// `elif records: exit_code = 0` (quorum/checks.py:134-143). A signal-killed
+// phase that already emitted records is therefore treated as CLEAN by Python.
+// TS used to map a kill to 128+signo (137), which lands in the >=128 crash band
+// REGARDLESS of records — a parity divergence. Bug-for-bug parity: map the kill
+// to a negative code so the records-clean-out path applies.
+test('a signal-killed bash phase that already emitted a record is clean (parity with Python)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'present.txt'), 'x');
+  // Emit a real record, then kill the running bash with SIGKILL.
+  const checksSh = checksShWith(
+    'pre() {\n  file-exists present.txt\n  kill -KILL $$\n}\npost() { :; }\n',
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    quorumBin: BIN,
+  });
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    check: 'file-exists',
+    passed: true,
+    phase: 'pre',
+  });
+  expect(exitCode).toBe(0);
 });
 
 // E-spawn-failure-swallowed: Python `subprocess.run(['bash', ...])` raises
@@ -147,6 +176,36 @@ test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-P
     process.env['PATH'] = savedPath;
   }
   expect(childPath).toBe(`${BIN}:/usr/bin:/bin`);
+});
+
+// L3-phase-large-output-enobuf: runPhase's spawnSync has no maxBuffer, so a
+// pre()/post() body emitting >1 MB to stdout returns {status:null,
+// error:{code:'ENOBUFS'}}; the `if (proc.error) throw proc.error` guard then
+// fires BEFORE the record sink is read, discarding records the check tools
+// already wrote. Python reads the sink regardless of stdout volume. Parity: a
+// verbose phase that still writes a record must have that record collected.
+test('a phase emitting >1 MB still collects its records (no ENOBUFS discard)', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'present.txt'), 'x');
+  const checksSh = checksShWith(
+    // Emit ~2 MB of stdout (past Node's 1 MB default maxBuffer), then a real
+    // check record. The record must survive the large-output run.
+    "pre() {\n  head -c 2000000 /dev/zero | tr '\\0' 'x'\n  file-exists present.txt\n}\npost() { :; }\n",
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    quorumBin: BIN,
+  });
+  expect(exitCode).toBe(0);
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    check: 'file-exists',
+    args: ['present.txt'],
+    passed: true,
+    phase: 'pre',
+  });
 });
 
 test('parseCodingAgentsDirective reads a leading "# coding-agents:" csv', () => {

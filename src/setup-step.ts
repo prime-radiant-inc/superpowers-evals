@@ -36,6 +36,12 @@ export function runSetup(
       ...envExtra,
     },
     encoding: 'utf8',
+    // Python's subprocess.run has no output cap. spawnSync defaults maxBuffer to
+    // 1 MB of stdout+stderr; a verbose-but-successful setup.sh (git clone / bun
+    // install / uv sync routinely exceed 1 MB) would otherwise return
+    // {status:null, error:{code:'ENOBUFS'}}, which the spawn-error guard below
+    // then mislabels as a spawn failure. Uncap to match Python.
+    maxBuffer: Number.POSITIVE_INFINITY,
   });
   if (proc.error) {
     throw new SetupError(
