@@ -21,20 +21,17 @@ import { RealClock } from '../scheduler/clock.ts';
 import type { ScheduleHandle, SchedulerEvent } from '../scheduler/index.ts';
 import { runSchedule } from '../scheduler/index.ts';
 
-// Write side of the dashboard (PRI-2207, Spec 5, Task 12). One launch session at
-// a time; drives the extracted scheduler (Spec 4) and exposes launch/stop. This
-// is a faithful port of .worktrees/dashboard-ref/quorum/dashboard/orchestrator.py
-// with two structural simplifications that single-loop Bun makes mandatory:
+// Write side of the dashboard. One launch session at a time; drives the
+// scheduler and exposes launch/stop. Single-loop Bun makes two structural
+// simplifications possible:
 //
-//  - NO background thread. The Python orchestrator spawns a daemon thread for
-//    the drive because uvicorn's loop must stay free; here runSchedule is itself
-//    an async task on the one loop, so launch() just kicks it off and returns.
+//  - NO background thread. runSchedule is itself an async task on the one loop,
+//    so launch() just kicks it off and returns.
 //  - NO locks. Event callbacks + completions are serialized by the single loop,
-//    so the Python's _lock / _pid_lock / _append_lock have nothing to guard.
+//    so there is no shared mutable state for a lock to guard.
 //
-// The kimi batch preflight the Python ran is intentionally absent: the TS
-// run-all deferred it (each kimi child self-preflights via its adapter), so the
-// orchestrator inherits that simplification rather than reintroducing the seam.
+// There is no kimi batch preflight: each kimi child self-preflights via its
+// adapter, so the orchestrator does not need that seam.
 
 // A launch was requested while a session is already active (the route maps this
 // to HTTP 409). Extends Error directly — no parameter properties.
@@ -46,7 +43,7 @@ export class LaunchBusyError extends Error {
 }
 
 // The kind of launch: a single scenario row, a single agent column, or the whole
-// matrix. Maps to the matrix filter the same way the Python orchestrator did.
+// matrix. Maps to the matrix filter.
 export type LaunchKind = 'row' | 'column' | 'all';
 
 export interface LaunchArgs {
@@ -63,8 +60,8 @@ export interface OrchestratorArgs {
   // Injectable child launcher (tests stub it; defaults to the live invokeChild).
   readonly invoke?: InvokeFn;
   // The SSE sink: every scheduler event is forwarded here AFTER results.jsonl is
-  // appended. The server translates these into cell/strip publishes (parity with
-  // app.py's _on_schedule_event). Optional — a headless orchestrator is fine.
+  // appended. The server translates these into cell/strip publishes. Optional —
+  // a headless orchestrator is fine.
   readonly onEvent?: (event: SchedulerEvent) => void;
 }
 

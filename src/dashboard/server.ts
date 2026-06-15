@@ -23,10 +23,8 @@ import {
 } from './templates.ts';
 import { cellView, diffGrids, headerTally, launchEstimate } from './view.ts';
 
-// The Bun.serve fetch handler + scanner loop for the quorum dashboard (PRI-2207,
-// Spec 5, Task 13). A faithful port of
-// .worktrees/dashboard-ref/quorum/dashboard/app.py with the FastAPI/uvicorn/
-// sse_starlette stack replaced by native Bun.serve + a ReadableStream SSE body.
+// The Bun.serve fetch handler + scanner loop for the quorum dashboard. Native
+// Bun.serve + a ReadableStream SSE body; no external web stack.
 //
 // Three layers, filesystem as the single source of truth:
 //  - GET /            warm scan -> full grid (first paint).
@@ -39,11 +37,10 @@ import { cellView, diffGrids, headerTally, launchEstimate } from './view.ts';
 //  - The ORCHESTRATOR pushes on scheduler progress via onSchedulerEvent —
 //    cell_started marks the cell running (neutral 'setup' phase) and bumps
 //    in-flight; cell_finished re-derives the cell from a fresh scan and bumps
-//    done + spent. This is app.py's _on_schedule_event.
+//    done + spent.
 //  - The SCANNER pushes on filesystem diff every ~1s while a client is connected
 //    — it picks up phase.json advances and verdict.json landings (including
-//    terminal-launched runs the orchestrator never saw). This is app.py's
-//    _scanner_loop.
+//    terminal-launched runs the orchestrator never saw).
 // Both publish the SAME idempotent full-state cell partial through the bus, so
 // whichever fires first, the cell converges. The run strip reflects the
 // dashboard's OWN session counts only (build spec); the grid reflects all runs.
@@ -75,7 +72,7 @@ export interface Dashboard {
 }
 
 // The static asset dir, resolved relative to this module so it works regardless
-// of cwd (parity with app.py's _STATIC_DIR = __file__.parent / "static").
+// of cwd.
 const STATIC_DIR = fileURLToPath(new URL('./static', import.meta.url));
 
 // SSE data MUST be a single line: each `data:` field is one line, and a newline
@@ -106,8 +103,8 @@ function contentTypeFor(path: string): string {
   return 'application/octet-stream';
 }
 
-// Sorted scenario dir names with a story.md (mirrors app.py _discover_scenarios /
-// `quorum list`). The grid's row order.
+// Sorted scenario dir names with a story.md (the same set `quorum list` shows).
+// The grid's row order.
 function discoverScenarios(scenariosRoot: string): string[] {
   if (!existsSync(scenariosRoot)) {
     return [];
@@ -126,9 +123,9 @@ function discoverScenarios(scenariosRoot: string): string[] {
   return out;
 }
 
-// Sorted *.yaml stems under coding_agents_dir (app.py _discover_agents). The
-// grid's column order. The dashboard accepts knownAgents for the read-side
-// longest-suffix parse separately; this is the DISPLAY column set.
+// Sorted *.yaml stems under coding_agents_dir. The grid's column order. The
+// dashboard accepts knownAgents for the read-side longest-suffix parse
+// separately; this is the DISPLAY column set.
 function discoverAgents(codingAgentsDir: string): string[] {
   if (!existsSync(codingAgentsDir)) {
     return [];
@@ -143,8 +140,8 @@ function discoverAgents(codingAgentsDir: string): string[] {
   return out;
 }
 
-// Pre-format a launch estimate (app.py _fmt_est): a fixed-2 dollar string or ""
-// when unknown. Carried verbatim in the data-estimate attribute; app.js reparses.
+// Pre-format a launch estimate: a fixed-2 dollar string or "" when unknown.
+// Carried verbatim in the data-estimate attribute; app.js reparses.
 function fmtEst(value: number | undefined): string {
   return value !== undefined ? value.toFixed(2) : '';
 }
@@ -198,9 +195,9 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     });
   };
 
-  // The orchestrator's SSE sink (app.py _on_schedule_event). cell_started shows
-  // a neutral running cell + bumps in-flight; cell_finished re-scans the cell to
-  // pick up the landed verdict + bumps done/spent. cell_queued dims the cell.
+  // The orchestrator's SSE sink. cell_started shows a neutral running cell +
+  // bumps in-flight; cell_finished re-scans the cell to pick up the landed
+  // verdict + bumps done/spent. cell_queued dims the cell.
   const onSchedulerEvent = (event: SchedulerEvent): void => {
     if (event.kind === 'cell_queued') {
       const { scenario, codingAgent: agent } = event.entry;
@@ -237,10 +234,9 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       session.done += 1;
       session.inFlight = Math.max(0, session.inFlight - 1);
       // Attribute "$ spent" to the EXACT run the dashboard launched (the
-      // event's run_id), not the newest window slot — parity with scheduler.py
-      // _run_cost(out_root / result.run_id). Reading the newest slot would let a
-      // sibling terminal run-all that lands a later run for the same cell
-      // corrupt the strip total in the post-finish rescan.
+      // event's run_id), not the newest window slot. Reading the newest slot
+      // would let a sibling terminal run-all that lands a later run for the same
+      // cell corrupt the strip total in the post-finish rescan.
       const cost =
         event.run_id !== null
           ? (readDashboardVerdict(join(resultsRoot, event.run_id))?.economics
@@ -256,8 +252,8 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       // The session is over. Clear the run strip so #runbar doesn't linger with
       // a misleading "Running N · ■ Stop" that the user can click into a no-op
       // stop. The grid cells carry the results; a fresh launch re-seeds the
-      // strip. (The Python left the final strip up; clearing matches the spec's
-      // "the run strip describes the dashboard's own launch session.")
+      // strip. The run strip describes the dashboard's own launch session, so it
+      // should be empty between sessions.
       session.running = 0;
       session.inFlight = 0;
       session.done = 0;
@@ -296,13 +292,12 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         }
         publishCell(cell, cell.scenario, cell.agent);
       }
-      // The scanner publishes ONLY cell partials (parity with app.py
-      // _scanner_loop). The run strip is driven by launch + cell_started/
-      // cell_finished events alone — publishing it here pushed the idle
-      // "Running 0 · 0 in flight · ■ Stop" strip into #runbar the moment any
-      // client connected, showing a session that isn't running. Idle ⇒ #runbar
-      // stays empty (its first-paint state). The SSE stream stays warm via its
-      // own keepalive (handleEvents), not a phantom strip.
+      // The scanner publishes ONLY cell partials. The run strip is driven by
+      // launch + cell_started/cell_finished events alone — publishing it here
+      // pushed the idle "Running 0 · 0 in flight · ■ Stop" strip into #runbar the
+      // moment any client connected, showing a session that isn't running. Idle ⇒
+      // #runbar stays empty (its first-paint state). The SSE stream stays warm
+      // via its own keepalive (handleEvents), not a phantom strip.
       lastGrid = next;
     }
     scannerTimer = setTimeout(tick, 1000);

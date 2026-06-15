@@ -1,10 +1,7 @@
-// src/setup-helpers/sdd-fixtures.ts
-// SDD-fixture helpers ported from sdd_real_projects.py, sdd_auth_plan.py,
-// sdd_broken_plan.py, sdd_quality_defect_plan.py, sdd_yagni_plan.py, and
-// sdd_spec_constraint_plan.py. The nine scaffoldSdd* fixture-reading helpers
-// copy design.md + plan.md out of fixtures/ and commit a clean-slate repo; the
-// five embedded-body helpers (auth/broken/quality/yagni/spec-constraint) write
-// their plan bodies verbatim. The PLAN_BODY constants carry literal backslash-n
+// SDD-fixture helpers. The nine scaffoldSdd* fixture-reading helpers copy
+// design.md + plan.md out of fixtures/ and commit a clean-slate repo; the five
+// embedded-body helpers (auth/broken/quality/yagni/spec-constraint) write their
+// plan bodies inline. The PLAN_BODY constants carry literal backslash-n
 // sequences and literal ${...} interpolations that must reach the file
 // unchanged.
 import { copyFileSync } from 'node:fs';
@@ -17,9 +14,8 @@ import { runGit } from './git.ts';
 const FIXTURES_DIR = join(repoRoot(), 'fixtures');
 
 // Shared scaffold for the nine sdd-* fixture-reading helpers. Inits a clean
-// repo, copies design.md + plan.md from fixtures/<fixtureName>, and commits.
-// Mirrors sdd_real_projects.py:_scaffold_from_fixture (git add -A, single
-// "initial: design + plan" commit).
+// repo, copies design.md + plan.md from fixtures/<fixtureName>, then `git add -A`
+// and a single "initial: design + plan" commit.
 function scaffoldFromFixture(workdir: string, fixtureName: string): void {
   ensureWorkdir(workdir);
   runGit(['init', '-b', 'main'], workdir);
@@ -35,52 +31,43 @@ function scaffoldFromFixture(workdir: string, fixtureName: string): void {
   runGit(['commit', '-m', 'initial: design + plan'], workdir);
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals.
 export function scaffoldSddGoFractals(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_crisp.
 export function scaffoldSddGoFractalsCrisp(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-crisp');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_critical_plan.
 export function scaffoldSddGoFractalsCriticalPlan(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-critical-plan');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_stripped.
 export function scaffoldSddGoFractalsStripped(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-stripped');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_coarse.
 export function scaffoldSddGoFractalsCoarse(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-coarse');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_elicited.
 export function scaffoldSddGoFractalsElicited(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-elicited');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_go_fractals_control_plan.
 export function scaffoldSddGoFractalsControlPlan(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-control-plan');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_svelte_todo.
 export function scaffoldSddSvelteTodo(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo');
 }
 
-// Port of sdd_real_projects.py:scaffold_sdd_svelte_todo_elicited.
 export function scaffoldSddSvelteTodoElicited(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo-elicited');
 }
 
-// Verbatim from sdd_auth_plan.py:PLAN_BODY — the trivial auth-system stub plan.
+// The trivial auth-system stub plan.
 const AUTH_PLAN_BODY = `# Auth System Implementation Plan
 
 A short stub plan used by the explicit-skill-request and
@@ -120,8 +107,8 @@ SDD skill loads and starts dispatching subagents in response to the
 user's request, not whether the implementation completes.
 `;
 
-// Port of sdd_auth_plan.py:add_sdd_auth_plan. No init — layers a single plan
-// commit onto an existing repo (scoped `git add docs`).
+// No init — layers a single plan commit onto an existing repo (scoped
+// `git add docs`).
 export function addSddAuthPlan(ctx: HelperContext): void {
   writeFixtureFile(
     ctx.workdir,
@@ -132,7 +119,6 @@ export function addSddAuthPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'draft auth-system plan'], ctx.workdir);
 }
 
-// Verbatim from sdd_broken_plan.py:PACKAGE_JSON.
 const BROKEN_PACKAGE_JSON = `{
   "name": "report-escalation",
   "version": "1.0.0",
@@ -143,9 +129,9 @@ const BROKEN_PACKAGE_JSON = `{
 }
 `;
 
-// Verbatim from sdd_broken_plan.py:PLAN_BODY. The `lines.join("\\n")` calls are
-// LITERAL backslash-n in the emitted file (the \\n yields one backslash + n),
-// and the `${...}` interpolations are escaped so they reach the file unchanged.
+// The `lines.join("\\n")` calls are LITERAL backslash-n in the emitted file (the
+// \\n yields one backslash + n), and the `${...}` interpolations are escaped so
+// they reach the file unchanged.
 const BROKEN_PLAN_BODY = `# Report Formatter — Implementation Plan
 
 Two report formatting functions. Implement exactly what each task
@@ -224,9 +210,8 @@ export function formatAdminReport(admin) {
 **Verification:** \`npm test\`
 `;
 
-// Port of sdd_broken_plan.py:scaffold_sdd_broken_plan. Inits a Node project
-// whose 2-task plan's Task 2 (30-char banner) contradicts the Global
-// Constraints (40-char banner); the scenario measures escalation.
+// Inits a Node project whose 2-task plan's Task 2 (30-char banner) contradicts
+// the Global Constraints (40-char banner); the scenario measures escalation.
 export function scaffoldSddBrokenPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -244,7 +229,6 @@ export function scaffoldSddBrokenPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: report formatter plan'], ctx.workdir);
 }
 
-// Verbatim from sdd_quality_defect_plan.py:PACKAGE_JSON.
 const QUALITY_PACKAGE_JSON = `{
   "name": "report-quality",
   "version": "1.0.0",
@@ -255,9 +239,9 @@ const QUALITY_PACKAGE_JSON = `{
 }
 `;
 
-// Verbatim from sdd_quality_defect_plan.py:PLAN_BODY. Same literal-backslash-n
-// and escaped-interpolation hazards as BROKEN_PLAN_BODY; Task 2 duplicates
-// Task 1's banner verbatim and mandates an assertion-free smoke test.
+// Same literal-backslash-n and escaped-interpolation hazards as
+// BROKEN_PLAN_BODY; Task 2 duplicates Task 1's banner verbatim and mandates an
+// assertion-free smoke test.
 const QUALITY_PLAN_BODY = `# Report Formatter — Implementation Plan
 
 Two report formatting functions. Implement exactly what each task
@@ -332,7 +316,6 @@ export function formatAdminReport(admin) {
 **Verification:** \`npm test\`
 `;
 
-// Port of sdd_quality_defect_plan.py:scaffold_sdd_quality_defect_plan.
 export function scaffoldSddQualityDefectPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -350,7 +333,6 @@ export function scaffoldSddQualityDefectPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: report formatter plan'], ctx.workdir);
 }
 
-// Verbatim from sdd_yagni_plan.py:PACKAGE_JSON.
 const YAGNI_PACKAGE_JSON = `{
   "name": "math-yagni",
   "version": "1.0.0",
@@ -361,8 +343,8 @@ const YAGNI_PACKAGE_JSON = `{
 }
 `;
 
-// Verbatim from sdd_yagni_plan.py:PLAN_BODY. No literal-backslash-n hazard here;
-// the escaped interpolation-free code blocks still need backtick escaping.
+// No literal-backslash-n hazard here; the interpolation-free code blocks still
+// need backtick escaping.
 const YAGNI_PLAN_BODY = `# Math Module — Implementation Plan
 
 A minimal plan for the SDD spec-compliance test. The point is YAGNI:
@@ -424,8 +406,8 @@ export function multiply(a, b) {
 **Verification:** \`npm test\`
 `;
 
-// Port of sdd_yagni_plan.py:scaffold_sdd_yagni_plan. Inits a Node project whose
-// Task 2 explicitly forbids over-implementation (the YAGNI check).
+// Inits a Node project whose Task 2 explicitly forbids over-implementation (the
+// YAGNI check).
 export function scaffoldSddYagniPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -443,7 +425,6 @@ export function scaffoldSddYagniPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: math YAGNI plan'], ctx.workdir);
 }
 
-// Verbatim from sdd_spec_constraint_plan.py:PACKAGE_JSON.
 const SPEC_PACKAGE_JSON = `{
   "name": "priority-formatting",
   "version": "1.0.0",
@@ -454,15 +435,14 @@ const SPEC_PACKAGE_JSON = `{
 }
 `;
 
-// Verbatim from sdd_spec_constraint_plan.py:README.
 const SPEC_README = `# Priority formatting fixture
 
 Small fixture for a neutral SDD comparison scenario.
 `;
 
-// Verbatim from sdd_spec_constraint_plan.py:SPEC_BODY. The literal backticks
-// (\`src/priority.js\`, \`P<n> :: quartz\`, etc.) are escaped so they reach the
-// file unchanged; this body carries the "quartz" marker the scenario asserts.
+// The literal backticks (\`src/priority.js\`, \`P<n> :: quartz\`, etc.) are
+// escaped so they reach the file unchanged; this body carries the "quartz"
+// marker the scenario asserts.
 const SPEC_BODY = `# Priority Formatting Design
 
 ## Priority Rules
@@ -489,9 +469,9 @@ Display rules:
 - \`formatTicket\` trims surrounding whitespace from \`id\` and \`title\`.
 `;
 
-// Verbatim from sdd_spec_constraint_plan.py:PLAN_BODY. Cites the spec path and
-// deliberately omits "quartz"; the literal backticks (\`- [ ]\`, \`npm test\`,
-// \`src/priority.js\`, etc.) are escaped so they reach the file unchanged.
+// Cites the spec path and deliberately omits "quartz"; the literal backticks
+// (\`- [ ]\`, \`npm test\`, \`src/priority.js\`, etc.) are escaped so they reach
+// the file unchanged.
 const SPEC_PLAN_BODY = `# Priority Formatting Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
@@ -542,10 +522,9 @@ Implement the ticket summary function from the spec.
 - [ ] Run \`npm test\` and confirm the full suite passes.
 `;
 
-// Port of sdd_spec_constraint_plan.py:scaffold_sdd_spec_constraint_plan. Inits
-// a Node project whose plan cites a separate spec (carrying the "quartz"
-// marker) rather than restating the rules; the scenario measures whether an
-// SDD run preserves the cited constraints.
+// Inits a Node project whose plan cites a separate spec (carrying the "quartz"
+// marker) rather than restating the rules; the scenario measures whether an SDD
+// run preserves the cited constraints.
 export function scaffoldSddSpecConstraintPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);

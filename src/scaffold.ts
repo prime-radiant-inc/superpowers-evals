@@ -4,9 +4,6 @@
 // setup.sh, checks.sh) with the executable bit set on setup.sh.
 // checkScenario validates an existing scenario — checks.sh must exist,
 // parse, define pre() and post(), and be functions-only.
-//
-// Ported from quorum/scaffold.py (the oracle). Problem strings are
-// reproduced verbatim from the Python so triage output stays identical.
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -26,7 +23,7 @@ import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
 const VALID_TIERS = ['sentinel', 'full', 'adhoc'] as const;
 
-// _STORY_TEMPLATE — verbatim from scaffold.py 21-38 ({name} interpolated).
+// Scaffolded story.md skeleton ({name} interpolated).
 const STORY_TEMPLATE = `---
 id: {name}
 title: TODO one-line title
@@ -79,9 +76,8 @@ export class ScaffoldError extends Error {
  * Create a structurally-valid scenario skeleton; return its directory.
  *
  * `name` is the scenario's name as the user supplied it, stamped verbatim into
- * the story `id:` (Python new_scenario stamps the raw name, so `foo/bar` yields
- * `id: foo/bar`, not just the final segment). When omitted it defaults to the
- * directory's basename.
+ * the story `id:` (the raw name, so `foo/bar` yields `id: foo/bar`, not just the
+ * final segment). When omitted it defaults to the directory's basename.
  */
 export function newScenario(scenarioDir: string, name?: string): string {
   if (existsSync(scenarioDir)) {
@@ -105,10 +101,9 @@ export function newScenario(scenarioDir: string, name?: string): string {
   return scenarioDir;
 }
 
-// Port of _parse_frontmatter (scaffold.py 86-96): a full YAML parse of the
-// leading --- block. Returns a record only when the block parses to a mapping;
-// otherwise an empty record. The body is text[3..end] where end is the index
-// of the first "\n---" found from offset 3 (matching str.find).
+// A full YAML parse of the leading --- block. Returns a record only when the
+// block parses to a mapping; otherwise an empty record. The body is text[3..end]
+// where end is the index of the first "\n---" found from offset 3.
 function parseFrontmatter(text: string): Record<string, unknown> {
   if (!text.startsWith('---')) return {};
   const end = text.indexOf('\n---', 3);
@@ -131,9 +126,8 @@ function parseFrontmatter(text: string): Record<string, unknown> {
   return {};
 }
 
-// Port of _validate_checks_sh (scaffold.py 99-154): checks.sh exists, parses
-// with `bash -n`, is functions-only, defines pre()/post(), and is free of the
-// backgrounded-check and $QUORUM_WORKDIR lints.
+// Validate checks.sh: exists, parses with `bash -n`, is functions-only, defines
+// pre()/post(), and is free of the backgrounded-check and $QUORUM_WORKDIR lints.
 function validateChecksSh(scenarioDir: string): string[] {
   const cs = join(scenarioDir, 'checks.sh');
   const problems: string[] = [];
@@ -195,8 +189,8 @@ function validateChecksSh(scenarioDir: string): string[] {
       );
     }
   }
-  // $QUORUM_WORKDIR is not set in the new model — checks run with cwd=workdir,
-  // so paths are workdir-relative. Catch stale ports from the old format.
+  // $QUORUM_WORKDIR is not set — checks run with cwd=workdir, so paths are
+  // workdir-relative. Flag any reference to it.
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (/\$\{?QUORUM_WORKDIR\b/.test(line)) {
@@ -209,7 +203,7 @@ function validateChecksSh(scenarioDir: string): string[] {
   return problems;
 }
 
-// Count occurrences of a single character in a string (parity with str.count).
+// Count occurrences of a single character in a string.
 function countChar(s: string, ch: string): number {
   let n = 0;
   for (const c of s) {
@@ -218,19 +212,18 @@ function countChar(s: string, ch: string): number {
   return n;
 }
 
-// The Unicode line boundaries Python's str.splitlines() breaks on: LF, CR,
-// CRLF (one boundary), VT (U+000B), FF (U+000C), FS/GS/RS (U+001C-U+001E),
-// NEL (U+0085), LS (U+2028), PS (U+2029). \r\n is listed first so it is
-// consumed as a single boundary rather than two. The control-character escapes
-// are deliberate (str.splitlines parity), so the noControlCharactersInRegex
+// The full Unicode line-boundary set: LF, CR, CRLF (one boundary), VT (U+000B),
+// FF (U+000C), FS/GS/RS (U+001C-U+001E), NEL (U+0085), LS (U+2028), PS (U+2029).
+// \r\n is listed first so it is consumed as a single boundary rather than two.
+// The control-character escapes are deliberate, so the noControlCharactersInRegex
 // lint is suppressed.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: splitlines() parity requires the full Unicode line-boundary set
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the full Unicode line-boundary set requires these control-character escapes
 const LINE_BOUNDARY = /\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]/g;
 
-// Port of Python str.splitlines(): split on every line boundary above, drop
-// the separators, and emit NO trailing empty element. text.split('\n')
-// diverges by keeping \r/\v/etc. attached, adding a trailing empty line, and
-// not breaking on bare \r or the other Unicode boundaries.
+// Split on every line boundary above, drop the separators, and emit NO trailing
+// empty element. A plain split('\n') would diverge by keeping \r/\v/etc.
+// attached, adding a trailing empty line, and not breaking on bare \r or the
+// other Unicode boundaries.
 export function pySplitlines(text: string): string[] {
   const lines: string[] = [];
   let start = 0;
@@ -250,9 +243,9 @@ export function pySplitlines(text: string): string[] {
   return lines;
 }
 
-// Reproduce Python's repr() for the short top-level-statement snippet: wrap in
-// single quotes, escaping backslashes and embedded single quotes. The snippet
-// is a one-line trimmed slice, so no control-char escaping is needed here.
+// Quote the short top-level-statement snippet for problem output: wrap in single
+// quotes, escaping backslashes and embedded single quotes. The snippet is a
+// one-line trimmed slice, so no control-char escaping is needed here.
 function pyRepr(s: string): string {
   const escaped = s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   return `'${escaped}'`;
@@ -292,8 +285,8 @@ export function checkScenario(scenarioDir: string): string[] {
 
   if (existsSync(setup)) {
     const setupText = readFileSync(setup, 'utf8');
-    // Port of re.finditer(r"setup-helpers\s+run\s+(.+)", ...): each match's
-    // group(1) is split on whitespace and every token must be a known helper.
+    // For each `setup-helpers run <args>` occurrence, the captured args are split
+    // on whitespace and every token must be a known helper.
     const re = /setup-helpers\s+run\s+(.+)/g;
     for (const match of setupText.matchAll(re)) {
       const group = match[1] ?? '';
@@ -314,21 +307,20 @@ function isValidTier(tier: unknown): boolean {
   return tier === 'sentinel' || tier === 'full' || tier === 'adhoc';
 }
 
-// Render a frontmatter value the way Python's f-string {tier!r} would for the
-// invalid-tier message. Strings get single-quoted repr; everything else uses
-// its plain string form (e.g. a YAML int/bool), matching repr() closely enough
-// for the values a quorum_tier field can hold.
+// Render a frontmatter value for the invalid-tier message: strings get
+// single-quoted, booleans render as `True`/`False`, and everything else uses its
+// plain string form (e.g. a YAML int). Covers every value a quorum_tier field
+// can hold.
 function pyReprValue(value: unknown): string {
   if (typeof value === 'string') return pyRepr(value);
   if (typeof value === 'boolean') return value ? 'True' : 'False';
   return String(value);
 }
 
-// os.access(path, os.X_OK) parity: executability is resolved against the
-// caller's euid/ownership, not by OR-ing all three execute bits. As the file's
-// non-root owner this consults the OWNER execute bit specifically; a file whose
-// only execute bits are group/other (e.g. 0o011) is NOT executable to its owner,
-// matching Python's check_scenario and fix_executable_bits.
+// Executability is resolved against the caller's euid/ownership, not by OR-ing
+// all three execute bits. As the file's non-root owner this consults the OWNER
+// execute bit specifically; a file whose only execute bits are group/other
+// (e.g. 0o011) is NOT executable to its owner.
 function isExecutable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
@@ -340,8 +332,8 @@ function isExecutable(path: string): boolean {
 
 /**
  * chmod +x setup.sh if it is missing the executable bit. Returns the
- * scenario-relative paths fixed. Port of fix_executable_bits (scaffold.py
- * 196-212): setup.sh is the only script quorum execs directly.
+ * scenario-relative paths fixed. setup.sh is the only script quorum execs
+ * directly.
  */
 export function fixExecutableBits(scenarioDir: string): string[] {
   const fixed: string[] = [];

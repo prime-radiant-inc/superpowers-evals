@@ -54,9 +54,9 @@ function basename(path: string): string {
   return last !== undefined && last !== '' ? last : path;
 }
 
-// Fail fast (exit 1) when a scenarios-root does not exist or is not a directory
-// — parity with click.Path(exists=True, file_okay=False) on list/check, where a
-// typo'd root is a hard error rather than a silent empty result.
+// Fail fast (exit 1) when a scenarios-root does not exist or is not a directory,
+// so a typo'd root on list/check is a hard error rather than a silent empty
+// result.
 function requireScenariosRoot(root: string): void {
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     process.stderr.write(`error: --scenarios-root does not exist: ${root}\n`);
@@ -75,10 +75,10 @@ function scenarioNames(root: string): string[] {
     .sort();
 }
 
-// Strict integer parse for a numeric option. Parity with click's IntRange,
-// which rejects any non-integer token: Number.parseInt truncates (`3.5` -> 3,
-// `8x` -> 8), so it can't gate the flag. Returns undefined for any token that
-// is not a pure decimal integer (optionally signed).
+// Strict integer parse for a numeric option: reject any non-integer token.
+// Number.parseInt truncates (`3.5` -> 3, `8x` -> 8), so it can't gate the flag.
+// Returns undefined for any token that is not a pure decimal integer (optionally
+// signed).
 function parseIntegerOption(value: string): number | undefined {
   if (!/^[+-]?\d+$/.test(value)) {
     return undefined;
@@ -88,7 +88,7 @@ function parseIntegerOption(value: string): number | undefined {
 }
 
 // Parse a CSV filter flag: undefined/empty -> undefined (no filter, = all);
-// otherwise the trimmed, non-empty members (parity with the Python `if csv`).
+// otherwise the trimmed, non-empty members.
 function csvList(csv: string | undefined): string[] | undefined {
   if (csv === undefined || csv === '') {
     return undefined;
@@ -233,8 +233,8 @@ program
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .action((names: string[], opts: { fix: boolean; scenariosRoot: string }) => {
     const root = opts.scenariosRoot;
-    // Parity with click.Path(exists=True) on --scenarios-root: a missing root is
-    // a hard error before any scenario work, not a silent empty run.
+    // A missing --scenarios-root is a hard error before any scenario work, not a
+    // silent empty run.
     requireScenariosRoot(resolve(root));
     let targets: string[];
     if (names.length > 0) {
@@ -311,9 +311,8 @@ program
       process.stderr.write('error: --tier must be sentinel|full|adhoc\n');
       process.exit(1);
     }
-    // Validate the input roots exist at the CLI boundary (parity with Python's
-    // click.Path(exists=True, file_okay=False)): a typo'd root fails fast here
-    // rather than depending on runBatch's internal directory walk.
+    // Validate the input roots exist at the CLI boundary: a typo'd root fails
+    // fast here rather than depending on runBatch's internal directory walk.
     for (const [flag, dir] of [
       ['--scenarios-root', opts.scenariosRoot],
       ['--coding-agents-dir', opts.codingAgentsDir],
@@ -417,7 +416,7 @@ program
     }
 
     // A batch dir renders the scenario×agent matrix (or its raw json); the
-    // matrix has no quiet mode (parity with the Python show).
+    // matrix has no quiet mode.
     if (isBatchDir(runDir)) {
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(batchJson(runDir), null, 2)}\n`);
@@ -433,9 +432,9 @@ program
       process.exit(0);
     }
 
-    // --json never schema-validates (parity with Python's json.loads ->
-    // json.dumps): a parseable-but-off-schema verdict is dumped verbatim, and
-    // unknown top-level keys survive. Only unparseable JSON exits 2.
+    // --json never schema-validates (parse -> re-serialize): a parseable-but-
+    // off-schema verdict is dumped verbatim, and unknown top-level keys survive.
+    // Only unparseable JSON exits 2.
     if (opts.json) {
       let raw: unknown;
       try {

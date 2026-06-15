@@ -1,9 +1,7 @@
-// src/setup-helpers/pulse-dashboard.ts
-// Shared Pulse Dashboard source constants for the spec-fixture helpers. Ported
-// verbatim from setup_helpers/spec_writing_blind_spot.py so createSpecWritingBlindSpot
-// and the two createSpecTargetsWrongComponent* helpers cannot drift (Python imports
-// these across modules; we centralize). Every embedded backtick and ${ must stay
-// LITERAL in the emitted fixture, so they are escaped in these template literals.
+// Shared Pulse Dashboard source constants for the spec-fixture helpers, so
+// createSpecWritingBlindSpot and the two createSpecTargetsWrongComponent* helpers
+// cannot drift. Every embedded backtick and ${ must stay LITERAL in the emitted
+// fixture, so they are escaped in these template literals.
 
 export const PACKAGE_JSON = `{
   "name": "pulse-dashboard",

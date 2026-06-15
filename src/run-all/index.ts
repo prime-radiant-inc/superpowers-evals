@@ -24,29 +24,22 @@ import {
   buildMatrix,
 } from './matrix.ts';
 
-// quorum run-all orchestrator. Ports invoke_child + run_batch (run_all.py).
+// quorum run-all orchestrator: invokeChild + runBatch.
 // The run-all COMMAND is wired by the integrator (src/cli/index.ts); this
 // module exports the functions its action calls.
 //
-// As of PRI-2203 (Spec 4) the batch is driven through the central scheduler
-// (src/scheduler/index.ts): runBatch builds the matrix + renders the
-// directive/draft/tier skips caller-side, then hands the runnable cells to
-// runSchedule and becomes its event consumer. The scheduler owns ONE global
-// slot pool of size `jobs` and a TRUE global cap — replacing the prior
-// buildLanes/pLimit nested-pool model (a per-agent lane limiter alongside a main
-// pool), whose total in-flight could exceed `jobs` (the incumbent's bug).
+// The batch is driven through the central scheduler (src/scheduler/index.ts):
+// runBatch builds the matrix + renders the directive/draft/tier skips
+// caller-side, then hands the runnable cells to runSchedule and becomes its
+// event consumer. The scheduler owns ONE global slot pool of size `jobs` and a
+// TRUE global cap.
 //
-// DEFER (run_all.py parity gaps left for later specs):
-//  - NOTE: the Rich in-place LIVE in-flight panel — plain append-only output is
-//    the functional core, so only the plain path is ported here. A cell_started
-//    line is the live panel's concern; plain mode prints only on completion
-//    (parity with the current output), so cell_started is a no-op consumer-side.
-//  - NOTE: the kimi batch preflight (prepare_kimi_batch_preflight) — each kimi
-//    child self-preflights via its adapter, which avoids coupling run-all into
-//    kimi.ts internals.
-//  - NOTE (Spec 5): the dashboard SSE consumer of the same scheduler events —
-//    onSpawn (pid registration) and requestStop (/stop) pass through the
-//    scheduler API but are wired by the dashboard, not here.
+// Output is plain append-only: a cell_started line is a live-panel concern, so
+// plain mode prints only on completion and cell_started is a no-op
+// consumer-side. There is no kimi batch preflight here — each kimi child
+// self-preflights via its adapter, which avoids coupling run-all into kimi.ts
+// internals. The dashboard consumes the same scheduler events (onSpawn pid
+// registration, requestStop /stop), but wires them itself, not here.
 
 const RUN_ID_PREFIX = 'run-id: ';
 
@@ -70,18 +63,16 @@ export interface InvokeChildArgs {
   readonly timeoutSeconds?: number;
   readonly extraEnv?: Readonly<Record<string, string>>;
   // Called once with the spawned child's OS pid, right after spawn. The
-  // dashboard orchestrator (Spec 5) registers the pid here so /stop can SIGINT
-  // in-flight children; run-all leaves it unset.
+  // dashboard orchestrator registers the pid here so /stop can SIGINT in-flight
+  // children; run-all leaves it unset.
   readonly onPid?: (pid: number) => void;
 }
 
 // The spawn-and-collect core shared by invokeChild (and exercisable directly in
 // tests). Spawns `command args`, captures the run-id line from stdout, and
 // DRAINS stderr so a child writing more than the OS pipe buffer (~64KB) never
-// blocks on its stderr write — matching Python's subprocess.run(capture_output=
-// True), which buffers both streams. Without the stderr drain a verbose child
-// deadlocks on write() and the scheduler slot hangs forever (H-child-stderr-
-// not-drained).
+// blocks on its stderr write. Without the stderr drain a verbose child deadlocks
+// on write() and the scheduler slot hangs forever.
 export interface SpawnCollectArgs {
   readonly command: string;
   readonly args: readonly string[];
@@ -119,12 +110,11 @@ export function spawnCollectRunId(
     child.stdout?.on('data', (chunk: string) => {
       stdout += chunk;
     });
-    // Drain stderr too. We don't keep its contents in the result (Python's
-    // invoke_child discards stderr), but the bytes MUST be actively consumed —
-    // attaching a 'data' listener switches the stream to flowing mode and reads
-    // it — or the child can block once the OS pipe buffer fills (pipe-buffer
-    // deadlock). The optional onStderr hook lets tests observe that consumption
-    // happens (the prior code attached no stderr handler at all).
+    // Drain stderr too. We don't keep its contents in the result, but the bytes
+    // MUST be actively consumed — attaching a 'data' listener switches the stream
+    // to flowing mode and reads it — or the child can block once the OS pipe
+    // buffer fills (pipe-buffer deadlock). The optional onStderr hook lets tests
+    // observe that consumption happens.
     child.stderr?.on('data', (chunk: Buffer | string) => {
       args.onStderr?.(chunk.length);
     });
@@ -328,15 +318,15 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     });
 
   // The rate-limit latch hook: a finished child whose verdict.json carries the
-  // Code Assist marker latches its harness (run_all.py _is_rate_limited_verdict).
+  // Code Assist marker latches its harness.
   const isRateLimited = (result: ChildResult): boolean =>
     result.run_id !== null &&
     isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)));
 
   // run-all consumes the scheduler's event stream: render the completion / skip
   // line, append the results.jsonl record, and tally cost. cell_queued /
-  // cell_started are no-ops in plain mode (the start line is the deferred live
-  // panel's concern); batch_done's summary is printed after the drive resolves.
+  // cell_started are no-ops in plain mode (the start line is a live-panel
+  // concern); batch_done's summary is printed after the drive resolves.
   const onEvent = (event: SchedulerEvent): void => {
     if (event.kind === 'cell_finished') {
       const idx = matrixIdxFor(event.idx);
@@ -413,8 +403,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   return batchDir;
 }
 
-// One skip line for an upfront-skipped cell, with its reason label
-// (run_all.py skipped_indexed loop).
+// One skip line for an upfront-skipped cell, with its reason label.
 function skipLine(idx: number, total: number, entry: MatrixEntry): string {
   let reason: string;
   if (entry.skippedReason === 'directive') {
@@ -434,8 +423,7 @@ function skipLine(idx: number, total: number, entry: MatrixEntry): string {
   );
 }
 
-// One skip line for a runtime rate-limit-latched cell (run_all.py _drain
-// sentinel branch).
+// One skip line for a runtime rate-limit-latched cell.
 function rateLimitLine(idx: number, total: number, entry: MatrixEntry): string {
   return (
     `[${idxLabel(idx, total)}] skip   ` +
@@ -453,8 +441,8 @@ function stoppedLine(idx: number, total: number, entry: MatrixEntry): string {
   );
 }
 
-// One done line for a completed cell: glyph + duration + cost (run_all.py
-// _drain done branch). Cost is "—" when absent.
+// One done line for a completed cell: glyph + duration + cost. Cost is "—" when
+// absent.
 function doneLine(
   idx: number,
   total: number,
@@ -475,8 +463,7 @@ function idxLabel(idx: number, total: number): string {
   return `${String(idx).padStart(String(total).length, '0')}/${total}`;
 }
 
-// Integer-second duration: "Ns" under a minute, else "MmSSs" (run_all.py
-// _fmt_duration).
+// Integer-second duration: "Ns" under a minute, else "MmSSs".
 function fmtDuration(seconds: number): string {
   const s = Math.trunc(seconds);
   if (s < 60) return `${s}s`;
@@ -487,8 +474,8 @@ function fmtDuration(seconds: number): string {
 
 function relativeToCwd(path: string): string {
   const rel = relative(process.cwd(), path);
-  // relative() returns a ../-prefixed path when outside cwd; the Python falls
-  // back to the absolute path in that case.
+  // relative() returns a ../-prefixed path when outside cwd; fall back to the
+  // absolute path in that case.
   return rel.startsWith('..') ? path : rel;
 }
 
@@ -503,8 +490,7 @@ const VerdictViewSchema = z.object({
 });
 type VerdictView = z.infer<typeof VerdictViewSchema>;
 
-// Read + zod-narrow verdict.json for a run dir; null when missing/unparseable
-// (run_all.py _read_verdict).
+// Read + zod-narrow verdict.json for a run dir; null when missing/unparseable.
 function readVerdict(runDir: string): VerdictView | null {
   const path = join(runDir, 'verdict.json');
   if (!existsSync(path)) return null;
@@ -518,8 +504,7 @@ function readVerdict(runDir: string): VerdictView | null {
   return parsed.success ? parsed.data : null;
 }
 
-// True when a child's verdict carries the Code Assist rate-limit marker
-// (run_all.py _is_rate_limited_verdict).
+// True when a child's verdict carries the Code Assist rate-limit marker.
 function isRateLimitedVerdict(verdict: VerdictView | null): boolean {
   if (verdict === null) return false;
   const message = verdict.error?.message ?? '';
@@ -527,15 +512,14 @@ function isRateLimitedVerdict(verdict: VerdictView | null): boolean {
 }
 
 // Frozen total est cost for a run from its verdict.json economics block, or
-// null (run_all.py _run_cost).
+// null when absent.
 function runCost(runDir: string): number | null {
   const verdict = readVerdict(runDir);
   if (verdict === null) return null;
   return verdict.economics?.total_est_cost_usd ?? null;
 }
 
-// Map a child outcome to one of pass / fail / indeterminate / unknown
-// (run_all.py _final_status_for_result).
+// Map a child outcome to one of pass / fail / indeterminate / unknown.
 function finalStatusForResult(result: ChildResult, outRoot: string): Final {
   if (result.error !== null || result.run_id === null) return 'unknown';
   const verdict = readVerdict(join(outRoot, result.run_id));

@@ -62,9 +62,9 @@ interface ProvisionOpts {
   readonly python?: string;
 }
 
-// Mirror Python's `shutil.which('uv')` — a PATH lookup, NOT a subprocess. Using
-// Bun.which (vs spawning `uv --version` through the seam) means no extra
-// recorded call, so Task 9's behavior tests see `run.calls[0]` == the venv call.
+// A PATH lookup, NOT a subprocess. Using Bun.which (vs spawning `uv --version`
+// through the seam) means no extra recorded call, so the behavior tests see
+// `run.calls[0]` == the venv call.
 function uvOnPath(): boolean {
   return Bun.which('uv') !== null;
 }
@@ -99,9 +99,9 @@ function resolvePython(): string {
   );
 }
 
-// Port of setup_helpers/base.py:provision_venv. Creates <workdir>/.venv with
-// pytest + the workdir package installed editable. Uses uv when available
-// (fast), else stdlib venv + pip. Routed through CommandRunner for testability.
+// Creates <workdir>/.venv with pytest + the workdir package installed editable.
+// Uses uv when available (fast), else stdlib venv + pip. Routed through
+// CommandRunner for testability.
 export function provisionVenv(
   workdir: string,
   run: CommandRunner,

@@ -4,9 +4,8 @@ import { z } from 'zod';
 
 // quorum show <batch> — scenario × agent matrix renderer.
 //
-// Port of quorum/show.py render_batch (the oracle). Glyphs, labels, the
-// Legend line, and the tally string are reproduced verbatim; do not
-// paraphrase them. The Python is canonical for any drift.
+// Glyphs, labels, the Legend line, and the tally string are part of the
+// triage-output contract; do not paraphrase them.
 
 // The five cell verdicts a matrix cell can take. Closed union so the glyph
 // and color lookups stay exhaustive without an index-signature widening.
@@ -22,9 +21,8 @@ interface Glyph {
   readonly label: string;
 }
 
-// Mirror of show.py:_GLYPHS. NOTE the unknown label is "?" (not "no verdict");
-// only the Legend line spells out "no verdict". A missing-verdict cell renders
-// "? ?".
+// NOTE the unknown label is "?" (not "no verdict"); only the Legend line spells
+// out "no verdict". A missing-verdict cell renders "? ?".
 export const BATCH_GLYPHS: Record<BatchVerdict, Glyph> = {
   pass: { glyph: '✓', label: 'pass' },
   fail: { glyph: '✗', label: 'fail' },
@@ -33,10 +31,8 @@ export const BATCH_GLYPHS: Record<BatchVerdict, Glyph> = {
   unknown: { glyph: '?', label: '?' },
 };
 
-// Mirror of show.py:_BATCH_GLYPH_COLORS — Dracula palette. pass/fail/indet use
-// the verdict colors; skipped/unknown use the label gray. Stored as rgb tuples
-// here (the Python stores "rgb(r,g,b)" strings for rich); the ANSI form is the
-// same truecolor sequence.
+// Dracula palette. pass/fail/indet use the verdict colors; skipped/unknown use
+// the label gray. Stored as rgb tuples; emitted as ANSI truecolor sequences.
 type Rgb = readonly [number, number, number];
 
 export const BATCH_GLYPH_COLORS: Record<BatchVerdict, Rgb> = {
@@ -57,7 +53,7 @@ function paint(text: string, rgb: Rgb, on: boolean): string {
   return `\x1b[38;2;${r};${g};${b}m${text}\x1b[0m`;
 }
 
-// A path is a batch dir if it contains batch.json (show.py:is_batch_dir).
+// A path is a batch dir if it contains batch.json.
 export function isBatchDir(path: string): boolean {
   return existsSync(join(path, 'batch.json'));
 }
@@ -72,10 +68,9 @@ const BatchHeaderSchema = z.object({
 });
 
 // One results.jsonl record. run_id may be null (no run produced); skipped is a
-// truthy directive marker. The oracle (show.py:render_batch) reads skipped with
-// pure truthiness (`if r.get("skipped")`) and never type-checks it, so it is
-// accepted as unknown here — a non-string skipped degrades one cell rather than
-// aborting the whole matrix with a schema error.
+// truthy directive marker, read with pure truthiness and never type-checked, so
+// it is accepted as unknown here — a non-string skipped degrades one cell rather
+// than aborting the whole matrix with a schema error.
 const BatchResultSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
@@ -147,9 +142,8 @@ export interface RenderBatchArgs {
   readonly color: boolean;
 }
 
-// Port of show.py:render_batch. Returns the full multi-line table (banner,
-// blank, header, separator, one row per scenario, blank, Legend, tally) with a
-// trailing newline, matching rich's Console.print line-by-line.
+// Returns the full multi-line table (banner, blank, header, separator, one row
+// per scenario, blank, Legend, tally) with a trailing newline.
 export function renderBatch(args: RenderBatchArgs): string {
   const header = BatchHeaderSchema.parse(
     JSON.parse(readFileSync(join(args.batchDir, 'batch.json'), 'utf8')),
@@ -170,9 +164,8 @@ export function renderBatch(args: RenderBatchArgs): string {
 
   for (const r of rows) {
     const key = cellKey(r.scenario, r.coding_agent);
-    // Truthiness gate, mirroring show.py's `if r.get("skipped")`: any truthy
-    // value (a directive string, true, ...) marks the cell skipped; falsy or
-    // absent does not.
+    // Truthiness gate: any truthy value (a directive string, true, ...) marks
+    // the cell skipped; falsy or absent does not.
     if (r.skipped) {
       cellVerdicts.set(key, 'skipped');
       counts.skipped += 1;
@@ -183,7 +176,7 @@ export function renderBatch(args: RenderBatchArgs): string {
     counts[verdict] += 1;
   }
 
-  // Column widths grow to fit content (show.py).
+  // Column widths grow to fit content.
   let scenW = Math.max(...scenarios.map((s) => s.length), 0);
   scenW = Math.max(scenW, 'scenario'.length);
   const cellW = Math.max(...agents.map((a) => a.length), '⊘ indet'.length);

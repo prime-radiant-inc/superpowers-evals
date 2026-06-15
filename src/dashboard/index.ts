@@ -2,9 +2,9 @@ import type { InvokeFn } from '../run-all/index.ts';
 import { knownAgentNames } from '../run-all/matrix.ts';
 import { createDashboard } from './server.ts';
 
-// The dashboard entry point (PRI-2207, Spec 5, Task 14). Binds createDashboard's
-// fetch handler to a Bun.serve instance and starts the scanner loop. The CLI
-// `dashboard` command (src/cli/index.ts) and the e2e tests both go through here.
+// The dashboard entry point. Binds createDashboard's fetch handler to a
+// Bun.serve instance and starts the scanner loop. The CLI `dashboard` command
+// (src/cli/index.ts) and the e2e tests both go through here.
 
 export interface StartDashboardArgs {
   readonly port: number;

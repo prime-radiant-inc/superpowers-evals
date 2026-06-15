@@ -1,11 +1,7 @@
-// src/setup-helpers/cli.ts
-//
-// Port of setup_helpers/cli.py: `setup-helpers run <helper> [<helper>...]`.
-// Scenario setup.sh scripts dispatch named helpers here instead of inlining a
-// Python block. Each name is looked up in REGISTRY and invoked against
+// `setup-helpers run <helper> [<helper>...]`. Scenario setup.sh scripts dispatch
+// named helpers here. Each name is looked up in REGISTRY and invoked against
 // QUORUM_WORKDIR. Helpers whose registry entry declares needsTemplateDir /
-// needsSuperpowersRoot are filled from QUORUM_REPO_ROOT / SUPERPOWERS_ROOT
-// (the registry replaces Python's signature introspection).
+// needsSuperpowersRoot are filled from QUORUM_REPO_ROOT / SUPERPOWERS_ROOT.
 
 import { join } from 'node:path';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
@@ -66,10 +62,10 @@ export async function runHelpers(
   }
 }
 
-// Entrypoint mirroring `sys.exit(main())`. Returns the process exit code:
-// 2 for a usage error, 1 for a missing workdir or a helper failure, 0 on
-// success. SUPERPOWERS_ROOT rides the inherited environment (the runner injects
-// only QUORUM_REPO_ROOT via envExtra; SUPERPOWERS_ROOT comes from envSnapshot).
+// Entrypoint. Returns the process exit code: 2 for a usage error, 1 for a
+// missing workdir or a helper failure, 0 on success. SUPERPOWERS_ROOT rides the
+// inherited environment (the runner injects only QUORUM_REPO_ROOT via envExtra;
+// SUPERPOWERS_ROOT comes from envSnapshot).
 async function main(argv: readonly string[]): Promise<number> {
   if (argv.length < 2 || argv[0] !== 'run') {
     process.stderr.write('usage: setup-helpers run <helper> [<helper>...]\n');
@@ -96,6 +92,6 @@ async function main(argv: readonly string[]): Promise<number> {
 
 if (import.meta.main) {
   // The prelude's `setup-helpers` function (`bun run …/cli.ts "$@"`) inherits
-  // this exit code, preserving the Python CLI's 2-vs-1 distinction.
+  // this exit code, preserving the 2-vs-1 usage-vs-failure distinction.
   process.exit(await main(process.argv.slice(2)));
 }

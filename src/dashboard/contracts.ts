@@ -1,10 +1,8 @@
 import { z } from 'zod';
 
-// Dashboard read-side contracts (PRI-2207, Spec 5). The literal unions and zod
-// schemas here are the single source of truth for the grid model; scan.ts,
-// view.ts, templates.ts, orchestrator.ts, and server.ts all import from here.
-//
-// Parity reference: .worktrees/dashboard-ref/quorum/dashboard/data.py.
+// Dashboard read-side contracts. The literal unions and zod schemas here are the
+// single source of truth for the grid model; scan.ts, view.ts, templates.ts,
+// orchestrator.ts, and server.ts all import from here.
 
 // The four cell display states. Closed union so renders + state machines stay
 // exhaustive (assertNever on the default).
@@ -40,11 +38,11 @@ export type PhaseJson = z.infer<typeof PhaseJsonSchema>;
 // The narrow read-side view of verdict.json — only the fields the grid needs.
 // Every field is `.catch`-guarded so a single wrong-typed field never sinks the
 // whole parse: a malformed/legacy/externally-edited verdict still reads as a
-// PRESENT verdict, matching Python's type-blind `.get()` (data.py _read_json).
-// This preserves the authority rule — once verdict.json exists, phase.json is
-// ignored for that dir — for off-happy-path files too. A non-string `final`
-// degrades to undefined (the read-side then collapses it to 'unknown'); a
-// non-number cost degrades to null (rendered "cost unknown", never $0).
+// PRESENT verdict. This preserves the authority rule — once verdict.json exists,
+// phase.json is ignored for that dir — for off-happy-path files too. A
+// non-string `final` degrades to undefined (the read-side then collapses it to
+// 'unknown'); a non-number cost degrades to null (rendered "cost unknown", never
+// $0).
 export const DashboardVerdictSchema = z.object({
   final: z.string().optional().catch(undefined),
   economics: z

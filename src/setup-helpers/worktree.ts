@@ -1,10 +1,5 @@
-// src/setup-helpers/worktree.ts
-// Tier-1 worktree helpers ported from worktree.py (the non-codex/non-gemini
-// functions) and worktree_pressure.py. addWorktree/detachHead are library
-// functions (not dispatchable); the rest are HelperContext helpers. The
-// CALLER_CONSENT_PLAN constant is ported verbatim. Tier-2 helpers
-// (linkGeminiExtension, installCodexSuperpowersPluginHooks) are added in
-// Tasks 12-13.
+// Worktree helpers for the worktree scenarios. addWorktree/detachHead are
+// library functions (not dispatchable); the rest are HelperContext helpers.
 import {
   copyFileSync,
   existsSync,
@@ -26,7 +21,7 @@ import type { HelperContext } from './context.ts';
 import { writeFixtureFile } from './fs.ts';
 import { runGit, runGitAllowFail } from './git.ts';
 
-// Verbatim from worktree.py:CALLER_CONSENT_PLAN.
+// The committed implementation plan seeded into the caller-consent fixture.
 const CALLER_CONSENT_PLAN = `# Custom Greeting Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
@@ -53,15 +48,14 @@ const CALLER_CONSENT_PLAN = `# Custom Greeting Implementation Plan
 - [ ] **Step 3: Run the relevant tests.**
 `;
 
-// Port of worktree.py:_sibling_path. Returns <workdir.parent>/<workdir.name>-<suffix>.
+// Returns <workdir.parent>/<workdir.name>-<suffix>.
 function siblingPath(workdir: string, suffix: string): string {
   return join(dirname(workdir), `${basename(workdir)}-${suffix}`);
 }
 
-// Library (not dispatchable). Port of worktree.py:add_worktree. Python uses a
-// bare subprocess.run without the identity env here; reusing runGit is
-// intentional — the identity env is inert for non-committing git ops, so the
-// output is identical.
+// Library (not dispatchable). Reusing runGit (which carries the committer
+// identity env) is intentional — that env is inert for this non-committing git
+// op, so the output is identical to a bare git invocation.
 export function addWorktree(
   repoDir: string,
   branch: string,
@@ -70,9 +64,8 @@ export function addWorktree(
   runGit(['worktree', 'add', '-b', branch, worktreePath], repoDir);
 }
 
-// Library (not dispatchable). Port of worktree.py:detach_head. The final
-// `git branch -D` is run unchecked in Python (a stale branch is acceptable), so
-// it goes through the non-throwing variant.
+// Library (not dispatchable). The final `git branch -D` goes through the
+// non-throwing variant: a leftover stale branch is acceptable.
 export function detachHead(worktreePath: string): void {
   const commit = runGit(['rev-parse', 'HEAD'], worktreePath).trim();
   const branch = runGit(['branch', '--show-current'], worktreePath).trim();
@@ -82,8 +75,7 @@ export function detachHead(worktreePath: string): void {
   }
 }
 
-// Port of worktree.py:add_existing_worktree. Creates an existing worktree (for
-// 'already inside' scenarios).
+// Creates an existing worktree (for 'already inside' scenarios).
 export function addExistingWorktree(ctx: HelperContext): void {
   addWorktree(
     ctx.workdir,
@@ -92,14 +84,13 @@ export function addExistingWorktree(ctx: HelperContext): void {
   );
 }
 
-// Port of worktree.py:detach_worktree_head. Detaches HEAD in the existing
-// worktree.
+// Detaches HEAD in the existing worktree.
 export function detachWorktreeHead(ctx: HelperContext): void {
   detachHead(siblingPath(ctx.workdir, 'existing-worktree'));
 }
 
-// Port of worktree.py:symlink_superpowers. Creates <workdir>/.agents/skills and
-// symlinks superpowers -> <superpowersRoot>/skills. Does not stat the target.
+// Creates <workdir>/.agents/skills and symlinks superpowers ->
+// <superpowersRoot>/skills. Does not stat the target.
 export function symlinkSuperpowers(ctx: HelperContext): void {
   if (ctx.superpowersRoot === undefined) {
     throw new Error('superpowersRoot is required for symlink_superpowers');
@@ -139,30 +130,27 @@ function ignoreGeminiExtensionStage(
   return ignored;
 }
 
-// Improvement over worktree.py:link_gemini_extension. Links superpowers as a
-// Gemini CLI extension and injects project context. Extensions are global, but
-// GEMINI.md context loading is project-scoped, so the temp workdir needs a
-// GEMINI.md with absolute @imports. The extension name defaults to
-// 'superpowers'; only if <root>/gemini-extension.json exists do we parse it and
-// take its `name` field, suppressing JSON parse failures (parity with the
-// Python suppress(JSONDecodeError)).
+// Links superpowers as a Gemini CLI extension and injects project context.
+// Extensions are global, but GEMINI.md context loading is project-scoped, so the
+// temp workdir needs a GEMINI.md with absolute @imports. The extension name
+// defaults to 'superpowers'; only if <root>/gemini-extension.json exists do we
+// parse it and take its `name` field, suppressing JSON parse failures.
 //
-// Unlike Python (which links the raw SUPERPOWERS_ROOT), we link a CLEAN STAGED
-// copy that excludes evals/, .git, and node_modules. A real superpowers checkout
-// nests the entire evals/ submodule — including this harness's own results/ run
-// dirs — under SUPERPOWERS_ROOT. `gemini extensions link` (and the antigravity
-// `agy` CLI) copy the linked directory wholesale into the per-run Gemini home, so
+// We link a CLEAN STAGED copy that excludes evals/, .git, and node_modules
+// rather than the raw SUPERPOWERS_ROOT. A real superpowers checkout nests the
+// entire evals/ submodule — including this harness's own results/ run dirs —
+// under SUPERPOWERS_ROOT. `gemini extensions link` (and the antigravity `agy`
+// CLI) copy the linked directory wholesale into the per-run Gemini home, so
 // linking the raw root recursively re-copies prior run output and explodes the
 // destination path (observed live: "copying extension directory: mkdir
-// .../.gemini/config/plugins/superpowers/evals/results/<run>/coding-agent-config/.gemini/config").
-// Python has the same latent bug; staging is an intentional, documented fix.
+// .../.gemini/config/plugins/superpowers/evals/results/<run>/.gemini/config").
+// Staging is the fix for that latent explosion.
 //
 // Staging lifecycle: gemini copies the extension at link time (the live failure
-// is literally "copying extension directory"), so the staged dir is no longer
-// referenced after the link returns. We still leave it in place for the run's
-// lifetime — it lives under the run's workdir tree and is reclaimed when the run
-// dir is, and keeping it avoids any dependency on undocumented gemini re-read
-// behavior.
+// is literally "copying extension directory"), so the staged dir is unreferenced
+// after the link returns. We still leave it in place for the run's lifetime — it
+// lives under the run's workdir tree and is reclaimed when the run dir is, and
+// keeping it avoids any dependency on undocumented gemini re-read behavior.
 export function linkGeminiExtension(ctx: HelperContext): void {
   if (ctx.superpowersRoot === undefined) {
     throw new Error('superpowersRoot is required for link_gemini_extension');
@@ -185,7 +173,7 @@ export function linkGeminiExtension(ctx: HelperContext): void {
 
   // Gemini extensions are global; replace any prior link so this run tests the
   // requested SUPERPOWERS_ROOT checkout rather than a stale install. Status is
-  // ignored (Python runs this uninstall without check=True).
+  // ignored — a missing prior install is fine.
   ctx.run.run('gemini', ['extensions', 'uninstall', extensionName]);
   const linkResult = ctx.run.run('gemini', ['extensions', 'link', stageDir], {
     input: 'y\n',
@@ -207,8 +195,7 @@ export function linkGeminiExtension(ctx: HelperContext): void {
 }
 
 // Helper for linkGeminiExtension: parse <root>/gemini-extension.json and return
-// its `name`, falling back to `fallback` on a parse failure (Python suppresses
-// only JSONDecodeError) or a missing `name` (Python's `.get("name", default)`).
+// its `name`, falling back to `fallback` on a parse failure or a missing `name`.
 // JSON.parse output is treated as the boundary value it is and zod-parsed.
 const GeminiManifestSchema = z.object({ name: z.string().optional() });
 
@@ -220,8 +207,7 @@ function readGeminiExtensionName(
   try {
     raw = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch {
-    // Python suppresses only json.JSONDecodeError here; a parse failure keeps
-    // the default extension name.
+    // A parse failure keeps the default extension name.
     return fallback;
   }
   const parsed = GeminiManifestSchema.safeParse(raw);
@@ -231,8 +217,7 @@ function readGeminiExtensionName(
   return fallback;
 }
 
-// Dirs ignored in EVERY directory during the plugin copytree
-// (port of _ignore_codex_plugin_copy's base set).
+// Dirs ignored in EVERY directory during the plugin copy.
 const CODEX_PLUGIN_IGNORE_ALWAYS: ReadonlySet<string> = new Set<string>([
   '.git',
   '.mypy_cache',
@@ -244,10 +229,9 @@ const CODEX_PLUGIN_IGNORE_ALWAYS: ReadonlySet<string> = new Set<string>([
   'node_modules',
 ]);
 
-// Port of _ignore_codex_plugin_copy: the always-ignored set, plus `results`
-// only when the directory being walked is itself named `evals` (at any depth).
-// Invoked per-directory with that directory's absolute path + its entry names,
-// mirroring shutil.copytree's ignore(src, names) contract.
+// The always-ignored set, plus `results` only when the directory being walked is
+// itself named `evals` (at any depth). Invoked per-directory with that
+// directory's absolute path + its entry names; returns the subset to skip.
 function ignoreCodexPluginCopy(src: string, names: string[]): Set<string> {
   const ignored = new Set<string>();
   for (const name of names) {
@@ -263,15 +247,13 @@ function ignoreCodexPluginCopy(src: string, names: string[]): Set<string> {
   return ignored;
 }
 
-// A per-directory ignore predicate, mirroring shutil.copytree's
-// ignore(src, names) contract: given a source directory's absolute path and its
-// entry names, return the subset of names to skip.
+// A per-directory ignore predicate: given a source directory's absolute path and
+// its entry names, return the subset of names to skip.
 type IgnorePredicate = (src: string, names: string[]) => Set<string>;
 
-// Recursive copy honoring a per-directory ignore predicate, mirroring
-// shutil.copytree(..., ignore=...). The predicate is consulted with each
-// source directory's absolute path and its entry names; matched names are
-// skipped entirely (their subtrees are never walked).
+// Recursive copy honoring a per-directory ignore predicate. The predicate is
+// consulted with each source directory's absolute path and its entry names;
+// matched names are skipped entirely (their subtrees are never walked).
 function copyTreeWithIgnore(
   src: string,
   dest: string,
@@ -290,8 +272,8 @@ function copyTreeWithIgnore(
     if (entry.isDirectory()) {
       copyTreeWithIgnore(srcPath, destPath, ignore);
     } else if (entry.isSymbolicLink()) {
-      // copytree copies symlinks as files by default (follow_symlinks=True);
-      // copyFileSync follows the link and copies the target's contents.
+      // Copy symlinks as files: copyFileSync follows the link and copies the
+      // target's contents.
       copyFileSync(srcPath, destPath);
     } else {
       copyFileSync(srcPath, destPath);
@@ -299,13 +281,12 @@ function copyTreeWithIgnore(
   }
 }
 
-// Port of _toml_basic_string: escape `\` -> `\\` then `"` -> `\"`.
+// Escape a TOML basic string: `\` -> `\\` then `"` -> `\"`.
 function tomlBasicString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
-// Port of _write_codex_plugin_hooks_config: enable plugins/hooks and the
-// superpowers@debug plugin (verbatim TOML body).
+// Enable plugins/hooks and the superpowers@debug plugin in the codex config.
 function writeCodexPluginHooksConfig(configPath: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(
@@ -322,8 +303,7 @@ enabled = true
   );
 }
 
-// Port of _append_codex_trusted_hook: append the trusted-hash block, with both
-// the key and hash TOML-escaped.
+// Append the trusted-hash block, with both the key and hash TOML-escaped.
 function appendCodexTrustedHook(
   configPath: string,
   key: string,
@@ -337,9 +317,9 @@ function appendCodexTrustedHook(
   );
 }
 
-// Port of _login_codex_home_with_api_key: pipe OPENAI_API_KEY (trailing
-// newline) to `codex login --with-api-key` against the isolated CODEX_HOME.
-// Throws when the key is missing (OSError parity) or the login fails.
+// Pipe OPENAI_API_KEY (trailing newline) to `codex login --with-api-key`
+// against the isolated CODEX_HOME. Throws when the key is missing or the login
+// fails.
 function loginCodexHomeWithApiKey(
   codexHome: string,
   run: HelperContext['run'],
@@ -371,7 +351,7 @@ interface CodexDeps {
   setEnv(key: string, value: string): void;
 }
 
-// Options for the dual-mode codex install (Python's codex_home: Path | None).
+// Options for the dual-mode codex install.
 interface CodexInstallOptions {
   // Caller-supplied, pre-existing, already-logged-in CODEX_HOME. When given,
   // install into it directly and skip the isolated-home build, login, and the
@@ -380,8 +360,7 @@ interface CodexInstallOptions {
   readonly codexHome?: string;
 }
 
-// Port of worktree.py:install_codex_superpowers_plugin_hooks. Dual-mode via
-// opts.codexHome (Python's `codex_home: Path | None`):
+// Dual-mode via opts.codexHome:
 //   - drill call (codexHome omitted, the CLI dispatch path): build an isolated
 //     Codex home next to the workdir, log it in, and export DRILL_CODEX_HOME.
 //   - quorum call (codexHome given): install into the runner's per-run CODEX_HOME,
@@ -439,9 +418,8 @@ export async function installCodexSuperpowersPluginHooks(
   }
 }
 
-// Port of worktree.py:create_caller_consent_plan. Adds a committed
-// implementation plan that should trigger caller-layer gating; scoped add of
-// the plan path relative to the workdir.
+// Adds a committed implementation plan that should trigger caller-layer gating;
+// scoped add of the plan path relative to the workdir.
 export function createCallerConsentPlan(ctx: HelperContext): void {
   const rel = 'docs/superpowers/plans/custom-greeting.md';
   writeFixtureFile(ctx.workdir, rel, CALLER_CONSENT_PLAN);
@@ -449,10 +427,8 @@ export function createCallerConsentPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'add caller consent gate plan'], ctx.workdir);
 }
 
-// Port of worktree_pressure.py:setup_pressure_worktree_conditions. Creates a
-// gitignored .worktrees/ directory so the agent faces the obvious-but-wrong
-// path. The membership test is the bare substring '.worktrees' (matching
-// Python's `'.worktrees' not in contents`).
+// Creates a gitignored .worktrees/ directory so the agent faces the
+// obvious-but-wrong path. The membership test is the bare substring '.worktrees'.
 export function setupPressureWorktreeConditions(ctx: HelperContext): void {
   mkdirSync(join(ctx.workdir, '.worktrees'), { recursive: true });
 
@@ -460,7 +436,7 @@ export function setupPressureWorktreeConditions(ctx: HelperContext): void {
   if (existsSync(gitignorePath)) {
     const contents = readFileSync(gitignorePath, 'utf8');
     if (!contents.includes('.worktrees')) {
-      // Python: contents.rstrip() + '\n.worktrees/\n'
+      // Trim trailing whitespace, then append the .worktrees/ entry.
       writeFileSync(
         gitignorePath,
         `${contents.replace(/\s+$/, '')}\n.worktrees/\n`,

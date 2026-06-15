@@ -1,11 +1,8 @@
-// src/setup-helpers/registry.ts
-//
-// The dispatch table for `setup-helpers run <helper>`. Mirrors Python's
-// HELPER_REGISTRY (setup_helpers/__init__.py) but holds only the 37
+// The dispatch table for `setup-helpers run <helper>`. Holds only the 37
 // dispatchable (workdir-style) helpers; the two library-only entries
-// add_worktree/detach_head are intentionally absent (no scenario dispatches
-// them). KNOWN_HELPER_NAMES re-adds those two so `quorum check` validates
-// against the same 39-name set Python's registry exposes.
+// addWorktree/detachHead are intentionally absent (no scenario dispatches them).
+// KNOWN_HELPER_NAMES re-adds those two so `quorum check` validates against the
+// full 39-name set.
 
 import { createBaseRepo, recordHead } from './base.ts';
 import {

@@ -11,14 +11,13 @@ export interface RenderOptions {
 type Rgb = readonly [number, number, number];
 
 // Verdict renderer for `quorum show`. The NO-COLOR text layout is the stable
-// contract (it was kept byte-identical to the original Python `show` output);
-// color is TTY-only and best-effort.
+// contract; color is TTY-only and best-effort.
 
 const FOOTER =
   'see docs/superpowers/skills/triaging-a-failing-eval.md for triage.';
 
-// Dracula verdict palette (truecolor, bypasses theme remapping). Mirrors
-// _VERDICT_COLORS; pass/fail/indeterminate only — other statuses get no color.
+// Dracula verdict palette (truecolor, bypasses theme remapping).
+// pass/fail/indeterminate only — other statuses get no color.
 function verdictColor(status: string): Rgb | undefined {
   switch (status) {
     case 'pass':
@@ -86,11 +85,10 @@ function label(text: string, color: boolean): string {
   return style(text, { fg: LABEL_RGB }, color);
 }
 
-// ---------- formatting helpers (quorum/show.py _fmt_*) -------------------
+// ---------- formatting helpers -------------------------------------------
 
-// The _fmt_* helpers take `unknown` and degrade per-field on an off-type value
-// (parity with show.py, where _fmt_cost/_fmt_tokens/_fmt_bytes use isinstance
-// and return 'n/a'/'—' rather than crashing). This keeps a single off-type
+// The fmt* helpers take `unknown` and degrade per-field on an off-type value
+// (returning 'n/a'/'—' rather than crashing). This keeps a single off-type
 // economics field from dropping the whole pane.
 function fmtMs(ms: unknown): string {
   if (typeof ms !== 'number' || ms === 0 || Number.isNaN(ms)) {
@@ -149,10 +147,9 @@ function shortModel(modelId: unknown): string {
 }
 
 // Word-wrap prose to `width` cols, indenting continuation lines by `indent`
-// spaces. A plain greedy wrap — readable and semantically faithful to the Python
-// renderer; exact word-wrap parity (Python's textwrap break-on-hyphens /
-// long-word splitting) is explicitly NOT a goal. Formatting may differ on
-// hyphenated or over-long tokens; the content does not.
+// spaces. A plain greedy wrap: readable, but it does NOT break on hyphens or
+// split over-long tokens. Formatting may differ on hyphenated or over-long
+// tokens; the content does not.
 function wrapIndent(text: string, indent: number, width: number): string {
   if (!text) {
     return '';
@@ -182,12 +179,12 @@ function wrapIndent(text: string, indent: number, width: number): string {
   return lines.join('\n');
 }
 
-// ---------- economics pane (quorum/show.py _format_economics_pane) -------
+// ---------- economics pane ----------------------------------------------
 
 // The economics view schemas are deliberately TOLERANT: every leaf field is
-// `unknown` so safeParse succeeds for any economics shape. The renderer mirrors
-// show.py, whose only gate is `if not econ` — off-type fields degrade per-cell
-// via the _fmt_* helpers rather than dropping the whole pane.
+// `unknown` so safeParse succeeds for any economics shape. The only gate is
+// whether economics is present at all — off-type fields degrade per-cell via the
+// fmt* helpers rather than dropping the whole pane.
 const ObolViewSchema = z
   .object({
     pricing_as_of: z.unknown(),
@@ -319,7 +316,7 @@ function formatEconomicsPane(
   return `${[sep, header, ...rows].join('\n')}\n`;
 }
 
-// ---------- panes (quorum/show.py _format_*) ----------------------------
+// ---------- panes -------------------------------------------------------
 
 function formatHeader(
   verdict: FinalVerdict,

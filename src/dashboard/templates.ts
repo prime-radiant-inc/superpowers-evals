@@ -7,25 +7,16 @@ import type {
   SlotView,
 } from './contracts.ts';
 
-// Typed template-literal HTML renderers (PRI-2207, Spec 5, Task 8). No Jinja, no
-// templating dependency — pure string functions, no IO. These mirror the Python
-// reference 1:1 on every class name and data-* attribute the copied CSS/JS
-// couple on, so styles.css + app.js work unchanged. Semantic parity, not
-// byte-for-byte whitespace.
+// Typed template-literal HTML renderers. No templating dependency — pure string
+// functions, no IO. Every class name and data-* attribute here must match what
+// the static styles.css + app.js couple on, so those assets work unchanged.
 //
-// Reference:
-//   .worktrees/dashboard-ref/quorum/dashboard/templates/{cell,grid,layout}.html.j2
-//   .worktrees/dashboard-ref/quorum/dashboard/static/{styles.css,app.js}
-//   .worktrees/dashboard-ref/quorum/dashboard/app.py  (_tally_html, _run_strip_html)
-//
-// cellHtml is the single source of truth for first paint AND SSE swaps — exactly
-// the Jinja `cell` macro's role. Every interpolated scenario/agent/run_id/cost
-// string is run through esc().
+// cellHtml is the single source of truth for first paint AND SSE swaps. Every
+// interpolated scenario/agent/run_id/cost string is run through esc().
 
 // HTML-escape the five metacharacters that can break an attribute or element
 // body. Ampersand first so existing entities are not double-broken on the wrong
-// side (we escape the `&` once, intentionally, rather than skip it). Matches the
-// escaping the reference relied on Jinja autoescape for.
+// side (we escape the `&` once, intentionally, rather than skip it).
 const HTML_ESCAPES: Record<string, string> = {
   '&': '&amp;',
   '<': '&lt;',
@@ -42,15 +33,13 @@ export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] ?? ch);
 }
 
-// Three-decimal fixed format, matching the Python `'%.3f'|format(...)` used for
-// cost-bar heights and cell opacity.
+// Three-decimal fixed format, used for cost-bar heights and cell opacity.
 function f3(n: number): string {
   return n.toFixed(3);
 }
 
-// The verdict-ribbon band class for a resolved slot kind. Mirrors the cell macro:
-// ghost/running are handled inline; the rest map to b-* band classes. unknown is
-// the catch-all (the macro's `{% else %}`).
+// The verdict-ribbon band class for a resolved slot kind. ghost/running are
+// handled inline; the rest map to b-* band classes; unknown is the catch-all.
 function bandClass(kind: SlotKind): string {
   switch (kind) {
     case 'ghost':
@@ -166,9 +155,9 @@ export function cellHtml(view: CellView): string {
   );
 }
 
-// The header tally line (`.pghead` body). Mirrors app.py `_tally_html`:
+// The header tally line (`.pghead` body):
 //   quorum · N scenarios × M agents · P pass · F fail · I indeterminate · X not run
-// Counts are integers (no escaping needed) but kept as the same markup.
+// Counts are integers, so no escaping is needed.
 export function tallyHtml(tally: HeaderTally): string {
   const sep = `<span class="sep">·</span>`;
   return (
@@ -181,9 +170,9 @@ export function tallyHtml(tally: HeaderTally): string {
   );
 }
 
-// The run strip (`#runbar` body), swapped in by the `strip` SSE event. Mirrors
-// app.py `_run_strip_html`: "Running N · M in flight · K done · $X spent · ■ Stop".
-// The `.stop` element is what app.js's click handler keys off to POST /stop.
+// The run strip (`#runbar` body), swapped in by the `strip` SSE event:
+// "Running N · M in flight · K done · $X spent · ■ Stop". The `.stop` element is
+// what app.js's click handler keys off to POST /stop.
 export interface RunStripArgs {
   readonly running: number;
   readonly inFlight: number;
@@ -200,9 +189,9 @@ export function runStripHtml(a: RunStripArgs): string {
   );
 }
 
-// Pre-formatted launch estimates (app.py `_fmt_est`): a fixed-2 dollar string or
-// "" when unknown. Carried verbatim in the `data-estimate` attribute, which
-// app.js re-parses with parseFloat (NaN ⇒ "~$—").
+// Pre-formatted launch estimates: a fixed-2 dollar string or "" when unknown.
+// Carried verbatim in the `data-estimate` attribute, which app.js re-parses with
+// parseFloat (NaN ⇒ "~$—").
 export interface GridEstimates {
   readonly row: Readonly<Record<string, string>>;
   readonly column: Readonly<Record<string, string>>;
@@ -294,10 +283,10 @@ export function gridHtml(args: GridArgs): string {
   );
 }
 
-// The full page (`layout.html.j2`). References the vendored static assets and
-// wires the SSE extension on <body> (hx-ext="sse" + sse-connect="/events"). The
-// tally + grid bodies are already-rendered HTML inlined unescaped (the Jinja
-// `| safe`). #runbar is the strip swap target (sse-swap="strip").
+// The full page. References the vendored static assets and wires the SSE
+// extension on <body> (hx-ext="sse" + sse-connect="/events"). The tally + grid
+// bodies are already-rendered HTML inlined unescaped. #runbar is the strip swap
+// target (sse-swap="strip").
 export interface LayoutArgs {
   readonly tallyHtml: string;
   readonly gridHtml: string;

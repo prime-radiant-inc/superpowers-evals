@@ -65,8 +65,8 @@ export function resolveTarget(
   }
 
   // An existing non-batch directory must contain verdict.json; if it doesn't,
-  // fail here rather than falling through to prefix matching (parity with
-  // show.py rule 2 — a named dir is never reinterpreted as a prefix).
+  // fail here rather than falling through to prefix matching — a named dir is
+  // never reinterpreted as a prefix.
   if (existsSync(target) && statSync(target).isDirectory()) {
     if (existsSync(join(target, 'verdict.json'))) {
       return target;
@@ -75,8 +75,7 @@ export function resolveTarget(
   }
 
   // A verdict.json file resolves to its parent — but only when the basename is
-  // exactly "verdict.json" (show.py rule 3 uses p.name == "verdict.json", so a
-  // file like "oldverdict.json" is rejected).
+  // exactly "verdict.json", so a file like "oldverdict.json" is rejected.
   if (basename(target) === 'verdict.json' && existsSync(target)) {
     return dirname(target);
   }

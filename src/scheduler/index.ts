@@ -1,30 +1,24 @@
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import type { Clock } from './clock.ts';
 
-// The shared default global slot-pool size ("up to this many of anything").
-// The spec moves the --jobs default from 1 to 8: today's default is maximally
-// conservative — the opposite of the design's run-fast posture. The CLI run-all
-// option default and the dashboard both source this one constant.
+// The shared default global slot-pool size ("up to this many of anything"). The
+// CLI run-all option default and the dashboard both source this one constant.
 export const DEFAULT_JOBS = 8;
 
-// The quorum scheduler (PRI-2203, Spec 4). One central dispatcher owning ONE
-// global slot pool of size `jobs`, enforcing a TRUE global cap. Per-harness
-// rules (cap, spacing, rate-limit latch) gate which queued cells may take a
-// slot, but a cell waiting on its harness's cap, spacing, or latch NEVER
-// occupies a global slot — slots are consumed only by running work. This is the
-// property the Python incumbent's nested-pool model violated (lane work bypassed
-// the main pool's accounting); the single-pool dispatcher here corrects it.
+// The quorum scheduler. One central dispatcher owning ONE global slot pool of
+// size `jobs`, enforcing a TRUE global cap. Per-harness rules (cap, spacing,
+// rate-limit latch) gate which queued cells may take a slot, but a cell waiting
+// on its harness's cap, spacing, or latch NEVER occupies a global slot — slots
+// are consumed only by running work. A single pool (rather than nested per-lane
+// pools) is what makes the global cap exact: nested pools let lane work bypass
+// the main pool's accounting.
 //
 // The scheduler is PURE of file I/O. It emits a stream of events; final/cost
 // derivation (reading verdict.json) is the consumer's job, done in onEvent off
 // the run_id the cell_finished event carries. The event contract is general
-// enough to serve both consumers — run-all's Rich readout and a future dashboard
-// SSE bus (Spec 5).
-//
-// NOTE (Spec 5, out of scope here): the dashboard SSE consumer is NOT built in
-// this spec. The event/onEvent contract below is designed to serve it (events
-// carry idx/entry/run_id/elapsed_s/skipped_reason; requestStop drives /stop),
-// but only the run-all consumer is wired now.
+// enough to serve both consumers — run-all's Rich readout and the dashboard SSE
+// bus (events carry idx/entry/run_id/elapsed_s/skipped_reason; requestStop
+// drives /stop).
 
 // ---------------------------------------------------------------------------
 // Events

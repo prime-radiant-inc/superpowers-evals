@@ -9,11 +9,11 @@
 // functions; this file owns record emission + the 127 crash-band exit
 // discipline.
 //
-// Exit codes (parity with the old bash tools + check-transcript):
+// Exit codes (shared with check-transcript):
 //   0   — check passed
 //   1   — check failed (an honest pass/fail; `not` may invert it)
 //   127 — broken check: usage error / unknown verb / missing required arg /
-//         unknown operator/dimension / a thrown tool error. In bin/not's crash
+//         unknown operator/dimension / a thrown tool error. In `not`'s crash
 //         range (>=126) ON PURPOSE so a broken/typo'd check can't vacuously
 //         pass or be inverted into a silent pass.
 //
@@ -21,7 +21,7 @@
 // the inner verb via the shared dispatch table and emits one negated record. It
 // refuses to invert a missing inner tool or an inner crash — recording a FAIL
 // under `not` and exiting 1 (NOT 127: a 127 would crash the whole phase via
-// runPhase's heuristic; bin/not deliberately uses exit 1).
+// runPhase's heuristic; `not` deliberately uses exit 1).
 
 import { negate, runVerb } from '../check/dispatch.ts';
 import { defaultContext } from '../check/fs-verbs.ts';

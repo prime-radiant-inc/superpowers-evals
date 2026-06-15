@@ -13,9 +13,7 @@ import {
 
 // Pure derivations for the dashboard read side: fade/drift/cost math, the header
 // tally, and the per-cell render-ready view. No IO and no wall-clock except the
-// injectable `now` parameter — every formula is ported verbatim from
-// .worktrees/dashboard-ref/quorum/dashboard/data.py so the ▲, the bars, and the
-// fade stay byte-identical to the Python.
+// injectable `now` parameter.
 
 const SECONDS_PER_DAY = 86_400;
 
@@ -72,7 +70,7 @@ export function costBarHeights(costs: readonly number[]): number[] {
 
 // Human-coarse single-unit age: `45s`, `12m`, `3h`, `21d`. Sub-minute reads in
 // seconds; the unit steps up at each natural boundary. Each unit is an integer
-// floor (data.py `int()`). Negative/zero clamps to `0s`.
+// floor. Negative/zero clamps to `0s`.
 export function formatAge(ageDays: number): string {
   const seconds = Math.max(0, ageDays) * SECONDS_PER_DAY;
   if (seconds < 60) {
@@ -267,7 +265,7 @@ function cardView(
 
 // Resolve a Cell into a render-ready view. Always 5 slots, ghost-padded on the
 // left so the newest run is rightmost. Opacity: running -> 1.0, queued -> 0.5,
-// else the stale fade. Verbatim port of data.py `cell_view`.
+// else the stale fade.
 export function cellView(
   cell: Cell,
   scenario: string,
@@ -429,7 +427,7 @@ export interface GridChange {
 }
 
 // Compare two scan snapshots, returning a change for every cell whose displayed
-// state changed. Pure: no IO, no clock. Port of data.py `diff_grids`.
+// state changed. Pure: no IO, no clock.
 export function diffGrids(oldGrid: Grid, newGrid: Grid): GridChange[] {
   const changes: GridChange[] = [];
   const oldCells = oldGrid.cells;

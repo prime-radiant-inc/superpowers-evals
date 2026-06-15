@@ -1,12 +1,11 @@
 import type { SseMessage } from './contracts.ts';
 
-// Bounded SSE fan-out (PRI-2207, Spec 5). The dashboard's scheduler events are
-// published to every connected SSE client; each client reads through its own
-// BoundedQueue. There are NO threads and NO async here — Bun runs one event
-// loop, the scheduler's onEvent fires synchronously, and publish walks the
-// subscriber set in that same turn. (The Python's thread->asyncio bridge has no
-// TS equivalent and is not needed: single-loop Bun makes the bound the only
-// backpressure mechanism the bus needs.)
+// Bounded SSE fan-out. The dashboard's scheduler events are published to every
+// connected SSE client; each client reads through its own BoundedQueue. There
+// are NO threads and NO async here — Bun runs one event loop, the scheduler's
+// onEvent fires synchronously, and publish walks the subscriber set in that same
+// turn. Single-loop Bun makes the per-subscriber bound the only backpressure
+// mechanism the bus needs.
 
 // The default per-subscriber capacity. Dropping the oldest message is safe
 // because every cell partial the bus carries is an idempotent full-state swap:

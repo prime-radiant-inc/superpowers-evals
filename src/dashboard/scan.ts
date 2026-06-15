@@ -15,8 +15,6 @@ import {
 // Read side of the dashboard: scan results/, bucket runs into cells, and resolve
 // each cell's window, liveness, and verdicts. The filesystem is the single
 // source of truth; the only in-memory state here is the immutable verdict cache.
-//
-// Parity reference: .worktrees/dashboard-ref/quorum/dashboard/data.py.
 
 // <scenario>-<agent>-<timestamp>-<nonce>, e.g. ...-20260527T202301Z-f7fc
 const RUN_DIR_RE = /-(\d{8}T\d{6}Z)-([0-9a-f]{4})$/;
@@ -78,8 +76,7 @@ export function pidAlive(pid: number): boolean {
 // in-flight dir has no verdict yet, and one lands later. So we cache only the
 // present parse and re-read on a miss; caching `null` would pin a live dir as
 // verdict-less forever and break the running -> done transition the scanner
-// drives (parity with the Python's uncached _read_json, but keeping the
-// immutable-hit fast path).
+// drives.
 const _verdictCache = new Map<string, DashboardVerdict>();
 
 // Cached (for present verdicts), immutable read of <runDir>/verdict.json narrowed
@@ -195,8 +192,7 @@ export function scanResults(
       const phase = readPhase(runDir);
       if (phase !== null && pidAlive(phase.pid)) {
         // Only the newest in-flight dir matters for the cell's running state.
-        // The schema guarantees a string phase, so the data.py `.get(...,
-        // "setup")` default never fires here — the value is used verbatim.
+        // The schema guarantees a string phase, so the value is used as-is.
         running = { run_id: runId, phase: phase.phase };
       }
       // else: abandoned (dead/no pid) -> excluded from display.

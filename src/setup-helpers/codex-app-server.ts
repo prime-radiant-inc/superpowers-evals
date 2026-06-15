@@ -1,13 +1,10 @@
-// Async JSON-RPC client over `codex app-server --listen stdio://`, ported from
-// setup_helpers/worktree.py:_read_codex_superpowers_hook and its helpers
-// (_send_codex_app_server_request, _read_codex_app_server_response,
-// _terminate_codex_app_server, _select_codex_superpowers_hook).
+// Async JSON-RPC client over `codex app-server --listen stdio://`.
 //
-// The handshake is STRICTLY interleaved (matching the Python): send
-// initialize (id 1), await its response, THEN send hooks/list (id 2) and await
-// that. We do not pipeline both writes — the app-server may require the
-// initialize ack before accepting hooks/list. Reads drain stdout (and collect
-// stderr for error detail) line-by-line under a 15s deadline, matching by id.
+// The handshake is STRICTLY interleaved: send initialize (id 1), await its
+// response, THEN send hooks/list (id 2) and await that. We do not pipeline both
+// writes — the app-server may require the initialize ack before accepting
+// hooks/list. Reads drain stdout (and collect stderr for error detail)
+// line-by-line under a 15s deadline, matching by id.
 import { envSnapshot } from '../env.ts';
 
 const PLUGIN_ID = 'superpowers@debug';
@@ -113,9 +110,9 @@ function compactRequest(request: Record<string, unknown>): string {
   return `${JSON.stringify(request)}\n`;
 }
 
-// Port of _read_codex_app_server_response: drain stdout lines until one with
-// the requested id arrives (raising on a JSON-RPC `error` member), collecting
-// stderr lines for the timeout detail. Rejects on the 15s deadline.
+// Drain stdout lines until one with the requested id arrives (raising on a
+// JSON-RPC `error` member), collecting stderr lines for the timeout detail.
+// Rejects on the 15s deadline.
 async function readResponse(
   stdout: LineReader,
   stderrLines: string[],
@@ -185,8 +182,7 @@ function withTimeout<T>(
 }
 
 // Drain all stderr lines into the shared buffer in the background; ignore
-// errors (the process may be killed). Port of the stderr branch of the
-// selector loop.
+// errors (the process may be killed).
 async function drainStderr(reader: LineReader, sink: string[]): Promise<void> {
   try {
     while (true) {
@@ -201,7 +197,7 @@ async function drainStderr(reader: LineReader, sink: string[]): Promise<void> {
   }
 }
 
-// Port of _terminate_codex_app_server: SIGTERM, wait up to 3s, then SIGKILL.
+// SIGTERM, wait up to 3s, then SIGKILL.
 async function terminate(proc: ReturnType<typeof Bun.spawn>): Promise<void> {
   if (proc.exitCode !== null || proc.signalCode !== null) {
     return;
@@ -214,9 +210,9 @@ async function terminate(proc: ReturnType<typeof Bun.spawn>): Promise<void> {
   }
 }
 
-// Port of _select_codex_superpowers_hook: exactly one superpowers@debug plugin
-// SessionStart hook, firing on `startup`, dispatched through run-hook.cmd, with
-// a known trust status and a non-empty key + currentHash.
+// Selects exactly one superpowers@debug plugin SessionStart hook, firing on
+// `startup`, dispatched through run-hook.cmd, with a known trust status and a
+// non-empty key + currentHash.
 function selectSuperpowersHook(
   response: HooksListResponse,
 ): CodexSessionStartHook {

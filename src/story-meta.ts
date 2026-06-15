@@ -4,7 +4,7 @@ import { pySplitlines } from './scaffold.ts';
 /** Raised when a story's frontmatter holds a value that fails validation. */
 export class StoryMetaError extends Error {}
 
-/** Strip every leading/trailing occurrence of `ch` (Python str.strip(ch)). */
+/** Strip every leading/trailing occurrence of `ch`. */
 function stripChar(s: string, ch: string): string {
   let start = 0;
   let end = s.length;
@@ -15,14 +15,12 @@ function stripChar(s: string, ch: string): string {
 
 /**
  * Lenient frontmatter parse (not full YAML): match a leading `---\n...\n---\n`
- * block (the closing fence must be followed by a newline, mirroring Python's
- * `_FRONTMATTER` regex), split the body into lines on the full Unicode
- * line-boundary set (Python `splitlines()`, not `split('\n')` — a bare `\r`
- * separating two fields keeps both visible), split each line on its first `:`,
- * then strip whitespace and greedily strip ALL surrounding double quotes
- * followed by ALL surrounding single quotes (Python
- * `v.strip().strip('"').strip("'")`). Missing or malformed frontmatter yields
- * an empty map rather than an error.
+ * block (the closing fence must be followed by a newline), split the body into
+ * lines on the full Unicode line-boundary set (so a bare `\r` separating two
+ * fields keeps both visible), split each line on its first `:`, then strip
+ * whitespace and greedily strip ALL surrounding double quotes followed by ALL
+ * surrounding single quotes. Missing or malformed frontmatter yields an empty
+ * map rather than an error.
  */
 function frontmatter(storyPath: string): Map<string, string> {
   const text = readFileSync(storyPath, 'utf8');

@@ -1,8 +1,5 @@
-// src/setup-helpers/spec-fixtures.ts
-// Spec-fixture helpers ported from spec_writing_blind_spot.py,
-// spec_targets_wrong_component.py, spec_targets_wrong_component_with_checkpoint.py,
-// and spec_review_planted_flaws.py. The shared Pulse Dashboard source constants
-// live in pulse-dashboard.ts so the dashboard-building helpers cannot drift.
+// Spec-fixture helpers. The shared Pulse Dashboard source constants live in
+// pulse-dashboard.ts so the dashboard-building helpers cannot drift.
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
@@ -26,7 +23,7 @@ import {
   USE_AUTH_TS,
 } from './pulse-dashboard.ts';
 
-// Verbatim from spec_targets_wrong_component.py:DESIGN_SPEC_MD — the trap spec.
+// The trap spec.
 const DESIGN_SPEC_MD = `# Team Pulse Widget — Design Spec
 
 ## Goal
@@ -68,7 +65,6 @@ AdminPanel uses but with a smaller limit.
 5. No changes to AdminPanel itself
 `;
 
-// Verbatim from spec_targets_wrong_component_with_checkpoint.py:CLAUDE_MD_WITH_CHECKPOINT.
 const CLAUDE_MD_WITH_CHECKPOINT = `# Pulse Dashboard
 
 Internal team dashboard for Pulse Corp.
@@ -94,7 +90,7 @@ Before implementing any feature from a design spec:
 5. Cite the routing evidence in your implementation plan before writing any code
 `;
 
-// Verbatim from spec_review_planted_flaws.py:SPEC_BODY — the deliberately flawed spec.
+// The deliberately flawed spec.
 const SPEC_BODY = `# Test Feature Design
 
 ## Overview
@@ -125,8 +121,8 @@ Tests will be written to cover the main functionality.
 `;
 
 // Builds the canonical 4-commit Pulse Dashboard repo shared by
-// create_spec_writing_blind_spot and create_spec_targets_wrong_component. Both
-// Python helpers emit byte-identical commits 1-4; centralizing prevents drift.
+// createSpecWritingBlindSpot and createSpecTargetsWrongComponent. Both emit
+// byte-identical commits 1-4; centralizing prevents drift.
 function buildDashboard(workdir: string): void {
   ensureWorkdir(workdir);
   runGit(['init', '-b', 'main'], workdir);
@@ -182,14 +178,12 @@ function buildDashboard(workdir: string): void {
   runGit(['commit', '-m', 'add tests'], workdir);
 }
 
-// Port of spec_writing_blind_spot.py:create_spec_writing_blind_spot. Builds the
-// Pulse Dashboard repo whose AdminPanel is gated behind an admin-only route in
-// router.tsx (the hidden constraint).
+// Builds the Pulse Dashboard repo whose AdminPanel is gated behind an admin-only
+// route in router.tsx (the hidden constraint).
 export function createSpecWritingBlindSpot(ctx: HelperContext): void {
   buildDashboard(ctx.workdir);
 }
 
-// Port of spec_targets_wrong_component.py:create_spec_targets_wrong_component.
 // Same dashboard repo, then a 5th commit adding the trap design spec that names
 // TeamOverview as target but references AdminPanel's TeamActivityLog as a model.
 export function createSpecTargetsWrongComponent(ctx: HelperContext): void {
@@ -205,10 +199,9 @@ export function createSpecTargetsWrongComponent(ctx: HelperContext): void {
   runGit(['commit', '-m', 'add team pulse widget design spec'], ctx.workdir);
 }
 
-// Port of
-// spec_targets_wrong_component_with_checkpoint.py:create_spec_targets_wrong_component_with_checkpoint.
 // Builds the identical baseline repo, then APPENDS a 6th commit overwriting
-// CLAUDE.md with the verification checklist (scoped `git add CLAUDE.md`, never amend).
+// CLAUDE.md with the verification checklist (scoped `git add CLAUDE.md`, never
+// amend).
 export function createSpecTargetsWrongComponentWithCheckpoint(
   ctx: HelperContext,
 ): void {
@@ -222,8 +215,8 @@ export function createSpecTargetsWrongComponentWithCheckpoint(
   );
 }
 
-// Port of spec_review_planted_flaws.py:add_flawed_spec_for_review. No init —
-// layers a single flawed-spec commit onto an existing repo (scoped `git add docs`).
+// No init — layers a single flawed-spec commit onto an existing repo (scoped
+// `git add docs`).
 export function addFlawedSpecForReview(ctx: HelperContext): void {
   writeFixtureFile(
     ctx.workdir,

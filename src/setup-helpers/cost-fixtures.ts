@@ -1,14 +1,11 @@
-// src/setup-helpers/cost-fixtures.ts
-// Cost-fixture helpers ported from cost_checkbox_page.py, cost_clean_repo.py,
-// cost_large_files.py, and cost_trivial_plan.py. The large-files generator
-// (renderModule) is a byte-for-byte port of _render_module — byte parity is the
-// whole point of that fixture (it is the token-bloat measurement), so the
-// literal ${id} stays escaped and the comment/throw shape is exact.
+// Cost-fixture helpers: cost_checkbox_page, cost_clean_repo, cost_large_files,
+// and cost_trivial_plan. The large-files generator (renderModule) must emit
+// exact bytes — that fixture IS the token-bloat measurement — so the literal
+// ${id} stays escaped and the comment/throw shape is exact.
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
-// Verbatim from cost_checkbox_page.py:PAGE.
 const PAGE = `<!doctype html>
 <html lang="en">
   <head>
@@ -22,8 +19,7 @@ const PAGE = `<!doctype html>
 </html>
 `;
 
-// Port of cost_checkbox_page.py:create_cost_checkbox_page. Single-page fixture
-// with an empty <main>; scoped `git add index.html`.
+// Single-page fixture with an empty <main>; scoped `git add index.html`.
 export function createCostCheckboxPage(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -34,7 +30,6 @@ export function createCostCheckboxPage(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: empty tasks page'], ctx.workdir);
 }
 
-// Verbatim from cost_clean_repo.py:README.
 const README = `# habits
 
 A small CLI for tracking habits.
@@ -42,8 +37,7 @@ A small CLI for tracking habits.
 This is intentionally a sketch - there's no implementation yet.
 `;
 
-// Port of cost_clean_repo.py:create_cost_clean_repo. Clean repo with a vague
-// README; scoped `git add README.md`.
+// Clean repo with a vague README; scoped `git add README.md`.
 export function createCostCleanRepo(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -54,7 +48,6 @@ export function createCostCleanRepo(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: README'], ctx.workdir);
 }
 
-// Verbatim from cost_trivial_plan.py:APP_JS.
 const APP_JS = `function main() {
   return 0;
 }
@@ -62,7 +55,6 @@ const APP_JS = `function main() {
 main();
 `;
 
-// Verbatim from cost_trivial_plan.py:PLAN.
 const PLAN = `# 2026-05-06 Trivial single-line change
 
 A one-task plan used by the cost-trivial-task-review-fanout drill scenario.
@@ -80,8 +72,7 @@ Add the line \`console.log('app started');\` as the very first line of
 That's the entire change.
 `;
 
-// Port of cost_trivial_plan.py:create_cost_trivial_plan. App stub + dated plan;
-// `git add -A`.
+// App stub + dated plan; `git add -A`.
 export function createCostTrivialPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -99,7 +90,7 @@ export function createCostTrivialPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: app stub + trivial plan'], ctx.workdir);
 }
 
-// Verbatim from cost_large_files.py:MODULES (module name, entity name).
+// The synthetic CRUD modules, as (module name, entity name) pairs.
 const MODULES: ReadonlyArray<readonly [string, string]> = [
   ['users', 'User'],
   ['orders', 'Order'],
@@ -108,13 +99,12 @@ const MODULES: ReadonlyArray<readonly [string, string]> = [
   ['notifications', 'Notification'],
 ];
 
-// Verbatim from cost_large_files.py:ENTITIES_PER_MODULE.
 const ENTITIES_PER_MODULE = 80;
 
-// Byte-for-byte port of cost_large_files.py:_render_module. The header is 4
-// comment lines + blank + `const <module> = new Map();` + blank; each entity
-// emits a get/save block. The literal ${id} in the throw is escaped (\${id}) so
-// it lands in the file verbatim, not host-interpolated.
+// Render one synthetic CRUD module. The header is 4 comment lines + blank +
+// `const <module> = new Map();` + blank; each entity emits a get/save block. The
+// literal ${id} in the throw is escaped (\${id}) so it lands in the file
+// verbatim, not host-interpolated.
 function renderModule(module: string, entity: string): string {
   const header =
     `// ${module}.js\n` +
@@ -148,8 +138,7 @@ function renderModule(module: string, entity: string): string {
   return header + blocks.join('');
 }
 
-// Port of cost_large_files.py:create_cost_large_files. Writes the 5 synthetic
-// CRUD modules to src/<module>.js; `git add -A`.
+// Writes the 5 synthetic CRUD modules to src/<module>.js; `git add -A`.
 export function createCostLargeFiles(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);

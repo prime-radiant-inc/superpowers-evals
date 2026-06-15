@@ -1,14 +1,10 @@
-// src/setup-helpers/triggering-fixtures.ts
-// Triggering-fixture helpers ported from triggering_executing_plans.py and
-// triggering_writing_plans.py. addStubExecutingPlan layers a stub plan commit
+// Triggering-fixture helpers. addStubExecutingPlan layers a stub plan commit
 // onto an existing repo (no init); createWritingPlansSkeleton is a
-// self-contained Express skeleton (does its own git init). Embedded source
-// constants are ported verbatim from the corresponding Python module.
+// self-contained Express skeleton (does its own git init).
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
 
-// Verbatim from triggering_executing_plans.py:PLAN_BODY.
 const PLAN_BODY = `# 2024-01-15 Auth System Implementation Plan
 
 A short stub plan used by the triggering-executing-plans drill scenario.
@@ -30,8 +26,8 @@ The plan is intentionally trivial; the scenario only measures whether the
 executing-plans skill loads in response to the user's request.
 `;
 
-// Port of triggering_executing_plans.py:add_stub_executing_plan. No init; writes
-// the stub plan and commits it (scoped `git add docs`) onto an existing repo.
+// No init; writes the stub plan and commits it (scoped `git add docs`) onto an
+// existing repo.
 export function addStubExecutingPlan(ctx: HelperContext): void {
   writeFixtureFile(
     ctx.workdir,
@@ -42,7 +38,6 @@ export function addStubExecutingPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'add stub auth plan'], ctx.workdir);
 }
 
-// Verbatim from triggering_writing_plans.py:APP_JS.
 const APP_JS = `import express from "express";
 
 const app = express();
@@ -61,8 +56,8 @@ app.listen(3000, () => {
 });
 `;
 
-// Verbatim from triggering_writing_plans.py:PACKAGE_JSON. Written as a raw
-// string (2-space formatting / key order preserved); not JSON.stringify'd.
+// Written as a raw string (2-space formatting / key order preserved); not
+// JSON.stringify'd.
 const PACKAGE_JSON = `{
   "name": "auth-skeleton",
   "version": "0.1.0",
@@ -78,8 +73,7 @@ const PACKAGE_JSON = `{
 }
 `;
 
-// Port of triggering_writing_plans.py:create_writing_plans_skeleton. A
-// self-contained Express skeleton (own git init + config); `git add -A`.
+// A self-contained Express skeleton (own git init + config); `git add -A`.
 export function createWritingPlansSkeleton(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);

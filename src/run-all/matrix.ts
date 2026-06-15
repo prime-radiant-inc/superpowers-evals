@@ -6,8 +6,8 @@ import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { MatrixEntry, SkippedReason } from '../contracts/batch.ts';
 import { readQuorumTier, readStoryStatus } from '../story-meta.ts';
 
-// quorum run-all matrix construction. Ports build_matrix (run_all.py 93-166).
-// Reuses Spec-1 parseCodingAgentsDirective + readQuorumTier/readStoryStatus.
+// quorum run-all matrix construction. Reuses parseCodingAgentsDirective +
+// readQuorumTier/readStoryStatus.
 
 export interface BuildMatrixArgs {
   readonly scenariosRoot: string;
@@ -18,9 +18,8 @@ export interface BuildMatrixArgs {
   readonly includeDrafts?: boolean;
 }
 
-// Validate that an option's path exists and is a directory, mirroring Python's
-// click.Path(exists=True, file_okay=False) for --scenarios-root /
-// --coding-agents-dir. Without this a missing/non-dir root surfaces only later
+// Validate that an option's path exists and is a directory, for --scenarios-root
+// / --coding-agents-dir. Without this a missing/non-dir root surfaces only later
 // as a raw ENOENT/ENOTDIR thrown from readdirSync; this produces a clean,
 // actionable error that names the offending option and path upfront.
 function requireDirectory(option: string, path: string): void {
@@ -88,9 +87,8 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     includeDrafts = false,
   } = args;
 
-  // Validate both roots upfront (parity with Python's click.Path(exists=True,
-  // file_okay=False)) so a missing/non-dir root fails with a clear message
-  // instead of a raw ENOENT from readdirSync.
+  // Validate both roots upfront so a missing/non-dir root fails with a clear
+  // message instead of a raw ENOENT from readdirSync.
   requireDirectory('--scenarios-root', scenariosRoot);
   requireDirectory('--coding-agents-dir', codingAgentsDir);
 
@@ -187,8 +185,8 @@ function readSchedulerKeys(
 }
 
 // An agent's optional max_concurrency cap from its YAML, or null when unset /
-// unreadable (run_all.py _agent_max_concurrency). Agents whose backend
-// rate-limits concurrent calls set this to 1 so the scheduler serializes them.
+// unreadable. Agents whose backend rate-limits concurrent calls set this to 1 so
+// the scheduler serializes them.
 export function agentMaxConcurrency(
   codingAgentsDir: string,
   agent: string,
