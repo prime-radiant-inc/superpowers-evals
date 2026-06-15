@@ -1,5 +1,6 @@
 import {
   ATIF_SCHEMA_VERSION,
+  type AtifMetrics,
   type AtifStep,
   type AtifToolCall,
   type AtifTrajectory,
@@ -62,6 +63,30 @@ interface GeminiToolCall {
   name?: string;
   args?: Record<string, unknown>;
   status?: string;
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Extract ATIF usage metrics from a Gemini turn's `tokens` block.
+ *
+ * Field mapping (spec 2026-06-15-atif-usage-unification.md): input→prompt_tokens,
+ * output + thoughts (reasoning) folded → completion_tokens, cached→cached_tokens.
+ * Gemini logs carry no per-message cost, so cost_usd is left unset (priced
+ * downstream by obol's rate table). Returns undefined when the row has no
+ * `tokens` block.
+ */
+function extractGeminiMetrics(message: GeminiMessage): AtifMetrics | undefined {
+  const tok = message['tokens'];
+  if (typeof tok !== 'object' || tok === null) return undefined;
+  const t = tok as Record<string, unknown>;
+  return {
+    prompt_tokens: num(t['input']),
+    completion_tokens: num(t['output']) + num(t['thoughts']),
+    cached_tokens: num(t['cached']),
+  };
 }
 
 function parseGeminiMessages(raw: string): GeminiMessage[] {
@@ -150,31 +175,70 @@ function normalizeGeminiToolCall(tc: GeminiToolCall): AtifToolCall {
 export function normalizeGemini(raw: string, version: string): AtifTrajectory {
   const steps: AtifStep[] = [];
   const seenIds = new Set<string>();
+  // gemini-cli rewrites a running `messages[]` snapshot on each line, so a turn
+  // (same row `id`) recurs with identical `tokens`. Dedup token accounting by
+  // row id so each turn's usage is counted exactly once.
+  const seenTokenIds = new Set<string>();
   let stepId = 1;
 
   for (const message of parseGeminiMessages(raw)) {
     if (message['type'] !== 'gemini') continue;
-    const toolCalls = message['toolCalls'];
-    if (!Array.isArray(toolCalls)) continue;
     const timestamp = extractTimestamp(message);
 
-    for (const tc of toolCalls) {
-      if (typeof tc !== 'object' || tc === null) continue;
-      const gtc = tc as GeminiToolCall;
-      const id = gtc.id;
-      if (id) {
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
+    // Compute this turn's usage once per distinct row id. A row with no `id`
+    // (or a first-seen id) contributes; a repeat of a seen id contributes
+    // nothing (it is the same turn re-snapshotted).
+    const rowId = typeof message['id'] === 'string' ? message['id'] : null;
+    let metrics: AtifMetrics | undefined;
+    let modelName: string | undefined;
+    if (rowId === null || !seenTokenIds.has(rowId)) {
+      metrics = extractGeminiMetrics(message);
+      if (metrics) {
+        if (rowId !== null) seenTokenIds.add(rowId);
+        modelName =
+          typeof message['model'] === 'string' ? message['model'] : undefined;
       }
+    }
 
-      const atifTc = normalizeGeminiToolCall(gtc);
-      const step: AtifStep = {
-        step_id: stepId++,
-        source: 'agent',
-        tool_calls: [atifTc],
-      };
-      if (timestamp) step.timestamp = timestamp;
-      steps.push(step);
+    const toolCalls = message['toolCalls'];
+    const turnSteps: AtifStep[] = [];
+    if (Array.isArray(toolCalls)) {
+      for (const tc of toolCalls) {
+        if (typeof tc !== 'object' || tc === null) continue;
+        const gtc = tc as GeminiToolCall;
+        const id = gtc.id;
+        if (id) {
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+        }
+
+        const atifTc = normalizeGeminiToolCall(gtc);
+        const step: AtifStep = {
+          step_id: stepId++,
+          source: 'agent',
+          tool_calls: [atifTc],
+        };
+        if (timestamp) step.timestamp = timestamp;
+        turnSteps.push(step);
+        steps.push(step);
+      }
+    }
+
+    if (metrics) {
+      // Attach the turn's usage to its first emitted tool-call step. A turn that
+      // emits no tool step (text-only / final answer) gets a dedicated
+      // metrics-only agent step so its tokens are not dropped.
+      const carrier =
+        turnSteps[0] ??
+        (() => {
+          const s: AtifStep = { step_id: stepId++, source: 'agent' };
+          if (timestamp) s.timestamp = timestamp;
+          steps.push(s);
+          return s;
+        })();
+      carrier.metrics = metrics;
+      if (modelName) carrier.model_name = modelName;
+      carrier.extra = { ...carrier.extra, provider: 'google' };
     }
   }
 

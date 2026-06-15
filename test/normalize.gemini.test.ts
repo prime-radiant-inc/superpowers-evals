@@ -356,3 +356,191 @@ test('non-dict tool-call args are wrapped as {raw_args: <value>}', () => {
   expect(tc.function_name).toBe('Bash');
   expect(tc.arguments).toEqual({ raw_args: 'rawstring' });
 });
+
+// ---------------------------------------------------------------------------
+// ATIF usage metrics (spec: 2026-06-15-atif-usage-unification.md)
+//
+// gemini-cli rewrites a running `messages[]` snapshot on each JSONL line, so the
+// same assistant turn (same row `id`) is recorded more than once — once before
+// tool calls and once with them — carrying identical `tokens`. The normalizer
+// must sum each distinct row id ONCE. Field mapping per the contract:
+// input→prompt_tokens, output+thoughts→completion_tokens, cached→cached_tokens.
+// No per-message cost in gemini logs → cost_usd stays unset (priced downstream).
+// model → step.model_name; provider "google" stamped on the row → extra.provider.
+// ---------------------------------------------------------------------------
+
+// Real-shaped fixture from a live gemini-cli run (mirrors test/obol-fallback.test.ts):
+// turn `a1` is recorded TWICE with the same id — once without toolCalls, once
+// with — so its tokens must be counted exactly once. Turn `a2` is text-only
+// (tokens, no toolCalls).
+const usageLog = [
+  { sessionId: 's', startTime: '2026-06-15T02:07:00.000Z', kind: 'main' },
+  {
+    id: 'u1',
+    timestamp: '2026-06-15T02:08:00.000Z',
+    type: 'user',
+    content: 'go',
+  },
+  {
+    id: 'a1',
+    timestamp: '2026-06-15T02:08:18.488Z',
+    type: 'gemini',
+    content: '',
+    tokens: {
+      input: 15813,
+      output: 27,
+      cached: 0,
+      thoughts: 1005,
+      tool: 0,
+      total: 16845,
+    },
+    model: 'gemini-3.5-flash',
+  },
+  {
+    id: 'a1',
+    timestamp: '2026-06-15T02:08:18.500Z',
+    type: 'gemini',
+    content: '',
+    tokens: {
+      input: 15813,
+      output: 27,
+      cached: 0,
+      thoughts: 1005,
+      tool: 0,
+      total: 16845,
+    },
+    model: 'gemini-3.5-flash',
+    toolCalls: [
+      {
+        id: 'write_file__x',
+        name: 'write_file',
+        args: { file_path: 'hello.txt' },
+      },
+    ],
+  },
+  {
+    id: 'a2',
+    timestamp: '2026-06-15T02:08:25.000Z',
+    type: 'gemini',
+    content: 'done',
+    tokens: {
+      input: 16960,
+      output: 14,
+      cached: 7,
+      thoughts: 150,
+      tool: 0,
+      total: 17131,
+    },
+    model: 'gemini-3.5-flash',
+  },
+]
+  .map((r) => JSON.stringify(r))
+  .join('\n');
+
+test('usage: maps gemini tokens onto step.metrics with thoughts folded into completion', () => {
+  const traj = normalizeGemini(usageLog, '0.1.18');
+  expect(validateTrajectory(traj).ok).toBe(true);
+
+  const withMetrics = traj.steps.filter((s) => s.metrics !== undefined);
+  // Two distinct token-bearing turns (a1, a2) → two metrics-bearing steps.
+  expect(withMetrics.length).toBe(2);
+
+  // a1: input 15813, output 27 + thoughts 1005, cached 0
+  const a1 = withMetrics[0]!;
+  expect(a1.metrics).toEqual({
+    prompt_tokens: 15813,
+    completion_tokens: 27 + 1005,
+    cached_tokens: 0,
+  });
+  expect(a1.model_name).toBe('gemini-3.5-flash');
+  expect(a1.extra?.['provider']).toBe('google');
+
+  // a2: input 16960, output 14 + thoughts 150, cached 7
+  const a2 = withMetrics[1]!;
+  expect(a2.metrics).toEqual({
+    prompt_tokens: 16960,
+    completion_tokens: 14 + 150,
+    cached_tokens: 7,
+  });
+  expect(a2.model_name).toBe('gemini-3.5-flash');
+});
+
+test('usage: gemini dedups the running-snapshot turn (same id) so tokens count once', () => {
+  const traj = normalizeGemini(usageLog, '0.1.18');
+  const totals = traj.steps.reduce(
+    (acc, s) => {
+      if (!s.metrics) return acc;
+      acc.prompt += s.metrics.prompt_tokens ?? 0;
+      acc.completion += s.metrics.completion_tokens ?? 0;
+      acc.cached += s.metrics.cached_tokens ?? 0;
+      return acc;
+    },
+    { prompt: 0, completion: 0, cached: 0 },
+  );
+  // a1 counted once despite appearing on two snapshot lines, plus a2.
+  expect(totals.prompt).toBe(15813 + 16960);
+  expect(totals.completion).toBe(27 + 1005 + 14 + 150);
+  expect(totals.cached).toBe(0 + 7);
+});
+
+test("usage: gemini turn metrics attach to the turn's first emitted step", () => {
+  // A turn whose first snapshot already carries its tool call gets the metrics
+  // on that tool-call step (no earlier metrics-only step to claim them).
+  const raw = JSON.stringify({
+    id: 'a1',
+    type: 'gemini',
+    tokens: {
+      input: 100,
+      output: 5,
+      cached: 0,
+      thoughts: 2,
+      tool: 0,
+      total: 107,
+    },
+    model: 'gemini-3.5-flash',
+    toolCalls: [
+      { id: 'w1', name: 'write_file', args: { file_path: 'hello.txt' } },
+    ],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  const writeStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Write',
+  );
+  expect(writeStep).toBeDefined();
+  expect(writeStep!.metrics?.prompt_tokens).toBe(100);
+  expect(writeStep!.metrics?.completion_tokens).toBe(5 + 2);
+  expect(writeStep!.model_name).toBe('gemini-3.5-flash');
+});
+
+test('usage: gemini turn whose first snapshot lacks tool calls gets a metrics-only step', () => {
+  // Running-snapshot reality: the same id appears first without tool calls, then
+  // with them. Tokens are counted once, on the first snapshot's metrics-only
+  // step; the later tool-call step (same id) carries no metrics (already counted).
+  const traj = normalizeGemini(usageLog, '0.1.18');
+  const a1Metrics = traj.steps.find((s) => s.metrics?.prompt_tokens === 15813);
+  expect(a1Metrics).toBeDefined();
+  expect(a1Metrics!.tool_calls).toBeUndefined();
+  const writeStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Write',
+  );
+  expect(writeStep!.metrics).toBeUndefined();
+});
+
+test('usage: gemini text-only turn (no tool calls) still surfaces its tokens', () => {
+  // a2 has tokens but no toolCalls; without a dedicated metrics step its usage
+  // would be silently dropped from the trajectory.
+  const traj = normalizeGemini(usageLog, '0.1.18');
+  const a2 = traj.steps.find((s) => s.metrics?.prompt_tokens === 16960);
+  expect(a2).toBeDefined();
+  expect(a2!.source).toBe('agent');
+  expect(a2!.tool_calls).toBeUndefined();
+});
+
+test('usage: no tokens on any row leaves step.metrics unset', () => {
+  const raw = JSON.stringify({
+    type: 'gemini',
+    toolCalls: [{ id: 'x', name: 'read_file', args: { file_path: 'a' } }],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  expect(traj.steps.every((s) => s.metrics === undefined)).toBe(true);
+});

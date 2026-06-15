@@ -1,5 +1,6 @@
 import {
   ATIF_SCHEMA_VERSION,
+  type AtifMetrics,
   type AtifStep,
   type AtifToolCall,
   type AtifTrajectory,
@@ -41,6 +42,55 @@ function getToolInput(part: Record<string, unknown>): unknown {
   const state = part['state'];
   if (!state || typeof state !== 'object') return {};
   return (state as Record<string, unknown>)['input'] ?? {};
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+interface MessageUsage {
+  metrics: AtifMetrics;
+  model: string | undefined;
+  provider: string | undefined;
+  cacheWrite: number;
+}
+
+/**
+ * Extract per-message usage from an OpenCode assistant message `info` block.
+ *
+ * Field mapping (spec 2026-06-15-atif-usage-unification.md): input→prompt_tokens,
+ * output + reasoning folded→completion_tokens, cache.read→cached_tokens, the
+ * per-message `cost`→cost_usd (OpenCode logs cost, so we do NOT re-price).
+ * modelID→model_name, providerID→extra.provider, cache.write→extra.cache_write.
+ * Returns undefined when the message carries no `tokens` block.
+ */
+function extractOpencodeUsage(
+  info: Record<string, unknown>,
+): MessageUsage | undefined {
+  const tok = info['tokens'];
+  if (typeof tok !== 'object' || tok === null) return undefined;
+  const t = tok as Record<string, unknown>;
+  const cache =
+    typeof t['cache'] === 'object' && t['cache'] !== null
+      ? (t['cache'] as Record<string, unknown>)
+      : {};
+
+  const metrics: AtifMetrics = {
+    prompt_tokens: num(t['input']),
+    completion_tokens: num(t['output']) + num(t['reasoning']),
+    cached_tokens: num(cache['read']),
+  };
+  if (typeof info['cost'] === 'number' && Number.isFinite(info['cost'])) {
+    metrics.cost_usd = info['cost'];
+  }
+
+  return {
+    metrics,
+    model: typeof info['modelID'] === 'string' ? info['modelID'] : undefined,
+    provider:
+      typeof info['providerID'] === 'string' ? info['providerID'] : undefined,
+    cacheWrite: num(cache['write']),
+  };
 }
 
 function normalizeOpencodeArgs(
@@ -129,6 +179,13 @@ export function normalizeOpencode(
         const parts = msg['parts'];
         if (!Array.isArray(parts)) continue;
 
+        const info =
+          typeof msg['info'] === 'object' && msg['info'] !== null
+            ? (msg['info'] as Record<string, unknown>)
+            : msg;
+        const usage = extractOpencodeUsage(info);
+
+        const messageSteps: AtifStep[] = [];
         for (const part of parts) {
           if (!part || typeof part !== 'object') continue;
           const p = part as Record<string, unknown>;
@@ -146,11 +203,32 @@ export function normalizeOpencode(
             arguments: args,
           };
 
-          steps.push({
+          const step: AtifStep = {
             step_id: stepId++,
             source: 'agent',
             tool_calls: [tc],
-          });
+          };
+          messageSteps.push(step);
+          steps.push(step);
+        }
+
+        if (usage) {
+          // Attach the message's usage to its first emitted tool-call step. An
+          // assistant message that emits no tool step (text-only final answer)
+          // gets a dedicated metrics-only agent step so its usage is not dropped.
+          const carrier =
+            messageSteps[0] ??
+            (() => {
+              const s: AtifStep = { step_id: stepId++, source: 'agent' };
+              steps.push(s);
+              return s;
+            })();
+          carrier.metrics = usage.metrics;
+          if (usage.model) carrier.model_name = usage.model;
+          const extra: Record<string, unknown> = { ...carrier.extra };
+          if (usage.provider) extra['provider'] = usage.provider;
+          extra['cache_write'] = usage.cacheWrite;
+          carrier.extra = extra;
         }
       }
     }
