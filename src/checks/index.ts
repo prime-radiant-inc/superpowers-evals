@@ -37,9 +37,9 @@ export interface RunPhaseArgs {
 export interface RunPhaseResult {
   readonly records: readonly CheckRecord[];
   /**
-   * Crash-aware exit code (parity with quorum/checks.py): a tool that fails its
-   * assertion (rc 1) is an ok phase if it emitted a record, but a bash crash
-   * (command-not-found / signal / no records) propagates as nonzero.
+   * Crash-aware exit code: a tool that fails its assertion (rc 1) is an ok phase
+   * if it emitted a record, but a bash crash (command-not-found / signal / no
+   * records) propagates as nonzero.
    */
   readonly exitCode: number;
 }
@@ -47,14 +47,13 @@ export interface RunPhaseResult {
 /**
  * Source the check prelude + a scenario's checks.sh and invoke one phase
  * (`pre`/`post`), collecting the CheckRecords its verb functions emit. Pure
- * given the filesystem; throws only on an unrecoverable spawn failure
- * (§6.1/§6.4).
+ * given the filesystem; throws only on an unrecoverable spawn failure.
  */
 export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   const sinkDir = mkdtempSync(join(tmpdir(), 'sink-'));
   const sink = join(sinkDir, 'records.jsonl');
 
-  // Build the subprocess env from the sanctioned snapshot (§6.5), never process.env
+  // Build the subprocess env from the sanctioned snapshot, never process.env
   // directly. undefined values are simply absent in the child's environment.
   // Assembled as one literal (conditional spreads for the optional keys) so the
   // names are object properties, not index-signature reads/writes.
@@ -83,18 +82,17 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
         cwd: args.workdir,
         env,
         encoding: 'utf8',
-        // Python's subprocess.run has no output cap. spawnSync defaults maxBuffer
-        // to 1 MB of stdout+stderr; a verbose pre()/post() body would otherwise
-        // return {status:null, error:{code:'ENOBUFS'}}, tripping the spawn-error
-        // guard below and discarding records the check tools already wrote to the
-        // sink. Uncap to match Python and preserve those records.
+        // spawnSync defaults maxBuffer to 1 MB of stdout+stderr; a verbose
+        // pre()/post() body would otherwise return {status:null,
+        // error:{code:'ENOBUFS'}}, tripping the spawn-error guard below and
+        // discarding records the check tools already wrote to the sink. Uncap so
+        // those records survive a chatty phase.
         maxBuffer: Number.POSITIVE_INFINITY,
       },
     );
-    // Python's subprocess.run raises FileNotFoundError when bash cannot be
-    // spawned; that exception propagates out of run_phase. Node's spawnSync does
-    // NOT throw on spawn failure — it returns {status:null, error:<Error>}. Mirror
-    // the raise rather than swallowing it into a clean, empty phase.
+    // Node's spawnSync does NOT throw when bash cannot be spawned — it returns
+    // {status:null, error:<Error>}. Surface that as a thrown error rather than
+    // swallowing it into a clean, empty phase.
     if (proc.error) {
       throw proc.error;
     }
@@ -103,17 +101,16 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
     // status:null with proc.signal set. Such a phase DIED MID-RUN, so its result
     // is untrustworthy and incomplete — it is a CRASH regardless of any partial
-    // records. This DELIBERATELY DIVERGES from Python (quorum/checks.py:134-143
-    // maps a signal to a negative returncode and would treat a killed-with-records
-    // phase as clean): a killed phase is never "clean". Map the kill into the
-    // >=128 crash band (128 + signo) so the composer reports a checks crash; the
-    // records above are still surfaced for the verdict's check list.
+    // records. A killed phase is never "clean", even if it emitted records before
+    // dying. Map the kill into the >=128 crash band (128 + signo) so the composer
+    // reports a checks crash; the records above are still surfaced for the
+    // verdict's check list.
     if (proc.signal) {
       return { records, exitCode: 128 + signalNumber(proc.signal) };
     }
     const rc = proc.status ?? 0;
 
-    // Crash heuristic (parity with quorum/checks.py:134-143):
+    // Crash heuristic:
     //   rc 0                  -> ok
     //   rc 126/127 or >= 128  -> crash (not-executable / not-found)
     //   else (1..125)         -> ok iff at least one record was emitted, else crash
@@ -156,29 +153,27 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
   return records;
 }
 
-// Mirror of quorum/checks.py:_DIRECTIVE_RE — `^\s*#\s*coding-agents:\s*(.+?)\s*$`.
-// Leading whitespace before the `#` is allowed; the trailing `\s*$` plus the
-// non-greedy `(.+?)` mean a bare `# coding-agents:` (no value) does NOT match.
+// The `# coding-agents:` directive matcher. Leading whitespace before the `#` is
+// allowed; the trailing `\s*$` plus the non-greedy `(.+?)` mean a bare
+// `# coding-agents:` (no value) does NOT match.
 const DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
 
 /**
  * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
  * trimmed CSV members. A line that matches the directive but lists only
  * separators (e.g. `# coding-agents: ,`) is a *matched-but-empty* directive and
- * returns `[]` (parity with quorum/checks.py:56) — the matrix gate reads `[]` as
- * skip-all-agents, whereas a true absence (no matching line, or a missing
- * checks.sh) returns `undefined` (§5.5).
+ * returns `[]` — the matrix gate reads `[]` as skip-all-agents, whereas a true
+ * absence (no matching line, or a missing checks.sh) returns `undefined`.
  */
 export function parseCodingAgentsDirective(
   checksSh: string,
 ): string[] | undefined {
-  // Python guards `if not checks_sh.exists(): return None` (quorum/checks.py:49)
-  // before reading; a story-only scenario dir has no checks.sh and must be
-  // treated as un-gated rather than crashing the matrix build.
+  // A story-only scenario dir has no checks.sh and must be treated as un-gated
+  // rather than crashing the matrix build.
   if (!existsSync(checksSh)) {
     return undefined;
   }
-  // Python scans line indices 0..20 inclusive (`if i > 20: break`) — 21 lines.
+  // Scan the first 21 lines (indices 0..20 inclusive) for the directive.
   const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 21);
   for (const line of head) {
     const match = DIRECTIVE_RE.exec(line);

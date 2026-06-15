@@ -11,10 +11,6 @@ import {
 import { join } from 'node:path';
 import { RunnerError } from './errors.ts';
 
-// Port of quorum/runner.py:_populate_context_dir + its helpers
-// (_copy_with_substitutions, _copytree_with_substitutions,
-// _raise_if_context_contains_placeholders).
-//
 // Copies per-coding-agent HOWTOs from <codingAgentsDir>/<codingAgent>-context/
 // into <runDir>/gauntlet-agent/context/, burning resolved absolute paths into
 // every $… placeholder. This is the quorum workaround for tmux stripping
@@ -74,10 +70,10 @@ export function populateContextDir(args: PopulateContextDirArgs): void {
   }
 }
 
-// _copy_with_substitutions: read as text and apply substitutions; a binary file
-// (not valid UTF-8) is copied as-is. Placeholders are applied sorted by length
-// DESCENDING so a longer key (e.g. $QUORUM_AGENT_CWD_SH) is replaced before a
-// prefix of it ($QUORUM_AGENT_CWD). A substituted shebang file is re-marked +x.
+// Read as text and apply substitutions; a binary file (not valid UTF-8) is
+// copied as-is. Placeholders are applied sorted by length DESCENDING so a longer
+// key (e.g. $QUORUM_AGENT_CWD_SH) is replaced before a prefix of it
+// ($QUORUM_AGENT_CWD). A substituted shebang file is re-marked +x.
 function copyWithSubstitutions(
   src: string,
   dst: string,
@@ -105,7 +101,7 @@ function copyWithSubstitutions(
   }
 }
 
-// _copytree_with_substitutions: recurse, substituting every file.
+// Recurse, substituting every file.
 function copytreeWithSubstitutions(
   src: string,
   dst: string,
@@ -123,9 +119,9 @@ function copytreeWithSubstitutions(
   }
 }
 
-// _raise_if_context_contains_placeholders: walk the destination tree and raise
-// if any forbidden placeholder still appears in a text file. Non-text files are
-// skipped (they cannot carry a substitution placeholder meaningfully).
+// Walk the destination tree and raise if any forbidden placeholder still appears
+// in a text file. Non-text files are skipped (they cannot carry a substitution
+// placeholder meaningfully).
 function raiseIfContextContainsPlaceholders(
   contextDir: string,
   forbidden: readonly string[],
@@ -162,10 +158,10 @@ function* walkFiles(root: string): Generator<string> {
 }
 
 // Read a file as STRICT UTF-8, throwing on any invalid byte sequence so the
-// caller falls back to a byte-identical binary copy (parity with Python's
-// read_text() raising UnicodeDecodeError). A fatal TextDecoder is the faithful
-// check — `buf.toString('utf8')` is lossy (it replaces bad bytes with U+FFFD),
-// which would let an invalid-UTF-8 binary through and corrupt it on write-back.
+// caller falls back to a byte-identical binary copy. A fatal TextDecoder is the
+// faithful check — `buf.toString('utf8')` is lossy (it replaces bad bytes with
+// U+FFFD), which would let an invalid-UTF-8 binary through and corrupt it on
+// write-back.
 function readTextStrict(path: string): string {
   return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
 }

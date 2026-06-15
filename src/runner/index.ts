@@ -76,16 +76,16 @@ import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
 import { writePhase } from './phase.ts';
 
-// RunnerError moved to ./errors.ts so context.ts can throw it without a
-// runner<->context import cycle. Re-export it here to preserve the existing
-// public surface (src/runner/index.ts exported it before this split).
+// RunnerError lives in ./errors.ts so context.ts can throw it without a
+// runner<->context import cycle. Re-exported here so it is part of this module's
+// public surface.
 export { RunnerError };
 
-// Empty-capture retry/guard (PRI-2081). A transient flush race between the
-// Coding-Agent exiting and the capture diff reading its session log used to
-// become a permanent stage="capture" indeterminate. Bounded re-diff: worst
-// case adds (attempts - 1) * delay ms to a genuinely-empty run before the
-// per-backend diagnostic cascade proceeds unchanged.
+// Empty-capture retry/guard. A transient flush race between the Coding-Agent
+// exiting and the capture diff reading its session log can otherwise become a
+// permanent stage="capture" indeterminate. Bounded re-diff: worst case adds
+// (attempts - 1) * delay ms to a genuinely-empty run before the per-backend
+// diagnostic cascade proceeds unchanged.
 const CAPTURE_RETRY_ATTEMPTS = 3;
 const CAPTURE_RETRY_DELAY_MS = 2000;
 
@@ -137,9 +137,8 @@ export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
   return argv;
 }
 
-// The valid gauntlet statuses quorum acts on. Anything else (incl. 'errored',
-// schema drift) coerces to 'investigate' — parity with Python's _valid set,
-// which is exactly {pass, fail, investigate}.
+// The valid gauntlet statuses quorum acts on, exactly {pass, fail, investigate}.
+// Anything else (incl. 'errored', schema drift) coerces to 'investigate'.
 const VALID_GAUNTLET_STATUSES = new Set<GauntletStatus>([
   'pass',
   'fail',
@@ -154,12 +153,12 @@ function coerceGauntletStatus(raw: unknown): GauntletStatus {
 }
 
 // Build a GauntletLayer from the run dir's gauntlet-agent/results/<runId>/
-// result.json (parity with Python _build_gauntlet_layer_from_run_dir). Iterates
-// the run-id subdirs sorted-then-reversed and, on a missing/unreadable/malformed
-// result.json, skips to the next-newest candidate. run_id is the DIRECTORY NAME
-// (always concrete when a result exists), not result.json's optional runId
-// field. Status outside {pass,fail,investigate} coerces to investigate. Returns
-// null when no candidate yields a parseable result.
+// result.json. Iterates the run-id subdirs sorted-then-reversed and, on a
+// missing/unreadable/malformed result.json, skips to the next-newest candidate.
+// run_id is the DIRECTORY NAME (always concrete when a result exists), not
+// result.json's optional runId field. Status outside {pass,fail,investigate}
+// coerces to investigate. Returns null when no candidate yields a parseable
+// result.
 export function gauntletLayerFromRunDir(runDir: string): GauntletLayer | null {
   const root = join(runDir, 'gauntlet-agent', 'results');
   if (!existsSync(root)) {
@@ -201,9 +200,9 @@ export function gauntletLayerFromRunDir(runDir: string): GauntletLayer | null {
   return null;
 }
 
-// Kill the gauntlet tmux server driving agy for this run (parity with Python
-// _kill_gauntlet_tmux_for_run). Gauntlet runs agy in a private tmux server whose
-// pane cwd is <runDir>/gauntlet-agent/results/<runId>/scratch; the runId is
+// Kill the gauntlet tmux server driving agy for this run. Gauntlet runs agy in a
+// private tmux server whose pane cwd is
+// <runDir>/gauntlet-agent/results/<runId>/scratch; the runId is
 // minted inside gauntlet, but quorum is single-run-per-dir so exactly one such
 // scratch dir exists. Globs them, takes the last, and hands it to the killer
 // (which matches the server by strict pane-path equality). The killer is
@@ -233,8 +232,8 @@ export function killGauntletTmuxForRun(
 
 // Outcome of a gauntlet drive: always a layer, derived from the run dir's
 // result.json (synthesized 'investigate' when none parses). The exit code is
-// not surfaced as a verdict error — parity with Python invoke_gauntlet, which
-// discards it. A spawn-level failure rejects from spawnGauntlet instead.
+// not surfaced as a verdict error — it is discarded. A spawn-level failure
+// rejects from spawnGauntlet instead.
 export interface InvokeGauntletResult {
   readonly gauntlet: GauntletLayer;
 }
@@ -245,7 +244,7 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // Base env gauntlet inherits. Defaults to the full host snapshot; copilot
   // passes a tightly-scoped allowlist (copilotGauntletEnv) so the host
   // environment (other provider keys, credentialed proxies) is not leaked into
-  // the agent subprocess (parity with Python's env_base).
+  // the agent subprocess.
   readonly envBase?: Readonly<Record<string, string | undefined>> | undefined;
 }
 
@@ -259,7 +258,7 @@ export function currentGauntletChild(): ChildProcess | null {
 
 // Settled exit of the gauntlet child: the exit code (null on signal-kill) plus
 // the collected stderr (for the error message). A typed value, not a string
-// match on stderr inline (coding standard 6.4).
+// match on stderr inline.
 interface GauntletExit {
   readonly status: number | null;
   readonly stderr: string;
@@ -299,16 +298,15 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   });
 }
 
-// Spawn the gauntlet CLI, then derive the gauntlet layer from its run dir. Parity
-// with Python invoke_gauntlet: the exit code is DISCARDED — status always comes
-// from result.json under gauntlet-agent/results/, falling back to a synthesized
-// 'investigate' layer when no parseable result exists (a gauntlet that exited
-// non-zero but wrote a valid result still yields that pass/fail; a non-zero exit
-// with no/garbled result becomes investigate -> composer indeterminate, not a
-// gauntlet-stage error). The subprocess env is the sanctioned snapshot (6.5)
-// overlaid with the launch cwd and the agent's extra env. A spawn-level failure
-// (gauntlet not on PATH) still rejects from spawnGauntlet and surfaces as an
-// 'unknown'-stage crash, matching the un-catchable case in Python.
+// Spawn the gauntlet CLI, then derive the gauntlet layer from its run dir. The
+// exit code is DISCARDED — status always comes from result.json under
+// gauntlet-agent/results/, falling back to a synthesized 'investigate' layer
+// when no parseable result exists (a gauntlet that exited non-zero but wrote a
+// valid result still yields that pass/fail; a non-zero exit with no/garbled
+// result becomes investigate -> composer indeterminate, not a gauntlet-stage
+// error). The subprocess env is the sanctioned snapshot overlaid with the launch
+// cwd and the agent's extra env. A spawn-level failure (gauntlet not on PATH)
+// still rejects from spawnGauntlet and surfaces as an 'unknown'-stage crash.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
@@ -343,17 +341,17 @@ export interface RunScenarioResult {
 
 // The economics block is opaque at the verdict layer (a record of unknowns);
 // re-validate the structured block through that schema to cross into the field
-// without a type assertion (4.1).
+// without a type assertion.
 const OpaqueEconomicsSchema = z.record(z.unknown());
 
 // setup.sh may override the agent's launch cwd by writing this sentinel into the
-// workdir (parity with quorum LAUNCH_CWD_SENTINEL).
+// workdir.
 const LAUNCH_CWD_SENTINEL = '.quorum-launch-cwd';
 
 // Build an indeterminate verdict directly (NOT via compose, whose error path
-// prefixes "quorum error (stage): …"). Mirrors Python _write_indeterminate so
-// every early/cascade short-circuit carries its exact final_reason. The verdict
-// is identity-stamped + persisted by runScenario.
+// prefixes "quorum error (stage): …") so every early/cascade short-circuit
+// carries its exact final_reason. The verdict is identity-stamped + persisted by
+// runScenario.
 function writeIndeterminate(a: {
   finalReason: string;
   gauntlet?: GauntletLayer | null;
@@ -371,17 +369,16 @@ function writeIndeterminate(a: {
   };
 }
 
-// Render paths relative to the session-log dir for human-facing reasons (parity
-// with Python's path.relative_to(session_log_dir)).
+// Render paths relative to the session-log dir for human-facing reasons.
 function relToLogDir(logDir: string, paths: readonly string[]): string[] {
   return paths.map((p) => relative(logDir, p));
 }
 
 // Strict-capture dialects whose run is uninterpretable without a transcript:
 // no source logs OR zero normalized rows is a capture indeterminate, regardless
-// of whether any deterministic check is present (parity with Python
-// strict_capture_names). codex is NOT here — its empty case is the post-checks
-// misplaced-rollout guard. copilot's leak/session-state checks run first in
+// of whether any deterministic check is present. codex is NOT here — its empty
+// case is the post-checks misplaced-rollout guard. copilot's leak/session-state
+// checks run first in
 // copilotCascadeVerdict; its no-transcript/zero-row floor lives here (the
 // copilot branch is guarded by source_logs, so it cannot cover the empty case).
 const STRICT_CAPTURE_NAMES: Readonly<Record<string, string>> = {
@@ -406,8 +403,7 @@ export interface CaptureCascadeArgs {
   readonly runDir: string;
 }
 
-// Per-normalizer strict-capture / diagnostic cascade (parity with the Python
-// _run_scenario_inner capture-stage block). Returns a backend-specific
+// Per-normalizer strict-capture / diagnostic cascade. Returns a backend-specific
 // indeterminate verdict when a strict backend produced no usable transcript, or
 // null to proceed to post-checks. Each branch is independent of whether any
 // deterministic check exists — that is the gap the generic captureEmpty path in
@@ -579,11 +575,11 @@ export interface CodexMisplacedArgs {
   readonly launchCwd: string;
 }
 
-// Codex empty-capture qa-agent-misconfigured short-circuit (parity with the
-// Python step 12b guard, which runs AFTER post-checks). An empty capture plus a
-// codex rollout sitting under run_dir but launched in a subdir other than
-// launch_cwd means the QA agent skipped `cd $QUORUM_AGENT_CWD`. Surfaced as its
-// own stage so downstream trace checks (all "never called") don't bury the cause.
+// Codex empty-capture qa-agent-misconfigured short-circuit, run AFTER
+// post-checks. An empty capture plus a codex rollout sitting under run_dir but
+// launched in a subdir other than launch_cwd means the QA agent skipped
+// `cd $QUORUM_AGENT_CWD`. Surfaced as its own stage so downstream trace checks
+// (all "never called") don't bury the cause.
 export function codexMisplacedVerdict(
   a: CodexMisplacedArgs,
 ): FinalVerdict | null {
@@ -613,8 +609,7 @@ export function codexMisplacedVerdict(
   });
 }
 
-// Render a path relative to `base` when it is under it, else the absolute path
-// (parity with Python's `path.relative_to(base) if is_relative_to else path`).
+// Render a path relative to `base` when it is under it, else the absolute path.
 function relIfUnder(base: string, path: string): string {
   const rel = relative(base, path);
   return rel.startsWith('..') ? path : rel;
@@ -631,12 +626,11 @@ export interface CopilotCascadeArgs {
   readonly preRecords: readonly CheckRecord[];
 }
 
-// Copilot post-capture branch (parity with the Python copilot capture-stage
-// block). In order: (1) a secret-leak scan over the whole run dir (skipping the
-// env file that legitimately holds the secret) -> indeterminate naming the
-// leaking artifacts; (2) the expected session-state events.jsonl must be among
-// the captured source logs; (3) no UNEXPECTED session-state logs may appear.
-// Returns null to proceed when the run is clean.
+// Copilot post-capture branch. In order: (1) a secret-leak scan over the whole
+// run dir (skipping the env file that legitimately holds the secret) ->
+// indeterminate naming the leaking artifacts; (2) the expected session-state
+// events.jsonl must be among the captured source logs; (3) no UNEXPECTED
+// session-state logs may appear. Returns null to proceed when the run is clean.
 export function copilotCascadeVerdict(
   a: CopilotCascadeArgs,
 ): FinalVerdict | null {
@@ -691,11 +685,11 @@ export function copilotCascadeVerdict(
 }
 
 // Secret temp dirs an agent's provisioning created OUTSIDE the run artifact
-// root, to be reaped after the run (parity with Python AgentRuntime.cleanup_dirs,
-// which only kimi populates). kimi writes a mode-0600 runtime env file into a
-// run-scoped mkdtemp kept out of the run root so capture never snapshots it; the
-// dir to reap is the env file's parent. Derived from the provision env map ($KIMI
-// _ENV_FILE) rather than threading a runtime record back through provision().
+// root, to be reaped after the run (currently only kimi populates this). kimi
+// writes a mode-0600 runtime env file into a run-scoped mkdtemp kept out of the
+// run root so capture never snapshots it; the dir to reap is the env file's
+// parent. Derived from the provision env map ($KIMI_ENV_FILE) rather than
+// threading a runtime record back through provision().
 export function runtimeCleanupDirs(
   extraEnv: Readonly<Record<string, string>>,
 ): string[] {
@@ -704,15 +698,11 @@ export function runtimeCleanupDirs(
 }
 
 // The kimi launch-agent substitutions, derived from KimiAgent.provision's extra
-// -env map ($KIMI_ENV_FILE / $KIMI_BINARY). Parity with Python's kimi
-// AgentRuntime.substitutions:
-//   "$KIMI_ENV_FILE": str(env_file),
-//   "$KIMI_BINARY": shlex.quote(kimi_binary)
-// The kimi-context launcher sources "$KIMI_ENV_FILE" (already double-quoted in
-// the script, so the value stays raw) and execs $KIMI_BINARY unquoted under
-// `set -u`, so the binary value is pre-quoted here. Both are required: a kimi run
-// reaching context setup without them is a setup-stage invariant failure (mirrors
-// copilot's missing-provisioning guard) — without it the launcher would carry
+// -env map ($KIMI_ENV_FILE / $KIMI_BINARY). The kimi-context launcher sources
+// "$KIMI_ENV_FILE" (already double-quoted in the script, so the value stays raw)
+// and execs $KIMI_BINARY unquoted under `set -u`, so the binary value is
+// pre-quoted here. Both are required: a kimi run reaching context setup without
+// them is a setup-stage invariant failure — without it the launcher would carry
 // unresolved placeholders and abort under `set -u`.
 export function kimiLaunchSubstitutions(
   extraEnv: Readonly<Record<string, string>>,
@@ -760,9 +750,9 @@ export function homeEnvSubstitutions(
   };
 }
 
-// Reap the agent runtime's secret temp dirs (parity with Python
-// _cleanup_agent_runtime). Each dir is removed recursively; an already-absent
-// dir is fine, but any other removal failure — or a path that survives removal —
+// Reap the agent runtime's secret temp dirs. Each dir is removed recursively; an
+// already-absent dir is fine, but any other removal failure — or a path that
+// survives removal —
 // is a setup-stage RunnerError so a leaked secret dir fails the run (mapped to
 // indeterminate by runScenario) rather than silently persisting on disk.
 export function cleanupAgentRuntime(cleanupDirs: readonly string[]): void {
@@ -791,7 +781,7 @@ export function cleanupAgentRuntime(cleanupDirs: readonly string[]): void {
 
 // Run one scenario end to end. Always allocates a run dir and always writes
 // verdict.json; a thrown invariant maps to an indeterminate verdict via the
-// composer (6.1) rather than escaping.
+// composer rather than escaping.
 export async function runScenario(
   a: RunScenarioArgs,
 ): Promise<RunScenarioResult> {
@@ -842,9 +832,8 @@ function scenarioName(scenarioDir: string): string {
   return last;
 }
 
-// Map a caught value to its error stage without assertions or non-null (6.3): a
-// staged RunnerError carries its own, a SetupError is setup, anything else is
-// unknown.
+// Map a caught value to its error stage without assertions or non-null: a staged
+// RunnerError carries its own, a SetupError is setup, anything else is unknown.
 function errorStage(err: unknown): RunErrorStage {
   if (err instanceof RunnerError) {
     return err.stage;
@@ -859,11 +848,10 @@ function errorStage(err: unknown): RunErrorStage {
   return 'unknown';
 }
 
-// Claude-family binary PATH preflight (parity with quorum
-// _preflight_coding_agent_binary): a claude run whose CLI is not installed fails
-// fast at setup, not deep in the gauntlet drive. Other families are launched by
-// gauntlet's own resolution, so this is claude-only. PATH is read through the
-// sanctioned env snapshot, never process.env directly.
+// Claude-family binary PATH preflight: a claude run whose CLI is not installed
+// fails fast at setup, not deep in the gauntlet drive. Other families are
+// launched by gauntlet's own resolution, so this is claude-only. PATH is read
+// through the sanctioned env snapshot, never process.env directly.
 function preflightCodingAgentBinary(cfg: {
   runtime_family?: string | undefined;
   name: string;
@@ -882,10 +870,10 @@ function preflightCodingAgentBinary(cfg: {
   }
 }
 
-// Resolve the agent launch cwd from the workdir's .quorum-launch-cwd sentinel
-// (parity with quorum _resolve_launch_cwd). No sentinel -> the workdir. A
-// sentinel whose named path does not exist is a runner error, so a stale/typo
-// sentinel fails up front rather than launching gauntlet from a missing dir.
+// Resolve the agent launch cwd from the workdir's .quorum-launch-cwd sentinel.
+// No sentinel -> the workdir. A sentinel whose named path does not exist is a
+// runner error, so a stale/typo sentinel fails up front rather than launching
+// gauntlet from a missing dir.
 function resolveLaunchCwd(workdir: string): string {
   const sentinel = join(workdir, LAUNCH_CWD_SENTINEL);
   if (!existsSync(sentinel)) {
@@ -902,8 +890,7 @@ function resolveLaunchCwd(workdir: string): string {
 }
 
 // Thin wrapper guaranteeing agent-runtime teardown on EVERY exit path of the
-// run body — normal return, early indeterminate return, or throw (parity with
-// Python _run_scenario_inner's `finally: _cleanup_agent_runtime`). cleanupDirs
+// run body — normal return, early indeterminate return, or throw. cleanupDirs
 // starts empty and is populated by the body right after provisioning, so a crash
 // before provisioning reaps nothing and a crash after still reaps the secret dir.
 async function runInner(
@@ -924,8 +911,8 @@ async function runInnerBody(
   cleanupDirs: string[],
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup');
-  // Early guards run in strict parity-order with quorum _run_scenario_inner,
-  // BEFORE any side effect (workdir creation, provisioning, setup.sh, gauntlet).
+  // Early guards run BEFORE any side effect (workdir creation, provisioning,
+  // setup.sh, gauntlet).
 
   // 1. Unknown coding-agent: a missing yaml gets a clean runner error rather
   //    than a leaked raw ENOENT from loadAgentConfig's readFileSync.
@@ -1008,15 +995,14 @@ async function runInnerBody(
     configDir,
     workdir,
     // skeletonRoot default = the coding-agents dir itself, so ClaudeAgent copies
-    // <codingAgentsDir>/claude-home-skeleton (parity with quorum/runner.py,
-    // which defaults skeleton_root to _quorum_repo_root()/"coding-agents").
+    // <codingAgentsDir>/claude-home-skeleton.
     skeletonRoot: a.skeletonRoot ?? a.codingAgentsDir,
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner
   // needs for the $QUORUM_COPILOT_SESSION_ID substitution, the gauntlet env base,
-  // and the post-run secret-leak / session-state cascade (parity with Python's
-  // copilot branch). Every other agent uses the declarative provision() motion.
+  // and the post-run secret-leak / session-state cascade. Every other agent uses
+  // the declarative provision() motion.
   let copilotProvisioning: CopilotProvisioning | undefined;
   let extraEnv: Record<string, string>;
   if (cfg.name === 'copilot' && agent instanceof CopilotAgent) {
@@ -1030,16 +1016,13 @@ async function runInnerBody(
     extraEnv = agent.provision(home, defaultCommandRunner);
   }
   // Track any secret temp dir provisioning created outside the run root (kimi's
-  // runtime-env mkdtemp) so the runInner finally reaps it (parity with Python
-  // AgentRuntime.cleanup_dirs). Pushed AFTER provision returns, so this covers
-  // the success path and every later run-exit; a provision that THROWS after
-  // writing the secret file is the one window not covered here (Python guards it
-  // with an internal try/except in _seed_kimi_config).
+  // runtime-env mkdtemp) so the runInner finally reaps it. Pushed AFTER provision
+  // returns, so this covers the success path and every later run-exit; a
+  // provision that THROWS after writing the secret file is the one window not
+  // covered here.
   cleanupDirs.push(...runtimeCleanupDirs(extraEnv));
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
-  // setup-helpers against it). Parity with quorum/runner.py 1826/1831:
-  //   env_extra = {"QUORUM_REPO_ROOT": str(_quorum_repo_root())}
-  //   run_setup(scenario_dir, workdir, env_extra=env_extra)
+  // setup-helpers against it).
   runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
 
   const checksRepoRoot = repoRoot();
@@ -1074,19 +1057,18 @@ async function runInnerBody(
   }
 
   // drive gauntlet. launch cwd honors a .quorum-launch-cwd sentinel written by
-  // setup.sh (parity with Python _resolve_launch_cwd), else the workdir. A
-  // sentinel naming a path that does not exist is a runner error, not a silent
-  // launch from a nonexistent cwd. Resolved before the opencode snapshot, which
-  // is keyed on the launch cwd.
+  // setup.sh, else the workdir. A sentinel naming a path that does not exist is a
+  // runner error, not a silent launch from a nonexistent cwd. Resolved before the
+  // opencode snapshot, which is keyed on the launch cwd.
   let launchCwd = resolveLaunchCwd(workdir);
 
-  // antigravity launch-cwd preparation (parity with Python): (1) git-exclude the
-  // per-run project marker so it never dirties the launch repo; (2) when the
-  // launch cwd has a hidden path component (quorum runs live under .codex/ etc.)
-  // expose it through a visible temp symlink, since Antigravity rejects --add-dir
-  // workspaces with hidden components; (3) re-write trusted-workspaces settings
-  // against the RESOLVED launch cwd (provision wrote them against the raw
-  // workdir, before the sentinel/symlink was known).
+  // antigravity launch-cwd preparation: (1) git-exclude the per-run project
+  // marker so it never dirties the launch repo; (2) when the launch cwd has a
+  // hidden path component (quorum runs live under .codex/ etc.) expose it through
+  // a visible temp symlink, since Antigravity rejects --add-dir workspaces with
+  // hidden components; (3) re-write trusted-workspaces settings against the
+  // RESOLVED launch cwd (provision wrote them against the raw workdir, before the
+  // sentinel/symlink was known).
   if (cfg.normalizer === 'antigravity') {
     excludeAntigravityProjectMarker(launchCwd);
     launchCwd = prepareAntigravityLaunchCwd(launchCwd, runDir);
@@ -1094,13 +1076,12 @@ async function runInnerBody(
   }
 
   // snapshot the agent session-log dir before the run (substitute env vars +
-  // expand a leading ~, parity with Python resolve_session_log_dir).
+  // expand a leading ~).
   const logDir = resolveSessionLogDir(cfg.session_log_dir, extraEnv);
 
   // opencode does not write capturable session logs on its own: snapshot the
   // pre-existing session ids before the run so the post-run export can diff to
-  // the NEW ones (parity with Python snapshot_opencode_sessions). An
-  // OpenCodeCaptureError -> capture indeterminate.
+  // the NEW ones. An OpenCodeCaptureError -> capture indeterminate.
   let opencodeSessionSnapshot = new Set<string>();
   if (cfg.normalizer === 'opencode') {
     try {
@@ -1125,8 +1106,7 @@ async function runInnerBody(
   // Populate <runDir>/gauntlet-agent/context/ with the per-agent HOWTO +
   // launcher, burning resolved absolute paths into every $… placeholder. tmux
   // strips arbitrary env from new sessions, so the QA agent reads concrete
-  // paths from the substituted files rather than from env inheritance. Parity
-  // with quorum/runner.py 1885-1925 (the substitutions dict + _populate_context_dir).
+  // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
   const agentConfigEnv = cfg.agent_config_env;
   const launchAgentPath = join(
@@ -1147,26 +1127,25 @@ async function runInnerBody(
     // splices $QUORUM_HOME_ENV into its `exec env …` line.
     ...homeEnvSubstitutions(runHomeDir),
   };
-  // Provision-supplied substitutions (quorum's agent_runtime.substitutions). For
-  // claude these are the auth env-file path the launcher sources; the path is
-  // deterministic (configDir/.claude-env, written by ClaudeAgent.provision), so
-  // the runner derives it rather than threading it back through provision().
+  // Provision-supplied substitutions. For claude these are the auth env-file path
+  // the launcher sources; the path is deterministic (configDir/.claude-env,
+  // written by ClaudeAgent.provision), so the runner derives it rather than
+  // threading it back through provision().
   if (family === 'claude') {
     const claudeEnvFile = join(configDir, CLAUDE_ENV_FILE_NAME);
     substitutions['$CLAUDE_ENV_FILE'] = claudeEnvFile;
     substitutions['$CLAUDE_ENV_FILE_SH'] = shellSingleQuote(claudeEnvFile);
     substitutions['$CLAUDE_MODEL'] = cfg.model ?? '';
   }
-  // Per-agent env-file substitutions the runner can derive from configDir (parity
-  // with quorum/runner.py's name-keyed additions). These mirror the Python's
-  // deterministic agent_config_dir-relative paths.
+  // Per-agent env-file substitutions the runner derives from configDir as
+  // deterministic config-dir-relative paths.
   if (cfg.name === 'gemini') {
     const geminiEnvFile = join(configDir, '.gemini-env');
     substitutions['$GEMINI_ENV_FILE'] = geminiEnvFile;
     substitutions['$GEMINI_ENV_FILE_SH'] = shellSingleQuote(geminiEnvFile);
     // The gemini launcher's GEMINI_DEFAULT_AUTH_TYPE reads $GEMINI_AUTH_TYPE_SH;
-    // resolve it the same way GeminiAgent.provision does (Python: the gemini
-    // branch in _run_scenario_inner). Mirrors the $CLAUDE_MODEL pattern.
+    // resolve it the same way GeminiAgent.provision does. Mirrors the
+    // $CLAUDE_MODEL pattern.
     const geminiAuth = geminiAuthType();
     substitutions['$GEMINI_AUTH_TYPE'] = geminiAuth;
     substitutions['$GEMINI_AUTH_TYPE_SH'] = shellSingleQuote(geminiAuth);
@@ -1175,10 +1154,9 @@ async function runInnerBody(
     substitutions['$PI_ENV_FILE'] = join(configDir, 'pi.env');
   }
   if (cfg.name === 'copilot' && copilotProvisioning !== undefined) {
-    // Use the provisioning record's env file + minted session id (parity with
-    // Python copilot_provisioning.env_file / .session_id) so the launcher's
-    // `--session-id "$QUORUM_COPILOT_SESSION_ID"` resolves and the capture can
-    // find the matching session-state/<id>/events.jsonl.
+    // Use the provisioning record's env file + minted session id so the
+    // launcher's `--session-id "$QUORUM_COPILOT_SESSION_ID"` resolves and the
+    // capture can find the matching session-state/<id>/events.jsonl.
     substitutions['$COPILOT_ENV_FILE'] = copilotProvisioning.envFile;
     substitutions['$COPILOT_ENV_FILE_SH'] = shellSingleQuote(
       copilotProvisioning.envFile,
@@ -1188,8 +1166,7 @@ async function runInnerBody(
   if (cfg.normalizer === 'kimi') {
     // KimiAgent.provision returns $KIMI_ENV_FILE / $KIMI_BINARY in its extra-env
     // map; thread them into the context-dir substitution set so the kimi-context
-    // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`
-    // (parity with Python's kimi AgentRuntime.substitutions).
+    // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`.
     Object.assign(substitutions, kimiLaunchSubstitutions(extraEnv));
   }
   populateContextDir({
@@ -1202,9 +1179,9 @@ async function runInnerBody(
   });
 
   // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full
-  // host env, and a proxy var carrying credentialed userinfo is rejected
-  // (parity with Python _copilot_gauntlet_env). copilotGauntletEnv can throw a
-  // ProvisionError (credentialed proxy) -> mapped to a setup indeterminate.
+  // host env, and a proxy var carrying credentialed userinfo is rejected.
+  // copilotGauntletEnv can throw a ProvisionError (credentialed proxy) -> mapped
+  // to a setup indeterminate.
   const gauntletEnvBase =
     cfg.name === 'copilot' ? copilotGauntletEnv(envSnapshot()) : undefined;
 
@@ -1216,8 +1193,7 @@ async function runInnerBody(
   // finally (best-effort, restore only if the live file is missing or corrupt).
   // A live AgyRateLimitWatcher tails the run's agy.log during the drive and, on
   // a confirmed Code Assist 429, tears down gauntlet's private tmux server so the
-  // cell fails fast instead of burning its full budget (parity with Python's
-  // invoke_gauntlet watcher + agy_creds guard).
+  // cell fails fast instead of burning its full budget.
   const isAntigravity = cfg.normalizer === 'antigravity';
   const credBackup = isAntigravity ? backupCredential() : null;
   let watcher: AgyRateLimitWatcher | null = null;
@@ -1257,8 +1233,8 @@ async function runInnerBody(
     }
   }
 
-  // antigravity mid-run rate-limit short-circuit (parity with Python): when the
-  // watcher tripped, agy was killed and the run dir has no usable transcript.
+  // antigravity mid-run rate-limit short-circuit: when the watcher tripped, agy
+  // was killed and the run dir has no usable transcript.
   // Intercept BEFORE the capture cascade so it surfaces as a recognizable
   // rate-limit verdict carrying ANTIGRAVITY_RATE_LIMIT_MARKER (for run_all's
   // latch) rather than a generic empty-trace capture indeterminate.
@@ -1279,7 +1255,7 @@ async function runInnerBody(
   // antigravity: a rate-limited Code Assist backend detected in the completed
   // agy.log (the watcher may not have tripped if the 429 landed late) is an
   // environmental indeterminate, not pass/fail. This precedes the capture
-  // handling, parity with quorum/runner.py.
+  // handling.
   if (isAntigravity) {
     const reason = antigravityRateLimitReason(configDir);
     if (reason !== null) {
@@ -1293,10 +1269,9 @@ async function runInnerBody(
   }
 
   // opencode: after gauntlet exits, export the NEW sessions into the file-diffed
-  // session-log dir so the generic capture can see them (parity with Python
-  // export_opencode_sessions). Without this every opencode run captures zero
-  // rows. An OpenCodeCaptureError -> capture indeterminate carrying the gauntlet
-  // layer.
+  // session-log dir so the generic capture can see them. Without this every
+  // opencode run captures zero rows. An OpenCodeCaptureError -> capture
+  // indeterminate carrying the gauntlet layer.
   let opencodeExportedPaths: readonly string[] = [];
   if (cfg.normalizer === 'opencode') {
     try {
@@ -1320,9 +1295,9 @@ async function runInnerBody(
   }
 
   // capture tool calls + token usage from the new session logs. The
-  // empty-capture retry/guard (PRI-2081) re-diffs a session log still being
-  // flushed when the post-drive diff runs, so a transient race does not become
-  // a permanent capture indeterminate.
+  // empty-capture retry/guard re-diffs a session log still being flushed when the
+  // post-drive diff runs, so a transient race does not become a permanent capture
+  // indeterminate.
   const capture = captureToolCallsWithRetry(
     {
       logDir,
@@ -1336,7 +1311,7 @@ async function runInnerBody(
   );
   // captureTokenUsage writes coding-agent-token-usage.json as a side effect
   // (null when obol cannot price); economics reads that file, so the returned
-  // path is not needed here, but the promise still has an owner (6.2).
+  // path is not needed here, but the promise still has an owner.
   await captureTokenUsage({
     logDir,
     logGlob: cfg.session_log_glob,
@@ -1347,10 +1322,9 @@ async function runInnerBody(
   });
   const captureEmpty = capture.rowCount === 0;
 
-  // opencode export/capture snapshot mismatch (parity with the Python check that
-  // runs before the strict cascade): the export wrote session files but the
-  // file-diff capture saw none as new — an export-snapshot timing problem rather
-  // than a genuinely empty run.
+  // opencode export/capture snapshot mismatch, checked before the strict
+  // cascade: the export wrote session files but the file-diff capture saw none as
+  // new — an export-snapshot timing problem rather than a genuinely empty run.
   if (
     cfg.normalizer === 'opencode' &&
     capture.sourceLogs.length === 0 &&
@@ -1369,9 +1343,9 @@ async function runInnerBody(
     });
   }
 
-  // copilot post-capture branch (parity with the Python copilot block, which
-  // runs ahead of the generic strict-capture cascade): secret-leak scan +
-  // expected/unexpected session-state log checks, using the provisioning record.
+  // copilot post-capture branch, run ahead of the generic strict-capture
+  // cascade: secret-leak scan + expected/unexpected session-state log checks,
+  // using the provisioning record.
   if (cfg.normalizer === 'copilot' && copilotProvisioning !== undefined) {
     const copilotVerdict = copilotCascadeVerdict({
       runDir,
@@ -1388,11 +1362,11 @@ async function runInnerBody(
     }
   }
 
-  // Per-normalizer strict-capture / diagnostic cascade (parity with the Python
-  // capture-stage block). A strict backend (claude/gemini/antigravity/opencode/
-  // pi/kimi) that produced no usable transcript is an indeterminate with a
-  // backend-specific reason — independent of whether any deterministic check
-  // exists, which the generic composer captureEmpty path cannot cover.
+  // Per-normalizer strict-capture / diagnostic cascade. A strict backend
+  // (claude/gemini/antigravity/opencode/pi/kimi) that produced no usable
+  // transcript is an indeterminate with a backend-specific reason — independent
+  // of whether any deterministic check exists, which the generic composer
+  // captureEmpty path cannot cover.
   const cascade = captureCascadeVerdict({
     normalizer: cfg.normalizer,
     logDir,
@@ -1433,10 +1407,10 @@ async function runInnerBody(
     });
   }
 
-  // Codex empty-capture qa-agent-misconfigured short-circuit (runs after
-  // post-checks, parity with Python step 12b): an empty codex capture plus a
-  // rollout launched from the wrong cwd surfaces as its own stage rather than a
-  // wall of "never called" trace checks.
+  // Codex empty-capture qa-agent-misconfigured short-circuit, run after
+  // post-checks: an empty codex capture plus a rollout launched from the wrong
+  // cwd surfaces as its own stage rather than a wall of "never called" trace
+  // checks.
   const codexMisplaced = codexMisplacedVerdict({
     captureEmpty,
     normalizer: cfg.normalizer,
@@ -1450,7 +1424,7 @@ async function runInnerBody(
     return codexMisplaced;
   }
 
-  // compose + attach economics (opaque at this layer; 4.1).
+  // compose + attach economics (opaque at this layer).
   const verdict = compose({
     gauntlet,
     checks: [...pre.records, ...post.records],
@@ -1459,8 +1433,7 @@ async function runInnerBody(
   });
   // Economics is measurement, never worth losing a verdict over: a wrong-typed
   // artifact (version skew, tampering, a legacy pre-obol usage file) degrades to
-  // a null economics block rather than crashing the composed verdict (PRI-2130,
-  // parity with quorum's try/except around build_run_economics).
+  // a null economics block rather than crashing the composed verdict.
   const economics = await safeBuildRunEconomics(runDir);
   return {
     ...verdict,
@@ -1470,7 +1443,7 @@ async function runInnerBody(
 }
 
 // build_run_economics, isolated: any throw degrades to a null economics block so
-// it cannot destroy an already-composed verdict (K-x-economics-call-site-guard).
+// it cannot destroy an already-composed verdict.
 async function safeBuildRunEconomics(
   runDir: string,
 ): Promise<Awaited<ReturnType<typeof buildRunEconomics>> | null> {

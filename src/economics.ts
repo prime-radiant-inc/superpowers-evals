@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import type { PerModelUsageSchema, TokenUsage } from './contracts/economics.ts';
 import { estimateUsageSidecar } from './obol/index.ts';
 
-/** Token totals exposed in each economics block (mirrors Python's shell). */
+/** Token totals exposed in each economics block. */
 interface TokenShell {
   readonly input: number;
   readonly output: number;
@@ -17,7 +17,7 @@ interface TokenShell {
 /** obol provenance carried alongside a priced block. Present whenever the
  *  source usage object carries a `pricing_as_of` key — even when its value is
  *  null (an all-unpriced sidecar). Absent (null) only for pre-obol legacy
- *  frozen files that never had the key. Mirrors Python `_obol_provenance`. */
+ *  frozen files that never had the key. */
 interface ObolProvenance {
   readonly per_model: Readonly<
     Record<string, z.infer<typeof PerModelUsageSchema>>
@@ -71,13 +71,12 @@ const ZERO_TOKENS: TokenShell = {
 
 const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
 
-/** A plain JSON object (parity with Python's dict). All economics reads are
- *  schema-less: every field is fetched via tolerant accessors with defaults so
- *  a malformed or legacy artifact degrades per-field rather than crashing. */
+/** A plain JSON object. All economics reads are schema-less: every field is
+ *  fetched via tolerant accessors with defaults so a malformed or legacy
+ *  artifact degrades per-field rather than crashing. */
 type JsonObject = Record<string, unknown>;
 
-/** Read + parse a JSON file; null on missing/malformed/non-object (mirrors
- *  Python economics._read_json: isinstance(data, dict) else None). */
+/** Read + parse a JSON file; null on missing/malformed/non-object. */
 function readJsonObject(path: string): JsonObject | null {
   let text: string;
   try {
@@ -121,8 +120,7 @@ function asJsonObject(v: unknown): JsonObject | null {
     : null;
 }
 
-/** Cost field: a number stays, anything else (missing/null/wrong-type) -> null,
- *  parity with Python `.get("est_cost_usd")` reading a number-or-null field. */
+/** Cost field: a number stays, anything else (missing/null/wrong-type) -> null. */
 function costField(o: JsonObject, key: string): number | null {
   const v = o[key];
   return typeof v === 'number' ? v : null;
@@ -159,9 +157,9 @@ function perModelMap(
     : (obj as Record<string, z.infer<typeof PerModelUsageSchema>>);
 }
 
-/** The nested obol provenance block, or null for pre-obol legacy frozen files.
- *  Mirrors Python `_obol_provenance`: null ONLY when the `pricing_as_of` key is
- *  ABSENT; a present-but-null value still yields a provenance block. */
+/** The nested obol provenance block, or null for pre-obol legacy frozen files:
+ *  null ONLY when the `pricing_as_of` key is ABSENT; a present-but-null value
+ *  still yields a provenance block. */
 function obolProvenance(u: JsonObject): ObolProvenance | null {
   if (!('pricing_as_of' in u)) {
     return null;
@@ -174,8 +172,7 @@ function obolProvenance(u: JsonObject): ObolProvenance | null {
   };
 }
 
-/** First sorted results dir carrying a result.json OR a usage.jsonl. Python's
- *  economics._gauntlet_results_dir prefers the first dir with artifacts; a
+/** First sorted results dir carrying a result.json OR a usage.jsonl. A
  *  usage.jsonl-only dir must still be selected so its sidecar gets priced. */
 function gauntletResultsDir(runDir: string): string | null {
   const base = join(runDir, 'gauntlet-agent', 'results');
@@ -237,8 +234,8 @@ function buildCodingAgentBlock(usage: JsonObject): CodingAgentBlock {
         est_cost_usd: costField(m, 'est_cost_usd'),
       };
     })
-    // Python: key=lambda m: m["est_cost_usd"] or 0, reverse=True — None maps to
-    // 0 and ties (stably) with a genuine $0-priced free-tier model.
+    // Sort by cost descending; a null cost maps to 0 and ties (stably) with a
+    // genuine $0-priced free-tier model.
     .sort((a, b) => (b.est_cost_usd ?? 0) - (a.est_cost_usd ?? 0));
   const hasUnpriced =
     stringList(usage['unpriced_models']).length > 0 ||
@@ -264,9 +261,8 @@ export type SidecarEstimator = (path: string) => Promise<TokenUsage | null>;
  *  The gauntlet block is built whenever result.json OR its usage exists.
  *
  *  Every read is best-effort: a malformed/legacy artifact degrades per-field to
- *  null + `partial:true` rather than throwing (mirrors Python economics.py).
- *  The runner additionally guards the call site (Wave 2b) so even an unexpected
- *  throw never destroys a composed verdict. */
+ *  null + `partial:true` rather than throwing. The runner additionally guards
+ *  the call site so even an unexpected throw never destroys a composed verdict. */
 export async function buildRunEconomics(
   runDir: string,
   sidecarEstimator: SidecarEstimator = estimateUsageSidecar,
@@ -285,8 +281,8 @@ export async function buildRunEconomics(
   }
 
   // Coding-agent block — frozen, already priced at capture time. Read
-  // schema-less (Python _read_json): a legacy pre-obol file lacking obol keys
-  // still builds a block with obol=null instead of crashing.
+  // schema-less: a legacy pre-obol file lacking obol keys still builds a block
+  // with obol=null instead of crashing.
   let coding: CodingAgentBlock | null = null;
   const codingUsage = readJsonObject(
     join(runDir, 'coding-agent-token-usage.json'),
@@ -314,8 +310,8 @@ export async function buildRunEconomics(
     gCost === null ||
     cCost === null ||
     anyUnpriced;
-  // Python iterates (coding, gauntlet) and takes the first truthy
-  // pricing_as_of, so a present-but-null (falsy) value falls through.
+  // Take the first truthy pricing_as_of across (coding, gauntlet), so a
+  // present-but-null (falsy) value falls through.
   let pricingAsof: string | null = null;
   for (const block of [coding, gauntlet]) {
     const candidate = block?.obol?.pricing_as_of;

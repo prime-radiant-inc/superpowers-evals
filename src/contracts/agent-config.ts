@@ -5,9 +5,8 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { getEnv } from '../env.ts';
 
-// The runtime families the harness knows how to provision/normalize (parity with
-// quorum/coding_agent_config.py:KNOWN_RUNTIME_FAMILIES). An unknown family would
-// otherwise fall through to the declarative DefaultAgent silently.
+// The runtime families the harness knows how to provision/normalize. An unknown
+// family would otherwise fall through to the declarative DefaultAgent silently.
 const KNOWN_RUNTIME_FAMILIES: ReadonlySet<string> = new Set([
   'antigravity',
   'claude',
@@ -38,7 +37,7 @@ export const AgentConfigSchema = z.object({
   max_time: z.string().optional(),
   project_prompt: z.string().optional(),
   model: z.string().optional(),
-  // PRI-2203 scheduler keys (parsed now, consumed in Spec 4)
+  // Scheduler keys: per-agent concurrency cap and launch spacing.
   max_concurrency: z.number().int().min(1).optional(),
   launch_spacing_seconds: z.number().min(0).optional(),
 });
@@ -63,9 +62,8 @@ export function agentConfigDir(
 }
 
 // Thrown when a coding-agent YAML is structurally valid but a referenced file
-// cannot be resolved (mirrors quorum/coding_agent_config.py:CodingAgentConfigError
-// for the project_prompt-existence leg). The runner maps it to a setup-stage
-// indeterminate via errorStage.
+// cannot be resolved (e.g. the project_prompt-existence leg). The runner maps it
+// to a setup-stage indeterminate via errorStage.
 export class CodingAgentConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -81,9 +79,9 @@ export function loadAgentConfig(
   const raw: unknown = parseYaml(readFileSync(path, 'utf8'));
   const cfg = AgentConfigSchema.parse(raw);
 
-  // Loader validations in the same order as quorum/coding_agent_config.py:
-  // name==stem, runtime_family known, claude requires a non-blank model, then
-  // required_env present. Each is a CodingAgentConfigError -> setup indeterminate.
+  // Loader validations, in order: name==stem, runtime_family known, claude
+  // requires a non-blank model, then required_env present. Each is a
+  // CodingAgentConfigError -> setup indeterminate.
 
   // name must equal the file stem (the name arg, since path is `${name}.yaml`).
   if (cfg.name !== name) {
@@ -112,8 +110,7 @@ export function loadAgentConfig(
     throw new CodingAgentConfigError(`${path}: model must not be blank`);
   }
 
-  // required_env must be set (a present-but-empty value counts as missing,
-  // matching Python's `not os.environ.get(v)`).
+  // required_env must be set (a present-but-empty value counts as missing).
   const missingEnv = cfg.required_env.filter((v) => {
     const value = getEnv(v);
     return value === undefined || value === '';
@@ -125,12 +122,10 @@ export function loadAgentConfig(
   }
 
   // Resolve project_prompt relative to the YAML file's dir to an absolute path
-  // and require it to exist, mirroring quorum/coding_agent_config.py:
-  //   candidate = (path.parent / project_prompt_raw).resolve()
-  //   if not candidate.is_file(): raise ...
-  // Gauntlet's --project-prompt needs an absolute, existing file; the raw
-  // "claude.project-prompt.md" alone fails ("file not found"). Overwrite the
-  // parsed field with the resolved absolute path so invokeGauntlet passes it.
+  // and require it to exist. Gauntlet's --project-prompt needs an absolute,
+  // existing file; the raw "claude.project-prompt.md" alone fails ("file not
+  // found"). Overwrite the parsed field with the resolved absolute path so
+  // invokeGauntlet passes it.
   if (cfg.project_prompt !== undefined && cfg.project_prompt !== '') {
     const candidate = resolve(dirname(path), cfg.project_prompt);
     if (!existsSync(candidate) || !statSync(candidate).isFile()) {
@@ -145,8 +140,7 @@ export function loadAgentConfig(
 
 /**
  * Replace `$VAR` and `${VAR}` occurrences from a map, and `$$` with a literal
- * `$` (parity with Python's string.Template.safe_substitute). Unknown vars and a
- * lone `$` are left intact.
+ * `$`. Unknown vars and a lone `$` are left intact.
  */
 export function substituteEnv(
   text: string,
@@ -168,8 +162,8 @@ export function substituteEnv(
   );
 }
 
-// Expand a leading ~ to the user's home dir (Python Path.expanduser parity for
-// the common case; a non-leading ~ is left untouched).
+// Expand a leading ~ to the user's home dir (the common case; a non-leading ~ is
+// left untouched).
 function expanduser(path: string): string {
   if (path === '~') {
     return homedir();
@@ -182,8 +176,7 @@ function expanduser(path: string): string {
 
 /**
  * Resolve a session_log_dir template: substitute env vars, then expand a leading
- * ~ (parity with quorum CodingAgentConfig.resolve_session_log_dir, which does
- * Template substitution then Path.expanduser). Literal paths pass through.
+ * ~. Literal paths pass through.
  */
 export function resolveSessionLogDir(
   template: string,
