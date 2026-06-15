@@ -27,6 +27,18 @@ export class OpenCodeCaptureError extends Error {
   }
 }
 
+// Thrown when an opencode subprocess is killed by its timeout. Bun.spawnSync does
+// NOT throw on timeout — it kills the child and returns { exitCode: null,
+// signalCode: 'SIGTERM' }. defaultSpawn detects that and raises this so the
+// isTimeoutError branch surfaces a timed-out diagnostic instead of silently
+// parsing empty stdout as a success (M1-opencode-timeout-swallowed-as-success).
+export class OpenCodeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OpenCodeTimeoutError';
+  }
+}
+
 // quorum/opencode_capture.py:opencode_env — the XDG-isolation env the OpenCode
 // subprocess receives. HOME and every XDG root live under opencodeHome.
 export function opencodeEnv(opencodeHome: string): Record<string, string> {
@@ -100,6 +112,22 @@ export type SpawnFn = (opts: {
   timeoutMs: number;
 }) => SpawnResult;
 
+// Pure decision: map a raw spawn result to an outcome. Bun.spawnSync returns
+// exitCode === null with a SIGTERM signalCode when the child was killed (the
+// timeout fired); a clean exit reports a numeric exitCode and a null/undefined
+// signalCode. A killed child (null exit, or any signal present) MUST be treated
+// as a timeout, never coerced to exit 0. A clean exit 0 is success; any other
+// exit is a failure. (M1-opencode-timeout-swallowed-as-success)
+export function spawnOutcome(result: {
+  exitCode: number | null;
+  signalCode?: string | null;
+}): 'success' | 'failure' | 'timeout' {
+  if (result.exitCode === null || (result.signalCode ?? null) !== null) {
+    return 'timeout';
+  }
+  return result.exitCode === 0 ? 'success' : 'failure';
+}
+
 // quorum/opencode_capture.py:run_opencode_command docstring — the opencode binary
 // ends every command with a bare process.exit(), which discards stdout that has
 // not yet drained. Through a pipe, payloads >64KiB arrive truncated at the
@@ -129,6 +157,14 @@ export function defaultSpawn(opts: {
         stderr: 'pipe',
         timeout: timeoutMs,
       });
+      // Bun.spawnSync does NOT throw on timeout: it kills the child and reports
+      // exitCode === null with a signalCode. Surface that as a timeout instead of
+      // coercing it to a phantom exit 0 (which would parse empty stdout as []).
+      if (spawnOutcome(proc) === 'timeout') {
+        throw new OpenCodeTimeoutError(
+          `opencode ${args.slice(1).join(' ')} timed out after ${timeoutMs / 1000}s`,
+        );
+      }
       const stdout = readFileSync(tmpFile, 'utf8');
       const stderr =
         proc.stderr instanceof Uint8Array
@@ -244,9 +280,11 @@ function sessionDecisions(
 
 function isTimeoutError(e: unknown): boolean {
   return (
-    e instanceof Error &&
-    (e.message.toLowerCase().includes('timeout') ||
-      e.constructor.name === 'TimeoutError')
+    e instanceof OpenCodeTimeoutError ||
+    (e instanceof Error &&
+      (e.message.toLowerCase().includes('timeout') ||
+        e.message.toLowerCase().includes('timed out') ||
+        e.constructor.name === 'TimeoutError'))
   );
 }
 

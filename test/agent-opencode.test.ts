@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,7 +14,11 @@ import { join } from 'node:path';
 import type { CommandResult } from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import { OpenCodeAgent } from '../src/agents/opencode.ts';
-import type { SpawnFn, SpawnResult } from '../src/agents/opencode-capture.ts';
+import {
+  OpenCodeTimeoutError,
+  type SpawnFn,
+  type SpawnResult,
+} from '../src/agents/opencode-capture.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -388,6 +393,46 @@ test('provision throws ProvisionError when a non-OK reply persists across 3 trie
   }
 });
 
+// M1-opencode-timeout-swallowed-as-success (preflight): a preflight timeout must
+// ABORT immediately with a timeout-typed ProvisionError — Python raises on the
+// FIRST TimeoutExpired at 90s — NOT be masked as a non-OK reply and retried 3x.
+test('provision aborts the preflight on the first timeout (no retry)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  // `run` always times out (the live defaultSpawn throws OpenCodeTimeoutError when
+  // Bun.spawnSync kills the child). The loop must NOT swallow + retry.
+  let runAttempts = 0;
+  const spawn: SpawnFn = (opts): SpawnResult => {
+    if (opts.args[1] === '--version') {
+      return { stdout: 'v1\n', stderr: '', exitCode: 0 };
+    }
+    if (opts.args[1] === 'run') {
+      runAttempts += 1;
+      throw new OpenCodeTimeoutError('opencode run timed out after 90s');
+    }
+    return { stdout: '', stderr: '', exitCode: 0 };
+  };
+
+  try {
+    withEnv(spRoot, () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner)).toThrow(
+        /timed out after 90s/,
+      );
+      // Aborted on the FIRST timeout — Python raises immediately, no 3x retry.
+      // Two provision() calls above, one run attempt each => exactly 2.
+      expect(runAttempts).toBe(2);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 test('provision throws ProvisionError when node --check fails', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
@@ -419,18 +464,22 @@ test('provision throws ProvisionError when node --check fails', () => {
 
 // B2-opencode-node-check-unconditional: when node is absent on PATH, the
 // node --check is silently skipped (Python guards with shutil.which("node")).
+// The probe is real Bun.which over PATH, so we point PATH at a bin dir holding
+// ONLY a fake opencode binary => Bun.which('opencode') resolves, 'node' is null.
 test('provision skips node --check when node is absent on PATH', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
 
-  // `command -v node` resolves nothing; `command -v opencode` resolves a path.
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'command' && args[0] === '-v') {
-      if (args[1] === 'node') return { status: 1, stdout: '', stderr: '' };
-      return { status: 0, stdout: `/usr/local/bin/${args[1]}\n`, stderr: '' };
-    }
+  const binDir = join(home.workdir, '..', 'opencode-only-bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeOpencode = join(binDir, 'opencode');
+  writeFileSync(fakeOpencode, '#!/bin/sh\nexit 0\n');
+  chmodSync(fakeOpencode, 0o755);
+
+  // The runner must NOT be asked to run node --check when node is off PATH.
+  const runner = new FakeCommandRunner((command) => {
     if (command === 'node') {
       throw new Error('node --check must not run when node is absent');
     }
@@ -438,6 +487,8 @@ test('provision skips node --check when node is absent on PATH', () => {
   });
   const { spawn } = makeHappySpawn();
 
+  const prevPath = process.env['PATH'];
+  process.env['PATH'] = binDir;
   try {
     withEnv(spRoot, () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
@@ -446,26 +497,33 @@ test('provision skips node --check when node is absent on PATH', () => {
       expect(runner.calls.some((c) => c.command === 'node')).toBe(false);
     });
   } finally {
+    if (prevPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = prevPath;
     cleanup();
   }
 });
 
-// B2-opencode-which-guard-dropped: a missing opencode binary fails fast with a
-// clear setup-stage error before any staging or preflight work.
+// H3-opencode-command-v-probe-false-not-found / B2-opencode-which-guard-dropped:
+// a missing opencode binary fails fast with a clear setup-stage error before any
+// staging or preflight work. The probe is real Bun.which over PATH (NOT a faked
+// `command -v` shell builtin, which ENOENTs on Linux and falsely reports
+// not-found); the test makes opencode genuinely absent by pointing PATH at an
+// empty dir.
 test('provision throws ProvisionError when opencode is not on PATH', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
 
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'command' && args[0] === '-v' && args[1] === 'opencode') {
-      return { status: 1, stdout: '', stderr: '' };
-    }
-    return { status: 0, stdout: `/usr/local/bin/${args[1]}\n`, stderr: '' };
-  });
+  // An empty bin dir as the ONLY PATH entry => Bun.which('opencode') is null.
+  const emptyBin = join(home.workdir, '..', 'empty-bin');
+  mkdirSync(emptyBin, { recursive: true });
+
+  const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
 
+  const prevPath = process.env['PATH'];
+  process.env['PATH'] = emptyBin;
   try {
     withEnv(spRoot, () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
@@ -475,6 +533,8 @@ test('provision throws ProvisionError when opencode is not on PATH', () => {
       expect(calls.length).toBe(0);
     });
   } finally {
+    if (prevPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = prevPath;
     cleanup();
   }
 });

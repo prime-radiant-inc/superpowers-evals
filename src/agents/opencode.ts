@@ -18,6 +18,7 @@ import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import {
   defaultSpawn,
+  OpenCodeTimeoutError,
   opencodeEnv,
   runOpencodeCommand,
   type SpawnFn,
@@ -107,14 +108,12 @@ function* walk(root: string): Generator<string> {
   }
 }
 
-// quorum/runner.py:1181-1182 / 1247 — PATH lookups. shutil.which has no direct
-// TS equivalent; probe via the runner (`command -v <binary>`) so the hermetic
-// gate can stub the lookup. Mirrors the kimi adapter's resolveKimiBinary.
-function binaryOnPath(binary: string, runner: CommandRunner): boolean {
-  const probe = runner.run('command', ['-v', binary], {
-    env: { ...envSnapshot() },
-  });
-  return probe.status === 0 && probe.stdout.trim() !== '';
+// quorum/runner.py:1181-1182 / 1247 — PATH lookups, mirroring shutil.which.
+// Bun.which resolves a real PATH entry; a `command -v` shell builtin ENOENTs on
+// Linux (no `command` executable) and would falsely report not-found
+// (H3-opencode-command-v-probe-false-not-found).
+function binaryOnPath(binary: string): boolean {
+  return Bun.which(binary, { PATH: envSnapshot()['PATH'] ?? '' }) !== null;
 }
 
 export class OpenCodeAgent implements CodingAgent {
@@ -145,7 +144,7 @@ export class OpenCodeAgent implements CodingAgent {
     // quorum/runner.py:1181-1182 — fail fast when the opencode binary is absent,
     // before any staging, so a missing binary yields a precise diagnostic instead
     // of an opaque downstream preflight spawn failure.
-    if (!binaryOnPath('opencode', runner)) {
+    if (!binaryOnPath('opencode')) {
       throw new ProvisionError(
         'opencode not found on PATH; cannot run opencode evals',
       );
@@ -252,7 +251,7 @@ export class OpenCodeAgent implements CodingAgent {
     // `shutil.which("node")` guard: a host without node skips the check and
     // proceeds, rather than failing on an unspawnable binary). A non-zero check
     // when node IS present is a hard ProvisionError.
-    if (binaryOnPath('node', runner)) {
+    if (binaryOnPath('node')) {
       const node = getEnv('OPENCODE_NODE_BIN') ?? 'node';
       const nodeCheck = runner.run(node, ['--check', stagedPlugin], {
         env: envSnapshot(),
@@ -327,21 +326,34 @@ export class OpenCodeAgent implements CodingAgent {
       let lastStdout = '';
       let lastStderr = '';
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const result = runOpencodeCommand(
-          [
-            'run',
-            '-m',
-            OPENCODE_MODEL,
-            '--dangerously-skip-permissions',
-            'Reply with EXACTLY OK.',
-          ],
-          {
-            opencodeHome: home,
-            launchCwd: cwd,
-            timeoutMs: 90_000,
-            spawn: this.spawn,
-          },
-        );
+        let result: ReturnType<typeof runOpencodeCommand>;
+        try {
+          result = runOpencodeCommand(
+            [
+              'run',
+              '-m',
+              OPENCODE_MODEL,
+              '--dangerously-skip-permissions',
+              'Reply with EXACTLY OK.',
+            ],
+            {
+              opencodeHome: home,
+              launchCwd: cwd,
+              timeoutMs: 90_000,
+              spawn: this.spawn,
+            },
+          );
+        } catch (e) {
+          // quorum/runner.py:_run_opencode_provider_preflight — a TimeoutExpired
+          // raises on the FIRST timeout; it is NOT swallowed and retried. Surface
+          // it as a setup-stage ProvisionError with the same message.
+          if (e instanceof OpenCodeTimeoutError) {
+            throw new ProvisionError(
+              'opencode provider preflight timed out after 90s',
+            );
+          }
+          throw e;
+        }
         lastExit = result.exitCode;
         lastStdout = result.stdout;
         lastStderr = result.stderr;
