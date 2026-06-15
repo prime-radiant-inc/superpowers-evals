@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { isBatchDir } from './render-batch.ts';
 import { resolveTarget } from './resolve-target.ts';
@@ -192,7 +192,13 @@ const BatchResultSchema = z
   })
   .passthrough();
 
-function batchRows(batchDir: string, resultsRoot: string): CostRow[] {
+function batchRows(batchDir: string): CostRow[] {
+  // A batch always lives at `<out-root>/batches/<id>`, and `run-all` writes its
+  // run dirs at `<out-root>/<run_id>` (run-all/index.ts). So each `run_id` from
+  // results.jsonl resolves against the batch dir's grandparent (the out-root) —
+  // NOT the passed --results-root, which on `quorum costs <batchDir>` defaults
+  // to "results" and points nowhere.
+  const outRoot = resolve(dirname(dirname(batchDir)));
   const text = readFileSync(join(batchDir, 'results.jsonl'), 'utf8');
   const rows: CostRow[] = [];
   for (const line of text.split('\n')) {
@@ -222,7 +228,7 @@ function batchRows(batchDir: string, resultsRoot: string): CostRow[] {
     if (runId === null) {
       continue;
     }
-    const view = readVerdictView(join(resultsRoot, runId));
+    const view = readVerdictView(join(outRoot, runId));
     rows.push(
       view === null
         ? unreadableRow(rec.scenario, rec.coding_agent)
@@ -263,7 +269,7 @@ export function loadCostRows(
 ): CostRow[] {
   const dir = resolveTarget(target, resultsRoot);
   if (isBatchDir(dir)) {
-    return batchRows(dir, resultsRoot);
+    return batchRows(dir);
   }
   const view = readVerdictView(dir);
   const fallback = identityFromRunDirName(runDirName(dir));

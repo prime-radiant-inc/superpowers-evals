@@ -314,6 +314,68 @@ test('loadCostRows on a batch dir yields one row per produced run (skips skipped
   expect(keys).not.toContain('beta/claude');
 });
 
+// The real on-disk layout `run-all` produces: run dirs live at
+// `<out-root>/<run_id>` and the batch dir at `<out-root>/batches/<id>`. But
+// `quorum costs <batchDir>` is invoked with the DEFAULT --results-root, which is
+// NOT the out-root. So the run dirs must be resolved against the batch dir's
+// grandparent (the out-root), never the passed results-root.
+function makeRealisticBatch(): { batchDir: string; outRoot: string } {
+  const outRoot = mkdtempSync(join(tmpdir(), 'costs-realbatch-'));
+  const batchDir = join(outRoot, 'batches', 'b-real');
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'b-real',
+      started_at: '2026-06-12T00:00:00Z',
+      finished_at: '2026-06-12T00:30:00Z',
+      coding_agents: ['claude', 'gemini'],
+    }),
+  );
+  const records = [
+    { scenario: 'alpha', coding_agent: 'claude', run_id: 'run-real-claude' },
+    { scenario: 'alpha', coding_agent: 'gemini', run_id: 'run-real-gemini' },
+  ];
+  writeFileSync(
+    join(batchDir, 'results.jsonl'),
+    `${records.map((r) => JSON.stringify(r)).join('\n')}\n`,
+  );
+  // Run dirs at <out-root>/<run_id>, NOT under <out-root>/batches/.
+  writeRunDir(
+    outRoot,
+    'run-real-claude',
+    pricedVerdict({
+      scenario: 'alpha',
+      agent: 'claude',
+      costUsd: 2,
+      total: 5000,
+    }),
+  );
+  writeRunDir(
+    outRoot,
+    'run-real-gemini',
+    partialVerdict({ scenario: 'alpha', agent: 'gemini' }),
+  );
+  return { batchDir, outRoot };
+}
+
+test('loadCostRows resolves batch run dirs via the out-root, not the passed results-root', () => {
+  const { batchDir } = makeRealisticBatch();
+  // A bogus results-root the run dirs do NOT live under — mirrors `quorum
+  // costs <batchDir>` with the default --results-root ("results").
+  const bogusResultsRoot = mkdtempSync(join(tmpdir(), 'costs-bogus-'));
+  const rows = loadCostRows(batchDir, bogusResultsRoot);
+  const claude = rows.find(
+    (r) => r.scenario === 'alpha' && r.agent === 'claude',
+  );
+  expect(claude).toBeDefined();
+  // The priced run is found (resolved via the batch grandparent) — NOT an
+  // unreadable/unpriced row.
+  expect((claude as CostRow).coding.unpriced).toBe(false);
+  expect((claude as CostRow).coding.estCostUsd).toBe(2);
+  expect((claude as CostRow).coding.tokensTotal).toBe(5000);
+});
+
 test('loadCostRows resolves a bare batch id under resultsRoot/batches', () => {
   const { resultsRoot } = makeBatch();
   const rows = loadCostRows('b-001', resultsRoot);
