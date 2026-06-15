@@ -1,9 +1,9 @@
-// check/record.ts — drop-in TS equivalent of quorum/bin/_record.
+// check/record.ts — emits one structured check record per call.
 //
 // Reads QUORUM_RECORD_SINK from the environment. When unset, all calls are
 // no-ops so callers don't need to guard around it.
 //
-// Emitted JSON line shape (mirrors the shell _record_emit format):
+// Emitted JSON line shape:
 //   {"check":<string>,"args":<string[]>,"negated":false,"passed":<bool>,"detail":<string|null>}
 
 import { appendFileSync } from 'node:fs';
@@ -56,7 +56,7 @@ export function recordFail(
 /**
  * Emit a record with an explicit `negated` flag — the `not` path's single
  * negated record (check=<inner>, negated:true), and `not`'s own refusal record
- * (check=not, negated:false). Mirrors bin/_record's record_negated.
+ * (check=not, negated:false).
  */
 export function recordWith(
   check: string,

@@ -6,8 +6,6 @@ function escapeRegex(s: string): string {
 }
 
 /**
- * Faithful TS port of quorum/bin/_skill_predicate.jq `is_skill_invocation`.
- *
  * Returns true when the tool call represents an agent loading skill `name`
  * whose directory segment is `dir`. Three patterns are recognized:
  *

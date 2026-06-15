@@ -4,13 +4,13 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 // Per-dialect session-log cwd filtering. codex/kimi/pi store sessions under a
 // shared home tree, so a parallel run's snapshot diff can surface another run's
 // logs. Each filter drops logs whose recorded cwd does not match the run's
-// launch cwd. Ports filter_{codex,pi,kimi}_logs_by_cwd from quorum/normalizers.py.
-// Dialects without a filter (claude/codex-isolated/gemini/opencode/copilot/
-// antigravity) pass through unchanged.
+// launch cwd. Dialects without a filter (claude/codex-isolated/gemini/opencode/
+// copilot/antigravity) pass through unchanged.
 
-// Resolve symlinks like Python os.path.realpath (macOS hands out /var/folders
-// workdirs that resolve to /private/var/...). Falls back to a plain resolve when
-// the path does not exist on disk, so a recorded-but-absent cwd still compares.
+// Resolve symlinks so two paths to the same location compare equal (macOS hands
+// out /var/folders workdirs that resolve to /private/var/...). Falls back to a
+// plain resolve when the path does not exist on disk, so a recorded-but-absent
+// cwd still compares.
 function realPath(p: string): string {
   try {
     return realpathSync(p);
@@ -75,7 +75,7 @@ function filterPiLogsByCwd(paths: string[], targetCwd: string): string[] {
 }
 
 // The kimi home for a wire log is the parent of the nearest ancestor dir named
-// "sessions". Mirrors _kimi_home_for_log.
+// "sessions".
 function kimiHomeForLog(path: string): string | undefined {
   let dir = dirname(path);
   for (;;) {

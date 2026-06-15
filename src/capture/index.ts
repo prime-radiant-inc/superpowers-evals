@@ -20,8 +20,8 @@ import { normalizePi } from '../normalize/pi.ts';
 import { estimateTrajectory, kimiToolResultTotalBytes } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
 
-// Backend (coding-agent name) -> ATIF normalizer. Mirrors the cli/normalize.ts
-// dispatch table; all eight dialects produce an ATIF Trajectory.
+// Backend (coding-agent name) -> ATIF normalizer; all eight dialects produce an
+// ATIF Trajectory.
 type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
 
 const NORMALIZERS: Record<string, AtifNormalizer> = {
@@ -85,8 +85,8 @@ export interface CaptureArgs {
   readonly normalizer: string;
   readonly runDir: string;
   // The run's launch cwd. codex/kimi/pi share a home tree, so new logs are
-  // filtered to those whose recorded cwd matches this before normalizing
-  // (parity with quorum/capture.py). Other dialects ignore it.
+  // filtered to those whose recorded cwd matches this before normalizing.
+  // Other dialects ignore it.
   readonly launchCwd: string;
 }
 
@@ -136,7 +136,7 @@ interface OrderedStep {
  *   step keeps its file-relative position instead of sinking. Only a file with
  *   NO timestamps at all sinks to the tail (kept in input order). The sort key
  *   is `(noEffectiveTs, effectiveTs, fileIndex, inFileIndex)`. This is uniform
- *   across dialects; it subsumes the old gemini-only timestamp-ordering case.
+ *   across dialects.
  * - `step_id` is renumbered sequentially from 1 across the merged set.
  * - Each step's `tool_calls`/`observation` are kept intact; observations already
  *   reference tool_call_ids in their own step, so renumbering step_ids preserves
@@ -326,19 +326,19 @@ export function captureToolCallsWithRetry(
 // post-drive diff to the run's own logs; these detectors flag the logs that were
 // EXCLUDED because they landed in the wrong cwd — the smoking gun that the QA
 // agent skipped `cd $QUORUM_AGENT_CWD` before launching the coding-agent. The
-// Wave-2b runner uses a non-empty return to compose an indeterminate verdict
-// with stage="qa-agent-misconfigured" instead of a generic capture failure.
-// Each detector returns only file PATHS (never log contents), so they cannot
-// leak secrets from a session log into a verdict. Ports the find_misplaced_* /
-// find_unusable_* / diagnose_kimi_* helpers from quorum/{normalizers,capture}.py.
+// runner uses a non-empty return to compose an indeterminate verdict with
+// stage="qa-agent-misconfigured" instead of a generic capture failure. Each
+// detector returns only file PATHS (never log contents), so they cannot leak
+// secrets from a session log into a verdict.
 // ---------------------------------------------------------------------------
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Resolve symlinks like Python os.path.realpath; falls back to a plain resolve
- *  when the path does not exist, so a recorded-but-absent cwd still compares. */
+/** Resolve symlinks so two paths to the same location compare equal; falls back
+ *  to a plain resolve when the path does not exist, so a recorded-but-absent cwd
+ *  still compares. */
 function realPath(p: string): string {
   try {
     return realpathSync(p);
@@ -452,7 +452,7 @@ export function detectUnusablePiSessions(
 }
 
 // The kimi home for a wire log is the parent of the nearest ancestor dir named
-// "sessions". Mirrors _kimi_home_for_log.
+// "sessions".
 function kimiHomeForLog(path: string): string | undefined {
   let dir = dirname(path);
   for (;;) {
@@ -585,8 +585,7 @@ export function detectKimiCwdMismatch(
 }
 
 /** Parse an ISO-8601 timestamp string to epoch milliseconds, treating a `Z`
- *  suffix as `+00:00` (parity with Python datetime.fromisoformat). Returns null
- *  on any parse failure. */
+ *  suffix as `+00:00`. Returns null on any parse failure. */
 function isoToMs(ts: string): number | null {
   const normalized = ts.endsWith('Z') ? `${ts.slice(0, -1)}+00:00` : ts;
   const ms = new Date(normalized).getTime();
@@ -597,8 +596,7 @@ function isoToMs(ts: string): number | null {
  *  no timestamps are found. Scans every JSONL row for an ISO-8601 `timestamp`
  *  string (Claude/Codex, parsed via isoToMs) AND a numeric epoch-ms `time` value
  *  (Kimi; booleans excluded), then returns max(max - min, 0). Unreadable files,
- *  blank/non-JSON lines, and non-object rows are skipped. Ports
- *  quorum/timing.py session_logs_duration_ms. */
+ *  blank/non-JSON lines, and non-object rows are skipped. */
 export function sessionDurationMs(files: readonly string[]): number | null {
   const points: number[] = [];
   for (const filePath of files) {

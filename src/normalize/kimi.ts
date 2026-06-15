@@ -229,7 +229,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // The injection origin of a kimi row: a top-level `origin`, else the message's
-// `origin` (parity with Python _kimi_injection_origin).
+// `origin`.
 function kimiInjectionOrigin(row: Record<string, unknown>): unknown {
   const origin = row['origin'];
   if (origin !== undefined && origin !== null) {
@@ -240,7 +240,7 @@ function kimiInjectionOrigin(row: Record<string, unknown>): unknown {
 }
 
 // Flatten a kimi message's content (string, or an array of strings / {text}
-// parts) into one string (parity with Python _kimi_message_text).
+// parts) into one string.
 function kimiMessageText(row: Record<string, unknown>): string {
   const message = row['message'];
   if (!isRecord(message)) {
@@ -266,9 +266,9 @@ function kimiMessageText(row: Record<string, unknown>): string {
 
 /**
  * Whether any kimi wire log proves the Superpowers `plugin_session_start`
- * injection fired (parity with quorum kimi_logs_have_superpowers_session_start).
- * Accepts either a direct `event.type == plugin_session_start` row carrying
- * plugin=superpowers + skill=using-superpowers, OR an injection-origin variant
+ * injection fired. Accepts either a direct `event.type == plugin_session_start`
+ * row carrying plugin=superpowers + skill=using-superpowers, OR an
+ * injection-origin variant
  * whose message text contains `<plugin_session_start` + superpowers +
  * using-superpowers. Unreadable files and blank/non-JSON/non-object lines are
  * skipped without throwing. This is the core proof Superpowers loaded for a kimi

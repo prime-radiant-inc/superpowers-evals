@@ -1,6 +1,6 @@
 // check/fs-verbs.ts — one exported function per non-transcript check verb.
 //
-// These mirror the old bin/ bash tools (file-exists, file-contains,
+// Covers the filesystem/git/env verbs (file-exists, file-contains,
 // command-succeeds, git-*, assert-checkout-clean, requires-tool) and the 6
 // per-harness bootstrap checks. Each verb is a pure(ish) function over a
 // CheckContext (cwd + env) and the positional args, returning a CheckOutcome.
@@ -61,8 +61,7 @@ function broken(detail: string): CheckOutcome {
 // file-exists <glob>
 // ---------------------------------------------------------------------------
 // Pass iff at least one path matches the glob (workdir-relative). Supports a
-// single `**` recursive segment (the bash tool routed `**` through find because
-// macOS bash 3.2 has no globstar). Literal paths with no glob chars match iff
+// single `**` recursive segment. Literal paths with no glob chars match iff
 // the path exists.
 export function verbFileExists(
   args: string[],
@@ -77,8 +76,7 @@ export function verbFileExists(
 }
 
 /**
- * Resolve a workdir-relative glob to existing paths. Mirrors the bash
- * file-exists semantics:
+ * Resolve a workdir-relative glob to existing paths:
  *   - a literal path (no glob chars) matches iff it exists;
  *   - `*` / `?` / `[...]` expand within a single path segment;
  *   - a single `**` segment recurses (find -name / -path equivalent).
@@ -105,7 +103,7 @@ function hasGlobChars(p: string): boolean {
 // Expand a path split into segments, where each segment may be a glob. Returns
 // workdir-relative paths that exist at each expansion step. Leading-empty
 // segments (absolute-style patterns) are not supported (patterns are
-// workdir-relative), matching the bash tool.
+// workdir-relative).
 function expandSegments(
   cwd: string,
   prefix: string,
@@ -141,7 +139,7 @@ function expandSegments(
 }
 
 // A `**` recursive glob: split into the literal prefix (dirs before the first
-// `**/`) and the suffix (after the last `**/`). Mirrors the bash find logic.
+// `**/`) and the suffix (after the last `**/`).
 function globStar(pattern: string, cwd: string): string[] {
   const lastIdx = pattern.lastIndexOf('**/');
   const suffix =
@@ -246,7 +244,7 @@ function globToRegexSource(glob: string, starCrossesSlash: boolean): string {
 // file-contains <path> <ere>
 // ---------------------------------------------------------------------------
 // Pass iff the file exists and at least one line matches the extended regex
-// (grep -qE parity). POSIX bracket classes are translated to JS equivalents.
+// (grep -qE semantics). POSIX bracket classes are translated to JS equivalents.
 export function verbFileContains(
   args: string[],
   ctx: CheckContext,
@@ -271,7 +269,7 @@ export function verbFileContains(
 // command-succeeds <command>
 // ---------------------------------------------------------------------------
 // Run the command via `bash -c`; pass iff it exits 0. On failure, the first 500
-// bytes of combined stdout+stderr become the detail (parity with the bash tool).
+// bytes of combined stdout+stderr become the detail.
 export function verbCommandSucceeds(
   args: string[],
   ctx: CheckContext,
@@ -288,9 +286,8 @@ export function verbCommandSucceeds(
   if ((proc.status ?? 0) === 0) {
     return pass();
   }
-  // Parity with the bash tool's `detail=$(head -c 500 "$tmpfile")`: take the
-  // first 500 bytes of combined stdout+stderr, then strip trailing newlines
-  // (command substitution drops them).
+  // Take the first 500 bytes of combined stdout+stderr, then strip trailing
+  // newlines.
   const combined = `${proc.stdout ?? ''}${proc.stderr ?? ''}`;
   const detail = combined.slice(0, 500).replace(/\n+$/, '');
   return fail(`exit non-zero: ${detail}`);

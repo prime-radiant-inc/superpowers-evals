@@ -4,7 +4,7 @@
 // The CLI maps that to recordPass/recordFail and an exit code.
 //
 // Index = position in the flattened calls list (0-based); detail reports
-// line numbers as index+1 to match the shell tools.
+// line numbers as index+1.
 
 import type { ToolCallView } from '../atif/project.ts';
 import {
@@ -366,9 +366,9 @@ export function verbWorktreeCreated(
 // ---------------------------------------------------------------------------
 // tool-match-before-tool-match <toolA> <argReA> <toolB> <argReB>
 //
-// The shell tool matches args.command if present, otherwise falls back to
-// compact JSON of args. We replicate that: if args.command exists as a
-// string, use it; otherwise use JSON.stringify(args).
+// Match against args.command if present, otherwise fall back to compact JSON
+// of args: if args.command exists as a string, use it; otherwise use
+// JSON.stringify(args).
 // ---------------------------------------------------------------------------
 function matchText(call: ToolCallView): string {
   const cmd = call.args['command'];
@@ -429,14 +429,13 @@ export function verbToolMatchBeforeToolMatch(
 // ---------------------------------------------------------------------------
 // tool-arg-match <tool> [--eq key=value]... [--matches key=regex]... [--ignore-case]
 //
-// Structured replacement for the old jq-driven shell tool. PASS iff THERE
-// EXISTS a call with tool === <tool> whose args satisfy ALL given matchers.
-// This is a positive existence assertion, so it naturally fails on an empty
-// transcript (no call can satisfy it) — no empty-guard is needed, matching
-// the shell original.
+// Structured argument matcher. PASS iff THERE EXISTS a call with tool ===
+// <tool> whose args satisfy ALL given matchers. This is a positive existence
+// assertion, so it naturally fails on an empty transcript (no call can satisfy
+// it) — no empty-guard is needed.
 //
-// Matcher key syntax supports comma-separated field-fallback keys, mirroring
-// jq's `(.path // .file_path // "")`: the FIRST key present in args is used
+// Matcher key syntax supports comma-separated field-fallback keys
+// (`.path // .file_path // ""`): the FIRST key present in args is used
 // (empty string if none present), and that value is tested.
 //
 //   --eq key[,key2,...]=value     String(value) === <value>
@@ -489,18 +488,17 @@ export function parseToolArgMatchArgs(args: string[]): ParsedToolArgMatch {
         expected,
       });
     }
-    // Unknown token — ignore (keeps parity with lenient shell parsing).
+    // Unknown token — ignore (lenient parsing).
   }
 
   return { tool, matchers, ignoreCase };
 }
 
 /**
- * Resolve the value to test for a matcher's keys, mirroring jq's `//` fallback
+ * Resolve the value to test for a matcher's keys via `//`-style fallback
  * (`.path // .file_path // ""`): the first key whose value is "present" wins,
- * where jq treats `null` and `false` (and a missing key) as absent and falls
- * through. An empty-string value IS present (jq keeps `""`). Returns "" if no
- * key resolves.
+ * where `null` and `false` (and a missing key) count as absent and fall
+ * through. An empty-string value IS present. Returns "" if no key resolves.
  */
 function firstPresentValue(
   args: Record<string, unknown>,

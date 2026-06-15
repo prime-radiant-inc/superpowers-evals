@@ -1,9 +1,9 @@
 // check/dispatch.ts — the single typed check-tool dispatcher.
 //
-// Generalizes the check-transcript precedent: every check verb (the old bin/
-// bash tools AND the transcript verbs) resolves to one pure function returning a
-// CheckOutcome. The CLI (src/cli/check-tool.ts) maps the outcome to a record +
-// exit code; `negate` runs an inner verb in-process to implement `not`.
+// Every check verb (the filesystem/git/env verbs AND the transcript verbs)
+// resolves to one pure function returning a CheckOutcome. The CLI
+// (src/cli/check-tool.ts) maps the outcome to a record + exit code; `negate`
+// runs an inner verb in-process to implement `not`.
 //
 // The 127 crash band is preserved: a broken/under-specified check returns
 // {broken:true}, which the CLI turns into exit 127 (non-invertible) so it can't
@@ -38,7 +38,7 @@ export type { CheckContext, CheckOutcome };
 export type VerbFn = (args: string[], ctx: CheckContext) => CheckOutcome;
 
 // The non-transcript check vocabulary. The record's `check` field is the verb
-// name (== the bin/ shim basename), preserving byte-identical records.
+// name.
 export const FS_VERBS: Record<string, VerbFn> = {
   'file-exists': verbFileExists,
   'file-contains': verbFileContains,
@@ -88,16 +88,16 @@ export function runVerb(
 }
 
 /**
- * Implement `not <inner> [args...]` in-process (the old bin/not).
+ * Implement `not <inner> [args...]` in-process.
  *
- * Three load-bearing rules, preserved:
+ * Three load-bearing rules:
  *   1. On a normal inner pass/fail, emit ONE record on the inner's behalf —
  *      check=<inner>, negated:true, passed=<inverted>, detail=null. Exit 0 iff
  *      the inner FAILED (the negation passed).
- *   2. Refuse to invert a MISSING tool (unknown inner verb). bin/not records a
- *      FAIL under its own name (`not`) and exits 1 — an honest failed check, NOT
- *      the 127 crash band (a 127 would crash the whole phase via runPhase's
- *      heuristic; bin/not deliberately uses exit 1).
+ *   2. Refuse to invert a MISSING tool (unknown inner verb). Record a FAIL under
+ *      `not`'s own name and exit 1 — an honest failed check, NOT the 127 crash
+ *      band (a 127 would crash the whole phase via runPhase's heuristic; `not`
+ *      deliberately uses exit 1).
  *   3. Refuse to invert a CRASH (the inner verb returned broken, or threw).
  *      Same handling as rule 2: record FAIL under `not`, exit 1.
  *
@@ -126,8 +126,8 @@ export function negate(args: string[], ctx: CheckContext): NegateResult {
   const inner = args[0] ?? '';
   const innerArgs = args.slice(1);
 
-  // Rule 2: a missing inner tool must not be invertible. bin/not records under
-  // its own name (`not`) with a fail, and exits 1.
+  // Rule 2: a missing inner tool must not be invertible. Record under
+  // `not`'s own name with a fail, and exit 1.
   const known = inner === 'check-transcript' || inner in FS_VERBS;
   if (!known) {
     return {

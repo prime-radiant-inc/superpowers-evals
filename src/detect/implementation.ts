@@ -1,11 +1,9 @@
 import type { ToolCallView } from '../atif/project.ts';
 
 /**
- * Faithful TS port of quorum/bin/_implementation_path.jq.
- *
- * canonical_string: if value is a string, try JSON.parse() and use result;
- * on parse failure use raw string. If not a string, use value as-is. Then
- * coerce to string via String().
+ * Canonicalize an argument value to a string: if value is a string, try
+ * JSON.parse() and use the result; on parse failure use the raw string. If not
+ * a string, use the value as-is. Then coerce to string via String().
  */
 function canonicalString(value: unknown): string {
   if (typeof value === 'string') {
@@ -21,7 +19,7 @@ function canonicalString(value: unknown): string {
 
 /**
  * Extract the canonical file-path from a tool call's arguments.
- * Priority order mirrors the jq definition:
+ * Priority order:
  *   file_path, path, TargetFile, target_file, filePath,
  *   AbsolutePath, Path, TargetPath, or "" if none present.
  */
@@ -46,9 +44,8 @@ const WORKDIR_SEPARATOR = '/coding-agent-workdir/';
  * Return the path relative to the coding-agent workdir, or "" if the path
  * is empty, absolute-but-not-under-workdir, or unavailable.
  *
- * Matches jq `split("/coding-agent-workdir/") | last` semantics — if the
- * literal segment appears multiple times, the portion after the LAST one
- * is returned.
+ * Splits on the `/coding-agent-workdir/` segment — if that literal segment
+ * appears multiple times, the portion after the LAST one is returned.
  */
 export function implementationRelpath(call: ToolCallView): string {
   const p = toolPath(call);
@@ -56,7 +53,6 @@ export function implementationRelpath(call: ToolCallView): string {
 
   if (p.includes(WORKDIR_SEPARATOR)) {
     const parts = p.split(WORKDIR_SEPARATOR);
-    // `last` in jq = parts[parts.length - 1]
     return parts[parts.length - 1] ?? '';
   }
 

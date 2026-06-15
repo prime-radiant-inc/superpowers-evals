@@ -38,8 +38,8 @@ interface GeminiMessage {
  *
  * Accepts `timestamp`, `createdAt`, or `time` (in that priority order).
  * String values are used verbatim; numeric values (epoch milliseconds) are
- * converted to an ISO-8601 string so the merge in quorum/capture.py can
- * order steps from multiple logs by event time.
+ * converted to an ISO-8601 string so the merge in src/capture/ can order
+ * steps from multiple logs by event time.
  */
 function extractTimestamp(message: GeminiMessage): string | undefined {
   const raw = message['timestamp'] ?? message['createdAt'] ?? message['time'];
@@ -96,10 +96,10 @@ function parseGeminiMessages(raw: string): GeminiMessage[] {
     if (typeof data === 'object' && data !== null) {
       const obj = data as Record<string, unknown>;
       if (!Array.isArray(data) && 'messages' in obj) {
-        // Match quorum/normalizers.py _gemini_messages: when the envelope has a
-        // `messages` key, iterate ONLY that value (filtering to dicts). A
-        // present-but-non-array `messages` yields no messages — the envelope
-        // object itself is NOT treated as a single message.
+        // When the envelope has a `messages` key, iterate ONLY that value
+        // (filtering to dicts). A present-but-non-array `messages` yields no
+        // messages — the envelope object itself is NOT treated as a single
+        // message.
         const inner = obj['messages'];
         if (Array.isArray(inner)) {
           for (const m of inner) {
@@ -134,9 +134,8 @@ function parseGeminiMessages(raw: string): GeminiMessage[] {
 function normalizeGeminiToolCall(tc: GeminiToolCall): AtifToolCall {
   const geminiName = tc.name ?? '';
   const canonical = GEMINI_TOOL_MAP[geminiName] ?? geminiName;
-  // Match quorum/normalizers.py _normalize_gemini_tool_call: a dict `args` is
-  // copied; any non-dict (string/number/array/null) is wrapped as
-  // {raw_args: <value>}, preserving the raw payload.
+  // A dict `args` is copied; any non-dict (string/number/array/null) is
+  // wrapped as {raw_args: <value>}, preserving the raw payload.
   const rawArgs: unknown = tc.args ?? {};
   const isDict =
     typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs);

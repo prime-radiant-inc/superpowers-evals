@@ -40,8 +40,8 @@ export function mergeEstimates(
   let pricingAsOf: string | null = null;
 
   for (const est of estimates) {
-    // Keep the first TRUTHY pricing_as_of (parity with Python's `or`): an
-    // empty-string from an earlier estimate is skipped for a later real date.
+    // Keep the first TRUTHY pricing_as_of: an empty-string from an earlier
+    // estimate is skipped for a later real date.
     pricingAsOf = pricingAsOf || est.pricing_as_of;
     for (const m of est.unpriced_models) {
       unpriced.add(m);
@@ -135,8 +135,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 /** Sum the UTF-8 byte length of every tool.result output string in a kimi wire
  *  log: context.append_loop_event rows whose event.type is "tool.result" and
  *  whose result.output is a string. Unreadable files, blank/non-JSON lines, and
- *  rows of any other shape contribute zero. Ports
- *  quorum/obol_capture.py _kimi_tool_result_total_bytes. */
+ *  rows of any other shape contribute zero. */
 export function kimiToolResultTotalBytes(file: string): number {
   let text: string;
   try {
