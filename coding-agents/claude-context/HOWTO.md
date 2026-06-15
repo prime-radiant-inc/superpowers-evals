@@ -8,9 +8,9 @@ itself an AI agent; what appears on screen is its work.
 Your bash starts in a scratch directory, NOT the workdir quorum
 prepared. quorum has generated a launcher that handles everything — it
 cds into the prepared git repo, sources the per-run Claude auth env,
-sets the per-run isolated `CLAUDE_CONFIG_DIR`, and starts Claude with
-the plugin dir, model, and permission flag. Type **this one line,
-verbatim** as your first action:
+pins a throwaway `$HOME` for the run, and starts Claude with the plugin
+dir, model, and permission flag. Type **this one line, verbatim** as
+your first action:
 
 ```
 "$QUORUM_LAUNCH_AGENT"
@@ -20,24 +20,26 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && source <per-run-claude-env> && CLAUDE_CONFIG_DIR=<per-run-isolated-dir> claude --dangerously-skip-permissions --plugin-dir <superpowers-root> --model "$CLAUDE_MODEL"
+cd <prepared-workdir> && source <per-run-claude-env> && HOME=<per-run-throwaway-home> claude --dangerously-skip-permissions --plugin-dir <superpowers-root> --model "$CLAUDE_MODEL"
 ```
 
 Because the `cd` and the flags live inside the launcher, you cannot skip
 the cd into the prepared workdir. Do NOT hand-type a bare `claude` or
 reconstruct the line yourself. Just run the one line above. (The
-isolated `CLAUDE_CONFIG_DIR` ensures no user-installed plugins or
-projects from the host machine affect this run.)
+throwaway `$HOME` ensures no user-installed plugins or projects from the
+host machine affect this run.)
 
-The `CLAUDE_CONFIG_DIR`, Claude auth env file, and `SUPERPOWERS_ROOT`
+The throwaway `$HOME`, Claude auth env file, and `SUPERPOWERS_ROOT`
 values are burned into this HOWTO at runtime by quorum — they look like
 env-var refs but quorum has already substituted absolute paths. tmux
 strips arbitrary env from new sessions, which is why we don't rely on
 inheritance.
 
-`CLAUDE_CONFIG_DIR` points at a per-run isolated `.claude` dir (seeded
-with dialog-bypass state) so no user-installed plugins or projects from
-the host machine affect this run.
+Claude reads its config from its `$HOME/.claude` default, a per-run
+isolated dir quorum seeds (with dialog-bypass state) before launch, so
+no user-installed plugins or projects from the host machine affect this
+run. The `$CLAUDE_CONFIG_DIR` paths below are burned in by quorum at
+runtime to that same isolated `.claude` dir.
 
 ## Observing what Claude is doing
 

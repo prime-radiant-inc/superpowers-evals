@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # quorum-generated launcher for Claude Code (the agent under test).
 #
-# The cd, Claude auth env, CLAUDE_CONFIG_DIR, plugin-dir, and flags are baked
+# The cd, Claude auth env, throwaway-$HOME pin, plugin-dir, and flags are baked
 # in here so the QA agent launches Claude with ONE token and cannot skip the
 # prepared workdir. quorum substitutes the $… values below at runtime, so the
 # installed copy contains literal absolute paths (no env inheritance needed —
 # tmux strips env from new sessions).
+#
+# No CLAUDE_CONFIG_DIR is set: the launcher pins HOME to the throwaway home via
+# $QUORUM_HOME_ENV, and provisioning seeds the config INTO <HOME>/.claude
+# (claude.yaml home_config_subdir: ".claude"). Claude finds its config and
+# writes its transcript under its $HOME/.claude default, so the config dir need
+# not be threaded through the launcher.
 #
 # `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID` strips the launching Claude Code
 # session's identity. Claude Code (>=2.1.166) skips writing its session
@@ -22,8 +28,8 @@
 # detection, so capture stays robust across claude versions.
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID HOME="$QUORUM_AGENT_HOME" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 source "$CLAUDE_ENV_FILE"
-exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID $QUORUM_HOME_ENV CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
+exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID $QUORUM_HOME_ENV CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
