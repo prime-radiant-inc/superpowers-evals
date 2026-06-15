@@ -149,6 +149,27 @@ test('run_shell_command maps to Bash', () => {
   expect(tc.arguments['command']).toBe('git status');
 });
 
+test('invoke_agent maps to Agent (subagent dispatch)', () => {
+  // gemini dispatches subagents via `invoke_agent`. Without this alias the
+  // canonical `tool-called Agent` check reads zero Agent calls and a run that
+  // correctly used subagent-driven-development is scored as a false failure.
+  const raw = JSON.stringify({
+    type: 'gemini',
+    toolCalls: [
+      {
+        id: 'agent-1',
+        name: 'invoke_agent',
+        args: { description: 'implement task 1', prompt: 'You are…' },
+        status: 'success',
+      },
+    ],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  const tc = traj.steps[0]!.tool_calls![0]!;
+  expect(tc.function_name).toBe('Agent');
+});
+
 test('JSON messages format: maps all expected tool names', () => {
   const traj = normalizeGemini(messagesJson, '0.1.18');
   const r = validateTrajectory(traj);
