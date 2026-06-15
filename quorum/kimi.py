@@ -40,8 +40,11 @@ _SENSITIVE_ENV_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
 _MIN_SENSITIVE_VALUE_LEN = 6
 
 
-def resolve_kimi_binary(binary: str) -> str:
-    resolved = shutil.which(binary)
+def resolve_kimi_binary(binary: str, env: Mapping[str, str] | None = None) -> str:
+    if env is None:
+        resolved = shutil.which(binary)
+    else:
+        resolved = shutil.which(binary, path=env.get("PATH", os.defpath))
     if resolved is None:
         raise KimiConfigError(f"{binary!r} not found on PATH; cannot run Kimi evals")
     return resolved

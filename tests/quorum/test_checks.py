@@ -140,3 +140,25 @@ def test_run_phase_omits_harness_run_dir_when_none(tmp_path: Path):
     )
     assert exit_code == 0
     assert len(records) == 1 and records[0].passed
+
+
+def test_run_phase_env_base_replaces_ambient_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-poison")
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    checks_sh = tmp_path / "checks.sh"
+    checks_sh.write_text(
+        "pre() { :; }\n"
+        "post() { command-succeeds 'test -z \"${ANTHROPIC_API_KEY:-}\"'; }\n"
+    )
+
+    records, exit_code = run_phase(
+        checks_sh=checks_sh,
+        phase="post",
+        workdir=workdir,
+        quorum_bin=Path("bin").resolve(),
+        env_base={"PATH": "/usr/bin:/bin"},
+    )
+
+    assert exit_code == 0
+    assert len(records) == 1 and records[0].passed

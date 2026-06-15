@@ -45,6 +45,58 @@ def test_opencode_run_env_scrubs_harness_paths_and_preserves_provider_env(tmp_pa
     assert "QUORUM_AGENT_CWD" not in env
 
 
+def test_opencode_run_env_managed_mode_ignores_ambient_provider_poison(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-poison")
+    monkeypatch.setenv("PATH", "/bin")
+
+    env = opencode_run_env(home)
+
+    assert env["PATH"] == "/bin"
+    assert "OPENAI_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_opencode_run_env_managed_mode_uses_explicit_env_base(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+
+    env = opencode_run_env(
+        home,
+        env_base={
+            "PATH": "/usr/bin:/bin",
+            "OPENAI_API_KEY": "profile-key",
+            "QUORUM_TARGET_ENV_KEYS": "OPENAI_API_KEY",
+        },
+    )
+
+    assert env["OPENAI_API_KEY"] == "profile-key"
+
+
+def test_opencode_run_env_managed_env_base_keeps_only_target_provider_keys(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("QUORUM_MANAGED_HOST", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+
+    env = opencode_run_env(
+        home,
+        env_base={
+            "PATH": "/usr/bin:/bin",
+            "ANTHROPIC_API_KEY": "profile-key",
+            "OPENAI_API_KEY": "wrong-target-key",
+            "QUORUM_TARGET_ENV_KEYS": "ANTHROPIC_API_KEY",
+        },
+    )
+
+    assert env["ANTHROPIC_API_KEY"] == "profile-key"
+    assert "OPENAI_API_KEY" not in env
+
+
 def _completed(cmd, kwargs, stdout, stderr="", returncode=0):
     """Mimic run_opencode_command's seam: stdout goes to the file, not the pipe."""
     kwargs["stdout"].write(stdout)

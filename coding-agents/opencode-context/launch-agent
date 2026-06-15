@@ -18,6 +18,9 @@ for name in \
   GEMINI_API_KEY GOOGLE_API_KEY \
   AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+  if [[ "${QUORUM_MANAGED_HOST:-}" == "1" && ",${QUORUM_TARGET_ENV_KEYS:-}," != *",$name,"* ]]; then
+    continue
+  fi
   if [[ -n "${!name-}" ]]; then
     env_args+=("$name=${!name}")
   fi

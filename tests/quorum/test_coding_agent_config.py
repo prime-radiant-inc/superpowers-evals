@@ -372,6 +372,59 @@ class TestLoadCodingAgentConfig:
         with pytest.raises(CodingAgentConfigError, match="model must be a string"):
             load_coding_agent_config(path)
 
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("name", 42, "name must be a string"),
+            ("binary", 42, "binary must be a string"),
+            ("binary", ["codex"], "binary must be a string"),
+            ("agent_config_env", ["CODEX_HOME"], "agent_config_env must be a string"),
+            ("session_log_dir", ["${CODEX_HOME}/sessions"], "session_log_dir must be a string"),
+            ("session_log_glob", 42, "session_log_glob must be a string"),
+            ("normalizer", ["codex"], "normalizer must be a string"),
+            ("runtime_family", ["codex"], "runtime_family must be a string"),
+            ("max_time", 10, "max_time must be a string"),
+            ("project_prompt", ["prompt.md"], "project_prompt must be a string"),
+        ],
+    )
+    def test_string_fields_must_be_strings(self, tmp_path, field, value, message):
+        doc = {
+            "name": "codex",
+            "binary": "codex",
+            "agent_config_env": "CODEX_HOME",
+            "session_log_dir": "${CODEX_HOME}/sessions",
+            "session_log_glob": "*.jsonl",
+            "normalizer": "codex",
+            "required_env": [],
+        }
+        doc[field] = value
+        path = _write(tmp_path, "codex", doc)
+
+        with pytest.raises(CodingAgentConfigError, match=message):
+            load_coding_agent_config(path)
+
+    @pytest.mark.parametrize(
+        "value",
+        [42, "SUPERPOWERS_ROOT", [["SUPERPOWERS_ROOT"]], [""]],
+    )
+    def test_required_env_must_be_list_of_strings(self, tmp_path, value):
+        path = _write(
+            tmp_path,
+            "codex",
+            {
+                "name": "codex",
+                "binary": "codex",
+                "agent_config_env": "CODEX_HOME",
+                "session_log_dir": "${CODEX_HOME}/sessions",
+                "session_log_glob": "*.jsonl",
+                "normalizer": "codex",
+                "required_env": value,
+            },
+        )
+
+        with pytest.raises(CodingAgentConfigError, match="required_env must be"):
+            load_coding_agent_config(path)
+
     def test_non_claude_variant_is_rejected_in_v1(self, tmp_path):
         path = _write(
             tmp_path,
@@ -448,6 +501,27 @@ class TestLoadCodingAgentConfig:
         )
         with pytest.raises(CodingAgentConfigError, match="ANTHROPIC_API_KEY"):
             load_coding_agent_config(path)
+
+    def test_required_env_can_be_supplied_by_explicit_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        path = _write(
+            tmp_path,
+            "claude",
+            {
+                "name": "claude",
+                "binary": "claude",
+                "agent_config_env": "CLAUDE_CONFIG_DIR",
+                "session_log_dir": "/tmp",
+                "session_log_glob": "*.jsonl",
+                "normalizer": "claude",
+                "required_env": ["ANTHROPIC_API_KEY"],
+                "model": "opus",
+            },
+        )
+
+        cfg = load_coding_agent_config(path, env={"ANTHROPIC_API_KEY": "profile-key"})
+
+        assert cfg.required_env == ("ANTHROPIC_API_KEY",)
 
     def test_missing_agent_config_env_raises(self, tmp_path):
         path = _write(

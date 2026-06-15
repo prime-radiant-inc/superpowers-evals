@@ -208,14 +208,23 @@ class RunnerError(RuntimeError):
         self.stage = stage
 
 
-def _preflight_coding_agent_binary(tcfg: CodingAgentConfig) -> None:
+def _preflight_coding_agent_binary(
+    tcfg: CodingAgentConfig,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
     if tcfg.runtime_family != "claude":
         return
-    if shutil.which(tcfg.binary) is None:
+    if _which(tcfg.binary, env_base) is None:
         raise RunnerError(
             f"Claude Code is not on PATH: {tcfg.binary!r}",
             stage="setup",
         )
+
+
+def _which(binary: str, env_base: Mapping[str, str] | None = None) -> str | None:
+    if env_base is None:
+        return shutil.which(binary)
+    return shutil.which(binary, path=env_base.get("PATH", os.defpath))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -339,7 +348,12 @@ def _seed_codex_auth(codex_home: Path) -> None:
     dest.chmod(0o600)
 
 
-def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
+def _seed_codex_plugin_hooks(
+    codex_home: Path,
+    workdir: Path,
+    *,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
     """Stage Superpowers as a trusted Codex plugin hook in the per-run home.
 
     The codex home already exists and is logged in (see _seed_codex_auth).
@@ -348,7 +362,8 @@ def _seed_codex_plugin_hooks(codex_home: Path, workdir: Path) -> None:
     the Superpowers access every claude run gets. The install ceremony is
     the shared setup_helpers function, pointed at the per-run CODEX_HOME.
     """
-    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    host_env = os.environ if env_base is None else env_base
+    superpowers_root = host_env.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
         raise RunnerError("SUPERPOWERS_ROOT not set; cannot install codex plugin hooks")
     install_codex_superpowers_plugin_hooks(workdir, superpowers_root, codex_home=codex_home)
@@ -387,8 +402,9 @@ def _shell_single_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def _gemini_stderr_excerpt(stderr: str) -> str:
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+def _gemini_stderr_excerpt(stderr: str, env: Mapping[str, str] | None = None) -> str:
+    host_env = os.environ if env is None else env
+    api_key = host_env.get("GEMINI_API_KEY", "")
     excerpt = stderr.strip()
     if api_key:
         excerpt = excerpt.replace(api_key, "[redacted]")
@@ -402,9 +418,15 @@ def _gemini_extension_list_shows_superpowers(stdout: str) -> bool:
     )
 
 
-def _write_gemini_env_file(gemini_home: Path, auth_type: str | None = None) -> Path:
-    auth_type = auth_type or _gemini_auth_type()
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+def _write_gemini_env_file(
+    gemini_home: Path,
+    auth_type: str | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    host_env = os.environ if env is None else env
+    auth_type = auth_type or _gemini_auth_type(host_env)
+    api_key = host_env.get("GEMINI_API_KEY", "")
     if auth_type == GEMINI_AUTH_TYPE_API_KEY and not api_key:
         raise RunnerError("GEMINI_API_KEY not set; cannot seed Gemini auth", stage="setup")
     env_file = gemini_home / GEMINI_ENV_FILE_NAME
@@ -433,9 +455,14 @@ def _write_private_text(path: Path, content: str) -> None:
         os.fchmod(f.fileno(), 0o600)
 
 
-def _copy_gemini_oauth_credentials(gemini_home: Path) -> None:
+def _copy_gemini_oauth_credentials(
+    gemini_home: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> None:
+    host_env = os.environ if env is None else env
     source_home = Path(
-        os.environ.get("GEMINI_OAUTH_HOME", str(Path.home() / ".gemini"))
+        host_env.get("GEMINI_OAUTH_HOME", str(Path.home() / ".gemini"))
     ).expanduser()
     for name in ("oauth_creds.json", "google_accounts.json"):
         source = source_home / name
@@ -447,8 +474,12 @@ def _copy_gemini_oauth_credentials(gemini_home: Path) -> None:
         _write_private_text(gemini_home / ".gemini" / name, source.read_text())
 
 
-def _write_claude_env_file(claude_config_dir: Path) -> Path:
-    api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth")
+def _write_claude_env_file(
+    claude_config_dir: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth", env)
     env_file = claude_config_dir / CLAUDE_ENV_FILE_NAME
     env_file.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -506,6 +537,8 @@ def _gh_auth_token() -> str | None:
 
 def _resolve_copilot_auth_env(
     env: Mapping[str, str] | None = None,
+    *,
+    allow_gh_fallback: bool = True,
 ) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...]]:
     host_env = os.environ if env is None else env
     if _copilot_offline_requested(host_env) and not host_env.get("COPILOT_PROVIDER_BASE_URL"):
@@ -532,7 +565,7 @@ def _resolve_copilot_auth_env(
         if value:
             token_value = value
             break
-    if not token_value:
+    if not token_value and allow_gh_fallback:
         token_value = _gh_auth_token() or ""
     if not token_value:
         raise RunnerError(
@@ -575,25 +608,31 @@ def _require_gemini_superpowers_root(superpowers_root: str) -> Path:
     return root
 
 
-def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
+def _seed_gemini_config(
+    gemini_home: Path,
+    workdir: Path,
+    *,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
     """Install Superpowers into an isolated Gemini CLI home without invoking the model."""
     del workdir
-    superpowers_root = _require_gemini_superpowers_root(os.environ.get("SUPERPOWERS_ROOT", ""))
-    if shutil.which("gemini") is None:
+    host_env = os.environ if env_base is None else env_base
+    superpowers_root = _require_gemini_superpowers_root(host_env.get("SUPERPOWERS_ROOT", ""))
+    if _which("gemini", env_base) is None:
         raise RunnerError(
             "gemini not found on PATH; cannot run Gemini evals",
             stage="setup",
         )
 
-    auth_type = _gemini_auth_type()
+    auth_type = _gemini_auth_type(host_env)
     gemini_home.mkdir(parents=True, exist_ok=True)
     _write_gemini_settings(gemini_home, auth_type)
-    _write_gemini_env_file(gemini_home, auth_type)
+    _write_gemini_env_file(gemini_home, auth_type, env=host_env)
     if auth_type == GEMINI_AUTH_TYPE_OAUTH:
-        _copy_gemini_oauth_credentials(gemini_home)
+        _copy_gemini_oauth_credentials(gemini_home, env=host_env)
 
     env = {
-        **os.environ,
+        **host_env,
         "GEMINI_CLI_HOME": str(gemini_home),
         "GEMINI_CLI_TRUST_WORKSPACE": "true",
         "GEMINI_DEFAULT_AUTH_TYPE": auth_type,
@@ -609,7 +648,7 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
     if link.returncode != 0:
         raise RunnerError(
             "gemini extensions link failed "
-            f"(exit {link.returncode}); stderr: {_gemini_stderr_excerpt(link.stderr)}",
+            f"(exit {link.returncode}); stderr: {_gemini_stderr_excerpt(link.stderr, host_env)}",
             stage="setup",
         )
 
@@ -622,9 +661,10 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
         env=env,
     )
     if listing.returncode != 0:
+        stderr = _gemini_stderr_excerpt(listing.stderr, host_env)
         raise RunnerError(
             "gemini extensions list failed "
-            f"(exit {listing.returncode}); stderr: {_gemini_stderr_excerpt(listing.stderr)}",
+            f"(exit {listing.returncode}); stderr: {stderr}",
             stage="setup",
         )
     if not _gemini_extension_list_shows_superpowers(f"{listing.stdout}\n{listing.stderr}"):
@@ -656,20 +696,27 @@ def _seed_gemini_config(gemini_home: Path, workdir: Path) -> None:
         )
 
 
-def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRuntime:
+def _seed_kimi_config(
+    kimi_home: Path,
+    *,
+    run_dir: Path,
+    binary: str,
+    env_base: Mapping[str, str] | None = None,
+) -> AgentRuntime:
     """Seed an isolated Kimi home with env-overlay auth and local Superpowers plugin."""
-    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    host_env = os.environ if env_base is None else env_base
+    superpowers_root = host_env.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
         raise RunnerError(
             "SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin",
             stage="setup",
         )
-    preflight_sentinel = os.environ.get("QUORUM_KIMI_PREFLIGHT_SENTINEL")
-    preflight_token = os.environ.get("QUORUM_KIMI_PREFLIGHT_TOKEN")
+    preflight_sentinel = host_env.get("QUORUM_KIMI_PREFLIGHT_SENTINEL")
+    preflight_token = host_env.get("QUORUM_KIMI_PREFLIGHT_TOKEN")
 
     try:
-        kimi_binary = resolve_kimi_binary(binary)
-        kimi_env = effective_kimi_model_env(os.environ)
+        kimi_binary = resolve_kimi_binary(binary, env=env_base)
+        kimi_env = effective_kimi_model_env(host_env)
         if preflight_sentinel:
             validate_kimi_preflight_sentinel(
                 Path(preflight_sentinel),
@@ -681,18 +728,18 @@ def _seed_kimi_config(kimi_home: Path, *, run_dir: Path, binary: str) -> AgentRu
             run_kimi_auth_preflight(
                 kimi_binary=kimi_binary,
                 kimi_model_env=kimi_env,
-                base_env=os.environ,
+                base_env=host_env,
             )
         install_kimi_superpowers_plugin(kimi_home, superpowers_root)
     except KimiConfigError as e:
-        raise RunnerError(sanitize_kimi_diagnostic(e), stage="setup") from e
+        raise RunnerError(sanitize_kimi_diagnostic(e, env=host_env), stage="setup") from e
 
     kimi_home.mkdir(parents=True, exist_ok=True)
     for child in ("home", "cache", "xdg-config", "xdg-cache", "xdg-data"):
         (kimi_home / child).mkdir(parents=True, exist_ok=True)
 
     runtime_env = build_kimi_subprocess_env(
-        base_env=os.environ,
+        base_env=host_env,
         kimi_home=kimi_home,
         cwd=kimi_home,
         kimi_model_env=kimi_env,
@@ -756,8 +803,9 @@ def _agy_log_shows_rate_limit(*texts: str) -> bool:
     return any(sig in blob for sig in _AGY_RATE_LIMIT_SUBSTRINGS) or bool(_AGY_429_RE.search(blob))
 
 
-def _run_antigravity_auth_preflight() -> None:
+def _run_antigravity_auth_preflight(env_base: Mapping[str, str] | None = None) -> None:
     """Verify agy auth and hidden --gemini_dir isolation using throwaway state."""
+    host_env = os.environ if env_base is None else env_base
     with tempfile.TemporaryDirectory(prefix="quorum-antigravity-preflight-") as tmp:
         tmp_path = Path(tmp)
         cwd = tmp_path / "cwd"
@@ -782,7 +830,7 @@ def _run_antigravity_auth_preflight() -> None:
                 text=True,
                 capture_output=True,
                 timeout=90,
-                env={**os.environ, "AGY_CLI_DISABLE_AUTO_UPDATE": "true"},
+                env={**host_env, "AGY_CLI_DISABLE_AUTO_UPDATE": "true"},
             )
         except subprocess.TimeoutExpired as e:
             raise RunnerError(
@@ -859,22 +907,31 @@ def _write_antigravity_settings(
     settings_path.write_text(json.dumps(settings, indent=2))
 
 
-def _seed_antigravity_config(antigravity_config_dir: Path, workdir: Path) -> None:
+def _seed_antigravity_config(
+    antigravity_config_dir: Path,
+    workdir: Path,
+    *,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
     """Install Superpowers into an isolated Antigravity .gemini tree."""
-    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    host_env = os.environ if env_base is None else env_base
+    superpowers_root = host_env.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
         raise RunnerError(
             "SUPERPOWERS_ROOT not set; cannot install antigravity Superpowers plugin",
             stage="setup",
         )
-    if shutil.which("agy") is None:
+    if _which("agy", env_base) is None:
         raise RunnerError(
             "agy not found on PATH; cannot run antigravity evals",
             stage="setup",
         )
 
     antigravity_config_dir.mkdir(parents=True, exist_ok=True)
-    _run_antigravity_auth_preflight()
+    if env_base is None:
+        _run_antigravity_auth_preflight()
+    else:
+        _run_antigravity_auth_preflight(host_env)
 
     cmd = [
         "agy",
@@ -888,7 +945,7 @@ def _seed_antigravity_config(antigravity_config_dir: Path, workdir: Path) -> Non
         cwd=antigravity_config_dir,
         text=True,
         capture_output=True,
-        env={**os.environ, "AGY_CLI_DISABLE_AUTO_UPDATE": "true"},
+        env={**host_env, "AGY_CLI_DISABLE_AUTO_UPDATE": "true"},
     )
     if result.returncode != 0:
         raise RunnerError(
@@ -923,7 +980,7 @@ def _seed_antigravity_config(antigravity_config_dir: Path, workdir: Path) -> Non
         )
 
 
-def _run_opencode_provider_preflight() -> None:
+def _run_opencode_provider_preflight(env_base: Mapping[str, str] | None = None) -> None:
     """Verify OpenCode can answer in a throwaway isolated home.
 
     The model is pinned (-m) so the check exercises the same provider the
@@ -952,6 +1009,7 @@ def _run_opencode_provider_preflight() -> None:
                 opencode_home=home,
                 launch_cwd=cwd,
                 timeout=15,
+                env_base=env_base,
             )
             version_hint = (version.stdout or version.stderr).strip() or "unknown"
         except (subprocess.TimeoutExpired, OSError):
@@ -970,6 +1028,7 @@ def _run_opencode_provider_preflight() -> None:
                     opencode_home=home,
                     launch_cwd=cwd,
                     timeout=90,
+                    env_base=env_base,
                 )
             except subprocess.TimeoutExpired as e:
                 raise RunnerError(
@@ -1081,14 +1140,20 @@ def _seed_copilot_config(
     copilot_home: Path,
     workdir: Path,
     session_id: str,
+    *,
+    env_base: Mapping[str, str] | None = None,
 ) -> CopilotProvisioning:
     """Stage Superpowers and prepare isolated Copilot CLI state."""
     del workdir
-    sp_root = _require_copilot_superpowers_root(os.environ.get("SUPERPOWERS_ROOT", ""))
-    if shutil.which("copilot") is None:
+    host_env = os.environ if env_base is None else env_base
+    sp_root = _require_copilot_superpowers_root(host_env.get("SUPERPOWERS_ROOT", ""))
+    if _which("copilot", env_base) is None:
         raise RunnerError("copilot not found on PATH; cannot run Copilot evals", stage="setup")
 
-    env_values, secret_names, secret_values = _resolve_copilot_auth_env()
+    env_values, secret_names, secret_values = _resolve_copilot_auth_env(
+        host_env,
+        allow_gh_fallback=env_base is None,
+    )
     env_file = _write_copilot_env_file(copilot_home, env_values)
     for path in (
         copilot_home / ".quorum",
@@ -1170,15 +1235,20 @@ def _scan_copilot_secret_leaks(
     return tuple(leaks)
 
 
-def _seed_opencode_config(opencode_home: Path) -> None:
+def _seed_opencode_config(
+    opencode_home: Path,
+    *,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
     """Install Superpowers into an isolated OpenCode home."""
-    superpowers_root = os.environ.get("SUPERPOWERS_ROOT", "")
+    host_env = os.environ if env_base is None else env_base
+    superpowers_root = host_env.get("SUPERPOWERS_ROOT", "")
     if not superpowers_root:
         raise RunnerError(
             "SUPERPOWERS_ROOT not set; cannot install opencode Superpowers plugin",
             stage="setup",
         )
-    if shutil.which("opencode") is None:
+    if _which("opencode", env_base) is None:
         raise RunnerError("opencode not found on PATH; cannot run opencode evals", stage="setup")
 
     sp_root = Path(superpowers_root)
@@ -1244,7 +1314,7 @@ def _seed_opencode_config(opencode_home: Path) -> None:
         plugin_link.unlink()
     plugin_link.symlink_to(staged_plugin)
 
-    node = shutil.which("node")
+    node = _which("node", env_base)
     if node is not None:
         result = subprocess.run(
             [node, "--check", str(staged_plugin)],
@@ -1264,11 +1334,12 @@ def _seed_opencode_config(opencode_home: Path) -> None:
     for path in staged_skills.rglob("*"):
         _require_under_home(path, opencode_home)
 
-    _run_opencode_provider_preflight()
+    _run_opencode_provider_preflight(env_base)
 
 
-def _require_env(name: str, purpose: str) -> str:
-    value = os.environ.get(name, "")
+def _require_env(name: str, purpose: str, env: Mapping[str, str] | None = None) -> str:
+    host_env = os.environ if env is None else env
+    value = host_env.get(name, "")
     if not value:
         raise RunnerError(f"{name} not set; cannot {purpose}", stage="setup")
     return value
@@ -1297,10 +1368,14 @@ PI_AZURE_ENV_NAMES = (
 )
 
 
-def _pi_provider_extra_env(provider: str) -> dict[str, str]:
+def _pi_provider_extra_env(
+    provider: str,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    host_env = os.environ if env is None else env
     if provider != "azure-openai-responses":
         return {}
-    if not os.environ.get("AZURE_OPENAI_BASE_URL") and not os.environ.get(
+    if not host_env.get("AZURE_OPENAI_BASE_URL") and not host_env.get(
         "AZURE_OPENAI_RESOURCE_NAME"
     ):
         raise RunnerError(
@@ -1308,7 +1383,7 @@ def _pi_provider_extra_env(provider: str) -> dict[str, str]:
             "or AZURE_OPENAI_RESOURCE_NAME",
             stage="setup",
         )
-    return {name: os.environ[name] for name in PI_AZURE_ENV_NAMES if os.environ.get(name)}
+    return {name: host_env[name] for name in PI_AZURE_ENV_NAMES if host_env.get(name)}
 
 
 def _write_pi_env_file(
@@ -1332,17 +1407,24 @@ def _write_pi_env_file(
     return env_path
 
 
-def _seed_pi_config(pi_config_dir: Path) -> None:
-    superpowers_raw = _require_env("SUPERPOWERS_ROOT", "load Pi Superpowers extension")
-    provider = _require_env("PI_PROVIDER", "configure Pi provider")
-    model = _require_env("PI_MODEL", "configure Pi model")
-    api_key = _require_env("PI_API_KEY", "configure Pi API-key auth")
-    extra_env = _pi_provider_extra_env(provider)
+def _seed_pi_config(
+    pi_config_dir: Path,
+    *,
+    env_base: Mapping[str, str] | None = None,
+) -> None:
+    host_env = os.environ if env_base is None else env_base
+    superpowers_raw = _require_env(
+        "SUPERPOWERS_ROOT", "load Pi Superpowers extension", host_env
+    )
+    provider = _require_env("PI_PROVIDER", "configure Pi provider", host_env)
+    model = _require_env("PI_MODEL", "configure Pi model", host_env)
+    api_key = _require_env("PI_API_KEY", "configure Pi API-key auth", host_env)
+    extra_env = _pi_provider_extra_env(provider, host_env)
 
     superpowers_root = Path(superpowers_raw).expanduser()
     _require_pi_superpowers_source(superpowers_root)
 
-    if shutil.which("pi") is None:
+    if _which("pi", env_base) is None:
         raise RunnerError("pi not found on PATH; cannot run Pi evals", stage="setup")
 
     pi_config_dir.mkdir(parents=True, exist_ok=True)
@@ -1383,6 +1465,7 @@ def _seed_agent_config_dir(
     workdir: Path,
     *,
     run_dir: Path,
+    env_base: Mapping[str, str] | None = None,
 ) -> AgentRuntime:
     """Allocate a fresh per-run agent-config dir.
 
@@ -1422,8 +1505,8 @@ def _seed_agent_config_dir(
         }
         config_path.write_text(json.dumps(config))
     if runtime_family == "claude" and "ANTHROPIC_API_KEY" in coding_agent.required_env:
-        api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth")
-        env_file = _write_claude_env_file(dest)
+        api_key = _require_env("ANTHROPIC_API_KEY", "seed Claude auth", env_base)
+        env_file = _write_claude_env_file(dest, env=env_base)
         _approve_claude_api_key(dest / ".claude.json", api_key)
         runtime = AgentRuntime(
             substitutions={
@@ -1433,17 +1516,37 @@ def _seed_agent_config_dir(
         )
     if coding_agent.name == "codex":
         _seed_codex_auth(dest)
-        _seed_codex_plugin_hooks(dest, workdir)
+        if env_base is None:
+            _seed_codex_plugin_hooks(dest, workdir)
+        else:
+            _seed_codex_plugin_hooks(dest, workdir, env_base=env_base)
     if coding_agent.name == "kimi":
-        runtime = _seed_kimi_config(dest, run_dir=run_dir, binary=coding_agent.binary)
+        if env_base is None:
+            runtime = _seed_kimi_config(dest, run_dir=run_dir, binary=coding_agent.binary)
+        else:
+            runtime = _seed_kimi_config(
+                dest,
+                run_dir=run_dir,
+                binary=coding_agent.binary,
+                env_base=env_base,
+            )
     if coding_agent.name == "antigravity":
-        _seed_antigravity_config(dest, workdir)
+        if env_base is None:
+            _seed_antigravity_config(dest, workdir)
+        else:
+            _seed_antigravity_config(dest, workdir, env_base=env_base)
     if coding_agent.name == "gemini":
-        _seed_gemini_config(dest, workdir)
+        if env_base is None:
+            _seed_gemini_config(dest, workdir)
+        else:
+            _seed_gemini_config(dest, workdir, env_base=env_base)
     if coding_agent.name == "opencode":
-        _seed_opencode_config(dest)
+        _seed_opencode_config(dest, env_base=env_base)
     if coding_agent.name == "pi":
-        _seed_pi_config(dest)
+        if env_base is None:
+            _seed_pi_config(dest)
+        else:
+            _seed_pi_config(dest, env_base=env_base)
     return runtime
 
 
@@ -1817,6 +1920,7 @@ def _run_scenario_inner(
     coding_agents_dir: Path,
     out_root: Path,
     skeleton_root: Path | None = None,
+    env_base: Mapping[str, str] | None = None,
 ) -> tuple[Path, FinalVerdict]:
     """Inner implementation — run_dir is pre-allocated by the wrapper.
 
@@ -1824,10 +1928,12 @@ def _run_scenario_inner(
     Runs checks.sh pre() before the agent, post() after capture.
     """
     # 1. Parse coding-agent config.
+    runtime_env_base = dict(env_base) if env_base is not None else None
+    host_env: Mapping[str, str] = runtime_env_base if runtime_env_base is not None else os.environ
     coding_agent_path = coding_agents_dir / f"{coding_agent}.yaml"
     if not coding_agent_path.exists():
         raise RunnerError(f"unknown coding-agent {coding_agent!r}: no {coding_agent_path}")
-    tcfg = load_coding_agent_config(coding_agent_path)
+    tcfg = load_coding_agent_config(coding_agent_path, env=host_env)
 
     story_path = scenario_dir / "story.md"
     if not story_path.exists():
@@ -1858,7 +1964,7 @@ def _run_scenario_inner(
             run_dir,
             final_reason=f"requires coding-agents: {', '.join(allowed)}",
         )
-    _preflight_coding_agent_binary(tcfg)
+    _preflight_coding_agent_binary(tcfg, runtime_env_base)
 
     # 3. Create workdir (inside run_dir) + per-run coding-agent-config dir.
     #    Both live inside run_dir so they persist with the rest of the
@@ -1869,11 +1975,19 @@ def _run_scenario_inner(
     agent_runtime = AgentRuntime()
     copilot_provisioning: CopilotProvisioning | None = None
     if tcfg.name == "copilot":
-        copilot_provisioning = _seed_copilot_config(
-            agent_config_dir,
-            workdir,
-            str(uuid.uuid4()),
-        )
+        if runtime_env_base is None:
+            copilot_provisioning = _seed_copilot_config(
+                agent_config_dir,
+                workdir,
+                str(uuid.uuid4()),
+            )
+        else:
+            copilot_provisioning = _seed_copilot_config(
+                agent_config_dir,
+                workdir,
+                str(uuid.uuid4()),
+                env_base=runtime_env_base,
+            )
     else:
         agent_runtime = _seed_agent_config_dir(
             tcfg,
@@ -1881,6 +1995,7 @@ def _run_scenario_inner(
             dest=agent_config_dir,
             workdir=workdir,
             run_dir=run_dir,
+            env_base=runtime_env_base,
         )
     try:
         session_log_dir = tcfg.resolve_session_log_dir(agent_config_dir)
@@ -1889,7 +2004,7 @@ def _run_scenario_inner(
         # 4. Run setup.sh (build the fixture).
         # SetupError propagates directly to the run_scenario wrapper, which maps it
         # to an indeterminate verdict with error.stage="setup".
-        run_setup(scenario_dir, workdir, env_extra=env_extra)
+        run_setup(scenario_dir, workdir, env_extra=env_extra, env_base=runtime_env_base)
 
         # 4b. Run checks.sh pre() — verifies the fixture is in the expected state.
         pre_records, pre_exit = run_phase(
@@ -1899,6 +2014,7 @@ def _run_scenario_inner(
             quorum_bin=_quorum_bin_dir(),
             tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
             run_dir=run_dir,
+            env_base=runtime_env_base,
         )
         if pre_exit != 0:
             return run_dir, _write_indeterminate(
@@ -1918,10 +2034,17 @@ def _run_scenario_inner(
         opencode_session_snapshot: set[str] = set()
         if tcfg.normalizer == "opencode":
             try:
-                opencode_session_snapshot = snapshot_opencode_sessions(
-                    opencode_home=agent_config_dir,
-                    launch_cwd=launch_cwd,
-                )
+                if runtime_env_base is None:
+                    opencode_session_snapshot = snapshot_opencode_sessions(
+                        opencode_home=agent_config_dir,
+                        launch_cwd=launch_cwd,
+                    )
+                else:
+                    opencode_session_snapshot = snapshot_opencode_sessions(
+                        opencode_home=agent_config_dir,
+                        launch_cwd=launch_cwd,
+                        env_base=runtime_env_base,
+                    )
             except OpenCodeCaptureError as e:
                 return run_dir, _write_indeterminate(
                     run_dir,
@@ -1947,7 +2070,7 @@ def _run_scenario_inner(
         substitutions = {
             "$QUORUM_AGENT_CWD": str(launch_cwd),
             "$QUORUM_AGENT_CWD_SH": _shell_single_quote(str(launch_cwd)),
-            "$SUPERPOWERS_ROOT": os.environ.get("SUPERPOWERS_ROOT", ""),
+            "$SUPERPOWERS_ROOT": host_env.get("SUPERPOWERS_ROOT", ""),
             "$QUORUM_LAUNCH_AGENT": str(launch_agent_path),
             "$QUORUM_LAUNCH_AGENT_SH": _shell_single_quote(str(launch_agent_path)),
             f"${tcfg.agent_config_env}": str(agent_config_dir),
@@ -1955,7 +2078,7 @@ def _run_scenario_inner(
             **agent_runtime.substitutions,
         }
         if tcfg.name == "gemini":
-            gemini_auth_type = _gemini_auth_type()
+            gemini_auth_type = _gemini_auth_type(host_env)
             substitutions["$GEMINI_ENV_FILE"] = str(agent_config_dir / GEMINI_ENV_FILE_NAME)
             substitutions["$GEMINI_ENV_FILE_SH"] = _shell_single_quote(
                 str(agent_config_dir / GEMINI_ENV_FILE_NAME)
@@ -1994,7 +2117,11 @@ def _run_scenario_inner(
         #    token refresh can corrupt the shared ~/.gemini/oauth_creds.json. Back
         #    it up before the run and verify/restore in a finally after it returns
         #    (A4). Antigravity only; no overhead for other agents.
-        gauntlet_env_base = _copilot_gauntlet_env(os.environ) if tcfg.name == "copilot" else None
+        gauntlet_env_base = (
+            _copilot_gauntlet_env(host_env)
+            if tcfg.name == "copilot"
+            else runtime_env_base
+        )
         cb = agy_creds.backup_credential() if coding_agent == "antigravity" else None
         try:
             gauntlet_result = invoke_gauntlet(
@@ -2040,12 +2167,21 @@ def _run_scenario_inner(
         opencode_exported_paths: tuple[Path, ...] = ()
         if tcfg.normalizer == "opencode":
             try:
-                opencode_exported_paths = export_opencode_sessions(
-                    opencode_home=agent_config_dir,
-                    export_dir=session_log_dir,
-                    launch_cwd=launch_cwd,
-                    snapshot=opencode_session_snapshot,
-                )
+                if runtime_env_base is None:
+                    opencode_exported_paths = export_opencode_sessions(
+                        opencode_home=agent_config_dir,
+                        export_dir=session_log_dir,
+                        launch_cwd=launch_cwd,
+                        snapshot=opencode_session_snapshot,
+                    )
+                else:
+                    opencode_exported_paths = export_opencode_sessions(
+                        opencode_home=agent_config_dir,
+                        export_dir=session_log_dir,
+                        launch_cwd=launch_cwd,
+                        snapshot=opencode_session_snapshot,
+                        env_base=runtime_env_base,
+                    )
             except OpenCodeCaptureError as e:
                 gauntlet_layer = _build_gauntlet_layer_from_run_dir(run_dir)
                 if gauntlet_layer is None:
@@ -2402,6 +2538,7 @@ def _run_scenario_inner(
             quorum_bin=_quorum_bin_dir(),
             tool_calls_path=run_dir / "coding-agent-tool-calls.jsonl",
             run_dir=run_dir,
+            env_base=runtime_env_base,
         )
         if post_exit != 0:
             return run_dir, _write_indeterminate(
@@ -2474,6 +2611,7 @@ def run_scenario(
     coding_agents_dir: Path,
     out_root: Path,
     skeleton_root: Path | None = None,
+    env_base: Mapping[str, str] | None = None,
 ) -> tuple[Path, FinalVerdict]:
     """Run one scenario against one Coding-Agent, always writing verdict.json.
 
@@ -2488,6 +2626,33 @@ def run_scenario(
         scenario_name=scenario_dir.name,
         coding_agent=coding_agent,
     )
+    return run_scenario_in_dir(
+        run_dir=run_dir,
+        scenario_dir=scenario_dir,
+        coding_agent=coding_agent,
+        coding_agents_dir=coding_agents_dir,
+        out_root=out_root,
+        skeleton_root=skeleton_root,
+        env_base=env_base,
+    )
+
+
+def run_scenario_in_dir(
+    *,
+    run_dir: Path,
+    scenario_dir: Path,
+    coding_agent: str,
+    coding_agents_dir: Path,
+    out_root: Path,
+    skeleton_root: Path | None = None,
+    env_base: Mapping[str, str] | None = None,
+) -> tuple[Path, FinalVerdict]:
+    """Run one scenario in a caller-allocated run directory.
+
+    Managed smoke uses this seam to persist the run-dir in job state before
+    executing the live eval. Exception mapping intentionally matches
+    `run_scenario`.
+    """
     try:
         return _run_scenario_inner(
             run_dir=run_dir,
@@ -2496,6 +2661,7 @@ def run_scenario(
             coding_agents_dir=coding_agents_dir,
             out_root=out_root,
             skeleton_root=skeleton_root,
+            env_base=env_base,
         )
     except CodingAgentConfigError as e:
         v = _write_indeterminate(

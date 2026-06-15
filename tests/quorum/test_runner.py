@@ -20,6 +20,7 @@ from quorum.runner import (
     COPILOT_PROVIDER_ENV_NAMES,
     COPILOT_REQUIRED_SUPERPOWERS_FILES,
     COPILOT_SECRET_ENV_NAMES,
+    GEMINI_ENV_FILE_NAME,
     AgentRuntime,
     CopilotProvisioning,
     GauntletResult,
@@ -38,17 +39,20 @@ from quorum.runner import (
     _scan_copilot_secret_leaks,
     _seed_agent_config_dir,
     _seed_antigravity_config,
+    _seed_codex_plugin_hooks,
     _seed_copilot_config,
     _seed_gemini_config,
     _seed_kimi_config,
     _shell_single_quote,
     _stage_copilot_superpowers_plugin,
+    _which,
     _write_antigravity_settings,
     _write_copilot_env_file,
     _write_gemini_env_file,
     _write_gemini_settings,
     invoke_gauntlet,
     run_scenario,
+    run_scenario_in_dir,
 )
 
 
@@ -1519,6 +1523,36 @@ class TestSeedAgentConfigDir:
         assert claude_config["customApiKeyResponses"]["approved"] == ["sk-test-key"]
         assert claude_config["customApiKeyResponses"]["rejected"] == []
 
+    def test_claude_target_env_file_uses_env_base_instead_of_ambient(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-poison")
+        cfg = CodingAgentConfig(
+            name="claude",
+            runtime_family="claude",
+            binary="claude",
+            agent_config_env="CLAUDE_CONFIG_DIR",
+            session_log_dir="${CLAUDE_CONFIG_DIR}/projects",
+            session_log_glob="**/*.jsonl",
+            normalizer="claude",
+            required_env=("ANTHROPIC_API_KEY",),
+            model="opus",
+            max_time=None,
+            project_prompt=None,
+        )
+        dest = tmp_path / "agent-config"
+
+        _seed_agent_config_dir(
+            cfg,
+            _empty_skeleton(tmp_path),
+            dest,
+            tmp_path / "workdir",
+            run_dir=tmp_path / "run-dir",
+            env_base={"ANTHROPIC_API_KEY": "profile-key"},
+        )
+
+        assert (dest / CLAUDE_ENV_FILE_NAME).read_text() == "ANTHROPIC_API_KEY='profile-key'\n"
+
     def test_claude_seed_raises_without_api_key_when_required(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         cfg = CodingAgentConfig(
@@ -1640,6 +1674,24 @@ class TestSeedAgentConfigDir:
                 run_dir=tmp_path / "run-dir",
             )
 
+    def test_codex_plugin_hook_uses_env_base_superpowers_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        superpowers = tmp_path / "superpowers"
+        superpowers.mkdir()
+
+        with patch("quorum.runner.install_codex_superpowers_plugin_hooks") as install:
+            _seed_codex_plugin_hooks(
+                tmp_path / "codex-home",
+                tmp_path / "workdir",
+                env_base={"SUPERPOWERS_ROOT": str(superpowers)},
+            )
+
+        install.assert_called_once_with(
+            tmp_path / "workdir",
+            str(superpowers),
+            codex_home=tmp_path / "codex-home",
+        )
+
     def test_codex_target_installs_plugin_hooks(self, tmp_path, monkeypatch):
         # The runner stages Superpowers as a trusted plugin hook into the
         # per-run CODEX_HOME — the codex equivalent of claude's Superpowers
@@ -1696,6 +1748,36 @@ class TestSeedAgentConfigDir:
             )
         mock_seed.assert_called_once_with(dest, tmp_path / "wd")
 
+    def test_antigravity_seed_uses_env_base_for_superpowers_and_install_env(
+        self, tmp_path, monkeypatch
+    ):
+        superpowers = _make_gemini_superpowers_root(tmp_path)
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        monkeypatch.setattr("quorum.runner.shutil.which", lambda name, path=None: "/usr/bin/agy")
+        seen_envs: list[dict[str, str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen_envs.append(kwargs["env"])
+            root = tmp_path / "cfg" / ".gemini" / "config" / "plugins" / "superpowers"
+            (root / "skills" / "using-superpowers").mkdir(parents=True, exist_ok=True)
+            (root / "plugin.json").write_text("{}")
+            (root / "hooks.json").write_text("{}")
+            (root / "skills" / "using-superpowers" / "SKILL.md").write_text("skill")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with (
+            patch("quorum.runner._run_antigravity_auth_preflight"),
+            patch("quorum.runner.subprocess.run", side_effect=fake_run),
+        ):
+            _seed_antigravity_config(
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                env_base={"PATH": "/usr/bin:/bin", "SUPERPOWERS_ROOT": str(superpowers)},
+            )
+
+        assert seen_envs
+        assert seen_envs[0]["SUPERPOWERS_ROOT"] == str(superpowers)
+
     def test_pi_target_seeds_run_local_auth_files(self, tmp_path, monkeypatch):
         superpowers = _make_superpowers_pi_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(superpowers))
@@ -1705,7 +1787,7 @@ class TestSeedAgentConfigDir:
         monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "https://example.openai.azure.com")
         monkeypatch.setattr(
             "quorum.runner.shutil.which",
-            lambda name: "/usr/bin/pi" if name == "pi" else None,
+            lambda name, path=None: "/usr/bin/pi" if name == "pi" else None,
         )
 
         dest = tmp_path / "cfg"
@@ -1733,6 +1815,42 @@ class TestSeedAgentConfigDir:
         assert "AZURE_OPENAI_BASE_URL=https://example.openai.azure.com" in env_text
         assert oct(env_path.stat().st_mode & 0o777) == "0o600"
         assert (dest / "sessions").is_dir()
+
+    def test_pi_seed_uses_env_base_for_profile_values(self, tmp_path, monkeypatch):
+        superpowers = _make_superpowers_pi_root(tmp_path)
+        for name in (
+            "SUPERPOWERS_ROOT",
+            "PI_PROVIDER",
+            "PI_MODEL",
+            "PI_API_KEY",
+            "AZURE_OPENAI_BASE_URL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name, path=None: "/usr/bin/pi" if name == "pi" else None,
+        )
+
+        dest = tmp_path / "cfg"
+        _seed_agent_config_dir(
+            _pi_tcfg(),
+            tmp_path,
+            dest,
+            tmp_path / "wd",
+            run_dir=tmp_path / "run-dir",
+            env_base={
+                "PATH": "/usr/bin:/bin",
+                "SUPERPOWERS_ROOT": str(superpowers),
+                "PI_PROVIDER": "azure-openai-responses",
+                "PI_MODEL": "gpt-5.4",
+                "PI_API_KEY": "profile-pi-key",
+                "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com",
+            },
+        )
+
+        env_text = (dest / "pi.env").read_text()
+        assert "profile-pi-key" in env_text
+        assert "AZURE_OPENAI_BASE_URL=https://example.openai.azure.com" in env_text
 
     def test_pi_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
@@ -1807,12 +1925,55 @@ class TestSeedAgentConfigDir:
         sp = _make_gemini_superpowers_root(tmp_path)
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(sp))
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/gemini")
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name, path=None: "/usr/bin/gemini",
+        )
 
         with pytest.raises(RunnerError, match="GEMINI_API_KEY") as excinfo:
             _seed_gemini_config(tmp_path / "cfg", tmp_path / "wd")
 
         assert excinfo.value.stage == "setup"
+
+    def test_gemini_seed_uses_env_base_for_auth_and_subprocess_env(
+        self, tmp_path, monkeypatch
+    ):
+        sp = _make_gemini_superpowers_root(tmp_path)
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name, path=None: "/usr/bin/gemini",
+        )
+        seen_envs: list[dict[str, str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen_envs.append(kwargs["env"])
+            cfg = Path(kwargs["env"]["GEMINI_CLI_HOME"])
+            if "link" in cmd:
+                metadata_root = cfg / ".gemini" / "extensions" / "superpowers"
+                metadata_root.mkdir(parents=True)
+                (metadata_root / ".gemini-extension-install.json").write_text("{}")
+                (cfg / ".gemini" / "extensions" / "extension-enablement.json").write_text("{}")
+                (cfg / ".gemini" / "extension_integrity.json").write_text("{}")
+            return subprocess.CompletedProcess(cmd, 0, "superpowers\n", "")
+
+        with patch("quorum.runner.subprocess.run", side_effect=fake_run):
+            _seed_gemini_config(
+                tmp_path / "cfg",
+                tmp_path / "wd",
+                env_base={
+                    "PATH": "/usr/bin:/bin",
+                    "SUPERPOWERS_ROOT": str(sp),
+                    "GEMINI_API_KEY": "profile-gemini-key",
+                },
+            )
+
+        assert (tmp_path / "cfg" / GEMINI_ENV_FILE_NAME).read_text() == (
+            "GEMINI_API_KEY='profile-gemini-key'\n"
+        )
+        assert seen_envs
+        assert all(env["GEMINI_API_KEY"] == "profile-gemini-key" for env in seen_envs)
 
     def test_gemini_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -1891,6 +2052,12 @@ class TestSeedAgentConfigDir:
         assert values == {"COPILOT_GITHUB_TOKEN": "gh-token"}
         assert secret_names == ("COPILOT_GITHUB_TOKEN",)
         assert secret_values == ("gh-token",)
+
+    def test_copilot_auth_can_disable_gh_auth_token_fallback(self, monkeypatch):
+        monkeypatch.setattr("quorum.runner._gh_auth_token", lambda: "ambient-gh-token")
+
+        with pytest.raises(RunnerError, match="no Copilot auth found"):
+            _resolve_copilot_auth_env({}, allow_gh_fallback=False)
 
     def test_copilot_auth_provider_mode_does_not_require_github_token(self):
         values, secret_names, secret_values = _resolve_copilot_auth_env(
@@ -2048,6 +2215,39 @@ class TestSeedAgentConfigDir:
         assert not (extra_staged / "SKILL.md").exists()
         for rel in (".quorum", ".cache", "logs", "plugins", "session-state"):
             assert (cfg / rel).is_dir()
+
+    def test_copilot_seed_uses_env_base_for_superpowers_and_auth(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_copilot_root(tmp_path)
+        _clear_copilot_auth_env(monkeypatch)
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        seen_paths: list[str | None] = []
+
+        def fake_which(name, path=None):
+            seen_paths.append(path)
+            return "/profile/bin/copilot" if name == "copilot" else None
+
+        monkeypatch.setattr("quorum.runner.shutil.which", fake_which)
+        cfg = tmp_path / "cfg"
+        session_id = str(uuid.uuid4())
+
+        provisioning = _seed_copilot_config(
+            cfg,
+            tmp_path / "wd",
+            session_id,
+            env_base={
+                "PATH": "/profile/bin",
+                "SUPERPOWERS_ROOT": str(sp),
+                "COPILOT_PROVIDER_BASE_URL": "http://127.0.0.1:4000",
+                "COPILOT_PROVIDER_TYPE": "openai",
+                "COPILOT_PROVIDER_API_KEY": "profile-provider-key",
+            },
+        )
+
+        assert seen_paths == ["/profile/bin"]
+        assert provisioning.secret_values == ("profile-provider-key",)
+        assert "profile-provider-key" in provisioning.env_file.read_text()
+        for rel in COPILOT_REQUIRED_SUPERPOWERS_FILES:
+            assert (cfg / "plugins" / "superpowers" / rel).is_file()
 
     def test_copilot_seed_errors_when_required_plugin_file_missing(self, tmp_path):
         sp = _make_superpowers_copilot_root(tmp_path)
@@ -2464,7 +2664,7 @@ class TestSeedAgentConfigDir:
         superpowers = _make_kimi_superpowers_root(tmp_path)
 
         dest = tmp_path / "agent-config"
-        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name: "/usr/bin/kimi")
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name, path=None: "/usr/bin/kimi")
 
         with (
             patch.dict(
@@ -2493,6 +2693,32 @@ class TestSeedAgentConfigDir:
         assert plugin["enabled"] is True
         assert runtime.env_file is not None
         assert runtime.env_file.exists()
+
+    def test_kimi_seed_uses_env_base_for_auth_and_runtime_env(self, tmp_path, monkeypatch):
+        superpowers = _make_kimi_superpowers_root(tmp_path)
+        monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
+        monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+        monkeypatch.setattr("quorum.kimi.shutil.which", lambda name, path=None: "/usr/bin/kimi")
+
+        with patch("quorum.runner.run_kimi_auth_preflight") as mock_preflight:
+            runtime = _seed_kimi_config(
+                tmp_path / "cfg",
+                run_dir=tmp_path / "run",
+                binary="kimi",
+                env_base={
+                    "PATH": "/usr/bin:/bin",
+                    "SUPERPOWERS_ROOT": str(superpowers),
+                    "KIMI_MODEL_API_KEY": "profile-kimi-key",
+                },
+            )
+
+        assert runtime.env_file is not None
+        runtime_env_text = runtime.env_file.read_text()
+        assert "profile-kimi-key" in runtime_env_text
+        mock_preflight.assert_called_once()
+        assert mock_preflight.call_args.kwargs["base_env"]["KIMI_MODEL_API_KEY"] == (
+            "profile-kimi-key"
+        )
 
     def test_kimi_seed_runs_auth_preflight_without_sentinel(self, tmp_path, monkeypatch):
         superpowers = _make_kimi_superpowers_root(tmp_path)
@@ -2854,6 +3080,18 @@ class TestSeedAgentConfigDir:
 
         assert mock_run.call_count == 2
 
+    def test_which_uses_os_defpath_for_explicit_env_without_path(self, monkeypatch):
+        seen_paths: list[str | None] = []
+
+        def fake_which(name, path=None):
+            seen_paths.append(path)
+            return None
+
+        monkeypatch.setattr("quorum.runner.shutil.which", fake_which)
+
+        assert _which("opencode", {}) is None
+        assert seen_paths == [os.defpath]
+
     def test_opencode_seed_requires_superpowers_root(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SUPERPOWERS_ROOT", raising=False)
         monkeypatch.setattr("quorum.runner.shutil.which", lambda name: "/usr/bin/opencode")
@@ -2925,6 +3163,46 @@ class TestSeedAgentConfigDir:
         # provider keys are ambient (it picked claude-sonnet over GPT).
         seeded_config = json.loads((config_dir / "opencode.json").read_text())
         assert seeded_config["model"] == "openai/gpt-5.5"
+
+    def test_opencode_seed_uses_env_base_superpowers_root(self, tmp_path, monkeypatch):
+        sp = _make_superpowers_opencode_root(tmp_path)
+        plugin_src = sp / ".opencode" / "plugins" / "superpowers.js"
+        ambient_poison = tmp_path / "ambient-poison"
+        ambient_poison.mkdir()
+        monkeypatch.setenv("SUPERPOWERS_ROOT", str(ambient_poison))
+        monkeypatch.setattr(
+            "quorum.runner.shutil.which",
+            lambda name, path=None: f"/profile/bin/{name}",
+        )
+        monkeypatch.setattr(
+            "quorum.runner.subprocess.run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "OK\n", ""),
+        )
+        monkeypatch.setattr(
+            "quorum.runner.run_opencode_command",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "OK\n", ""),
+        )
+
+        dest = tmp_path / "cfg"
+        _seed_agent_config_dir(
+            _opencode_tcfg(),
+            tmp_path,
+            dest,
+            tmp_path / "wd",
+            run_dir=tmp_path / "run-dir",
+            env_base={"PATH": "/profile/bin", "SUPERPOWERS_ROOT": str(sp)},
+        )
+
+        staged_plugin = (
+            dest
+            / ".config"
+            / "opencode"
+            / "superpowers"
+            / ".opencode"
+            / "plugins"
+            / "superpowers.js"
+        )
+        assert staged_plugin.read_text() == plugin_src.read_text()
 
     def test_opencode_seed_rejects_skill_tree_symlinks(self, tmp_path, monkeypatch):
         sp = _make_superpowers_opencode_root(tmp_path)
@@ -3155,6 +3433,31 @@ class TestAntigravityProjectMarkerExclusion:
 
 
 class TestRunScenario:
+    def test_run_scenario_in_dir_uses_preallocated_dir_and_maps_exceptions(self, tmp_path):
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        coding_agents_dir.mkdir(parents=True)
+        (coding_agents_dir / "broken.yaml").write_text("name: broken\n")
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+        run_dir = tmp_path / "results" / "managed-smoke-run"
+        run_dir.mkdir(parents=True)
+
+        returned_dir, verdict = run_scenario_in_dir(
+            run_dir=run_dir,
+            scenario_dir=sd,
+            coding_agent="broken",
+            coding_agents_dir=coding_agents_dir,
+            out_root=tmp_path / "results",
+            skeleton_root=_empty_skeleton(tmp_path),
+        )
+
+        assert returned_dir == run_dir
+        assert verdict.final == "indeterminate"
+        assert verdict.error is not None
+        assert verdict.error.stage == "setup"
+        assert (run_dir / "verdict.json").exists()
+
     def test_claude_family_missing_binary_fails_before_writing_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         monkeypatch.setenv("SUPERPOWERS_ROOT", str(tmp_path / "superpowers"))
@@ -4270,6 +4573,99 @@ class TestRunScenario:
             "AWS_SECRET_ACCESS_KEY",
         ):
             assert name not in env_base
+
+    def test_run_scenario_passes_env_base_to_setup_checks_and_gauntlet(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        _make_coding_agent(coding_agents_dir, "claude", session_log_dir)
+        (coding_agents_dir / "claude-context").mkdir()
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        marker_dir = tmp_path / "markers"
+        marker_dir.mkdir()
+        (sd / "setup.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "%s" "${{OPENAI_API_KEY:-unset}}" > {marker_dir / "setup"}\n'
+        )
+        (sd / "setup.sh").chmod(0o755)
+        (sd / "checks.sh").write_text(
+            "pre() { command-succeeds 'test -z \"${OPENAI_API_KEY:-}\"'; }\n"
+            "post() { :; }\n"
+        )
+        captured: dict[str, dict[str, str] | None] = {}
+
+        def fake_invoke(*, run_dir, env_base, **_kwargs):
+            captured["gauntlet_env_base"] = env_base
+            result_dir = run_dir / "gauntlet-agent" / "results" / "run-1"
+            result_dir.mkdir(parents=True)
+            (result_dir / "result.json").write_text(json.dumps({"status": "pass"}))
+            (session_log_dir / "trace.jsonl").write_text(_claude_log_line())
+            return GauntletResult(status="pass")
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=fake_invoke):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+                env_base={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+            )
+
+        assert verdict.final == "pass"
+        assert (marker_dir / "setup").read_text() == "unset"
+        assert captured["gauntlet_env_base"] == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+    def test_run_scenario_required_env_comes_from_env_base(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        coding_agents_dir = tmp_path / "coding-agents"
+        scenarios_dir = tmp_path / "scenarios"
+        session_log_dir = tmp_path / "logs"
+        session_log_dir.mkdir()
+        coding_agents_dir.mkdir()
+        (coding_agents_dir / "claude.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "claude",
+                    "runtime_family": "claude",
+                    "binary": "echo",
+                    "agent_config_env": "CLAUDE_CONFIG_DIR",
+                    "session_log_dir": str(session_log_dir),
+                    "session_log_glob": "*.jsonl",
+                    "normalizer": "claude",
+                    "required_env": ["ANTHROPIC_API_KEY"],
+                    "model": "opus",
+                }
+            )
+        )
+        (coding_agents_dir / "claude-context").mkdir()
+        sd = _make_scenario(scenarios_dir, "x", with_checks=False)
+        (sd / "checks.sh").write_text("pre() { :; }\npost() { :; }\n")
+
+        def fake_invoke(*, run_dir, **_kwargs):
+            result_dir = run_dir / "gauntlet-agent" / "results" / "run-1"
+            result_dir.mkdir(parents=True)
+            (result_dir / "result.json").write_text(json.dumps({"status": "pass"}))
+            (session_log_dir / "trace.jsonl").write_text(_claude_log_line())
+            return GauntletResult(status="pass")
+
+        with patch("quorum.runner.invoke_gauntlet", side_effect=fake_invoke):
+            _run_dir, verdict = run_scenario(
+                scenario_dir=sd,
+                coding_agent="claude",
+                coding_agents_dir=coding_agents_dir,
+                out_root=tmp_path / "results",
+                skeleton_root=_empty_skeleton(tmp_path),
+                env_base={
+                    "PATH": "/usr/bin:/bin",
+                    "ANTHROPIC_API_KEY": "profile-key",
+                    "SUPERPOWERS_ROOT": str(tmp_path / "superpowers"),
+                },
+            )
+
+        assert verdict.final == "pass"
 
     def test_copilot_missing_transcript_is_indeterminate(self, tmp_path):
         coding_agents_dir = tmp_path / "coding-agents"

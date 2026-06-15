@@ -6,8 +6,11 @@ import json
 import os
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
+
+from quorum.runtime_env import is_managed_host
 
 
 class OpenCodeCaptureError(RuntimeError):
@@ -47,6 +50,19 @@ OPENCODE_ENV_ALLOWLIST = {
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
 }
+OPENCODE_PROVIDER_ENV_NAMES = {
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+}
 
 OPENCODE_CAPTURE_TIMEOUT_SECONDS = 30
 
@@ -57,6 +73,7 @@ def run_opencode_command(
     opencode_home: Path,
     launch_cwd: Path,
     timeout: float = OPENCODE_CAPTURE_TIMEOUT_SECONDS,
+    env_base: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run an opencode CLI command with stdout redirected to a file.
 
@@ -73,7 +90,7 @@ def run_opencode_command(
             text=True,
             stdout=stdout_file,
             stderr=subprocess.PIPE,
-            env=opencode_run_env(opencode_home),
+            env=opencode_run_env(opencode_home, env_base=env_base),
             timeout=timeout,
         )
         stdout_file.seek(0)
@@ -81,8 +98,22 @@ def run_opencode_command(
     return result
 
 
-def opencode_run_env(opencode_home: Path) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in OPENCODE_ENV_ALLOWLIST}
+def opencode_run_env(
+    opencode_home: Path,
+    env_base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    source = dict(env_base) if env_base is not None else dict(os.environ)
+    allowlist = set(OPENCODE_ENV_ALLOWLIST)
+    source_managed = is_managed_host(source) or is_managed_host(os.environ)
+    if source_managed:
+        target_provider_env = {
+            name.strip()
+            for name in source.get("QUORUM_TARGET_ENV_KEYS", "").split(",")
+            if name.strip()
+        }
+        allowlist -= OPENCODE_PROVIDER_ENV_NAMES
+        allowlist |= target_provider_env & OPENCODE_PROVIDER_ENV_NAMES
+    env = {key: value for key, value in source.items() if key in allowlist}
     env.setdefault("PATH", os.defpath)
     env.setdefault("TERM", "xterm-256color")
     env.setdefault("LANG", "C.UTF-8")
@@ -136,12 +167,18 @@ def _session_decisions(
     return decisions, matches
 
 
-def _list_sessions(*, opencode_home: Path, launch_cwd: Path) -> list[Any]:
+def _list_sessions(
+    *,
+    opencode_home: Path,
+    launch_cwd: Path,
+    env_base: Mapping[str, str] | None = None,
+) -> list[Any]:
     try:
         result = run_opencode_command(
             ["session", "list", "--format", "json"],
             opencode_home=opencode_home,
             launch_cwd=launch_cwd,
+            env_base=env_base,
         )
     except subprocess.TimeoutExpired as e:
         raise OpenCodeCaptureError(
@@ -161,9 +198,15 @@ def _list_sessions(*, opencode_home: Path, launch_cwd: Path) -> list[Any]:
     return sessions
 
 
-def snapshot_opencode_sessions(*, opencode_home: Path, launch_cwd: Path) -> set[str]:
+def snapshot_opencode_sessions(
+    *,
+    opencode_home: Path,
+    launch_cwd: Path,
+    env_base: Mapping[str, str] | None = None,
+) -> set[str]:
     _decisions, sessions = _session_decisions(
-        _list_sessions(opencode_home=opencode_home, launch_cwd=launch_cwd), launch_cwd
+        _list_sessions(opencode_home=opencode_home, launch_cwd=launch_cwd, env_base=env_base),
+        launch_cwd,
     )
     return {session["id"] for session in sessions}
 
@@ -177,13 +220,18 @@ def _session_created(session: dict[str, Any]) -> int | None:
 
 
 def _export_session(
-    *, session_id: str, opencode_home: Path, launch_cwd: Path
+    *,
+    session_id: str,
+    opencode_home: Path,
+    launch_cwd: Path,
+    env_base: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     try:
         result = run_opencode_command(
             ["export", session_id],
             opencode_home=opencode_home,
             launch_cwd=launch_cwd,
+            env_base=env_base,
         )
     except subprocess.TimeoutExpired as e:
         raise OpenCodeCaptureError(
@@ -222,17 +270,25 @@ def export_opencode_sessions(
     export_dir: Path,
     launch_cwd: Path,
     snapshot: set[str],
+    env_base: Mapping[str, str] | None = None,
 ) -> tuple[Path, ...]:
     """Export OpenCode sessions for launch_cwd into export_dir."""
     export_dir.mkdir(parents=True, exist_ok=True)
-    raw_sessions = _list_sessions(opencode_home=opencode_home, launch_cwd=launch_cwd)
+    raw_sessions = _list_sessions(
+        opencode_home=opencode_home,
+        launch_cwd=launch_cwd,
+        env_base=env_base,
+    )
     decisions, sessions = _session_decisions(raw_sessions, launch_cwd)
     new_sessions = [session for session in sessions if session["id"] not in snapshot]
     export_records: list[dict[str, Any]] = []
     for session in new_sessions:
         session_id = session["id"]
         exported_json, stdout, stderr = _export_session(
-            session_id=session_id, opencode_home=opencode_home, launch_cwd=launch_cwd
+            session_id=session_id,
+            opencode_home=opencode_home,
+            launch_cwd=launch_cwd,
+            env_base=env_base,
         )
         created = _session_created(session) or _exported_created(exported_json)
         export_records.append(

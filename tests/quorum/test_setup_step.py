@@ -70,3 +70,20 @@ class TestRunSetup:
         )
         run_setup(scenario_dir, workdir, env_extra={"QUORUM_REPO_ROOT": "/fake/root"})
         assert marker_path.read_text().strip() == "/fake/root"
+
+    def test_env_base_replaces_ambient_environment(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "ambient-poison")
+        scenario_dir = tmp_path / "scenario"
+        scenario_dir.mkdir()
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        marker_path = tmp_path / "captured_env"
+        _make_executable(
+            scenario_dir / "setup.sh",
+            "#!/usr/bin/env bash\n"
+            f'printf "%s" "${{OPENAI_API_KEY:-unset}}" > {marker_path}\n',
+        )
+
+        run_setup(scenario_dir, workdir, env_base={"PATH": "/usr/bin:/bin"})
+
+        assert marker_path.read_text() == "unset"

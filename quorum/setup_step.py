@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -22,11 +23,13 @@ def _run_scenario_script(
     workdir: Path,
     env_extra: dict[str, str] | None,
     error_cls: type[RuntimeError],
+    env_base: Mapping[str, str] | None = None,
 ) -> None:
     script = scenario_dir / script_name
     if not script.exists():
         return
-    env = {**os.environ, "QUORUM_WORKDIR": str(workdir), **(env_extra or {})}
+    base_env = dict(env_base) if env_base is not None else dict(os.environ)
+    env = {**base_env, "QUORUM_WORKDIR": str(workdir), **(env_extra or {})}
     proc = subprocess.run(
         [str(script)],
         cwd=workdir,
@@ -46,5 +49,13 @@ def run_setup(
     scenario_dir: Path,
     workdir: Path,
     env_extra: dict[str, str] | None = None,
+    env_base: Mapping[str, str] | None = None,
 ) -> None:
-    _run_scenario_script(scenario_dir, "setup.sh", workdir, env_extra, SetupError)
+    _run_scenario_script(
+        scenario_dir,
+        "setup.sh",
+        workdir,
+        env_extra,
+        SetupError,
+        env_base=env_base,
+    )

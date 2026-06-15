@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -65,6 +66,7 @@ def run_phase(
     quorum_bin: Path,
     tool_calls_path: Path | None = None,
     run_dir: Path | None = None,
+    env_base: Mapping[str, str] | None = None,
 ) -> tuple[list[CheckRecord], int]:
     """Source checks.sh, call <phase>, return (records, script_exit_code).
 
@@ -77,9 +79,10 @@ def run_phase(
     # or `command-succeeds 'go test'` need brew / pyenv / nvm tools that don't
     # live in /usr/bin or /bin. Prepend quorum_bin so the check vocabulary
     # wins lookups, then layer our own overrides on top.
+    base_env = dict(env_base) if env_base is not None else dict(os.environ)
     env = {
-        **os.environ,
-        "PATH": f"{quorum_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        **base_env,
+        "PATH": f"{quorum_bin}:{base_env.get('PATH', '/usr/bin:/bin')}",
         "QUORUM_RECORD_SINK": str(sink),
     }
     if tool_calls_path is not None:
