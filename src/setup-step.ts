@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { envSnapshot, getEnv } from './env.ts';
+import { envSnapshot } from './env.ts';
 import { repoRoot } from './paths.ts';
 
 /** Raised when a scenario's `setup.sh` exits non-zero; carries its output. */
@@ -27,11 +27,19 @@ export function runSetup(
   if (!existsSync(script)) {
     return;
   }
+  // setup.sh calls bare verbs (`setup-helpers run …`, etc). They resolve via the
+  // sourced check prelude: BASH_ENV makes the non-interactive bash that runs
+  // setup.sh source the prelude (which defines those functions) before the
+  // script body. The prelude reads QUORUM_REPO_ROOT, set here and forwarded to
+  // its delegating CLIs.
+  const root = repoRoot();
+  const prelude = join(root, 'src', 'checks', 'prelude.sh');
   const proc = spawnSync(script, [], {
     cwd: workdir,
     env: {
       ...envSnapshot(),
-      PATH: `${join(repoRoot(), 'bin')}:${getEnv('PATH') ?? ''}`,
+      BASH_ENV: prelude,
+      QUORUM_REPO_ROOT: root,
       QUORUM_WORKDIR: workdir,
       ...envExtra,
     },

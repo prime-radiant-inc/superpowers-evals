@@ -1043,7 +1043,6 @@ async function runInnerBody(
   runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
 
   const checksRepoRoot = repoRoot();
-  const quorumBin = join(checksRepoRoot, 'bin');
 
   // pre-checks: a crash is an error stage; a failed assertion is a verdict.
   // checks.sh is guaranteed present (the missing-checks guard returned early).
@@ -1052,7 +1051,6 @@ async function runInnerBody(
     phase: 'pre',
     workdir,
     repoRoot: checksRepoRoot,
-    quorumBin,
     runDir,
   });
   if (pre.exitCode !== 0) {
@@ -1420,7 +1418,6 @@ async function runInnerBody(
     phase: 'post',
     workdir,
     repoRoot: checksRepoRoot,
-    quorumBin,
     transcriptPath: capture.path,
     runDir,
   });

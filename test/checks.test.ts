@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
 
 const REPO = resolve(import.meta.dir, '..');
-const BIN = resolve(REPO, 'bin');
 
 function checksShWith(body: string): string {
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
@@ -27,7 +26,6 @@ test('pre() emitting a passing file-exists record is collected', async () => {
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
   expect(records).toHaveLength(1);
@@ -53,7 +51,6 @@ test('not file-exists (miss) emits a single negated record under the inner name 
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
   expect(records).toHaveLength(1);
@@ -84,7 +81,6 @@ test('git-count commits via runPhase emits the byte-shaped record', async () => 
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
   expect(records).toHaveLength(3);
@@ -105,7 +101,6 @@ test('rc 0 with no records yields exitCode 0 and no records', async () => {
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
   expect(records).toEqual([]);
@@ -124,7 +119,6 @@ test('a bash crash (unbound command) with no records surfaces as a nonzero exitC
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(records).toEqual([]);
   expect(exitCode).toBe(127);
@@ -146,7 +140,6 @@ test('a signal-killed bash phase with no records surfaces a nonzero crash exitCo
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(records).toEqual([]);
   expect(exitCode).not.toBe(0);
@@ -171,7 +164,6 @@ test('a signal-killed bash phase is a crash even if it already emitted a record'
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   // The partial record is still captured for the verdict's check list.
   expect(records).toHaveLength(1);
@@ -193,10 +185,10 @@ test('a bash spawn failure throws instead of reporting a clean empty phase', asy
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   const emptyDir = mkdtempSync(join(tmpdir(), 'nobin-'));
   const checksSh = checksShWith('pre() { :; }\npost() { :; }\n');
-  // Compose an env where neither quorumBin nor the inherited PATH can resolve
-  // `bash`, forcing spawnSync to fail with ENOENT (status:null, error set).
-  // runPhase composes the child PATH from envSnapshot() (a live process.env view),
-  // so we set it to a bash-less dir for the duration of this one assertion.
+  // Compose an env where the inherited PATH cannot resolve `bash`, forcing
+  // spawnSync to fail with ENOENT (status:null, error set). runPhase composes the
+  // child PATH from envSnapshot() (a live process.env view), so we set it to a
+  // bash-less dir for the duration of this one assertion.
   // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
   const savedPath = process.env['PATH'];
   // biome-ignore lint/style/noProcessEnv: must mutate inherited PATH to provoke a spawn failure
@@ -208,7 +200,6 @@ test('a bash spawn failure throws instead of reporting a clean empty phase', asy
         phase: 'pre',
         workdir,
         repoRoot: REPO,
-        quorumBin: emptyDir,
       }),
     ).rejects.toThrow();
   } finally {
@@ -217,12 +208,12 @@ test('a bash spawn failure throws instead of reporting a clean empty phase', asy
   }
 });
 
-// E-path-empty-fallback: Python composes the child PATH as
-// `{quorum_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}` (quorum/checks.py:82),
-// so an UNSET PATH still resolves system utilities. TS fell back to '' — yielding
-// `{quorumBin}:` whose trailing empty component means CWD on POSIX, and no
-// /usr/bin or /bin. Parity: an unset PATH falls back to /usr/bin:/bin.
-test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-PATH empty component)', async () => {
+// E-path-empty-fallback: an UNSET PATH must still resolve system utilities
+// (bash, git) the check verbs shell out to. A '' fallback would yield an empty
+// PATH (CWD-on-PATH and no /usr/bin or /bin). The check verbs are prelude
+// functions, not PATH entries, so PATH carries no quorum component: an unset
+// PATH falls back to exactly /usr/bin:/bin.
+test('an unset PATH falls back to /usr/bin:/bin in the child env (not an empty/CWD-on-PATH PATH)', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   // bash lives under /bin or /usr/bin, so the fallback is what makes this run at
   // all once PATH is unset. Capture the child's PATH for inspection.
@@ -241,14 +232,13 @@ test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-P
       phase: 'pre',
       workdir,
       repoRoot: REPO,
-      quorumBin: BIN,
     });
     childPath = readFileSync(out, 'utf8');
   } finally {
     // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
     process.env['PATH'] = savedPath;
   }
-  expect(childPath).toBe(`${BIN}:/usr/bin:/bin`);
+  expect(childPath).toBe('/usr/bin:/bin');
 });
 
 // L3-phase-large-output-enobuf: runPhase's spawnSync has no maxBuffer, so a
@@ -270,7 +260,6 @@ test('a phase emitting >1 MB still collects its records (no ENOBUFS discard)', a
     phase: 'pre',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
   expect(records).toHaveLength(1);
@@ -349,15 +338,16 @@ test('parseCodingAgentsDirective honors a directive on the 21st physical line', 
   expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude']);
 });
 
-// Negative-assertion empty-capture guard (oracle 0f6af56, lives in
-// bin/tool-not-called + bin/skill-not-called). A negative assertion cannot be
-// verified without a transcript: an empty/missing capture means "we don't know",
-// not "it wasn't called". The guard must emit a FAIL record rather than vacuously
-// pass. These drive both negative tools through runPhase so a regression in the
-// shared bash is caught from the TS side. The load-bearing signal is the FAIL
-// record (passed:false): the bin tool exits 1, but runPhase's crash heuristic
-// normalizes a record-bearing assertion-fail to exitCode 0 — the record, not the
-// exit code, is what flips RED if the guard ever vacuously passes again.
+// Negative-assertion empty-capture guard (oracle 0f6af56, in the
+// tool-not-called + skill-not-called check-transcript verbs). A negative
+// assertion cannot be verified without a transcript: an empty/missing capture
+// means "we don't know", not "it wasn't called". The guard must emit a FAIL
+// record rather than vacuously pass. These drive both negative verbs through
+// runPhase so a regression is caught from the TS side. The load-bearing signal
+// is the FAIL record (passed:false): the verb exits 1, but runPhase's crash
+// heuristic normalizes a record-bearing assertion-fail to exitCode 0 — the
+// record, not the exit code, is what flips RED if the guard ever vacuously
+// passes again.
 
 // An ATIF trajectory carrying a single Read tool call. A "non-empty trace that
 // lacks the asserted tool/skill" — the positive control for the empty-guard.
@@ -394,7 +384,6 @@ test('tool-not-called FAILs against an empty trace capture (no vacuous pass)', a
     phase: 'post',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
     transcriptPath,
   });
   expect(records[0]).toMatchObject({
@@ -417,7 +406,6 @@ test('skill-not-called FAILs against an empty trace capture (no vacuous pass)', 
     phase: 'post',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
     transcriptPath,
   });
   expect(records[0]).toMatchObject({
@@ -441,7 +429,6 @@ test('tool-not-called PASSes on a non-empty trace that lacks the tool (positive 
     phase: 'post',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
     transcriptPath,
   });
   expect(exitCode).toBe(0);
@@ -466,7 +453,6 @@ test('skill-not-called PASSes on a non-empty trace that lacks the skill (positiv
     phase: 'post',
     workdir,
     repoRoot: REPO,
-    quorumBin: BIN,
     transcriptPath,
   });
   expect(exitCode).toBe(0);

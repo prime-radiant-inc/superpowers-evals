@@ -9,11 +9,12 @@ import {
 } from '../contracts/verdict.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 
-// A bin/ check tool emits one of these per line into QUORUM_RECORD_SINK. The
-// tools are thin shims over the typed dispatcher (src/cli/check-tool.ts), whose
-// sole record emitter is src/check/record.ts: {check, args, negated, passed,
-// detail}. The phase is injected by quorum, not the tool, so the sink-line
-// schema is the full CheckRecord minus its phase field.
+// A check verb emits one of these per line into QUORUM_RECORD_SINK. The verbs
+// are bash functions (defined by the sourced prelude, src/checks/prelude.sh)
+// over the typed dispatcher (src/cli/check-tool.ts), whose sole record emitter
+// is src/check/record.ts: {check, args, negated, passed, detail}. The phase is
+// injected by quorum, not the verb, so the sink-line schema is the full
+// CheckRecord minus its phase field.
 const SinkRecordSchema = CheckRecordSchema.omit({ phase: true });
 
 export interface RunPhaseArgs {
@@ -27,12 +28,6 @@ export interface RunPhaseArgs {
    * functions delegating to the TS check CLIs.
    */
   readonly repoRoot: string;
-  /**
-   * Directory prepended to PATH so the legacy bin/ check shims resolve. Retained
-   * only during the prelude migration's dual-wire window; removed once the
-   * prelude is the sole resolution path.
-   */
-  readonly quorumBin: string;
   /** Optional: path to the ATIF trajectory.json, exposed to transcript checks. */
   readonly transcriptPath?: string;
   /** Optional: the run dir, exposed to post-checks that read sibling artifacts. */
@@ -50,9 +45,10 @@ export interface RunPhaseResult {
 }
 
 /**
- * Source a scenario's checks.sh and invoke one phase (`pre`/`post`), collecting
- * the CheckRecords its bin/ tools emit. Pure given the filesystem; throws only on
- * an unrecoverable spawn failure (§6.1/§6.4).
+ * Source the check prelude + a scenario's checks.sh and invoke one phase
+ * (`pre`/`post`), collecting the CheckRecords its verb functions emit. Pure
+ * given the filesystem; throws only on an unrecoverable spawn failure
+ * (§6.1/§6.4).
  */
 export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   const sinkDir = mkdtempSync(join(tmpdir(), 'sink-'));
@@ -62,14 +58,15 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   // directly. undefined values are simply absent in the child's environment.
   // Assembled as one literal (conditional spreads for the optional keys) so the
   // names are object properties, not index-signature reads/writes.
-  // Match quorum/checks.py:82 — an unset PATH falls back to the system default,
-  // not '' (a '' fallback yields `{quorumBin}:` whose trailing empty component is
-  // CWD on POSIX and drops /usr/bin:/bin, so even bash itself fails to resolve).
+  // An unset PATH falls back to the system default so bash, git, and the other
+  // utilities the verbs shell out to still resolve. The check verbs themselves
+  // are prelude functions (no PATH entry), so PATH carries no quorum-specific
+  // component.
   const path = getEnv('PATH') ?? '/usr/bin:/bin';
   const prelude = join(args.repoRoot, 'src', 'checks', 'prelude.sh');
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
-    PATH: `${args.quorumBin}:${path}`,
+    PATH: path,
     QUORUM_REPO_ROOT: args.repoRoot,
     QUORUM_RECORD_SINK: sink,
     ...(args.transcriptPath !== undefined
