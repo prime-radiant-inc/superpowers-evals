@@ -7,8 +7,8 @@ itself an AI agent; what appears on screen is its work.
 
 Your bash starts in a scratch directory, NOT the workdir quorum prepared.
 quorum has generated a launcher that handles everything: it cds into the
-prepared workdir, sources the private Copilot env file, sets an isolated
-`COPILOT_HOME`, points Copilot at the staged Superpowers plugin, assigns the
+prepared workdir, sources the private Copilot env file, pins a throwaway
+`$HOME` for the run, points Copilot at the staged Superpowers plugin, assigns the
 run-specific session id, disables auto-update and remote/builtin MCPs, marks
 secret env vars for Copilot, and writes logs inside the isolated home. Type
 this one line, verbatim, as your first action:
@@ -21,13 +21,15 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && . <private-copilot-env-file> && env -i PATH=<path> HOME=<per-run-isolated-home> COPILOT_HOME=<per-run-isolated-home> COPILOT_CACHE_HOME=<per-run-isolated-home>/.cache COPILOT_CLI=1 COPILOT_AUTO_UPDATE=false copilot --plugin-dir <per-run-isolated-home>/plugins/superpowers --session-id <run-session-id> --allow-all --no-auto-update --no-remote --disable-builtin-mcps --secret-env-vars=<secret-env-var-names> --log-dir <per-run-isolated-home>/logs
+cd <prepared-workdir> && . <private-copilot-env-file> && env -i PATH=<path> HOME=<per-run-throwaway-home> XDG_CONFIG_HOME=<home>/.config XDG_CACHE_HOME=<home>/.cache XDG_DATA_HOME=<home>/.local/share XDG_STATE_HOME=<home>/.local/state TMPDIR=<home>/.tmp COPILOT_CACHE_HOME=<home>/.copilot/.cache COPILOT_CLI=1 COPILOT_AUTO_UPDATE=false copilot --plugin-dir <home>/.copilot/plugins/superpowers --session-id <run-session-id> --allow-all --no-auto-update --no-remote --disable-builtin-mcps --secret-env-vars=<secret-env-var-names> --log-dir <home>/.copilot/logs
 ```
 
-Because the cd, env file source, isolated home, plugin directory, session id,
+Because the cd, env file source, throwaway `$HOME`, plugin directory, session id,
 permission flags, secret env var list, and log directory live inside the
 launcher, do not hand-type a bare `copilot` or reconstruct the command
-yourself. Run only the one line above as your first action.
+yourself. Run only the one line above as your first action. The launcher sets no
+`COPILOT_HOME`; with it unset Copilot resolves its home to `$HOME/.copilot`,
+where quorum seeded the config.
 
 ## Observing what Copilot is doing
 

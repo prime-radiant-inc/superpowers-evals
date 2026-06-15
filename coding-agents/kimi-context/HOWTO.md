@@ -7,7 +7,7 @@ an AI agent; what appears on screen is its work.
 
 Your bash starts in a scratch directory, NOT the workdir quorum prepared.
 quorum has generated a launcher that handles everything: it cds into the
-prepared workdir, sets the per-run isolated `KIMI_CODE_HOME`, and starts Kimi
+prepared workdir, pins a throwaway `$HOME` for the run, and starts Kimi
 with automatic permissions. Type this one line, verbatim, as your first action:
 
 ```
@@ -16,15 +16,16 @@ with automatic permissions. Type this one line, verbatim, as your first action:
 
 That path is burned into this HOWTO at runtime by quorum.
 
-Because the `cd`, isolated Kimi home, auth settings, and permission flags live inside the
+Because the `cd`, throwaway `$HOME`, auth settings, and permission flags live inside the
 launcher, do not hand-type a bare `kimi` or reconstruct the command yourself.
 Just run the one line above.
 
-`KIMI_CODE_HOME` points at a per-run isolated Kimi home. quorum registers the
-local Superpowers checkout as the only enabled Kimi plugin in that home. Auth
-and model settings are supplied by quorum through its generated launcher; do
-not hand-type provider env vars, use a local Kimi login, or reconstruct the
-command yourself.
+The launcher pins HOME but sets no `KIMI_CODE_HOME`; Kimi defaults
+`KIMI_CODE_HOME` to `$HOME/.kimi-code`, the per-run isolated Kimi home. quorum
+registers the local Superpowers checkout as the only enabled Kimi plugin in that
+home. Auth and model settings are supplied by quorum through its generated
+launcher; do not hand-type provider env vars, use a local Kimi login, or
+reconstruct the command yourself.
 
 ## Observing what Kimi is doing
 

@@ -7,7 +7,7 @@ AI agent; what appears on screen is its work.
 
 Your bash starts in a scratch directory, NOT the workdir quorum
 prepared. quorum has generated a launcher that handles everything — it
-cds into the prepared workdir, sets the per-run isolated `CODEX_HOME`,
+cds into the prepared workdir, pins a throwaway `$HOME` for the run,
 scrubs OpenAI API-key environment variables so Codex uses the copied
 ChatGPT subscription auth, and starts codex with the bypass flag. Type
 **this one line, verbatim**
@@ -21,15 +21,17 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && CODEX_HOME=<per-run-isolated-dir> env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+cd <prepared-workdir> && HOME=<per-run-throwaway-home> env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
 ```
 
 Because the `cd` and the flags live inside the launcher, you cannot skip
 them. Do NOT hand-type a bare `codex` or reconstruct the `cd … && codex`
 line yourself — launching codex from the scratch dir lands its rollouts
 off-workdir and quorum discards the run as misconfigured. Just run the
-one line above. (The isolated `CODEX_HOME` ensures no user-installed
-Codex plugins or prior sessions affect this run.)
+one line above. (The launcher pins HOME but sets no `CODEX_HOME`; Codex
+defaults `CODEX_HOME` to `$HOME/.codex`, where quorum seeded the per-run
+config, so no user-installed Codex plugins or prior sessions affect this
+run.)
 
 For superpowers tool-mapping scenarios that use the legacy `.agents`
 symlink path, the setup step creates `.agents/skills/superpowers/` in
@@ -39,8 +41,9 @@ the workdir before you start.
 
 Codex writes rollout logs as JSONL files under
 `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` — one file per
-(sub)agent, organized by date. Because this run has its own isolated
-`CODEX_HOME`, anything in there is from this session.
+(sub)agent, organized by date. Because this run has its own throwaway
+`$HOME` (with `CODEX_HOME` under it at `$HOME/.codex`), anything in there
+is from this session.
 
 The rollout JSONL is **ground truth** for what Codex has done — every
 tool call, every reasoning step, every shell invocation lands there.
