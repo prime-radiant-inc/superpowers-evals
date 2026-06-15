@@ -598,10 +598,13 @@ test('writePrivateFileNoFollow refuses to write through a dest symlink', () => {
   }
 });
 
-// Guards the inherited 74e4a2d HOME isolation: the codex launch-agent template
-// scrubs OpenAI env, pins HOME under $CODEX_HOME, and isolates XDG/TMPDIR so the
-// staged superpowers@debug plugin is the version under test (no host bleed).
-test('codex launch-agent isolates HOME, XDG, TMPDIR and scrubs OPENAI_API_KEY', () => {
+// Guards the HOME isolation + CODEX_HOME collapse: the codex launch-agent
+// template scrubs OpenAI env and pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV so
+// the staged superpowers@debug plugin is the version under test (no host
+// bleed). It does NOT set CODEX_HOME: codex defaults CODEX_HOME to $HOME/.codex,
+// which is where the runner seeds the per-run config (codex.yaml:
+// home_config_subdir ".codex").
+test('codex launch-agent isolates HOME, scrubs OPENAI_API_KEY, and omits CODEX_HOME', () => {
   const launcher = readFileSync(
     join(
       import.meta.dir,
@@ -613,8 +616,10 @@ test('codex launch-agent isolates HOME, XDG, TMPDIR and scrubs OPENAI_API_KEY', 
     'utf8',
   );
   // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token (the
-  // standard every agent uses); codex keeps its OPENAI_API_KEY strip + CODEX_HOME.
+  // standard every agent uses); codex keeps its OPENAI_API_KEY strip.
   expect(launcher).toContain('$QUORUM_HOME_ENV');
   expect(launcher).toContain('-u OPENAI_API_KEY');
-  expect(launcher).toContain('CODEX_HOME="$CODEX_HOME"');
+  // CODEX_HOME is collapsed into $HOME — the launcher must NOT set it as an env
+  // assignment on the exec line (the comment block may still mention the name).
+  expect(launcher).not.toContain('CODEX_HOME="$CODEX_HOME"');
 });

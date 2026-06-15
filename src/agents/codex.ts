@@ -26,6 +26,11 @@ import { writePrivateFileNoFollow } from './private-file.ts';
 // it seeds the per-run CODEX_HOME so the agent boots past the sign-in picker
 // with Superpowers staged as a trusted SessionStart plugin hook.
 //
+// The per-run CODEX_HOME is `home.configDir`, which the runner roots at
+// <runHome>/.codex (codex.yaml: home_config_subdir ".codex"). Codex defaults
+// CODEX_HOME to $HOME/.codex, so the launcher sets only the isolated $HOME and
+// codex discovers this seeded config via that default — no CODEX_HOME var.
+//
 // Auth is a validated file write, not a login subprocess (oracle d9ccf4e):
 // _seed_codex_auth copies the host's ChatGPT subscription auth.json from
 // ~/.codex/auth.json into the per-run CODEX_HOME (mode 0600, O_NOFOLLOW so a

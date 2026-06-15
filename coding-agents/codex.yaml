@@ -1,6 +1,11 @@
 name: codex
 binary: codex
 agent_config_env: CODEX_HOME
+# Collapse CODEX_HOME into the throwaway $HOME: codex defaults CODEX_HOME to
+# $HOME/.codex for BOTH auth (auth.json) and rollouts (sessions/), so rooting
+# the config dir at <runHome>/.codex lets the launcher omit CODEX_HOME entirely
+# (the agent finds it via its $HOME default). See agentConfigDir().
+home_config_subdir: ".codex"
 session_log_dir: "${CODEX_HOME}/sessions"
 session_log_glob: "**/rollout-*.jsonl"
 normalizer: codex

@@ -1,28 +1,33 @@
 #!/usr/bin/env bash
 # quorum-generated launcher for Codex (the agent under test).
 #
-# The cd, CODEX_HOME, and the bypass flag are baked in here so the QA agent
-# launches Codex with ONE token and cannot accidentally skip the `cd` or
-# shorten the command. That skip was the qa-agent-misconfigured failure mode:
-# Codex launched from the scratch dir, rollouts landed off-workdir, and the
-# run was discarded. quorum substitutes the $… values below at runtime, so the
-# installed copy contains literal absolute paths (no env inheritance needed —
-# tmux strips env from new sessions).
+# The cd and the bypass flag are baked in here so the QA agent launches Codex
+# with ONE token and cannot accidentally skip the `cd` or shorten the command.
+# That skip was the qa-agent-misconfigured failure mode: Codex launched from the
+# scratch dir, rollouts landed off-workdir, and the run was discarded. quorum
+# substitutes the $… values below at runtime, so the installed copy contains
+# literal absolute paths (no env inheritance needed — tmux strips env from new
+# sessions).
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" CODEX_HOME="$CODEX_HOME" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#   cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#
+# CODEX_HOME collapse: this launcher sets HOME (via $QUORUM_HOME_ENV) but NOT
+# CODEX_HOME. Codex defaults CODEX_HOME to $HOME/.codex, which is exactly where
+# the runner seeds the per-run config (auth.json + the trusted plugin hook) —
+# so Codex finds its config via the isolated $HOME with no config-dir var.
 #
 # HOME isolation: Codex discovers user-scope skills and plugin marketplaces from
-# $HOME/.agents/{skills,plugins}, resolved via $HOME directly — NOT $CODEX_HOME
-# (codex core-skills loader adds an "$HOME/.agents/skills" user skill root via
-# home_dir(), with no off switch). Left at the host's HOME, a host
-# ~/.agents/skills/* symlink (e.g. into a host superpowers checkout) bleeds host
-# skills into the run and overrides the staged superpowers@debug plugin. The
-# shared $QUORUM_HOME_ENV pins HOME (and XDG/TMPDIR) to the per-run throwaway home
-# every agent uses, forcing Codex to load the staged skills — the version
-# actually under test. Codex auth lives in $CODEX_HOME/auth.json (seeded by the
-# runner), so isolating HOME does not affect login; the scenario repo carries
-# local git identity, so commits are unaffected.
+# $HOME/.agents/{skills,plugins}, resolved via $HOME directly (codex core-skills
+# loader adds an "$HOME/.agents/skills" user skill root via home_dir(), with no
+# off switch). Left at the host's HOME, a host ~/.agents/skills/* symlink (e.g.
+# into a host superpowers checkout) bleeds host skills into the run and overrides
+# the staged superpowers@debug plugin. The shared $QUORUM_HOME_ENV pins HOME (and
+# XDG/TMPDIR) to the per-run throwaway home every agent uses, forcing Codex to
+# load the staged skills — the version actually under test. Codex auth lives in
+# $HOME/.codex/auth.json (seeded by the runner), so isolating HOME does not
+# affect login; the scenario repo carries local git identity, so commits are
+# unaffected.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 
@@ -32,5 +37,4 @@ exec env \
   -u OPENAI_ORG_ID \
   -u OPENAI_PROJECT \
   $QUORUM_HOME_ENV \
-  CODEX_HOME="$CODEX_HOME" \
   codex --dangerously-bypass-approvals-and-sandbox "$@"
