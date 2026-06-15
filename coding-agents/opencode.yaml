@@ -1,6 +1,12 @@
 name: opencode
 binary: opencode
 agent_config_env: OPENCODE_QUORUM_HOME
+# OPENCODE_QUORUM_HOME is the opencode home root: it pins HOME and the XDG dirs,
+# and opencode keys its session DB off XDG_DATA_HOME. Collapse the config dir
+# into the throwaway per-run $HOME (= runHomeDir) so the launcher and the capture
+# subprocess share the same home — and therefore the same session store. "."
+# means the home itself.
+home_config_subdir: "."
 session_log_dir: "${OPENCODE_QUORUM_HOME}/.quorum/session-exports"
 session_log_glob: "[0-9]*-ses_*.json"
 normalizer: opencode

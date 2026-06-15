@@ -5,6 +5,12 @@
 # permission flag are baked in here so the QA agent launches OpenCode from the
 # prepared workdir with one command. quorum substitutes the $... values below
 # at runtime; the installed copy contains literal absolute paths.
+#
+# HOME/XDG/TMPDIR come from the QUORUM_HOME_ENV token (the single per-run
+# throwaway-HOME fragment, rooted at runHomeDir = the QUORUM_AGENT_HOME token).
+# opencode keys its session DB off XDG_DATA_HOME, so pinning HOME here puts the
+# session store under the same home the capture subprocess (opencodeEnv) uses.
+# OPENCODE_CONFIG_DIR mirrors opencodeEnv: <home>/.config/opencode.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 
@@ -25,11 +31,6 @@ done
 
 exec env -i \
   "${env_args[@]}" \
-  HOME="$OPENCODE_QUORUM_HOME" \
-  XDG_CONFIG_HOME="$OPENCODE_QUORUM_HOME/.config" \
-  XDG_DATA_HOME="$OPENCODE_QUORUM_HOME/.local/share" \
-  XDG_STATE_HOME="$OPENCODE_QUORUM_HOME/.local/state" \
-  XDG_CACHE_HOME="$OPENCODE_QUORUM_HOME/.cache" \
-  TMPDIR="$OPENCODE_QUORUM_HOME/.tmp" \
-  OPENCODE_CONFIG_DIR="$OPENCODE_QUORUM_HOME/.config/opencode" \
+  $QUORUM_HOME_ENV \
+  OPENCODE_CONFIG_DIR="$QUORUM_AGENT_HOME/.config/opencode" \
   opencode run -i --dangerously-skip-permissions "$@"
