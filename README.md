@@ -139,29 +139,28 @@ set -a; source .env; set +a
 export SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers
 export GEMINI_AUTH_TYPE=oauth-personal
 export SCENARIOS="scenario-a,scenario-b"
-export LOGDIR="results/runlogs/$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$LOGDIR"
 
-# Mirror combined stdout/stderr to a per-target log with `tee`.
+# run-all auto-persists results to results/batches/<id>/ + each run-dir's
+# verdict.json — no stdout capture needed; view with `bun run quorum show <batch-id>`.
 
 # Uncapped targets share the --jobs pool.
 bun run quorum run-all \
   --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
   --scenarios "$SCENARIOS" \
   --jobs 4 \
-  --no-cursor 2>&1 | tee "$LOGDIR/uncapped.log"
+  --no-cursor
 
 # Capped or fragile targets run one serial column per batch. Launch several
 # single-column batches in parallel only when their backends do not interfere.
-bun run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor 2>&1 | tee "$LOGDIR/copilot.log" &
-bun run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor 2>&1 | tee "$LOGDIR/opencode.log" &
-bun run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor 2>&1 | tee "$LOGDIR/pi.log" &
-bun run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor 2>&1 | tee "$LOGDIR/gemini.log" &
+bun run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+bun run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+bun run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+bun run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
 wait
 
 # Keep Antigravity separate from Gemini to avoid Google/Gemini auth or quota
 # noise while collecting clean capture.
-bun run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor 2>&1 | tee "$LOGDIR/antigravity.log"
+bun run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
 ```
 
 Trusted-maintainer Antigravity sweep:

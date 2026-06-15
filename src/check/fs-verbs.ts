@@ -717,11 +717,8 @@ export function verbCodexNativeHookConfigured(
     return fail('QUORUM_AGENT_CONFIG_DIR is not set');
   }
 
-  const config = resolve(ctx.cwd, join(codexHomeDir, 'config.toml'));
-  const plugin = resolve(
-    ctx.cwd,
-    join(codexHomeDir, 'plugins/cache/debug/superpowers/local'),
-  );
+  const config = join(codexHomeDir, 'config.toml');
+  const plugin = join(codexHomeDir, 'plugins/cache/debug/superpowers/local');
 
   if (!isFile(config)) {
     return fail(`missing Codex config at ${config}`);

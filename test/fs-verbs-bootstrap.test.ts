@@ -254,6 +254,47 @@ test('kimi-plugin-installed fails when QUORUM_AGENT_CONFIG_DIR is unset', () => 
   expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
 });
 
+// Write an installed.json with one enabled Superpowers plugin whose entry
+// fields are overridden, so the verb passes the file-existence guard and
+// reaches its content-validation branch.
+function writeKimiInstalledEntry(
+  cfg: string,
+  entry: Record<string, unknown>,
+): void {
+  writeUnder(
+    cfg,
+    'plugins/installed.json',
+    JSON.stringify({
+      plugins: [{ id: 'superpowers', enabled: true, ...entry }],
+    }),
+  );
+}
+
+test('kimi-plugin-installed fails when the plugin source is not local-path', () => {
+  const cfg = configDir();
+  const pluginRoot = stageKimiPluginRoot();
+  writeKimiInstalledEntry(cfg, { source: 'registry', root: pluginRoot });
+  const out = verbKimiPluginInstalled(
+    [],
+    ctxFor(cfg, { SUPERPOWERS_ROOT: pluginRoot }),
+  );
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('source must be local-path');
+});
+
+test('kimi-plugin-installed fails when the plugin root points away from SUPERPOWERS_ROOT', () => {
+  const cfg = configDir();
+  const pluginRoot = stageKimiPluginRoot();
+  const otherRoot = stageKimiPluginRoot();
+  writeKimiInstalledEntry(cfg, { source: 'local-path', root: otherRoot });
+  const out = verbKimiPluginInstalled(
+    [],
+    ctxFor(cfg, { SUPERPOWERS_ROOT: pluginRoot }),
+  );
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('does not match SUPERPOWERS_ROOT');
+});
+
 // ---------------------------------------------------------------------------
 // codex-native-hook-configured: <configDir>/config.toml (with the four hook
 // tokens) + <configDir>/plugins/cache/debug/superpowers/local/{manifest,hook}.
@@ -299,4 +340,60 @@ test('codex-native-hook-configured fails when QUORUM_AGENT_CONFIG_DIR is unset',
   });
   expect(out.passed).toBe(false);
   expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
+});
+
+// Stage the manifest + hook runner so the file-existence guards pass, then
+// write a config.toml body so the verb reaches its content-validation branches.
+function stageCodexConfigWithToml(cfg: string, toml: string): void {
+  writeUnder(cfg, 'config.toml', toml);
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, '.codex-plugin/plugin.json'),
+    '{"name":"superpowers"}\n',
+  );
+  writeUnder(cfg, join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'), ':\n');
+}
+
+test('codex-native-hook-configured fails when config.toml omits plugin_hooks = true', () => {
+  const cfg = configDir();
+  const toml = CODEX_CONFIG_TOML.split('\n')
+    .filter((l) => l !== 'plugin_hooks = true')
+    .join('\n');
+  stageCodexConfigWithToml(cfg, toml);
+  const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('plugin_hooks');
+});
+
+test('codex-native-hook-configured fails when the debug plugin table is absent', () => {
+  const cfg = configDir();
+  const toml = CODEX_CONFIG_TOML.split('\n')
+    .filter((l) => l !== '[plugins."superpowers@debug"]')
+    .join('\n');
+  stageCodexConfigWithToml(cfg, toml);
+  const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('debug Superpowers plugin not enabled');
+});
+
+test('codex-native-hook-configured fails when the hook trust state is absent', () => {
+  const cfg = configDir();
+  const toml = CODEX_CONFIG_TOML.split('\n')
+    .filter((l) => l !== '[hooks.state."superpowers@debug:session_start"]')
+    .join('\n');
+  stageCodexConfigWithToml(cfg, toml);
+  const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('hook trust state missing');
+});
+
+test('codex-native-hook-configured fails when the trusted hook hash is absent', () => {
+  const cfg = configDir();
+  const toml = CODEX_CONFIG_TOML.split('\n')
+    .filter((l) => l !== 'trusted_hash = "sha256:deadbeef0123"')
+    .join('\n');
+  stageCodexConfigWithToml(cfg, toml);
+  const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('trusted hook hash missing');
 });

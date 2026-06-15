@@ -17,9 +17,9 @@ import { homeEnvSubstitutions } from '../src/runner/index.ts';
 // {HOWTO.md, launch-agent}, the templates populateContextDir substitutes.
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
-// Build the claude context substitutions exactly as the runner does
-// (quorum/runner.py 1885-1916 for the runtime_family == claude path). configDir
-// is the per-run agent-config dir; launchCwd the prepared workdir.
+// Build the claude context substitutions exactly as the runner does for the
+// runtime_family == claude path (src/runner/index.ts). configDir is the per-run
+// agent-config dir; launchCwd the prepared workdir.
 function claudeSubstitutions(opts: {
   readonly launchCwd: string;
   readonly configDir: string;
@@ -41,8 +41,6 @@ function claudeSubstitutions(opts: {
     $SUPERPOWERS_ROOT: superpowersRoot,
     $QUORUM_LAUNCH_AGENT: launchAgentPath,
     $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(launchAgentPath),
-    $CLAUDE_CONFIG_DIR: configDir,
-    $CLAUDE_CONFIG_DIR_SH: shellSingleQuote(configDir),
     $CLAUDE_ENV_FILE: claudeEnvFile,
     $CLAUDE_ENV_FILE_SH: shellSingleQuote(claudeEnvFile),
     $CLAUDE_MODEL: model,
