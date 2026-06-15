@@ -22,6 +22,7 @@ const GEMINI_TOOL_MAP: Record<string, string> = {
   list_directory: 'Glob',
   enter_plan_mode: 'EnterPlanMode',
   exit_plan_mode: 'ExitPlanMode',
+  invoke_agent: 'Agent',
 };
 
 interface GeminiMessage {
