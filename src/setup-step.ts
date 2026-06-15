@@ -12,11 +12,10 @@ export class SetupError extends Error {}
  * subprocess environment is the current snapshot (via {@link envSnapshot})
  * overlaid with `QUORUM_WORKDIR` and any `envExtra`.
  *
- * Mirrors Python `_run_scenario_script`: a missing `setup.sh` is a silent
- * no-op; a spawn-level failure (e.g. a non-executable file — `spawnSync` sets
- * `proc.error` with `status` null) throws, rather than being swallowed by the
- * exit-code guard; and a non-zero exit throws a {@link SetupError} carrying the
- * captured stdout and stderr.
+ * A missing `setup.sh` is a silent no-op; a spawn-level failure (e.g. a
+ * non-executable file — `spawnSync` sets `proc.error` with `status` null) throws,
+ * rather than being swallowed by the exit-code guard; and a non-zero exit throws
+ * a {@link SetupError} carrying the captured stdout and stderr.
  */
 export function runSetup(
   scenarioDir: string,
@@ -44,11 +43,11 @@ export function runSetup(
       ...envExtra,
     },
     encoding: 'utf8',
-    // Python's subprocess.run has no output cap. spawnSync defaults maxBuffer to
-    // 1 MB of stdout+stderr; a verbose-but-successful setup.sh (git clone / bun
-    // install / uv sync routinely exceed 1 MB) would otherwise return
-    // {status:null, error:{code:'ENOBUFS'}}, which the spawn-error guard below
-    // then mislabels as a spawn failure. Uncap to match Python.
+    // spawnSync defaults maxBuffer to 1 MB of stdout+stderr; a verbose-but-
+    // successful setup.sh (git clone / bun install / uv sync routinely exceed
+    // 1 MB) would otherwise return {status:null, error:{code:'ENOBUFS'}}, which
+    // the spawn-error guard below then mislabels as a spawn failure. Uncap so a
+    // chatty setup is not misread as a crash.
     maxBuffer: Number.POSITIVE_INFINITY,
   });
   if (proc.error) {

@@ -3,16 +3,16 @@
 # Scenario scripts call BARE commands: `file-exists`, `git-count`, `not`,
 # `check-transcript`, `setup-helpers`, … This file is SOURCED before each
 # scenario script so those names resolve to shell functions that delegate
-# straight to the TypeScript dispatchers — no bin/-on-PATH shims.
+# straight to the TypeScript dispatchers.
 #
 # It is path-free: every function reads $QUORUM_REPO_ROOT at call time, so the
 # prelude can be sourced from anywhere (runPhase's bash -c, setup.sh's BASH_ENV).
 #
-# Each FS verb still execs the SAME src/cli/check-tool.ts with its name as $1, so
-# the emitted {check,args,negated,passed,detail} record and the 127 crash-band
-# exit discipline are byte-for-byte unchanged from the old bin/ shims. `not` is
-# also a check-tool.ts verb (its 3 in-process rules live there). check-transcript
-# and setup-helpers delegate to their own CLIs.
+# Each FS verb execs src/cli/check-tool.ts with its name as $1; that dispatcher
+# is the sole source of the emitted {check,args,negated,passed,detail} record and
+# the 127 crash-band exit discipline. `not` is also a check-tool.ts verb (its 3
+# in-process rules live there). check-transcript and setup-helpers delegate to
+# their own CLIs.
 
 # Define one delegating function per FS check verb. The verb vocabulary is read
 # from the dispatcher (Object.keys(FS_VERBS)) so it can never drift from the

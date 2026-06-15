@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
-// Batch index contracts (parity with quorum/run_all.py write_batch_header /
-// append_result_record). Every JSON read at these boundaries is zod-narrowed;
-// the writers live in src/run-all/batch-index.ts and match the Python byte
-// shapes (batch.json indent 2, results.jsonl one compact record per line).
+// Batch index contracts. Every JSON read at these boundaries is zod-narrowed;
+// the writers live in src/run-all/batch-index.ts (batch.json indent 2,
+// results.jsonl one compact record per line).
 
 // batch.json — written once at batch start (finished_at null), patched at end.
 export const BatchHeaderSchema = z.object({
@@ -30,8 +29,8 @@ export type ResultRecord = z.infer<typeof ResultRecordSchema>;
 // directive > draft > tier (see buildMatrix).
 export type SkippedReason = 'directive' | 'draft' | 'tier' | null;
 
-// One (scenario, agent) cell of the batch matrix. Mirrors run_all.py MatrixEntry;
-// `runnable` is the helper below rather than a property to keep the type plain.
+// One (scenario, agent) cell of the batch matrix. `runnable` is the helper below
+// rather than a property to keep the type plain.
 export interface MatrixEntry {
   readonly scenario: string;
   readonly codingAgent: string;
@@ -41,12 +40,12 @@ export interface MatrixEntry {
   readonly status: string;
 }
 
-// A cell runs iff it carries no skip reason (run_all.py MatrixEntry.runnable).
+// A cell runs iff it carries no skip reason.
 export function runnable(entry: MatrixEntry): boolean {
   return entry.skippedReason === null;
 }
 
-// Outcome of one child `quorum run` invocation (run_all.py ChildResult).
+// Outcome of one child `quorum run` invocation.
 //   run_id    — the run-dir basename the child printed, or null if it crashed
 //               before allocating one.
 //   exit_code — child process exit code (0 pass / 1 fail / 2 indeterminate;
