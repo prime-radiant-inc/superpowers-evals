@@ -20,7 +20,18 @@ export interface RunPhaseArgs {
   readonly checksSh: string;
   readonly phase: CheckPhase;
   readonly workdir: string;
-  /** Directory prepended to PATH so the bin/ check tools resolve (the repo bin/). */
+  /**
+   * The quorum repo root. Exposed to the child as QUORUM_REPO_ROOT and used to
+   * locate the sourced check prelude (src/checks/prelude.sh), which defines the
+   * bare-verb DSL (file-exists, git-count, not, check-transcript, …) as
+   * functions delegating to the TS check CLIs.
+   */
+  readonly repoRoot: string;
+  /**
+   * Directory prepended to PATH so the legacy bin/ check shims resolve. Retained
+   * only during the prelude migration's dual-wire window; removed once the
+   * prelude is the sole resolution path.
+   */
   readonly quorumBin: string;
   /** Optional: path to the ATIF trajectory.json, exposed to transcript checks. */
   readonly transcriptPath?: string;
@@ -55,9 +66,11 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   // not '' (a '' fallback yields `{quorumBin}:` whose trailing empty component is
   // CWD on POSIX and drops /usr/bin:/bin, so even bash itself fails to resolve).
   const path = getEnv('PATH') ?? '/usr/bin:/bin';
+  const prelude = join(args.repoRoot, 'src', 'checks', 'prelude.sh');
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
     PATH: `${args.quorumBin}:${path}`,
+    QUORUM_REPO_ROOT: args.repoRoot,
     QUORUM_RECORD_SINK: sink,
     ...(args.transcriptPath !== undefined
       ? { QUORUM_TRANSCRIPT_PATH: args.transcriptPath }
@@ -68,7 +81,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   try {
     const proc = spawnSync(
       'bash',
-      ['-c', `source '${args.checksSh}'; ${args.phase}`],
+      ['-c', `source '${prelude}'; source '${args.checksSh}'; ${args.phase}`],
       {
         cwd: args.workdir,
         env,

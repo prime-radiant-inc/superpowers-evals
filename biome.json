@@ -105,7 +105,8 @@
         "test/agent-*.test.ts",
         "test/setup-helpers-shim.test.ts",
         "test/check-transcript.test.ts",
-        "test/check-tool.test.ts"
+        "test/check-tool.test.ts",
+        "test/prelude-record-equality.test.ts"
       ],
       "linter": {
         "rules": {

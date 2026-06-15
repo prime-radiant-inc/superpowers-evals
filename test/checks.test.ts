@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
 
-const BIN = resolve(import.meta.dir, '..', 'bin');
+const REPO = resolve(import.meta.dir, '..');
+const BIN = resolve(REPO, 'bin');
 
 function checksShWith(body: string): string {
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
@@ -25,6 +26,7 @@ test('pre() emitting a passing file-exists record is collected', async () => {
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
@@ -50,6 +52,7 @@ test('not file-exists (miss) emits a single negated record under the inner name 
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
@@ -80,6 +83,7 @@ test('git-count commits via runPhase emits the byte-shaped record', async () => 
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
@@ -100,6 +104,7 @@ test('rc 0 with no records yields exitCode 0 and no records', async () => {
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
@@ -118,6 +123,7 @@ test('a bash crash (unbound command) with no records surfaces as a nonzero exitC
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(records).toEqual([]);
@@ -139,6 +145,7 @@ test('a signal-killed bash phase with no records surfaces a nonzero crash exitCo
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(records).toEqual([]);
@@ -163,6 +170,7 @@ test('a signal-killed bash phase is a crash even if it already emitted a record'
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   // The partial record is still captured for the verdict's check list.
@@ -195,7 +203,13 @@ test('a bash spawn failure throws instead of reporting a clean empty phase', asy
   process.env['PATH'] = emptyDir;
   try {
     await expect(
-      runPhase({ checksSh, phase: 'pre', workdir, quorumBin: emptyDir }),
+      runPhase({
+        checksSh,
+        phase: 'pre',
+        workdir,
+        repoRoot: REPO,
+        quorumBin: emptyDir,
+      }),
     ).rejects.toThrow();
   } finally {
     // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
@@ -222,7 +236,13 @@ test('an unset PATH falls back to /usr/bin:/bin in the child env (not a CWD-on-P
   process.env['PATH'] = undefined;
   let childPath: string;
   try {
-    await runPhase({ checksSh, phase: 'pre', workdir, quorumBin: BIN });
+    await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+      quorumBin: BIN,
+    });
     childPath = readFileSync(out, 'utf8');
   } finally {
     // biome-ignore lint/style/noProcessEnv: restore the inherited PATH after the assertion
@@ -249,6 +269,7 @@ test('a phase emitting >1 MB still collects its records (no ENOBUFS discard)', a
     checksSh,
     phase: 'pre',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
   });
   expect(exitCode).toBe(0);
@@ -372,6 +393,7 @@ test('tool-not-called FAILs against an empty trace capture (no vacuous pass)', a
     checksSh,
     phase: 'post',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
     transcriptPath,
   });
@@ -394,6 +416,7 @@ test('skill-not-called FAILs against an empty trace capture (no vacuous pass)', 
     checksSh,
     phase: 'post',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
     transcriptPath,
   });
@@ -417,6 +440,7 @@ test('tool-not-called PASSes on a non-empty trace that lacks the tool (positive 
     checksSh,
     phase: 'post',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
     transcriptPath,
   });
@@ -441,6 +465,7 @@ test('skill-not-called PASSes on a non-empty trace that lacks the skill (positiv
     checksSh,
     phase: 'post',
     workdir,
+    repoRoot: REPO,
     quorumBin: BIN,
     transcriptPath,
   });
