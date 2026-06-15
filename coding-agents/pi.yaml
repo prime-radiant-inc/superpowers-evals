@@ -1,8 +1,19 @@
 name: pi
 binary: pi
 agent_config_env: PI_CODING_AGENT_DIR
+# Collapse PI_CODING_AGENT_DIR into the throwaway $HOME: pi defaults its config
+# dir to $HOME/.pi/agent (PI_CODING_AGENT_DIR unset) and its session dir to
+# <config>/sessions (PI_CODING_AGENT_SESSION_DIR / --session-dir unset), so
+# rooting the config dir at <runHome>/.pi/agent lets the launcher omit both the
+# config-dir env var AND --session-dir — pi finds its seeded config and writes
+# sessions via its $HOME default. See agentConfigDir().
+home_config_subdir: ".pi/agent"
 session_log_dir: "${PI_CODING_AGENT_DIR}/sessions"
-session_log_glob: "*.jsonl"
+# Without an explicit --session-dir, pi nests sessions one level deeper, under a
+# per-launch-cwd subdir (sessions/<cwd-encoded>/<ts>_<uuid>.jsonl), so the glob
+# must traverse it. The cwd-filter keys off each file's first-line `cwd`, not the
+# path, so the extra depth is transparent to capture.
+session_log_glob: "**/*.jsonl"
 normalizer: pi
 # Auth is OAuth-or-env (PiAgent.provision): PI_PROVIDER/PI_MODEL/PI_API_KEY are
 # only needed for the api-key path; an OAuth login under ~/.pi works without

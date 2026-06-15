@@ -2,9 +2,16 @@
 # quorum-generated launcher for Pi (the agent under test).
 #
 # quorum substitutes the $... values below at runtime, so the installed copy
-# contains literal absolute paths. The cd, auth env file, session dir, model,
-# extension path, and tool allowlist are baked in so the QA agent launches Pi
-# with one command and cannot accidentally start from the scratch directory.
+# contains literal absolute paths. The cd, auth env file, model, extension path,
+# and tool allowlist are baked in so the QA agent launches Pi with one command
+# and cannot accidentally start from the scratch directory.
+#
+# PI_CODING_AGENT_DIR collapse: this launcher sets HOME (via $QUORUM_HOME_ENV)
+# but NOT PI_CODING_AGENT_DIR, and passes NO --session-dir. pi defaults its
+# config dir to $HOME/.pi/agent and its session dir to <config>/sessions, which
+# is exactly where the runner seeds the per-run config (pi.yaml:
+# home_config_subdir ".pi/agent") — so pi finds its config and writes sessions
+# via the isolated $HOME with no config-dir or session-dir flag.
 set -euo pipefail
 
 cd "$QUORUM_AGENT_CWD" || {
@@ -28,11 +35,9 @@ fi
 
 exec env \
   $QUORUM_HOME_ENV \
-  PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" \
   PI_OFFLINE=1 \
   PI_TELEMETRY=0 \
   pi \
-    --session-dir "$PI_CODING_AGENT_DIR/sessions" \
     --provider "$PI_PROVIDER" \
     --model "$PI_MODEL" \
     --no-extensions \

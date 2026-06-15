@@ -84,13 +84,17 @@ afterAll(() => {
 });
 
 // The pi.yaml shape (coding-agents/pi.yaml), inlined so the test is hermetic.
+// home_config_subdir ".pi/agent" collapses the config dir into the throwaway
+// $HOME; the adapter writes under home.configDir regardless, so it is carried
+// here only to mirror the real YAML.
 function piConfig(): AgentConfig {
   return {
     name: 'pi',
     binary: 'pi',
     agent_config_env: 'PI_CODING_AGENT_DIR',
+    home_config_subdir: '.pi/agent',
     session_log_dir: '${PI_CODING_AGENT_DIR}/sessions',
-    session_log_glob: '*.jsonl',
+    session_log_glob: '**/*.jsonl',
     normalizer: 'pi',
     required_env: ['SUPERPOWERS_ROOT', 'PI_PROVIDER', 'PI_MODEL', 'PI_API_KEY'],
     max_time: '10m',
@@ -623,4 +627,28 @@ test('oauth path without provider/model (no settings, no env) throws', () => {
     sp.cleanup();
     cleanup();
   }
+});
+
+// Guards the HOME isolation + PI_CODING_AGENT_DIR collapse: the pi launch-agent
+// template pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV and sources pi.env, but it
+// does NOT set PI_CODING_AGENT_DIR and passes NO --session-dir. pi defaults its
+// config dir to $HOME/.pi/agent and its session dir to <config>/sessions, which
+// is where the runner seeds the per-run config (pi.yaml: home_config_subdir
+// ".pi/agent") — so pi finds it all via the isolated $HOME.
+test('pi launch-agent isolates HOME, omits PI_CODING_AGENT_DIR and --session-dir', () => {
+  const launcher = readFileSync(
+    join(import.meta.dir, '..', 'coding-agents', 'pi-context', 'launch-agent'),
+    'utf8',
+  );
+  // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token.
+  expect(launcher).toContain('$QUORUM_HOME_ENV');
+  // PI_CODING_AGENT_DIR is collapsed into $HOME — the launcher must NOT set it as
+  // an env assignment on the exec line (the comment block may still mention it).
+  expect(launcher).not.toContain('PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR"');
+  // No explicit --session-dir flag: pi nests sessions under its $HOME default.
+  // Asserts the flag-invocation form, which (unlike the bare name in prose) only
+  // ever appears on the exec line.
+  expect(launcher).not.toContain(
+    '--session-dir "$PI_CODING_AGENT_DIR/sessions"',
+  );
 });

@@ -282,6 +282,15 @@ function readPiOauthSettings(settingsPath: string): {
 // the host OAuth login into the isolated config dir. The returned env map carries
 // only the agent_config_env -> configDir mapping; every secret lives in the
 // written files, never in the returned env.
+//
+// PI_CODING_AGENT_DIR collapse: home.configDir is now rooted under the throwaway
+// $HOME at <runHome>/.pi/agent (pi.yaml: home_config_subdir ".pi/agent"), which
+// is exactly where pi defaults its config + session dir when neither
+// PI_CODING_AGENT_DIR nor --session-dir is set. provision seeds the same files
+// under configDir as before; the launcher omits the config-dir var and
+// --session-dir, so pi discovers it all via the isolated $HOME. The returned
+// agent_config_env -> configDir mapping still resolves session_log_dir's
+// ${PI_CODING_AGENT_DIR} for capture and bakes the path into the HOWTO/launcher.
 export class PiAgent implements CodingAgent {
   readonly config: AgentConfig;
   constructor(config: AgentConfig) {
