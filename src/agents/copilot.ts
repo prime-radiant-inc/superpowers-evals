@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -9,13 +8,13 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Copilot provisioning adapter (PRI-2207 Spec 2). Ports the Python oracle
 // quorum/runner.py: _resolve_copilot_auth_env, _gh_auth_token,
@@ -304,10 +303,10 @@ function resolveCopilotAuthEnv(runner: CommandRunner): CopilotAuthEnv {
 }
 
 // Port of _write_copilot_env_file: write COPILOT_HOME/.copilot-env at mode 0600
-// with sorted KEY='value' lines (shell-quoted). Returns the file path.
-// writeFileSync's `mode` is ignored when the file already exists, so chmod after
-// to enforce 0600 even when a pre-existing .copilot-env had looser perms (the
-// oracle fchmods 0600 both before and after writing).
+// with sorted KEY='value' lines (shell-quoted). Returns the file path. The write
+// goes through the shared O_NOFOLLOW writer so a pre-placed symlink at the
+// destination cannot redirect the secret (the oracle fchmods 0600 both before
+// and after writing).
 function writeCopilotEnvFile(
   copilotHome: string,
   values: Readonly<Record<string, string>>,
@@ -318,8 +317,7 @@ function writeCopilotEnvFile(
     .sort()
     .map((key) => `${key}=${shellSingleQuote(values[key] ?? '')}\n`)
     .join('');
-  writeFileSync(envFile, lines, { mode: 0o600 });
-  chmodSync(envFile, 0o600);
+  writePrivateFileNoFollow(envFile, lines);
   return envFile;
 }
 

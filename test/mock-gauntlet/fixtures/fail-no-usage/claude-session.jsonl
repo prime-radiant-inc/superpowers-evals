@@ -1,0 +1,2 @@
+{"type":"tool_use","name":"Bash","input":{"command":"ls"}}
+{"type":"tool_use","name":"Edit","input":{"file_path":"/y"}}

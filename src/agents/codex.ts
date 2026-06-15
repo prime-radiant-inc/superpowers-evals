@@ -1,14 +1,9 @@
 import {
-  closeSync,
   cpSync,
   existsSync,
-  fchmodSync,
-  constants as fsConstants,
   mkdirSync,
-  openSync,
   readFileSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +17,7 @@ import {
 } from './codex-app-server.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Codex-family provisioning. Ports quorum/runner.py:_seed_codex_auth +
 // _seed_codex_plugin_hooks (which delegates to
@@ -304,29 +300,8 @@ function tomlBasicString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
-// Write `data` to `path` at mode 0600 through an O_NOFOLLOW-protected open, so a
-// pre-placed symlink at the destination cannot redirect the (secret) write to an
-// attacker-controlled path. Mirrors the Python secret writers, which all open
-// with O_CREAT|O_TRUNC|O_NOFOLLOW and fchmod 0600 (quorum/runner.py
-// _write_private_text / _write_gemini_env_file / _write_claude_env_file /
-// _write_copilot_env_file). Exported so Wave-2b's gemini/claude/copilot env-file
-// writers reuse the same protection. O_NOFOLLOW makes the open fail (ELOOP) when
-// the final path component is a symlink, surfacing as a thrown error rather than
-// a redirected secret.
-export function writePrivateFileNoFollow(
-  path: string,
-  data: string | Buffer,
-): void {
-  const flags =
-    fsConstants.O_WRONLY |
-    fsConstants.O_CREAT |
-    fsConstants.O_TRUNC |
-    fsConstants.O_NOFOLLOW;
-  const fd = openSync(path, flags, 0o600);
-  try {
-    fchmodSync(fd, 0o600);
-    writeSync(fd, typeof data === 'string' ? Buffer.from(data) : data);
-  } finally {
-    closeSync(fd);
-  }
-}
+// The O_NOFOLLOW private-file writer now lives in ./private-file.ts so every
+// per-run env/credential writer (gemini, claude, copilot) shares one
+// implementation. Re-exported here to preserve codex.ts's public surface (its
+// importers, incl. the codex agent tests, still resolve it through this module).
+export { writePrivateFileNoFollow };
