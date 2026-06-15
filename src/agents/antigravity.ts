@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,11 +14,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { agyLogShowsRateLimit } from './agy-watch.ts';
-import type { CommandRunner } from './command-runner.ts';
+import type { CommandResult, CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 
 // Antigravity-family provisioning. Ports the SETUP portion of
@@ -79,6 +80,39 @@ export function setAgyWhichForTesting(probe: AgyWhichProbe | null): void {
   agyWhichProbe = probe ?? defaultAgyWhich;
 }
 
+// agy `plugin install <path>` deep-copies the given path into the per-run gemini
+// home. When evals run from within a superpowers checkout, SUPERPOWERS_ROOT nests
+// the entire evals/ submodule (results/, worktrees, node_modules) — none of it
+// part of the plugin — which recursively explodes the copy. Exclude eval output
+// + VCS/build cruft so only the plugin is staged and installed.
+export function isExcludedFromPluginStage(src: string, root: string): boolean {
+  const name = basename(src);
+  // VCS/build artifacts are never part of the plugin, at any depth.
+  if (name === '.git' || name === 'node_modules') {
+    return true;
+  }
+  // Top-level non-plugin trees: the `evals` submodule and `.claude` (dev
+  // worktrees + local state — each worktree is itself a full checkout with its
+  // own evals/results/fixtures). `.claude-plugin` (the plugin manifest) is a
+  // different name and is preserved.
+  if (resolve(dirname(src)) === resolve(root)) {
+    return name === 'evals' || name === '.claude';
+  }
+  return false;
+}
+
+// Stage a clean copy of the Superpowers plugin (sans eval output / cruft) into a
+// fresh temp dir and return its path. The caller hands it to `agy plugin install`
+// and removes it afterward (agy copies it into the gemini home at install time).
+export function stageAntigravityPluginSource(superpowersRoot: string): string {
+  const staged = mkdtempSync(join(tmpdir(), 'quorum-agy-plugin-'));
+  cpSync(superpowersRoot, staged, {
+    recursive: true,
+    filter: (src: string) => !isExcludedFromPluginStage(src, superpowersRoot),
+  });
+  return staged;
+}
+
 export class AntigravityAgent implements CodingAgent {
   readonly config: AgentConfig;
 
@@ -111,17 +145,25 @@ export class AntigravityAgent implements CodingAgent {
     // 1. Auth preflight against throwaway state.
     this.runAuthPreflight(runner);
 
-    // 2. agy plugin install <SUPERPOWERS_ROOT> against the real per-run
-    //    --gemini_dir, cwd = configDir, with auto-update disabled.
+    // 2. agy plugin install against the real per-run --gemini_dir, cwd =
+    //    configDir, with auto-update disabled. Install from a CLEAN staged copy
+    //    (sans evals/.git/node_modules) rather than the raw SUPERPOWERS_ROOT, so
+    //    agy's deep-copy never recurses into nested eval output.
     const geminiDir = join(configDir, '.gemini');
-    const installResult = runner.run(
-      'agy',
-      [`--gemini_dir=${geminiDir}`, 'plugin', 'install', superpowersRoot],
-      {
-        cwd: configDir,
-        env: { ...envSnapshot(), AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
-      },
-    );
+    const stagedPlugin = stageAntigravityPluginSource(superpowersRoot);
+    let installResult: CommandResult;
+    try {
+      installResult = runner.run(
+        'agy',
+        [`--gemini_dir=${geminiDir}`, 'plugin', 'install', stagedPlugin],
+        {
+          cwd: configDir,
+          env: { ...envSnapshot(), AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+        },
+      );
+    } finally {
+      rmSync(stagedPlugin, { recursive: true, force: true });
+    }
     if (installResult.status !== 0) {
       throw new ProvisionError(
         `agy plugin install failed (exit ${installResult.status}); stderr: ${installResult.stderr.trim().slice(0, 300)}`,

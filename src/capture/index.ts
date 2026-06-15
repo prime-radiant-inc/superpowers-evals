@@ -47,7 +47,14 @@ function globRel(logDir: string, glob: string): Map<string, string> {
   if (!existsSync(logDir)) {
     return out;
   }
-  for (const abs of new Glob(glob).scanSync({ cwd: logDir, absolute: true })) {
+  // dot:true so `**` descends into dot-directories — antigravity (agy) writes its
+  // transcript under brain/<uuid>/.system_generated/logs/, which a default glob
+  // skips, making the run look uncaptured and tripping the strict-capture floor.
+  for (const abs of new Glob(glob).scanSync({
+    cwd: logDir,
+    absolute: true,
+    dot: true,
+  })) {
     out.set(relative(logDir, abs), abs);
   }
   return out;

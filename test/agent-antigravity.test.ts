@@ -3,12 +3,15 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
   ANTIGRAVITY_RATE_LIMIT_MARKER,
@@ -16,8 +19,10 @@ import {
   ANTIGRAVITY_VISIBLE_WORKSPACE_ROOT_ENV,
   AntigravityAgent,
   excludeAntigravityProjectMarker,
+  isExcludedFromPluginStage,
   prepareAntigravityLaunchCwd,
   setAgyWhichForTesting,
+  stageAntigravityPluginSource,
   writeAntigravitySettings,
 } from '../src/agents/antigravity.ts';
 import type { CommandResult } from '../src/agents/command-runner.ts';
@@ -120,6 +125,19 @@ function happyResponder(
   return { status: 0, stdout: 'OK\n', stderr: '' };
 }
 
+// Create a minimal on-disk SUPERPOWERS_ROOT so provision's plugin staging (a
+// real cpSync of the source tree) has something to copy. The fake agy still
+// simulates the installed-plugin output separately via writeInstalledPlugin.
+function makeSpRoot(home: { workdir: string }): string {
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(join(spRoot, 'skills', 'using-superpowers'), { recursive: true });
+  writeFileSync(
+    join(spRoot, 'gemini-extension.json'),
+    '{"name":"superpowers"}',
+  );
+  return spRoot;
+}
+
 // Set SUPERPOWERS_ROOT around `body`, restoring the prior value even on throw.
 // getEnv reads process.env; biome noProcessEnv is OFF for test/agent-*.test.ts.
 function withRoot(superpowersRoot: string | undefined, body: () => void): void {
@@ -142,7 +160,7 @@ function withRoot(superpowersRoot: string | undefined, body: () => void): void {
 
 test('provision seeds the .gemini tree, preflights, installs the plugin, and writes settings', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
@@ -209,7 +227,7 @@ test('provision seeds the .gemini tree, preflights, installs the plugin, and wri
 
 test('provision drives the expected agy subprocess calls (preflight then install)', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
@@ -237,14 +255,19 @@ test('provision drives the expected agy subprocess calls (preflight then install
       expect(preflightGeminiDir).not.toBe(join(home.configDir, '.gemini'));
 
       // 2. Plugin install against the real per-run --gemini_dir, cwd=configDir.
+      // The install SOURCE is a CLEAN staged copy (excludes evals/.git/
+      // node_modules), NOT the raw SUPERPOWERS_ROOT — so agy's deep-copy never
+      // recurses into nested eval output.
       const install = runner.calls[1];
       expect(install?.command).toBe('agy');
-      expect(install?.args).toEqual([
+      const installArgs = install?.args ?? [];
+      expect(installArgs[0]).toBe(
         `--gemini_dir=${join(home.configDir, '.gemini')}`,
-        'plugin',
-        'install',
-        spRoot,
-      ]);
+      );
+      expect(installArgs[1]).toBe('plugin');
+      expect(installArgs[2]).toBe('install');
+      expect(installArgs[3]).not.toBe(spRoot);
+      expect(installArgs[3]).toContain('quorum-agy-plugin-');
       expect(install?.options?.cwd).toBe(home.configDir);
       expect(install?.options?.env?.['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe(
         'true',
@@ -257,7 +280,7 @@ test('provision drives the expected agy subprocess calls (preflight then install
 
 test('preflight tolerates punctuation/case/whitespace in the OK reply', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   // Reply "  ok.!  " — normalizes to OK.
   const runner = new FakeCommandRunner((command, args) => {
     if (command !== 'agy') {
@@ -289,7 +312,7 @@ test('preflight tolerates punctuation/case/whitespace in the OK reply', () => {
 
 test('provision throws ProvisionError when the preflight exits non-zero', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   // Preflight fails; the adapter must abort before the plugin-install step.
   const runner = new FakeCommandRunner((command, args) => {
     if (command === 'agy' && !isPluginInstall(args)) {
@@ -312,7 +335,7 @@ test('provision throws ProvisionError when the preflight exits non-zero', () => 
 
 test('provision throws ProvisionError when the preflight reply is not OK', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   // Exit 0 but a verbose, non-OK reply.
   const runner = new FakeCommandRunner((command, args) => {
     if (command !== 'agy') {
@@ -348,7 +371,7 @@ test('provision throws ProvisionError when the preflight reply is not OK', () =>
 
 test('a throttled preflight surfaces the Code Assist rate-limit marker', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   // Empty reply + a RESOURCE_EXHAUSTED log: the rate-limit diagnosis must win.
   const runner = new FakeCommandRunner((command, args) => {
     if (command !== 'agy') {
@@ -404,7 +427,7 @@ test('provision throws ProvisionError when SUPERPOWERS_ROOT is unset', () => {
 
 test('provision throws ProvisionError when an expected plugin file is missing', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   // Preflight OK, but plugin install stages an INCOMPLETE tree (no SKILL.md).
   const runner = new FakeCommandRunner((command, args) => {
     if (command !== 'agy') {
@@ -446,7 +469,7 @@ test('provision throws ProvisionError when an expected plugin file is missing', 
 
 test('provision throws ProvisionError when agy plugin install exits non-zero', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner((command, args) => {
     if (command !== 'agy') {
       return { status: 0, stdout: '', stderr: '' };
@@ -488,7 +511,7 @@ test('settings.json secret-free config is a regular file (mode parity guard)', (
   // 0o600 file to assert. This guards that settings.json is a normal config
   // file; if a secret ever lands here, the mode contract becomes visible.
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
@@ -515,7 +538,7 @@ test('settings.json secret-free config is a regular file (mode parity guard)', (
 // "agy not found on PATH" diagnostic when the binary is absent, before any work.
 test('provision throws ProvisionError when agy is not on PATH', () => {
   const { home, cleanup } = makeTempHome();
-  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner(happyResponder);
 
   try {
@@ -716,5 +739,83 @@ test('writeAntigravitySettings re-trust adds the launch cwd to an existing setti
     expect(settings.trustedWorkspaces).toContain(resolve(launchCwd));
   } finally {
     cleanup();
+  }
+});
+
+// agy `plugin install <path>` deep-copies whatever path it is handed. When evals
+// run from within a superpowers checkout, SUPERPOWERS_ROOT nests the entire
+// evals/ submodule (results/, worktrees, node_modules) — not part of the plugin —
+// which recursively explodes the copy. Stage a clean copy and install from that.
+test('isExcludedFromPluginStage excludes evals/.claude/.git/node_modules at the root', () => {
+  const root = '/srv/superpowers';
+  expect(isExcludedFromPluginStage(`${root}/evals`, root)).toBe(true);
+  // .claude holds dev worktrees (each a full checkout w/ its own evals/results).
+  expect(isExcludedFromPluginStage(`${root}/.claude`, root)).toBe(true);
+  expect(isExcludedFromPluginStage(`${root}/.git`, root)).toBe(true);
+  expect(isExcludedFromPluginStage(`${root}/node_modules`, root)).toBe(true);
+  // .git / node_modules excluded at any depth.
+  expect(isExcludedFromPluginStage(`${root}/skills/.git`, root)).toBe(true);
+  // plugin content is kept — including the .claude-plugin manifest dir.
+  expect(isExcludedFromPluginStage(`${root}/skills`, root)).toBe(false);
+  expect(isExcludedFromPluginStage(`${root}/hooks`, root)).toBe(false);
+  expect(isExcludedFromPluginStage(`${root}/.claude-plugin`, root)).toBe(false);
+  expect(isExcludedFromPluginStage(`${root}/gemini-extension.json`, root)).toBe(
+    false,
+  );
+  // a nested (non-root) `evals` dir is NOT excluded — only the root submodule.
+  expect(isExcludedFromPluginStage(`${root}/skills/evals`, root)).toBe(false);
+});
+
+test('stageAntigravityPluginSource copies the plugin without the evals subtree', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sp-root-'));
+  try {
+    mkdirSync(join(root, 'skills', 'using-superpowers'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'using-superpowers', 'SKILL.md'), '# s');
+    mkdirSync(join(root, 'hooks'), { recursive: true });
+    writeFileSync(
+      join(root, 'gemini-extension.json'),
+      '{"name":"superpowers"}',
+    );
+    // eval output + cruft that must NOT be copied into the plugin.
+    mkdirSync(join(root, 'evals', 'results', 'old-run', 'deep'), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(root, 'evals', 'results', 'old-run', 'deep', 'x'),
+      'junk',
+    );
+    mkdirSync(join(root, '.git'), { recursive: true });
+    mkdirSync(join(root, 'node_modules'), { recursive: true });
+    // dev worktrees under .claude (each a full checkout with nested evals/results)
+    mkdirSync(join(root, '.claude', 'worktrees', 'wt', 'evals', 'results'), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(root, '.claude', 'worktrees', 'wt', 'evals', 'results', 'r.jsonl'),
+      'junk',
+    );
+    // the plugin manifest dir must survive (different name than .claude).
+    mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(root, '.claude-plugin', 'plugin.json'), '{}');
+
+    const staged = stageAntigravityPluginSource(root);
+    try {
+      expect(
+        existsSync(join(staged, 'skills', 'using-superpowers', 'SKILL.md')),
+      ).toBe(true);
+      expect(existsSync(join(staged, 'hooks'))).toBe(true);
+      expect(existsSync(join(staged, 'gemini-extension.json'))).toBe(true);
+      expect(existsSync(join(staged, '.claude-plugin', 'plugin.json'))).toBe(
+        true,
+      );
+      expect(existsSync(join(staged, 'evals'))).toBe(false);
+      expect(existsSync(join(staged, '.claude'))).toBe(false);
+      expect(existsSync(join(staged, '.git'))).toBe(false);
+      expect(existsSync(join(staged, 'node_modules'))).toBe(false);
+    } finally {
+      rmSync(staged, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

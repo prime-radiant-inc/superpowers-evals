@@ -634,3 +634,17 @@ test('detectKimiCwdMismatch returns [] when reason is not wrong-cwd', () => {
     }),
   ).toEqual([]);
 });
+
+// Antigravity (and any agent) can write its session transcript under a DOT
+// directory — agy drops it at brain/<uuid>/.system_generated/logs/transcript.jsonl.
+// Bun.Glob skips dot dirs unless dot:true, so a `**/transcript.jsonl` glob must
+// still match a transcript nested under `.system_generated` or capture sees an
+// empty run and the strict-capture floor wrongly fails it.
+test('snapshotDir matches a log nested under a dot-directory', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'capture-dotdir-'));
+  const deep = join(logDir, 'sess', '.system_generated', 'logs');
+  mkdirSync(deep, { recursive: true });
+  writeFileSync(join(deep, 'transcript.jsonl'), '{}\n');
+  const snap = snapshotDir(logDir, '**/transcript.jsonl');
+  expect(snap.has('sess/.system_generated/logs/transcript.jsonl')).toBe(true);
+});
