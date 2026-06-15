@@ -18,7 +18,11 @@ import {
   scanCopilotSecretLeaks,
 } from '../src/agents/copilot.ts';
 import { ProvisionError } from '../src/agents/index.ts';
-import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import {
+  type AgentConfig,
+  agentConfigDir,
+  resolveSessionLogDir,
+} from '../src/contracts/agent-config.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -28,6 +32,8 @@ const CONFIG: AgentConfig = {
   name: 'copilot',
   binary: 'copilot',
   agent_config_env: 'COPILOT_HOME',
+  // Collapsed under the throwaway $HOME: copilot finds config at $HOME/.copilot.
+  home_config_subdir: '.copilot',
   session_log_dir: '${COPILOT_HOME}/session-state',
   session_log_glob: '**/events.jsonl',
   normalizer: 'copilot',
@@ -147,6 +153,26 @@ function withProvisionEnv(
 function mode(path: string): number {
   return statSync(path).mode & 0o777;
 }
+
+// The config-dir collapse: with home_config_subdir set, the copilot config dir
+// roots under the throwaway per-run $HOME at <runHome>/.copilot — exactly where
+// copilot resolves its home when COPILOT_HOME is unset (verified empirically).
+// The launcher therefore omits COPILOT_HOME and finds the seeded config via
+// $HOME, while --plugin-dir/--log-dir/COPILOT_CACHE_HOME and the resolved
+// session_log_dir all point at that same dir under the home.
+test('config dir collapses under the throwaway $HOME at <runHome>/.copilot', () => {
+  const runDir = '/runs/copilot-run';
+  const runHomeDir = join(runDir, 'home');
+  const configDir = agentConfigDir(CONFIG, runDir, runHomeDir);
+  expect(configDir).toBe(join(runHomeDir, '.copilot'));
+
+  // session_log_dir resolves against the provisioning env ({COPILOT_HOME: configDir})
+  // to the session-state dir under that same collapsed config dir.
+  const logDir = resolveSessionLogDir(CONFIG.session_log_dir, {
+    COPILOT_HOME: configDir,
+  });
+  expect(logDir).toBe(join(runHomeDir, '.copilot', 'session-state'));
+});
 
 test('provision stages COPILOT_HOME, writes secret env file, and stages the plugin', () => {
   const sp = makeSuperpowersRoot();

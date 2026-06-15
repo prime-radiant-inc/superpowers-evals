@@ -37,20 +37,23 @@ secret_env_vars=(
   COPILOT_PROVIDER_API_KEY COPILOT_PROVIDER_BEARER_TOKEN
 )
 
+# HOME/XDG/TMPDIR come from the QUORUM_HOME_ENV token. With COPILOT_HOME unset,
+# copilot resolves its home to $HOME/.copilot, where provisioning seeded the
+# config; the --plugin-dir/--log-dir/COPILOT_CACHE_HOME paths point at that same
+# configDir ($QUORUM_AGENT_HOME/.copilot) so they match where provisioning seeds.
 exec env -i \
   "${env_args[@]}" \
   $QUORUM_HOME_ENV \
-  COPILOT_HOME=$COPILOT_HOME_SH \
-  COPILOT_CACHE_HOME=$COPILOT_HOME_SH/.cache \
+  COPILOT_CACHE_HOME="$QUORUM_AGENT_HOME/.copilot/.cache" \
   COPILOT_CLI=1 \
   COPILOT_AUTO_UPDATE=false \
   copilot \
-    --plugin-dir $COPILOT_HOME_SH/plugins/superpowers \
+    --plugin-dir "$QUORUM_AGENT_HOME/.copilot/plugins/superpowers" \
     --session-id "$QUORUM_COPILOT_SESSION_ID" \
     --allow-all \
     --no-auto-update \
     --no-remote \
     --disable-builtin-mcps \
     --secret-env-vars="$(IFS=,; echo "${secret_env_vars[*]}")" \
-    --log-dir $COPILOT_HOME_SH/logs \
+    --log-dir "$QUORUM_AGENT_HOME/.copilot/logs" \
     "$@"

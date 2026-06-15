@@ -1,6 +1,14 @@
 name: copilot
 binary: copilot
 agent_config_env: COPILOT_HOME
+# Collapse the copilot config dir into the throwaway $HOME: with COPILOT_HOME
+# unset, copilot resolves its home to $HOME/.copilot (verified empirically — it
+# seeds config.json, logs/, session-state/, session-store.db there). With
+# ".copilot" the config dir IS <runHome>/.copilot, so the launcher need not set
+# COPILOT_HOME — copilot finds the seeded config via its $HOME default. The
+# --plugin-dir/--log-dir/COPILOT_CACHE_HOME flags still point at that same
+# configDir (now under the home) so they match where provisioning seeds.
+home_config_subdir: ".copilot"
 session_log_dir: "${COPILOT_HOME}/session-state"
 session_log_glob: "**/events.jsonl"
 normalizer: copilot
