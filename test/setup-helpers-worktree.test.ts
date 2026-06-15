@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { lstatSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type {
@@ -101,19 +109,57 @@ class GeminiRunner implements CommandRunner {
   }
 }
 
-test('linkGeminiExtension writes GEMINI.md and calls gemini twice', async () => {
+// Build a hermetic superpowersRoot that mirrors the live-eval failure: the
+// checkout contains the whole evals/ submodule (with prior run output under
+// results/), a .git dir, and node_modules — none of which belong in the linked
+// Gemini extension.
+function makeSuperpowersRoot(parent: string): string {
+  const root = join(parent, 'sp');
+  mkdirSync(join(root, 'skills', 'using-superpowers', 'references'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(root, 'skills', 'using-superpowers', 'SKILL.md'),
+    'skill\n',
+    'utf8',
+  );
+  writeFileSync(
+    join(root, 'skills', 'using-superpowers', 'references', 'gemini-tools.md'),
+    'tools\n',
+    'utf8',
+  );
+  writeFileSync(
+    join(root, 'gemini-extension.json'),
+    JSON.stringify({ name: 'superpowers' }),
+    'utf8',
+  );
+  mkdirSync(join(root, 'hooks'), { recursive: true });
+  writeFileSync(join(root, 'hooks', 'hook.sh'), 'echo hi\n', 'utf8');
+  mkdirSync(join(root, 'evals', 'results', 'junk'), { recursive: true });
+  writeFileSync(
+    join(root, 'evals', 'results', 'junk', 'prior-run.txt'),
+    'old output\n',
+    'utf8',
+  );
+  mkdirSync(join(root, '.git'), { recursive: true });
+  writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+  mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true });
+  writeFileSync(join(root, 'node_modules', 'pkg', 'index.js'), '0\n', 'utf8');
+  return root;
+}
+
+test('linkGeminiExtension uninstalls then links a clean staged extension', () => {
   const parent = mkdtempSync(join(tmpdir(), 'sh-gem-'));
   const run = new GeminiRunner();
   try {
+    const root = makeSuperpowersRoot(parent);
     const wd = join(parent, 'wd');
     linkGeminiExtension({
       workdir: wd,
-      superpowersRoot: '/sp',
+      superpowersRoot: root,
       run,
     } as never);
-    expect(await Bun.file(join(wd, 'GEMINI.md')).text()).toContain(
-      '@/sp/skills/using-superpowers/SKILL.md',
-    );
+
     expect(run.calls[0]).toEqual([
       'gemini',
       'extensions',
@@ -121,6 +167,50 @@ test('linkGeminiExtension writes GEMINI.md and calls gemini twice', async () => 
       'superpowers',
     ]);
     expect(run.calls[1]?.slice(0, 3)).toEqual(['gemini', 'extensions', 'link']);
+
+    // The linked path is a STAGED copy, not the raw superpowersRoot.
+    const linkedPath = run.calls[1]?.[3];
+    expect(linkedPath).toBeDefined();
+    expect(linkedPath).not.toBe(root);
+
+    // The staged dir excludes evals/.git/node_modules ...
+    expect(existsSync(join(linkedPath as string, 'evals'))).toBe(false);
+    expect(existsSync(join(linkedPath as string, '.git'))).toBe(false);
+    expect(existsSync(join(linkedPath as string, 'node_modules'))).toBe(false);
+    // ... but still contains the actual extension contents.
+    expect(
+      existsSync(join(linkedPath as string, 'gemini-extension.json')),
+    ).toBe(true);
+    expect(existsSync(join(linkedPath as string, 'skills'))).toBe(true);
+    expect(existsSync(join(linkedPath as string, 'hooks'))).toBe(true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('linkGeminiExtension GEMINI.md @imports point at the staged skills dir', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'sh-gem-'));
+  const run = new GeminiRunner();
+  try {
+    const root = makeSuperpowersRoot(parent);
+    const wd = join(parent, 'wd');
+    linkGeminiExtension({
+      workdir: wd,
+      superpowersRoot: root,
+      run,
+    } as never);
+
+    const linkedPath = run.calls[1]?.[3] as string;
+    const gemini = await Bun.file(join(wd, 'GEMINI.md')).text();
+    // The @import resolves to the staged skills dir (which is what gemini
+    // actually linked), not the raw root's skills dir.
+    expect(gemini).toContain(
+      `@${join(linkedPath, 'skills')}/using-superpowers/SKILL.md`,
+    );
+    expect(gemini).toContain(
+      `@${join(linkedPath, 'skills')}/using-superpowers/references/gemini-tools.md`,
+    );
+    expect(gemini).not.toContain(`@${join(root, 'skills')}/`);
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

@@ -111,13 +111,58 @@ export function symlinkSuperpowers(ctx: HelperContext): void {
   symlinkSync(target, link);
 }
 
-// Port of worktree.py:link_gemini_extension. Links superpowers as a Gemini CLI
-// extension and injects project context. Extensions are global, but GEMINI.md
-// context loading is project-scoped, so the temp workdir needs a GEMINI.md with
-// absolute @imports. The extension name defaults to 'superpowers'; only if
-// <root>/gemini-extension.json exists do we parse it and take its `name`
-// field, suppressing JSON parse failures (parity with the Python
-// suppress(JSONDecodeError)).
+// Dirs excluded from the staged Gemini extension copy (at any depth). The whole
+// `evals` submodule is dropped: when SUPERPOWERS_ROOT is a superpowers checkout,
+// evals/ holds the eval harness's own output (results/, worktrees, run dirs) and
+// node_modules — `gemini extensions link` copies the linked dir wholesale into
+// the per-run Gemini home, so linking the raw root recursively copies prior run
+// output and explodes the destination path. (.git and node_modules are likewise
+// not part of the extension.) This is the per-eval analogue of
+// _ignore_codex_plugin_copy; see linkGeminiExtension's staging note for why the
+// exclusion is broader here (whole `evals`, not just `evals/results`).
+const GEMINI_EXTENSION_STAGE_IGNORE: ReadonlySet<string> = new Set<string>([
+  '.git',
+  'evals',
+  'node_modules',
+]);
+
+function ignoreGeminiExtensionStage(
+  _src: string,
+  names: string[],
+): Set<string> {
+  const ignored = new Set<string>();
+  for (const name of names) {
+    if (GEMINI_EXTENSION_STAGE_IGNORE.has(name)) {
+      ignored.add(name);
+    }
+  }
+  return ignored;
+}
+
+// Improvement over worktree.py:link_gemini_extension. Links superpowers as a
+// Gemini CLI extension and injects project context. Extensions are global, but
+// GEMINI.md context loading is project-scoped, so the temp workdir needs a
+// GEMINI.md with absolute @imports. The extension name defaults to
+// 'superpowers'; only if <root>/gemini-extension.json exists do we parse it and
+// take its `name` field, suppressing JSON parse failures (parity with the
+// Python suppress(JSONDecodeError)).
+//
+// Unlike Python (which links the raw SUPERPOWERS_ROOT), we link a CLEAN STAGED
+// copy that excludes evals/, .git, and node_modules. A real superpowers checkout
+// nests the entire evals/ submodule — including this harness's own results/ run
+// dirs — under SUPERPOWERS_ROOT. `gemini extensions link` (and the antigravity
+// `agy` CLI) copy the linked directory wholesale into the per-run Gemini home, so
+// linking the raw root recursively re-copies prior run output and explodes the
+// destination path (observed live: "copying extension directory: mkdir
+// .../.gemini/config/plugins/superpowers/evals/results/<run>/coding-agent-config/.gemini/config").
+// Python has the same latent bug; staging is an intentional, documented fix.
+//
+// Staging lifecycle: gemini copies the extension at link time (the live failure
+// is literally "copying extension directory"), so the staged dir is no longer
+// referenced after the link returns. We still leave it in place for the run's
+// lifetime — it lives under the run's workdir tree and is reclaimed when the run
+// dir is, and keeping it avoids any dependency on undocumented gemini re-read
+// behavior.
 export function linkGeminiExtension(ctx: HelperContext): void {
   if (ctx.superpowersRoot === undefined) {
     throw new Error('superpowersRoot is required for link_gemini_extension');
@@ -129,11 +174,20 @@ export function linkGeminiExtension(ctx: HelperContext): void {
     extensionName = readGeminiExtensionName(manifestPath, extensionName);
   }
 
+  // Stage a clean copy of the extension next to the workdir and link THAT, so
+  // gemini never copies evals/.git/node_modules. The staging dir lives under the
+  // run tree (sibling of workdir) and is reclaimed with it.
+  const stageDir = siblingPath(ctx.workdir, 'gemini-extension');
+  if (existsSync(stageDir)) {
+    rmSync(stageDir, { recursive: true, force: true });
+  }
+  copyTreeWithIgnore(root, stageDir, ignoreGeminiExtensionStage);
+
   // Gemini extensions are global; replace any prior link so this run tests the
   // requested SUPERPOWERS_ROOT checkout rather than a stale install. Status is
   // ignored (Python runs this uninstall without check=True).
   ctx.run.run('gemini', ['extensions', 'uninstall', extensionName]);
-  const linkResult = ctx.run.run('gemini', ['extensions', 'link', root], {
+  const linkResult = ctx.run.run('gemini', ['extensions', 'link', stageDir], {
     input: 'y\n',
   });
   if ((linkResult.status ?? 1) !== 0) {
@@ -141,7 +195,9 @@ export function linkGeminiExtension(ctx: HelperContext): void {
   }
 
   // Create GEMINI.md with absolute @imports so context loads in the temp workdir.
-  const skillsRoot = join(root, 'skills');
+  // Point at the staged skills dir — that is the copy gemini actually linked, so
+  // the @imports resolve against the same tree the extension was built from.
+  const skillsRoot = join(stageDir, 'skills');
   mkdirSync(ctx.workdir, { recursive: true });
   writeFileSync(
     join(ctx.workdir, 'GEMINI.md'),
@@ -207,15 +263,24 @@ function ignoreCodexPluginCopy(src: string, names: string[]): Set<string> {
   return ignored;
 }
 
+// A per-directory ignore predicate, mirroring shutil.copytree's
+// ignore(src, names) contract: given a source directory's absolute path and its
+// entry names, return the subset of names to skip.
+type IgnorePredicate = (src: string, names: string[]) => Set<string>;
+
 // Recursive copy honoring a per-directory ignore predicate, mirroring
 // shutil.copytree(..., ignore=...). The predicate is consulted with each
 // source directory's absolute path and its entry names; matched names are
 // skipped entirely (their subtrees are never walked).
-function copyTreeWithIgnore(src: string, dest: string): void {
+function copyTreeWithIgnore(
+  src: string,
+  dest: string,
+  ignore: IgnorePredicate = ignoreCodexPluginCopy,
+): void {
   mkdirSync(dest, { recursive: true });
   const entries = readdirSync(src, { withFileTypes: true });
   const names = entries.map((e) => e.name);
-  const ignored = ignoreCodexPluginCopy(src, names);
+  const ignored = ignore(src, names);
   for (const entry of entries) {
     if (ignored.has(entry.name)) {
       continue;
@@ -223,7 +288,7 @@ function copyTreeWithIgnore(src: string, dest: string): void {
     const srcPath = join(src, entry.name);
     const destPath = join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyTreeWithIgnore(srcPath, destPath);
+      copyTreeWithIgnore(srcPath, destPath, ignore);
     } else if (entry.isSymbolicLink()) {
       // copytree copies symlinks as files by default (follow_symlinks=True);
       // copyFileSync follows the link and copies the target's contents.
