@@ -288,7 +288,7 @@ const turnContextLine = JSON.stringify({
   payload: { model: 'gpt-5.5', effort: 'high' },
 });
 
-test('final cumulative token_count maps to final_metrics (reasoning folded into completion)', () => {
+test('final cumulative token_count maps to final_metrics (reasoning already inside output)', () => {
   const raw = [
     turnContextLine,
     tokenCountEarly,
@@ -298,10 +298,27 @@ test('final cumulative token_count maps to final_metrics (reasoning folded into 
   const traj = normalizeCodex(raw, '1.0.0');
   expect(traj.final_metrics).toBeDefined();
   // ATIF buckets are DISJOINT: codex input_tokens INCLUDES cached, so prompt =
-  // UNCACHED input (input − cached); completion = output + reasoning; cached in extra.
+  // UNCACHED input (input − cached); cached rides in extra.
   expect(traj.final_metrics!.total_prompt_tokens).toBe(378285 - 330752);
-  expect(traj.final_metrics!.total_completion_tokens).toBe(9437 + 4970);
+  // QUIRK (verified against real rollout 2026-06-13): codex output_tokens ALREADY
+  // INCLUDES reasoning_output_tokens (total_tokens == input + output, and
+  // reasoning <= output in every row). So completion = output_tokens; folding
+  // reasoning in again double-counts it. completion is NOT output + reasoning.
+  expect(traj.final_metrics!.total_completion_tokens).toBe(9437);
   expect(traj.final_metrics!.extra?.['total_cached_tokens']).toBe(330752);
+});
+
+test('codex disjoint buckets conserve the log total (no reasoning double-count)', () => {
+  // Real rollout invariant: total_tokens == input_tokens + output_tokens, with
+  // cached ⊂ input and reasoning ⊂ output. The DISJOINT ATIF sum
+  // (prompt + cached + completion) must equal the log's own total_tokens.
+  const raw = [turnContextLine, tokenCountFinal].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const fm = traj.final_metrics!;
+  const prompt = fm.total_prompt_tokens ?? 0;
+  const completion = fm.total_completion_tokens ?? 0;
+  const cached = (fm.extra?.['total_cached_tokens'] as number | undefined) ?? 0;
+  expect(prompt + cached + completion).toBe(387722); // == log total_tokens
 });
 
 test('agent.model_name comes from turn_context.payload.model', () => {

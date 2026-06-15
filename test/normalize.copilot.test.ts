@@ -271,14 +271,103 @@ test('assistant.message step carries model_name and completion_tokens from outpu
 
 test('session.shutdown totals populate final_metrics and agent.model_name', () => {
   const traj = normalizeCopilot(usageLog, '1.0.0');
-  // prompt = non-cached input (tokenDetails.input); completion = output;
-  // cache-read carried in final_metrics.extra (no top-level cached field).
+  // prompt = non-cached input (tokenDetails.input); cache-read carried in
+  // final_metrics.extra (no top-level cached field). Completion is NOT carried
+  // in final_metrics: it is already accounted per-step (data.outputTokens), so
+  // putting it here too would double-count it when downstream sums step.metrics
+  // + final_metrics.
   expect(traj.final_metrics).toEqual({
     total_prompt_tokens: 26055,
-    total_completion_tokens: 571,
     extra: { total_cached_tokens: 58880 },
   });
   expect(traj.agent.model_name).toBe('gpt-5.4');
+});
+
+// Real shape from /tmp/quorum-live-results4/...-copilot-.../events.jsonl: four
+// assistant.message rows (outputTokens 234, 267, 55, 15) — the last has an
+// empty toolRequests array — and a shutdown with input 26055, cache_read 58880,
+// output 571. The DISJOINT sum (prompt + cached + per-step completion) must
+// equal the true session total, with NO completion double-count and NO dropped
+// text-only-turn completion.
+const realCopilotLog = [
+  JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      model: 'gpt-5.4',
+      outputTokens: 234,
+      toolRequests: [{ name: 'bash', arguments: { command: 'a' } }],
+    },
+  }),
+  JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      model: 'gpt-5.4',
+      outputTokens: 267,
+      toolRequests: [{ name: 'bash', arguments: { command: 'b' } }],
+    },
+  }),
+  JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      model: 'gpt-5.4',
+      outputTokens: 55,
+      toolRequests: [{ name: 'view', arguments: { file: 'README.md' } }],
+    },
+  }),
+  JSON.stringify({
+    type: 'assistant.message',
+    data: { model: 'gpt-5.4', outputTokens: 15, toolRequests: [] },
+  }),
+  JSON.stringify({
+    type: 'session.shutdown',
+    data: {
+      currentModel: 'gpt-5.4',
+      tokenDetails: {
+        input: { tokenCount: 26055 },
+        cache_read: { tokenCount: 58880 },
+        output: { tokenCount: 571 },
+      },
+    },
+  }),
+].join('\n');
+
+test('copilot disjoint buckets conserve the session total (no completion double-count, no dropped text-only turn)', () => {
+  const traj = normalizeCopilot(realCopilotLog, '1.0.0');
+  let prompt = 0;
+  let completion = 0;
+  let cached = 0;
+  let cacheWrite = 0;
+  for (const s of traj.steps) {
+    if (s.metrics) {
+      prompt += s.metrics.prompt_tokens ?? 0;
+      completion += s.metrics.completion_tokens ?? 0;
+      cached += s.metrics.cached_tokens ?? 0;
+    }
+    const cw = s.extra?.['cache_write'];
+    if (typeof cw === 'number') cacheWrite += cw;
+  }
+  const fm = traj.final_metrics;
+  if (fm) {
+    prompt += fm.total_prompt_tokens ?? 0;
+    completion += fm.total_completion_tokens ?? 0;
+    const fc = fm.extra?.['total_cached_tokens'];
+    if (typeof fc === 'number') cached += fc;
+  }
+  // Per-step completion must cover ALL output (234+267+55+15 = 571), including
+  // the text-only final turn; the final_metrics must NOT also carry completion.
+  expect(completion).toBe(571);
+  // Full disjoint sum == prompt(26055) + cached(58880) + completion(571).
+  expect(prompt + cached + completion + cacheWrite).toBe(85506);
+});
+
+test('copilot text-only assistant message keeps its completion (metrics-only step)', () => {
+  const traj = normalizeCopilot(realCopilotLog, '1.0.0');
+  const completions = traj.steps
+    .map((s) => s.metrics?.completion_tokens)
+    .filter((v): v is number => typeof v === 'number');
+  // 15-token text-only turn (empty toolRequests) must contribute a step.
+  expect(completions).toContain(15);
+  expect(completions.reduce((a, b) => a + b, 0)).toBe(571);
 });
 
 test('logs without usage produce no metrics or final_metrics', () => {

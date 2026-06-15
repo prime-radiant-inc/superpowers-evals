@@ -120,10 +120,15 @@ function numberOrUndefined(value: unknown): number | undefined {
 
 /**
  * Extract the session-total usage from a `session.shutdown` event into ATIF
- * `final_metrics` + the trajectory model name. Copilot logs the full token
+ * `final_metrics` + the trajectory model name. Copilot logs the full INPUT
  * breakdown only at shutdown: `modelMetrics.<model>.usage` carries
- * `inputTokens` (which INCLUDES `cacheReadTokens`), `outputTokens`, and
- * `cacheReadTokens`; the non-cached prompt count is `tokenDetails.input`.
+ * `inputTokens` (which INCLUDES `cacheReadTokens`) and `cacheReadTokens`; the
+ * non-cached prompt count is `tokenDetails.input`.
+ *
+ * Completion is intentionally NOT taken from the shutdown total: it is already
+ * accounted per-step from each assistant.message's `outputTokens` (every
+ * message carries it, including text-only turns). Carrying it here too would
+ * double-count completion when downstream sums step.metrics + final_metrics.
  */
 function shutdownFinalMetrics(data: Record<string, unknown>): {
   finalMetrics?: AtifFinalMetrics | undefined;
@@ -140,13 +145,10 @@ function shutdownFinalMetrics(data: Record<string, unknown>): {
   };
 
   const prompt = countOf('input');
-  const completion = countOf('output');
   const cached = countOf('cache_read');
 
   const finalMetrics: AtifFinalMetrics = {};
   if (prompt !== undefined) finalMetrics.total_prompt_tokens = prompt;
-  if (completion !== undefined)
-    finalMetrics.total_completion_tokens = completion;
   if (cached !== undefined)
     finalMetrics.extra = { total_cached_tokens: cached };
 
@@ -210,6 +212,17 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
     const completion = numberOrUndefined(d['outputTokens']);
     let messageUsageAttached = false;
 
+    const attachUsage = (step: AtifStep): void => {
+      if (messageUsageAttached) return;
+      if (messageModel) step.model_name = messageModel;
+      if (completion !== undefined) {
+        step.metrics = { completion_tokens: completion };
+      }
+      if (messageModel || completion !== undefined) {
+        messageUsageAttached = true;
+      }
+    };
+
     for (const request of toolRequests) {
       if (!request || typeof request !== 'object') continue;
       const req = request as CopilotToolRequest;
@@ -236,16 +249,17 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
         tool_calls: [tc],
       };
 
-      if (!messageUsageAttached) {
-        if (messageModel) step.model_name = messageModel;
-        if (completion !== undefined) {
-          step.metrics = { completion_tokens: completion };
-        }
-        if (messageModel || completion !== undefined) {
-          messageUsageAttached = true;
-        }
-      }
+      attachUsage(step);
+      steps.push(step);
+    }
 
+    // A text-only assistant message (no tool requests) still carries its
+    // outputTokens. Emit a dedicated metrics-only agent step so its completion
+    // is not dropped — completion is sourced ONLY per-step (final_metrics
+    // carries no completion), so dropping it here would lose those tokens.
+    if (!messageUsageAttached && completion !== undefined) {
+      const step: AtifStep = { step_id: stepId++, source: 'agent' };
+      attachUsage(step);
       steps.push(step);
     }
   }

@@ -25,10 +25,9 @@ function asTokenUsage(value: unknown): CodexTokenUsage | undefined {
   return value as CodexTokenUsage;
 }
 
-// Map the final cumulative codex usage into ATIF final_metrics. reasoning is
-// folded into completion per the contract; cached has no first-class
-// final-metrics field so it rides in extra.total_cached_tokens. No cost is
-// logged by codex; cost is priced downstream by obol.
+// Map the final cumulative codex usage into ATIF final_metrics. cached has no
+// first-class final-metrics field so it rides in extra.total_cached_tokens. No
+// cost is logged by codex; cost is priced downstream by obol.
 function finalMetricsFromUsage(usage: CodexTokenUsage): AtifFinalMetrics {
   const fm: AtifFinalMetrics = {};
   // ATIF token buckets are DISJOINT (prompt = UNCACHED input). codex's
@@ -39,13 +38,13 @@ function finalMetricsFromUsage(usage: CodexTokenUsage): AtifFinalMetrics {
       0,
       usage.input_tokens - (usage.cached_input_tokens ?? 0),
     );
-  const completion =
-    (usage.output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0);
-  if (
-    usage.output_tokens !== undefined ||
-    usage.reasoning_output_tokens !== undefined
-  )
-    fm.total_completion_tokens = completion;
+  // codex output_tokens ALREADY INCLUDES reasoning_output_tokens (verified
+  // against real rollouts: total_tokens == input_tokens + output_tokens, and
+  // reasoning ⊆ output in every row). completion = output_tokens; folding
+  // reasoning in again would double-count it and break the disjoint-sum
+  // conservation (prompt + cached + completion == total_tokens).
+  if (typeof usage.output_tokens === 'number')
+    fm.total_completion_tokens = usage.output_tokens;
   if (typeof usage.cached_input_tokens === 'number')
     fm.extra = { total_cached_tokens: usage.cached_input_tokens };
   return fm;
