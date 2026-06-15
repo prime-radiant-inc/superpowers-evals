@@ -59,7 +59,7 @@ export function verbToolNotCalled(
 
 // ---------------------------------------------------------------------------
 // tool-count <tool> <op> <n>
-// Returns null for unknown op (caller should exit 2).
+// Returns null for unknown op (the caller maps it to the 127 broken-check band).
 // ---------------------------------------------------------------------------
 export function verbToolCount(
   calls: ToolCallView[],
@@ -76,6 +76,9 @@ export function verbToolCount(
     case 'eq':
       passed = count === n;
       break;
+    case 'ne':
+      passed = count !== n;
+      break;
     case 'gt':
       passed = count > n;
       break;
@@ -89,7 +92,7 @@ export function verbToolCount(
       passed = count <= n;
       break;
     default:
-      return null; // unknown op → exit 2
+      return null; // unknown op → broken check (127)
   }
 
   const detail = passed

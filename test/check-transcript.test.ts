@@ -217,6 +217,21 @@ test('tool-count eq: pass', () => {
   expect(result!.detail).toContain('Read called 2 time(s) (eq 2)');
 });
 
+test('tool-count ne: pass (parity with git-count)', () => {
+  const result = verbToolCount([call('Read')], false, ['Read', 'ne', '2']);
+  expect(result!.passed).toBe(true);
+  expect(result!.detail).toContain('(ne 2)');
+});
+
+test('tool-count ne: fail', () => {
+  const result = verbToolCount([call('Read'), call('Read')], false, [
+    'Read',
+    'ne',
+    '2',
+  ]);
+  expect(result!.passed).toBe(false);
+});
+
 test('tool-count gt: fail', () => {
   const result = verbToolCount([call('Read')], false, ['Read', 'gt', '2']);
   expect(result!.passed).toBe(false);

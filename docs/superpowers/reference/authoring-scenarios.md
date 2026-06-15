@@ -33,7 +33,6 @@ tells you how to regenerate the list rather than pasting a table that will rot.
 4. [Writing `checks.sh`](#4-writing-checkssh)
 5. [Debugging a non-passing run](#5-debugging-a-non-passing-run)
 6. [Worked examples](#6-worked-examples)
-7. [Known source discrepancies (flag for maintainers)](#7-known-source-discrepancies-flag-for-maintainers)
 
 ---
 
@@ -362,7 +361,7 @@ the Superpowers plugin is staged into a harness's isolated config:
 |---|---|---|
 | `tool-called` | `<tool>` | The tool was called ≥1 time. |
 | `tool-not-called` | `<tool>` | **Negative.** Tool called 0 times; **empty capture → FAIL**. |
-| `tool-count` | `<tool> <op> <n>` | `op ∈ {eq, gt, gte, lt, lte}` — **no `ne`** (unlike `git-count`; see §7). Unknown op → broken (127). |
+| `tool-count` | `<tool> <op> <n>` | `op ∈ {eq, ne, gt, gte, lt, lte}` (same ops as `git-count`). Unknown op → broken (127). |
 | `tool-before` | `<a> <b>` | First `<a>` precedes first `<b>`; both must occur. |
 | `skill-called` | `<skill>` | Skill loaded (native `Skill`, shell read of `SKILL.md`, or normalized `Read` — `isSkillInvocation`). |
 | `skill-not-called` | `<skill>` | **Negative.** Empty capture → FAIL. |
@@ -648,31 +647,3 @@ post() {
 `indeterminate`, not a false `fail`.) The AC prose asserts the same facts in
 words, so the Gauntlet-Agent and the deterministic checks corroborate — and
 disagreement between them is itself a triage signal.
-
----
-
-## 7. Known source discrepancies (flag for maintainers)
-
-These were confirmed against the source while writing this guide. They are noted
-here rather than fixed:
-
-1. **Stale "exit 2" comments in `src/check/verbs.ts`.** `verbToolCount`'s header
-   comment says "Returns null for unknown op (caller should exit 2)" and the
-   `default` branch is annotated `// unknown op → exit 2`. The actual behavior is
-   the **127 broken-check band**: `transcript-dispatch.ts` maps a `null` from
-   `verbToolCount` to `broken(...)`, and `check-transcript.ts` exits **127** for a
-   broken check (never 2). The comments predate the unified 127 crash-band
-   discipline.
-
-2. **`tool-count` supports no `ne`.** `verbToolCount` (`src/check/verbs.ts`) and
-   its broken-op message accept only `eq | gt | gte | lt | lte`. This diverges from
-   `git-count`, whose `GIT_COUNT_OPS` (`src/check/fs-verbs.ts`) **does** include
-   `ne`. An author reaching for `check-transcript tool-count Foo ne 0` will hit a
-   127 broken check; use `tool-not-called Foo` (or `tool-count Foo gt 0`) instead.
-
-3. **No `bin/` (or `bin-ts/`) directory exists in this tree.** The parent and
-   worktree `CLAUDE.md` "Architecture" sections describe a `bin/` check-tool
-   directory and a `bin-ts/setup-helpers` shim with a PATH prepend. Those paths do
-   not exist here; the real mechanism is the `BASH_ENV`/`source`d
-   `src/checks/prelude.sh` delegating to the TS CLIs (documented in §1/§4). The
-   architecture docs should be reconciled to the prelude mechanism.
