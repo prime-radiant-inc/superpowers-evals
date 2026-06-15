@@ -6,6 +6,7 @@ import {
   ObolError,
 } from '@primeradianthq/obol';
 import type { TokenUsage } from '../contracts/economics.ts';
+import { sumCodingAgentTokens } from './fallback.ts';
 
 /** Backend family (normalizer name) -> obol dialect. Identity for the 7 priced
  *  dialects; the `obol` dialect is reserved for the gauntlet usage sidecar. */
@@ -188,10 +189,40 @@ function kimiToolResultTotalBytes(file: string): number {
 }
 
 /** Price each new session log with obol and merge. Maps `family` to its obol
- *  dialect; returns null for unknown families, empty input, or any ObolError.
+ *  dialect. When obol cannot price the logs (unknown dialect, ObolError, or a
+ *  zero-token merge because the agent's on-disk format drifted past obol's
+ *  parser), fall back to summing the agent's own per-message token usage from
+ *  its logs (gemini, opencode) — those models come back UNPRICED. Returns null
+ *  only when neither obol nor the fallback can produce token counts.
  *  For the kimi family, also stamps `tool_result_total_bytes` (the UTF-8 byte
  *  total of every tool.result output across the logs). */
 export async function estimateSessionLogs(
+  family: string,
+  files: readonly string[],
+): Promise<TokenUsage | null> {
+  if (files.length === 0) {
+    return null;
+  }
+  const usage = await estimateWithObol(family, files);
+  // obol could not extract tokens for this agent/version: sum the agent's own
+  // per-message usage from its logs (unpriced) so coding-agent economics is not
+  // silently dropped to null.
+  const resolved = usage ?? sumCodingAgentTokens(family, files);
+  if (resolved !== null && family === 'kimi') {
+    return {
+      ...resolved,
+      tool_result_total_bytes: files.reduce(
+        (sum, f) => sum + kimiToolResultTotalBytes(f),
+        0,
+      ),
+    };
+  }
+  return resolved;
+}
+
+/** Run obol over each log and merge, or null when obol cannot price them
+ *  (unknown dialect, empty input, ObolError, or a zero-token merge). */
+async function estimateWithObol(
   family: string,
   files: readonly string[],
 ): Promise<TokenUsage | null> {
@@ -210,17 +241,7 @@ export async function estimateSessionLogs(
     }
     throw e;
   }
-  const usage = mergeEstimates(estimates);
-  if (usage !== null && family === 'kimi') {
-    return {
-      ...usage,
-      tool_result_total_bytes: files.reduce(
-        (sum, f) => sum + kimiToolResultTotalBytes(f),
-        0,
-      ),
-    };
-  }
-  return usage;
+  return mergeEstimates(estimates);
 }
 
 /** Price the gauntlet usage sidecar (obol's own `obol` dialect). Returns null
