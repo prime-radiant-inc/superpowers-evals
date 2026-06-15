@@ -117,6 +117,7 @@ const PI_ENV_KEYS = [
   'PI_PROVIDER',
   'PI_MODEL',
   'PI_API_KEY',
+  'PI_OAUTH_HOME',
   'AZURE_OPENAI_BASE_URL',
   'AZURE_OPENAI_RESOURCE_NAME',
   'AZURE_OPENAI_API_VERSION',
@@ -400,6 +401,225 @@ test('pi present on PATH resolves via Bun.which and provisions', () => {
       process.env['PATH'] = prevPath;
     }
     path.cleanup();
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// OAuth-or-env auth. Pi (and Kimi) host installs log in via OAuth, not env-var
+// keys. When PI_API_KEY is absent but a host OAuth login exists under
+// PI_OAUTH_HOME (default ~/.pi), provision() seeds that credential into the
+// isolated PI_CODING_AGENT_DIR (mirroring codex's auth-copy seam) so the run
+// authenticates via OAuth rather than failing at setup.
+// ---------------------------------------------------------------------------
+
+// Build a fake host PI_OAUTH_HOME laying down the OAuth credential files the
+// way `pi` writes them: <home>/agent/{auth.json,settings.json}. auth.json keys
+// the provider name to an OAuth token object; settings.json carries the default
+// provider/model. Returns the home plus a cleanup().
+function makePiOauthHome(opts?: {
+  provider?: string;
+  model?: string;
+  omitSettings?: boolean;
+}): { home: string; cleanup: () => void } {
+  const home = mkdtempSync(join(tmpdir(), 'quorum-pi-oauthhome-'));
+  const agentDir = join(home, 'agent');
+  mkdirSync(agentDir, { recursive: true });
+  const provider = opts?.provider ?? 'openai-codex';
+  const model = opts?.model ?? 'gpt-5.5';
+  writeFileSync(
+    join(agentDir, 'auth.json'),
+    `${JSON.stringify(
+      {
+        [provider]: {
+          type: 'oauth',
+          access: 'host-access-token',
+          refresh: 'host-refresh-token',
+          expires: 9999999999999,
+          accountId: 'acct-1234',
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  if (!opts?.omitSettings) {
+    writeFileSync(
+      join(agentDir, 'settings.json'),
+      `${JSON.stringify(
+        {
+          defaultProvider: provider,
+          defaultModel: model,
+          defaultThinkingLevel: 'medium',
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+  return {
+    home,
+    cleanup: () => {
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
+}
+
+// OAuth path: no PI_API_KEY, but a host OAuth login under PI_OAUTH_HOME. The
+// adapter copies the host auth.json verbatim into the isolated config dir at
+// mode 0600, writes settings.json + pi.env carrying provider/model (derived
+// from the host settings) and NO PI_API_KEY, and returns the config-dir map.
+test('oauth path seeds the host auth.json into the isolated config dir', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const oauth = makePiOauthHome();
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: sp.root,
+        PI_OAUTH_HOME: oauth.home,
+        PI_PROVIDER: undefined,
+        PI_MODEL: undefined,
+        PI_API_KEY: undefined,
+      },
+      () => {
+        const agent = new PiAgent(piConfig());
+        const returned = agent.provision(home);
+
+        // auth.json is the host OAuth credential, copied verbatim, mode 0600.
+        const authPath = join(home.configDir, 'auth.json');
+        expect(existsSync(authPath)).toBe(true);
+        expect(mode600(authPath)).toBe(0o600);
+        const auth: unknown = JSON.parse(readFileSync(authPath, 'utf8'));
+        expect(auth).toEqual({
+          'openai-codex': {
+            type: 'oauth',
+            access: 'host-access-token',
+            refresh: 'host-refresh-token',
+            expires: 9999999999999,
+            accountId: 'acct-1234',
+          },
+        });
+
+        // settings.json carries the host default provider/model.
+        const settings: unknown = JSON.parse(
+          readFileSync(join(home.configDir, 'settings.json'), 'utf8'),
+        );
+        expect(settings).toEqual({
+          defaultProvider: 'openai-codex',
+          defaultModel: 'gpt-5.5',
+          defaultThinkingLevel: 'medium',
+        });
+
+        // pi.env carries provider/model for the launcher's --provider/--model,
+        // and NO PI_API_KEY (OAuth needs none).
+        const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
+        expect(envBody).toBe(
+          [
+            'export PI_PROVIDER=openai-codex',
+            'export PI_MODEL=gpt-5.5',
+            '',
+          ].join('\n'),
+        );
+        expect(envBody).not.toContain('PI_API_KEY');
+
+        expect(returned).toEqual({ PI_CODING_AGENT_DIR: home.configDir });
+      },
+    );
+  } finally {
+    oauth.cleanup();
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// OAuth path honors PI_PROVIDER/PI_MODEL as overrides when set (without an API
+// key), instead of the host settings defaults.
+test('oauth path honors PI_PROVIDER/PI_MODEL overrides over host settings', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const oauth = makePiOauthHome();
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: sp.root,
+        PI_OAUTH_HOME: oauth.home,
+        PI_PROVIDER: 'anthropic',
+        PI_MODEL: 'claude-sonnet-4-6',
+        PI_API_KEY: undefined,
+      },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home);
+        const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
+        expect(envBody).toBe(
+          [
+            'export PI_PROVIDER=anthropic',
+            'export PI_MODEL=claude-sonnet-4-6',
+            '',
+          ].join('\n'),
+        );
+      },
+    );
+  } finally {
+    oauth.cleanup();
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// Neither PI_API_KEY nor a host OAuth login: a clear setup error.
+test('neither PI_API_KEY nor oauth login throws a clear ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  // Point PI_OAUTH_HOME at an empty dir so no host auth.json exists.
+  const emptyHome = mkdtempSync(join(tmpdir(), 'quorum-pi-noauth-'));
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: sp.root,
+        PI_OAUTH_HOME: emptyHome,
+        PI_PROVIDER: undefined,
+        PI_MODEL: undefined,
+        PI_API_KEY: undefined,
+      },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home)).toThrow(
+          /no PI_API_KEY and no .* oauth login/i,
+        );
+      },
+    );
+  } finally {
+    rmSync(emptyHome, { recursive: true, force: true });
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// OAuth path with a host login that has no settings.json and no env override
+// cannot determine provider/model: a clear setup error (don't guess).
+test('oauth path without provider/model (no settings, no env) throws', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const oauth = makePiOauthHome({ omitSettings: true });
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: sp.root,
+        PI_OAUTH_HOME: oauth.home,
+        PI_PROVIDER: undefined,
+        PI_MODEL: undefined,
+        PI_API_KEY: undefined,
+      },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home)).toThrow(/provider|model/i);
+      },
+    );
+  } finally {
+    oauth.cleanup();
     sp.cleanup();
     cleanup();
   }

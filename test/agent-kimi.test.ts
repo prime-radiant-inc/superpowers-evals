@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -548,27 +549,33 @@ test('provision throws ProvisionError when SUPERPOWERS_ROOT is unset', () => {
   }
 });
 
-test('provision throws ProvisionError when KIMI_MODEL_API_KEY is unset', () => {
+test('provision throws ProvisionError when neither KIMI_MODEL_API_KEY nor oauth login exist', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
+  // Point KIMI_OAUTH_HOME at an empty dir so no host oauth login is found.
+  const emptyOauth = mkdtempSync(join(tmpdir(), 'quorum-kimi-nooauth-'));
 
   try {
     withEnv(
       {
         SUPERPOWERS_ROOT: spRoot,
         KIMI_MODEL_API_KEY: undefined,
+        KIMI_OAUTH_HOME: emptyOauth,
         KIMI_MODEL_NAME: undefined,
         QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
       },
       () => {
         const agent = new KimiAgent(KIMI_CONFIG);
-        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+        expect(() => agent.provision(home, runner)).toThrow(
+          /no KIMI_MODEL_API_KEY and no .* oauth login/i,
+        );
       },
     );
   } finally {
+    rmSync(emptyOauth, { recursive: true, force: true });
     cleanup();
   }
 });
@@ -1048,6 +1055,151 @@ test('provision throws ProvisionError when the binary is absent from PATH (no fa
       },
     );
   } finally {
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// OAuth-or-env auth. Kimi host installs log in via OAuth (credentials live under
+// ~/.kimi-code), not an env-var key. When KIMI_MODEL_API_KEY is absent but a host
+// OAuth login exists under KIMI_OAUTH_HOME (default ~/.kimi-code), provision()
+// seeds those credential files into the isolated KIMI_CODE_HOME so the run
+// authenticates via OAuth (kimi reads them from KIMI_CODE_HOME) rather than
+// failing at setup.
+// ---------------------------------------------------------------------------
+
+// The host kimi oauth credential files seeded into the isolated home.
+const KIMI_OAUTH_FILES = [
+  'config.toml',
+  'credentials/kimi-code.json',
+  'oauth/kimi-code',
+] as const;
+
+// Build a fake host KIMI_OAUTH_HOME laying down the oauth login files the way
+// `kimi login` writes them. config.toml carries the provider/oauth config;
+// credentials/kimi-code.json holds the token; oauth/kimi-code is the marker.
+function makeKimiOauthHome(): { home: string; cleanup: () => void } {
+  const home = mkdtempSync(join(tmpdir(), 'quorum-kimi-oauthhome-'));
+  mkdirSync(join(home, 'credentials'), { recursive: true });
+  mkdirSync(join(home, 'oauth'), { recursive: true });
+  writeFileSync(
+    join(home, 'config.toml'),
+    'default_model = "kimi-code/kimi-for-coding"\n\n' +
+      '[providers."managed:kimi-code"]\n' +
+      'type = "kimi"\n' +
+      'base_url = "https://api.kimi.com/coding/v1"\n' +
+      'api_key = ""\n\n' +
+      '[providers."managed:kimi-code".oauth]\n' +
+      'storage = "file"\n' +
+      'key = "oauth/kimi-code"\n',
+  );
+  writeFileSync(
+    join(home, 'credentials', 'kimi-code.json'),
+    `${JSON.stringify({
+      access_token: 'host-kimi-access',
+      refresh_token: 'host-kimi-refresh',
+      expires_at: 9999999999,
+      scope: 'kimi-code',
+      token_type: 'Bearer',
+      expires_in: 3600,
+    })}\n`,
+  );
+  writeFileSync(join(home, 'oauth', 'kimi-code'), '');
+  return {
+    home,
+    cleanup: () => {
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
+}
+
+test('oauth path seeds the host credential files into KIMI_CODE_HOME and runs the preflight', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const oauth = makeKimiOauthHome();
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: undefined,
+        KIMI_OAUTH_HOME: oauth.home,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        const env = agent.provision(home, runner);
+
+        // Returned env: KIMI_CODE_HOME -> configDir + launcher pointers.
+        expect(env['KIMI_CODE_HOME']).toBe(home.configDir);
+        expect(env['KIMI_BINARY']).toBe(RESOLVED_BINARY);
+        expect(existsSync(env['KIMI_ENV_FILE'] ?? '')).toBe(true);
+
+        // The host oauth credential files are seeded into the isolated home.
+        for (const rel of KIMI_OAUTH_FILES) {
+          expect(existsSync(join(home.configDir, rel))).toBe(true);
+        }
+        // The credential file carries the host token verbatim.
+        const creds = JSON.parse(
+          readFileSync(
+            join(home.configDir, 'credentials', 'kimi-code.json'),
+            'utf8',
+          ),
+        );
+        expect(creds.access_token).toBe('host-kimi-access');
+
+        // The plugin is still installed.
+        expect(
+          existsSync(join(home.configDir, 'plugins', 'installed.json')),
+        ).toBe(true);
+
+        // The preflight ran (one subprocess), keyed on the resolved binary, and
+        // its env carries NO model-key env (oauth provides auth via the seeded
+        // credentials, not KIMI_MODEL_API_KEY).
+        expect(runner.calls.length).toBe(1);
+        const preflightEnv = runner.calls[0]?.options?.env ?? {};
+        expect(preflightEnv['KIMI_MODEL_API_KEY']).toBeUndefined();
+        expect(preflightEnv['KIMI_CODE_HOME']).toBeDefined();
+      },
+    );
+  } finally {
+    oauth.cleanup();
+    cleanup();
+  }
+});
+
+test('oauth path: a failing preflight surfaces a ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const oauth = makeKimiOauthHome();
+  const runner = new FakeCommandRunner(() => ({
+    status: 1,
+    stdout: '',
+    stderr: 'oauth login required',
+  }));
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: undefined,
+        KIMI_OAUTH_HOME: oauth.home,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      },
+    );
+  } finally {
+    oauth.cleanup();
     cleanup();
   }
 });

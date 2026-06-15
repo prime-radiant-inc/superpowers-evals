@@ -1,10 +1,16 @@
 name: kimi
-binary: kimi-code
+# The kimi engine binary is `kimi` under ~/.kimi-code/bin (not on PATH by
+# default, and NOT named `kimi-code`). The launcher prepends ~/.kimi-code/bin to
+# PATH so this resolves via Bun.which.
+binary: kimi
 agent_config_env: KIMI_CODE_HOME
 session_log_dir: "${KIMI_CODE_HOME}/sessions"
 session_log_glob: "**/wire.jsonl"
 normalizer: kimi
+# Auth is OAuth-or-env (KimiAgent.provision): KIMI_MODEL_API_KEY is only needed
+# for the api-key path; an OAuth login under ~/.kimi-code works without it. The
+# "neither oauth nor env" failure is raised in provision() with a clear message,
+# not by the loader's required_env check.
 required_env:
   - SUPERPOWERS_ROOT
-  - KIMI_MODEL_API_KEY
 max_time: 10m

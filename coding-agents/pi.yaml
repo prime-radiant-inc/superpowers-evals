@@ -4,10 +4,11 @@ agent_config_env: PI_CODING_AGENT_DIR
 session_log_dir: "${PI_CODING_AGENT_DIR}/sessions"
 session_log_glob: "*.jsonl"
 normalizer: pi
+# Auth is OAuth-or-env (PiAgent.provision): PI_PROVIDER/PI_MODEL/PI_API_KEY are
+# only needed for the api-key path; an OAuth login under ~/.pi works without
+# them. The "neither oauth nor env" failure is raised in provision() with a
+# clear message, not by the loader's required_env check.
 required_env:
   - SUPERPOWERS_ROOT
-  - PI_PROVIDER
-  - PI_MODEL
-  - PI_API_KEY
 max_time: 10m
 max_concurrency: 1
