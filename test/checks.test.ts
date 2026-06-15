@@ -93,15 +93,14 @@ test('a signal-killed bash phase with no records surfaces a nonzero crash exitCo
   expect(exitCode).not.toBe(0);
 });
 
-// L4-signal-killed-with-records-is-clean: Python's subprocess.run returns a
-// NEGATIVE returncode for a signal (-9 for SIGKILL), so its crash band test
-// (`== 126 || == 127 || >= 128`) is False and it falls through to
-// `elif records: exit_code = 0` (quorum/checks.py:134-143). A signal-killed
-// phase that already emitted records is therefore treated as CLEAN by Python.
-// TS used to map a kill to 128+signo (137), which lands in the >=128 crash band
-// REGARDLESS of records — a parity divergence. Bug-for-bug parity: map the kill
-// to a negative code so the records-clean-out path applies.
-test('a signal-killed bash phase that already emitted a record is clean (parity with Python)', async () => {
+// L4-signal-killed-is-a-crash: a phase whose bash child is signal-killed
+// (OOM-killer, timeout SIGKILL) DIED MID-RUN, so its result is untrustworthy and
+// incomplete — it is a crash REGARDLESS of any partial records. This DELIBERATELY
+// DIVERGES from Python (quorum/checks.py:134-143 maps a signal to a negative
+// returncode and would treat a killed-with-records phase as clean): a killed
+// phase is never "clean". The records are still surfaced for the verdict, but the
+// exit code lands in the >=128 crash band so the composer reports a checks crash.
+test('a signal-killed bash phase is a crash even if it already emitted a record', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   writeFileSync(join(workdir, 'present.txt'), 'x');
   // Emit a real record, then kill the running bash with SIGKILL.
@@ -114,13 +113,15 @@ test('a signal-killed bash phase that already emitted a record is clean (parity 
     workdir,
     quorumBin: BIN,
   });
+  // The partial record is still captured for the verdict's check list.
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({
     check: 'file-exists',
     passed: true,
     phase: 'pre',
   });
-  expect(exitCode).toBe(0);
+  // But the signal kill is a crash (SIGKILL -> 128 + 9 = 137), not clean.
+  expect(exitCode).toBeGreaterThanOrEqual(128);
 });
 
 // E-spawn-failure-swallowed: Python `subprocess.run(['bash', ...])` raises

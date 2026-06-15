@@ -86,21 +86,25 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     if (proc.error) {
       throw proc.error;
     }
-    // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
-    // status:null with proc.signal set. Python's subprocess.run returns a
-    // NEGATIVE returncode for a signal (-9 for SIGKILL), which does NOT land in
-    // the >=128 crash band — so Python subjects a signal kill to the same
-    // records-based clean-out as an ordinary 1..125 exit (quorum/checks.py:
-    // 134-143). Map a signal kill to -signo to match: a killed phase that
-    // already emitted records is treated as clean, one with none stays nonzero.
-    const rc = proc.status ?? (proc.signal ? -signalNumber(proc.signal) : 0);
     const records = readRecords(sink, args.phase);
+
+    // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
+    // status:null with proc.signal set. Such a phase DIED MID-RUN, so its result
+    // is untrustworthy and incomplete — it is a CRASH regardless of any partial
+    // records. This DELIBERATELY DIVERGES from Python (quorum/checks.py:134-143
+    // maps a signal to a negative returncode and would treat a killed-with-records
+    // phase as clean): a killed phase is never "clean". Map the kill into the
+    // >=128 crash band (128 + signo) so the composer reports a checks crash; the
+    // records above are still surfaced for the verdict's check list.
+    if (proc.signal) {
+      return { records, exitCode: 128 + signalNumber(proc.signal) };
+    }
+    const rc = proc.status ?? 0;
 
     // Crash heuristic (parity with quorum/checks.py:134-143):
     //   rc 0                  -> ok
     //   rc 126/127 or >= 128  -> crash (not-executable / not-found)
-    //   else (1..125, or a negative signal code)
-    //                         -> ok iff at least one record was emitted, else crash
+    //   else (1..125)         -> ok iff at least one record was emitted, else crash
     let exitCode: number;
     if (rc === 0) {
       exitCode = 0;
