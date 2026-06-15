@@ -21,9 +21,9 @@ import { writePrivateFileNoFollow } from './private-file.ts';
 // _write_copilot_env_file, _stage_copilot_superpowers_plugin,
 // _seed_copilot_config. provision() is SETUP: it verifies the copilot binary is
 // on PATH, stages the isolated COPILOT_HOME, writes a mode-0600 secret env file,
-// and stages the superpowers plugin from SUPERPOWERS_ROOT. The only subprocesses
-// are the PATH/auth probes (`command -v copilot`, the `gh auth token` fallback),
-// routed through the injectable `runner` seam.
+// and stages the superpowers plugin from SUPERPOWERS_ROOT. PATH presence checks
+// (copilot, gh) use Bun.which (a real PATH lookup); the only subprocess is the
+// `gh auth token` auth fallback, routed through the injectable `runner` seam.
 //
 // provisionCopilot() takes a per-run session id (minted by the runner) so it can
 // run the pre-snapshot session-state guard and return the CopilotProvisioning
@@ -184,15 +184,30 @@ function rejectCopilotStagingSourceSymlinks(spRoot: string): void {
   }
 }
 
+// Expand a leading ~ to HOME (mirrors Path.expanduser for the common case the
+// oracle hits at _require_copilot_superpowers_root). Reads HOME only through
+// env.ts, like the pi/kimi adapters.
+function expanduser(p: string): string {
+  if (p === '~' || p.startsWith('~/')) {
+    const home = getEnv('HOME');
+    if (home !== undefined && home !== '') {
+      return p === '~' ? home : join(home, p.slice(2));
+    }
+  }
+  return p;
+}
+
 // Port of _require_copilot_superpowers_root: SUPERPOWERS_ROOT must be set, free
-// of staging-source symlinks, and contain every required plugin file.
+// of staging-source symlinks, and contain every required plugin file. The
+// oracle calls Path(superpowers_root).expanduser(), so a leading ~ is expanded
+// before resolving (otherwise resolve('~/sp') yields a literal "~" dir).
 function requireCopilotSuperpowersRoot(superpowersRootValue: string): string {
   if (!superpowersRootValue) {
     throw new ProvisionError(
       'SUPERPOWERS_ROOT not set; cannot install Copilot Superpowers plugin',
     );
   }
-  const root = resolve(superpowersRootValue);
+  const root = resolve(expanduser(superpowersRootValue));
   rejectCopilotStagingSourceSymlinks(root);
   const missing = COPILOT_REQUIRED_SUPERPOWERS_FILES.filter(
     (rel) => !isFile(join(root, rel)),
@@ -236,12 +251,13 @@ interface CopilotAuthEnv {
 }
 
 // Port of _gh_auth_token: shell `gh auth token` as the final auth fallback,
-// tolerant of gh-not-on-PATH and a non-zero exit (both yield no token). Routed
-// through the injectable runner so the hermetic gate stubs the lookup; `command
-// -v gh` stands in for the oracle's shutil.which("gh") guard.
+// tolerant of gh-not-on-PATH and a non-zero exit (both yield no token). The
+// presence check mirrors the oracle's shutil.which("gh") with Bun.which (a real
+// PATH lookup; the prior `command -v gh` probe ENOENTs through the no-shell
+// spawnSync seam and false-fails on Linux). The `gh auth token` call itself
+// still routes through the injectable runner so the hermetic gate stubs it.
 function ghAuthToken(runner: CommandRunner): string | undefined {
-  const present = runner.run('command', ['-v', 'gh'], { env: envSnapshot() });
-  if (present.status !== 0 || present.stdout.trim() === '') {
+  if (Bun.which('gh', { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     return undefined;
   }
   const result = runner.run('gh', ['auth', 'token'], { env: envSnapshot() });
@@ -370,13 +386,17 @@ function stageCopilotSuperpowersPlugin(
   return pluginRoot;
 }
 
-// Recursively yield every path under `root` (oracle Path.rglob('*')).
+// Recursively yield every path under `root` (oracle os.walk/Path.rglob('*')).
+// A symlinked directory is yielded as a path but never descended into, so the
+// walk cannot escape `root` through a symlink (os.walk does not follow
+// symlinked dirs by default). lstat (not stat) classifies the entry itself.
 function walk(root: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(root)) {
     const full = join(root, entry);
     out.push(full);
-    if (statSync(full).isDirectory()) {
+    const info = lstatSync(full);
+    if (info.isDirectory()) {
       out.push(...walk(full));
     }
   }
@@ -478,15 +498,13 @@ export interface CopilotProvisioning {
   readonly expectedEventsLog: string;
 }
 
-// Port of the shutil.which("copilot") guard in _seed_copilot_config. node has no
-// shutil.which; probe via the injectable runner (`command -v copilot`) so the
-// hermetic gate can stub the lookup, and raise ProvisionError when it is missing.
-function requireCopilotBinaryOnPath(
-  binary: string,
-  runner: CommandRunner,
-): void {
-  const probe = runner.run('command', ['-v', binary], { env: envSnapshot() });
-  if (probe.status !== 0 || probe.stdout.trim() === '') {
+// Port of the shutil.which("copilot") guard in _seed_copilot_config. Bun.which
+// does a real PATH lookup (the matching idiom the antigravity adapter and the
+// claude preflight use); the prior `command -v` probe shelled the `command`
+// builtin through the no-shell spawnSync seam, which ENOENTs and false-fails on
+// Linux. Raise ProvisionError when the binary is absent.
+function requireCopilotBinaryOnPath(binary: string): void {
+  if (Bun.which(binary, { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     throw new ProvisionError(
       `${binary} not found on PATH; cannot run Copilot evals`,
     );
@@ -501,12 +519,12 @@ export class CopilotAgent implements CodingAgent {
     this.config = config;
   }
 
-  // SETUP. Verifies copilot is on PATH, stages COPILOT_HOME, writes the
-  // mode-0600 secret env file, runs the pre-snapshot session-state guard, and
-  // stages the superpowers plugin. The only subprocesses are the binary/auth
-  // probes (via `runner`). Throws ProvisionError on any failure. Returns the
-  // full CopilotProvisioning record the runner needs to wire the session-id
-  // substitution, gauntlet env, capture validation, and post-run leak scan.
+  // SETUP. Verifies copilot is on PATH (Bun.which), stages COPILOT_HOME, writes
+  // the mode-0600 secret env file, runs the pre-snapshot session-state guard,
+  // and stages the superpowers plugin. The only subprocess is the `gh auth
+  // token` auth fallback (via `runner`). Throws ProvisionError on any failure.
+  // Returns the full CopilotProvisioning record the runner needs to wire the
+  // session-id substitution, gauntlet env, capture validation, and leak scan.
   provisionCopilot(
     home: RunHome,
     runner: CommandRunner,
@@ -516,7 +534,7 @@ export class CopilotAgent implements CodingAgent {
     const spRoot = requireCopilotSuperpowersRoot(
       getEnv('SUPERPOWERS_ROOT') ?? '',
     );
-    requireCopilotBinaryOnPath(this.config.binary, runner);
+    requireCopilotBinaryOnPath(this.config.binary);
 
     // Resolve auth first so a missing/invalid credential fails before any dir
     // is created (matches the oracle's ordering in _seed_copilot_config).

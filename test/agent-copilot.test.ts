@@ -7,9 +7,10 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CopilotAgent,
@@ -121,6 +122,28 @@ function clearedAuthEnv(): Record<string, string | undefined> {
   return cleared;
 }
 
+// The binary-presence checks (copilot, gh) now use a real Bun.which PATH lookup
+// (parity with the oracle's shutil.which). To keep tests hermetic regardless of
+// what is installed on the host, stub `copilot` and `gh` in a temp dir and
+// prepend it to PATH (the same idiom the claude binary-preflight tests use).
+const FAKE_BIN_DIR = mkdtempSync(join(tmpdir(), 'copilot-fakebin-'));
+for (const name of ['copilot', 'gh']) {
+  const stub = join(FAKE_BIN_DIR, name);
+  writeFileSync(stub, '#!/usr/bin/env bash\n:\n');
+  chmodSync(stub, 0o755);
+}
+
+// Like withEnv, but always makes `copilot` and `gh` resolvable on PATH via the
+// fake-bin dir so the Bun.which presence checks pass deterministically. The
+// real `gh auth token` execution still goes through the (faked) runner.
+function withProvisionEnv(
+  overrides: Readonly<Record<string, string | undefined>>,
+  body: () => void,
+): void {
+  const path = `${FAKE_BIN_DIR}:${Bun.env['PATH'] ?? ''}`;
+  withEnv({ ...overrides, PATH: path }, body);
+}
+
 function mode(path: string): number {
   return statSync(path).mode & 0o777;
 }
@@ -131,7 +154,7 @@ test('provision stages COPILOT_HOME, writes secret env file, and stages the plug
   try {
     const runner = copilotPresentRunner();
     let returned: Record<string, string> = {};
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -176,10 +199,10 @@ test('provision stages COPILOT_HOME, writes secret env file, and stages the plug
     expect(returned).toEqual({ COPILOT_HOME: home.configDir });
     expect(Object.keys(returned)).toEqual(['COPILOT_HOME']);
 
-    // provision()'s only subprocess is the `command -v copilot` PATH probe.
-    expect(runner.calls.map((c) => [c.command, ...c.args])).toEqual([
-      ['command', '-v', 'copilot'],
-    ]);
+    // provision() runs no subprocess here: the copilot PATH check is a real
+    // Bun.which lookup, and auth came from COPILOT_GITHUB_TOKEN so the gh
+    // fallback never shelled out.
+    expect(runner.calls).toEqual([]);
   } finally {
     cleanup();
     sp.cleanup();
@@ -190,7 +213,7 @@ test('provision honors the GH_TOKEN fallback chain and quotes embedded quotes', 
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -226,7 +249,7 @@ test('provision re-enforces 0600 on a pre-existing loose-perm .copilot-env', () 
     chmodSync(envFile, 0o644);
     expect(mode(envFile)).toBe(0o644);
 
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -247,7 +270,7 @@ test('provision writes sorted provider env when COPILOT_PROVIDER_BASE_URL is set
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -279,17 +302,15 @@ test('provision falls back to `gh auth token` when no token env var is set', () 
   try {
     // No COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN and no provider base url:
     // the oracle's final fallback shells `gh auth token` (here via the runner
-    // seam). The resolved token is written into the secret env file.
+    // seam). gh's presence is a real Bun.which lookup satisfied by the fake-bin
+    // dir; the resolved token is written into the secret env file.
     const runner = new FakeCommandRunner((command, args) => {
-      if (command === 'command' && args[0] === '-v') {
-        return { status: 0, stdout: `/usr/bin/${args[1]}\n`, stderr: '' };
-      }
       if (command === 'gh' && args[0] === 'auth' && args[1] === 'token') {
         return { status: 0, stdout: 'gho_from_gh_cli\n', stderr: '' };
       }
       return { status: 0, stdout: '', stderr: '' };
     });
-    withEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
+    withProvisionEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
       new CopilotAgent(CONFIG).provision(home, runner);
     });
     const envFile = join(home.configDir, '.copilot-env');
@@ -312,18 +333,16 @@ test('provision tolerates a non-zero `gh auth token` and reports no auth found',
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    // gh is present but not authenticated: `gh auth token` exits non-zero. The
-    // oracle treats that as "no token" and raises the no-auth setup error.
+    // gh is present (fake-bin dir) but not authenticated: `gh auth token` exits
+    // non-zero. The oracle treats that as "no token" and raises the no-auth
+    // setup error.
     const runner = new FakeCommandRunner((command, args) => {
-      if (command === 'command' && args[0] === '-v') {
-        return { status: 0, stdout: `/usr/bin/${args[1]}\n`, stderr: '' };
-      }
       if (command === 'gh' && args[0] === 'auth' && args[1] === 'token') {
         return { status: 1, stdout: '', stderr: 'not logged in' };
       }
       return { status: 0, stdout: '', stderr: '' };
     });
-    withEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
+    withProvisionEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
       expect(() => new CopilotAgent(CONFIG).provision(home, runner)).toThrow(
         /no Copilot auth found/,
       );
@@ -338,8 +357,9 @@ test('provision throws ProvisionError when no auth is present', () => {
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    withEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
+    withProvisionEnv({ ...clearedAuthEnv(), SUPERPOWERS_ROOT: sp.root }, () => {
       // Binary present so the no-auth branch (not the PATH check) is what throws.
+      // gh resolves (fake-bin) but `gh auth token` yields no token here.
       expect(() =>
         new CopilotAgent(CONFIG).provision(home, copilotPresentRunner()),
       ).toThrow(/no Copilot auth found/);
@@ -396,7 +416,7 @@ test('provision throws ProvisionError when offline lacks a provider base url', (
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -415,28 +435,26 @@ test('provision throws ProvisionError when offline lacks a provider base url', (
   }
 });
 
-// A copilot-binary responder: replies success to `command -v copilot` (and
-// `command -v gh` so the gh fallback probe behaves) and OK to everything else.
+// A benign runner that replies OK to everything. PATH presence checks now use
+// Bun.which (not the runner), so this only needs to satisfy the `gh auth token`
+// fallback when a test exercises it.
 function copilotPresentRunner(): FakeCommandRunner {
-  return new FakeCommandRunner((command, args) => {
-    if (command === 'command' && args[0] === '-v') {
-      return { status: 0, stdout: `/usr/bin/${args[1]}\n`, stderr: '' };
-    }
+  return new FakeCommandRunner(() => {
     return { status: 0, stdout: '', stderr: '' };
   });
 }
 
-test('provision fails fast when the copilot binary is not on PATH', () => {
+test('provision does not false-fail a present binary when `command` builtin ENOENTs', () => {
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    // `command -v copilot` exits non-zero: the oracle raises a clear setup error
-    // (shutil.which("copilot") is None) before any provisioning subprocess.
-    const runner = new FakeCommandRunner((command, args) => {
-      if (command === 'command' && args[0] === '-v' && args[1] === 'copilot') {
-        return { status: 1, stdout: '', stderr: '' };
-      }
-      return { status: 0, stdout: '', stderr: '' };
+    // The H3 bug: the old `command -v` probe shelled the `command` builtin
+    // through the no-shell spawnSync seam, ENOENTing on Linux and false-failing
+    // a binary that is genuinely on PATH. Model that runner (every call
+    // ENOENTs) and confirm a present binary (sh) still provisions, because the
+    // PATH check is now a real Bun.which lookup that ignores the runner.
+    const enoentRunner = new FakeCommandRunner(() => {
+      return { status: 127, stdout: '', stderr: 'command: not found' };
     });
     withEnv(
       {
@@ -445,9 +463,10 @@ test('provision fails fast when the copilot binary is not on PATH', () => {
         COPILOT_GITHUB_TOKEN: 'ghp_test_token',
       },
       () => {
-        expect(() => new CopilotAgent(CONFIG).provision(home, runner)).toThrow(
-          /copilot not found on PATH/,
-        );
+        const returned = new CopilotAgent(
+          configWithBinary(PRESENT_BINARY),
+        ).provision(home, enoentRunner);
+        expect(returned).toEqual({ COPILOT_HOME: home.configDir });
       },
     );
   } finally {
@@ -472,7 +491,7 @@ test('provisionCopilot guards a pre-existing session-state events.jsonl', () => 
     mkdirSync(join(stale, '..'), { recursive: true });
     writeFileSync(stale, '{"stale":true}\n');
 
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -501,7 +520,7 @@ test('provisionCopilot returns the secret values, env file, and session-state pa
   try {
     const sessionId = 'sess-xyz-999';
     let result: ReturnType<CopilotAgent['provisionCopilot']> | undefined;
-    withEnv(
+    withProvisionEnv(
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
@@ -564,10 +583,10 @@ test('scanCopilotSecretLeaks returns nothing when there are no secret values', (
   }
 });
 
-// A separate test where the runner is wired with a failing responder confirms
-// provision() never touches the runner for provisioning subprocesses beyond the
-// binary/gh probes: provisioning shells out to nothing else.
-test('provision runs no provisioning subprocess beyond the binary/auth probes', () => {
+// Confirms provision() shells out to nothing when auth comes from the env: the
+// copilot PATH check is a Bun.which lookup (not the runner) and the gh fallback
+// is skipped, so the runner is never touched.
+test('provision runs no provisioning subprocess when auth comes from the env', () => {
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
@@ -579,19 +598,15 @@ test('provision runs no provisioning subprocess beyond the binary/auth probes', 
         COPILOT_GITHUB_TOKEN: 'ghp_test_token',
       },
       () => {
-        const returned = new CopilotAgent(CONFIG).provision(home, runner);
+        const returned = new CopilotAgent(
+          configWithBinary(PRESENT_BINARY),
+        ).provision(home, runner);
         expect(returned).toEqual({ COPILOT_HOME: home.configDir });
       },
     );
-    // Only the `command -v copilot` PATH probe ran; auth came from the env var
-    // so the gh fallback was never invoked.
-    expect(runner.calls).toEqual([
-      {
-        command: 'command',
-        args: ['-v', 'copilot'],
-        options: { env: expect.anything() },
-      },
-    ]);
+    // No subprocess ran: the binary check used Bun.which, and the gh fallback
+    // was never invoked because COPILOT_GITHUB_TOKEN supplied the auth.
+    expect(runner.calls).toEqual([]);
   } finally {
     cleanup();
     sp.cleanup();
@@ -626,4 +641,161 @@ test('copilotGauntletEnv passes a clean proxy URL and rejects a credentialed one
   expect(() =>
     copilotGauntletEnv({ HTTPS_PROXY: 'http://user:pass@proxy.example:8080' }),
   ).toThrow(/credentialed proxy URL/);
+});
+
+// A guaranteed-absent binary name; `command -v` over the shell-less spawnSync
+// seam returns ENOENT for the `command` builtin and so used to false-fail on
+// Linux. The PATH probe must use a real PATH lookup (Bun.which) instead, so a
+// missing binary is reported as missing and a present one resolves.
+const ABSENT_BINARY = 'copilot-definitely-absent-binary-xyz-9000';
+// `sh` is on PATH on every POSIX host the eval runs on; the real Bun.which
+// lookup must find it.
+const PRESENT_BINARY = 'sh';
+
+function configWithBinary(binary: string): AgentConfig {
+  return { ...CONFIG, binary };
+}
+
+test('provision reports a missing copilot binary via a real PATH lookup (not faked)', () => {
+  const sp = makeSuperpowersRoot();
+  const { home, cleanup } = makeTempHome();
+  try {
+    // The PATH probe must be a real PATH lookup, not the runner. We pass a
+    // runner that would happily "find" anything via `command -v` (the legacy
+    // probe path); the real Bun.which lookup must still report the absent
+    // binary missing. This isolates the real-PATH behavior from the obsolete
+    // shell-builtin probe.
+    withEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: sp.root,
+        COPILOT_GITHUB_TOKEN: 'ghp_test_token',
+      },
+      () => {
+        expect(() =>
+          new CopilotAgent(configWithBinary(ABSENT_BINARY)).provision(
+            home,
+            copilotPresentRunner(),
+          ),
+        ).toThrow(
+          new RegExp(`${ABSENT_BINARY} not found on PATH; cannot run Copilot`),
+        );
+      },
+    );
+  } finally {
+    cleanup();
+    sp.cleanup();
+  }
+});
+
+test('provision resolves a real copilot binary via a real PATH lookup (no probe call)', () => {
+  const sp = makeSuperpowersRoot();
+  const { home, cleanup } = makeTempHome();
+  try {
+    // A binary that genuinely exists on PATH must satisfy the check without any
+    // runner subprocess for the PATH probe.
+    const runner = new FakeCommandRunner();
+    withEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: sp.root,
+        COPILOT_GITHUB_TOKEN: 'ghp_test_token',
+      },
+      () => {
+        const returned = new CopilotAgent(
+          configWithBinary(PRESENT_BINARY),
+        ).provision(home, runner);
+        expect(returned).toEqual({ COPILOT_HOME: home.configDir });
+      },
+    );
+    // The PATH probe is a real Bun.which lookup, not a `command -v` subprocess,
+    // so no `command -v` call reaches the runner.
+    expect(
+      runner.calls.some((c) => c.command === 'command' && c.args[0] === '-v'),
+    ).toBe(false);
+  } finally {
+    cleanup();
+    sp.cleanup();
+  }
+});
+
+test('provision expands a leading ~ in SUPERPOWERS_ROOT under the home dir', () => {
+  // A real plugin tree placed under the user's home, addressed with a ~ path.
+  // The oracle calls Path(superpowers_root).expanduser(); without expansion
+  // resolve('~/...') yields a literal "~" dir and staging fails with a
+  // missing-files error. With expansion the plugin stages successfully.
+  const homeRoot = mkdtempSync(join(homedir(), '.copilot-sproot-tilde-'));
+  for (const rel of PLUGIN_FILES) {
+    const path = join(homeRoot, rel);
+    mkdirSync(join(path, '..'), { recursive: true });
+    const body =
+      rel === '.claude-plugin/plugin.json'
+        ? JSON.stringify({ name: 'superpowers', version: '0.0.0' })
+        : `marker:${rel}\n`;
+    writeFileSync(path, body);
+  }
+  // The ~-relative form of homeRoot (e.g. "~/.copilot-sproot-tilde-XXXX").
+  const tildePath = `~/${homeRoot.slice(homedir().length + 1)}`;
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: tildePath,
+        COPILOT_GITHUB_TOKEN: 'ghp_test_token',
+      },
+      () => {
+        const returned = new CopilotAgent(
+          configWithBinary(PRESENT_BINARY),
+        ).provision(home, new FakeCommandRunner());
+        expect(returned).toEqual({ COPILOT_HOME: home.configDir });
+      },
+    );
+    // The plugin staged from the ~-expanded root: plugin.json copied verbatim.
+    const stagedPluginJson: unknown = JSON.parse(
+      readFileSync(
+        join(
+          home.configDir,
+          'plugins',
+          'superpowers',
+          '.claude-plugin',
+          'plugin.json',
+        ),
+        'utf8',
+      ),
+    );
+    expect(stagedPluginJson).toEqual({ name: 'superpowers', version: '0.0.0' });
+  } finally {
+    cleanup();
+    rmSync(homeRoot, { recursive: true, force: true });
+  }
+});
+
+test('scanCopilotSecretLeaks does not descend into a symlinked directory', () => {
+  // An outside dir (outside runDir) holding the secret. A symlink inside runDir
+  // points at it. os.walk does not follow symlinked dirs, so the scan must not
+  // traverse the symlink and must not report a leak from outside runDir — while
+  // still catching a genuine in-tree leak.
+  const runDir = mkdtempSync(join(tmpdir(), 'copilot-leak-symlink-'));
+  const outsideDir = mkdtempSync(join(tmpdir(), 'copilot-leak-outside-'));
+  try {
+    const secret = 'ghp_symlink_secret';
+    // The secret lives only outside runDir, reachable via a symlinked dir.
+    const outsideLeak = join(outsideDir, 'outside-secret.txt');
+    writeFileSync(outsideLeak, `leaked ${secret} here\n`);
+    symlinkSync(outsideDir, join(runDir, 'linked-dir'));
+
+    // A genuine in-tree leak that must still be reported.
+    const inTreeLeak = join(runDir, 'logs', 'transcript.txt');
+    mkdirSync(join(inTreeLeak, '..'), { recursive: true });
+    writeFileSync(inTreeLeak, `prompt used ${secret} oops\n`);
+
+    const leaks = scanCopilotSecretLeaks(runDir, [secret], []);
+    // Only the in-tree leak; nothing reached through the symlinked dir.
+    expect(leaks).toEqual([inTreeLeak]);
+    expect(leaks.some((p) => p.includes('outside-secret.txt'))).toBe(false);
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
 });
