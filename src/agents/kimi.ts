@@ -132,7 +132,7 @@ export class KimiAgent implements CodingAgent {
     home: RunHome,
     runner: CommandRunner,
   ): Record<string, string> {
-    const { configDir } = home;
+    const { configDir, workdir } = home;
 
     // _seed_kimi_config requires SUPERPOWERS_ROOT up front (RunnerError ->
     // ProvisionError). Read env only through env.ts.
@@ -198,21 +198,24 @@ export class KimiAgent implements CodingAgent {
       mkdirSync(join(configDir, child), { recursive: true });
     }
 
-    // 5. build_kimi_subprocess_env: the launcher's full runtime env (cwd is the
-    //    kimi home itself, mirroring _seed_kimi_config's cwd=kimi_home).
+    // 5. build_kimi_subprocess_env: the launcher's runtime env file. pinHome is
+    //    false — the launcher pins HOME/XDG via $QUORUM_HOME_ENV and kimi finds
+    //    KIMI_CODE_HOME via its $HOME/.kimi-code default (home_config_subdir
+    //    ".kimi-code"), so the secret env file carries only the model + PATH.
     const runtimeEnv = buildKimiSubprocessEnv({
       kimiHome: configDir,
       kimiModelEnv,
+      pinHome: false,
     });
 
     // write_kimi_runtime_env_file: mode-0600 secret file of sorted shell
     // assignments, placed OUTSIDE the run artifact root (via
     // _kimi_runtime_env_temp_parent + a run-scoped mkdtemp keyed on run_dir.name)
-    // so capture never snapshots the secret. RunHome carries no explicit run_dir,
-    // but the per-run dir IS configDir's parent (runner.py builds configDir =
-    // run_dir/coding-agent-config), so we derive run_dir from configDir and the
-    // escape guard keeps the secret out of the artifact root.
-    const runDir = dirname(configDir);
+    // so capture never snapshots the secret. Derive the run dir from workdir
+    // (always <runDir>/coding-agent-workdir) — NOT configDir, which under the
+    // throwaway-$HOME collapse is <runDir>/home/.kimi-code (inside the artifact
+    // root), so dirname(configDir) would no longer be the run dir.
+    const runDir = dirname(workdir);
     const envFilePath = writeKimiRuntimeEnvFile(runtimeEnv, { runDir });
 
     // write_effective_kimi_config: redacted summary (KIMI_MODEL_API_KEY ->
@@ -497,6 +500,9 @@ function runKimiAuthPreflight(
     const env = buildKimiSubprocessEnv({
       kimiHome,
       kimiModelEnv: ctx.kimiModelEnv,
+      // The preflight runs against its OWN isolated throwaway home and asserts
+      // isolation by reading <kimiHome>/sessions, so it pins HOME/XDG here.
+      pinHome: true,
     });
     const result = runner.run(
       ctx.kimiBinary,
@@ -670,6 +676,14 @@ function kimiStreamJsonReplyOk(stdout: string): boolean {
 interface SubprocessEnvContext {
   readonly kimiHome: string;
   readonly kimiModelEnv: Readonly<Record<string, string>>;
+  // Pin HOME + the KIMI/XDG dirs under kimiHome. TRUE for the auth preflight,
+  // which runs against its OWN isolated throwaway home and asserts isolation by
+  // reading <kimiHome>/sessions. FALSE for the launcher's runtime env file: the
+  // launcher pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV and kimi finds
+  // KIMI_CODE_HOME via its $HOME/.kimi-code default (kimi.yaml home_config_subdir
+  // ".kimi-code" roots configDir there), so the secret env file carries only the
+  // model + PATH/locale passthrough — no HOME/XDG/KIMI_CODE_HOME.
+  readonly pinHome: boolean;
 }
 
 // build_kimi_subprocess_env: an allow-listed, hermetic env for the kimi process.
@@ -708,12 +722,14 @@ function buildKimiSubprocessEnv(
   for (const [key, value] of Object.entries(ctx.kimiModelEnv)) {
     out[key] = value;
   }
-  out['HOME'] = join(ctx.kimiHome, 'home');
-  out['KIMI_CODE_HOME'] = ctx.kimiHome;
-  out['KIMI_CODE_CACHE_DIR'] = join(ctx.kimiHome, 'cache');
-  out['XDG_CONFIG_HOME'] = join(ctx.kimiHome, 'xdg-config');
-  out['XDG_CACHE_HOME'] = join(ctx.kimiHome, 'xdg-cache');
-  out['XDG_DATA_HOME'] = join(ctx.kimiHome, 'xdg-data');
+  if (ctx.pinHome) {
+    out['HOME'] = join(ctx.kimiHome, 'home');
+    out['KIMI_CODE_HOME'] = ctx.kimiHome;
+    out['KIMI_CODE_CACHE_DIR'] = join(ctx.kimiHome, 'cache');
+    out['XDG_CONFIG_HOME'] = join(ctx.kimiHome, 'xdg-config');
+    out['XDG_CACHE_HOME'] = join(ctx.kimiHome, 'xdg-cache');
+    out['XDG_DATA_HOME'] = join(ctx.kimiHome, 'xdg-data');
+  }
   return out;
 }
 

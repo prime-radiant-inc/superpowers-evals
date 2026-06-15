@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # quorum-generated launcher for Kimi Code (the agent under test).
+#
+# Throwaway $HOME: $QUORUM_HOME_ENV pins HOME (+XDG +TMPDIR) to the per-run home,
+# and kimi.yaml's home_config_subdir ".kimi-code" makes the config dir
+# $HOME/.kimi-code — where provisioning seeded kimi's config + host OAuth creds.
+# kimi finds it via the $HOME default, so the launcher sets NO KIMI_CODE_HOME.
+# The sourced env file carries only the model env + the ~/.kimi-code/bin PATH
+# prepend (so the engine binary resolves); $QUORUM_HOME_ENV's HOME assignment
+# overrides whatever the inherited env had. The env file (which holds the mode-
+# 0600 model API key) is sourced then deleted so capture never snapshots it.
 set -euo pipefail
 
 cleanup_kimi_env() {
@@ -20,4 +29,4 @@ trap - EXIT HUP INT TERM
 unset KIMI_ENV_FILE
 unset -f cleanup_kimi_env
 
-exec $KIMI_BINARY --yolo "$@"
+exec env $QUORUM_HOME_ENV $KIMI_BINARY --yolo "$@"

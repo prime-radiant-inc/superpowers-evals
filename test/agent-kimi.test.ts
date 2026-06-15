@@ -250,19 +250,20 @@ test('provision seeds KIMI_CODE_HOME, runs the preflight, installs the plugin', 
         expect(summary.model_env.KIMI_DISABLE_TELEMETRY).toBe('1');
         expect(JSON.stringify(summary)).not.toContain(API_KEY);
 
-        // The runtime env file: mode 0600, carries the model env + XDG/HOME, and
-        // does NOT leak into a world-readable file.
+        // The runtime env file: mode 0600, carries ONLY the model env (+ PATH),
+        // and does NOT leak into a world-readable file. Under the throwaway-$HOME
+        // collapse the launcher pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV and kimi
+        // finds KIMI_CODE_HOME via its $HOME/.kimi-code default, so the env file
+        // must NOT set HOME/XDG/KIMI_CODE_HOME (pinHome:false).
         const envFilePath = env['KIMI_ENV_FILE'] ?? '';
         const mode = statSync(envFilePath).mode & 0o777;
         expect(mode).toBe(0o600);
         const envFileBody = readFileSync(envFilePath, 'utf8');
         expect(envFileBody).toContain(`KIMI_MODEL_API_KEY='${API_KEY}'`);
         expect(envFileBody).toContain("KIMI_DISABLE_TELEMETRY='1'");
-        expect(envFileBody).toContain(`KIMI_CODE_HOME='${home.configDir}'`);
-        expect(envFileBody).toContain(`HOME='${join(home.configDir, 'home')}'`);
-        expect(envFileBody).toContain(
-          `XDG_CONFIG_HOME='${join(home.configDir, 'xdg-config')}'`,
-        );
+        expect(envFileBody).not.toContain('KIMI_CODE_HOME=');
+        expect(envFileBody).not.toContain('HOME=');
+        expect(envFileBody).not.toContain('XDG_CONFIG_HOME=');
 
         // Subprocess calls: only the auth preflight (binary resolution is the
         // in-process Bun.which from H3, not a `command -v` subprocess probe).

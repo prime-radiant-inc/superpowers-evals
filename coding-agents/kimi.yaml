@@ -4,6 +4,14 @@ name: kimi
 # PATH so this resolves via Bun.which.
 binary: kimi
 agent_config_env: KIMI_CODE_HOME
+# Collapse the kimi config dir into the throwaway $HOME. kimi defaults
+# KIMI_CODE_HOME to $HOME/.kimi-code when unset (verified: a one-shot prompt with
+# KIMI_CODE_HOME unset writes config + sessions under $HOME/.kimi-code), so with
+# ".kimi-code" configDir == <runHome>/.kimi-code: provisioning seeds the config +
+# host OAuth creds there, and the launcher (which sets HOME via $QUORUM_HOME_ENV
+# and omits KIMI_CODE_HOME) finds them via the $HOME default. The agent_config_env
+# above is kept only as the substitution key for session_log_dir below.
+home_config_subdir: ".kimi-code"
 session_log_dir: "${KIMI_CODE_HOME}/sessions"
 session_log_glob: "**/wire.jsonl"
 normalizer: kimi
