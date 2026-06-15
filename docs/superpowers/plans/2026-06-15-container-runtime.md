@@ -6,7 +6,7 @@
 
 **Architecture:** A host-side `scripts/evals-container` wrapper builds and manages one long-lived workspace container. The container bind-mounts evals at `/workspace/evals`, Superpowers at `/workspace/superpowers`, and writes quorum results to `/workspace/evals/results`. Secrets enter only through read-only mounts: one dotenv file at `/run/evals/credentials.env` and optional auth source directories under `/auth/*`. A `/usr/local/bin/quorum` shim sources the credential file only for quorum invocations, exports the auth source variables, exports `SUPERPOWERS_ROOT`, and execs the existing Bun CLI.
 
-**Tech Stack:** Docker, Bash, Ubuntu 26.04 via `mcr.microsoft.com/devcontainers/base:ubuntu-26.04`, Bun/TypeScript tests for wrapper behavior, existing quorum TypeScript CLI.
+**Tech Stack:** Docker, Bash, Ubuntu 26.04 via `mcr.microsoft.com/devcontainers/base:3.0.1-ubuntu26.04`, Bun/TypeScript tests for wrapper behavior, existing quorum TypeScript CLI.
 
 **Spec:** `docs/superpowers/specs/2026-06-15-container-runtime-design.md`
 
@@ -46,7 +46,7 @@ Modify only if needed:
 - [ ] Run:
 
 ```bash
-docker manifest inspect mcr.microsoft.com/devcontainers/base:ubuntu-26.04 >/tmp/quorum-devcontainer-base.json
+docker manifest inspect mcr.microsoft.com/devcontainers/base:3.0.1-ubuntu26.04 >/tmp/quorum-devcontainer-base.json
 ```
 
 - [ ] Expected: exit 0. If it fails, stop and inspect the Microsoft devcontainer tags for an explicit Ubuntu 26.04-compatible tag. Do not silently switch to 24.04.
@@ -309,7 +309,7 @@ EOF
 **Base:**
 
 ```dockerfile
-FROM mcr.microsoft.com/devcontainers/base:ubuntu-26.04
+FROM mcr.microsoft.com/devcontainers/base:3.0.1-ubuntu26.04
 ```
 
 **System packages:** install with `apt-get` and `--no-install-recommends`:

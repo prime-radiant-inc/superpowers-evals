@@ -89,15 +89,15 @@ unwritable results path is a hard error.
 ## Image
 
 The image should be a rich Ubuntu 26.04 dev workstation based on Microsoft's
-devcontainer base image when the matching tag exists:
+devcontainer base image. The verified 26.04 tag is:
 
 ```dockerfile
-FROM mcr.microsoft.com/devcontainers/base:ubuntu-26.04
+FROM mcr.microsoft.com/devcontainers/base:3.0.1-ubuntu26.04
 ```
 
-If that exact tag is unavailable during implementation, do not silently fall
-back to Ubuntu 24.04. Check the available Microsoft devcontainer tags and choose
-the explicit 26.04-compatible tag.
+Do not silently fall back to Ubuntu 24.04. If the tag is unavailable during
+implementation, check the available Microsoft devcontainer tags and choose an
+explicit 26.04-compatible tag.
 
 The image should include broad implementation tooling because coding agents will
 use it for real development work, not only eval runner work:
