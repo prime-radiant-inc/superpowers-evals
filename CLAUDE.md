@@ -41,10 +41,9 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **dashboard**: `bun run quorum dashboard [--port N]` (web matrix: results, launch, live progress)
 
 Per-coding-agent config: `coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
-`coding-agents/<name>-context/HOWTO.md`. Per-coding-agent home skeleton (seeded
-into the agent's config dir under the per-run throwaway `$HOME`, e.g.
-`<runDir>/home/.claude` / `<runDir>/home/.codex`):
-`coding-agents/<name>-home-skeleton/`. Spec:
+`coding-agents/<name>-context/HOWTO.md`. Each agent seeds its config under the
+per-run throwaway `$HOME` (e.g. `<runDir>/home/.claude` / `<runDir>/home/.codex`)
+at provision time; no committed home skeleton ships. Spec:
 `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 
 ## Architecture
@@ -67,7 +66,7 @@ into the agent's config dir under the per-run throwaway `$HOME`, e.g.
 - `src/run-all/` — batch matrix driver (scenario × agent), batch dir allocation.
 - `src/dashboard/` — web dashboard: `scan.ts`/`view.ts` (read side over `results/`), `templates.ts` (typed HTML renderers; `cellHtml` is the single source for first paint + SSE swaps), `event-bus.ts` (bounded SSE fan-out), `orchestrator.ts` (one-session-at-a-time launch/stop over the scheduler, pid-tracked SIGINT), `server.ts` (`Bun.serve` routes + ~1s scanner loop), `index.ts` (`startDashboard`).
 - `src/setup-helpers/` — fixture creators. Each helper takes a uniform `HelperContext` (`context.ts`); `registry.ts` maps the dispatchable snake_case names to entries declaring `needsTemplateDir`/`needsSuperpowersRoot`, and `KNOWN_HELPER_NAMES` is the single validation set `quorum check` uses. `cli.ts` is the `setup-helpers run <helper>` entrypoint. Tier-1 helpers (git + filesystem: `base.ts`, `fs.ts`, `git.ts`, `spec-fixtures.ts`, `sdd-fixtures.ts`, `cost-fixtures.ts`, `behavior-fixtures.ts`, `triggering-fixtures.ts`, the non-codex/gemini `worktree.ts` parts, shared `pulse-dashboard.ts` constants) are hermetic and unit-tested directly; Tier-2 helpers (`provisionVenv`, `linkGeminiExtension`, `installCodexSuperpowersPluginHooks` + its `codex-app-server.ts` JSON-RPC client) route subprocess calls through `agents/command-runner.ts` so tests inject fakes. `setup.sh`'s bare `setup-helpers run …` resolves to TS via the `setup-helpers` function in the sourced `src/checks/prelude.sh`, which `src/setup-step.ts` sources through `BASH_ENV` before running `setup.sh`.
-- `src/checks/prelude.sh` — the bare-verb DSL (no check LOGIC): one shell function per check verb delegating to `check-tool.ts <verb>`, plus the `not`, `check-transcript`, and `setup-helpers` functions. Sourced before `checks.sh` (`runPhase`) and before `setup.sh` (via `BASH_ENV`); there is no `bin/` on `PATH`. Operator scripts live in `scripts/` (`refresh-claude-home-skeleton`, `run-with-log`).
+- `src/checks/prelude.sh` — the bare-verb DSL (no check LOGIC): one shell function per check verb delegating to `check-tool.ts <verb>`, plus the `not`, `check-transcript`, and `setup-helpers` functions. Sourced before `checks.sh` (`runPhase`) and before `setup.sh` (via `BASH_ENV`); there is no `bin/` on `PATH`. Operator scripts live in `scripts/` (`run-with-log`).
 - `scenarios/` — active scenarios, one directory each.
 - `coding-agents/` — per-agent YAML, context HOWTOs, and home skeletons (see "Per-coding-agent" above).
 

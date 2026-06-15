@@ -998,8 +998,9 @@ async function runInnerBody(
   const home = {
     configDir,
     workdir,
-    // skeletonRoot default = the coding-agents dir itself, so ClaudeAgent copies
-    // <codingAgentsDir>/claude-home-skeleton.
+    // skeletonRoot default = the coding-agents dir itself, so an agent that ships
+    // a <family>-home-skeleton there gets it copied. Only CodexAgent consumes it
+    // now (claude no longer seeds an onboarding skeleton).
     skeletonRoot: a.skeletonRoot ?? a.codingAgentsDir,
   };
   // copilot is special-cased: it mints a per-run session id, threads it through

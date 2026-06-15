@@ -426,9 +426,9 @@ A Coding-Agent is one agent CLI under test. Its config is
 learn how to launch and observe that CLI. Every agent runs with `HOME` pinned
 to the throwaway per-run home at `<run>/home` and its config collapsed under it
 (the `home_config_subdir` in `coding-agents/<name>.yaml`); provisioning seeds
-that config — and any host creds — before launch. Claude additionally has a
-home skeleton at `coding-agents/claude-home-skeleton/` that gets copied into
-`<run>/home/.claude` (Codex seeds its config under `<run>/home/.codex` from
+that config — and any host creds — before launch. Claude seeds its config under
+`<run>/home/.claude` — a project-trust block + API-key approval, no onboarding
+skeleton (Codex seeds its config under `<run>/home/.codex` from
 local ChatGPT subscription auth at `~/.codex/auth.json`; Antigravity and Gemini
 seed isolated `.gemini` state under the home, seeding host OAuth creds; Kimi
 seeds config + host OAuth under `<run>/home/.kimi-code`; OpenCode stages the
@@ -865,33 +865,19 @@ Check verbs run from the fixture workdir as bash functions defined by the
 sourced check prelude (`src/checks/prelude.sh`), not as `bin/` shims on `PATH`.
 Post-checks that need sibling run artifacts can use `$QUORUM_RUN_DIR`.
 
-## Refreshing the Claude Skeleton
+## Per-Agent Provisioning
 
-The dialog-bypass skeleton at `coding-agents/claude-home-skeleton/` is
-committed — fresh checkouts, worktrees, and CI runners boot Claude straight
-to the prompt with no per-machine setup. It carries only the ~12 universal
-dialog-bypass flags (`hasCompletedOnboarding`, `installMethod`, migration
-markers, etc.); the refresh script scrubs all per-user, per-machine, and
-per-key fields before writing.
-
-Refresh only when Claude Code adds new onboarding state (a previously-skipped
-picker reappearing in a tmux attach is the usual symptom):
-
-```bash
-# 1. Run Claude with a fresh config dir; click through every dialog with your
-#    real ANTHROPIC_API_KEY active. Once you reach the prompt, /exit.
-CLAUDE_CONFIG_DIR=/tmp/claude-source claude
-
-# 2. Rebuild the fixture; commit the diff.
-scripts/refresh-claude-home-skeleton --source /tmp/claude-source
-git diff coding-agents/claude-home-skeleton/   # sanity-check the scrubbed result
-git commit coding-agents/claude-home-skeleton/ -m "quorum: refresh Claude skeleton"
-```
-
-Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot need no committed
-home skeleton. Each seeds its config under the throwaway per-run home
-(`<run>/home/<config-subdir>`) at provision time. Codex seeds `<run>/home/.codex`
-from your local ChatGPT subscription login in `~/.codex/auth.json`; Antigravity
+No agent ships a committed home skeleton — each seeds its config under the
+throwaway per-run home (`<run>/home/<config-subdir>`) at provision time. Claude
+seeds `<run>/home/.claude` with a project-trust block and the API-key approval:
+recent claude boots straight to the prompt on `ANTHROPIC_API_KEY` auth + that
+trust block (it runs and auto-completes onboarding each run), so no hand-seeded
+onboarding state is needed. (`IS_DEMO=1` is not used: it skips
+the first-run flow that activates auth on a never-onboarded config, so claude
+comes up "Not logged in" — reproduced 2/2; the auth resolver itself is
+IS_DEMO-independent.) Codex
+seeds `<run>/home/.codex` from your local ChatGPT subscription login in
+`~/.codex/auth.json`; Antigravity
 seeds `<run>/home/.gemini`, runs its auth preflight, seeds host OAuth creds, and
 installs the Superpowers plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local
 auth (and host OAuth, on the OAuth path) and links the local extension; Kimi
@@ -979,11 +965,10 @@ src/
                         checks); check-transcript.ts and setup-helpers/cli.ts are the
                         other two dispatchers the prelude delegates to
   cli/list-check-verbs.ts  prints the FS_VERBS verb set the prelude loops over (drift-proof)
-scripts/                operator scripts: refresh-claude-home-skeleton, run-with-log
+scripts/                operator scripts: run-with-log
 coding-agents/          per-Coding-Agent material:
   <name>.yaml             CLI config
   <name>-context/         HOWTO prose for the Gauntlet-Agent
-  <name>-home-skeleton/   committed config skeleton where needed (claude only)
 scenarios/              scenarios (one directory each)
 fixtures/               shared static fixture repos (e.g. template-repo/, sdd-*/)
 test/                   bun test suite

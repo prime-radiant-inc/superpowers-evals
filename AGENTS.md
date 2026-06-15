@@ -35,7 +35,7 @@ inline prose all use lowercase `quorum`.
 - `src/checks/prelude.sh` — the bare-verb DSL (no check LOGIC): one shell function per check verb delegating to `check-tool.ts <verb>`, plus `not`, `check-transcript`, and `setup-helpers` functions. Sourced before `checks.sh` (`runPhase`) and before `setup.sh` (via `BASH_ENV`); no `bin/` on `PATH`. Operator scripts live in `scripts/`.
 - `coding-agents/<name>.yaml` — per-Coding-Agent CLI config.
 - `coding-agents/<name>-context/HOWTO.md` — instructions copied into Gauntlet-Agent context.
-- `coding-agents/<name>-home-skeleton/` — seeded into the agent's config dir under the per-run throwaway `$HOME` (e.g. `<runDir>/home/.claude` / `<runDir>/home/.codex`).
+- Each agent seeds its config under the per-run throwaway `$HOME` (`<runDir>/home/<config-subdir>`, e.g. `.claude`/`.codex`) at provision time; no committed home skeleton ships.
 - `scenarios/*/` — active scenarios, one directory each.
 - `src/setup-helpers/` — fixture creators (CLI: `setup-helpers run <helper>`).
 - `fixtures/` — static fixture repos (e.g. `template-repo/`).

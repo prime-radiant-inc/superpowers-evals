@@ -1,10 +1,4 @@
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
@@ -80,52 +74,39 @@ class DefaultAgent implements CodingAgent {
   }
 }
 
-/** Claude-family provisioning: seed the skeleton (or an empty dir), trust the
- *  run's project so the CLI never prompts, and write a mode-0600 .claude-env
- *  carrying the API key for the launcher. */
+/** Claude-family provisioning: create the config dir, trust the run's project so
+ *  the CLI never prompts, and write a mode-0600 .claude-env carrying the API key
+ *  for the launcher. No onboarding skeleton is seeded — recent claude boots on
+ *  API-key auth + the trust block (it runs/auto-completes onboarding each run). */
 class ClaudeAgent implements CodingAgent {
   readonly config: AgentConfig;
   constructor(config: AgentConfig) {
     this.config = config;
   }
   provision(home: RunHome): Record<string, string> {
-    const { configDir, workdir, skeletonRoot } = home;
-    const family = this.config.runtime_family ?? 'claude';
-    const skel =
-      skeletonRoot !== undefined
-        ? join(skeletonRoot, `${family}-home-skeleton`)
-        : undefined;
-    const seeded = skel !== undefined && existsSync(skel);
-    if (seeded) {
-      cpSync(skel, configDir, { recursive: true });
-    } else {
-      mkdirSync(configDir, { recursive: true });
-    }
+    const { configDir, workdir } = home;
+    mkdirSync(configDir, { recursive: true });
 
     const claudeJsonPath = join(configDir, '.claude.json');
 
-    // Trust the project so claude doesn't prompt — but only when a skeleton was
-    // seeded: the trust block extends the .claude.json the skeleton provides;
-    // with no skeleton there is no onboarding state to extend. Parse the existing
-    // file (boundary §4.1) rather than asserting its shape.
-    if (seeded) {
-      const claudeJson = existsSync(claudeJsonPath)
-        ? ClaudeJsonSchema.parse(
-            JSON.parse(readFileSync(claudeJsonPath, 'utf8')),
-          )
-        : ClaudeJsonSchema.parse({});
-      const projects: Record<string, unknown> = { ...claudeJson.projects };
-      projects[resolve(workdir)] = {
-        hasTrustDialogAccepted: true,
-        projectOnboardingSeenCount: 1,
-        hasClaudeMdExternalIncludesApproved: true,
-        hasClaudeMdExternalIncludesWarningShown: true,
-      };
-      writeFileSync(
-        claudeJsonPath,
-        `${JSON.stringify({ ...claudeJson, projects }, null, 2)}\n`,
-      );
-    }
+    // Trust the run's project so claude doesn't prompt. IS_DEMO=1 (set by the
+    // launcher) skips first-run onboarding, so no hand-seeded onboarding skeleton
+    // is needed; the workspace-trust state still lives in .claude.json. Parse any
+    // existing file (boundary §4.1) rather than asserting its shape.
+    const claudeJson = existsSync(claudeJsonPath)
+      ? ClaudeJsonSchema.parse(JSON.parse(readFileSync(claudeJsonPath, 'utf8')))
+      : ClaudeJsonSchema.parse({});
+    const projects: Record<string, unknown> = { ...claudeJson.projects };
+    projects[resolve(workdir)] = {
+      hasTrustDialogAccepted: true,
+      projectOnboardingSeenCount: 1,
+      hasClaudeMdExternalIncludesApproved: true,
+      hasClaudeMdExternalIncludesWarningShown: true,
+    };
+    writeFileSync(
+      claudeJsonPath,
+      `${JSON.stringify({ ...claudeJson, projects }, null, 2)}\n`,
+    );
 
     // When ANTHROPIC_API_KEY is a required env, seed the per-run auth: write the
     // mode-0600 .claude-env the launcher sources, and record the API-key

@@ -61,26 +61,23 @@ function withEnv(
   }
 }
 
-// Seed a claude home skeleton at skeletonRoot/<family>-home-skeleton with the
-// given .claude.json contents (mirrors coding-agents/claude-home-skeleton).
-function seedSkeleton(skeletonRoot: string, claudeJson: unknown): void {
-  const skel = join(skeletonRoot, 'claude-home-skeleton');
-  mkdirSync(skel, { recursive: true });
-  writeFileSync(join(skel, '.claude.json'), JSON.stringify(claudeJson));
+// Pre-seed configDir/.claude.json so provision() extends an existing file. Claude
+// no longer copies a home skeleton (IS_DEMO/onboarding state is unnecessary —
+// recent claude boots on API-key auth + the trust block alone), so prior state
+// is modeled by writing .claude.json directly rather than via a skeleton copy.
+function seedClaudeJson(configDir: string, claudeJson: unknown): void {
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, '.claude.json'), JSON.stringify(claudeJson));
 }
 
-// B1-claude-md-warning-flag-missing: the per-project trust block must carry all
-// four keys, including hasClaudeMdExternalIncludesWarningShown (Python
-// _seed_agent_config_dir 1418-1423).
+// The per-project trust block must carry all four keys, including
+// hasClaudeMdExternalIncludesWarningShown.
 test('provision writes all four trust keys including the external-includes warning flag', () => {
   const { home, cleanup } = makeTempHome();
-  const skelRoot = join(home.workdir, '..', 'skel');
-  mkdirSync(skelRoot, { recursive: true });
-  seedSkeleton(skelRoot, {});
   try {
     withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
       const agent = resolveAgent(claudeConfig());
-      agent.provision({ ...home, skeletonRoot: skelRoot }, undefined as never);
+      agent.provision(home, undefined as never);
 
       const claudeJson: { projects: Record<string, unknown> } = JSON.parse(
         readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
@@ -100,26 +97,21 @@ test('provision writes all four trust keys including the external-includes warni
   }
 });
 
-// B1-claude-trust-block-unconditional: with no skeleton seeded, Python skips the
-// trust block entirely (guard `seeded` at 1415). The TS must not synthesize a
-// .claude.json projects block from {} when no skeleton existed.
-test('provision does not write a trust block when no skeleton was seeded', () => {
+// claude provisioning writes the per-project trust block UNCONDITIONALLY (a
+// deliberate divergence from the retired Python, which gated it on a seeded
+// skeleton): claude no longer ships an onboarding skeleton, so provision always
+// synthesizes the trust block from {} so the workspace-trust prompt never fires.
+test('provision writes the trust block even with no prior .claude.json', () => {
   const { home, cleanup } = makeTempHome();
   try {
     withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
       const agent = resolveAgent(claudeConfig());
-      // skeletonRoot undefined -> no skeleton copied.
       agent.provision(home, undefined as never);
 
-      const claudeJsonPath = join(home.configDir, '.claude.json');
-      // The approval step still writes .claude.json (it creates it from {}),
-      // but it must not carry a per-project trust block.
-      if (existsSync(claudeJsonPath)) {
-        const claudeJson: { projects?: Record<string, unknown> } = JSON.parse(
-          readFileSync(claudeJsonPath, 'utf8'),
-        );
-        expect(claudeJson.projects ?? {}).toEqual({});
-      }
+      const claudeJson: { projects: Record<string, unknown> } = JSON.parse(
+        readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
+      );
+      expect(Object.keys(claudeJson.projects).length).toBe(1);
     });
   } finally {
     cleanup();
@@ -132,17 +124,15 @@ test('provision does not write a trust block when no skeleton was seeded', () =>
 // _approve_claude_api_key 466-483).
 test('provision seeds the customApiKeyResponses approval fingerprint and scrubs rejected', () => {
   const { home, cleanup } = makeTempHome();
-  const skelRoot = join(home.workdir, '..', 'skel');
-  mkdirSync(skelRoot, { recursive: true });
-  // Skeleton pre-rejected this exact fingerprint; approval must move it.
+  // Pre-existing .claude.json pre-rejected this exact fingerprint; approval must move it.
   const fingerprint = API_KEY.slice(-20);
-  seedSkeleton(skelRoot, {
+  seedClaudeJson(home.configDir, {
     customApiKeyResponses: { approved: [], rejected: [fingerprint, 'other'] },
   });
   try {
     withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
       const agent = resolveAgent(claudeConfig());
-      agent.provision({ ...home, skeletonRoot: skelRoot }, undefined as never);
+      agent.provision(home, undefined as never);
 
       const claudeJson: {
         customApiKeyResponses: { approved: string[]; rejected: string[] };
@@ -162,16 +152,14 @@ test('provision seeds the customApiKeyResponses approval fingerprint and scrubs 
 // not duplicated (Python `if fingerprint not in approved`).
 test('provision does not duplicate an already-approved fingerprint', () => {
   const { home, cleanup } = makeTempHome();
-  const skelRoot = join(home.workdir, '..', 'skel');
-  mkdirSync(skelRoot, { recursive: true });
   const fingerprint = API_KEY.slice(-20);
-  seedSkeleton(skelRoot, {
+  seedClaudeJson(home.configDir, {
     customApiKeyResponses: { approved: [fingerprint] },
   });
   try {
     withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
       const agent = resolveAgent(claudeConfig());
-      agent.provision({ ...home, skeletonRoot: skelRoot }, undefined as never);
+      agent.provision(home, undefined as never);
       const claudeJson: {
         customApiKeyResponses: { approved: string[] };
       } = JSON.parse(

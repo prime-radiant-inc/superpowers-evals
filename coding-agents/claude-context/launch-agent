@@ -29,6 +29,15 @@
 #
 # Equivalent manual command (for debugging):
 #   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID HOME="$QUORUM_AGENT_HOME" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+#
+# Auth is ANTHROPIC_API_KEY + provision()'s API-key approval; the project-trust
+# block provision() writes into .claude.json suppresses the trust prompt. No
+# onboarding skeleton, IS_DEMO, or marketplace-disable is needed — claude boots
+# headless and runs/auto-completes onboarding each run (that is what activates
+# auth). (IS_DEMO=1 is NOT used: it skips that first-run flow on a never-onboarded
+# config, so claude comes up "Not logged in" — reproduced 2/2. The auth resolver
+# itself is IS_DEMO-independent; it's the onboarding-skip on a fresh config that
+# bites.)
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 source "$CLAUDE_ENV_FILE"
