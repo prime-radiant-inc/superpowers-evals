@@ -1,10 +1,49 @@
 import {
   ATIF_SCHEMA_VERSION,
+  type AtifFinalMetrics,
   type AtifStep,
   type AtifToolCall,
   type AtifTrajectory,
 } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
+
+// Codex token usage lives in `event_msg` rows whose payload.type is
+// "token_count". `info.total_token_usage` is the running session cumulative
+// (the last one is the session total); `info.last_token_usage` is a per-turn
+// delta. Codex rollout steps are individual tool calls with no turn/message
+// structure to hang per-turn usage on, so the session total maps to
+// AtifTrajectory.final_metrics, not per-step metrics.
+interface CodexTokenUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_input_tokens?: number;
+  reasoning_output_tokens?: number;
+}
+
+function asTokenUsage(value: unknown): CodexTokenUsage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  return value as CodexTokenUsage;
+}
+
+// Map the final cumulative codex usage into ATIF final_metrics. reasoning is
+// folded into completion per the contract; cached has no first-class
+// final-metrics field so it rides in extra.total_cached_tokens. No cost is
+// logged by codex; cost is priced downstream by obol.
+function finalMetricsFromUsage(usage: CodexTokenUsage): AtifFinalMetrics {
+  const fm: AtifFinalMetrics = {};
+  if (typeof usage.input_tokens === 'number')
+    fm.total_prompt_tokens = usage.input_tokens;
+  const completion =
+    (usage.output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0);
+  if (
+    usage.output_tokens !== undefined ||
+    usage.reasoning_output_tokens !== undefined
+  )
+    fm.total_completion_tokens = completion;
+  if (typeof usage.cached_input_tokens === 'number')
+    fm.extra = { total_cached_tokens: usage.cached_input_tokens };
+  return fm;
+}
 
 // Reverse mapping: Codex tool names → canonical names.
 // spawn_agent aliases to Agent (1:1 with a subagent launch). wait_agent and
@@ -194,6 +233,10 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   // For function_call and custom_tool_call, deduplicate by call_id.
   const seenCallIds = new Set<string>();
 
+  // Last cumulative session usage and model, harvested from the non-tool rows.
+  let sessionUsage: CodexTokenUsage | undefined;
+  let modelName: string | undefined;
+
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry: Record<string, unknown>;
@@ -202,6 +245,39 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     } catch {
       continue;
     }
+
+    // token_count events ride on `event_msg` rows, not `response_item`.
+    if (entry['type'] === 'event_msg') {
+      const payload = entry['payload'];
+      if (
+        payload &&
+        typeof payload === 'object' &&
+        (payload as { type?: unknown }).type === 'token_count'
+      ) {
+        const info = (payload as { info?: unknown }).info;
+        const total =
+          info && typeof info === 'object'
+            ? asTokenUsage(
+                (info as { total_token_usage?: unknown }).total_token_usage,
+              )
+            : undefined;
+        if (total) sessionUsage = total;
+      }
+      continue;
+    }
+
+    // Model is recorded on turn_context (and the session_meta source); take the
+    // first one we see.
+    if (entry['type'] === 'turn_context' && modelName === undefined) {
+      const payload = entry['payload'];
+      const model =
+        payload && typeof payload === 'object'
+          ? (payload as { model?: unknown }).model
+          : undefined;
+      if (typeof model === 'string' && model) modelName = model;
+      continue;
+    }
+
     if (entry['type'] !== 'response_item') continue;
 
     // Codex uses "payload" (real runs) or "item" (test fixtures using item key).
@@ -232,6 +308,8 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     agent: { name: 'codex', version },
     steps,
   };
+  if (modelName) traj.agent.model_name = modelName;
+  if (sessionUsage) traj.final_metrics = finalMetricsFromUsage(sessionUsage);
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

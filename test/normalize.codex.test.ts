@@ -224,3 +224,99 @@ test('each tool call gets its own step', () => {
   const traj = normalizeCodex(raw2Lines, '1.0.0');
   expect(traj.steps.length).toBe(2);
 });
+
+// ---------------------------------------------------------------------------
+// ATIF usage metrics (spec: 2026-06-15-atif-usage-unification.md)
+// ---------------------------------------------------------------------------
+
+// Codex rollout token usage lives in event_msg rows with payload.type
+// "token_count". info.total_token_usage is the running session cumulative;
+// the LAST one is the session total. info.last_token_usage is the per-turn
+// delta. Codex rollout steps are tool-call steps with no turn/message
+// structure, so the session total maps to final_metrics, not per-step metrics.
+const tokenCountEarly = JSON.stringify({
+  timestamp: '2026-06-13T17:31:26.732Z',
+  type: 'event_msg',
+  payload: {
+    type: 'token_count',
+    info: {
+      total_token_usage: {
+        input_tokens: 15175,
+        cached_input_tokens: 3456,
+        output_tokens: 188,
+        reasoning_output_tokens: 66,
+        total_tokens: 15363,
+      },
+      last_token_usage: {
+        input_tokens: 15175,
+        cached_input_tokens: 3456,
+        output_tokens: 188,
+        reasoning_output_tokens: 66,
+        total_tokens: 15363,
+      },
+    },
+  },
+});
+
+const tokenCountFinal = JSON.stringify({
+  timestamp: '2026-06-13T17:34:19.825Z',
+  type: 'event_msg',
+  payload: {
+    type: 'token_count',
+    info: {
+      total_token_usage: {
+        input_tokens: 378285,
+        cached_input_tokens: 330752,
+        output_tokens: 9437,
+        reasoning_output_tokens: 4970,
+        total_tokens: 387722,
+      },
+      last_token_usage: {
+        input_tokens: 44017,
+        cached_input_tokens: 39808,
+        output_tokens: 1530,
+        reasoning_output_tokens: 1034,
+        total_tokens: 45547,
+      },
+    },
+  },
+});
+
+const turnContextLine = JSON.stringify({
+  timestamp: '2026-06-13T17:31:23.141Z',
+  type: 'turn_context',
+  payload: { model: 'gpt-5.5', effort: 'high' },
+});
+
+test('final cumulative token_count maps to final_metrics (reasoning folded into completion)', () => {
+  const raw = [
+    turnContextLine,
+    tokenCountEarly,
+    functionCallLine,
+    tokenCountFinal,
+  ].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  expect(traj.final_metrics).toBeDefined();
+  // prompt = input_tokens; completion = output + reasoning_output; cached.
+  expect(traj.final_metrics!.total_prompt_tokens).toBe(378285);
+  expect(traj.final_metrics!.total_completion_tokens).toBe(9437 + 4970);
+  expect(traj.final_metrics!.extra?.['total_cached_tokens']).toBe(330752);
+});
+
+test('agent.model_name comes from turn_context.payload.model', () => {
+  const raw = [turnContextLine, functionCallLine, tokenCountFinal].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  expect(traj.agent.model_name).toBe('gpt-5.5');
+});
+
+test('no total_cost_usd (codex rollout logs no cost; priced downstream)', () => {
+  const raw = [tokenCountFinal].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
+});
+
+test('no token_count events => no final_metrics, no model_name', () => {
+  const traj = normalizeCodex(functionCallLine, '1.0.0');
+  expect(traj.final_metrics).toBeUndefined();
+  expect(traj.agent.model_name).toBeUndefined();
+});

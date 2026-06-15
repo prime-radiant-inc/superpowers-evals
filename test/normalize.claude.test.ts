@@ -233,6 +233,92 @@ test('flat top-level tool_use entry becomes an agent step with one tool_call', (
   });
 });
 
+// ---------------------------------------------------------------------------
+// ATIF usage metrics (spec: 2026-06-15-atif-usage-unification.md)
+// ---------------------------------------------------------------------------
+
+// Real-shaped assistant usage: claude session jsonl carries
+// message.usage{input_tokens, output_tokens, cache_read_input_tokens,
+// cache_creation_input_tokens} + message.model. Per-message cost is NOT logged
+// (priced downstream by obol).
+const usageLine = JSON.stringify({
+  type: 'assistant',
+  message: {
+    role: 'assistant',
+    model: 'claude-opus-4-8',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_u1',
+        name: 'Bash',
+        input: { command: 'ls' },
+      },
+    ],
+    usage: {
+      input_tokens: 16153,
+      output_tokens: 12,
+      cache_read_input_tokens: 13804,
+      cache_creation_input_tokens: 6918,
+    },
+  },
+});
+
+test('assistant step carries ATIF metrics + model from message.usage', () => {
+  const traj = normalizeClaudeLegacy(usageLine, '2.1.177');
+  const step = traj.steps.find((s) => s.source === 'agent')!;
+  expect(step.model_name).toBe('claude-opus-4-8');
+  expect(step.metrics).toEqual({
+    prompt_tokens: 16153,
+    completion_tokens: 12,
+    cached_tokens: 13804,
+  });
+});
+
+test('cache_creation_input_tokens lands in extra.cache_write', () => {
+  const traj = normalizeClaudeLegacy(usageLine, '2.1.177');
+  const step = traj.steps.find((s) => s.source === 'agent')!;
+  expect(step.extra?.['cache_write']).toBe(6918);
+});
+
+test('no cost_usd is set (claude usage carries no per-message cost)', () => {
+  const traj = normalizeClaudeLegacy(usageLine, '2.1.177');
+  const step = traj.steps.find((s) => s.source === 'agent')!;
+  expect(step.metrics?.cost_usd).toBeUndefined();
+});
+
+test('assistant step without usage gets no metrics or model_name', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } },
+      ],
+    },
+  });
+  const traj = normalizeClaudeLegacy(line, '2.1.177');
+  const step = traj.steps.find((s) => s.source === 'agent')!;
+  expect(step.metrics).toBeUndefined();
+  expect(step.model_name).toBeUndefined();
+});
+
+test('partial usage maps present fields and omits absent ones', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'text', text: 'done' }],
+      usage: { input_tokens: 100, output_tokens: 5 },
+    },
+  });
+  const traj = normalizeClaudeLegacy(line, '2.1.177');
+  const step = traj.steps.find((s) => s.source === 'agent')!;
+  expect(step.model_name).toBe('claude-sonnet-4-6');
+  expect(step.metrics).toEqual({ prompt_tokens: 100, completion_tokens: 5 });
+  expect(step.extra?.['cache_write']).toBeUndefined();
+});
+
 // Note: the per-agent `src/cli/normalize-claude.ts` shim and the unified
 // `src/cli/normalize.ts` dispatcher are intentionally not grafted onto this
 // branch — capture invokes the normalizers in-process, not via a CLI — so their

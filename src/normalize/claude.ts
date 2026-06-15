@@ -1,10 +1,49 @@
 import {
   ATIF_SCHEMA_VERSION,
+  type AtifMetrics,
   type AtifObservationResult,
   type AtifStep,
   type AtifToolCall,
   type AtifTrajectory,
 } from '../atif/types.ts';
+
+interface ClaudeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/**
+ * Populate an agent step's ATIF usage from a Claude assistant message's
+ * `usage` block (and `model`). Mapping per the ATIF usage contract:
+ *   input_tokens               → metrics.prompt_tokens
+ *   output_tokens              → metrics.completion_tokens
+ *   cache_read_input_tokens    → metrics.cached_tokens
+ *   cache_creation_input_tokens→ extra.cache_write
+ * No per-message cost is logged by Claude; cost is priced downstream by obol.
+ */
+function applyClaudeUsage(step: AtifStep, message: Record<string, unknown>) {
+  const model = message['model'];
+  if (typeof model === 'string' && model) step.model_name = model;
+
+  const usage = message['usage'];
+  if (!usage || typeof usage !== 'object') return;
+  const u = usage as ClaudeUsage;
+
+  const metrics: AtifMetrics = {};
+  if (typeof u.input_tokens === 'number')
+    metrics.prompt_tokens = u.input_tokens;
+  if (typeof u.output_tokens === 'number')
+    metrics.completion_tokens = u.output_tokens;
+  if (typeof u.cache_read_input_tokens === 'number')
+    metrics.cached_tokens = u.cache_read_input_tokens;
+  if (Object.keys(metrics).length > 0) step.metrics = metrics;
+
+  if (typeof u.cache_creation_input_tokens === 'number') {
+    step.extra = { ...step.extra, cache_write: u.cache_creation_input_tokens };
+  }
+}
 
 interface Block {
   type?: string;
@@ -76,6 +115,9 @@ export function normalizeClaudeLegacy(
         step.tool_calls = toolCalls;
         for (const c of toolCalls) callIndex.set(c.tool_call_id, step);
       }
+      const message = entry['message'];
+      if (message && typeof message === 'object')
+        applyClaudeUsage(step, message as Record<string, unknown>);
       steps.push(step);
       continue;
     }
