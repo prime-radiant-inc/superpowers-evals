@@ -43,14 +43,17 @@ Live evals run the Coding-Agent under test with broad execution power:
 - Pi uses explicit tool allowlists and API-key auth in a run-local config dir.
 - Copilot uses `--allow-all`.
 
-quorum seeds a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-Claude and Claude Haiku, `CODEX_HOME` for Codex, `ANTIGRAVITY_CONFIG_DIR` for
-Antigravity, `GEMINI_CLI_HOME` for Gemini, `KIMI_CODE_HOME` for Kimi,
-`OPENCODE_QUORUM_HOME` plus isolated XDG dirs for OpenCode,
-`PI_CODING_AGENT_DIR` for Pi, and `COPILOT_HOME` for Copilot) so the
-Coding-Agent never sees the host's real
-`~/.claude`, `~/.codex`, `~/.gemini`, `~/.kimi-code`, `~/.pi`,
-`~/.copilot`, or OpenCode state, installed plugins, or prior sessions. Copilot
+quorum pins each Coding-Agent's `HOME` (plus the XDG base dirs and `TMPDIR`)
+to a throwaway per-run home at `<run>/home` — the launcher splices in the
+`$QUORUM_HOME_ENV` token built by `src/agents/home-env.ts` (`xdgHomeEnv`, the
+single source of truth). Each agent's config dir is collapsed *under* that home
+(Claude `.claude`, Codex `.codex`, Gemini `.`, OpenCode `.`, Antigravity `.`,
+Copilot `.copilot`, Kimi `.kimi-code`, Pi `.pi/agent`), so the Coding-Agent
+finds its config via its own `$HOME` default and never sees the host's real
+`~/.claude`, `~/.codex`, `~/.gemini`, `~/.kimi-code`, `~/.pi`, `~/.copilot`,
+`~/.config`, or other home-relative state, installed plugins, or prior sessions.
+Provisioning seeds the config — and the host OAuth creds each agent needs — into
+that throwaway home before launch, so there is no run-time login. Copilot also
 stages the local Superpowers plugin under the isolated home, uses an
 allowlisted outer environment, and writes a secret-bearing chmod-0600
 `.copilot-env` inside the run dir. That narrows the blast radius but is not a
@@ -207,10 +210,13 @@ For a Kimi-only sweep:
 bun run quorum run-all --coding-agents kimi --jobs 1
 ```
 
-Kimi runs use a fresh per-run `KIMI_CODE_HOME` and do not read or symlink local
-`~/.kimi-code`. Auth/model config comes from `KIMI_MODEL_API_KEY` plus
-Quorum's default Kimi provider env. `KIMI_MODEL_NAME` may be overridden; other
-host `KIMI_MODEL_*` overrides are rejected in v1 for reproducibility.
+Kimi runs find their config at `<run>/home/.kimi-code` (collapsed under the
+throwaway home) and do not read or symlink the host's `~/.kimi-code`;
+provisioning seeds the Superpowers plugin and the host's Kimi OAuth creds there
+before launch. Auth/model config comes from `KIMI_MODEL_API_KEY` (or a seeded
+OAuth login) plus Quorum's default Kimi provider env. `KIMI_MODEL_NAME` may be
+overridden; other host `KIMI_MODEL_*` overrides are rejected in v1 for
+reproducibility.
 
 Do not wire Kimi live evals to public CI. They launch `kimi --yolo`, write raw
 `wire.jsonl` model/tool logs, and should not be run against untrusted PR
@@ -258,7 +264,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Claude Haiku**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Claude Haiku**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | config + session log under its throwaway `$HOME` at `<run>/home/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Quorum** | The TypeScript/Bun wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/src/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
@@ -321,11 +327,17 @@ after the Coding-Agent's session is captured. The optional
 scenario is valid for; omit it to allow all agents.
 
 Scripts must have **no exec bit** and contain only function definitions.
-Invoke check tools by name — they are on `PATH` via `bin/`.
+Invoke check tools by bare name — they are bash functions defined by the check
+prelude (`src/checks/prelude.sh`), which the runner sources before each
+scenario script (via `bash -c` for `checks.sh` and `BASH_ENV` for `setup.sh`).
+There is no `bin/` directory and no PATH prepend; each function delegates to a
+TypeScript dispatcher (`src/cli/check-tool.ts` for the FS verbs and `not`,
+`src/cli/check-transcript.ts` for trace verbs, `src/setup-helpers/cli.ts` for
+`setup-helpers`).
 
-### Check Vocabulary (`bin/`)
+### Check Vocabulary
 
-Every tool emits one JSON record per invocation. A non-zero exit means the
+Every check emits one JSON record per invocation. A non-zero exit means the
 check failed; the record carries a `detail` string explaining why.
 
 **Artifact surface** — the filesystem the Coding-Agent produced:
@@ -359,8 +371,9 @@ read by the `check-transcript <verb>` tool. The 13 verbs:
 **Negation:**
 - `not <check> [args…]` — runs the inner check without emitting a record, inverts the result, and emits one negated record. Always use `not` rather than bash's bare `!`.
 
-The shared `_record` helper (sourced by every tool) handles record emission and
-an `ERR` trap so a crashing tool never silently drops out of the verdict.
+Record emission is centralized in the dispatcher (`src/check/record.ts` is the
+sole emitter, writing to `QUORUM_RECORD_SINK`), and a crashing check lands in
+the 127 crash-band so it never silently drops out of the verdict.
 
 ## Verdict
 
@@ -395,7 +408,9 @@ results/<scenario>-<coding-agent>-<timestamp>/
 │       ├── inputs/story.md
 │       └── captures/
 ├── coding-agent-workdir/            the Coding-Agent's file output
-├── coding-agent-config/             the Coding-Agent's isolated config home
+├── home/                            the Coding-Agent's throwaway $HOME (config
+│                                    collapsed under it, e.g. home/.claude,
+│                                    home/.codex, home/.gemini)
 ├── trajectory.json                 the Coding-Agent's normalized ATIF trace
 └── coding-agent-token-usage.json    the Coding-Agent's token cost
 ```
@@ -408,15 +423,18 @@ transcripts.
 A Coding-Agent is one agent CLI under test. Its config is
 `coding-agents/<name>.yaml`; its companion HOWTO,
 `coding-agents/<name>-context/HOWTO.md`, is prose the Gauntlet-Agent reads to
-learn how to launch and observe that CLI. Claude additionally has a home
-skeleton at `coding-agents/claude-home-skeleton/` that gets copied into the
-per-run `CLAUDE_CONFIG_DIR` (Codex provisions its home fresh per run by
-copying local ChatGPT subscription auth from `~/.codex/auth.json`;
-Antigravity and Gemini provision isolated
-`.gemini` state fresh per run; Kimi provisions an isolated `KIMI_CODE_HOME`;
-OpenCode stages the local Superpowers plugin and skills into isolated XDG
-dirs; Pi provisions run-local auth and settings; Copilot stages the local
-Superpowers plugin into an isolated `COPILOT_HOME` and writes a private
+learn how to launch and observe that CLI. Every agent runs with `HOME` pinned
+to the throwaway per-run home at `<run>/home` and its config collapsed under it
+(the `home_config_subdir` in `coding-agents/<name>.yaml`); provisioning seeds
+that config — and any host creds — before launch. Claude additionally has a
+home skeleton at `coding-agents/claude-home-skeleton/` that gets copied into
+`<run>/home/.claude` (Codex seeds its config under `<run>/home/.codex` from
+local ChatGPT subscription auth at `~/.codex/auth.json`; Antigravity and Gemini
+seed isolated `.gemini` state under the home, seeding host OAuth creds; Kimi
+seeds config + host OAuth under `<run>/home/.kimi-code`; OpenCode stages the
+local Superpowers plugin and skills under the home's XDG dirs; Pi seeds
+run-local auth and settings under `<run>/home/.pi/agent`; Copilot stages the
+local Superpowers plugin under `<run>/home/.copilot` and writes a private
 `.copilot-env`). All authored once per agent and shared across scenarios.
 `claude-haiku` is a Claude Code target variant that uses the Claude
 runtime/context and the same `ANTHROPIC_API_KEY` path as `claude`.
@@ -450,19 +468,22 @@ modified superpowers skill text.
 
 ### Gemini
 
-`coding-agents/gemini.yaml` launches Gemini CLI as `gemini`. quorum creates an
-isolated per-run `GEMINI_CLI_HOME` under `<run>/coding-agent-config`, writes a
-chmod-0600 runtime env file, seeds auth in `.gemini/settings.json`, and links
-Superpowers from local `SUPERPOWERS_ROOT` with:
+`coding-agents/gemini.yaml` launches Gemini CLI as `gemini`. Its config dir is
+collapsed onto the throwaway home (`home_config_subdir: "."`), so quorum seeds
+its `.gemini` state directly under `<run>/home/.gemini`, writes a chmod-0600
+runtime env file, seeds auth in `.gemini/settings.json`, and links Superpowers
+from local `SUPERPOWERS_ROOT` with:
 
 ```bash
 gemini extensions link "$SUPERPOWERS_ROOT" --consent
 ```
 
-The generated launcher starts interactive Gemini from the scenario workdir with:
+The generated launcher starts interactive Gemini from the scenario workdir. It
+pins `HOME` (+ XDG + `TMPDIR`) via `$QUORUM_HOME_ENV` and sets NO
+`GEMINI_CLI_HOME` — gemini finds the seeded config via its `$HOME` default:
 
 ```bash
-GEMINI_CLI_HOME="$GEMINI_CLI_HOME" \
+$QUORUM_HOME_ENV \
 GEMINI_DEFAULT_AUTH_TYPE=<gemini-api-key|oauth-personal> \
 GEMINI_CLI_TRUST_WORKSPACE=true \
 gemini --skip-trust --approval-mode=yolo
@@ -482,9 +503,9 @@ scrubbing them.
 Provisioning verifies that Gemini linked and enabled Superpowers by checking:
 
 ```text
-<run>/coding-agent-config/.gemini/extensions/superpowers/.gemini-extension-install.json
-<run>/coding-agent-config/.gemini/extensions/extension-enablement.json
-<run>/coding-agent-config/.gemini/extension_integrity.json
+<run>/home/.gemini/extensions/superpowers/.gemini-extension-install.json
+<run>/home/.gemini/extensions/extension-enablement.json
+<run>/home/.gemini/extension_integrity.json
 ```
 
 Those files prove the extension was linked. They do not prove Gemini honored
@@ -492,7 +513,7 @@ Superpowers behavior. Behavioral evidence comes from normalized transcript rows
 in `<run>/trajectory.json` and from raw Gemini transcripts at:
 
 ```text
-<run>/coding-agent-config/.gemini/tmp/**/chats/**/*.json*
+<run>/home/.gemini/tmp/**/chats/**/*.json*
 ```
 
 Live smoke:
@@ -517,24 +538,33 @@ bun run quorum show <run-dir>
 
 `coding-agents/antigravity.yaml` launches Google Antigravity CLI as `agy`.
 It requires `SUPERPOWERS_ROOT` because quorum installs the local Superpowers
-plugin into each run's isolated Antigravity config. The runner creates a
-per-run `ANTIGRAVITY_CONFIG_DIR` under the run directory and the generated
-launcher starts interactive `agy` from the scenario workdir with:
+plugin into each run's isolated Antigravity config. Antigravity's config dir is
+collapsed onto the throwaway home (`home_config_subdir: "."`), so
+`ANTIGRAVITY_CONFIG_DIR` resolves to `<run>/home` and its `.gemini` state lives
+at `<run>/home/.gemini`. The generated launcher starts interactive `agy` from
+the scenario workdir, pinning `HOME` (+ XDG + `TMPDIR`) via `$QUORUM_HOME_ENV`:
 
 ```bash
+$QUORUM_HOME_ENV \
 ANTIGRAVITY_CONFIG_DIR="$ANTIGRAVITY_CONFIG_DIR" \
 AGY_CLI_DISABLE_AUTO_UPDATE=true \
 agy \
   --gemini_dir="$ANTIGRAVITY_CONFIG_DIR/.gemini" \
+  --add-dir="$QUORUM_AGENT_CWD" \
   --dangerously-skip-permissions \
   --log-file "$ANTIGRAVITY_CONFIG_DIR/agy.log"
 ```
 
-`--gemini_dir` is a hidden Antigravity CLI compatibility dependency; keep it
-inside the runner/launcher path, not in scenarios. `AGY_CLI_DISABLE_AUTO_UPDATE`
-keeps runs from mutating themselves mid-eval. Before launch, quorum runs an
-auth/isolation preflight using a throwaway `--gemini_dir`, then installs the
-plugin into the real per-run config with:
+`agy` reads its live, rotating OAuth token from `$HOME/.gemini/oauth_creds.json`
+at runtime, so provisioning seeds the host's OAuth creds into the throwaway
+home's `.gemini` before launch (the keyring entry is per-login-user, so it
+survives the throwaway `$HOME`). `ANTIGRAVITY_CONFIG_DIR` and the explicit
+`--gemini_dir` are kept belt-and-braces — both already resolve to the same
+collapsed `.gemini` the `$HOME` default would pick, but they pin the state seam
+to a known path; keep them inside the runner/launcher path, not in scenarios.
+`AGY_CLI_DISABLE_AUTO_UPDATE` keeps runs from mutating themselves mid-eval.
+Before launch, quorum runs an auth/isolation preflight using a throwaway
+`--gemini_dir`, then installs the plugin into the real per-run config with:
 
 ```bash
 agy --gemini_dir="$ANTIGRAVITY_CONFIG_DIR/.gemini" plugin install "$SUPERPOWERS_ROOT"
@@ -548,7 +578,7 @@ Provisioning verifies that `plugin.json`, `hooks.json`, and
 `skills/using-superpowers/SKILL.md` exist under:
 
 ```text
-<run>/coding-agent-config/.gemini/config/plugins/superpowers/
+<run>/home/.gemini/config/plugins/superpowers/
 ```
 
 Those files prove the plugin was installed. They do not prove hook or skill
@@ -556,13 +586,13 @@ behavior. Behavioral evidence comes from normalized transcript rows in
 `<run>/trajectory.json` and from raw Antigravity transcripts at:
 
 ```text
-<run>/coding-agent-config/.gemini/antigravity-cli/brain/**/transcript.jsonl
+<run>/home/.gemini/antigravity-cli/brain/**/transcript.jsonl
 ```
 
 The Antigravity CLI lifecycle/debug log is:
 
 ```text
-<run>/coding-agent-config/agy.log
+<run>/home/agy.log
 ```
 
 Antigravity may also write `.antigravitycli/` project metadata in the launch
@@ -578,23 +608,27 @@ each run's isolated Kimi config. Kimi auth/model setup comes from
 `KIMI_MODEL_API_KEY` plus quorum's default Kimi provider environment, with
 `KIMI_MODEL_NAME` available as the only host `KIMI_MODEL_*` override in v1.
 
-The runner creates a fresh per-run `KIMI_CODE_HOME` under the run directory and
-does not read or symlink the host's `~/.kimi-code`. Before launch, quorum writes
+Kimi's config dir is collapsed onto the throwaway home
+(`home_config_subdir: ".kimi-code"`), so quorum seeds its config — plus the
+host's Kimi OAuth creds — under `<run>/home/.kimi-code` and does not read or
+symlink the host's `~/.kimi-code`. Before launch, quorum writes
 `plugins/installed.json` with a single enabled Superpowers plugin whose
 `source` is `local-path` and whose root realpath matches `SUPERPOWERS_ROOT`.
 The runtime must not contain a copied `plugins/managed/superpowers` plugin.
 
-Kimi launches with:
+The launcher pins `HOME` (+ XDG + `TMPDIR`) via `$QUORUM_HOME_ENV`, sets NO
+`KIMI_CODE_HOME` (kimi finds its config via its `$HOME` default), and launches
+with:
 
 ```bash
-kimi --yolo
+$QUORUM_HOME_ENV kimi --yolo
 ```
 
 Kimi run artifacts are sensitive. In addition to the normalized
 `<run>/trajectory.json`, raw Kimi wire logs may appear at:
 
 ```text
-<run>/coding-agent-config/**/wire.jsonl
+<run>/home/.kimi-code/sessions/**/wire.jsonl
 ```
 
 Those logs can contain model outputs, tool arguments, and provider environment
@@ -609,16 +643,20 @@ separate, higher-level concept that selects the agent config.
 
 `coding-agents/opencode.yaml` launches OpenCode CLI as `opencode`. It requires
 `SUPERPOWERS_ROOT` because quorum stages the local Superpowers OpenCode plugin
-and skills into each run's isolated config home. The runner creates a per-run
-`OPENCODE_QUORUM_HOME`, seeds isolated XDG dirs, copies
+and skills into each run's isolated config home. OpenCode's config dir is
+collapsed onto the throwaway home (`home_config_subdir: "."`), which doubles as
+`OPENCODE_QUORUM_HOME`; the runner pins the home and its XDG dirs, copies
 `.opencode/plugins/superpowers.js`, copies the `skills/` tree, links the plugin
 into `.config/opencode/plugins/`, and rejects symlinks or stale session exports
-before launch.
+before launch. OpenCode keys its session DB off `XDG_DATA_HOME`, so pinning the
+throwaway home keeps the launcher and the capture subprocess on the same store.
 
 The generated launcher starts interactive OpenCode from the scenario workdir
-with an allowlisted environment:
+with an allowlisted environment. It pins `HOME` (+ XDG + `TMPDIR`) via
+`$QUORUM_HOME_ENV` and sets `OPENCODE_CONFIG_DIR=<home>/.config/opencode`:
 
 ```bash
+$QUORUM_HOME_ENV OPENCODE_CONFIG_DIR="$QUORUM_AGENT_HOME/.config/opencode" \
 opencode run -i --dangerously-skip-permissions
 ```
 
@@ -634,13 +672,13 @@ Gauntlet, exporting matching new sessions after Gauntlet, and normalizing the
 exported files under:
 
 ```text
-<run>/coding-agent-config/.quorum/session-exports/[0-9]*-ses_*.json
+<run>/home/.quorum/session-exports/[0-9]*-ses_*.json
 ```
 
 The manifest at:
 
 ```text
-<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json
+<run>/home/.quorum/session-exports/opencode-session-export-manifest.json
 ```
 
 records raw session rows, cwd-filter decisions, skipped existing sessions, and
@@ -650,30 +688,38 @@ normalization.
 ### Pi
 
 `coding-agents/pi.yaml` launches Pi as `pi`. It requires `SUPERPOWERS_ROOT`,
-`PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`. quorum creates an isolated per-run
-`PI_CODING_AGENT_DIR` under `<run>/coding-agent-config` and writes:
+`PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`. Pi's config dir is collapsed onto
+the throwaway home (`home_config_subdir: ".pi/agent"`), so quorum seeds its
+config under `<run>/home/.pi/agent` and writes:
 
 ```text
-<run>/coding-agent-config/auth.json
-<run>/coding-agent-config/settings.json
-<run>/coding-agent-config/pi.env
-<run>/coding-agent-config/sessions/*.jsonl
+<run>/home/.pi/agent/auth.json
+<run>/home/.pi/agent/settings.json
+<run>/home/.pi/agent/pi.env
+<run>/home/.pi/agent/sessions/**/*.jsonl
 ```
 
 `auth.json` references `$PI_API_KEY` instead of embedding the key; `pi.env`
 contains the real runtime secret and is chmod `0600`. Pi run directories are
 secret-bearing artifacts.
 
-The generated launcher starts Pi with:
+The generated launcher pins `HOME` (+ XDG + `TMPDIR`) via `$QUORUM_HOME_ENV` and
+sets NO `PI_CODING_AGENT_DIR` and NO `--session-dir`/`--config-dir` — pi finds
+its seeded config and writes sessions via its `$HOME` defaults
+(`$HOME/.pi/agent` and `<config>/sessions`). It starts Pi with:
 
 ```bash
-PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" \
+$QUORUM_HOME_ENV \
 pi \
-  --config-dir "$PI_CODING_AGENT_DIR" \
-  --no-context-files \
+  --provider "$PI_PROVIDER" \
+  --model "$PI_MODEL" \
+  --no-extensions \
   --extension "$SUPERPOWERS_ROOT" \
-  --allow-tool RunCommand \
-  --allow-tool Edit
+  --extension "$PI_SUBAGENTS_PKG" \
+  --no-skills \
+  --skill "$SUPERPOWERS_ROOT/skills" \
+  --no-context-files \
+  --tools read,bash,edit,write,grep,find,ls,subagent
 ```
 
 Pi loads the Superpowers extension and skills from the local
@@ -682,14 +728,14 @@ cannot satisfy the eval accidentally — with one deliberate exception: the
 launcher loads the `pi-subagents` package (host prerequisite:
 `npm install -g pi-subagents`), which provides the `subagent` delegation
 tool. The launcher resolves it via `npm root -g` and fails loudly when it
-is missing. Known isolation caveat: pi-subagents always reads agent
-definitions from `~/.agents` in addition to the per-run
-`PI_CODING_AGENT_DIR`, so host-defined agent names can appear in the
-`subagent` agent list alongside the package's bundled ones (reviewer,
-worker, scout, ...). Raw Pi sessions are captured from:
+is missing. pi-subagents reads agent definitions from `$HOME/.agents` in
+addition to the per-run config dir; because the launcher pins `HOME` to the
+throwaway home, that path now resolves under `<run>/home/.agents` rather than
+the operator's real `~/.agents`, alongside the package's bundled agents
+(reviewer, worker, scout, ...). Raw Pi sessions are captured from:
 
 ```text
-<run>/coding-agent-config/sessions/*.jsonl
+<run>/home/.pi/agent/sessions/**/*.jsonl
 ```
 
 Pi runs are priced through obol's `pi` dialect (PRI-2130):
@@ -702,20 +748,26 @@ captured session, and omitted otherwise (`economics.partial: true`).
 context lives in `coding-agents/copilot-context/HOWTO.md`, and quorum generates
 the per-run launcher from `coding-agents/copilot-context/launch-agent`.
 
-quorum creates an isolated `COPILOT_HOME` under `<run>/coding-agent-config`,
-writes a chmod-0600 `.copilot-env`, stages Superpowers under
-`plugins/superpowers`, and launches Copilot from the scenario workdir with:
+Copilot's config dir is collapsed onto the throwaway home
+(`home_config_subdir: ".copilot"`), so quorum seeds its config under
+`<run>/home/.copilot`, writes a chmod-0600 `.copilot-env`, stages Superpowers
+under `<run>/home/.copilot/plugins/superpowers`, and launches Copilot from the
+scenario workdir. The launcher pins `HOME` (+ XDG + `TMPDIR`) via
+`$QUORUM_HOME_ENV` and sets NO `COPILOT_HOME` — copilot resolves its home to
+`$HOME/.copilot`, where provisioning seeded the config:
 
 ```bash
+$QUORUM_HOME_ENV \
+COPILOT_CACHE_HOME=<run>/home/.copilot/.cache \
 copilot \
-  --plugin-dir <run>/coding-agent-config/plugins/superpowers \
+  --plugin-dir <run>/home/.copilot/plugins/superpowers \
   --session-id <run-session-id> \
   --allow-all \
   --no-auto-update \
   --no-remote \
   --disable-builtin-mcps \
   --secret-env-vars=<secret-env-var-names> \
-  --log-dir <run>/coding-agent-config/logs
+  --log-dir <run>/home/.copilot/logs
 ```
 
 The launcher uses an allowlisted outer environment. Auth can come from
@@ -727,7 +779,7 @@ variants before running Copilot evals.
 Copilot's primary trace is strict session state:
 
 ```text
-<run>/coding-agent-config/session-state/<run-session-id>/events.jsonl
+<run>/home/.copilot/session-state/<run-session-id>/events.jsonl
 ```
 
 quorum normalizes that file into `<run>/trajectory.json` and
@@ -752,18 +804,21 @@ A `quorum run` drives one scenario against one Coding-Agent:
    its required env vars validated.
 2. **Run dir** — a per-run directory is created under `results/`. It
    doubles as Gauntlet's `--state-dir` root and the evidence root.
-3. **Isolation** — a fresh per-run agent-config dir (`CLAUDE_CONFIG_DIR` for
-   Claude and Claude Haiku, `CODEX_HOME` for Codex,
-   `ANTIGRAVITY_CONFIG_DIR` for Antigravity, `GEMINI_CLI_HOME` for Gemini,
-   `KIMI_CODE_HOME` for Kimi,
-   `OPENCODE_QUORUM_HOME` for OpenCode, `PI_CODING_AGENT_DIR` for Pi, and
-   `COPILOT_HOME` for Copilot) is seeded or provisioned, so the Coding-Agent
+3. **Isolation** — a throwaway per-run `$HOME` is created at `<run>/home` and
+   the launcher pins `HOME` (+ the XDG base dirs and `TMPDIR`) to it via the
+   `$QUORUM_HOME_ENV` token. Each agent's config dir is collapsed *under* that
+   home (`.claude`, `.codex`, `.gemini`, `.kimi-code`, `.pi/agent`, `.copilot`,
+   etc.), and provisioning seeds the config plus any host creds there before
+   launch, so the Coding-Agent finds its config via its own `$HOME` default and
    never sees the host's real `~/.claude`, `~/.codex`, `~/.gemini`,
-   `~/.kimi-code`, OpenCode state, `~/.pi` state, or `~/.copilot` state,
-   installed plugins, or prior sessions. Antigravity also runs an isolated auth
-   preflight and plugin install before launch; Gemini links the local
-   Superpowers extension before launch; Kimi gets an isolated local-path
-   Superpowers plugin install before launch; OpenCode stages the plugin and
+   `~/.kimi-code`, OpenCode state, `~/.pi` state, `~/.copilot` state, `~/.config`,
+   installed plugins, or prior sessions. The launcher no longer sets the
+   per-agent config-dir env var (the `agent_config_env` name survives only as
+   the internal substitution key for `session_log_dir`). Antigravity also runs
+   an isolated auth preflight, seeds host OAuth creds, and installs the plugin
+   before launch; Gemini links the local Superpowers extension and seeds host
+   OAuth before launch; Kimi gets an isolated local-path Superpowers plugin
+   install and seeds host OAuth before launch; OpenCode stages the plugin and
    runs an isolated provider preflight; Pi writes run-local auth, settings, and
    environment files; Copilot stages the plugin and writes a private
    `.copilot-env` before launch.
@@ -800,13 +855,14 @@ A `quorum run` drives one scenario against one Coding-Agent:
    `setup-helpers run <helper>` over inline shell; if you need a new fixture,
    add a helper to `src/setup-helpers/` and register it in
    `src/setup-helpers/registry.ts`.
-4. Write `checks.sh` with `pre()` and `post()` functions using the
-   `bin/` vocabulary. No exec bit.
+4. Write `checks.sh` with `pre()` and `post()` functions using the check
+   vocabulary (bare verbs resolved from the sourced prelude). No exec bit.
 5. `bun run quorum check <name>` to validate structure, then run it against a
    Coding-Agent.
 
 Setup scripts run with `$QUORUM_WORKDIR` pointing at the fixture workdir.
-Check tools run from the fixture workdir with `bin/` on `PATH`.
+Check verbs run from the fixture workdir as bash functions defined by the
+sourced check prelude (`src/checks/prelude.sh`), not as `bin/` shims on `PATH`.
 Post-checks that need sibling run artifacts can use `$QUORUM_RUN_DIR`.
 
 ## Refreshing the Claude Skeleton
@@ -833,15 +889,17 @@ git commit coding-agents/claude-home-skeleton/ -m "quorum: refresh Claude skelet
 ```
 
 Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot need no committed
-home skeleton. Codex provisions a fresh per-run home from your local
-ChatGPT subscription login in `~/.codex/auth.json`; Antigravity provisions an isolated per-run
-`ANTIGRAVITY_CONFIG_DIR`, runs its auth preflight, and installs the Superpowers
-plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local auth and links the local
-extension; Kimi provisions a fresh per-run `KIMI_CODE_HOME` and installs only
-the local-path Superpowers plugin from `SUPERPOWERS_ROOT`; OpenCode stages the
-plugin and skills from `SUPERPOWERS_ROOT` into isolated XDG dirs; Pi provisions
-run-local auth, settings, and env files under `PI_CODING_AGENT_DIR`; Copilot
-stages the plugin from `SUPERPOWERS_ROOT` into isolated `COPILOT_HOME`.
+home skeleton. Each seeds its config under the throwaway per-run home
+(`<run>/home/<config-subdir>`) at provision time. Codex seeds `<run>/home/.codex`
+from your local ChatGPT subscription login in `~/.codex/auth.json`; Antigravity
+seeds `<run>/home/.gemini`, runs its auth preflight, seeds host OAuth creds, and
+installs the Superpowers plugin from `SUPERPOWERS_ROOT`; Gemini seeds run-local
+auth (and host OAuth, on the OAuth path) and links the local extension; Kimi
+seeds `<run>/home/.kimi-code` with host OAuth and installs only the local-path
+Superpowers plugin from `SUPERPOWERS_ROOT`; OpenCode stages the plugin and
+skills from `SUPERPOWERS_ROOT` under the home's XDG dirs; Pi seeds run-local
+auth, settings, and env files under `<run>/home/.pi/agent`; Copilot stages the
+plugin from `SUPERPOWERS_ROOT` under `<run>/home/.copilot`.
 
 ## Safe Checks
 
@@ -869,9 +927,10 @@ indices, economics, the Gauntlet result, agent YAML — are **zod schemas** in
 fails loudly instead of corrupting a verdict. The `cli/` layer parses commands
 and dispatches into the `runner/` pipeline (one scenario × one Coding-Agent) or
 `run-all/` (the matrix). Per-Coding-Agent differences live in two parallel
-fan-outs keyed by agent name: `agents/` provisions a fresh isolated config home,
-and `normalizers/` turns that agent's session log into a uniform tool-call
-trace. Live agent-CLI calls and other non-hermetic subprocesses go through the
+fan-outs keyed by agent name: `agents/` seeds the agent's config under the
+throwaway per-run `$HOME` (`<run>/home`), and `normalizers/` turns that agent's
+session log into a uniform tool-call trace. Live agent-CLI calls and other
+non-hermetic subprocesses go through the
 `agents/command-runner.ts` seam, so the unit suite injects fakes and never
 launches a real CLI. `scheduler/` is the shared concurrency engine under both
 `run-all/` and the `dashboard/`. `env.ts` is the only module that reads
@@ -898,25 +957,28 @@ src/
   obol/                 obol cost estimation (session-log + gauntlet sidecar)
   economics.ts          token-cost composition → coding-agent-token-usage.json
   composer.ts           three-valued verdict from the gauntlet + checks layers
-  checks/               sources checks.sh, runs pre()/post(), collects check records (bin/ on PATH)
+  checks/               sources prelude.sh + checks.sh, runs pre()/post(), collects check records
+    prelude.sh            bare-verb DSL: defines each check verb as a bash function that
+                          delegates to the TS dispatchers (no bin/ shims, no PATH prepend)
   scheduler/            central concurrency dispatcher (one global slot pool, per-harness limits + spacing)
   run-all/              scenario × Coding-Agent matrix over the scheduler; batch index
   dashboard/            web matrix UI: read-side scan/view, typed HTML templates, SSE bus, orchestrator, Bun.serve
   setup-helpers/        scenario fixture builders + the `setup-helpers` CLI (dispatch registry)
   contracts/            zod schemas at the JSON boundaries (verdict, batch, economics, gauntlet, agent-config)
   scaffold.ts           `quorum new` / `quorum check`
-  setup-step.ts         runs scenario setup.sh (puts bin/ on PATH so setup-helpers resolves)
+  setup-step.ts         runs scenario setup.sh (sources prelude.sh via BASH_ENV so bare verbs resolve)
   story-meta.ts         story.md frontmatter (quorum_max_time, quorum_tier, status)
   env.ts                the single process.env boundary
   paths.ts              repo root, UTC stamps, nonces
   invariant.ts          assertNever exhaustiveness guard for closed unions
   check/                typed check verbs: fs-verbs.ts (file/git/env + bootstrap),
                         dispatch.ts (table + `not`), transcript-dispatch.ts, record.ts (sole emitter)
-  cli/check-tool.ts     the dispatcher behind every bin/ check shim
-bin/                    thin shims only — one 5-line `exec bun run check-tool.ts <verb>`
-                        per check verb (file-exists, file-contains, command-succeeds, git-*,
-                        assert-checkout-clean, requires-tool, not, files-exist, the *-installed/
-                        hook/extension checks); plus the check-transcript and setup-helpers shims
+  cli/check-tool.ts     the dispatcher behind every check verb function (file-exists,
+                        file-contains, command-succeeds, git-*, assert-checkout-clean,
+                        requires-tool, not, files-exist, the *-installed/hook/extension
+                        checks); check-transcript.ts and setup-helpers/cli.ts are the
+                        other two dispatchers the prelude delegates to
+  cli/list-check-verbs.ts  prints the FS_VERBS verb set the prelude loops over (drift-proof)
 scripts/                operator scripts: refresh-claude-home-skeleton, run-with-log
 coding-agents/          per-Coding-Agent material:
   <name>.yaml             CLI config
@@ -944,11 +1006,11 @@ When an Antigravity run is non-passing or indeterminate:
 1. Confirm `agy` is installed and reachable: `agy --version`.
 2. Confirm local browser/keyring auth works outside quorum with a one-shot
    print command, for example `agy --print "Reply with EXACTLY OK."`.
-3. Inspect the CLI lifecycle log at `<run>/coding-agent-config/agy.log`.
+3. Inspect the CLI lifecycle log at `<run>/home/agy.log`.
 4. Confirm the plugin files exist under
-   `<run>/coding-agent-config/.gemini/config/plugins/superpowers/`.
+   `<run>/home/.gemini/config/plugins/superpowers/`.
 5. Confirm raw transcripts exist under
-   `<run>/coding-agent-config/.gemini/antigravity-cli/brain/**/transcript.jsonl`.
+   `<run>/home/.gemini/antigravity-cli/brain/**/transcript.jsonl`.
 6. Inspect normalized behavior in `<run>/trajectory.json`; plugin
    files alone do not prove hook or skill behavior.
 7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
@@ -963,11 +1025,11 @@ When an OpenCode run is non-passing or indeterminate:
 2. Confirm provider auth works outside quorum with a one-shot command, for
    example `opencode run --dangerously-skip-permissions "Reply with EXACTLY OK."`.
 3. Confirm the staged plugin exists at
-   `<run>/coding-agent-config/.config/opencode/plugins/superpowers.js`.
+   `<run>/home/.config/opencode/plugins/superpowers.js`.
 4. Confirm the staged skills exist under
-   `<run>/coding-agent-config/.config/opencode/superpowers/skills/`.
+   `<run>/home/.config/opencode/superpowers/skills/`.
 5. Inspect the export manifest at
-   `<run>/coding-agent-config/.quorum/session-exports/opencode-session-export-manifest.json`.
+   `<run>/home/.quorum/session-exports/opencode-session-export-manifest.json`.
 6. Inspect normalized behavior in `<run>/trajectory.json`; plugin
    files alone do not prove hook or skill behavior.
 7. Render the verdict with `bun run quorum show <run-or-batch-id>`.
@@ -984,12 +1046,12 @@ When a Pi run is non-passing or indeterminate:
    set in the shell that launches quorum.
 4. If using `azure-openai-responses`, confirm `AZURE_OPENAI_BASE_URL` or
    `AZURE_OPENAI_RESOURCE_NAME` is set.
-5. Inspect `<run>/coding-agent-config/pi.env`; it should exist, be chmod
+5. Inspect `<run>/home/.pi/agent/pi.env`; it should exist, be chmod
    `0600`, and contain the runtime env expected by the launcher.
-6. Inspect `<run>/coding-agent-config/auth.json`; it should be chmod `0600`
+6. Inspect `<run>/home/.pi/agent/auth.json`; it should be chmod `0600`
    and should reference `$PI_API_KEY`, not the literal secret.
 7. Confirm raw Pi sessions exist under
-   `<run>/coding-agent-config/sessions/*.jsonl`.
+   `<run>/home/.pi/agent/sessions/**/*.jsonl`.
 8. If the verdict says `qa-agent-misconfigured`, look for a new Pi session
    whose header `cwd` is outside `<run>/coding-agent-workdir`.
 9. If the verdict says `unusable Pi session header`, inspect the first line of
@@ -1005,9 +1067,9 @@ When a Copilot run is non-passing or indeterminate:
 2. Confirm auth is available from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
    `GITHUB_TOKEN`, `gh auth token`, or `COPILOT_PROVIDER_BASE_URL`.
 3. Confirm the staged plugin files exist under
-   `<run>/coding-agent-config/plugins/superpowers/`.
+   `<run>/home/.copilot/plugins/superpowers/`.
 4. Confirm the expected session-state trace exists at
-   `<run>/coding-agent-config/session-state/<run-session-id>/events.jsonl`.
+   `<run>/home/.copilot/session-state/<run-session-id>/events.jsonl`.
 5. Inspect normalized behavior in `<run>/trajectory.json`;
    behavioral validation comes from native `Skill` rows, not
    `copilot plugin list`.
