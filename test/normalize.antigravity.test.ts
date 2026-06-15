@@ -249,3 +249,47 @@ test('canonicalizes skill marker casing and nested metadata', () => {
   );
   expect(args(traj, 0)['is_skill_file']).toBe(true);
 });
+
+// ---------------------------------------------------------------------------
+// Usage guard (ATIF usage-unification contract, 2026-06-15)
+//
+// Antigravity transcripts carry NO token usage anywhere (verified against
+// /tmp/quorum-live-results4/...-antigravity-.../**/transcript.jsonl and
+// docs/experiments/2026-06-15-coding-agent-token-capture.md). The normalizer
+// must NOT fabricate metrics: every step.metrics / model_name stays unset and
+// trajectory.final_metrics stays absent.
+// ---------------------------------------------------------------------------
+
+const realNoUsage = await Bun.file(
+  new URL('./fixtures/antigravity-real-no-usage.jsonl', import.meta.url),
+).text();
+
+test('real antigravity transcript carries no usage metrics', () => {
+  const traj = normalizeAntigravity(realNoUsage, '0.1.0');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  // It DID find tool calls (proves the log was parsed, not empty).
+  expect(traj.steps.some((s) => s.tool_calls)).toBe(true);
+  // ...but no usage was invented.
+  for (const step of traj.steps) {
+    expect(step.metrics).toBeUndefined();
+    expect(step.model_name).toBeUndefined();
+  }
+  expect(traj.final_metrics).toBeUndefined();
+  expect(traj.agent.model_name).toBeUndefined();
+});
+
+test('synthetic transcript with tool calls produces no metrics', () => {
+  const raw = [
+    JSON.stringify({
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'pytest -q' } }],
+    }),
+    JSON.stringify({
+      PLANNER_RESPONSE: {
+        tool_calls: [{ name: 'write_to_file', args: { Path: 'src/app.py' } }],
+      },
+    }),
+  ].join('\n');
+  const traj = normalizeAntigravity(raw, '0.1.0');
+  expect(traj.steps.every((s) => s.metrics === undefined)).toBe(true);
+  expect(traj.final_metrics).toBeUndefined();
+});
