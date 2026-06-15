@@ -110,6 +110,27 @@ export class KimiAgent implements CodingAgent {
   }
 
   provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+    // SECURITY (H2): the whole provisioning motion — binary resolve, preflight,
+    // plugin install, and the env-file/config writes — can surface diagnostics
+    // that echo secrets (e.g. the API key in a failing preflight's stderr). Mirror
+    // quorum/runner.py:_seed_kimi_config, which wraps the seed in
+    // `except KimiConfigError as e: raise RunnerError(sanitize_kimi_diagnostic(e))`,
+    // so NO raw secret-bearing text escapes provision() into the runner's catch
+    // and verdict.json. Any ProvisionError we already raise is re-wrapped through
+    // the same scrub (idempotent: a value already redacted has nothing left to
+    // match).
+    try {
+      return this.seedKimiConfig(home, runner);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new ProvisionError(sanitizeKimiDiagnostic(message));
+    }
+  }
+
+  private seedKimiConfig(
+    home: RunHome,
+    runner: CommandRunner,
+  ): Record<string, string> {
     const { configDir } = home;
 
     // _seed_kimi_config requires SUPERPOWERS_ROOT up front (RunnerError ->
@@ -124,7 +145,7 @@ export class KimiAgent implements CodingAgent {
     const preflightToken = getEnv('QUORUM_KIMI_PREFLIGHT_TOKEN');
 
     // 1. resolve_kimi_binary: PATH lookup (KimiConfigError -> ProvisionError).
-    const kimiBinary = resolveKimiBinary(this.config.binary, runner);
+    const kimiBinary = resolveKimiBinary(this.config.binary);
 
     // 2. effective_kimi_model_env: merge defaults with host overrides.
     const kimiModelEnv = effectiveKimiModelEnv();
@@ -238,15 +259,15 @@ export function sanitizeKimiDiagnostic(
   return text;
 }
 
-// resolve_kimi_binary: PATH lookup. node has no shutil.which; probe via the
-// runner (`command -v <binary>`) so the hermetic gate can stub the lookup, and
-// raise ProvisionError (mapping KimiConfigError) when it is missing.
-function resolveKimiBinary(binary: string, runner: CommandRunner): string {
-  const probe = runner.run('command', ['-v', binary], {
-    env: { ...envSnapshot() },
-  });
-  const resolved = probe.stdout.trim();
-  if (probe.status !== 0 || resolved === '') {
+// resolve_kimi_binary: PATH lookup. Mirrors the Python's shutil.which — a pure
+// in-process PATH walk via Bun.which (matching antigravity's Bun.which('agy') and
+// the claude preflight in runner/index.ts). A `command -v` subprocess probe would
+// ENOENT on Linux because `command` is a shell builtin, not an executable, and the
+// default CommandRunner spawns with no shell. Raise ProvisionError (mapping
+// KimiConfigError) when the binary is missing.
+function resolveKimiBinary(binary: string): string {
+  const resolved = Bun.which(binary, { PATH: envSnapshot()['PATH'] ?? '' });
+  if (resolved === null || resolved === '') {
     throw new ProvisionError(
       `'${binary}' not found on PATH; cannot run Kimi evals`,
     );

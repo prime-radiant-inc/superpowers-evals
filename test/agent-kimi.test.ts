@@ -27,9 +27,12 @@ import { makeTempHome } from './provision-helpers.ts';
 
 // A kimi.yaml-shaped config (mirrors coding-agents/kimi.yaml). The fields the
 // adapter reads are binary, agent_config_env (KIMI_CODE_HOME), and required_env.
+// `binary` is a REAL on-PATH executable so resolveKimiBinary's in-process
+// Bun.which (mirroring shutil.which, H3) resolves it — there is no `command -v`
+// subprocess probe to stub.
 const KIMI_CONFIG: AgentConfig = {
   name: 'kimi',
-  binary: 'kimi',
+  binary: 'sh',
   agent_config_env: 'KIMI_CODE_HOME',
   session_log_dir: '${KIMI_CODE_HOME}/sessions',
   session_log_glob: '**/wire.jsonl',
@@ -39,7 +42,9 @@ const KIMI_CONFIG: AgentConfig = {
 };
 
 const API_KEY = 'kimi-model-key-abcdef';
-const RESOLVED_BINARY = '/usr/local/bin/kimi';
+// The Bun.which-resolved path of KIMI_CONFIG.binary; the preflight subprocess is
+// keyed on this resolved path, never a faked probe value.
+const RESOLVED_BINARY = Bun.which(KIMI_CONFIG.binary) ?? '';
 
 // The model-provider defaults the adapter bakes in (must equal the Python's
 // DEFAULT_KIMI_MODEL_ENV + KIMI_RUNTIME_FLAGS, modulo the host-overlaid key).
@@ -158,17 +163,15 @@ function writeKimiPreflightSession(
   );
 }
 
-// Happy preflight responder: `command -v kimi` resolves the binary; the kimi
-// auth preflight replies with a stream-json assistant "OK" line and writes the
-// expected on-disk session attribution into the throwaway kimi home.
+// Happy preflight responder: the binary is resolved in-process via Bun.which (H3),
+// so the only subprocess is the kimi auth preflight, keyed on the resolved binary
+// path. It replies with a stream-json assistant "OK" line and writes the expected
+// on-disk session attribution into the throwaway kimi home.
 function happyResponder(
   command: string,
-  args: readonly string[],
+  _args: readonly string[],
   options: CommandOptions | undefined,
 ): CommandResult {
-  if (command === 'command' && args[0] === '-v') {
-    return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
-  }
   if (command === RESOLVED_BINARY) {
     writeKimiPreflightSession(options);
     const reply = { role: 'assistant', content: 'OK' };
@@ -260,14 +263,11 @@ test('provision seeds KIMI_CODE_HOME, runs the preflight, installs the plugin', 
           `XDG_CONFIG_HOME='${join(home.configDir, 'xdg-config')}'`,
         );
 
-        // Subprocess calls: the PATH probe then the auth preflight.
-        expect(runner.calls.length).toBe(2);
+        // Subprocess calls: only the auth preflight (binary resolution is the
+        // in-process Bun.which from H3, not a `command -v` subprocess probe).
+        expect(runner.calls.length).toBe(1);
 
-        const probe = runner.calls[0];
-        expect(probe?.command).toBe('command');
-        expect(probe?.args).toEqual(['-v', 'kimi']);
-
-        const preflight = runner.calls[1];
+        const preflight = runner.calls[0];
         expect(preflight?.command).toBe(RESOLVED_BINARY);
         expect(preflight?.args).toEqual([
           '-p',
@@ -305,7 +305,7 @@ test('preflight env equals the effective model env overlaid on the hermetic XDG 
       () => {
         const agent = new KimiAgent(KIMI_CONFIG);
         agent.provision(home, runner);
-        const preflightEnv = runner.calls[1]?.options?.env ?? {};
+        const preflightEnv = runner.calls[0]?.options?.env ?? {};
         for (const [key, value] of Object.entries(EXPECTED_MODEL_ENV)) {
           expect(preflightEnv[key]).toBe(value);
         }
@@ -334,7 +334,7 @@ test('a host KIMI_MODEL_NAME override flows into the model env', () => {
       () => {
         const agent = new KimiAgent(KIMI_CONFIG);
         agent.provision(home, runner);
-        expect(runner.calls[1]?.options?.env?.['KIMI_MODEL_NAME']).toBe(
+        expect(runner.calls[0]?.options?.env?.['KIMI_MODEL_NAME']).toBe(
           'kimi-custom',
         );
         const summary = JSON.parse(
@@ -383,9 +383,9 @@ test('a precomputed sentinel is validated instead of running the live preflight'
       () => {
         const agent = new KimiAgent(KIMI_CONFIG);
         agent.provision(home, runner);
-        // Only the PATH probe ran; the live preflight was skipped.
-        expect(runner.calls.length).toBe(1);
-        expect(runner.calls[0]?.command).toBe('command');
+        // No subprocess at all: binary resolution is in-process (Bun.which) and
+        // the sentinel path skips the live preflight.
+        expect(runner.calls.length).toBe(0);
       },
     );
   } finally {
@@ -438,11 +438,8 @@ test('provision throws ProvisionError when the preflight does not reply OK', () 
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  // PATH probe resolves, but the preflight assistant reply is not OK.
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'command' && args[0] === '-v') {
-      return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
-    }
+  // Binary resolves in-process (Bun.which); the preflight assistant reply is not OK.
+  const runner = new FakeCommandRunner(() => {
     const reply = { role: 'assistant', content: 'NOPE' };
     return { status: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '' };
   });
@@ -470,12 +467,12 @@ test('provision throws ProvisionError when the preflight exits non-zero', () => 
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner((command, args) => {
-    if (command === 'command' && args[0] === '-v') {
-      return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
-    }
-    return { status: 1, stdout: '', stderr: 'auth rejected' };
-  });
+  // Binary resolves in-process (Bun.which); the preflight subprocess exits non-zero.
+  const runner = new FakeCommandRunner(() => ({
+    status: 1,
+    stdout: '',
+    stderr: 'auth rejected',
+  }));
 
   try {
     withEnv(
@@ -495,17 +492,17 @@ test('provision throws ProvisionError when the preflight exits non-zero', () => 
   }
 });
 
-test('provision throws ProvisionError when the kimi binary is not on PATH', () => {
+test('provision throws ProvisionError naming the binary when it is not on PATH', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  // The PATH probe fails: no binary resolved.
-  const runner = new FakeCommandRunner(() => ({
-    status: 1,
-    stdout: '',
-    stderr: '',
-  }));
+  const runner = new FakeCommandRunner(happyResponder);
+  // A binary name guaranteed absent from PATH; Bun.which resolves to null (H3).
+  const absentConfig: AgentConfig = {
+    ...KIMI_CONFIG,
+    binary: 'no-such-kimi-binary-on-path-7f3a9',
+  };
 
   try {
     withEnv(
@@ -516,10 +513,10 @@ test('provision throws ProvisionError when the kimi binary is not on PATH', () =
         QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
       },
       () => {
-        const agent = new KimiAgent(KIMI_CONFIG);
-        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-        // No preflight after the failed probe.
-        expect(runner.calls.length).toBe(1);
+        const agent = new KimiAgent(absentConfig);
+        expect(() => agent.provision(home, runner)).toThrow(
+          /'no-such-kimi-binary-on-path-7f3a9' not found on PATH/,
+        );
       },
     );
   } finally {
@@ -672,6 +669,97 @@ test('provision throws ProvisionError when the manifest name is wrong', () => {
 });
 
 // ---------------------------------------------------------------------------
+// H2 (SECURITY): provision() runs every escaping diagnostic through
+// sanitizeKimiDiagnostic, so a secret echoed by a failing subprocess (e.g. the
+// API key in preflight stderr) is REDACTED before the message reaches the
+// runner's catch and verdict.json — never leaked verbatim.
+// ---------------------------------------------------------------------------
+
+test('provision redacts a secret echoed in preflight stderr before it escapes', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  // The preflight subprocess fails AND echoes the API key in its stderr. Without
+  // sanitization the raw key would flow into ProvisionError.message verbatim.
+  const runner = new FakeCommandRunner(() => ({
+    status: 1,
+    stdout: '',
+    stderr: `auth rejected for token ${API_KEY}`,
+  }));
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        let caught: unknown;
+        try {
+          agent.provision(home, runner);
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ProvisionError);
+        const message = (caught as ProvisionError).message;
+        // The raw secret is gone; the same redaction sanitizeKimiDiagnostic applies.
+        expect(message).not.toContain(API_KEY);
+        expect(message).toContain('<redacted>');
+        // The non-secret diagnostic context survives.
+        expect(message).toContain('kimi auth preflight failed');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision redacts an arbitrary sensitive env value leaked into a diagnostic', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const otherSecret = 'super-secret-token-value';
+  const runner = new FakeCommandRunner(() => ({
+    status: 1,
+    stdout: '',
+    stderr: `failure mentioning ${otherSecret}`,
+  }));
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        // A name containing TOKEN with a >=6-char value: sanitize must redact it.
+        SERVICE_AUTH_TOKEN: otherSecret,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        let caught: unknown;
+        try {
+          agent.provision(home, runner);
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ProvisionError);
+        const message = (caught as ProvisionError).message;
+        expect(message).not.toContain(otherSecret);
+        expect(message).toContain('<redacted>');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // sanitizeKimiDiagnostic (SECURITY)
 // ---------------------------------------------------------------------------
 
@@ -797,10 +885,7 @@ function provisionWithAttribution(
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
-  const runner = new FakeCommandRunner((command, args, options) => {
-    if (command === 'command' && args[0] === '-v') {
-      return { status: 0, stdout: `${RESOLVED_BINARY}\n`, stderr: '' };
-    }
+  const runner = new FakeCommandRunner((command, _args, options) => {
     if (command === RESOLVED_BINARY) {
       attribution(options);
       const reply = { role: 'assistant', content: 'OK' };
@@ -864,4 +949,105 @@ test('preflight throws when the matching sessionDir contains no wire.jsonl', () 
     writeKimiPreflightSession(options, { omitWire: true });
   });
   expect(() => run()).toThrow(ProvisionError);
+});
+
+// ---------------------------------------------------------------------------
+// H3: kimi binary resolution via Bun.which (in-process PATH walk, like
+// shutil.which), not a `command -v` subprocess probe that ENOENTs on Linux.
+// ---------------------------------------------------------------------------
+
+// A real binary guaranteed on PATH, with its true resolved path. The adapter
+// must resolve via Bun.which, returning this path — never a faked probe value.
+const REAL_BINARY_NAME = 'sh';
+const REAL_BINARY_PATH = Bun.which(REAL_BINARY_NAME) ?? '';
+
+const REAL_BINARY_CONFIG: AgentConfig = {
+  ...KIMI_CONFIG,
+  binary: REAL_BINARY_NAME,
+};
+
+// Happy responder for a real-binary config: the preflight subprocess is keyed on
+// the Bun.which-resolved path, and NO `command -v` probe is involved.
+function realBinaryResponder(
+  command: string,
+  _args: readonly string[],
+  options: CommandOptions | undefined,
+): CommandResult {
+  if (command === REAL_BINARY_PATH) {
+    writeKimiPreflightSession(options);
+    const reply = { role: 'assistant', content: 'OK' };
+    return { status: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '' };
+  }
+  return { status: 0, stdout: '', stderr: '' };
+}
+
+test('provision resolves the kimi binary via Bun.which (no command -v subprocess)', () => {
+  expect(REAL_BINARY_PATH).not.toBe('');
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(realBinaryResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(REAL_BINARY_CONFIG);
+        const env = agent.provision(home, runner);
+        // The resolved binary is the real PATH resolution, not a faked value.
+        expect(env['KIMI_BINARY']).toBe(REAL_BINARY_PATH);
+        // Only the preflight ran; there is NO `command -v` probe subprocess.
+        expect(runner.calls.length).toBe(1);
+        expect(runner.calls[0]?.command).toBe(REAL_BINARY_PATH);
+        for (const call of runner.calls) {
+          expect(call.command).not.toBe('command');
+        }
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws ProvisionError when the binary is absent from PATH (no faked probe)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  // The responder NEVER answers a probe; resolution is in-process via Bun.which.
+  // No binary by this name exists on PATH, so resolution must fail on its own.
+  const runner = new FakeCommandRunner(() => ({
+    status: 0,
+    stdout: '',
+    stderr: '',
+  }));
+  const absentConfig: AgentConfig = {
+    ...KIMI_CONFIG,
+    binary: 'definitely-not-a-real-binary-xyzzy-kimi',
+  };
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(absentConfig);
+        expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+        // Resolution failed in-process: NO subprocess was attempted.
+        expect(runner.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+  }
 });
