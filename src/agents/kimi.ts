@@ -178,18 +178,6 @@ export class KimiAgent implements CodingAgent {
     //    plugin (plugins/installed.json).
     installKimiSuperpowersPlugin(configDir, superpowersRoot);
 
-    // Create the isolated kimi home subdirs. The kimi home IS configDir
-    // (agent_config_env = KIMI_CODE_HOME = home.configDir).
-    for (const child of [
-      'home',
-      'cache',
-      'xdg-config',
-      'xdg-cache',
-      'xdg-data',
-    ]) {
-      mkdirSync(join(configDir, child), { recursive: true });
-    }
-
     // 5. Build the launcher's runtime env file. pinHome is false — the launcher
     //    pins HOME/XDG via $QUORUM_HOME_ENV and kimi finds KIMI_CODE_HOME via its
     //    $HOME/.kimi-code default (home_config_subdir ".kimi-code"), so the secret

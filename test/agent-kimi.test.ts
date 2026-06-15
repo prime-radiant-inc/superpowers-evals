@@ -35,6 +35,7 @@ const KIMI_CONFIG: AgentConfig = {
   name: 'kimi',
   binary: 'sh',
   agent_config_env: 'KIMI_CODE_HOME',
+  home_config_subdir: '.kimi-code',
   session_log_dir: '${KIMI_CODE_HOME}/sessions',
   session_log_glob: '**/wire.jsonl',
   normalizer: 'kimi',
@@ -206,7 +207,9 @@ test('provision seeds KIMI_CODE_HOME, runs the preflight, installs the plugin', 
         expect(typeof env['KIMI_ENV_FILE']).toBe('string');
         expect(existsSync(env['KIMI_ENV_FILE'] ?? '')).toBe(true);
 
-        // The kimi home + the seeded subdirs all exist.
+        // The kimi home exists, but the legacy per-agent isolation subdirs are
+        // NOT created: HOME/XDG isolation is pinned by $QUORUM_HOME_ENV under
+        // the throwaway runHome, not under configDir.
         expect(existsSync(home.configDir)).toBe(true);
         for (const child of [
           'home',
@@ -215,7 +218,7 @@ test('provision seeds KIMI_CODE_HOME, runs the preflight, installs the plugin', 
           'xdg-cache',
           'xdg-data',
         ]) {
-          expect(existsSync(join(home.configDir, child))).toBe(true);
+          expect(existsSync(join(home.configDir, child))).toBe(false);
         }
 
         // plugins/installed.json registers the local checkout as the sole

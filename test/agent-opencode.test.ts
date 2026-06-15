@@ -30,6 +30,7 @@ const OPENCODE_CONFIG: AgentConfig = {
   name: 'opencode',
   binary: 'opencode',
   agent_config_env: 'OPENCODE_QUORUM_HOME',
+  home_config_subdir: '.',
   session_log_dir: '${OPENCODE_QUORUM_HOME}/.quorum/session-exports',
   session_log_glob: '[0-9]*-ses_*.json',
   normalizer: 'opencode',

@@ -34,6 +34,7 @@ function writeClaudeYaml(dir: string, projectPrompt: string | undefined): void {
     'runtime_family: claude',
     'binary: claude',
     'agent_config_env: CLAUDE_CONFIG_DIR',
+    'home_config_subdir: ".claude"',
     'session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"',
     'session_log_glob: "**/*.jsonl"',
     'normalizer: claude',
@@ -56,6 +57,7 @@ function writeYaml(dir: string, name: string, lines: readonly string[]): void {
 const CLAUDE_BASE: readonly string[] = [
   'binary: claude',
   'agent_config_env: CLAUDE_CONFIG_DIR',
+  'home_config_subdir: ".claude"',
   'session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"',
   'session_log_glob: "**/*.jsonl"',
   'normalizer: claude',
@@ -70,6 +72,7 @@ test('loads claude.yaml into a typed AgentConfig', () => {
       'runtime_family: claude',
       'binary: claude',
       'agent_config_env: CLAUDE_CONFIG_DIR',
+      'home_config_subdir: ".claude"',
       'session_log_dir: "${CLAUDE_CONFIG_DIR}/projects"',
       'session_log_glob: "**/*.jsonl"',
       'normalizer: claude',
@@ -81,6 +84,7 @@ test('loads claude.yaml into a typed AgentConfig', () => {
   );
   const cfg = loadAgentConfig(dir, 'claude');
   expect(cfg.name).toBe('claude');
+  expect(cfg.home_config_subdir).toBe('.claude');
   expect(cfg.required_env).toEqual(['ANTHROPIC_API_KEY']);
   expect(cfg.session_log_glob).toBe('**/*.jsonl');
   expect(cfg.max_concurrency).toBeUndefined();
@@ -233,30 +237,39 @@ test('resolveSessionLogDir leaves a non-leading ~ untouched', () => {
   expect(resolveSessionLogDir('/a/~/b', {})).toBe('/a/~/b');
 });
 
+// home_config_subdir is required: every agent runs in the throwaway $HOME with
+// its config collapsed under it, so a yaml omitting the key is a config error
+// (not a silent fall-back to a standalone dir).
+test('AgentConfigSchema requires home_config_subdir', () => {
+  expect(() =>
+    AgentConfigSchema.parse({
+      name: 'x',
+      binary: 'x',
+      agent_config_env: 'X_HOME',
+      session_log_dir: '${X_HOME}/sessions',
+      session_log_glob: '*.jsonl',
+      normalizer: 'x',
+    }),
+  ).toThrow();
+});
+
 // agentConfigDir — the throwaway-$HOME config collapse seam.
 const CONFIG_DIR_BASE = AgentConfigSchema.parse({
   name: 'x',
   binary: 'x',
   agent_config_env: 'X_HOME',
+  home_config_subdir: '.',
   session_log_dir: '${X_HOME}/sessions',
   session_log_glob: '*.jsonl',
   normalizer: 'x',
 });
 
-test('agentConfigDir: absent home_config_subdir -> legacy standalone dir', () => {
-  expect(agentConfigDir(CONFIG_DIR_BASE, '/run', '/run/home')).toBe(
-    join('/run', 'coding-agent-config'),
-  );
-});
-
 test('agentConfigDir: a config-dir-like subdir roots under the throwaway home', () => {
   const cfg = { ...CONFIG_DIR_BASE, home_config_subdir: '.codex' };
-  expect(agentConfigDir(cfg, '/run', '/run/home')).toBe(
-    join('/run/home', '.codex'),
-  );
+  expect(agentConfigDir(cfg, '/run/home')).toBe(join('/run/home', '.codex'));
 });
 
 test('agentConfigDir: "." means the throwaway home itself (a HOME-like var)', () => {
   const cfg = { ...CONFIG_DIR_BASE, home_config_subdir: '.' };
-  expect(agentConfigDir(cfg, '/run', '/run/home')).toBe('/run/home');
+  expect(agentConfigDir(cfg, '/run/home')).toBe('/run/home');
 });

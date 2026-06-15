@@ -76,6 +76,7 @@ const ANTIGRAVITY_CONFIG: AgentConfig = {
   name: 'antigravity',
   binary: 'agy',
   agent_config_env: 'ANTIGRAVITY_CONFIG_DIR',
+  home_config_subdir: '.',
   session_log_dir: '${ANTIGRAVITY_CONFIG_DIR}/.gemini/antigravity-cli/brain',
   session_log_glob: '**/transcript.jsonl',
   normalizer: 'antigravity',

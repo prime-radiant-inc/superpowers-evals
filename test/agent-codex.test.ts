@@ -29,6 +29,7 @@ const CODEX_CONFIG: AgentConfig = {
   name: 'codex',
   binary: 'codex',
   agent_config_env: 'CODEX_HOME',
+  home_config_subdir: '.codex',
   session_log_dir: '${CODEX_HOME}/sessions',
   session_log_glob: '**/rollout-*.jsonl',
   normalizer: 'codex',

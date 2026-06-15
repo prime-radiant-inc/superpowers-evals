@@ -26,13 +26,12 @@ export const AgentConfigSchema = z.object({
   session_log_dir: z.string(),
   session_log_glob: z.string(),
   normalizer: z.string(),
-  // Throwaway-$HOME config collapse: when set, the agent's config dir is rooted
-  // UNDER the per-run throwaway home (<runHome>/<home_config_subdir>) instead of
-  // the standalone <runDir>/coding-agent-config, so the agent finds its config
-  // via its $HOME default and the launcher need not set the config-dir env var.
-  // "." means the home itself (the var was HOME-like, e.g. gemini/opencode).
-  // Absent = legacy standalone config dir. See agentConfigDir().
-  home_config_subdir: z.string().optional(),
+  // Throwaway-$HOME config collapse (required): the agent's config dir is rooted
+  // UNDER the per-run throwaway home (<runHome>/<home_config_subdir>), so the
+  // agent finds its config via its $HOME default and the launcher need not set
+  // the config-dir env var. "." means the home itself (the var was HOME-like,
+  // e.g. gemini/opencode). See agentConfigDir().
+  home_config_subdir: z.string(),
   required_env: z.array(z.string()).default([]),
   max_time: z.string().optional(),
   project_prompt: z.string().optional(),
@@ -44,21 +43,13 @@ export const AgentConfigSchema = z.object({
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
 /**
- * Resolve the agent's isolated config dir. When `home_config_subdir` is set the
- * config dir is rooted under the per-run throwaway home `runHomeDir` (the agent
- * then finds it via its $HOME default, so the launcher needs no config-dir env
- * var); `"."` means the home itself (a HOME-like var, e.g. gemini/opencode).
- * Absent = the legacy standalone `<runDir>/coding-agent-config`.
+ * Resolve the agent's isolated config dir, rooted under the per-run throwaway
+ * home `runHomeDir` at `home_config_subdir` (the agent finds it via its $HOME
+ * default, so the launcher needs no config-dir env var). `"."` means the home
+ * itself (a HOME-like var, e.g. gemini/opencode).
  */
-export function agentConfigDir(
-  cfg: AgentConfig,
-  runDir: string,
-  runHomeDir: string,
-): string {
-  if (cfg.home_config_subdir !== undefined) {
-    return join(runHomeDir, cfg.home_config_subdir);
-  }
-  return join(runDir, 'coding-agent-config');
+export function agentConfigDir(cfg: AgentConfig, runHomeDir: string): string {
+  return join(runHomeDir, cfg.home_config_subdir);
 }
 
 // Thrown when a coding-agent YAML is structurally valid but a referenced file

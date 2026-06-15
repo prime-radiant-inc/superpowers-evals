@@ -163,7 +163,7 @@ function mode(path: string): number {
 test('config dir collapses under the throwaway $HOME at <runHome>/.copilot', () => {
   const runDir = '/runs/copilot-run';
   const runHomeDir = join(runDir, 'home');
-  const configDir = agentConfigDir(CONFIG, runDir, runHomeDir);
+  const configDir = agentConfigDir(CONFIG, runHomeDir);
   expect(configDir).toBe(join(runHomeDir, '.copilot'));
 
   // session_log_dir resolves against the provisioning env ({COPILOT_HOME: configDir})

@@ -986,11 +986,10 @@ async function runInnerBody(
   for (const dir of [runHomeDir, ...xdgHomeSubdirs(runHomeDir)]) {
     mkdirSync(dir, { recursive: true });
   }
-  // The agent's isolated config dir: rooted under the throwaway home when the
-  // agent declares home_config_subdir (it then finds config via its $HOME
-  // default and the launcher omits the config-dir env var), else the legacy
-  // standalone <runDir>/coding-agent-config.
-  const configDir = agentConfigDir(cfg, runDir, runHomeDir);
+  // The agent's isolated config dir: rooted under the throwaway home at the
+  // agent's home_config_subdir (it finds config via its $HOME default and the
+  // launcher omits the config-dir env var).
+  const configDir = agentConfigDir(cfg, runHomeDir);
   const home = {
     configDir,
     workdir,

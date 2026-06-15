@@ -18,6 +18,7 @@ function claudeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
     name: 'claude',
     binary: 'claude',
     agent_config_env: 'CLAUDE_CONFIG_DIR',
+    home_config_subdir: '.claude',
     session_log_dir: '${CLAUDE_CONFIG_DIR}',
     session_log_glob: '*.jsonl',
     normalizer: 'claude',
