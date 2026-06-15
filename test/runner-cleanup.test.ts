@@ -9,8 +9,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { shellSingleQuote } from '../src/agents/index.ts';
 import {
   cleanupAgentRuntime,
+  kimiLaunchSubstitutions,
   RunnerError,
   runtimeCleanupDirs,
 } from '../src/runner/index.ts';
@@ -55,6 +57,50 @@ test('cleanupAgentRuntime: already-absent dir is ignored (no throw)', () => {
   const gone = join(tmpdir(), 'quorum-kimi-runtime-never-existed-xyz');
   expect(existsSync(gone)).toBe(false);
   expect(() => cleanupAgentRuntime([gone])).not.toThrow();
+});
+
+// kimiLaunchSubstitutions threads KimiAgent.provision's extra-env ($KIMI_ENV_FILE
+// / $KIMI_BINARY) into the launch-agent substitution set (parity with Python's
+// kimi AgentRuntime.substitutions: "$KIMI_ENV_FILE": str(env_file),
+// "$KIMI_BINARY": shlex.quote(kimi_binary)). The kimi-context launcher sources
+// "$KIMI_ENV_FILE" and execs $KIMI_BINARY under `set -u`, so both must resolve.
+test('kimiLaunchSubstitutions: env-file unquoted, binary shell-quoted', () => {
+  const envFile = '/tmp/quorum-kimi-runtime-abc/kimi-runtime.env';
+  const binary = '/opt/kimi/bin/kimi cli';
+  expect(
+    kimiLaunchSubstitutions({ KIMI_ENV_FILE: envFile, KIMI_BINARY: binary }),
+  ).toEqual({
+    $KIMI_ENV_FILE: envFile,
+    $KIMI_BINARY: shellSingleQuote(binary),
+  });
+});
+
+test('kimiLaunchSubstitutions: missing KIMI_ENV_FILE -> RunnerError(setup)', () => {
+  expect(() =>
+    kimiLaunchSubstitutions({ KIMI_BINARY: '/opt/kimi/bin/kimi' }),
+  ).toThrow(RunnerError);
+  expect(() =>
+    kimiLaunchSubstitutions({ KIMI_BINARY: '/opt/kimi/bin/kimi' }),
+  ).toThrow(/KIMI_ENV_FILE/);
+});
+
+test('kimiLaunchSubstitutions: missing KIMI_BINARY -> RunnerError(setup)', () => {
+  expect(() =>
+    kimiLaunchSubstitutions({ KIMI_ENV_FILE: '/tmp/k/kimi-runtime.env' }),
+  ).toThrow(RunnerError);
+  expect(() =>
+    kimiLaunchSubstitutions({ KIMI_ENV_FILE: '/tmp/k/kimi-runtime.env' }),
+  ).toThrow(/KIMI_BINARY/);
+});
+
+test('kimiLaunchSubstitutions: the RunnerError stage is setup', () => {
+  try {
+    kimiLaunchSubstitutions({});
+    throw new Error('expected kimiLaunchSubstitutions to throw');
+  } catch (err) {
+    expect(err).toBeInstanceOf(RunnerError);
+    expect((err as RunnerError).stage).toBe('setup');
+  }
 });
 
 test('cleanupAgentRuntime: a surviving secret path -> RunnerError(setup)', () => {

@@ -701,6 +701,40 @@ export function runtimeCleanupDirs(
   return kimiEnvFile === undefined ? [] : [dirname(kimiEnvFile)];
 }
 
+// The kimi launch-agent substitutions, derived from KimiAgent.provision's extra
+// -env map ($KIMI_ENV_FILE / $KIMI_BINARY). Parity with Python's kimi
+// AgentRuntime.substitutions:
+//   "$KIMI_ENV_FILE": str(env_file),
+//   "$KIMI_BINARY": shlex.quote(kimi_binary)
+// The kimi-context launcher sources "$KIMI_ENV_FILE" (already double-quoted in
+// the script, so the value stays raw) and execs $KIMI_BINARY unquoted under
+// `set -u`, so the binary value is pre-quoted here. Both are required: a kimi run
+// reaching context setup without them is a setup-stage invariant failure (mirrors
+// copilot's missing-provisioning guard) — without it the launcher would carry
+// unresolved placeholders and abort under `set -u`.
+export function kimiLaunchSubstitutions(
+  extraEnv: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const envFile = extraEnv['KIMI_ENV_FILE'];
+  const binary = extraEnv['KIMI_BINARY'];
+  if (envFile === undefined) {
+    throw new RunnerError(
+      'kimi provisioning missing KIMI_ENV_FILE before context setup',
+      'setup',
+    );
+  }
+  if (binary === undefined) {
+    throw new RunnerError(
+      'kimi provisioning missing KIMI_BINARY before context setup',
+      'setup',
+    );
+  }
+  return {
+    $KIMI_ENV_FILE: envFile,
+    $KIMI_BINARY: shellSingleQuote(binary),
+  };
+}
+
 // Reap the agent runtime's secret temp dirs (parity with Python
 // _cleanup_agent_runtime). Each dir is removed recursively; an already-absent
 // dir is fine, but any other removal failure — or a path that survives removal —
@@ -1110,13 +1144,13 @@ async function runInnerBody(
     );
     substitutions['$QUORUM_COPILOT_SESSION_ID'] = copilotProvisioning.sessionId;
   }
-  // NOTE: provision-supplied substitutions the TS provision does not yet expose:
-  //   - kimi: $KIMI_ENV_FILE / $KIMI_BINARY (KimiAgent.provision RETURNS these in
-  //     its extra-env map, but that map is gauntlet env, not the context-dir
-  //     substitution set; threading provision-substitutions back to the runner is
-  //     deferred). The kimi-context launcher will carry unresolved placeholders
-  //     until that lands.
-  // CLAUDE needs none of these, so the claude context-dir path is COMPLETE.
+  if (cfg.normalizer === 'kimi') {
+    // KimiAgent.provision returns $KIMI_ENV_FILE / $KIMI_BINARY in its extra-env
+    // map; thread them into the context-dir substitution set so the kimi-context
+    // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`
+    // (parity with Python's kimi AgentRuntime.substitutions).
+    Object.assign(substitutions, kimiLaunchSubstitutions(extraEnv));
+  }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
     codingAgent: family,
