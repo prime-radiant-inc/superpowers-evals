@@ -19,10 +19,14 @@ import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
 // The gemini.yaml surface the adapter depends on (agent_config_env + required_env).
+// home_config_subdir "." collapses the config dir into the throwaway $HOME; the
+// adapter writes under home.configDir regardless, so it is carried here only to
+// mirror the real YAML.
 const CONFIG: AgentConfig = {
   name: 'gemini',
   binary: 'gemini',
   agent_config_env: 'GEMINI_CLI_HOME',
+  home_config_subdir: '.',
   session_log_dir: '${GEMINI_CLI_HOME}/.gemini/tmp',
   session_log_glob: '**/chats/**/*.json*',
   normalizer: 'gemini',
