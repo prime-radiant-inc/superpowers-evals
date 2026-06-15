@@ -23,19 +23,19 @@ inline prose all use lowercase `quorum`.
 ## Architecture
 
 - `src/runner/` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict.
-- `src/checks/` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records.
+- `src/checks/` — sources `prelude.sh` (the bare-verb DSL: one shell function per check verb delegating to the TS CLIs) then `checks.sh`, runs `pre()`/`post()`, collects structured check records.
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types (`verdict.ts`, `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`).
 - `src/capture/` — session-log snapshot/diff + ATIF capture: normalizes each new log to an ATIF `Trajectory`, merges by timestamp, writes `trajectory.json`; `src/obol/` prices token usage.
 - `src/atif/` + `src/normalize/` + `src/detect/` — ATIF v1.7 transcript (types/project/validate), the 8 per-Coding-Agent → ATIF normalizers, and the skill/implementation-path detectors.
-- `src/check/` + `src/cli/check-tool.ts` + `src/cli/check-transcript.ts` — the typed check-tool dispatcher behind every `bin/` shim: `fs-verbs.ts` (file/git/env verbs + bootstrap checks), `transcript-dispatch.ts` (13 trace verbs, shared with `check-transcript`), `dispatch.ts` (verb table + in-process `not`), `record.ts` (sole emitter). Each verb emits one record; the 127 crash-band is preserved.
+- `src/check/` + `src/cli/check-tool.ts` + `src/cli/check-transcript.ts` — the typed check-tool dispatcher behind every bare-verb prelude function: `fs-verbs.ts` (file/git/env verbs + bootstrap checks), `transcript-dispatch.ts` (13 trace verbs, shared with `check-transcript`), `dispatch.ts` (verb table + in-process `not`), `record.ts` (sole emitter). Each verb emits one record; the 127 crash-band is preserved. `src/checks/prelude.sh` defines one shell function per verb (vocabulary from `list-check-verbs.ts`) execing `check-tool.ts <verb>`.
 - `src/agents/` — per-Coding-Agent provisioning adapters over the `command-runner.ts` seam.
 - `src/scaffold.ts` — `quorum new` / `quorum check` implementation.
 - `src/cli/` — the `quorum` CLI; `src/run-all/` the batch matrix driver; `src/scheduler/` the concurrency dispatcher; `src/dashboard/` the web matrix.
-- `bin/` — thin shims only: one 5-line `exec bun run check-tool.ts <verb>` per check verb, plus `check-transcript` and `setup-helpers` shims. Operator scripts live in `scripts/`.
+- `src/checks/prelude.sh` — the bare-verb DSL (no check LOGIC): one shell function per check verb delegating to `check-tool.ts <verb>`, plus `not`, `check-transcript`, and `setup-helpers` functions. Sourced before `checks.sh` (`runPhase`) and before `setup.sh` (via `BASH_ENV`); no `bin/` on `PATH`. Operator scripts live in `scripts/`.
 - `coding-agents/<name>.yaml` — per-Coding-Agent CLI config.
 - `coding-agents/<name>-context/HOWTO.md` — instructions copied into Gauntlet-Agent context.
-- `coding-agents/<name>-home-skeleton/` — seeded into per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+- `coding-agents/<name>-home-skeleton/` — seeded into the agent's config dir under the per-run throwaway `$HOME` (e.g. `<runDir>/home/.claude` / `<runDir>/home/.codex`).
 - `scenarios/*/` — active scenarios, one directory each.
 - `src/setup-helpers/` — fixture creators (CLI: `setup-helpers run <helper>`).
 - `fixtures/` — static fixture repos (e.g. `template-repo/`).
@@ -46,11 +46,12 @@ inline prose all use lowercase `quorum`.
 - Required files: `story.md`, `setup.sh`, `checks.sh`.
 - `story.md` briefs the Gauntlet-Agent and includes acceptance criteria.
 - `setup.sh` builds the fixture using `$QUORUM_WORKDIR`; prefer
-  `setup-helpers run <helper>` (the PATH-resolved TS shim) over inline scripting.
+  `setup-helpers run <helper>` (a prelude function, sourced via `BASH_ENV`) over inline scripting.
 - `checks.sh` contains exactly `pre()` and `post()` function definitions and no
   top-level executable statements.
 - `checks.sh` should not have the executable bit set.
-- Check tools run from the fixture workdir with `bin/` on `PATH`.
+- Check verbs run from the fixture workdir as shell functions defined by the
+  sourced `src/checks/prelude.sh` (no `bin/` on `PATH`).
 - Post-checks that need sibling run artifacts can use `$QUORUM_RUN_DIR`.
 - Use the top-of-file `# coding-agents: <csv>` directive to restrict a scenario
   to specific Coding-Agents.

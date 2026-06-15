@@ -42,14 +42,15 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 
 Per-coding-agent config: `coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
 `coding-agents/<name>-context/HOWTO.md`. Per-coding-agent home skeleton (seeded
-into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
+into the agent's config dir under the per-run throwaway `$HOME`, e.g.
+`<runDir>/home/.claude` / `<runDir>/home/.codex`):
 `coding-agents/<name>-home-skeleton/`. Spec:
 `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 
 ## Architecture
 
 - `src/runner/` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict (`index.ts`); `context.ts`, `phase.ts`, `errors.ts` (staged `RunError`), `stopped.ts`.
-- `src/checks/` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records (the `bin/` tools emit them to `QUORUM_RECORD_SINK`).
+- `src/checks/` — sources `prelude.sh` (the bare-verb DSL: one shell function per FS check verb, plus `not`/`check-transcript`/`setup-helpers`, each delegating to the TS CLIs) then `checks.sh`, runs `pre()`/`post()`, collects structured check records (the verb functions emit them to `QUORUM_RECORD_SINK`).
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`.
 - `src/capture/` — session-log snapshot/diff + ATIF capture (`index.ts`): normalizes each new log to an ATIF `Trajectory`, merges them by step timestamp, writes `trajectory.json`, then `captureTokenUsage` prices that trajectory via obol's `"atif"` dialect into the frozen `coding-agent-token-usage.json` (kimi byte-count + wall-clock duration are the only raw-log reads — never tokens); per-backend cwd filtering (`cwd-filter.ts`).
@@ -58,15 +59,15 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `src/atif/` — ATIF v1.7 canonical transcript: `types.ts` (the `Trajectory` shape), `project.ts` (`flattenToolCalls` → `{tool,args}` view), `validate.ts`.
 - `src/normalize/` — per-Coding-Agent session-log → ATIF `Trajectory` normalizers (8 dialects).
 - `src/detect/` — skill-invocation and implementation-path detectors used by the transcript checks.
-- `src/check/` + `src/cli/check-tool.ts` + `src/cli/check-transcript.ts` — the typed check-tool dispatcher behind every `bin/` shim. `fs-verbs.ts` holds the filesystem/git/env verbs (`file-exists`, `file-contains`, `command-succeeds`, `git-*`, `assert-checkout-clean`, `requires-tool`, `files-exist`) plus the 6 per-harness bootstrap checks (`*-installed`/hook/extension, incl. the ported kimi-jq and codex-toml logic); `transcript-dispatch.ts` runs the 13 trace verbs (`verbs.ts`) and is shared by `check-transcript.ts`; `dispatch.ts` is the verb table + the in-process `negate` (`not`); `record.ts` is the sole record emitter. `check-tool.ts` owns the 127 crash-band exit discipline; every verb emits one `{check,args,negated,passed,detail}` record. Each `bin/<verb>` is a 5-line shim execing `check-tool.ts <verb>`.
+- `src/check/` + `src/cli/check-tool.ts` + `src/cli/check-transcript.ts` — the typed check-tool dispatcher behind every bare-verb prelude function. `fs-verbs.ts` holds the filesystem/git/env verbs (`file-exists`, `file-contains`, `command-succeeds`, `git-*`, `assert-checkout-clean`, `requires-tool`, `files-exist`) plus the 6 per-harness bootstrap checks (`*-installed`/hook/extension, incl. the ported kimi-jq and codex-toml logic); `transcript-dispatch.ts` runs the 13 trace verbs (`verbs.ts`) and is shared by `check-transcript.ts`; `dispatch.ts` is the verb table + the in-process `negate` (`not`); `record.ts` is the sole record emitter. `check-tool.ts` owns the 127 crash-band exit discipline; every verb emits one `{check,args,negated,passed,detail}` record. `src/checks/prelude.sh` defines one shell function per verb (its vocabulary read from `Object.keys(FS_VERBS)` via `src/cli/list-check-verbs.ts`, so it can't drift) that execs `check-tool.ts <verb>`.
 - `src/agents/` — per-Coding-Agent provisioning adapters (one per agent) over the `command-runner.ts` subprocess seam.
 - `src/scaffold.ts` — `quorum new` / `quorum check` implementation.
 - `src/scheduler/` — central concurrency dispatcher (global slot cap, per-harness cap + launch spacing) over an injectable `clock.ts`; shared by `run-all` and the dashboard.
 - `src/cli/` — the `quorum` CLI (`run`/`list`/`new`/`check`/`show`/`run-all`/`dashboard`) + verdict/batch renderers; entry `index.ts` (`bun run quorum`).
 - `src/run-all/` — batch matrix driver (scenario × agent), batch dir allocation.
 - `src/dashboard/` — web dashboard: `scan.ts`/`view.ts` (read side over `results/`), `templates.ts` (typed HTML renderers; `cellHtml` is the single source for first paint + SSE swaps), `event-bus.ts` (bounded SSE fan-out), `orchestrator.ts` (one-session-at-a-time launch/stop over the scheduler, pid-tracked SIGINT), `server.ts` (`Bun.serve` routes + ~1s scanner loop), `index.ts` (`startDashboard`).
-- `src/setup-helpers/` — fixture creators. Each helper takes a uniform `HelperContext` (`context.ts`); `registry.ts` maps the dispatchable snake_case names to entries declaring `needsTemplateDir`/`needsSuperpowersRoot`, and `KNOWN_HELPER_NAMES` is the single validation set `quorum check` uses. `cli.ts` is the `setup-helpers run <helper>` entrypoint. Tier-1 helpers (git + filesystem: `base.ts`, `fs.ts`, `git.ts`, `spec-fixtures.ts`, `sdd-fixtures.ts`, `cost-fixtures.ts`, `behavior-fixtures.ts`, `triggering-fixtures.ts`, the non-codex/gemini `worktree.ts` parts, shared `pulse-dashboard.ts` constants) are hermetic and unit-tested directly; Tier-2 helpers (`provisionVenv`, `linkGeminiExtension`, `installCodexSuperpowersPluginHooks` + its `codex-app-server.ts` JSON-RPC client) route subprocess calls through `agents/command-runner.ts` so tests inject fakes. The `bin/setup-helpers` shim plus a `bin/` PATH prepend in `src/setup-step.ts` make `setup.sh`'s bare `setup-helpers run …` resolve to TS.
-- `bin/` — thin shims only (no check LOGIC): one 5-line `exec bun run check-tool.ts <verb>` per check verb, plus the `check-transcript` and `setup-helpers` shims. Operator scripts live in `scripts/` (`refresh-claude-home-skeleton`, `run-with-log`).
+- `src/setup-helpers/` — fixture creators. Each helper takes a uniform `HelperContext` (`context.ts`); `registry.ts` maps the dispatchable snake_case names to entries declaring `needsTemplateDir`/`needsSuperpowersRoot`, and `KNOWN_HELPER_NAMES` is the single validation set `quorum check` uses. `cli.ts` is the `setup-helpers run <helper>` entrypoint. Tier-1 helpers (git + filesystem: `base.ts`, `fs.ts`, `git.ts`, `spec-fixtures.ts`, `sdd-fixtures.ts`, `cost-fixtures.ts`, `behavior-fixtures.ts`, `triggering-fixtures.ts`, the non-codex/gemini `worktree.ts` parts, shared `pulse-dashboard.ts` constants) are hermetic and unit-tested directly; Tier-2 helpers (`provisionVenv`, `linkGeminiExtension`, `installCodexSuperpowersPluginHooks` + its `codex-app-server.ts` JSON-RPC client) route subprocess calls through `agents/command-runner.ts` so tests inject fakes. `setup.sh`'s bare `setup-helpers run …` resolves to TS via the `setup-helpers` function in the sourced `src/checks/prelude.sh`, which `src/setup-step.ts` sources through `BASH_ENV` before running `setup.sh`.
+- `src/checks/prelude.sh` — the bare-verb DSL (no check LOGIC): one shell function per check verb delegating to `check-tool.ts <verb>`, plus the `not`, `check-transcript`, and `setup-helpers` functions. Sourced before `checks.sh` (`runPhase`) and before `setup.sh` (via `BASH_ENV`); there is no `bin/` on `PATH`. Operator scripts live in `scripts/` (`refresh-claude-home-skeleton`, `run-with-log`).
 - `scenarios/` — active scenarios, one directory each.
 - `coding-agents/` — per-agent YAML, context HOWTOs, and home skeletons (see "Per-coding-agent" above).
 
@@ -81,10 +82,11 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
   hand-plan scenarios only for longitudinal comparability.
 - `story.md` briefs the Gauntlet-Agent and includes evidence-demanding ACs.
 - `setup.sh` builds the fixture using `$QUORUM_WORKDIR`; prefer
-  `setup-helpers run <helper>` (the PATH-resolved TS shim).
+  `setup-helpers run <helper>` (a prelude function, sourced via `BASH_ENV`).
 - `checks.sh` contains only `pre()` and `post()` function definitions.
 - `checks.sh` should not have the executable bit set.
-- Check tools run from the fixture workdir with `bin/` on `PATH`.
+- Check verbs run from the fixture workdir as shell functions defined by the
+  sourced `src/checks/prelude.sh` (no `bin/` on `PATH`).
 - Post-checks that need sibling run artifacts can use `$QUORUM_RUN_DIR`.
 - Use `# coding-agents: <csv>` to restrict a scenario to specific agents.
 - Use `requires-tool <name>` in `pre()` for local toolchain dependencies.
