@@ -1,6 +1,12 @@
 name: gemini
 binary: gemini
 agent_config_env: GEMINI_CLI_HOME
+# Collapse the gemini config dir into the throwaway $HOME: GEMINI_CLI_HOME is
+# HOME-like (gemini writes state to <GEMINI_CLI_HOME>/.gemini/...), and unset it
+# defaults to $HOME -> $HOME/.gemini. With "." the config dir IS the run's
+# throwaway home, so the launcher need not set GEMINI_CLI_HOME — gemini finds the
+# seeded config via its $HOME default.
+home_config_subdir: "."
 session_log_dir: "${GEMINI_CLI_HOME}/.gemini/tmp"
 session_log_glob: "**/chats/**/*.json*"
 normalizer: gemini
