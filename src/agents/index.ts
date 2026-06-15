@@ -89,10 +89,12 @@ class ClaudeAgent implements CodingAgent {
 
     const claudeJsonPath = join(configDir, '.claude.json');
 
-    // Trust the run's project so claude doesn't prompt. IS_DEMO=1 (set by the
-    // launcher) skips first-run onboarding, so no hand-seeded onboarding skeleton
-    // is needed; the workspace-trust state still lives in .claude.json. Parse any
-    // existing file (boundary §4.1) rather than asserting its shape.
+    // Trust the run's project so claude doesn't prompt. No onboarding skeleton
+    // is needed — recent claude boots on API-key auth + this trust block and
+    // auto-completes onboarding each run. (IS_DEMO=1 is deliberately NOT set: it
+    // skips the first-run flow that activates auth on a fresh config, producing
+    // "Not logged in".) Parse any existing file (boundary §4.1) rather than
+    // asserting its shape.
     const claudeJson = existsSync(claudeJsonPath)
       ? ClaudeJsonSchema.parse(JSON.parse(readFileSync(claudeJsonPath, 'utf8')))
       : ClaudeJsonSchema.parse({});
