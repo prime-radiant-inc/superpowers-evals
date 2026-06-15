@@ -326,6 +326,13 @@ function resultProbeFiles(): string[] {
   }
 }
 
+function removeContainerRuntimeFiles(): void {
+  rmSync(join(REPO, 'results', '.container-runtime'), {
+    recursive: true,
+    force: true,
+  });
+}
+
 describe('scripts/evals-container', () => {
   test('build calls Docker build with the container Dockerfile and repo context', () => {
     const harness = makeHarness();
@@ -371,7 +378,7 @@ describe('scripts/evals-container', () => {
     }
   });
 
-  test('up gives the numeric container user writable home and XDG state under /tmp', () => {
+  test('up gives the numeric container user writable host-visible home and XDG state', () => {
     const harness = makeHarness();
     try {
       const superpowersRoot = makeSuperpowersRoot(harness.root);
@@ -384,21 +391,63 @@ describe('scripts/evals-container', () => {
       expect(proc.error).toBeUndefined();
       expect(proc.status).toBe(0);
       const args = dockerCommand(harness.dockerLog, 'run');
-      expect(envValue(args, 'HOME')).toBe('/tmp/superpowers-evals-home');
+      expect(envValue(args, 'HOME')).toBe(
+        '/workspace/evals/results/.container-home',
+      );
       expect(envValue(args, 'XDG_CACHE_HOME')).toBe(
-        '/tmp/superpowers-evals-home/.cache',
+        '/workspace/evals/results/.container-home/.cache',
       );
       expect(envValue(args, 'XDG_CONFIG_HOME')).toBe(
-        '/tmp/superpowers-evals-home/.config',
+        '/workspace/evals/results/.container-home/.config',
       );
       expect(envValue(args, 'XDG_STATE_HOME')).toBe(
-        '/tmp/superpowers-evals-home/.local/state',
+        '/workspace/evals/results/.container-home/.local/state',
       );
       expect(envValue(args, 'TMPDIR')).toBe('/tmp');
       expect(args.slice(-3, -1)).toEqual(['bash', '-lc']);
       expect(args.at(-1)).toContain('mkdir -p "$HOME"');
       expect(args.at(-1)).toContain('exec sleep infinity');
     } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('up mounts host-generated passwd and group files for the numeric container user', () => {
+    const harness = makeHarness();
+    removeContainerRuntimeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      const passwdMount = mountForTarget(args, '/etc/passwd');
+      const groupMount = mountForTarget(args, '/etc/group');
+      expectReadonly(passwdMount);
+      expectReadonly(groupMount);
+
+      const uid = process.getuid?.();
+      const gid = process.getgid?.();
+      expect(uid).toBeDefined();
+      expect(gid).toBeDefined();
+      const passwd = readFileSync(
+        join(REPO, 'results', '.container-runtime', 'passwd'),
+        'utf8',
+      );
+      const group = readFileSync(
+        join(REPO, 'results', '.container-runtime', 'group'),
+        'utf8',
+      );
+      expect(passwd).toContain(`evals:x:${uid}:${gid}:`);
+      expect(passwd).toContain('/workspace/evals/results/.container-home');
+      expect(group).toContain(`evals:x:${gid}:`);
+    } finally {
+      removeContainerRuntimeFiles();
       rmSync(harness.root, { recursive: true, force: true });
     }
   });

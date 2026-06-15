@@ -14,12 +14,11 @@ function expectInstallIntent(source: string, token: string): void {
   expect(source).toContain(token);
 }
 
-test('container Dockerfile uses the verified Ubuntu 26.04 devcontainer base', () => {
+test('container Dockerfile uses the official Ubuntu 26.04 LTS base', () => {
   const source = dockerfileSource();
 
-  expect(source).toMatch(
-    /^FROM mcr\.microsoft\.com\/devcontainers\/base:3\.0\.1-ubuntu26\.04$/m,
-  );
+  expect(source).toMatch(/^FROM ubuntu:26\.04$/m);
+  expect(source).not.toContain('mcr.microsoft.com/devcontainers');
   expect(source).not.toContain('ubuntu24.04');
 });
 
@@ -81,7 +80,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   for (const externalInstall of [
     'cursor.com/install',
     'aider-chat',
-    'goose_1.31.1_amd64.deb',
     'AGY_OAUTH_HOME',
     'KIMI_OAUTH_HOME',
   ]) {
@@ -100,11 +98,22 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain(
     'curl -fsSL https://cursor.com/install | HOME=/opt/cursor-agent bash',
   );
+  expect(source).toContain('test -x /opt/cursor-agent/.local/bin/agent');
+  expect(source).not.toContain('find /opt/cursor-agent -type f -name agent');
   expect(source).not.toContain(
     'HOME=/opt/cursor-agent curl -fsSL https://cursor.com/install | bash',
   );
   expect(source).toContain('UV_TOOL_BIN_DIR=/usr/local/bin');
+  expect(source).toContain('UV_PYTHON_INSTALL_DIR=/opt/uv-python');
+  expect(source).toContain(
+    'chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR"',
+  );
   expect(source).not.toContain('uv tool install --tool-dir');
+  expect(source).toContain('ARG TARGETARCH');
+  expect(source).toContain('amd64) goose_arch=x86_64');
+  expect(source).toContain('arm64) goose_arch=aarch64');
+  expect(source).toContain('goose-${goose_arch}-unknown-linux-gnu.tar.gz');
+  expect(source).not.toContain('goose_1.31.1_amd64.deb');
 
   for (const forbidden of [
     '.devcontainer/devcontainer.json',

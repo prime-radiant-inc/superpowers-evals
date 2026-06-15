@@ -265,6 +265,13 @@ test -w "$results_dir"
 
 run_up() {
   mkdir -p "$evals_root/results"
+  local container_home=/workspace/evals/results/.container-home
+  local container_cache_home="$container_home/.cache"
+  local container_config_home="$container_home/.config"
+  local container_state_home="$container_home/.local/state"
+  local runtime_dir="$evals_root/results/.container-runtime"
+  local passwd_file="$runtime_dir/passwd"
+  local group_file="$runtime_dir/group"
 
   if container_exists; then
     if mount_config_explicit; then
@@ -288,14 +295,22 @@ run_up() {
     mounts+=(--mount "type=bind,source=$source,target=$target$mode")
   }
 
-  local container_home=/tmp/superpowers-evals-home
-  local container_cache_home="$container_home/.cache"
-  local container_config_home="$container_home/.config"
-  local container_state_home="$container_home/.local/state"
+  mkdir -p "$runtime_dir"
+  {
+    printf 'root:x:0:0:root:/root:/bin/bash\n'
+    printf 'evals:x:%s:%s:Superpowers Evals:%s:/bin/bash\n' "$(id -u)" "$(id -g)" "$container_home"
+  } > "$passwd_file"
+  {
+    printf 'root:x:0:\n'
+    printf 'evals:x:%s:\n' "$(id -g)"
+  } > "$group_file"
+  chmod 0644 "$passwd_file" "$group_file"
 
   add_bind_mount "$evals_root" /workspace/evals
   add_bind_mount "$superpowers_root" /workspace/superpowers
   add_bind_mount "$evals_root/results" /workspace/evals/results
+  add_bind_mount "$passwd_file" /etc/passwd ",readonly"
+  add_bind_mount "$group_file" /etc/group ",readonly"
 
   if [[ -n "$env_file" ]]; then
     add_bind_mount "$env_file" /run/evals/credentials.env ",readonly"

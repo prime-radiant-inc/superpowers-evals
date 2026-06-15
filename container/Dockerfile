@@ -1,4 +1,7 @@
-FROM mcr.microsoft.com/devcontainers/base:3.0.1-ubuntu26.04
+FROM ubuntu:26.04
+
+ARG GOOSE_VERSION=1.31.1
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV BUN_INSTALL=/usr/local/bun
@@ -6,6 +9,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV UV_TOOL_DIR=/opt/uv-tools
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 ENV AGY_OAUTH_HOME=/auth/gemini
 ENV KIMI_OAUTH_HOME=/auth/kimi-code
 ENV PATH="/usr/local/bun/bin:/usr/local/cargo/bin:/opt/uv-tools:${PATH}"
@@ -101,20 +105,25 @@ RUN npm install -g \
 
 RUN mkdir -p /opt/cursor-agent \
   && curl -fsSL https://cursor.com/install | HOME=/opt/cursor-agent bash \
-  && cursor_agent_bin="$(find /opt/cursor-agent -type f -name agent -perm -111 | head -n 1)" \
-  && test -n "$cursor_agent_bin" \
-  && ln -sf "$cursor_agent_bin" /usr/local/bin/agent \
-  && ln -sf "$cursor_agent_bin" /usr/local/bin/cursor-agent \
+  && test -x /opt/cursor-agent/.local/bin/agent \
+  && test -x /opt/cursor-agent/.local/bin/cursor-agent \
+  && ln -sf /opt/cursor-agent/.local/bin/agent /usr/local/bin/agent \
+  && ln -sf /opt/cursor-agent/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
   && agent --version
 
 RUN uv tool install --python 3.12 aider-chat \
+  && chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" \
   && aider --version
 
-RUN curl -fsSL -o /tmp/goose.deb https://github.com/aaif-goose/goose/releases/download/v1.31.1/goose_1.31.1_amd64.deb \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends /tmp/goose.deb \
-  && rm -f /tmp/goose.deb \
-  && rm -rf /var/lib/apt/lists/* \
+RUN case "$TARGETARCH" in \
+      amd64) goose_arch=x86_64 ;; \
+      arm64) goose_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH for goose: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+  && curl -fsSL -o /tmp/goose.tar.gz "https://github.com/aaif-goose/goose/releases/download/v${GOOSE_VERSION}/goose-${goose_arch}-unknown-linux-gnu.tar.gz" \
+  && tar -xzf /tmp/goose.tar.gz -C /tmp ./goose \
+  && install -m 0755 /tmp/goose /usr/local/bin/goose \
+  && rm -f /tmp/goose /tmp/goose.tar.gz \
   && goose --version
 
 COPY container/bin/quorum /usr/local/bin/quorum
