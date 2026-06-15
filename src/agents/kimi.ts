@@ -11,13 +11,14 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Kimi-family provisioning (mirrors quorum/runner.py:_seed_kimi_config, which
 // orchestrates quorum/kimi.py). The heaviest adapter: it (1) resolves the kimi
@@ -147,11 +148,26 @@ export class KimiAgent implements CodingAgent {
     // 1. resolve_kimi_binary: PATH lookup (KimiConfigError -> ProvisionError).
     const kimiBinary = resolveKimiBinary(this.config.binary);
 
-    // 2. effective_kimi_model_env: merge defaults with host overrides.
-    const kimiModelEnv = effectiveKimiModelEnv();
+    // 2. Auth is OAuth-or-env. When KIMI_MODEL_API_KEY is set, use the env path
+    //    (the effective KIMI_MODEL_* env carries the key). Otherwise seed the
+    //    host OAuth login into the isolated KIMI_CODE_HOME so kimi authenticates
+    //    via the seeded credentials; the model env is then empty (kimi reads its
+    //    provider + oauth from KIMI_CODE_HOME's config.toml/credentials).
+    const apiKey = getEnv('KIMI_MODEL_API_KEY');
+    const useOauth = apiKey === undefined || apiKey === '';
+    const oauthSource = useOauth ? requireKimiOauthSource() : undefined;
+    const kimiModelEnv = useOauth ? {} : effectiveKimiModelEnv();
+
+    // Seed the per-run KIMI_CODE_HOME (configDir) before any preflight so the
+    // live probe runs against the same credentials the eval will use.
+    mkdirSync(configDir, { recursive: true });
+    if (oauthSource !== undefined) {
+      seedKimiOauthCredentials(oauthSource, configDir);
+    }
 
     // 3. Preflight: validate the precomputed sentinel when present, else run
-    //    the LIVE one-shot auth preflight through the runner.
+    //    the LIVE one-shot auth preflight through the runner. In OAuth mode the
+    //    preflight's throwaway home is seeded with the same OAuth credentials.
     if (preflightSentinel !== undefined && preflightSentinel !== '') {
       validateKimiPreflightSentinel(preflightSentinel, {
         kimiBinary,
@@ -162,6 +178,7 @@ export class KimiAgent implements CodingAgent {
       runKimiAuthPreflight(runner, {
         kimiBinary,
         kimiModelEnv,
+        oauthSource,
       });
     }
 
@@ -169,9 +186,8 @@ export class KimiAgent implements CodingAgent {
     //    register it as the only enabled plugin (plugins/installed.json).
     installKimiSuperpowersPlugin(configDir, superpowersRoot);
 
-    // Create the isolated kimi home subdirs the Python seeds. The kimi home IS
-    // configDir (agent_config_env = KIMI_CODE_HOME = home.configDir).
-    mkdirSync(configDir, { recursive: true });
+    // Create the isolated kimi home subdirs. The kimi home IS configDir
+    // (agent_config_env = KIMI_CODE_HOME = home.configDir).
     for (const child of [
       'home',
       'cache',
@@ -259,17 +275,31 @@ export function sanitizeKimiDiagnostic(
   return text;
 }
 
-// resolve_kimi_binary: PATH lookup. Mirrors the Python's shutil.which — a pure
-// in-process PATH walk via Bun.which (matching antigravity's Bun.which('agy') and
-// the claude preflight in runner/index.ts). A `command -v` subprocess probe would
-// ENOENT on Linux because `command` is a shell builtin, not an executable, and the
-// default CommandRunner spawns with no shell. Raise ProvisionError (mapping
-// KimiConfigError) when the binary is missing.
+// The host kimi install dir (KIMI_OAUTH_HOME, default ~/.kimi-code). Holds both
+// the bin/kimi engine binary and the OAuth login files.
+function kimiInstallHome(): string {
+  return getEnv('KIMI_OAUTH_HOME') ?? join(homedir(), '.kimi-code');
+}
+
+// resolve_kimi_binary: PATH lookup via Bun.which, with the kimi install's bin
+// dir (<KIMI_OAUTH_HOME>/bin) prepended so a bare `kimi` resolves to the engine
+// binary that is NOT on the host PATH by default. A pure in-process PATH walk
+// (matching antigravity's Bun.which('agy')); a `command -v` subprocess probe
+// would ENOENT on Linux because `command` is a shell builtin, not an executable,
+// and the default CommandRunner spawns with no shell. Raise ProvisionError when
+// the binary is missing. The resolved ABSOLUTE path is what the launcher execs,
+// so launch-time PATH is irrelevant.
 function resolveKimiBinary(binary: string): string {
-  const resolved = Bun.which(binary, { PATH: envSnapshot()['PATH'] ?? '' });
+  const hostPath = envSnapshot()['PATH'] ?? '';
+  const binDir = join(kimiInstallHome(), 'bin');
+  const searchPath =
+    hostPath === ''
+      ? binDir
+      : `${binDir}${sep === '\\' ? ';' : ':'}${hostPath}`;
+  const resolved = Bun.which(binary, { PATH: searchPath });
   if (resolved === null || resolved === '') {
     throw new ProvisionError(
-      `'${binary}' not found on PATH; cannot run Kimi evals`,
+      `'${binary}' not found on PATH (searched ${binDir} and host PATH); cannot run Kimi evals`,
     );
   }
   return resolved;
@@ -311,9 +341,72 @@ function effectiveKimiModelEnv(): Record<string, string> {
   return merged;
 }
 
+// The host kimi OAuth credential files seeded into an isolated KIMI_CODE_HOME so
+// the run authenticates via the host login. config.toml declares the OAuth
+// provider + the file-backed token location; credentials/kimi-code.json holds
+// the token; oauth/kimi-code is the marker the config.toml `key` points at.
+// Relative to the OAuth home (KIMI_OAUTH_HOME, default ~/.kimi-code).
+const KIMI_OAUTH_CREDENTIAL_FILES = [
+  'config.toml',
+  join('credentials', 'kimi-code.json'),
+  join('oauth', 'kimi-code'),
+] as const;
+
+// The kimi OAuth credentials are mandatory (the provider + token); the marker
+// file is created when present but its absence alone is not fatal (config.toml +
+// credentials are what authenticate).
+const KIMI_OAUTH_REQUIRED_FILES = [
+  'config.toml',
+  join('credentials', 'kimi-code.json'),
+] as const;
+
+// Resolve the host kimi OAuth login dir (KIMI_OAUTH_HOME, default ~/.kimi-code)
+// and require its credential files. Mirrors codex's CODEX_AUTH_HOME / gemini's
+// GEMINI_OAUTH_HOME override seam. Throws the clear "no key and no oauth" setup
+// error when the login is absent.
+function requireKimiOauthSource(): KimiOauthSource {
+  const home = kimiInstallHome();
+  const missing = KIMI_OAUTH_REQUIRED_FILES.filter(
+    (rel) => !existsSync(join(home, rel)),
+  );
+  if (missing.length > 0) {
+    throw new ProvisionError(
+      `no KIMI_MODEL_API_KEY and no kimi oauth login found under ${home} (missing ${missing.join(', ')}); run \`kimi login\` or set KIMI_MODEL_API_KEY`,
+    );
+  }
+  const files = KIMI_OAUTH_CREDENTIAL_FILES.filter((rel) =>
+    existsSync(join(home, rel)),
+  );
+  return { home, files };
+}
+
+// Copy the host OAuth credential files into an isolated KIMI_CODE_HOME. Secret
+// files (credentials/token) go through the O_NOFOLLOW-protected writer at mode
+// 0600 so a pre-placed symlink can't redirect them; config.toml + the marker are
+// written verbatim. Parent dirs are created as needed.
+function seedKimiOauthCredentials(
+  source: KimiOauthSource,
+  kimiHome: string,
+): void {
+  for (const rel of source.files) {
+    const src = join(source.home, rel);
+    const dest = join(kimiHome, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writePrivateFileNoFollow(dest, readFileSync(src));
+  }
+}
+
 interface PreflightContext {
   readonly kimiBinary: string;
   readonly kimiModelEnv: Readonly<Record<string, string>>;
+}
+
+// The host OAuth login dir + its credential files to seed into an isolated
+// KIMI_CODE_HOME (resolved by requireKimiOauthSource). Threaded into the
+// preflight so its throwaway home authenticates the same way the eval will.
+interface KimiOauthSource {
+  readonly home: string;
+  readonly files: readonly string[];
 }
 
 // kimi_preflight_sentinel_payload: the canonical object a precomputed sentinel
@@ -386,13 +479,21 @@ function validateKimiPreflightSentinel(
 // runs the subprocess; the file verification reads what that process wrote.
 function runKimiAuthPreflight(
   runner: CommandRunner,
-  ctx: PreflightContext,
+  ctx: PreflightContext & {
+    readonly oauthSource?: KimiOauthSource | undefined;
+  },
 ): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), 'quorum-kimi-preflight-'));
   try {
     const kimiHome = join(tmpRoot, 'kimi-home');
     const cwd = join(tmpRoot, 'cwd');
     mkdirSync(cwd, { recursive: true });
+    mkdirSync(kimiHome, { recursive: true });
+    // In OAuth mode, seed the throwaway home with the host OAuth credentials so
+    // the live probe authenticates the same way the eval will.
+    if (ctx.oauthSource !== undefined) {
+      seedKimiOauthCredentials(ctx.oauthSource, kimiHome);
+    }
     const env = buildKimiSubprocessEnv({
       kimiHome,
       kimiModelEnv: ctx.kimiModelEnv,
@@ -590,6 +691,12 @@ function buildKimiSubprocessEnv(
       out[key] = value;
     }
   }
+  // Prepend the kimi install's bin dir so the kimi process (and any `kimi`
+  // re-invocation) resolves the engine binary that is not on the host PATH by
+  // default. The launcher sources this env file, so the launch PATH carries it.
+  const binDir = join(kimiInstallHome(), 'bin');
+  const pathSep = sep === '\\' ? ';' : ':';
+  out['PATH'] = out['PATH'] ? `${binDir}${pathSep}${out['PATH']}` : binDir;
   for (const [key, value] of Object.entries(base)) {
     if (
       value !== undefined &&

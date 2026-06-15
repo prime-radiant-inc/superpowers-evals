@@ -1,8 +1,17 @@
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Pi azure-openai-responses provider passes through these env vars into pi.env
 // (mirrors PI_AZURE_ENV_NAMES in quorum/runner.py). Order is preserved for the
@@ -66,22 +75,25 @@ function piProviderExtraEnv(provider: string): Record<string, string> {
   return extra;
 }
 
-// Write pi.env (mode 0600). Mirrors _write_pi_env_file: shlex-quoted export
-// lines for PI_PROVIDER / PI_MODEL / PI_API_KEY, then extra env sorted by name,
-// then a trailing empty line (the joined-with-newline list ends with "", so the
-// file ends in a single newline).
+// Write pi.env (mode 0600). Shlex-quoted export lines for PI_PROVIDER / PI_MODEL
+// (the launcher passes both to `pi --provider/--model` under `set -u`), an
+// optional PI_API_KEY (api-key auth; OAuth omits it — the credential lives in
+// auth.json), then extra env sorted by name, then a trailing empty line (the
+// joined-with-newline list ends with "", so the file ends in a single newline).
 function writePiEnvFile(
   configDir: string,
   provider: string,
   model: string,
-  apiKey: string,
+  apiKey: string | undefined,
   extraEnv: Record<string, string>,
 ): void {
   const lines = [
     `export PI_PROVIDER=${shlexQuote(provider)}`,
     `export PI_MODEL=${shlexQuote(model)}`,
-    `export PI_API_KEY=${shlexQuote(apiKey)}`,
   ];
+  if (apiKey !== undefined) {
+    lines.push(`export PI_API_KEY=${shlexQuote(apiKey)}`);
+  }
   const extraNames = Object.keys(extraEnv).sort();
   for (const name of extraNames) {
     const value = extraEnv[name];
@@ -152,14 +164,124 @@ function requirePiOnPath(): void {
   }
 }
 
-// Pi-family provisioning (mirrors _seed_pi_config in quorum/runner.py). Setup
-// only — it shells out to nothing (the PATH probe is a Bun.which lookup, not a
-// subprocess), so no CommandRunner is needed. It creates the isolated config dir
-// and a sessions/ subdir, then writes auth.json (the API key is the literal
-// placeholder "$PI_API_KEY", expanded later by the launcher from pi.env),
-// settings.json, and pi.env. The returned env map carries only the
-// agent_config_env -> configDir mapping; every secret lives in the written
-// files, never in the returned env.
+// The host `pi` config dir holding the OAuth login (default <PI_OAUTH_HOME>/agent,
+// where PI_OAUTH_HOME defaults to ~/.pi). The same dir `pi` itself uses as its
+// PI_CODING_AGENT_DIR, carrying auth.json (the OAuth token, keyed by provider)
+// and settings.json (defaultProvider/defaultModel). PI_OAUTH_HOME mirrors codex's
+// CODEX_AUTH_HOME / gemini's GEMINI_OAUTH_HOME override seam so the hermetic gate
+// can point it at a temp dir.
+function piOauthAgentDir(): string {
+  const oauthHome = getEnv('PI_OAUTH_HOME') ?? join(homedir(), '.pi');
+  return join(oauthHome, 'agent');
+}
+
+// The host pi settings.json fields the OAuth path reads to default the
+// provider/model when PI_PROVIDER/PI_MODEL are not set as overrides. Permissive:
+// any other field passes through; missing defaults surface as a clear error.
+const PiSettingsSchema = z
+  .object({
+    defaultProvider: z.string().optional(),
+    defaultModel: z.string().optional(),
+    defaultThinkingLevel: z.string().optional(),
+  })
+  .passthrough();
+
+// Seed the host OAuth login into the isolated PI_CODING_AGENT_DIR so the run
+// authenticates via OAuth instead of an env-var key. Mirrors codex's
+// _seed_codex_auth: copy the host auth.json verbatim (mode 0600, O_NOFOLLOW so a
+// pre-placed symlink can't redirect the credential), then write settings.json +
+// pi.env carrying the resolved provider/model (env override else host settings)
+// and NO PI_API_KEY. Throws a clear setup error when no host login exists or the
+// provider/model can't be determined.
+function seedPiOauth(configDir: string): void {
+  const agentDir = piOauthAgentDir();
+  const source = join(agentDir, 'auth.json');
+  if (!existsSync(source)) {
+    throw new ProvisionError(
+      `no PI_API_KEY and no pi oauth login found at ${source}; run \`pi\` to log in or set PI_PROVIDER/PI_MODEL/PI_API_KEY`,
+    );
+  }
+
+  // Resolve provider/model: an explicit env override wins; otherwise read the
+  // host settings.json defaults. Without either, we cannot launch (the pi
+  // launcher needs --provider/--model), so fail loudly rather than guess.
+  let provider = getEnv('PI_PROVIDER');
+  let model = getEnv('PI_MODEL');
+  if (
+    provider === undefined ||
+    provider === '' ||
+    model === undefined ||
+    model === ''
+  ) {
+    const settings = readPiOauthSettings(join(agentDir, 'settings.json'));
+    provider =
+      provider !== undefined && provider !== '' ? provider : settings.provider;
+    model = model !== undefined && model !== '' ? model : settings.model;
+  }
+  if (provider === undefined || provider === '') {
+    throw new ProvisionError(
+      'pi oauth login: cannot determine provider; set PI_PROVIDER or add defaultProvider to the host pi settings.json',
+    );
+  }
+  if (model === undefined || model === '') {
+    throw new ProvisionError(
+      'pi oauth login: cannot determine model; set PI_MODEL or add defaultModel to the host pi settings.json',
+    );
+  }
+
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(join(configDir, 'sessions'), { recursive: true });
+
+  // Copy the OAuth credential verbatim through the O_NOFOLLOW-protected writer.
+  writePrivateFileNoFollow(join(configDir, 'auth.json'), readFileSync(source));
+
+  // settings.json mirrors the api-key path's shape (provider/model + fixed
+  // thinking level), so pi's defaults match the launcher's flags.
+  const settingsBody = {
+    defaultProvider: provider,
+    defaultModel: model,
+    defaultThinkingLevel: 'medium',
+  };
+  writeFileSync(
+    join(configDir, 'settings.json'),
+    `${JSON.stringify(settingsBody, null, 2)}\n`,
+  );
+
+  // pi.env carries provider/model for the launcher; no PI_API_KEY in OAuth mode.
+  writePiEnvFile(configDir, provider, model, undefined, {});
+}
+
+// Read provider/model defaults from the host pi settings.json. A missing file is
+// tolerated (the caller may still have env overrides); an unreadable/invalid file
+// is a clear setup error rather than a silent fall-through.
+function readPiOauthSettings(settingsPath: string): {
+  provider: string | undefined;
+  model: string | undefined;
+} {
+  if (!existsSync(settingsPath)) {
+    return { provider: undefined, model: undefined };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  } catch {
+    throw new ProvisionError(
+      `pi oauth login: host settings.json is not valid JSON: ${settingsPath}`,
+    );
+  }
+  const settings = PiSettingsSchema.parse(parsed);
+  return { provider: settings.defaultProvider, model: settings.defaultModel };
+}
+
+// Pi-family provisioning. Setup only — it shells out to nothing (the PATH probe
+// is a Bun.which lookup, not a subprocess), so no CommandRunner is needed. It
+// creates the isolated config dir and a sessions/ subdir, then writes auth.json,
+// settings.json, and pi.env. Auth is OAuth-or-env: when PI_API_KEY is set it
+// uses the api-key path (auth.json's key field is the literal "$PI_API_KEY"
+// placeholder, expanded later by the launcher from pi.env); otherwise it seeds
+// the host OAuth login into the isolated config dir. The returned env map carries
+// only the agent_config_env -> configDir mapping; every secret lives in the
+// written files, never in the returned env.
 export class PiAgent implements CodingAgent {
   readonly config: AgentConfig;
   constructor(config: AgentConfig) {
@@ -169,28 +291,36 @@ export class PiAgent implements CodingAgent {
   provision(home: RunHome): Record<string, string> {
     const { configDir } = home;
 
-    // _require_env order in the oracle: SUPERPOWERS_ROOT, PI_PROVIDER,
-    // PI_MODEL, PI_API_KEY. Reproduce it so the first-missing error matches.
+    // SUPERPOWERS_ROOT is required in both auth paths; verify it first.
     const superpowersRaw = requirePiEnv(
       'SUPERPOWERS_ROOT',
       'load Pi Superpowers extension',
     );
-    const provider = requirePiEnv('PI_PROVIDER', 'configure Pi provider');
-    const model = requirePiEnv('PI_MODEL', 'configure Pi model');
-    const apiKey = requirePiEnv('PI_API_KEY', 'configure Pi API-key auth');
-    const extraEnv = piProviderExtraEnv(provider);
 
     // Verify SUPERPOWERS_ROOT carries the Pi support files, then that the pi
-    // binary is on PATH — both before any filesystem mutation (oracle order:
-    // runner.py:1342-1346).
+    // binary is on PATH — both before any filesystem mutation.
     requirePiSuperpowersSource(expanduser(superpowersRaw));
     requirePiOnPath();
+
+    // Auth is OAuth-or-env. When PI_API_KEY is set, use the api-key path
+    // (PI_PROVIDER/PI_MODEL required, auth.json keyed to the "$PI_API_KEY"
+    // placeholder). Otherwise seed the host OAuth login into the isolated config
+    // dir so the run authenticates via OAuth.
+    const apiKey = getEnv('PI_API_KEY');
+    if (apiKey === undefined || apiKey === '') {
+      seedPiOauth(configDir);
+      return { [this.config.agent_config_env]: configDir };
+    }
+
+    const provider = requirePiEnv('PI_PROVIDER', 'configure Pi provider');
+    const model = requirePiEnv('PI_MODEL', 'configure Pi model');
+    const extraEnv = piProviderExtraEnv(provider);
 
     mkdirSync(configDir, { recursive: true });
     mkdirSync(join(configDir, 'sessions'), { recursive: true });
 
     // auth.json (mode 0600). The key field is the literal "$PI_API_KEY"
-    // placeholder, matching the oracle — the real key is supplied via pi.env.
+    // placeholder — the real key is supplied via pi.env.
     const authPath = join(configDir, 'auth.json');
     const authBody: Record<string, { type: string; key: string }> = {
       [provider]: { type: 'api_key', key: '$PI_API_KEY' },
@@ -199,7 +329,7 @@ export class PiAgent implements CodingAgent {
       mode: 0o600,
     });
 
-    // settings.json (no special mode; matches the oracle, which omits chmod).
+    // settings.json (no special mode).
     const settingsPath = join(configDir, 'settings.json');
     const settingsBody = {
       defaultProvider: provider,
