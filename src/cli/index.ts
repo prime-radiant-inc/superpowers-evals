@@ -22,6 +22,7 @@ import {
   ScaffoldError,
 } from '../scaffold.ts';
 import { DEFAULT_JOBS } from '../scheduler/index.ts';
+import { costsJson, loadCostRows, renderCosts } from './costs.ts';
 import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
 import { batchJson, isBatchDir, renderBatch } from './render-batch.ts';
@@ -464,6 +465,55 @@ program
       render(verdict, runDir, {
         color: opts.color && (process.stdout.isTTY ?? false),
         mode,
+      }),
+    );
+    process.exit(0);
+  });
+
+interface CostsOptions {
+  readonly json: boolean;
+  readonly withGauntlet: boolean;
+  readonly color: boolean;
+  readonly resultsRoot: string;
+}
+
+program
+  .command('costs')
+  .description(
+    'coding-agent cost/token/runtime report for a run or a batch (the gauntlet QA-driver side is opt-in via --with-gauntlet)',
+  )
+  .argument(
+    '[target]',
+    'run-dir, verdict.json, batch dir/id, or scenario prefix (default: newest run)',
+  )
+  .option('--json', 'machine-readable rows + aggregate', false)
+  .option('--with-gauntlet', 'also show the QA-driver (gauntlet) cost', false)
+  .option('--no-color', 'disable color')
+  .option('--results-root <dir>', 'results root', 'results')
+  .action((target: string | undefined, opts: CostsOptions) => {
+    // costs is display-only: success is 0, an unresolvable target is 1. A
+    // missing/partial economics block is NOT an error — it renders as
+    // "unpriced" (parity with how show degrades a malformed economics pane).
+    let rows: ReturnType<typeof loadCostRows>;
+    try {
+      rows = loadCostRows(target, opts.resultsRoot);
+    } catch (err: unknown) {
+      if (err instanceof ShowError) {
+        process.stderr.write(`${err.message}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
+
+    if (opts.json) {
+      process.stdout.write(`${JSON.stringify(costsJson(rows), null, 2)}\n`);
+      process.exit(0);
+    }
+
+    process.stdout.write(
+      renderCosts(rows, {
+        color: opts.color && (process.stdout.isTTY ?? false),
+        withGauntlet: opts.withGauntlet,
       }),
     );
     process.exit(0);
