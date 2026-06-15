@@ -1,24 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import {
   type CostEstimate,
-  type Dialect,
   estimatePath,
   ObolError,
 } from '@primeradianthq/obol';
 import type { TokenUsage } from '../contracts/economics.ts';
-import { sumCodingAgentTokens } from './fallback.ts';
-
-/** Backend family (normalizer name) -> obol dialect. Identity for the 7 priced
- *  dialects; the `obol` dialect is reserved for the gauntlet usage sidecar. */
-export const DIALECTS: Record<string, Dialect> = {
-  claude: 'claude',
-  codex: 'codex',
-  copilot: 'copilot',
-  gemini: 'gemini',
-  kimi: 'kimi',
-  opencode: 'opencode',
-  pi: 'pi',
-};
 
 const BUCKET_KEYS = [
   'total_input',
@@ -151,7 +137,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  *  whose result.output is a string. Unreadable files, blank/non-JSON lines, and
  *  rows of any other shape contribute zero. Ports
  *  quorum/obol_capture.py _kimi_tool_result_total_bytes. */
-function kimiToolResultTotalBytes(file: string): number {
+export function kimiToolResultTotalBytes(file: string): number {
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
@@ -188,64 +174,32 @@ function kimiToolResultTotalBytes(file: string): number {
   return total;
 }
 
-/** Price each new session log with obol and merge. Maps `family` to its obol
- *  dialect. When obol cannot price the logs (unknown dialect, ObolError, or a
- *  zero-token merge because the agent's on-disk format drifted past obol's
- *  parser), fall back to summing the agent's own per-message token usage from
- *  its logs (gemini, opencode) — those models come back UNPRICED. Returns null
- *  only when neither obol nor the fallback can produce token counts.
- *  For the kimi family, also stamps `tool_result_total_bytes` (the UTF-8 byte
- *  total of every tool.result output across the logs). */
-export async function estimateSessionLogs(
-  family: string,
-  files: readonly string[],
+/** Price the run's ATIF trajectory.json via obol's `"atif"` dialect. obol reads
+ *  the trajectory directly: it honors an embedded per-step `cost_usd` (opencode,
+ *  pi) and otherwise prices the token buckets with its rate tables; a model with
+ *  no rate surfaces as unpriced (est_cost_usd null, tokens kept). Returns null
+ *  when the file is absent, obol rejects it (ObolError), or the trajectory
+ *  carries no usage (antigravity). This is the ONLY coding-agent token source:
+ *  the normalizers fill the trajectory's metrics, no raw log is re-parsed. */
+export async function estimateTrajectory(
+  path: string,
 ): Promise<TokenUsage | null> {
-  if (files.length === 0) {
+  if (!existsSync(path)) {
     return null;
   }
-  const usage = await estimateWithObol(family, files);
-  // obol could not extract tokens for this agent/version: sum the agent's own
-  // per-message usage from its logs (unpriced) so coding-agent economics is not
-  // silently dropped to null.
-  const resolved = usage ?? sumCodingAgentTokens(family, files);
-  if (resolved !== null && family === 'kimi') {
-    return {
-      ...resolved,
-      tool_result_total_bytes: files.reduce(
-        (sum, f) => sum + kimiToolResultTotalBytes(f),
-        0,
-      ),
-    };
-  }
-  return resolved;
-}
-
-/** Run obol over each log and merge, or null when obol cannot price them
- *  (unknown dialect, empty input, ObolError, or a zero-token merge). */
-async function estimateWithObol(
-  family: string,
-  files: readonly string[],
-): Promise<TokenUsage | null> {
-  const dialect = DIALECTS[family];
-  if (dialect === undefined || files.length === 0) {
-    return null;
-  }
-  const estimates: CostEstimate[] = [];
   try {
-    for (const f of files) {
-      estimates.push(await estimatePath(f, dialect));
-    }
+    return mergeEstimates([await estimatePath(path, 'atif')]);
   } catch (e) {
     if (e instanceof ObolError) {
       return null;
     }
     throw e;
   }
-  return mergeEstimates(estimates);
 }
 
 /** Price the gauntlet usage sidecar (obol's own `obol` dialect). Returns null
- *  if the file is absent or obol rejects it (ObolError). */
+ *  if the file is absent or obol rejects it (ObolError). This is the QA-driver
+ *  (Gauntlet-Agent) measurement-overhead side, not a coding-agent log. */
 export async function estimateUsageSidecar(
   path: string,
 ): Promise<TokenUsage | null> {

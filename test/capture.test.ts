@@ -13,6 +13,7 @@ import type { AtifTrajectory } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import {
   ATIF_TRAJECTORY_FILENAME,
+  captureTokenUsage,
   captureToolCalls,
   captureToolCallsWithRetry,
   detectKimiCwdMismatch,
@@ -647,4 +648,82 @@ test('snapshotDir matches a log nested under a dot-directory', () => {
   writeFileSync(join(deep, 'transcript.jsonl'), '{}\n');
   const snap = snapshotDir(logDir, '**/transcript.jsonl');
   expect(snap.has('sess/.system_generated/logs/transcript.jsonl')).toBe(true);
+});
+
+// captureTokenUsage prices the ATIF trajectory (tokens come from there), but
+// still stamps the kimi-only tool_result_total_bytes from the raw wire log — the
+// UTF-8 byte total of every tool.result output. The trajectory carries the
+// tokens; the wire log carries the bytes. Both flow into the frozen usage file.
+test('captureTokenUsage stamps kimi tool_result_total_bytes from the raw wire log', async () => {
+  const target = mkdtempSync(join(tmpdir(), 'kimi-bytes-target-'));
+  const home = mkdtempSync(join(tmpdir(), 'kimi-bytes-home-'));
+  const sessDir = join(home, 'sessions', 'wd_target', 'session_a');
+  mkdirSync(sessDir, { recursive: true });
+  // "café" is 5 UTF-8 bytes, "hi" is 2 -> 7; non-string outputs contribute 0.
+  const wireRows = [
+    {
+      type: 'context.append_loop_event',
+      event: {
+        type: 'tool.result',
+        toolCallId: 't1',
+        result: { output: 'café' },
+      },
+    },
+    {
+      type: 'context.append_loop_event',
+      event: {
+        type: 'tool.result',
+        toolCallId: 't2',
+        result: { output: 'hi' },
+      },
+    },
+    {
+      type: 'context.append_loop_event',
+      event: { type: 'tool.result', toolCallId: 't3', result: { output: 123 } },
+    },
+  ];
+  writeFileSync(
+    join(sessDir, 'wire.jsonl'),
+    `${wireRows.map((r) => JSON.stringify(r)).join('\n')}\n`,
+  );
+  writeFileSync(
+    join(home, 'session_index.jsonl'),
+    `${JSON.stringify({ sessionDir: sessDir, workDir: target })}\n`,
+  );
+
+  // The run dir holds the priced trajectory (tokens) — economics' token source.
+  const runDir = mkdtempSync(join(tmpdir(), 'kimi-bytes-run-'));
+  const traj: AtifTrajectory = {
+    schema_version: 'ATIF-v1.7',
+    agent: { name: 'kimi', version: 'unknown', model_name: 'claude-opus-4-8' },
+    steps: [
+      {
+        step_id: 1,
+        source: 'agent',
+        model_name: 'claude-opus-4-8',
+        metrics: { prompt_tokens: 10, completion_tokens: 5, cached_tokens: 0 },
+      },
+    ],
+  };
+  writeFileSync(
+    join(runDir, ATIF_TRAJECTORY_FILENAME),
+    `${JSON.stringify(traj, null, 2)}\n`,
+  );
+
+  const out = await captureTokenUsage({
+    logDir: home,
+    logGlob: '**/wire.jsonl',
+    snapshot: new Set(),
+    normalizer: 'kimi',
+    runDir,
+    launchCwd: target,
+  });
+  expect(out).not.toBeNull();
+  const frozen = JSON.parse(readFileSync(out as string, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  // tokens from the trajectory, bytes from the raw wire log.
+  expect(frozen['total_tokens']).toBe(15);
+  expect(frozen['tool_result_total_bytes']).toBe(7);
 });

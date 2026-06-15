@@ -369,7 +369,7 @@ test('non-dict tool-call args are wrapped as {raw_args: <value>}', () => {
 // model → step.model_name; provider "google" stamped on the row → extra.provider.
 // ---------------------------------------------------------------------------
 
-// Real-shaped fixture from a live gemini-cli run (mirrors test/obol-fallback.test.ts):
+// Real-shaped fixture from a live gemini-cli run:
 // turn `a1` is recorded TWICE with the same id — once without toolCalls, once
 // with — so its tokens must be counted exactly once. Turn `a2` is text-only
 // (tokens, no toolCalls).

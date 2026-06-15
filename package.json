@@ -19,7 +19,7 @@
     "build": "bun build src/cli/index.ts --compile --outfile dist/quorum"
   },
   "dependencies": {
-    "@primeradianthq/obol": "^0.4.1",
+    "@primeradianthq/obol": "file:/Users/jesse/git/prime-radiant-inc/obol/dist-pack/primeradianthq-obol-0.5.0-atif.1.tgz",
     "commander": "^12",
     "yaml": "^2",
     "zod": "^3"

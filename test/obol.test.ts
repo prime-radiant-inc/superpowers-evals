@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CostEstimate, ModelCost } from '@primeradianthq/obol';
-import { estimateSessionLogs, mergeEstimates } from '../src/obol/index.ts';
+import type { AtifTrajectory } from '../src/atif/types.ts';
+import { estimateTrajectory, mergeEstimates } from '../src/obol/index.ts';
 
 // Typed CostEstimate fixtures (standard bans `as never`). The factory takes a
 // typed partial override and merges it over a fully-typed baseline, so any
@@ -59,86 +60,115 @@ test('est_cost_usd is null when every model is unpriced', () => {
   expect(m.models['claude-opus-4-8']?.est_cost_usd).toBeNull();
 });
 
-test('estimateSessionLogs adds kimi tool_result_total_bytes (UTF-8) for kimi', async () => {
-  // The byte total sums the UTF-8 length of every tool.result output string in
-  // context.append_loop_event rows. "café" is 5 UTF-8 bytes; "hi" is 2 -> 7.
-  // Non-string outputs and non-tool.result events contribute nothing.
-  const dir = mkdtempSync(join(tmpdir(), 'kimi-bytes-'));
-  const f = join(dir, 'wire.jsonl');
-  const rows = [
-    {
-      type: 'usage.record',
-      usageScope: 'turn',
-      model: 'kimi-for-coding',
-      time: 1_800_000_000_000,
-      usage: {
-        inputOther: 1,
-        inputCacheRead: 0,
-        inputCacheCreation: 0,
-        output: 1,
-      },
-    },
-    {
-      type: 'context.append_loop_event',
-      event: {
-        type: 'tool.result',
-        toolCallId: 't1',
-        result: { output: 'café' },
-      },
-    },
-    {
-      type: 'context.append_loop_event',
-      event: {
-        type: 'tool.result',
-        toolCallId: 't2',
-        result: { output: 'hi' },
-      },
-    },
-    {
-      type: 'context.append_loop_event',
-      event: { type: 'tool.result', toolCallId: 't3', result: { output: 123 } },
-    },
-    {
-      type: 'context.append_loop_event',
-      event: { type: 'assistant.message', result: { output: 'ignored' } },
-    },
-  ];
-  writeFileSync(f, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+// ── estimateTrajectory: price an ATIF trajectory.json via obol's "atif"
+//    dialect. These exercise the REAL obol native lib (atif dialect), so the
+//    pricing math is obol's, not a quorum re-parser. ──────────────────────────
 
-  const usage = await estimateSessionLogs('kimi', [f]);
-  expect(usage).not.toBeNull();
-  expect((usage as NonNullable<typeof usage>).tool_result_total_bytes).toBe(7);
-});
+function writeTrajectory(traj: AtifTrajectory): string {
+  const dir = mkdtempSync(join(tmpdir(), 'atif-traj-'));
+  const f = join(dir, 'trajectory.json');
+  writeFileSync(f, `${JSON.stringify(traj, null, 2)}\n`);
+  return f;
+}
 
-test('estimateSessionLogs does not add tool_result_total_bytes for non-kimi', async () => {
-  // A claude log carrying append_loop_event-shaped rows must NOT get the kimi
-  // byte field — it is kimi-only.
-  const dir = mkdtempSync(join(tmpdir(), 'claude-bytes-'));
-  const f = join(dir, 's.jsonl');
-  writeFileSync(
-    f,
-    `${JSON.stringify({
-      type: 'assistant',
-      timestamp: '2026-06-09T00:00:00Z',
-      message: {
-        id: 'm1',
-        model: 'claude-opus-4-8',
-        role: 'assistant',
-        content: [],
-        usage: {
-          input_tokens: 1,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          output_tokens: 1,
+test('estimateTrajectory prices a known model from per-step token buckets', async () => {
+  const f = writeTrajectory({
+    schema_version: 'ATIF-v1.7',
+    agent: {
+      name: 'claude',
+      version: 'unknown',
+      model_name: 'claude-opus-4-8',
+    },
+    steps: [
+      {
+        step_id: 1,
+        source: 'agent',
+        model_name: 'claude-opus-4-8',
+        metrics: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          cached_tokens: 3,
         },
       },
-    })}\n`,
-  );
-  const usage = await estimateSessionLogs('claude', [f]);
+    ],
+  });
+  const usage = await estimateTrajectory(f);
   expect(usage).not.toBeNull();
-  expect(
-    (usage as NonNullable<typeof usage>).tool_result_total_bytes,
-  ).toBeUndefined();
+  const u = usage as NonNullable<typeof usage>;
+  // disjoint buckets: prompt->input, completion->output, cached->cache_read.
+  expect(u.total_input).toBe(100);
+  expect(u.total_output).toBe(20);
+  expect(u.total_cache_read).toBe(3);
+  expect(u.total_tokens).toBe(123);
+  expect(u.model).toBe('claude-opus-4-8');
+  // obol has a rate for this model -> priced (a real positive number).
+  expect(u.est_cost_usd).not.toBeNull();
+  expect((u.est_cost_usd as number) > 0).toBe(true);
+  expect(u.unpriced_models).toEqual([]);
+});
+
+test('estimateTrajectory honors an embedded cost_usd instead of re-pricing', async () => {
+  // opencode/pi log a per-message cost; the atif dialect must use it verbatim.
+  const f = writeTrajectory({
+    schema_version: 'ATIF-v1.7',
+    agent: { name: 'opencode', version: 'unknown', model_name: 'some-model' },
+    steps: [
+      {
+        step_id: 1,
+        source: 'agent',
+        model_name: 'some-model',
+        metrics: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          cached_tokens: 3,
+          cost_usd: 0.42,
+        },
+      },
+    ],
+  });
+  const usage = await estimateTrajectory(f);
+  const u = usage as NonNullable<typeof usage>;
+  expect(u.est_cost_usd).toBe(0.42);
+  expect(u.total_tokens).toBe(123);
+});
+
+test('estimateTrajectory marks an unknown model unpriced (null cost, tokens kept)', async () => {
+  const f = writeTrajectory({
+    schema_version: 'ATIF-v1.7',
+    agent: {
+      name: 'gemini',
+      version: 'unknown',
+      model_name: 'totally-unknown-model-xyz',
+    },
+    steps: [
+      {
+        step_id: 1,
+        source: 'agent',
+        model_name: 'totally-unknown-model-xyz',
+        metrics: { prompt_tokens: 50, completion_tokens: 10, cached_tokens: 0 },
+      },
+    ],
+  });
+  const usage = await estimateTrajectory(f);
+  const u = usage as NonNullable<typeof usage>;
+  expect(u.total_tokens).toBe(60);
+  expect(u.est_cost_usd).toBeNull();
+  expect(u.unpriced_models).toEqual(['totally-unknown-model-xyz']);
+  expect(u.models['totally-unknown-model-xyz']?.est_cost_usd).toBeNull();
+});
+
+test('estimateTrajectory returns null for a no-usage (antigravity) trajectory', async () => {
+  const f = writeTrajectory({
+    schema_version: 'ATIF-v1.7',
+    agent: { name: 'antigravity', version: 'unknown' },
+    steps: [{ step_id: 1, source: 'agent' }],
+  });
+  expect(await estimateTrajectory(f)).toBeNull();
+});
+
+test('estimateTrajectory returns null when the trajectory file is absent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atif-missing-'));
+  expect(await estimateTrajectory(join(dir, 'trajectory.json'))).toBeNull();
 });
 
 test('keeps the first TRUTHY pricing_as_of (empty string from earlier est is skipped)', () => {

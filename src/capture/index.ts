@@ -17,7 +17,7 @@ import { normalizeGemini } from '../normalize/gemini.ts';
 import { normalizeKimi } from '../normalize/kimi.ts';
 import { normalizeOpencode } from '../normalize/opencode.ts';
 import { normalizePi } from '../normalize/pi.ts';
-import { estimateSessionLogs } from '../obol/index.ts';
+import { estimateTrajectory, kimiToolResultTotalBytes } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
 
 // Backend (coding-agent name) -> ATIF normalizer. Mirrors the cli/normalize.ts
@@ -641,19 +641,37 @@ export function sessionDurationMs(files: readonly string[]): number | null {
   return Math.max(Math.trunc(Math.max(...points) - Math.min(...points)), 0);
 }
 
-/** Price the new session logs with obol and write coding-agent-token-usage.json
- *  (carrying duration_ms). Returns the output path, or null when nothing could
- *  be priced. */
+/** Price the run's ATIF trajectory.json (written by captureToolCalls) with
+ *  obol's `"atif"` dialect and write coding-agent-token-usage.json — the frozen,
+ *  priced artifact economics reads back. Tokens/cost come ENTIRELY from the
+ *  trajectory (the normalizers fill its metrics); no raw agent log is parsed for
+ *  tokens. The raw session logs are still read for two non-token measurements:
+ *  the wall-clock `duration_ms` span and, for kimi, `tool_result_total_bytes`.
+ *  Returns the output path, or null when the trajectory carries no usage
+ *  (antigravity) or obol cannot price it. */
 export async function captureTokenUsage(
   args: CaptureArgs,
 ): Promise<string | null> {
-  const newLogs = capturedLogs(args);
-  const usage = await estimateSessionLogs(args.normalizer, newLogs);
+  const usage = await estimateTrajectory(
+    join(args.runDir, ATIF_TRAJECTORY_FILENAME),
+  );
   if (usage === null) {
     return null;
   }
-  const withDuration = { ...usage, duration_ms: sessionDurationMs(newLogs) };
+  const newLogs = capturedLogs(args);
+  const withExtras = {
+    ...usage,
+    duration_ms: sessionDurationMs(newLogs),
+    ...(args.normalizer === 'kimi'
+      ? {
+          tool_result_total_bytes: newLogs.reduce(
+            (sum, f) => sum + kimiToolResultTotalBytes(f),
+            0,
+          ),
+        }
+      : {}),
+  };
   const outPath = join(args.runDir, 'coding-agent-token-usage.json');
-  writeFileSync(outPath, `${JSON.stringify(withDuration, null, 2)}\n`);
+  writeFileSync(outPath, `${JSON.stringify(withExtras, null, 2)}\n`);
   return outPath;
 }

@@ -52,8 +52,8 @@ into the per-run `CLAUDE_CONFIG_DIR` / `CODEX_HOME`):
 - `src/checks/` — sources `checks.sh`, runs `pre()`/`post()`, collects structured check records (the `bin/` tools emit them to `QUORUM_RECORD_SINK`).
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`.
-- `src/capture/` — session-log snapshot/diff + ATIF capture (`index.ts`): normalizes each new log to an ATIF `Trajectory`, merges them by step timestamp, and writes `trajectory.json`; per-backend cwd filtering (`cwd-filter.ts`).
-- `src/obol/` — all obol calls: session-log + gauntlet-sidecar cost estimation, per-file merge.
+- `src/capture/` — session-log snapshot/diff + ATIF capture (`index.ts`): normalizes each new log to an ATIF `Trajectory`, merges them by step timestamp, writes `trajectory.json`, then `captureTokenUsage` prices that trajectory via obol's `"atif"` dialect into the frozen `coding-agent-token-usage.json` (kimi byte-count + wall-clock duration are the only raw-log reads — never tokens); per-backend cwd filtering (`cwd-filter.ts`).
+- `src/obol/` — obol cost estimation: `estimateTrajectory` prices the coding-agent ATIF `trajectory.json` (obol `"atif"` dialect, honoring embedded `cost_usd` else its rate tables), `estimateUsageSidecar` prices the gauntlet usage sidecar (obol `"obol"` dialect); `mergeEstimates` folds obol `CostEstimate`s into the `TokenUsage` shape.
 - `src/economics.ts` — assembles the economics block carried in the verdict.
 - `src/atif/` — ATIF v1.7 canonical transcript: `types.ts` (the `Trajectory` shape), `project.ts` (`flattenToolCalls` → `{tool,args}` view), `validate.ts`.
 - `src/normalize/` — per-Coding-Agent session-log → ATIF `Trajectory` normalizers (8 dialects).
