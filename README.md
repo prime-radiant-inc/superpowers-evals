@@ -112,6 +112,17 @@ The host environment is not passed wholesale. Only the in-container `quorum`
 shim sources that dotenv file, so `scripts/evals-container exec bash ...` does
 not automatically receive live eval credentials.
 
+Mount a specific dotenv file by passing the option before `up`:
+
+```bash
+scripts/evals-container down || true
+scripts/evals-container --env-file /path/to/evals.env up
+```
+
+The mounted file is read-only at `/run/evals/credentials.env` inside the
+container. Use `down` before changing the env-file mount on an existing
+container.
+
 OAuth/file auth sources are also read-only. Existing `~/.codex`, `~/.gemini`,
 `~/.kimi-code`, and `~/.pi` directories mount to `/auth/codex`, `/auth/gemini`,
 `/auth/kimi-code`, and `/auth/pi`. Use `--auth codex=<dir>`,
@@ -144,7 +155,7 @@ Then run the readiness gates:
 ```bash
 scripts/evals-container build
 scripts/evals-container down || true
-scripts/evals-container up
+scripts/evals-container --env-file .env.container up
 scripts/evals-container exec evals-tool-versions
 scripts/evals-container exec quorum check
 ```
