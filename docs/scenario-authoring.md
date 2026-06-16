@@ -398,6 +398,14 @@ the Superpowers plugin staging in a harness's isolated config:
 `codex-native-hook-configured` (the last two carry extra structured checks; see
 `fs-verbs.ts`).
 
+`bootstrap-installed` is the cross-agent dispatcher over those six. It reads
+`QUORUM_CODING_AGENT` (the coding-agent config name, exported to the checks
+phase by the runner) and delegates to the matching per-harness verb. Claude
+variants and pi have no dedicated install verb, so it passes for them — their
+bootstrap is proven behaviorally — and an unknown agent fails. Use it in `pre()`
+of an agent-agnostic scenario so a missing install reads as indeterminate
+(fixture/harness breakage) rather than a behavior failure.
+
 #### Transcript verbs (`src/check/verbs.ts`, dispatched in `transcript-dispatch.ts`)
 
 | `check-transcript <verb>` | Args | Semantics |
