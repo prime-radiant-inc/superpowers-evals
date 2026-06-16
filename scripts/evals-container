@@ -367,8 +367,12 @@ run_up() {
     add_bind_mount "$auth_pi" /auth/pi ",readonly"
   fi
 
+  # --init runs tini as PID 1 so orphaned children (e.g. a run-all child whose
+  # parent was killed before it could SIGINT them) are reaped instead of piling
+  # up as <defunct> zombies; the bare `sleep infinity` PID 1 never reaps.
   docker run \
     -d \
+    --init \
     --name "$container_name" \
     --user "$(id -u):$(id -g)" \
     --workdir /workspace/evals \
