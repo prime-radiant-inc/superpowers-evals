@@ -156,7 +156,7 @@ artifacts: results-harness/batches/20260526T180000Z-3f2a/
 - Counters in `[N/M]` are over **runnable** pairs only — skipped pairs are
   listed up front and don't consume a slot.
 - The `done` line shows the same glyph the matrix view uses (§6).
-- No cursor manipulation, no progress bar. A nicer TUI is a possible follow-up.
+- Plain line output only. A nicer TUI is a possible follow-up.
 
 ## 6. Matrix view
 
@@ -207,8 +207,7 @@ These are deliberate deferrals, not gaps:
   but we are not building that here. Tracked as a separate concern.
 - **Distinct `error` status for child crashes.** Handled by the renderer
   showing `?` for missing verdict.json, no new status type invented.
-- **Cursor-driven progress UI.** Dumb append-only printing today; a
-  rewritable status block is a possible follow-up.
+- **Progress UI.** Append-only printing is the current contract.
 - **Cross-batch comparison views.** `harness compare` (Drill) is not getting
   a harness analogue here.
 
@@ -351,10 +350,6 @@ via Rich; workers only mutate `progress.in_flight` (a dict) under a much
 smaller internal lock owned by `BatchProgress`, since dict mutation across
 threads needs synchronization to avoid mid-iteration changes when `render()`
 walks it.
-
-**`--no-cursor` flag.** Reserved for the case where someone wants to pipe a
-live run through `tee` but still get the v1 append-only style. Default
-behavior is "Rich on TTY, plain on non-TTY"; the flag forces plain.
 
 **New dependency: `rich`.** Adding to `pyproject.toml`. Already widely used
 (it's a transitive dep of many things); the cost is marginal.

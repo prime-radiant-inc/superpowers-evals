@@ -294,7 +294,6 @@ Co-Authored-By: YourBobName@<first8hex> (Sonnet 4.6)"
 3. **Skips render as `[idx/total] skip <scenario> × <agent> → — skip (requires <directive>)`** — same shape as `done` lines.
 4. **TTY path**: use `rich.live.Live` with a pinned panel showing in-flight rows. Completion events scroll above via `console.print`.
 5. **Non-TTY path** (`Console.is_terminal == False`): fall back to a plain append-only print of each event (no Live, no in-flight panel).
-6. **`--no-cursor` flag** on `harness run-all` (in `cli.py`): forces the non-TTY path even on a TTY.
 
 ### Step 1: Add tests for the new event format
 
@@ -330,7 +329,7 @@ def test_run_batch_event_format_uses_total_denominator_and_skip_verb(
     run_batch(
         scenarios_root=scenarios, coding_agents_dir=agents,
         out_root=out_root, jobs=1, agent_filter=None,
-        invoke=fake_invoke, use_cursor=False,
+        invoke=fake_invoke,
     )
 
     captured = capsys.readouterr().out
@@ -353,17 +352,17 @@ def test_run_batch_event_format_uses_total_denominator_and_skip_verb(
     assert 0 <= skip_pos < first_start_pos, (skip_pos, first_start_pos)
 ```
 
-(Some of these tests check stdout shape from `capsys`. The plain-mode path prints to `sys.stdout` directly; with `use_cursor=False` and `--jobs 1`, ordering is deterministic.)
+(Some of these tests check stdout shape from `capsys`. With `--jobs 1`, ordering is deterministic.)
 
 ### Step 2: Update existing tests for the new shape
 
-The `test_run_batch_writes_skipped_then_runnable` test currently has no `use_cursor` parameter. Add `use_cursor=False` to its `run_batch(...)` call to pin the plain-output path:
+The `test_run_batch_writes_skipped_then_runnable` test should keep its plain stream capture while asserting the new shape:
 
 ```python
     batch_dir = run_batch(
         scenarios_root=scenarios, coding_agents_dir=agents,
         out_root=out_root, jobs=1, agent_filter=None,
-        invoke=fake_invoke, use_cursor=False,
+        invoke=fake_invoke,
     )
 ```
 
@@ -372,15 +371,13 @@ Same for `test_run_batch_writes_batch_json_header_and_footer` and `test_run_batc
 ### Step 3: Run failing tests
 
 Run: `uv run pytest tests/harness/test_run_all.py -x -q`
-Expected: FAIL — `run_batch` doesn't accept `use_cursor`; `[skip]` prefix still present.
+Expected: FAIL — `[skip]` prefix still present.
 
 ### Step 4: Refactor `run_batch`
 
 Three changes:
 
-1. **Add `use_cursor: bool = True` to `run_batch`'s signature.**
-
-2. **Build the full indexed entry list before any printing.** Replace:
+1. **Build the full indexed entry list before any printing.** Replace:
 
    ```python
    runnable = [e for e in entries if e.runnable]
@@ -397,7 +394,7 @@ Three changes:
    skipped_indexed = [(idx, e) for idx, e in indexed if not e.runnable]
    ```
 
-3. **Introduce a `BatchProgress` helper that owns rendering**, and a top-level branch on `use_cursor`. New module-level class:
+2. **Introduce a `BatchProgress` helper that owns rendering**, and a top-level branch on terminal detection. New module-level class:
 
    ```python
    from rich.console import Console
@@ -476,9 +473,9 @@ Three changes:
    on every tick, picking up fresh state from `self._in_flight`. No tick
    thread needed.
 
-4. **Split `run_batch` into a TTY path and a plain path.** Both share matrix construction, batch-dir allocation, `started_at`, `BatchProgress` instantiation, and the skip-event emission. They diverge in how events are surfaced:
+3. **Split `run_batch` into a TTY path and a plain path.** Both share matrix construction, batch-dir allocation, `started_at`, `BatchProgress` instantiation, and the skip-event emission. They diverge in how events are surfaced:
 
-   - **Plain path** (`use_cursor=False` OR `console.is_terminal=False`): emit each event as a `print(...)` call to the provided stream (or `sys.stdout`). No Live. Format matches the spec:
+   - **Plain path** (`console.is_terminal=False`): emit each event as a `print(...)` call to the provided stream (or `sys.stdout`). No Live. Format matches the spec:
 
      ```
      [idx/total] skip   scenario × agent      → — skip (requires <directive>)
@@ -487,8 +484,6 @@ Three changes:
      ```
 
    - **TTY path:** wrap the scheduling loop in `with Live(progress.render, refresh_per_second=4, console=console) as live:`. Use `console.print(...)` for the completion log lines (start lines are NOT printed in TTY mode — the in-flight panel already shows them; only `done` and `skip` lines scroll). Live re-pulls `progress.render` four times a second so in-flight elapsed times update.
-
-The signature of `run_batch` gains `use_cursor: bool = True`. The CLI command in `cli.py` gets a corresponding `--no-cursor` flag that passes `use_cursor=False`.
 
 Implementation sketch for `run_batch`:
 
@@ -502,7 +497,6 @@ def run_batch(
     agent_filter: list[str] | None,
     invoke: Callable[..., ChildResult] | None = None,
     stream: TextIO | None = None,
-    use_cursor: bool = True,
 ) -> Path:
     if jobs < 1:
         raise ValueError(f"jobs must be >= 1, got {jobs}")
@@ -527,7 +521,7 @@ def run_batch(
     )
 
     console = Console(file=stream, force_terminal=None if stream is None else False)
-    use_live = use_cursor and console.is_terminal
+    use_live = console.is_terminal
     progress = BatchProgress(
         batch_id=batch_dir.name, total=total, jobs=jobs,
         skipped=len(skipped_indexed),
@@ -660,20 +654,10 @@ from rich.text import Text
 Run: `uv run pytest -x -q --ignore=tests/harness/test_run_all_e2e.py`
 Expected: PASS — 432 tests (430 + 2 new).
 
-### Step 6: Wire `--no-cursor` flag on the CLI
+### Step 6: Keep CLI output mode implicit
 
-In `harness/cli.py`, add to the `run-all` command:
-
-```python
-@click.option(
-    "--no-cursor", "no_cursor", is_flag=True, default=False,
-    help="Disable in-place live display; print events as plain lines.",
-)
-```
-
-Pass `use_cursor=not no_cursor` to `run_batch(...)`.
-
-Add a small test to `tests/harness/test_cli.py` asserting `--no-cursor` is accepted (Click `--help` listing).
+Do not add an output-mode flag. `run_batch(...)` selects the live path from
+terminal detection and falls back to plain lines for non-TTY output.
 
 ### Step 7: Manual smoke
 
@@ -682,12 +666,6 @@ uv run harness run-all --coding-agents claude --jobs 4 [against a small scenario
 ```
 
 Expected: in-flight panel pins at the bottom; completion events scroll above; final summary prints below.
-
-```
-uv run harness run-all --coding-agents claude --jobs 4 --no-cursor [against same root]
-```
-
-Expected: plain append-only output, no panel.
 
 ```
 uv run harness run-all --coding-agents claude --jobs 4 | cat
@@ -703,8 +681,7 @@ git commit -m "harness: Rich-driven live display + skip-as-event refactor
 
 Live mode (default on TTY): in-flight panel pinned at bottom, completion
 events scroll above, refresh ticks 4×/sec so in-flight elapsed times
-update. Falls back to plain append-only output when stdout isn't a TTY
-or --no-cursor is set.
+update. Falls back to plain append-only output when stdout isn't a TTY.
 
 Same change replaces the v1 \`[skip]\` prefix with the event-shaped
 \`[idx/total] skip <scenario> × <agent>\` line, and counts skips against
@@ -722,6 +699,6 @@ After Task 3:
 - [ ] `uv run pytest -x -q` — green (432 tests).
 - [ ] `uv run ruff check` — clean.
 - [ ] `uv run ty check` — clean.
-- [ ] Manual smoke: live mode on TTY, plain mode with `--no-cursor`, plain mode via pipe.
+- [ ] Manual smoke: live mode on TTY, plain mode via pipe.
 
 If any step fails, do NOT mark complete — diagnose and add follow-up tasks.

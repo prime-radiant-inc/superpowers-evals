@@ -1937,7 +1937,6 @@ def test_run_batch_preflights_kimi_once_for_multiple_cells(tmp_path):
             jobs=1,
             agent_filter=["kimi"],
             invoke=fake_invoke,
-            use_cursor=False,
         )
 
     assert calls["preflight"] == 1
@@ -1966,7 +1965,6 @@ def test_run_batch_kimi_preflight_failure_writes_indeterminate_runs(tmp_path):
             jobs=1,
             agent_filter=["kimi"],
             invoke=lambda **_kwargs: ChildResult(run_id=None, exit_code=99, error="should not run"),
-            use_cursor=False,
         )
 
     records = [json.loads(line) for line in (batch_dir / "results.jsonl").read_text().splitlines()]
@@ -2449,7 +2447,7 @@ Expected:
 After the bootstrap run passes:
 
 ```bash
-uv run quorum run-all --coding-agents kimi --scenarios kimi-superpowers-bootstrap,triggering-writing-plans,triggering-test-driven-development,explicit-skill-request-sdd,claim-without-verification-naive --jobs 1 --no-cursor
+uv run quorum run-all --coding-agents kimi --scenarios kimi-superpowers-bootstrap,triggering-writing-plans,triggering-test-driven-development,explicit-skill-request-sdd,claim-without-verification-naive --jobs 1
 uv run quorum show
 ```
 

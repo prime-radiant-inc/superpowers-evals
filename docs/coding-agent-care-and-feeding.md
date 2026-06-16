@@ -86,15 +86,13 @@ Start with the sentinel suite:
 scripts/evals-container exec quorum run-all \
   --tier sentinel \
   --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
-  --jobs 4 \
-  --no-cursor
+  --jobs 4
 
 for agent in gemini opencode pi copilot; do
   scripts/evals-container exec quorum run-all \
     --tier sentinel \
     --coding-agents "$agent" \
-    --jobs 1 \
-    --no-cursor
+    --jobs 1
 done
 ```
 
@@ -128,20 +126,19 @@ export SCENARIOS="scenario-a,scenario-b"
 bun run quorum run-all \
   --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
   --scenarios "$SCENARIOS" \
-  --jobs 4 \
-  --no-cursor
+  --jobs 4
 
 # Capped or fragile targets run one serial column per batch. Launch several
 # single-column batches in parallel only when their backends do not interfere.
-bun run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-bun run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-bun run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
-bun run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 --no-cursor &
+bun run quorum run-all --coding-agents copilot --scenarios "$SCENARIOS" --jobs 1 &
+bun run quorum run-all --coding-agents opencode --scenarios "$SCENARIOS" --jobs 1 &
+bun run quorum run-all --coding-agents pi --scenarios "$SCENARIOS" --jobs 1 &
+bun run quorum run-all --coding-agents gemini --scenarios "$SCENARIOS" --jobs 1 &
 wait
 
 # Keep Antigravity separate from Gemini to avoid Google/Gemini auth or quota
 # noise while collecting clean capture.
-bun run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1 --no-cursor
+bun run quorum run-all --coding-agents antigravity --scenarios "$SCENARIOS" --jobs 1
 ```
 
 `run-all` persists results automatically; no `tee` or stdout capture is needed.

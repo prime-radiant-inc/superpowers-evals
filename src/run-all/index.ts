@@ -34,12 +34,12 @@ import {
 // event consumer. The scheduler owns ONE global slot pool of size `jobs` and a
 // TRUE global cap.
 //
-// Output is plain append-only: a cell_started line is a live-panel concern, so
-// plain mode prints only on completion and cell_started is a no-op
-// consumer-side. There is no kimi batch preflight here — each kimi child
-// self-preflights via its adapter, which avoids coupling run-all into kimi.ts
-// internals. The dashboard consumes the same scheduler events (onSpawn pid
-// registration, requestStop /stop), but wires them itself, not here.
+// Output is plain append-only: run-all prints terminal cell events and ignores
+// scheduler lifecycle events that only matter to dashboard state. There is no
+// kimi batch preflight here — each kimi child self-preflights via its adapter,
+// which avoids coupling run-all into kimi.ts internals. The dashboard consumes
+// the same scheduler events (onSpawn pid registration, requestStop /stop), but
+// wires them itself, not here.
 
 const RUN_ID_PREFIX = 'run-id: ';
 
@@ -191,7 +191,6 @@ export interface RunBatchArgs {
   readonly tier?: 'sentinel' | 'full' | 'adhoc' | null;
   readonly includeDrafts?: boolean;
   readonly invoke?: InvokeFn;
-  readonly useCursor?: boolean;
   readonly stream?: { write(s: string): void };
   // The scheduler clock; defaults to RealClock. Tests inject a FakeClock to
   // drive spacing deterministically — but run-all's own behavior tests use the
@@ -209,9 +208,8 @@ const GLYPH_FOR_FINAL: Readonly<Record<Final, string>> = {
 };
 const GLYPH_SKIP = '—';
 
-// Run the full batch; returns the batch dir path (run_batch). Plain
-// append-only output only (Rich Live in-place panel deferred). `invoke`
-// defaults to the live (async) invokeChild; tests inject a fake.
+// Run the full batch; returns the batch dir path (run_batch). `invoke` defaults
+// to the live (async) invokeChild; tests inject a fake.
 //
 // The runnable cells are driven through the central scheduler (runSchedule),
 // which owns ONE global slot pool of size `jobs` and enforces a TRUE global cap
@@ -233,8 +231,6 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     stream = process.stdout,
     clock = new RealClock(),
   } = args;
-  // NOTE: useCursor / the Rich Live panel are deferred; only plain mode runs.
-
   if (jobs < 1) {
     throw new Error(`jobs must be >= 1, got ${jobs}`);
   }
@@ -324,9 +320,9 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)));
 
   // run-all consumes the scheduler's event stream: render the completion / skip
-  // line, append the results.jsonl record, and tally cost. cell_queued /
-  // cell_started are no-ops in plain mode (the start line is a live-panel
-  // concern); batch_done's summary is printed after the drive resolves.
+  // line, append the results.jsonl record, and tally cost. Scheduler lifecycle
+  // events feed dashboard state, not the plain CLI output; batch_done's summary
+  // is printed after the drive resolves.
   const onEvent = (event: SchedulerEvent): void => {
     if (event.kind === 'cell_finished') {
       const idx = matrixIdxFor(event.idx);

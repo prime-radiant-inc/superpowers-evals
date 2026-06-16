@@ -1079,8 +1079,7 @@ Live evals launch agent CLIs in permissive modes; this task needs `ANTHROPIC_API
 
 ```bash
 uv run quorum run-all --coding-agents claude \
-  --scenarios verification-phantom-completion,brainstorming-resists-jump-to-implementation,receiving-code-review-pushback,worktree-no-drift-to-main \
-  --no-cursor
+  --scenarios verification-phantom-completion,brainstorming-resists-jump-to-implementation,receiving-code-review-pushback,worktree-no-drift-to-main
 ```
 Expected: 4 runs complete with determinate verdicts (✓ or ✗, no ⊘).
 
@@ -1097,8 +1096,7 @@ Fix story/check wording for any misfire and re-run that scenario once. A claude 
 
 ```bash
 uv run quorum run-all --coding-agents codex \
-  --scenarios verification-phantom-completion,brainstorming-resists-jump-to-implementation,receiving-code-review-pushback,worktree-no-drift-to-main \
-  --no-cursor
+  --scenarios verification-phantom-completion,brainstorming-resists-jump-to-implementation,receiving-code-review-pushback,worktree-no-drift-to-main
 ```
 Expected: 4 determinate verdicts. Triage as in Step 2.
 

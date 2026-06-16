@@ -220,7 +220,7 @@ uv run quorum run scenarios/00-quorum-smoke-hello-world \
 ```
 
 If a maintainer chooses to smoke through `run-all` instead, they must use
-`--scenarios 00-quorum-smoke-hello-world --include-drafts --jobs 1 --no-cursor`.
+`--scenarios 00-quorum-smoke-hello-world --include-drafts --jobs 1`.
 
 The first successful smoke must verify:
 
@@ -280,8 +280,7 @@ comparison is:
 uv run quorum run-all \
   --coding-agents claude-haiku,kimi \
   --tier sentinel \
-  --jobs 1 \
-  --no-cursor
+  --jobs 1
 ```
 
 Use `--jobs 1` for the first comparative pass because Kimi has no checked-in

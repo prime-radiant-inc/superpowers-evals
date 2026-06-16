@@ -146,7 +146,7 @@ constant; the dashboard run strip's `M in flight` continues to mirror it.
 Event kinds: `cell_queued / cell_started / cell_finished / cell_skipped /
 batch_done`, with the fields the incumbent carries (`idx`, `entry`, `final`,
 `run_id`, `elapsed_s`, `cost_usd`, `skipped_reason`). `cell_skipped` reasons:
-`rate-limited | stopped`. Both consumers — run-all's Rich readout and the
+`rate-limited | stopped`. Both consumers — run-all's plain output and the
 dashboard's SSE bus — must work unmodified against the new engine.
 
 Ordering guarantees (stated explicitly for the first time):

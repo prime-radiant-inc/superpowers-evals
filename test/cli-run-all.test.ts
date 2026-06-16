@@ -58,6 +58,29 @@ test('run-all rejects a trailing-garbage --jobs value (e.g. 8x)', () => {
   expect(proc.stderr).toContain('--jobs');
 });
 
+test('run-all rejects the removed output-mode option', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scn-'));
+  const out = mkdtempSync(join(tmpdir(), 'out-'));
+  const removedOutputModeOption = `--no-${['cur', 'sor'].join('')}`;
+  const proc = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run-all',
+      removedOutputModeOption,
+      '--scenarios-root',
+      root,
+      '--coding-agents-dir',
+      root,
+      '--out-root',
+      out,
+    ],
+    { encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(proc.stderr).toContain(`unknown option '${removedOutputModeOption}'`);
+});
+
 test('run-all errors when --scenarios-root does not exist', () => {
   // Python declares run-all's --scenarios-root as click.Path(exists=True),
   // failing fast at the CLI boundary on a missing root.

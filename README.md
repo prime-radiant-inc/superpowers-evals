@@ -152,15 +152,13 @@ Start with the sentinel suite:
 scripts/evals-container exec quorum run-all \
   --tier sentinel \
   --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
-  --jobs 4 \
-  --no-cursor
+  --jobs 4
 
 for agent in gemini opencode pi copilot; do
   scripts/evals-container exec quorum run-all \
     --tier sentinel \
     --coding-agents "$agent" \
-    --jobs 1 \
-    --no-cursor
+    --jobs 1
 done
 ```
 
@@ -177,7 +175,7 @@ or include desktop IDEs. The image omits Antigravity's desktop `agy` installer;
 run Antigravity host-side until there is a headless install path:
 
 ```bash
-bun run quorum run-all --coding-agents antigravity --jobs 1 --no-cursor
+bun run quorum run-all --coding-agents antigravity --jobs 1
 ```
 
 For grouped all-agent host sweeps, per-agent credentials, auth mount details,

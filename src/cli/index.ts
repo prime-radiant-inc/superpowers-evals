@@ -120,8 +120,6 @@ interface RunAllOptions {
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
   readonly outRoot: string;
-  // commander sets `cursor` to false for --no-cursor (default true).
-  readonly cursor: boolean;
   readonly tier?: string;
   readonly includeDrafts: boolean;
 }
@@ -288,7 +286,6 @@ program
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
   .option('--out-root <dir>', 'results root', 'results')
-  .option('--no-cursor', 'plain (append-only) output')
   .option('--tier <tier>', 'restrict to sentinel|full|adhoc')
   .option('--include-drafts', 'include status: draft scenarios', false)
   .action(async (opts: RunAllOptions) => {
@@ -333,7 +330,6 @@ program
         ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
         tier: tier ?? null,
         includeDrafts: opts.includeDrafts,
-        useCursor: opts.cursor,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

@@ -16,7 +16,7 @@ export const DEFAULT_JOBS = 8;
 // The scheduler is PURE of file I/O. It emits a stream of events; final/cost
 // derivation (reading verdict.json) is the consumer's job, done in onEvent off
 // the run_id the cell_finished event carries. The event contract is general
-// enough to serve both consumers — run-all's Rich readout and the dashboard SSE
+// enough to serve both consumers — run-all's plain output and the dashboard SSE
 // bus (events carry idx/entry/run_id/elapsed_s/skipped_reason; requestStop
 // drives /stop).
 
