@@ -36,6 +36,7 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **list scenarios**: `bun run quorum list`
 - **scaffold scenario**: `bun run quorum new <name>`
 - **show verdict**: `bun run quorum show [<target>]`
+- **show costs**: `bun run quorum costs [<target>] [--with-gauntlet]`
 - **run all**: `bun run quorum run-all [--coding-agents X,Y] [--jobs N]`
 - **show batch**: `bun run quorum show <batch-id>` (matrix view)
 - **dashboard**: `bun run quorum dashboard [--port N]` (web matrix: results, launch, live progress)
@@ -62,7 +63,7 @@ Spec: `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 - `src/agents/` — per-Coding-Agent provisioning adapters (one per agent) over the `command-runner.ts` subprocess seam.
 - `src/scaffold.ts` — `quorum new` / `quorum check` implementation.
 - `src/scheduler/` — central concurrency dispatcher (global slot cap, per-harness cap + launch spacing) over an injectable `clock.ts`; shared by `run-all` and the dashboard.
-- `src/cli/` — the `quorum` CLI (`run`/`list`/`new`/`check`/`show`/`run-all`/`dashboard`) + verdict/batch renderers; entry `index.ts` (`bun run quorum`).
+- `src/cli/` — the `quorum` CLI (`run`/`list`/`new`/`check`/`show`/`costs`/`run-all`/`dashboard`) + verdict/batch/cost renderers; entry `index.ts` (`bun run quorum`).
 - `src/run-all/` — batch matrix driver (scenario × agent), batch dir allocation.
 - `src/dashboard/` — web dashboard: `scan.ts`/`view.ts` (read side over `results/`), `templates.ts` (typed HTML renderers; `cellHtml` is the single source for first paint + SSE swaps), `event-bus.ts` (bounded SSE fan-out), `orchestrator.ts` (one-session-at-a-time launch/stop over the scheduler, pid-tracked SIGINT), `server.ts` (`Bun.serve` routes + ~1s scanner loop), `index.ts` (`startDashboard`).
 - `src/setup-helpers/` — fixture creators. Each helper takes a uniform `HelperContext` (`context.ts`); `registry.ts` maps the dispatchable snake_case names to entries declaring `needsTemplateDir`/`needsSuperpowersRoot`, and `KNOWN_HELPER_NAMES` is the single validation set `quorum check` uses. `cli.ts` is the `setup-helpers run <helper>` entrypoint. Tier-1 helpers (git + filesystem: `base.ts`, `fs.ts`, `git.ts`, `spec-fixtures.ts`, `sdd-fixtures.ts`, `cost-fixtures.ts`, `behavior-fixtures.ts`, `triggering-fixtures.ts`, the non-codex/gemini `worktree.ts` parts, shared `pulse-dashboard.ts` constants) are hermetic and unit-tested directly; Tier-2 helpers (`provisionVenv`, `linkGeminiExtension`, `installCodexSuperpowersPluginHooks` + its `codex-app-server.ts` JSON-RPC client) route subprocess calls through `agents/command-runner.ts` so tests inject fakes. `setup.sh`'s bare `setup-helpers run …` resolves to TS via the `setup-helpers` function in the sourced `src/checks/prelude.sh`, which `src/setup-step.ts` sources through `BASH_ENV` before running `setup.sh`.
@@ -119,12 +120,11 @@ launch agent CLIs in permissive modes and can capture sensitive transcripts,
 tool calls, filesystem state, and token data. Do not add live evals, API keys,
 or dangerous-mode launches to public CI.
 
-## Required Env For Live Evals
+## Host Env For Live Evals
 
-```
-ANTHROPIC_API_KEY=sk-...
-OPENAI_API_KEY=sk-...
-```
+Host-side live evals need `SUPERPOWERS_ROOT` plus the selected agent's auth.
+Common keys are `ANTHROPIC_API_KEY` for Claude variants and provider keys such
+as `OPENAI_API_KEY` for OpenCode, depending on its selected model.
 
 Agent-specific live credentials are documented in `README.md`. The common
 cases are Anthropic for Claude variants, OpenAI/provider keys for OpenCode,

@@ -84,6 +84,8 @@ bun run quorum check
 Run one local scenario outside the container:
 
 ```bash
+export SUPERPOWERS_ROOT=/path/to/superpowers
+export ANTHROPIC_API_KEY=...
 bun run quorum run scenarios/triggering-writing-plans --coding-agent claude
 bun run quorum show <run-dir>
 ```
@@ -219,6 +221,7 @@ bun run quorum check my-new-scenario
 bun run quorum run scenarios/<name> --coding-agent <agent>
 bun run quorum run-all --coding-agents claude,codex --jobs 2
 bun run quorum show <run-or-batch-id>
+bun run quorum costs <run-or-batch-id>
 ```
 
 `quorum check` with no arguments validates every scenario. `run-all` runs every
@@ -239,7 +242,7 @@ Exit codes are 0 for `pass`, 1 for `fail`, and 2 for `indeterminate`.
 Each run produces one directory under `results/`:
 
 ```text
-results/<scenario>-<coding-agent>-<timestamp>/
+results/<scenario>-<coding-agent>-<timestamp>-<nonce>/
 |-- verdict.json                     composed result; start here
 |-- gauntlet-agent/                  Gauntlet-Agent evidence
 |-- coding-agent-workdir/            files the Coding-Agent produced
@@ -278,7 +281,7 @@ fails loudly instead of corrupting a verdict. The `cli/` layer parses commands
 and dispatches into the `runner/` pipeline (one scenario × one Coding-Agent) or
 `run-all/` (the matrix). Per-Coding-Agent differences live in two parallel
 fan-outs keyed by agent name: `agents/` seeds the agent's config under the
-throwaway per-run `$HOME` (`<run>/home`), and `normalizers/` turns that agent's
+throwaway per-run `$HOME` (`<run>/home`), and `normalize/` turns that agent's
 session log into a uniform tool-call trace. Live agent-CLI calls and other
 non-hermetic subprocesses go through the
 `agents/command-runner.ts` seam, so the unit suite injects fakes and never
@@ -288,8 +291,8 @@ launches a real CLI. `scheduler/` is the shared concurrency engine under both
 
 ```text
 src/
-  cli/                  commander CLI: run, list, new, check, show, run-all, dashboard
-    index.ts              command wiring + the run / run-all / dashboard actions
+  cli/                  commander CLI: run, list, new, check, show, costs, run-all, dashboard
+    index.ts              command wiring + run / costs / run-all / dashboard actions
     render.ts             verdict renderer for triage (quorum show)
     render-batch.ts       batch-matrix renderer (quorum show <batch>)
     resolve-target.ts     run/batch target resolution; scenario.ts scenario loading
@@ -302,7 +305,7 @@ src/
     index.ts              agent registry + dispatch (incl. the inline Claude/Default adapters)
     command-runner.ts     injectable subprocess seam (live CLIs faked in tests)
     <agent>.ts            codex/gemini/kimi/opencode/pi/copilot/antigravity adapters
-  normalizers/          session-log → normalized tool-call trace, one module per dialect
+  normalize/            session-log → normalized tool-call trace, one module per dialect
   capture/              session-log snapshot/diff + tool-call capture + token usage; cwd-filter
   obol/                 obol cost estimation (session-log + gauntlet sidecar)
   economics.ts          token-cost composition → coding-agent-token-usage.json
