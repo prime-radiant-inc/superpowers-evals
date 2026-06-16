@@ -149,6 +149,14 @@ describe('sdd fixtures', () => {
       expect(
         runGit(['show', 'HEAD:docs/superpowers/plans/auth-system.md'], dir),
       ).toContain('Auth System');
+      const plan = runGit(
+        ['show', 'HEAD:docs/superpowers/plans/auth-system.md'],
+        dir,
+      );
+      expect(plan).toContain('src/auth/credentials.js');
+      expect(plan).toContain('test/auth/credentials.test.js');
+      expect(plan).toContain('npm test');
+      expect(plan).not.toMatch(/\b(stub|placeholder|no-op)\b/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

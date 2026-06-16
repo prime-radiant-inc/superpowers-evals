@@ -43,7 +43,7 @@
 | `sdd-fixtures.ts` | 9 × `scaffoldSdd*`, `addSddAuthPlan`, `scaffoldSddBrokenPlan`, `scaffoldSddQualityDefectPlan`, `scaffoldSddYagniPlan`. |
 | `cost-fixtures.ts` | `createCostCheckboxPage`, `createCostCleanRepo`, `createCostLargeFiles`, `createCostTrivialPlan`. |
 | `behavior-fixtures.ts` | `createClaimWithoutVerification`, `createCodeReviewPlantedBugs`, `createPhantomCompletion`, `createReviewPushback`. |
-| `triggering-fixtures.ts` | `addStubExecutingPlan`, `createWritingPlansSkeleton`. |
+| `triggering-fixtures.ts` | `addAuthExecutionPlan`, `createWritingPlansSkeleton`. |
 | `codex-app-server.ts` | `queryCodexSessionStartHook(args)` — async JSON-RPC client over `codex app-server` stdio. |
 | `worktree.ts` | `addWorktree`/`detachHead` (library), `addExistingWorktree`, `detachWorktreeHead`, `symlinkSuperpowers`, `createCallerConsentPlan`, `setupPressureWorktreeConditions`, `linkGeminiExtension`, `installCodexSuperpowersPluginHooks`. |
 | `registry.ts` | `REGISTRY: Record<string, RegistryEntry>` for the 36 dispatchable helpers. |
@@ -928,7 +928,7 @@ describe('cost fixtures', () => {
 
 - `createCostCheckboxPage`: init + 2 config; write `PAGE`/`index.html` verbatim; **`git add index.html`** (scoped, matches `cost_checkbox_page.py`); commit "initial: empty tasks page".
 - `createCostCleanRepo`: init + 2 config; write `README`/`README.md` verbatim; **`git add README.md`** (scoped, matches `cost_clean_repo.py`); commit "initial: README".
-- `createCostTrivialPlan`: init + 2 config; write `APP_JS`/`src/app.js` + `PLAN`/`docs/superpowers/plans/2026-05-06-trivial.md` verbatim; **`git add -A`** (matches `cost_trivial_plan.py`); commit "initial: app stub + trivial plan".
+- `createCostTrivialPlan`: init + 2 config; write `APP_JS`/`src/app.js` + `PLAN`/`docs/superpowers/plans/2026-05-06-trivial.md` verbatim; **`git add -A`** (matches `cost_trivial_plan.py`); commit "initial: minimal app + trivial plan".
 - `createCostLargeFiles`: port the generator (`_render_module`); write the 5 modules to `src/<module>.js`; **`git add -A`**; commit "initial: synthetic CRUD modules".
 
 **The generator must be transcribed from `cost_large_files.py:_render_module` exactly** — byte parity is the whole point of this fixture (it is the token-bloat measurement). Do NOT paraphrase. The verified per-module output is (for `module`, `entity` ∈ `MODULES = [['users','User'],['orders','Order'],['invoices','Invoice'],['inventory','Item'],['notifications','Notification']]`, `ENTITIES_PER_MODULE = 80`):
@@ -1138,7 +1138,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runGit } from '../src/setup-helpers/git.ts';
 import {
-  addStubExecutingPlan,
+  addAuthExecutionPlan,
   createWritingPlansSkeleton,
 } from '../src/setup-helpers/triggering-fixtures.ts';
 
@@ -1164,15 +1164,15 @@ describe('triggering fixtures', () => {
     }
   });
 
-  test('addStubExecutingPlan: layers a plan commit onto an existing repo', () => {
+  test('addAuthExecutionPlan: layers a concrete plan commit onto an existing repo', () => {
     const dir = tmp();
     try {
       runGit(['init', '-b', 'main'], dir);
       runGit(['config', 'user.email', 'drill@test.local'], dir);
       runGit(['config', 'user.name', 'Drill Test'], dir);
       runGit(['commit', '--allow-empty', '-m', 'base'], dir);
-      addStubExecutingPlan({ workdir: dir } as never);
-      expect(runGit(['log', '-1', '--format=%s'], dir).trim()).toBe('add stub auth plan');
+      addAuthExecutionPlan({ workdir: dir } as never);
+      expect(runGit(['log', '-1', '--format=%s'], dir).trim()).toBe('add auth execution plan');
       expect(
         runGit(['show', 'HEAD:docs/superpowers/plans/2024-01-15-auth-system.md'], dir),
       ).toContain('Auth System');
@@ -1186,7 +1186,7 @@ describe('triggering fixtures', () => {
 - [ ] **Step 2: Run it — expect FAIL.**
 
 - [ ] **Step 3: Implement `triggering-fixtures.ts`.**
-- `addStubExecutingPlan(ctx)`: **no init**; write `docs/superpowers/plans/2024-01-15-auth-system.md` from `PLAN_BODY` (verbatim); `git add docs`; commit "add stub auth plan".
+- `addAuthExecutionPlan(ctx)`: **no init**; write `docs/superpowers/plans/2024-01-15-auth-system.md` from `PLAN_BODY` (verbatim); `git add docs`; commit "add auth execution plan".
 - `createWritingPlansSkeleton(ctx)`: `mkdir -p`; init + 2 config; write `app.js` (`APP_JS`) + `package.json` (`PACKAGE_JSON`, raw string — preserve 2-space formatting/key order, do not `JSON.stringify`); `git add -A`; commit "initial: express app with in-memory user store".
 
 - [ ] **Step 4: Run the test — expect PASS.** `bun run check`.
@@ -1970,7 +1970,7 @@ EOF
 - **Tier-1 hermetic helpers (31)** → Tasks 3, 5–11.
 - **Tier-2 via CommandRunner seam (5)** → Tasks 4 (provisionVenv), 12 (gemini), 13 (codex).
 - **Shared Pulse Dashboard constants** → Task 5, consumed in Task 6.
-- **Every gotcha:** git identity env spread-order (Task 1); `git init -b main` (every init helper); no-init layered helpers — `add_flawed_spec_for_review` (6), `add_sdd_auth_plan` (7), `add_stub_executing_plan` (10), `create_caller_consent_plan`/`setup_pressure_worktree_conditions` (11); literal `\n` (Task 7); generated `${id}` (Task 8); db.js-written-twice (Task 9); append-never-amend checkpoint (Task 6); copytree ignore incl. `results`-in-`evals` + TOML escaping + DRILL_CODEX_HOME (Task 13); `git branch -D` unchecked (Task 11).
+- **Every gotcha:** git identity env spread-order (Task 1); `git init -b main` (every init helper); no-init layered helpers — `add_flawed_spec_for_review` (6), `add_sdd_auth_plan` (7), `add_auth_execution_plan` (10), `create_caller_consent_plan`/`setup_pressure_worktree_conditions` (11); literal `\n` (Task 7); generated `${id}` (Task 8); db.js-written-twice (Task 9); append-never-amend checkpoint (Task 6); copytree ignore incl. `results`-in-`evals` + TOML escaping + DRILL_CODEX_HOME (Task 13); `git branch -D` unchecked (Task 11).
 - **Parity (lasting unit + throwaway differential)** → per-module unit tests in every task + Task 18.
 - **Out of scope (purge)** → not in this plan, by design.
 

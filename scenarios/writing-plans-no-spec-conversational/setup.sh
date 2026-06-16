@@ -13,7 +13,7 @@ cat > package.json <<'JSON'
 JSON
 cat > cli.js <<'JS'
 #!/usr/bin/env node
-// tinytool: stub CLI. Supported flags: --help
+// tinytool: minimal CLI. Supported flags: --help
 if (process.argv.includes("--help")) {
   console.log("usage: tinytool [--help]");
   process.exit(0);
@@ -21,4 +21,4 @@ if (process.argv.includes("--help")) {
 console.log("tinytool: nothing to do");
 JS
 git add package.json cli.js
-git commit -qm "initial: tinytool CLI stub"
+git commit -qm "initial: tinytool minimal CLI"

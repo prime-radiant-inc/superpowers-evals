@@ -70,7 +70,7 @@ Mirror the Python module boundaries so the port reads 1:1 against its source.
 | `sdd-fixtures.ts` | the 9 `scaffoldSdd*` (table-driven over fixture-dir names), `addSddAuthPlan`, `scaffoldSddBrokenPlan`, `scaffoldSddQualityDefectPlan`, `scaffoldSddYagniPlan`. | `sdd_*.py` |
 | `cost-fixtures.ts` | `createCostCheckboxPage`, `createCostCleanRepo`, `createCostLargeFiles`, `createCostTrivialPlan`. | `cost_*.py` |
 | `behavior-fixtures.ts` | `createClaimWithoutVerification`, `createCodeReviewPlantedBugs`, `createPhantomCompletion`, `createReviewPushback`. | the 4 behavior `.py` |
-| `triggering-fixtures.ts` | `addStubExecutingPlan`, `createWritingPlansSkeleton`. | `triggering_*.py` |
+| `triggering-fixtures.ts` | `addAuthExecutionPlan`, `createWritingPlansSkeleton`. | `triggering_*.py` |
 | `registry.ts` | name → `{ fn, needsTemplateDir?, needsSuperpowersRoot? }` for the 36 dispatchable helpers. | `__init__.HELPER_REGISTRY` |
 | `cli.ts` | `setup-helpers run <helper> [<helper>…]`; reads `QUORUM_WORKDIR`/`QUORUM_REPO_ROOT`/`SUPERPOWERS_ROOT` via `env.ts`; fills `templateDir`/`superpowersRoot` per the registry's declared needs. | `cli.py` |
 
@@ -142,10 +142,10 @@ parity is asserted on tree content + commit messages + branch, never SHA.
 | `create_cost_checkbox_page` | init, `index.html` (empty `<main></main>` load-bearing), commit "initial: empty tasks page". | |
 | `create_cost_clean_repo` | init, `README.md` (deliberately vague), commit "initial: README". | |
 | `create_cost_large_files` | init, **generated** `src/{users,orders,invoices,inventory,notifications}.js`, 80 entity blocks each, commit "initial: synthetic CRUD modules". | **Port the generator, not a blob.** `${id}` is literal JS template-literal output — escape so TS doesn't interpolate. `MODULES` order + `ENTITIES_PER_MODULE=80` load-bearing. |
-| `create_cost_trivial_plan` | init, `src/app.js` stub + `docs/superpowers/plans/2026-05-06-trivial.md`, commit "initial: app stub + trivial plan". | Fixed plan filename/date keyed on by scenario. |
+| `create_cost_trivial_plan` | init, minimal `src/app.js` + `docs/superpowers/plans/2026-05-06-trivial.md`, commit "initial: minimal app + trivial plan". | Fixed plan filename/date keyed on by scenario. |
 | `create_code_review_planted_bugs` | init, 2 commits: safe `findUserByEmail` → overwrite `src/db.js` with 3 planted bugs (SQLi / identity-hash / cred-logging). | Node fixture, **no venv**. `db.js` written twice — the 2-commit diff *is* the artifact; don't collapse. Bug strings verbatim. |
 | `create_writing_plans_skeleton` | init, `app.js` (Express) + `package.json` (`auth-skeleton`), commit "initial: express app with in-memory user store". | `package.json` emitted as raw string (preserve formatting), not `JSON.stringify`. |
-| `add_stub_executing_plan` | `docs/superpowers/plans/2024-01-15-auth-system.md` + commit "add stub auth plan". | **No init** — existing repo. `git add docs`. |
+| `add_auth_execution_plan` | `docs/superpowers/plans/2024-01-15-auth-system.md` + commit "add auth execution plan". | **No init** — existing repo. `git add docs`. |
 
 ### Tier 2 — live / non-hermetic (CommandRunner seam)
 

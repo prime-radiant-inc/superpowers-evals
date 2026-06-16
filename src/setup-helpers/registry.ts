@@ -41,7 +41,7 @@ import {
   createSpecWritingBlindSpot,
 } from './spec-fixtures.ts';
 import {
-  addStubExecutingPlan,
+  addAuthExecutionPlan,
   createWritingPlansSkeleton,
 } from './triggering-fixtures.ts';
 import {
@@ -99,7 +99,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   create_spec_targets_wrong_component_with_checkpoint: {
     fn: createSpecTargetsWrongComponentWithCheckpoint,
   },
-  add_stub_executing_plan: { fn: addStubExecutingPlan },
+  add_auth_execution_plan: { fn: addAuthExecutionPlan },
   create_writing_plans_skeleton: { fn: createWritingPlansSkeleton },
   create_code_review_planted_bugs: { fn: createCodeReviewPlantedBugs },
   add_flawed_spec_for_review: { fn: addFlawedSpecForReview },

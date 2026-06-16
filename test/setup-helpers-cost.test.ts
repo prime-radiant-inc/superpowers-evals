@@ -81,10 +81,13 @@ describe('cost fixtures', () => {
     }
   });
 
-  test('trivial plan: app stub + dated plan file', () => {
+  test('trivial plan: minimal app + dated plan file', () => {
     const dir = tmp();
     try {
       createCostTrivialPlan({ workdir: dir } as never);
+      expect(runGit(['log', '--format=%s'], dir).trim()).toBe(
+        'initial: minimal app + trivial plan',
+      );
       expect(runGit(['show', 'HEAD:src/app.js'], dir)).toContain(
         'function main()',
       );

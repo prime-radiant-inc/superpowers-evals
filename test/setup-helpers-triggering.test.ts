@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runGit } from '../src/setup-helpers/git.ts';
 import {
-  addStubExecutingPlan,
+  addAuthExecutionPlan,
   createWritingPlansSkeleton,
 } from '../src/setup-helpers/triggering-fixtures.ts';
 
@@ -43,23 +43,25 @@ describe('triggering fixtures', () => {
     }
   });
 
-  test('addStubExecutingPlan: layers a plan commit onto an existing repo', () => {
+  test('addAuthExecutionPlan: layers a concrete plan commit onto an existing repo', () => {
     const dir = tmp();
     try {
       runGit(['init', '-b', 'main'], dir);
       runGit(['config', 'user.email', 'drill@test.local'], dir);
       runGit(['config', 'user.name', 'Drill Test'], dir);
       runGit(['commit', '--allow-empty', '-m', 'base'], dir);
-      addStubExecutingPlan({ workdir: dir } as never);
+      addAuthExecutionPlan({ workdir: dir } as never);
       expect(runGit(['log', '-1', '--format=%s'], dir).trim()).toBe(
-        'add stub auth plan',
+        'add auth execution plan',
       );
-      expect(
-        runGit(
-          ['show', 'HEAD:docs/superpowers/plans/2024-01-15-auth-system.md'],
-          dir,
-        ),
-      ).toContain('Auth System');
+      const plan = runGit(
+        ['show', 'HEAD:docs/superpowers/plans/2024-01-15-auth-system.md'],
+        dir,
+      );
+      expect(plan).toContain('src/authToken.js');
+      expect(plan).toContain('test/authToken.test.js');
+      expect(plan).toContain('npm test');
+      expect(plan).not.toMatch(/\b(stub|placeholder|no-op)\b/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

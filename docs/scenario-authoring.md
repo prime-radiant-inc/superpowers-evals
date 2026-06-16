@@ -64,7 +64,7 @@ bun run quorum new <name>
 `story.md` with `id`/`title`/`quorum_tier` frontmatter and an `## Acceptance
 Criteria` heading; a `setup.sh` (executable) that calls
 `setup-helpers run create_base_repo`; and a `checks.sh` (non-executable) with a
-`pre()` asserting `git-repo`/`git-branch main` and a `post()` stub.
+`pre()` asserting `git-repo`/`git-branch main` and an empty `post()`.
 
 ### Validate
 
@@ -287,7 +287,7 @@ but is not the source of truth.
 |---|---|---|
 | base (`base.ts`) | `create_base_repo` (`needsTemplateDir`), `record_head` | `create_base_repo` does `git init` and seeds from `fixtures/template-repo`. `record_head` writes the `assert-checkout-clean` sentinel. |
 | spec (`spec-fixtures.ts`) | `create_spec_writing_blind_spot`, `create_spec_targets_wrong_component`(`_with_checkpoint`), `add_flawed_spec_for_review` | `add_*` helpers layer onto an existing repo (no `git init`). |
-| triggering (`triggering-fixtures.ts`) | `add_stub_executing_plan`, `create_writing_plans_skeleton` | |
+| triggering (`triggering-fixtures.ts`) | `add_auth_execution_plan`, `create_writing_plans_skeleton` | |
 | sdd (`sdd-fixtures.ts`) | `scaffold_sdd_go_fractals*`, `scaffold_sdd_svelte_todo(_elicited)`, `add_sdd_auth_plan`, `scaffold_sdd_*_plan` | `scaffold_*` read fixture content; the elicited variants carry skill-generated plans. |
 | cost (`cost-fixtures.ts`) | `create_cost_checkbox_page`, `create_cost_clean_repo`, `create_cost_trivial_plan`, `create_cost_large_files` | |
 | behavior (`behavior-fixtures.ts`) | `create_claim_without_verification`, `create_phantom_completion`, `create_review_pushback`, `create_code_review_planted_bugs` | |

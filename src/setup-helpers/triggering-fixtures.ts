@@ -1,4 +1,4 @@
-// Triggering-fixture helpers. addStubExecutingPlan layers a stub plan commit
+// Triggering-fixture helpers. addAuthExecutionPlan layers a concrete plan commit
 // onto an existing repo (no init); createWritingPlansSkeleton is a
 // self-contained Express skeleton (does its own git init).
 import type { HelperContext } from './context.ts';
@@ -7,35 +7,59 @@ import { runGit } from './git.ts';
 
 const PLAN_BODY = `# 2024-01-15 Auth System Implementation Plan
 
-A short stub plan used by the triggering-executing-plans drill scenario.
+A compact plan used by the triggering-executing-plans drill scenario.
 
-## Task 1: Add a no-op auth placeholder
+## Task 1: Add Bearer token parsing
 
-**File:** \`src/auth.js\`
+**Files:**
 
-Create a module that exports a single function \`placeholder()\` returning the
-string \`"auth-placeholder"\`. Add a one-line test in \`test/auth.test.js\`.
+- \`package.json\`
+- \`src/authToken.js\`
+- \`test/authToken.test.js\`
 
-## Task 2: Wire the placeholder into the entry point
+Add a \`test\` script to \`package.json\`:
+
+\`\`\`json
+"scripts": {
+  "test": "node --test"
+}
+\`\`\`
+
+Create \`src/authToken.js\` exporting \`parseAuthToken(header)\`. It should return
+the token string for \`Authorization: Bearer <token>\`, trimming surrounding
+spaces around the token. It should return \`null\` for a missing header, a
+non-string header, a non-Bearer scheme, or an empty token.
+
+Create \`test/authToken.test.js\` with node:test coverage for:
+
+- valid Bearer token returns the token
+- empty Bearer token returns \`null\`
+- Basic auth returns \`null\`
+- missing header returns \`null\`
+
+Run \`npm test\` and keep it passing.
+
+## Task 2: Use the parser from the entry point
 
 **File:** \`src/index.js\`
 
-Import \`placeholder\` from \`./auth.js\` and log its return value at startup.
+Import \`parseAuthToken\` from \`./authToken.js\`. Update \`main()\` so it checks
+\`process.env.AUTHORIZATION\`, prints \`authenticated\` when a token is present,
+and prints \`anonymous\` otherwise. Keep the existing greeting output.
 
-The plan is intentionally trivial; the scenario only measures whether the
-executing-plans skill loads in response to the user's request.
+Run \`npm test\` after the change.
 `;
 
-// No init; writes the stub plan and commits it (scoped `git add docs`) onto an
+// No init; writes the plan and commits it (scoped `git add docs`) onto an
 // existing repo.
-export function addStubExecutingPlan(ctx: HelperContext): void {
+export function addAuthExecutionPlan(ctx: HelperContext): void {
   writeFixtureFile(
     ctx.workdir,
     'docs/superpowers/plans/2024-01-15-auth-system.md',
     PLAN_BODY,
   );
   runGit(['add', 'docs'], ctx.workdir);
-  runGit(['commit', '-m', 'add stub auth plan'], ctx.workdir);
+  runGit(['commit', '-m', 'add auth execution plan'], ctx.workdir);
 }
 
 const APP_JS = `import express from "express";

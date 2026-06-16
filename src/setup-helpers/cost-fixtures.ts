@@ -72,7 +72,7 @@ Add the line \`console.log('app started');\` as the very first line of
 That's the entire change.
 `;
 
-// App stub + dated plan; `git add -A`.
+// Minimal app + dated plan; `git add -A`.
 export function createCostTrivialPlan(ctx: HelperContext): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -87,7 +87,7 @@ export function createCostTrivialPlan(ctx: HelperContext): void {
   );
 
   runGit(['add', '-A'], ctx.workdir);
-  runGit(['commit', '-m', 'initial: app stub + trivial plan'], ctx.workdir);
+  runGit(['commit', '-m', 'initial: minimal app + trivial plan'], ctx.workdir);
 }
 
 // The synthetic CRUD modules, as (module name, entity name) pairs.

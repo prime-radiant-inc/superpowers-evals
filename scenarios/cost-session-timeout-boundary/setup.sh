@@ -18,4 +18,4 @@ const config = require("./config.js");
 console.log(`session timeout: ${config.SESSION_TIMEOUT_MINUTES}m`);
 JS
 git add config.js server.js
-git commit -qm "initial: app config and server stub"
+git commit -qm "initial: app config and minimal server"

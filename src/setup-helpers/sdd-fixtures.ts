@@ -67,44 +67,58 @@ export function scaffoldSddSvelteTodoElicited(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo-elicited');
 }
 
-// The trivial auth-system stub plan.
+// The compact auth-system plan.
 const AUTH_PLAN_BODY = `# Auth System Implementation Plan
 
-A short stub plan used by the explicit-skill-request and
-mid-conversation-skill-invocation drill scenarios.
+A compact plan used by the mid-conversation-skill-invocation drill scenario.
 
-## Task 1: Add User model
+## Task 1: Add credential parsing
 
-**File:** \`src/models/User.js\`
+**Files:**
 
-Export a \`User\` class with an \`email\` field and a \`passwordHash\` field.
-Add a one-line test in \`test/models/User.test.js\` asserting the class is
-constructable with \`{ email, passwordHash }\`.
+- \`package.json\`
+- \`src/auth/credentials.js\`
+- \`test/auth/credentials.test.js\`
 
-## Task 2: Add register/login routes
+Add a \`test\` script to \`package.json\`:
 
-**File:** \`src/routes/auth.js\`
+\`\`\`json
+"scripts": {
+  "test": "node --test"
+}
+\`\`\`
 
-Export Express-style handlers \`register(req, res)\` and \`login(req, res)\`.
-Stubs are fine — return JSON \`{ ok: true }\` from each.
+Create \`src/auth/credentials.js\` exporting \`parseCredentials(input)\`. It
+should accept an object with \`email\` and \`password\` fields, trim and lowercase
+the email, and return \`{ email, password }\` when both fields are non-empty
+strings. It should return \`null\` for missing fields, empty strings, or
+non-string values.
 
-## Task 3: Add JWT middleware
+Create \`test/auth/credentials.test.js\` with node:test coverage for:
 
-**File:** \`src/middleware/jwt.js\`
+- normalizing an uppercase email
+- rejecting an empty password
+- rejecting a missing email
+- rejecting non-string input fields
 
-Export \`requireJWT(req, res, next)\`. If no \`Authorization\` header,
-respond \`401\`. Otherwise call \`next()\`.
+Run \`npm test\` and keep it passing.
 
-## Task 4: Wire it up
+## Task 2: Add request validation helper
 
-**File:** \`src/index.js\`
+**Files:**
 
-Import the routes and middleware. Wire the routes to \`/auth/*\` paths
-and apply \`requireJWT\` to a placeholder \`/protected\` route.
+- \`src/auth/requireCredentials.js\`
+- \`test/auth/requireCredentials.test.js\`
 
-The plan is intentionally tiny; the scenarios only measure whether the
-SDD skill loads and starts dispatching subagents in response to the
-user's request, not whether the implementation completes.
+Create \`src/auth/requireCredentials.js\` exporting
+\`requireCredentials(body)\`. It should call \`parseCredentials(body)\` and
+return \`{ ok: true, credentials }\` for valid input. For invalid input, return
+\`{ ok: false, status: 400, error: "email and password are required" }\`.
+
+Create \`test/auth/requireCredentials.test.js\` covering the success and invalid
+input paths.
+
+Run \`npm test\` after the change.
 `;
 
 // No init — layers a single plan commit onto an existing repo (scoped
