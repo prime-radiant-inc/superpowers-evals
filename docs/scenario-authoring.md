@@ -1,11 +1,11 @@
 # Authoring a quorum scenario (evergreen)
 
-This is the durable reference for writing a quorum scenario — the three-file unit
-the harness runs to put a Coding-Agent under test and judge whether it behaved.
-It synthesizes the five authoring roles (anatomy, `story.md`, `setup.sh`,
-`checks.sh`, debugging) into one guide. Where a fact is enumerated in code (verb
-lists, helper names, error stages), this guide names the **source of truth** and
-tells you how to regenerate the list rather than pasting a table that will rot.
+Use this durable reference to write a quorum scenario: the three-file unit that
+puts a Coding-Agent under test and judges its behavior. The guide covers the
+five authoring jobs: anatomy, `story.md`, `setup.sh`, `checks.sh`, and
+debugging. When code enumerates a fact, such as verb lists, helper names, or
+error stages, this guide names the **source of truth** and shows how to
+regenerate the list instead of pasting a table that will rot.
 
 ## The mental model in 60 seconds
 
@@ -14,14 +14,15 @@ tells you how to regenerate the list rather than pasting a table that will rot.
 - A run involves **two LLMs**: the **Gauntlet-Agent** (the QA tester that reads
   `story.md`, drives the agent, and self-grades against your Acceptance Criteria)
   and the **Coding-Agent** (the subject — Claude, Codex, …).
-- The flow is: `setup.sh` builds a fixture → `pre()` asserts the fixture is what
-  you expect → the Gauntlet-Agent drives the Coding-Agent → quorum captures the
-  session into a normalized `trajectory.json` → `post()` asserts the outcome →
-  the composer fuses everything into one verdict.
+- Run flow: `setup.sh` builds a fixture → `pre()` asserts the fixture →
+  the Gauntlet-Agent drives the Coding-Agent → quorum captures the session into
+  `trajectory.json` → `post()` asserts the outcome → the composer writes one
+  verdict.
 - **`final = pass`** iff the **Gauntlet-Agent passed AND every post-check
-  passed**. **`final = indeterminate`** means the run couldn't be graded (a crash,
-  a failed pre-check, an empty transcript, a missing tool). **`final = fail`** is
-  the graded negative: the Gauntlet-Agent failed, or a post-check failed.
+  passed**. **`final = indeterminate`** means quorum could not grade the run: a
+  crash, failed pre-check, empty transcript, or missing tool blocked evaluation.
+  **`final = fail`** is the graded negative: the Gauntlet-Agent failed, or a
+  post-check failed.
 - The Gauntlet-Agent **never sees `checks.sh`.** It grades only the prose in
   `story.md`. `checks.sh` is quorum's independent, deterministic second opinion.
 
@@ -44,14 +45,14 @@ tells you how to regenerate the list rather than pasting a table that will rot.
 |---|---|---|
 | `story.md` | Briefs the Gauntlet-Agent: the role it plays, the exact message it sends, when it stops, and the Acceptance Criteria it grades against. | n/a |
 | `setup.sh` | Builds the fixture the Coding-Agent will work in, using `$QUORUM_WORKDIR`. Run as a subprocess. | **Yes** (`src/scaffold.ts` `fixExecutableBits`) |
-| `checks.sh` | Defines `pre()` and `post()` — quorum's deterministic assertions. **Sourced**, not executed. | **No** — it is `source`d (`src/checks/index.ts`); a `chmod +x` is a hazard, not a requirement |
+| `checks.sh` | Defines `pre()` and `post()` — quorum's deterministic assertions. **Sourced**, not executed. | **No** — quorum `source`s it (`src/checks/index.ts`); `chmod +x` is a hazard, not a requirement |
 
-The exec-bit asymmetry is load-bearing and is the single most common authoring
-trap. `setup.sh` is `spawnSync`'d directly (`src/setup-step.ts`), so it must be
-executable. `checks.sh` is `source`d inside a `bash -c` (`src/checks/index.ts`
-`runPhase`), so it must NOT be executable and must contain **only function
-definitions** — any top-level statement fails `quorum check` (the brace-depth
-scan in `src/scaffold.ts` `validateChecksSh`).
+The exec-bit asymmetry is load-bearing and the most common authoring trap.
+`setup.sh` runs directly via `spawnSync` (`src/setup-step.ts`), so it must be
+executable. quorum sources `checks.sh` inside `bash -c` (`src/checks/index.ts`
+`runPhase`), so it must lack the executable bit and contain **only function
+definitions**. Any top-level statement fails `quorum check` (the brace-depth scan
+in `src/scaffold.ts` `validateChecksSh`).
 
 ### Scaffold a new scenario
 
@@ -59,7 +60,7 @@ scan in `src/scaffold.ts` `validateChecksSh`).
 bun run quorum new <name>
 ```
 
-`newScenario` (`src/scaffold.ts`) stamps a structurally-valid skeleton: a
+`newScenario` (`src/scaffold.ts`) stamps a structurally valid skeleton: a
 `story.md` with `id`/`title`/`quorum_tier` frontmatter and an `## Acceptance
 Criteria` heading; a `setup.sh` (executable) that calls
 `setup-helpers run create_base_repo`; and a `checks.sh` (non-executable) with a
@@ -72,18 +73,18 @@ bun run quorum check                   # validate ALL scenarios
 bun run quorum check <name> [<name>…]  # validate only the named scenario(s)
 ```
 
-`quorum check` takes the same scenario-name forms as `run` — a bare `foo` or a
-`scenarios/foo` path both resolve (`src/cli/index.ts`) — so you can tighten the
-loop to the one scenario you are editing. It is a **static** validator: it never
+`quorum check` accepts the same scenario-name forms as `run`: a bare `foo` or a
+`scenarios/foo` path both resolve (`src/cli/index.ts`). Use that to tighten the
+loop to the scenario you are editing. It is a **static** validator: it never
 launches an agent and needs only the scenarios root, not `SUPERPOWERS_ROOT`.
 
-`checkScenario` (`src/scaffold.ts`) verifies, per scenario: `story.md` has `id`
-and `title` frontmatter and a `## Acceptance Criteria` section; `quorum_tier` (if
-present) is one of `sentinel | full | adhoc`; `setup.sh` is executable and every
-`setup-helpers run <helper>` token is a known helper; `checks.sh` exists, parses
-(`bash -n`), is functions-only, defines `pre()` and `post()`, has no backgrounded
-(`&`) check, and **never references `$QUORUM_WORKDIR`** (it is not set in
-checks.sh — see §4).
+`checkScenario` (`src/scaffold.ts`) verifies these contracts for each scenario:
+`story.md` has `id` and `title` frontmatter plus an `## Acceptance Criteria`
+section; `quorum_tier`, when present, is one of `sentinel | full | adhoc`;
+`setup.sh` is executable; every `setup-helpers run <helper>` token names a known
+helper; `checks.sh` exists, parses (`bash -n`), defines only `pre()` and
+`post()`, has no backgrounded (`&`) check, and **never references
+`$QUORUM_WORKDIR`**. That variable is not set in `checks.sh`; see §4.
 
 ### Run one
 
@@ -92,19 +93,19 @@ bun run quorum run scenarios/<name> --coding-agent <claude|codex|…>
 ```
 
 `--coding-agent` is required. Unlike `quorum check`, **running** a scenario needs
-`SUPERPOWERS_ROOT` set: provisioning stages the plugin from it, and every
-`needsSuperpowersRoot` setup-helper resolves it. If it is unset, provisioning
-fails fast with `SUPERPOWERS_ROOT not set; cannot install …` (per harness in
-`src/agents/*`). Export it to your `superpowers` checkout before a run
+`SUPERPOWERS_ROOT`: provisioning stages the plugin from it, and every
+`needsSuperpowersRoot` setup-helper resolves it. If you leave it unset,
+provisioning fails fast with `SUPERPOWERS_ROOT not set; cannot install …` (per
+harness in `src/agents/*`). Export it to your `superpowers` checkout before a run
 (`export SUPERPOWERS_ROOT=/path/to/superpowers`). See the run-dir layout in §5.
 
 ### Where the verbs and helpers actually live
 
 The scenario DSL — `file-exists`, `git-count`, `not`, `check-transcript`,
-`setup-helpers` — is **not** a set of executables in a `bin/` directory. (There
-is no `bin/` or `bin-ts/` in this tree; treat any doc that says otherwise as
-stale.) They are **shell functions** defined by `src/checks/prelude.sh`,
-which is `source`d before every scenario script:
+`setup-helpers` — is **not** a set of executables in a `bin/` directory. This
+tree has no `bin/` or `bin-ts/`; treat any doc that says otherwise as stale.
+The DSL entries are **shell functions** defined by `src/checks/prelude.sh`,
+which quorum sources before every scenario script:
 
 - For `checks.sh`, the prelude is `source`d directly inside `runPhase`'s
   `bash -c` (`src/checks/index.ts`).
@@ -112,12 +113,12 @@ which is `source`d before every scenario script:
   non-interactive bash that runs the script sources it first
   (`src/setup-step.ts`).
 
-Each function delegates to a TypeScript dispatcher: the filesystem/git verbs to
+Each function delegates to a TypeScript dispatcher: filesystem/git verbs to
 `src/cli/check-tool.ts`, transcript verbs to `src/cli/check-transcript.ts`, and
-fixtures to `src/setup-helpers/cli.ts`. The bare FS-verb *vocabulary* is
-**generated** from `FS_VERBS` in `src/check/dispatch.ts` via
-`src/cli/list-check-verbs.ts` (the prelude loops over its output), so it cannot
-drift from the source. To see the live list, run:
+fixtures to `src/setup-helpers/cli.ts`. The bare FS-verb *vocabulary* comes from
+`FS_VERBS` in `src/check/dispatch.ts` via `src/cli/list-check-verbs.ts`; the
+prelude loops over that output, so it cannot drift from the source. To see the
+live list, run:
 
 ```
 bun run src/cli/list-check-verbs.ts
@@ -141,7 +142,7 @@ an `## Acceptance Criteria` heading. Optional frontmatter (`src/story-meta.ts`,
 
 #### Choosing a `quorum_tier`
 
-The tier is a **batch filter**, not a behavior switch — it only decides whether
+The tier is a **batch filter**, not a behavior switch. It only decides whether
 `quorum run-all --tier <t>` includes the scenario (`src/run-all/matrix.ts`;
 precedence is directive > draft > tier). It defaults to `full`. Pick:
 
@@ -153,18 +154,17 @@ precedence is directive > draft > tier). It defaults to `full`. Pick:
 
 ### The body briefs a QA agent — it is not a task description
 
-The story body is **2nd-person instructions to the Gauntlet-Agent**: what role it
-is role-playing, the **exact message** it should type to the Coding-Agent (and an
-instruction not to paraphrase it), how to answer follow-up questions, and when it
-is done. The Gauntlet-Agent is launched with **only** the story
+Write the story body as **2nd-person instructions to the Gauntlet-Agent**. Tell
+it what role to play, the **exact message** to type to the Coding-Agent, how to
+answer follow-up questions, and when to stop. Tell it not to paraphrase the
+opening message. The Gauntlet-Agent launches with **only** the story
 (`buildGauntletArgv` in `src/runner/index.ts` passes the story path; `checks.sh`
-is not on its command line), so everything the grader knows about success must be
-in this prose.
+is not on its command line), so the success criteria must live in this prose.
 
 ### Acceptance Criteria are graded semantically by an LLM
 
-Because the Gauntlet-Agent grades your ACs by reading prose and observing the
-run, a good AC:
+The Gauntlet-Agent grades your ACs by reading prose and observing the run. A
+good AC:
 
 - **Names the exact evidence** and gives the grader the file path — e.g. "a
   `Skill` invocation naming `superpowers:requesting-code-review` appears in the
@@ -203,19 +203,19 @@ insist on any item"). An unfenced grader contaminates the experiment.
 
 ### The elicited-fixture methodology
 
-For skill-execution scenarios (where the agent executes a plan/spec), the fixture
-plan must be **generated by the skill under test**, not hand-written. Hand-authored
+For skill-execution scenarios, where the agent executes a plan/spec, generate
+the fixture plan with the skill under test. Do not hand-write it. Hand-authored
 prose plans execute roughly **2× costlier** than real `writing-plans` output and
-overstate the baseline — an attribution trap that contaminates any cost or
-behavior measurement (methodology correction,
+overstate the baseline. That attribution trap contaminates cost and behavior
+measurements (methodology correction,
 `docs/experiments/2026-06-10-sdd-cost-experiments.md`). The `*-elicited`
-scenarios carry the realistic fixtures; default to them. Keep the legacy
-hand-plan variants only for longitudinal comparability.
+scenarios carry the realistic fixtures; default to them. Keep legacy hand-plan
+variants only for longitudinal comparability.
 
 ### Belt-and-braces: assert the same fact twice
 
-The strongest scenarios assert a fact in **both** the AC prose (graded by the
-LLM) and in `checks.sh` (deterministic). The Gauntlet-Agent and the
+The strongest scenarios assert the same fact in **both** the AC prose (graded by
+the LLM) and `checks.sh` (deterministic). The Gauntlet-Agent and the
 post-checks are independent witnesses; agreement is a strong signal,
 disagreement is a triage flag (Pattern 2 vs 4 in §5). `sdd-go-fractals-elicited`
 is the model: its ACs say "builds, `go test ./...` passes, the work is on the
@@ -225,15 +225,15 @@ main checkout," and `checks.sh` independently runs `command-succeeds 'go test
 ### Cost scenarios are measurement instruments
 
 A cost scenario's AC certifies **comparability** ("a real, runnable deliverable
-that exercises the same surface"), not a dollar threshold. The price lives in the
-captured token economics; the AC's job is to keep the two arms of a comparison
-honest. Calibration pairs (e.g. `cost-checkbox-over-trigger` vs
-`brainstorming-resists-jump-to-implementation`) exist to bracket a behavior from
-both sides.
+that exercises the same surface"), not a dollar threshold. Captured token
+economics hold the price; the AC keeps the two arms of a comparison honest.
+Calibration pairs, such as `cost-checkbox-over-trigger` vs
+`brainstorming-resists-jump-to-implementation`, bracket behavior from both
+sides.
 
 ### Where the trigger lives: story prose vs fixture state
 
-For an auto-triggering scenario, decide what the skill keys off and put the
+For an auto-triggering scenario, decide what the skill keys off, and put the
 trigger there. Some skills key off the **conversation**:
 `triggering-finishing-a-development-branch` fires on the request "I finished …
 help me wrap it up and get it integrated," so its fixture is a bare
@@ -241,7 +241,7 @@ help me wrap it up and get it integrated," so its fixture is a bare
 off **repo state** — a skill about a feature branch only makes sense if `setup.sh`
 actually leaves the fixture on a branch with commits ahead of `main`. Match the
 fixture's git state to the story's premise: a story that says "I'm mid-rebase"
-over a pristine `main` checkout hands the grader a contradiction and muddies the
+over a pristine `main` checkout gives the grader a contradiction and muddies the
 result. When no helper builds the state you need, create it inline in `setup.sh`
 with plain git commands (the git fixtures commit under the "Drill Test"
 identity — see `src/setup-helpers/git.ts`).
@@ -260,9 +260,9 @@ identity — see `src/setup-helpers/git.ts`).
 
 ### `$QUORUM_WORKDIR` is the fixture root
 
-`setup.sh` runs with cwd already set to the workdir and `QUORUM_WORKDIR` exported
-to its absolute path (`src/setup-step.ts`). The dir already exists — **never
-`mkdir` it.** Build the fixture in place. (Reminder: `$QUORUM_WORKDIR` is
+`setup.sh` runs with cwd set to the workdir and `QUORUM_WORKDIR` exported to its
+absolute path (`src/setup-step.ts`). The dir already exists — **never `mkdir`
+it.** Build the fixture in place. (Reminder: `$QUORUM_WORKDIR` is
 available in `setup.sh` only, never in `checks.sh`.)
 
 The bare verbs and `setup-helpers` resolve via the `BASH_ENV`-sourced prelude,
@@ -277,11 +277,11 @@ verb, chaining left-to-right in one process:
 setup-helpers run create_base_repo add_existing_worktree detach_worktree_head
 ```
 
-The dispatch table is `REGISTRY` in `src/setup-helpers/registry.ts`, and the
-validation set `quorum check` uses is `KNOWN_HELPER_NAMES` (the registry keys plus
-two library-only names, `add_worktree`/`detach_head`). **Discover the current
-list from there**; the catalog below pins each entry to its defining file but is
-not the source of truth.
+`REGISTRY` in `src/setup-helpers/registry.ts` is the dispatch table.
+`KNOWN_HELPER_NAMES` is the validation set `quorum check` uses: the registry keys
+plus two library-only names, `add_worktree` and `detach_head`. **Discover the
+current list from there**; the catalog below pins each entry to its defining file
+but is not the source of truth.
 
 | Family / file | Representative helpers | Notes |
 |---|---|---|
@@ -295,8 +295,8 @@ not the source of truth.
 
 **Self-contained vs layering.** A self-contained helper (e.g. `create_base_repo`)
 does its own `git init`. A layering helper (`add_*`) assumes a repo already exists
-and must follow a repo-creating helper in the chain. Get the order wrong and the
-layering helper has nothing to write into.
+and must follow a repo-creating helper in the chain. Put them in the wrong order,
+and the layering helper has nothing to write into.
 
 **Declared needs.** `needsTemplateDir` resolves `fixtures/template-repo` (requires
 `QUORUM_REPO_ROOT`, which the runner sets). `needsSuperpowersRoot` resolves
@@ -313,8 +313,8 @@ trap (§2).
 
 ### The `.quorum-launch-cwd` sentinel
 
-By default the Coding-Agent launches in `$QUORUM_WORKDIR`. To launch it
-**elsewhere** (e.g. inside a sibling worktree the fixture created), write the
+By default, the Coding-Agent launches in `$QUORUM_WORKDIR`. To launch it
+**elsewhere**, such as inside a sibling worktree the fixture created, write the
 absolute target path into `$QUORUM_WORKDIR/.quorum-launch-cwd`:
 
 ```bash
@@ -322,8 +322,9 @@ echo "${QUORUM_WORKDIR}-existing-worktree" > "${QUORUM_WORKDIR}/.quorum-launch-c
 ```
 
 `resolveLaunchCwd` (`src/runner/index.ts`) reads it. A sentinel naming a
-**non-existent** path is a hard runner error (fails fast, not a silent launch from
-nowhere). The sentinel is harness plumbing: `assert-checkout-clean` ignores a
+**non-existent** path causes a hard runner error. The runner fails fast instead
+of launching from an accidental directory. The sentinel is harness plumbing:
+`assert-checkout-clean` ignores a
 `?? .quorum-launch-cwd` line in `git status` (`src/check/fs-verbs.ts`).
 
 ### Restricting and gating
@@ -334,19 +335,20 @@ nowhere). The sentinel is harness plumbing: `assert-checkout-clean` ignores a
   directive (`# coding-agents: ,`) means **skip all agents**; a true absence means
   un-gated. (This directive lives in `checks.sh`, not `setup.sh`, but it governs
   which agents the scenario runs against.)
-- **`requires-tool <name…>`** in `pre()` guards local toolchain dependencies (e.g.
-  `requires-tool go`). A missing tool fails the pre-check, which the composer maps
-  to **`indeterminate`** (env-missing), not `fail` — so a run on a machine without
-  `go` is correctly "couldn't evaluate," not a false negative. This also covers
-  interpreters a **post**-check shells out to: if a `command-succeeds` probe runs
-  `node`/`python`, guard it with `requires-tool node` in `pre()` so a missing
-  runtime reads as `indeterminate`, not a fake `fail`.
+- **`requires-tool <name…>`** in `pre()` guards local toolchain dependencies, for
+  example `requires-tool go`. A missing tool fails the pre-check, which the
+  composer maps to **`indeterminate`** (env-missing), not `fail`; a machine
+  without `go` correctly reads as "couldn't evaluate," not a false negative. This
+  also covers interpreters a **post**-check shells out to. If a
+  `command-succeeds` probe runs `node` or `python`, guard it with
+  `requires-tool node` in `pre()` so a missing runtime reads as `indeterminate`,
+  not a fake `fail`.
 
 ---
 
 ## 4. Writing `checks.sh`
 
-`checks.sh` is functions-only and defines two functions:
+`checks.sh` contains only function definitions:
 
 - **`pre()`** runs after `setup.sh`, before the Coding-Agent. It asserts the
   fixture is exactly what the scenario assumes. A failed pre-check →
@@ -355,15 +357,15 @@ nowhere). The sentinel is harness plumbing: `assert-checkout-clean` ignores a
 - **`post()`** runs after capture. It asserts the outcome. A failed post-check →
   **`fail`**. A post-check crash → `indeterminate`, stage `checks`.
 
-The same `checks.sh` is sourced for both phases; `pre`/`post` are just the
-functions invoked.
+quorum sources the same `checks.sh` for both phases; `pre` and `post` are the
+functions it invokes.
 
 ### Two verb namespaces
 
-1. **Filesystem / git / env verbs** — called **bare** (`file-exists`,
+1. **Filesystem / git / env verbs** — call these **bare** (`file-exists`,
    `git-count`, …). Source of truth: `FS_VERBS` in `src/check/dispatch.ts`,
    surfaced by `bun run src/cli/list-check-verbs.ts`.
-2. **Transcript verbs** — always invoked as **`check-transcript <verb>`**. Source
+2. **Transcript verbs** — always invoke these as **`check-transcript <verb>`**. Source
    of truth: the dispatch switch in `src/check/transcript-dispatch.ts` and the
    verb functions in `src/check/verbs.ts`. The composer's `TRACE_PRIMITIVES` set
    (`src/composer.ts`) must list the same verbs.
@@ -380,7 +382,7 @@ functions invoked.
 |---|---|---|
 | `file-exists` | `<glob>` | Pass iff ≥1 workdir-relative path matches. Supports a single `**` recursive segment plus single-segment `*`/`?`/`[…]`. A literal path matches iff it exists. With a no-slash suffix, `**` matches the **basename** at any depth **including the repo root** — so `file-exists '**/*.test.js'` also matches a top-level `foo.test.js`. Handy for "the agent left a test artifact *somewhere*." |
 | `file-contains` | `<path> <ere>` | `grep -qE` semantics: file exists and ≥1 line matches the extended regex. |
-| `command-succeeds` | `<command>` | `bash -c <command>` in the workdir; pass iff exit 0. On failure, first 500 bytes of combined stdout+stderr become the detail. **Quoting:** the command travels through the prelude into `bash -c`; single-quote the outer command and escape inner double quotes (e.g. a `node -e "…"` probe), and smoke-test the exact string with `bash -c '<command>'` before committing — a quoting slip lands silently in the assertion/127 band. |
+| `command-succeeds` | `<command>` | `bash -c <command>` in the workdir; pass iff exit 0. On failure, the first 500 bytes of combined stdout+stderr become the detail. **Quoting:** the command travels through the prelude into `bash -c`; single-quote the outer command and escape inner double quotes (e.g. a `node -e "…"` probe), then smoke-test the exact string with `bash -c '<command>'` before committing. A quoting slip lands silently in the assertion/127 band. |
 | `git-repo` | — | cwd is a git work tree. |
 | `git-branch` | `<name>` \| `detached` | Current branch equals `<name>`, or HEAD is detached. |
 | `git-clean` | — | `git status --porcelain` is empty. |
@@ -390,7 +392,7 @@ functions invoked.
 | `files-exist` | `<root> <rel…>` | Every `<rel>` is a regular file under `<root>`. |
 
 Six **bootstrap verbs** take no args and read `QUORUM_AGENT_CONFIG_DIR` to assert
-the Superpowers plugin is staged into a harness's isolated config:
+the Superpowers plugin staging in a harness's isolated config:
 `antigravity-plugin-installed`, `copilot-plugin-installed`,
 `opencode-plugin-installed`, `gemini-extension-linked`, `kimi-plugin-installed`,
 `codex-native-hook-configured` (the last two carry extra structured checks; see
@@ -416,7 +418,7 @@ the Superpowers plugin is staged into a harness's isolated config:
 
 #### `not` — three load-bearing rules (`negate` in `dispatch.ts`)
 
-1. On a normal inner pass/fail it emits **one** record on the inner's behalf
+1. On a normal inner pass/fail, it emits **one** record on the inner's behalf
    (`check=<inner>`, `negated:true`, inverted `passed`).
 2. It **refuses to invert a missing inner verb** — records a FAIL under `not` and
    exits **1** (an honest failed check, not 127).
@@ -432,23 +434,24 @@ passing. `not` works on both namespaces, e.g.
 A behavior/quality scenario lives or dies by a deterministic check that separates
 a **correct** fix from a **plausible-but-wrong** one — not merely "does it work."
 The trap: an end-to-end check (`command-succeeds 'the output is right now'`)
-passes for a symptom patch that papers over the real defect. The fix is to
-**probe the component you actually care about, directly**, rather than only the
-final output. In `systematic-debugging-fixes-root-cause` the end-to-end price is
-correct under *both* a real root-cause fix and a consumer-side guard, so the
-e2e check can't tell them apart; the discriminating check calls the upstream
-producer directly (`command-succeeds 'node -e "… getDiscountRate(\"BOGUS\") is a
-real number …"'`), which a symptom-only patch leaves returning `undefined`. Pair
-the discriminator (deterministic) with AC prose stating the same distinction
-(LLM-graded) — belt-and-braces — and **hand-verify the discriminator against all
-three states** (broken, symptom-only, root-cause) before trusting it; a check
-that can't fail the wrong-but-plausible fix is Pattern 4 waiting to happen.
+passes for a symptom patch that papers over the real defect. **Probe the
+component you actually care about, directly**, not only the final output.
+
+In `systematic-debugging-fixes-root-cause`, the end-to-end price is correct under
+*both* a real root-cause fix and a consumer-side guard, so the e2e check cannot
+tell them apart. The discriminating check calls the upstream producer directly:
+`command-succeeds 'node -e "… getDiscountRate(\"BOGUS\") is a real number …"'`.
+A symptom-only patch leaves that call returning `undefined`. Pair the
+deterministic discriminator with AC prose stating the same distinction, and
+**hand-verify the discriminator against all three states**: broken, symptom-only,
+and root-cause. A check that cannot fail the wrong-but-plausible fix is Pattern 4
+waiting to happen.
 
 ### The record model
 
 Every verb emits **one** JSON record to `QUORUM_RECORD_SINK`
 (`src/check/record.ts`): `{check, args, negated, passed, detail}`. The `phase`
-(`pre`/`post`) is injected by quorum, not the verb (`src/checks/index.ts`). The
+(`pre`/`post`) comes from quorum, not the verb (`src/checks/index.ts`). The
 record's `check` field is the **sub-verb** name (e.g. `skill-called`), never the
 wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
 
@@ -460,8 +463,8 @@ wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
 | `1` | check failed its assertion | yes |
 | `127` | **broken check**: usage error, unknown verb, missing required arg, unknown operator/dimension, or a thrown tool error | **no** — in `not`'s crash band on purpose |
 
-A typo'd or under-specified check lands in the 127 band so it can neither
-vacuously pass nor be inverted into a silent pass
+A typo'd or under-specified check lands in the 127 band, so it can neither
+vacuously pass nor invert into a silent pass
 (`src/cli/check-tool.ts`, `src/cli/check-transcript.ts`).
 
 ### Crash vs assertion at the phase level
@@ -474,8 +477,8 @@ vacuously pass nor be inverted into a silent pass
 - A signal-kill (status null + signal) is **always** a crash, even with partial
   records.
 
-A crashed pre-phase or post-phase becomes `indeterminate`, stage `checks` — never
-a `fail`.
+A crashed pre-phase or post-phase becomes `indeterminate`, stage `checks`; it
+never becomes `fail`.
 
 ### The environment available to checks
 
@@ -490,24 +493,23 @@ a `fail`.
 | `QUORUM_RUN_DIR` | **post only** | the run dir, for reading sibling artifacts |
 | `$QUORUM_WORKDIR` | **never** | checks run with **cwd = the workdir**; use workdir-relative paths. Referencing it is a hard `quorum check` failure. |
 
-For sibling run artifacts in a post-check, use `$QUORUM_RUN_DIR` rather than
-guessing a relative path up out of the workdir.
+For sibling run artifacts in a post-check, use `$QUORUM_RUN_DIR`; do not guess a
+relative path up out of the workdir.
 
 ### Vacuous-pass verbs and empty capture
 
-Three verbs **pass when their precondition is absent** (the "before" anchor never
-fired): `skill-before-tool`, `skill-before-implementation-tool`, and
-`tool-match-before-tool-match`. This is by design — "X before Y" is vacuously true
+Three verbs **pass when their precondition is absent** because the "before"
+anchor never fired: `skill-before-tool`, `skill-before-implementation-tool`, and
+`tool-match-before-tool-match`. This is by design: "X before Y" is vacuously true
 when there is no Y. Pair them with a positive verb (e.g. `skill-called`) when you
 need to assert the skill *did* fire.
 
 Conversely, the **negative** transcript verbs (`tool-not-called`,
 `skill-not-called`, `implementation-tool-not-called`, and the empty-guarded
 `-before` verbs) treat an **empty capture as FAIL**, so a run that captured
-nothing can't sneak through a "didn't call X" assertion. And the composer forces
+nothing cannot pass a "didn't call X" assertion. The composer also forces
 `indeterminate` when the capture was empty and **any** `TRACE_PRIMITIVES` check
-ran (`src/composer.ts`) — an empty transcript makes every trace check
-meaningless.
+ran (`src/composer.ts`). An empty transcript makes every trace check meaningless.
 
 ---
 
@@ -527,8 +529,8 @@ header (`final`, `final_reason`), the Gauntlet pane, and the checks pane
 
 ### The verdict decision tree (composer precedence)
 
-`compose` (`src/composer.ts`) evaluates **in this order** — the first match wins;
-it is precedence, not voting:
+`compose` (`src/composer.ts`) evaluates **in this order**. The first match wins;
+this is precedence, not voting:
 
 1. `error != null` → **indeterminate** (stage one of `setup | gauntlet | capture |
    checks | compose | qa-agent-misconfigured | stopped | unknown` —
@@ -549,10 +551,10 @@ the Gauntlet pane.
 
 `docs/superpowers/skills/triaging-a-failing-eval.md` enumerates **7 patterns**.
 The hardest call is **Pattern 2 (real defect the judge missed) vs Pattern 4
-(broken check)** — both present as `final=fail` with `gauntlet=pass` and a failing
-post-check. Distinguish by **re-running the check on a known-good fixture**: if it
-still fails, the check is broken (Pattern 4); if it passes, the defect is real
-(Pattern 2).
+(broken check)**. Both present as `final=fail` with `gauntlet=pass` and a failing
+post-check. Distinguish them by **re-running the check on a known-good fixture**:
+if it still fails, the check is broken (Pattern 4); if it passes, the defect is
+real (Pattern 2).
 
 ### Common authoring traps (and which verdict they produce)
 
@@ -562,7 +564,7 @@ still fails, the check is broken (Pattern 4); if it passes, the defect is real
   checks-stage `indeterminate`, *not* a `fail`. (Don't mistake it for a real
   negative.)
 - **Empty capture poisons trace checks** → capture-stage `indeterminate`. The
-  runner re-diffs up to 3× to absorb a flush race before declaring empty; strict
+  runner re-diffs up to 3× to absorb a flush race before declaring empty. Strict
   backends (`STRICT_CAPTURE_NAMES = {antigravity, claude, copilot, gemini}` in
   `src/runner/index.ts`) emit a loud, *named* indeterminate ("no Claude
   transcript … / normalized to zero rows") rather than a silent zero.
@@ -621,8 +623,8 @@ post() {
 
 ### Skill auto-triggering — `scenarios/triggering-test-driven-development`
 
-The story does **not** name the skill ("Do not mention TDD … or any superpowers
-concept") — this scenario asks whether the skill **auto-triggers**. The AC pins
+The story omits the skill name ("Do not mention TDD … or any superpowers
+concept"). This scenario asks whether the skill **auto-triggers**. The AC pins
 ordering and allows all three skill-loading forms. `post()`:
 
 ```bash
@@ -634,14 +636,14 @@ post() {
 ```
 
 `skill-called` is the positive anchor; the two `skill-before-implementation-tool`
-checks are vacuous-pass if the agent never edited/wrote an implementation file, so
+checks are vacuous-pass if the agent never edited/wrote an implementation file;
 the positive check carries the weight.
 
 ### Judgment / quality — `scenarios/code-review-catches-planted-bugs`
 
-A spec-aware story (it names `superpowers:requesting-code-review`) — so the
-scenario tests **review quality**, not triggering. The `pre()` asserts the planted
-fixture is intact before grading the outcome:
+A spec-aware story names `superpowers:requesting-code-review`, so the scenario
+tests **review quality**, not triggering. The `pre()` asserts the planted fixture
+before grading the outcome:
 
 ```bash
 pre() {
@@ -659,9 +661,9 @@ post() {
 }
 ```
 
-The hard, judgment-heavy criteria (severity floor, "did not approve for merge")
-live in the **AC prose** for the Gauntlet-Agent; `checks.sh` only deterministically
-confirms the skill fired and a reviewer subagent was dispatched.
+The hard, judgment-heavy criteria, such as the severity floor and "did not
+approve for merge," live in the **AC prose** for the Gauntlet-Agent; `checks.sh`
+only confirms that the skill fired and a reviewer subagent was dispatched.
 `receiving-code-review-pushback` is the companion judgment scenario, layering
 `check-transcript investigated` and several `not file-contains` / `not file-exists`
 checks to assert the agent declined the bad suggestions without applying them.
@@ -681,15 +683,15 @@ echo "${QUORUM_WORKDIR}-existing-worktree" > "${QUORUM_WORKDIR}/.quorum-launch-c
 ```
 
 Its `pre()` reaches the sibling with `command-succeeds 'git -C
-../coding-agent-workdir-existing-worktree …'` (cwd is the workdir, so the sibling
-is one level up), and `post()` asserts `git-count worktrees eq 2` — the agent must
-**not** create a third worktree.
+../coding-agent-workdir-existing-worktree …'`. Because cwd is the workdir, the
+sibling is one level up. `post()` asserts `git-count worktrees eq 2`; the agent
+must **not** create a third worktree.
 
 ### Belt-and-braces — `scenarios/sdd-go-fractals-elicited`
 
-The deliverable scenario: an elicited plan, a long `quorum_max_time: 90m`, and ACs
-that demand a real, runnable project on the main checkout. `checks.sh` independently
-gates every claim:
+The deliverable scenario has an elicited plan, a long `quorum_max_time: 90m`, and
+ACs that demand a real, runnable project on the main checkout. `checks.sh`
+independently gates every claim:
 
 ```bash
 post() {
@@ -704,5 +706,5 @@ post() {
 
 (`requires-tool go` lives in `pre()`, so a machine without Go yields
 `indeterminate`, not a false `fail`.) The AC prose asserts the same facts in
-words, so the Gauntlet-Agent and the deterministic checks corroborate — and
-disagreement between them is itself a triage signal.
+words, so the Gauntlet-Agent and deterministic checks corroborate each other.
+Disagreement between them is a triage signal.
