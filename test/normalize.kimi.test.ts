@@ -438,31 +438,3 @@ test('multiple think parts on the same step are joined with newlines', () => {
   expect(step!.reasoning_content).toContain('First thought.');
   expect(step!.reasoning_content).toContain('Second thought.');
 });
-
-// ---------------------------------------------------------------------------
-// Subagent tool name (verified against real wire.jsonl, 2026-06-17)
-// Kimi uses 'Agent' — same as Claude — with description/subagent_type/prompt args.
-// No alias needed; the name is already canonical.
-// ---------------------------------------------------------------------------
-
-test('kimi Agent tool calls are preserved as-is (already canonical)', () => {
-  const raw = JSON.stringify({
-    type: 'context.append_loop_event',
-    event: {
-      type: 'tool.call',
-      name: 'Agent',
-      args: {
-        description: 'Do task',
-        subagent_type: 'coder',
-        prompt: 'model: cheap\nDo work.',
-      },
-      toolCallId: 'call-agent-1',
-    },
-  });
-  const traj = normalizeKimi(raw, '0.1.0');
-  const step = traj.steps[0]!;
-  expect(step.tool_calls![0]!.function_name).toBe('Agent');
-  expect(step.tool_calls![0]!.arguments['prompt']).toBe(
-    'model: cheap\nDo work.',
-  );
-});

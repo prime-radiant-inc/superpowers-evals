@@ -123,8 +123,9 @@ function parseKimiUsage(entry: KimiEntry): KimiUsageRow | null {
  *     linked back to their call step and stored as an observation.
  *   - content.part rows carry a stepUuid that groups them with the tool.call
  *     in the same step. part.type="think" → reasoning_content; "text" → message.
- *   - Kimi's subagent tool is named "Agent" (same as Claude) with description/
- *     subagent_type/prompt args — already canonical; no alias needed.
+ *   - Kimi's orchestrator (main/wire.jsonl) emits `Agent` tool calls with
+ *     description/subagent_type/prompt args — already canonical; no alias needed.
+ *     Subagent sessions (agents/agent-N/wire.jsonl) contain only Bash/Read/Write.
  */
 export function normalizeKimi(raw: string, version: string): AtifTrajectory {
   const steps: AtifStep[] = [];
