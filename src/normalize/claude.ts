@@ -330,6 +330,15 @@ export function normalizeClaudeLegacy(
       break;
     }
   }
+  // session_id: read from the first row that carries a non-empty sessionId field.
+  let sessionId: string | undefined;
+  for (const entry of entries) {
+    const sid = entry['sessionId'];
+    if (typeof sid === 'string' && sid) {
+      sessionId = sid;
+      break;
+    }
+  }
   const cwds = sortedDistinct(entries, 'cwd');
   const gitBranches = sortedDistinct(entries, 'gitBranch');
   const agentIds = sortedDistinct(entries, 'agentId');
@@ -486,9 +495,11 @@ export function normalizeClaudeLegacy(
   const agent: AtifAgent = { name: 'claude-code', version: agentVersion };
   if (Object.keys(agentExtra).length > 0) agent.extra = agentExtra;
 
-  return {
+  const traj: AtifTrajectory = {
     schema_version: ATIF_SCHEMA_VERSION,
     agent,
     steps,
   };
+  if (sessionId) traj.session_id = sessionId;
+  return traj;
 }

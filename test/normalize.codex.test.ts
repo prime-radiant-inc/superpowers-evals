@@ -634,11 +634,11 @@ const webSearchCallLine = JSON.stringify({
   },
 });
 
-test('web_search_call payload becomes a tool-call step with web_search_call function_name', () => {
+test('web_search_call payload becomes a tool-call step with WebSearch function_name', () => {
   const traj = normalizeCodex(webSearchCallLine, '1.0.0');
   const step = traj.steps.find((s) => s.tool_calls?.length);
   expect(step).toBeDefined();
-  expect(step!.tool_calls![0]!.function_name).toBe('web_search_call');
+  expect(step!.tool_calls![0]!.function_name).toBe('WebSearch');
   expect(step!.tool_calls![0]!.arguments['action_type']).toBe('search');
   expect(step!.tool_calls![0]!.arguments['query']).toBe(
     'react todo list typescript',
@@ -655,7 +655,7 @@ test('web_search_call with url action type', () => {
   });
   const traj = normalizeCodex(line, '1.0.0');
   const tc = traj.steps[0]!.tool_calls![0]!;
-  expect(tc.function_name).toBe('web_search_call');
+  expect(tc.function_name).toBe('WebSearch');
   expect(tc.arguments['action_type']).toBe('open_url');
   expect(tc.arguments['url']).toBe('https://react.dev');
 });

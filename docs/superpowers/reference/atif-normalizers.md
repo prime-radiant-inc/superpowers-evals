@@ -4,7 +4,8 @@ Each Coding-Agent writes a different session-log format; `src/normalize/<agent>.
 
 ## Shared conventions (all normalizers)
 
-- **Tool calls / skills** → `step.tool_calls` / `step.observation` (drives `check-transcript`). Not covered further here.
+- **Tool calls / skills** → `step.tool_calls` / `step.observation` (drives `check-transcript`).
+- **Full-fidelity content (added this branch):** normalizers now emit content where the source log carries it: `step.message` (agent/user text), `step.reasoning_content` (thinking/reasoning blocks), `step.observation` (tool outputs, with `source_call_id` matching the same step's tool_call), plus `trajectory.session_id`, `agent.version`, and `agent.extra` where present in the log.
 - **Subagent-dispatch prompt → canonical `prompt` arg.** ATIF `arguments` is free-form (Harbor RFC 0001 blesses no dispatch key), so we set the convention: each normalizer aliases its subagent tool to `Agent`, and the dispatch instruction is canonicalized to the `prompt` key — so cross-harness checks (`tool-arg-match Agent --matches prompt=…`) are portable instead of silently failing where the key differs. claude/gemini/antigravity/copilot/opencode/kimi emit `prompt` natively; codex (`spawn_agent`) and pi (`subagent`) emit `task`, rewritten to `prompt` by `src/normalize/agent-prompt.ts` (lossless — the raw key survives in the retained session log). **kimi's orchestrator session emits `Agent` tool calls natively** (verified: `main/wire.jsonl` carries 18 `Agent` calls with `description`/`subagent_type`/`prompt` args); no alias is needed. Note: kimi dispatches subagents via an internal mechanism — the subagent sessions (`agents/agent-*/wire.jsonl`) contain only Bash/Read/Write tool calls and no `Agent` call; the `Agent` tool calls exist only in the main orchestrator session. An `Agent` transcript check is therefore satisfiable on kimi (via the main session log), but will never match a step in a subagent-session log.
 - **Token usage → ATIF metrics.** Per assistant/turn: `step.metrics` + `step.model_name`. Session-total-only logs: `trajectory.final_metrics` + `agent.model_name`.
 - **Buckets are DISJOINT** (no overlap), so they sum cleanly and map 1:1 to obol's `{input, cache_read, cache_write, output}`:
@@ -25,39 +26,47 @@ Each Coding-Agent writes a different session-log format; `src/normalize/<agent>.
 - Log: claude session `**/*.jsonl`; assistant rows carry `message.usage` + `message.model`.
 - `usage.input_tokens`→prompt; `output_tokens`→completion; `cache_read_input_tokens`→cached; `cache_creation_input_tokens`→`extra.cache_write`; `message.model`→model_name.
 - **Disjoint already** (input excludes cache_read). No cost logged.
+- **Full-fidelity:** emits `step.message` (text blocks), `step.reasoning_content` (thinking/reasoning/analysis blocks), `step.observation` (tool_result blocks with stdout/stderr/exitCode formatting), `trajectory.session_id` (from `sessionId` field on log rows), `agent.version` (from `version` field), `agent.extra` (cwds/git_branches/agent_ids).
 
 ### codex (`normalize/codex.ts`) — session-total → final_metrics; **input INCLUDES cached**
 - Log: `rollout-*.jsonl`; usage rides `event_msg` rows `payload.type=="token_count"`, `info.total_token_usage` is the running cumulative (last = session total). Rollout steps are individual tool calls with no turn/message structure, so usage maps to **`final_metrics`**, not per-step. Model from `turn_context.payload.model`.
 - **ASSUMPTION/QUIRK:** codex `input_tokens` INCLUDES cached (`total_tokens == input_tokens + output_tokens`, cached ⊂ input). So `total_prompt_tokens = input_tokens − cached_input_tokens` (the disjoint correction); `cached_input_tokens`→`final_metrics.extra.total_cached_tokens`. **`output_tokens` ALREADY INCLUDES `reasoning_output_tokens`** (verified against real rollouts: `total_tokens == input + output` in every row, with `reasoning ⊆ output`), so `total_completion_tokens = output_tokens` — do NOT add reasoning again or you double-count it. Conservation: `prompt + cached + completion == total_tokens`. No cost logged.
+- **Full-fidelity:** emits `step.message` (message events), `step.reasoning_content` (reasoning events with non-empty summary), `step.observation` (function_call_output/custom_tool_call_output paired by call_id), `trajectory.session_id` + `agent.version` + `agent.extra` (from session_meta). `web_search_call` → canonical `WebSearch` tool call.
 
 ### gemini (`normalize/gemini.ts`) — per-turn, disjoint, **running-snapshot dedup**
 - Log: `chats/session-*.jsonl`; `type:"gemini"` rows carry `tokens{input,output,cached,thoughts,tool,total}` + `model`.
-- `input`→prompt; `output`+`thoughts`→completion; `cached`→cached; `model`→model_name; provider stamped `"google"` (gemini logs none). No cost logged.
-- **Disjoint** (verified: `total == input+output+thoughts+cached`).
+- `input`→prompt; `output`+`thoughts`+`tool`→completion; `cached`→cached; `model`→model_name; provider stamped `"google"` (gemini logs none). No cost logged.
+- **Disjoint** (verified: `total == input+output+thoughts+tool+cached`). Note: `tool` tokens are real output tokens (tool-call generation) previously dropped; they are now folded into completion.
 - **QUIRK:** gemini-cli rewrites a running `messages[]` snapshot each line, so the same turn (same row `id`) recurs (once without tool calls, once with) with identical tokens. Dedup by row `id` — count each turn's tokens **once**, on the first step emitted for that id (often a metrics-only step).
+- **Full-fidelity:** emits `step.message` (model text), `step.reasoning_content` (thought text), `step.observation` (tool responses), `trajectory.session_id` + `agent.version` (from log metadata).
 
 ### opencode (`normalize/opencode.ts`) — per-message, disjoint, **carries cost**
 - Log: `.quorum/session-exports/*.json`; `messages[].info.tokens{input,output,reasoning,cache{read,write}}` + `modelID` + `providerID` + per-message `cost`.
 - `input`→prompt; `output`+`reasoning`→completion; `cache.read`→cached; `cache.write`→`extra.cache_write`; `modelID`→model_name; `providerID`→`extra.provider`; **`cost`→`cost_usd` (NOT re-priced).**
 - **Disjoint** (input separate from cache.read).
+- **Full-fidelity:** emits `step.message` (assistant text), `step.reasoning_content` (reasoning blocks), `step.observation` (tool results with `source_call_id`), `trajectory.session_id` + `agent.version` (from session metadata).
 
 ### pi (`normalize/pi.ts`) — per-message, disjoint, **carries cost**
 - Log: pi session; `message.usage{input,output,cacheRead,cacheWrite,cost{total},totalTokens}` + `model` + `provider`.
 - `input`→prompt; `output`→completion; `cacheRead`→cached; `cacheWrite`→`extra.cache_write`; **`cost.total`→`cost_usd`**; `model`→model_name; `provider`→`extra.provider`.
 - **Disjoint** (verified: `input+output+cacheRead == totalTokens`). Usage attaches to the message's first toolCall step, or a metrics-only step for a usage-bearing text-only final message. Cost values are passed through unrounded (float noise from the log).
+- **Full-fidelity:** emits `step.message` (assistant text), `step.observation` (tool results), `agent.version` + `agent.extra` (from session header). Reasoning blocks: pi logs carry content but no dedicated reasoning field; `step.reasoning_content` is absent.
 
 ### copilot (`normalize/copilot.ts`) — **final_metrics-only** (single source)
 - Log: copilot session-state events. Copilot reports the full usage ONLY at `session.shutdown.tokenDetails`: `input.tokenCount`→`final_metrics.total_prompt_tokens`, `output.tokenCount`→`final_metrics.total_completion_tokens`, `cache_read.tokenCount`→`final_metrics.extra.total_cached_tokens`, `currentModel`→`agent.model_name`. Tool steps carry tool_calls but **no `metrics`**.
 - **Final_metrics-only because of the SINGLE-SOURCE invariant** above: an earlier hybrid (completion per-step + prompt/cached in final_metrics) made the obol `atif` dialect skip final_metrics and silently drop ~90K of prompt+cached (the `copilot at 1k` bug). The shutdown `output` total equals the sum of per-message `outputTokens`, so sourcing completion from the shutdown total loses nothing.
 - **Disjoint** (verified: `modelMetrics.inputTokens == tokenDetails.input + cacheReadTokens`; use `tokenDetails.input` as the uncached prompt). Conservation: `final prompt + final completion + final cached == session total`. No per-message cost → priced downstream.
+- **Full-fidelity:** emits `step.message` (assistant text), `step.observation` (tool results), `agent.version` + `trajectory.session_id` (from session header). Reasoning: copilot reasoning is encrypted/absent in logs — `step.reasoning_content` is not emitted.
 
 ### kimi (`normalize/kimi.ts`) — per-turn, disjoint, **turn-vs-session scope**
 - Log: `wire.jsonl`; `type:"usage.record"` rows, `usage{inputOther,inputCacheRead,inputCacheCreation,output}` + `model` (verbatim, e.g. `kimi-code/kimi-for-coding`).
 - `inputOther`→prompt (already uncached); `inputCacheRead`→cached; `inputCacheCreation`→`extra.cache_write`; `output`→completion; `model`→model_name. No cost (model may be obol-unpriced — honest).
 - **QUIRK:** rows have `usageScope` of BOTH `"turn"` and `"session"`. Prefer per-turn rows (drop session-scope to avoid double-counting); if only session totals exist, fold into `final_metrics`. Usage rides dedicated agent steps; all-zero-token rows dropped. (`kimiLogsHaveSuperpowersSessionStart` is a separate capture-time assertion — leave intact.)
+- **Full-fidelity:** emits `step.message` (assistant text), `step.reasoning_content` (thinking blocks), `step.observation` (tool results from `tool.result` events, with `source_call_id`), `trajectory.session_id` + `agent.version` (from session metadata). No reasoning encryption — kimi thinking blocks are plain text.
 
 ### antigravity (`normalize/antigravity.ts`) — **no usage emitted**
 - Log: `brain/<uuid>/.system_generated/logs/transcript.jsonl`. agy emits **no coding-agent token usage anywhere** (only the gauntlet-agent's own `usage.jsonl` has tokens). The normalizer leaves `metrics`/`final_metrics` UNSET; cost is null — honest, not fabricated. A guard test asserts no metrics. Closing this needs an upstream fix (agy emitting usage); see `docs/experiments/2026-06-15-coding-agent-token-capture.md`.
+- **Full-fidelity:** emits `step.message` (content blocks) and `step.reasoning_content` (thinking blocks — plain text, not encrypted). No tokens → no metrics. `agent.version` + `agent.extra` from session header where present.
 
 ## Downstream
 Economics reads these ATIF metrics (not raw logs) and prices via obol's **`atif` dialect**: disjoint buckets → obol `{input, cache_read, cache_write, output}` rates; an embedded `cost_usd`/`total_cost_usd` is used verbatim (not re-priced). See the unification spec for the retirement of the old per-agent obol log parsers + `src/obol/fallback.ts`.

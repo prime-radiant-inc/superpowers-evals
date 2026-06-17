@@ -313,7 +313,7 @@ function normalizeToolCallPayload(payload: CodexPayload): AtifToolCall | null {
     if (action.url !== undefined) arguments_['url'] = action.url;
     return {
       tool_call_id: '',
-      function_name: 'web_search_call',
+      function_name: 'WebSearch',
       arguments: arguments_,
     };
   }

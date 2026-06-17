@@ -936,6 +936,31 @@ test('id-less assistant rows are NOT bundled (each is its own step)', () => {
   expect(agentSteps.length).toBe(2);
 });
 
+// ---------------------------------------------------------------------------
+// session_id: read from the first row carrying a non-empty sessionId field.
+// Real claude traces carry sessionId on every row (verified against
+// results/superpowers-bootstrap-claude-20260616T052827Z-bf6f).
+// ---------------------------------------------------------------------------
+
+test('session_id is populated from row sessionId field', () => {
+  const line = JSON.stringify({
+    type: 'user',
+    sessionId: 'abc-session-123',
+    message: { role: 'user', content: 'hello' },
+  });
+  const traj = normalizeClaudeLegacy(line, '2.1.178');
+  expect(traj.session_id).toBe('abc-session-123');
+});
+
+test('session_id is absent when no row carries sessionId', () => {
+  const line = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: 'hello' },
+  });
+  const traj = normalizeClaudeLegacy(line, '2.1.178');
+  expect(traj.session_id).toBeUndefined();
+});
+
 // Note: the per-agent `src/cli/normalize-claude.ts` shim and the unified
 // `src/cli/normalize.ts` dispatcher are intentionally not grafted onto this
 // branch — capture invokes the normalizers in-process, not via a CLI — so their
