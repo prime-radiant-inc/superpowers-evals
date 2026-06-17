@@ -1,5 +1,5 @@
 ---
-id: worktree-codex-detached-head
+id: worktree-detached-head-external
 title: Agent recognizes an externally-managed detached-HEAD worktree and skips creation
 status: ready
 tags: worktree

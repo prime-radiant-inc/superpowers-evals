@@ -676,7 +676,7 @@ only confirms that the skill fired and a reviewer subagent was dispatched.
 `check-transcript investigated` and several `not file-contains` / `not file-exists`
 checks to assert the agent declined the bad suggestions without applying them.
 
-### The launch-cwd sentinel — `scenarios/worktree-codex-detached-head`
+### The launch-cwd sentinel — `scenarios/worktree-detached-head-external`
 
 Chain three helpers, then point the launcher at the sibling worktree:
 

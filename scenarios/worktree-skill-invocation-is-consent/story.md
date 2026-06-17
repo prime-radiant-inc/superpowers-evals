@@ -1,5 +1,5 @@
 ---
-id: worktree-consent-flow
+id: worktree-skill-invocation-is-consent
 title: Agent treats a direct worktree-skill invocation as consent to proceed
 status: ready
 tags: worktree
