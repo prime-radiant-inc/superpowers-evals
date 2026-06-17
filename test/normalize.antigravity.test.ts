@@ -293,3 +293,117 @@ test('synthetic transcript with tool calls produces no metrics', () => {
   expect(traj.steps.every((s) => s.metrics === undefined)).toBe(true);
   expect(traj.final_metrics).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// Content + thinking capture (Task 8: full-fidelity ATIF content)
+//
+// Brain-transcript rows carry `content` (user/agent message text) and
+// `thinking` (agent reasoning). The normalizer must surface these as
+// step.message and step.reasoning_content respectively.
+// ---------------------------------------------------------------------------
+
+test('USER_INPUT content maps to user step message', () => {
+  const raw = JSON.stringify({
+    step_index: 0,
+    source: 'USER_EXPLICIT',
+    type: 'USER_INPUT',
+    content: 'Create a file called hello.txt containing the word hi.',
+  });
+  const traj = normalizeAntigravity(raw, '0.1.0');
+  const userSteps = traj.steps.filter((s) => s.source === 'user');
+  expect(userSteps.length).toBeGreaterThanOrEqual(1);
+  const userStep = userSteps.find(
+    (s) =>
+      s.message === 'Create a file called hello.txt containing the word hi.',
+  );
+  expect(userStep).toBeDefined();
+});
+
+test('PLANNER_RESPONSE content maps to agent step message on first tool-call step', () => {
+  const raw = JSON.stringify({
+    step_index: 2,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    content: 'I will read the instructions for the using-superpowers skill.',
+    tool_calls: [
+      { name: 'view_file', args: { AbsolutePath: '/tmp/SKILL.md' } },
+    ],
+  });
+  const traj = normalizeAntigravity(raw, '0.1.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  expect(agentSteps.length).toBeGreaterThanOrEqual(1);
+  expect(agentSteps[0]!.message).toBe(
+    'I will read the instructions for the using-superpowers skill.',
+  );
+});
+
+test('PLANNER_RESPONSE thinking maps to reasoning_content on first tool-call step', () => {
+  const raw = JSON.stringify({
+    step_index: 11,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    content: 'I will list the files in the workspace directory.',
+    thinking:
+      '**Considering the Requirements**\n\nOkay, analyzing the request.',
+    tool_calls: [{ name: 'list_dir', args: { DirectoryPath: '/tmp/workdir' } }],
+  });
+  const traj = normalizeAntigravity(raw, '0.1.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  expect(agentSteps[0]!.reasoning_content).toBe(
+    '**Considering the Requirements**\n\nOkay, analyzing the request.',
+  );
+  expect(agentSteps[0]!.message).toBe(
+    'I will list the files in the workspace directory.',
+  );
+});
+
+test('PLANNER_RESPONSE with no tool calls emits standalone agent text step', () => {
+  const raw = JSON.stringify({
+    step_index: 5,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    content: 'Task complete.',
+    thinking: 'Done reasoning.',
+  });
+  const traj = normalizeAntigravity(raw, '0.1.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  expect(agentSteps.length).toBeGreaterThanOrEqual(1);
+  const carrier = agentSteps[0]!;
+  expect(carrier.message).toBe('Task complete.');
+  expect(carrier.reasoning_content).toBe('Done reasoning.');
+  expect(carrier.tool_calls).toBeUndefined();
+});
+
+test('real fixture: USER_INPUT content populates user step message', () => {
+  const traj = normalizeAntigravity(realNoUsage, '0.1.0');
+  const userSteps = traj.steps.filter((s) => s.source === 'user');
+  // The fixture has one USER_EXPLICIT/USER_INPUT row with content
+  expect(
+    userSteps.some(
+      (s) => typeof s.message === 'string' && s.message.length > 0,
+    ),
+  ).toBe(true);
+});
+
+test('real fixture: PLANNER_RESPONSE content and thinking populate agent steps', () => {
+  const traj = normalizeAntigravity(realNoUsage, '0.1.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  // The fixture has PLANNER_RESPONSE rows with content and thinking
+  expect(
+    agentSteps.some(
+      (s) => typeof s.message === 'string' && s.message.length > 0,
+    ),
+  ).toBe(true);
+  expect(
+    agentSteps.some(
+      (s) =>
+        typeof s.reasoning_content === 'string' &&
+        s.reasoning_content.length > 0,
+    ),
+  ).toBe(true);
+  // Still no metrics
+  for (const step of traj.steps) {
+    expect(step.metrics).toBeUndefined();
+    expect(step.model_name).toBeUndefined();
+  }
+});
