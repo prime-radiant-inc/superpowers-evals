@@ -402,6 +402,35 @@ test('text content.part rows become message on the matching step', () => {
   expect(msgStep!.source).toBe('agent');
 });
 
+// ---------------------------------------------------------------------------
+// Agent tool calls (kimi orchestrator session — real wire.jsonl verified)
+// Real evidence: results/sdd-go-fractals-elicited-kimi-20260615T224239Z-86f5/
+//   home/.kimi-code/sessions/wd_.../session_.../agents/main/wire.jsonl
+//   has 18 tool.call rows with name:"Agent" and args {description,subagent_type,prompt}.
+// kimi emits Agent+prompt natively — no alias or prompt-key rewrite needed.
+// ---------------------------------------------------------------------------
+
+test('kimi orchestrator emits Agent tool calls natively with prompt arg preserved', () => {
+  const raw = toolCall('Agent', {
+    description: 'Implement Task 1: scaffolding',
+    subagent_type: 'coder',
+    prompt:
+      'model: cheap\n\nYou are implementing Task 1: Project scaffolding and module setup for the Go Fractals CLI.',
+  });
+  const traj = normalizeKimi(raw, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Agent',
+  );
+  expect(step).toBeDefined();
+  const call = step!.tool_calls![0]!;
+  expect(call.function_name).toBe('Agent');
+  // prompt arg is preserved verbatim — kimi emits it natively, no rewrite
+  expect(call.arguments['prompt']).toContain('Project scaffolding');
+  // description and subagent_type are also carried through
+  expect(call.arguments['description']).toBe('Implement Task 1: scaffolding');
+  expect(call.arguments['subagent_type']).toBe('coder');
+});
+
 test('multiple think parts on the same step are joined with newlines', () => {
   const raw = [
     JSON.stringify({
