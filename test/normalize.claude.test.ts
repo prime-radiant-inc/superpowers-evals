@@ -319,6 +319,175 @@ test('partial usage maps present fields and omits absent ones', () => {
   expect(step.extra?.['cache_write']).toBeUndefined();
 });
 
+// ---------------------------------------------------------------------------
+// Usage dedup by message.id (claude-code re-emits a running snapshot: the same
+// assistant message.id recurs across multiple rows, each carrying usage). The
+// normalizer must count each message's usage ONCE, not once per row.
+// Oracle: Harbor's claude_code.py keeps the last usage per message.id.
+// ---------------------------------------------------------------------------
+
+// Mirrors the bf6f real trace shape: each message.id spans 3 rows (thinking,
+// text, tool_use), every row carrying the SAME usage snapshot. The buggy
+// normalizer sums all rows (3× inflation); the fix counts each id once.
+const reemittedUsageLog = [
+  // message.id A — 3 rows, each with identical usage
+  {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      id: 'msg_A',
+      model: 'claude-opus-4-8',
+      content: [{ type: 'thinking', thinking: 'planning' }],
+      usage: {
+        input_tokens: 5691,
+        output_tokens: 160,
+        cache_read_input_tokens: 15835,
+        cache_creation_input_tokens: 7344,
+      },
+    },
+  },
+  {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      id: 'msg_A',
+      model: 'claude-opus-4-8',
+      content: [{ type: 'text', text: 'thinking out loud' }],
+      usage: {
+        input_tokens: 5691,
+        output_tokens: 160,
+        cache_read_input_tokens: 15835,
+        cache_creation_input_tokens: 7344,
+      },
+    },
+  },
+  {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      id: 'msg_A',
+      model: 'claude-opus-4-8',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'call_skill',
+          name: 'Skill',
+          input: { skill: 'superpowers:brainstorming' },
+        },
+      ],
+      usage: {
+        input_tokens: 5691,
+        output_tokens: 160,
+        cache_read_input_tokens: 15835,
+        cache_creation_input_tokens: 7344,
+      },
+    },
+  },
+  // message.id B — single row
+  {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      id: 'msg_B',
+      model: 'claude-opus-4-8',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'call_bash',
+          name: 'Bash',
+          input: { command: 'ls' },
+        },
+      ],
+      usage: {
+        input_tokens: 2,
+        output_tokens: 118,
+        cache_read_input_tokens: 32443,
+        cache_creation_input_tokens: 510,
+      },
+    },
+  },
+]
+  .map((e) => JSON.stringify(e))
+  .join('\n');
+
+test('dedups re-emitted usage by message.id (counts each message once)', () => {
+  const traj = normalizeClaudeLegacy(reemittedUsageLog, '2.1.177');
+
+  let promptTotal = 0;
+  let cachedTotal = 0;
+  let cacheWriteTotal = 0;
+  let completionTotal = 0;
+  for (const s of traj.steps) {
+    promptTotal += s.metrics?.prompt_tokens ?? 0;
+    cachedTotal += s.metrics?.cached_tokens ?? 0;
+    completionTotal += s.metrics?.completion_tokens ?? 0;
+    cacheWriteTotal += (s.extra?.['cache_write'] as number | undefined) ?? 0;
+  }
+
+  // msg_A counted once (5691/15835/7344/160) + msg_B (2/32443/510/118)
+  expect(promptTotal).toBe(5693);
+  expect(cachedTotal).toBe(48278);
+  expect(cacheWriteTotal).toBe(7854);
+  expect(completionTotal).toBe(278);
+});
+
+test('re-emitted message.id does not duplicate tool_calls', () => {
+  const traj = normalizeClaudeLegacy(reemittedUsageLog, '2.1.177');
+  const calls = traj.steps.flatMap((s) => s.tool_calls ?? []);
+  expect(calls.map((c) => c.function_name)).toEqual(['Skill', 'Bash']);
+  expect(calls.map((c) => c.tool_call_id)).toEqual(['call_skill', 'call_bash']);
+});
+
+test('a tool_use repeated across re-emitted rows is emitted once', () => {
+  // Same tool_use id appearing in two rows of one message.id must produce a
+  // single tool_call, not two.
+  const log = [
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        id: 'msg_X',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'dupe_call',
+            name: 'Bash',
+            input: { command: 'ls' },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 1 },
+      },
+    },
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        id: 'msg_X',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'dupe_call',
+            name: 'Bash',
+            input: { command: 'ls' },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 1 },
+      },
+    },
+  ]
+    .map((e) => JSON.stringify(e))
+    .join('\n');
+
+  const traj = normalizeClaudeLegacy(log, '2.1.177');
+  const calls = traj.steps.flatMap((s) => s.tool_calls ?? []);
+  expect(calls.length).toBe(1);
+  expect(calls[0]!.tool_call_id).toBe('dupe_call');
+  // usage counted once
+  let promptTotal = 0;
+  for (const s of traj.steps) promptTotal += s.metrics?.prompt_tokens ?? 0;
+  expect(promptTotal).toBe(10);
+});
+
 // Note: the per-agent `src/cli/normalize-claude.ts` shim and the unified
 // `src/cli/normalize.ts` dispatcher are intentionally not grafted onto this
 // branch — capture invokes the normalizers in-process, not via a CLI — so their

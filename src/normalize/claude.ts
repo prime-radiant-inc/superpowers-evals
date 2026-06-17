@@ -22,14 +22,22 @@ interface ClaudeUsage {
  *   cache_read_input_tokens    → metrics.cached_tokens
  *   cache_creation_input_tokens→ extra.cache_write
  * No per-message cost is logged by Claude; cost is priced downstream by obol.
+ *
+ * `usage` is the resolved usage block to charge (which may differ from
+ * `message.usage` when a message.id is re-emitted across rows — the caller
+ * supplies the last-seen snapshot). Pass `undefined` to record the model only
+ * and skip usage entirely (used to suppress double-counting on a repeat row).
  */
-function applyClaudeUsage(step: AtifStep, message: Record<string, unknown>) {
+function applyClaudeUsage(
+  step: AtifStep,
+  message: Record<string, unknown>,
+  usage: ClaudeUsage | undefined,
+) {
   const model = message['model'];
   if (typeof model === 'string' && model) step.model_name = model;
 
-  const usage = message['usage'];
-  if (!usage || typeof usage !== 'object') return;
-  const u = usage as ClaudeUsage;
+  if (!usage) return;
+  const u = usage;
 
   const metrics: AtifMetrics = {};
   if (typeof u.input_tokens === 'number')
@@ -43,6 +51,36 @@ function applyClaudeUsage(step: AtifStep, message: Record<string, unknown>) {
   if (typeof u.cache_creation_input_tokens === 'number') {
     step.extra = { ...step.extra, cache_write: u.cache_creation_input_tokens };
   }
+}
+
+/**
+ * claude-code re-emits a running snapshot of an in-flight assistant turn: the
+ * same `message.id` recurs across several session-log rows, each carrying the
+ * turn's `usage`. Summing every row triple-counts tokens. Build a map of the
+ * LAST usage seen per message.id (the most-complete streaming snapshot — the
+ * Harbor oracle's rule) so each turn's usage is charged exactly once.
+ */
+function lastUsageByMessageId(raw: string): Map<string, ClaudeUsage> {
+  const lastUsage = new Map<string, ClaudeUsage>();
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (entry['type'] !== 'assistant') continue;
+    const message = entry['message'];
+    if (!message || typeof message !== 'object') continue;
+    const m = message as Record<string, unknown>;
+    const id = m['id'];
+    const usage = m['usage'];
+    if (typeof id === 'string' && id && usage && typeof usage === 'object') {
+      lastUsage.set(id, usage as ClaudeUsage);
+    }
+  }
+  return lastUsage;
 }
 
 interface Block {
@@ -78,6 +116,12 @@ export function normalizeClaudeLegacy(
 ): AtifTrajectory {
   const steps: AtifStep[] = [];
   const callIndex = new Map<string, AtifStep>();
+  // claude-code re-emits a turn's running snapshot across rows sharing one
+  // `message.id`. Charge each turn's usage once (the last/most-complete
+  // snapshot) and never duplicate a tool_use already emitted in this turn.
+  const lastUsage = lastUsageByMessageId(raw);
+  const usageChargedMsgIds = new Set<string>();
+  const seenToolCallIds = new Set<string>();
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -99,8 +143,13 @@ export function normalizeClaudeLegacy(
         else if (b.type === 'thinking' && typeof b.thinking === 'string')
           thinking.push(b.thinking);
         else if (b.type === 'tool_use') {
+          // A re-emitted snapshot row replays a tool_use already seen; emit
+          // each distinct tool_call id once.
+          const callId = b.id ?? '';
+          if (callId && seenToolCallIds.has(callId)) continue;
+          if (callId) seenToolCallIds.add(callId);
           toolCalls.push({
-            tool_call_id: b.id ?? '',
+            tool_call_id: callId,
             function_name: b.name ?? '',
             arguments: b.input ?? {},
           });
@@ -116,8 +165,24 @@ export function normalizeClaudeLegacy(
         for (const c of toolCalls) callIndex.set(c.tool_call_id, step);
       }
       const message = entry['message'];
-      if (message && typeof message === 'object')
-        applyClaudeUsage(step, message as Record<string, unknown>);
+      if (message && typeof message === 'object') {
+        const m = message as Record<string, unknown>;
+        const msgId = typeof m['id'] === 'string' ? (m['id'] as string) : null;
+        // Charge usage once per message.id (the last/most-complete snapshot).
+        // A row whose id was already charged — or a re-emitted snapshot — keeps
+        // its model_name but contributes no tokens. Rows with no id always
+        // charge their own usage.
+        let usage: ClaudeUsage | undefined;
+        if (msgId === null) {
+          const u = m['usage'];
+          usage = u && typeof u === 'object' ? (u as ClaudeUsage) : undefined;
+        } else if (!usageChargedMsgIds.has(msgId)) {
+          usageChargedMsgIds.add(msgId);
+          usage =
+            lastUsage.get(msgId) ?? (m['usage'] as ClaudeUsage | undefined);
+        }
+        applyClaudeUsage(step, m, usage);
+      }
       steps.push(step);
       continue;
     }
