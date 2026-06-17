@@ -128,6 +128,27 @@ export function disjointFromHarbor(harborFinalMetrics: HarborFinalMetrics): {
   };
 }
 
+/**
+ * Translate a Harbor final_metrics block to disjoint buckets for a given agent.
+ * Most agents emit inclusive prompt buckets (disjointFromHarbor subtracts the
+ * cache buckets); a few (gemini) already emit disjoint buckets where
+ * total_prompt_tokens is uncached input and total_cached_tokens is separate.
+ */
+function harborDisjointFor(
+  agent: string,
+  fm: HarborFinalMetrics,
+): { uncached: number; cached: number; cache_write: number; completion: number } {
+  if (HARBOR_DISJOINT_FINAL_METRICS.has(agent)) {
+    return {
+      uncached: fm.total_prompt_tokens ?? 0,
+      cached: fm.total_cached_tokens ?? 0,
+      cache_write: 0,
+      completion: fm.total_completion_tokens ?? 0,
+    };
+  }
+  return disjointFromHarbor(fm);
+}
+
 // ── Our normalizer runner ─────────────────────────────────────────────────────
 
 function runOurNormalizer(agent: string, logDir: string): AtifTrajectory | null {
@@ -200,7 +221,7 @@ function runOurNormalizer(agent: string, logDir: string): AtifTrajectory | null 
 // ── Harbor runner ─────────────────────────────────────────────────────────────
 
 // Inline Python: instantiates Harbor's ClaudeCode converter and emits JSON
-const HARBOR_SCRIPT = `
+const HARBOR_CLAUDE_SCRIPT = `
 import sys, json
 from pathlib import Path
 from harbor.agents.installed.claude_code import ClaudeCode
@@ -214,7 +235,72 @@ else:
     print(json.dumps(htraj.to_json_dict()))
 `;
 
-function runHarbor(logDir: string): AtifTrajectory | null {
+// Inline Python: reconstructs each gemini session log (_load_gemini_session,
+// honoring $set/$rewindTo) then converts (_convert_gemini_to_atif). When the
+// dir holds several session logs the trajectories are concatenated + their
+// final_metrics summed (matching our merge). gemini final_metrics buckets are
+// already DISJOINT (input→prompt, cached separate), unlike claude's inclusive.
+const HARBOR_GEMINI_SCRIPT = `
+import sys, json, tempfile
+from pathlib import Path
+from harbor.agents.installed.gemini_cli import GeminiCli
+
+session_dir = Path(sys.argv[1])
+logs = Path(tempfile.mkdtemp())
+g = GeminiCli(logs_dir=logs, model_name='google/gemini-3-flash')
+
+paths = sorted(
+    p for p in session_dir.rglob('*')
+    if p.is_file() and p.suffix in ('.jsonl', '.json')
+)
+trajs = []
+for p in paths:
+    sess = g._load_gemini_session(p)
+    if sess is None:
+        continue
+    t = g._convert_gemini_to_atif(sess)
+    if t is not None:
+        trajs.append(t.to_json_dict())
+
+if not trajs:
+    print('null')
+else:
+    steps = []
+    for t in trajs:
+        for s in t['steps']:
+            steps.append({**s, 'step_id': len(steps) + 1})
+    fm = {
+        'total_prompt_tokens': sum(
+            (t.get('final_metrics') or {}).get('total_prompt_tokens', 0) for t in trajs
+        ),
+        'total_completion_tokens': sum(
+            (t.get('final_metrics') or {}).get('total_completion_tokens', 0) for t in trajs
+        ),
+        'total_cached_tokens': sum(
+            (t.get('final_metrics') or {}).get('total_cached_tokens', 0) for t in trajs
+        ),
+        'total_steps': len(steps),
+    }
+    out = {
+        'schema_version': trajs[0]['schema_version'],
+        'session_id': trajs[0].get('session_id'),
+        'agent': trajs[0]['agent'],
+        'steps': steps,
+        'final_metrics': fm,
+    }
+    print(json.dumps(out))
+`;
+
+const HARBOR_SCRIPTS: Record<string, string> = {
+  claude: HARBOR_CLAUDE_SCRIPT,
+  gemini: HARBOR_GEMINI_SCRIPT,
+};
+
+// Agents whose Harbor final_metrics token buckets are already DISJOINT
+// (no inclusive prompt sum to translate). gemini is one such agent.
+const HARBOR_DISJOINT_FINAL_METRICS = new Set<string>(['gemini']);
+
+function runHarbor(agent: string, logDir: string): AtifTrajectory | null {
   if (!existsSync(HARBOR_PYTHON)) {
     console.error(
       `Harbor Python not found at ${HARBOR_PYTHON}.\n` +
@@ -224,7 +310,16 @@ function runHarbor(logDir: string): AtifTrajectory | null {
     return null;
   }
 
-  const result = spawnSync(HARBOR_PYTHON, ['-c', HARBOR_SCRIPT, logDir], {
+  const script = HARBOR_SCRIPTS[agent];
+  if (!script) {
+    console.error(
+      `No Harbor oracle script for agent "${agent}". ` +
+        `Supported: ${Object.keys(HARBOR_SCRIPTS).join(', ')}`,
+    );
+    return null;
+  }
+
+  const result = spawnSync(HARBOR_PYTHON, ['-c', script, logDir], {
     encoding: 'utf8',
   });
 
@@ -288,7 +383,11 @@ function contentFields(traj: AtifTrajectory): string[] {
   return [...fields].sort();
 }
 
-function printSummary(label: string, traj: AtifTrajectory | null): void {
+function printSummary(
+  agent: string,
+  label: string,
+  traj: AtifTrajectory | null,
+): void {
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`${label}`);
   console.log(`${'─'.repeat(60)}`);
@@ -326,12 +425,19 @@ function printSummary(label: string, traj: AtifTrajectory | null): void {
     // Cast to Harbor shape to read total_cached_tokens if present
     const fmH = fm as HarborFinalMetrics;
     const hasCached = (fmH.total_cached_tokens ?? 0) > 0 || (fmH.extra?.total_cache_creation_input_tokens ?? 0) > 0;
+    const harborSide = label.startsWith('HARBOR');
     console.log('  [final_metrics]');
-    if (hasCached) {
-      // Harbor format: inclusive buckets
-      const disjoint = disjointFromHarbor(fmH);
-      console.log('    Harbor inclusive → disjoint:');
-      console.log(`      total_prompt (inclusive): ${fmH.total_prompt_tokens ?? 0}`);
+    if (harborSide && hasCached) {
+      // Harbor format. Translate per agent: inclusive prompt buckets get
+      // subtracted (claude); already-disjoint buckets (gemini) pass through.
+      const disjoint = harborDisjointFor(agent, fmH);
+      const disjointAgent = HARBOR_DISJOINT_FINAL_METRICS.has(agent);
+      console.log(
+        disjointAgent
+          ? '    Harbor disjoint:'
+          : '    Harbor inclusive → disjoint:',
+      );
+      console.log(`      total_prompt:             ${fmH.total_prompt_tokens ?? 0}`);
       console.log(`      total_cached:             ${fmH.total_cached_tokens ?? 0}`);
       console.log(`      cache_creation (extra):   ${fmH.extra?.total_cache_creation_input_tokens ?? 0}`);
       console.log(`    → uncached:    ${disjoint.uncached}`);
@@ -352,7 +458,11 @@ function printSummary(label: string, traj: AtifTrajectory | null): void {
 
 // ── Parity comparison ─────────────────────────────────────────────────────────
 
-function printParity(ours: AtifTrajectory | null, harbor: AtifTrajectory | null): void {
+function printParity(
+  agent: string,
+  ours: AtifTrajectory | null,
+  harbor: AtifTrajectory | null,
+): void {
   console.log(`\n${'═'.repeat(60)}`);
   console.log('PARITY CHECK');
   console.log(`${'═'.repeat(60)}`);
@@ -383,7 +493,7 @@ function printParity(ours: AtifTrajectory | null, harbor: AtifTrajectory | null)
   const harborFm = harbor.final_metrics as HarborFinalMetrics | undefined;
 
   if (harborFm) {
-    const harborDisjoint = disjointFromHarbor(harborFm);
+    const harborDisjoint = harborDisjointFor(agent, harborFm);
     const ourTotal =
       ourMetrics.prompt + ourMetrics.cached + ourMetrics.cache_write + ourMetrics.completion;
     const harborTotal =
@@ -469,11 +579,11 @@ function main(): void {
   console.log(`Log dir: ${logDir}`);
 
   const ours = runOurNormalizer(agent, logDir);
-  const harbor = runHarbor(logDir);
+  const harbor = runHarbor(agent, logDir);
 
-  printSummary('OUR NORMALIZER', ours);
-  printSummary('HARBOR CONVERTER', harbor);
-  printParity(ours, harbor);
+  printSummary(agent, 'OUR NORMALIZER', ours);
+  printSummary(agent, 'HARBOR CONVERTER', harbor);
+  printParity(agent, ours, harbor);
   console.log();
 }
 
