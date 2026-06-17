@@ -1,6 +1,6 @@
 ---
-id: sdd-go-fractals-elicited
-title: Agent executes an opus-elicited crisp Go fractals plan (L1 guidance output) via subagent-driven-development
+id: sdd-go-fractals-gpt55
+title: Agent executes a gpt-5.5-authored Go fractals plan end-to-end via subagent-driven-development
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 90m

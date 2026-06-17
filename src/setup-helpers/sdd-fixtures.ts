@@ -31,16 +31,17 @@ function scaffoldFromFixture(workdir: string, fixtureName: string): void {
   runGit(['commit', '-m', 'initial: design + plan'], workdir);
 }
 
-// The base scenario's plan is elicited from gpt-5.5 (the codex CLI following
-// this repo's writing-plans skill, 2026-06-16); sdd-go-fractals-elicited carries
-// the opus-elicited plan. Same design.md, two frontier models — cross-model SDD
-// execution coverage.
-export function scaffoldSddGoFractals(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals');
+// Two go-fractals fixtures over the SAME design.md, each plan genuinely elicited
+// by following this repo's writing-plans skill — they differ only in the frontier
+// model that authored plan.md (cross-model SDD execution coverage: the plan author
+// differs from the Claude executor under test). gpt55 = gpt-5.5 (codex CLI,
+// 2026-06-16); opus48 = Opus 4.8.
+export function scaffoldSddGoFractalsGpt55(ctx: HelperContext): void {
+  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-gpt55');
 }
 
-export function scaffoldSddGoFractalsElicited(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-elicited');
+export function scaffoldSddGoFractalsOpus48(ctx: HelperContext): void {
+  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-opus48');
 }
 
 export function scaffoldSddSvelteTodo(ctx: HelperContext): void {

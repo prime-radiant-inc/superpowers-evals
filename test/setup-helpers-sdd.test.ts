@@ -7,7 +7,7 @@ import { runGit } from '../src/setup-helpers/git.ts';
 import {
   addSddAuthPlan,
   scaffoldSddBrokenPlan,
-  scaffoldSddGoFractals,
+  scaffoldSddGoFractalsGpt55,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddYagniPlan,
@@ -18,10 +18,10 @@ function tmp(): string {
 }
 
 describe('sdd fixtures', () => {
-  test('scaffoldSddGoFractals reads fixtures/ and commits design+plan', () => {
+  test('scaffoldSddGoFractalsGpt55 reads fixtures/ and commits design+plan', () => {
     const dir = tmp();
     try {
-      scaffoldSddGoFractals({ workdir: dir } as never);
+      scaffoldSddGoFractalsGpt55({ workdir: dir } as never);
       expect(runGit(['log', '--format=%s'], dir).trim()).toBe(
         'initial: design + plan',
       );
@@ -119,7 +119,7 @@ describe('sdd fixtures', () => {
     const base = tmp();
     try {
       const cases: Array<[string, (ctx: never) => void]> = [
-        ['go-fractals', scaffoldSddGoFractals],
+        ['go-fractals', scaffoldSddGoFractalsGpt55],
         ['broken', scaffoldSddBrokenPlan],
         ['quality', scaffoldSddQualityDefectPlan],
         ['yagni', scaffoldSddYagniPlan],

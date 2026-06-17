@@ -217,7 +217,7 @@ variants only for longitudinal comparability.
 The strongest scenarios assert the same fact in **both** the AC prose (graded by
 the LLM) and `checks.sh` (deterministic). The Gauntlet-Agent and the
 post-checks are independent witnesses; agreement is a strong signal,
-disagreement is a triage flag (Pattern 2 vs 4 in §5). `sdd-go-fractals-elicited`
+disagreement is a triage flag (Pattern 2 vs 4 in §5). `sdd-go-fractals-opus48`
 is the model: its ACs say "builds, `go test ./...` passes, the work is on the
 main checkout," and `checks.sh` independently runs `command-succeeds 'go test
 ./...'` and `git-count commits gte 4`.
@@ -695,7 +695,7 @@ Its `pre()` reaches the sibling with `command-succeeds 'git -C
 sibling is one level up. `post()` asserts `git-count worktrees eq 2`; the agent
 must **not** create a third worktree.
 
-### Belt-and-braces — `scenarios/sdd-go-fractals-elicited`
+### Belt-and-braces — `scenarios/sdd-go-fractals-opus48`
 
 The deliverable scenario has an elicited plan, a long `quorum_max_time: 90m`, and
 ACs that demand a real, runnable project on the main checkout. `checks.sh`
