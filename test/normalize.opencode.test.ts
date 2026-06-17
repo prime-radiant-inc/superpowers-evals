@@ -399,3 +399,305 @@ test('usage: assistant message without a tokens block leaves metrics unset', () 
   const traj = normalizeOpencode(JSON.stringify(noTokens), '0.5.0');
   expect(traj.steps.every((s) => s.metrics === undefined)).toBe(true);
 });
+
+// ---------------------------------------------------------------------------
+// Full-fidelity ATIF fields: session_id, message, reasoning_content,
+// observation, real callID → tool_call_id, timestamps
+// ---------------------------------------------------------------------------
+
+// Fixture mirroring the real opencode export shape:
+// - msg 0: user (text part only)
+// - msg 1: assistant, reasoning + text + tool (todowrite) with callID + state.output + timestamp
+// - msg 2: assistant, text only (no tools)
+const fullFidelityExport = {
+  info: { id: 'ses_abc123', directory: '/tmp/project' },
+  messages: [
+    {
+      info: { role: 'user', id: 'msg_u1', sessionID: 'ses_abc123' },
+      parts: [
+        {
+          type: 'text',
+          text: 'Let me make a todo list',
+          id: 'pt_u1',
+          sessionID: 'ses_abc123',
+          messageID: 'msg_u1',
+        },
+      ],
+    },
+    {
+      info: {
+        role: 'assistant',
+        id: 'msg_a1',
+        sessionID: 'ses_abc123',
+        modelID: 'claude-sonnet-4-5',
+        providerID: 'anthropic',
+        cost: 0.012,
+        tokens: {
+          total: 500,
+          input: 400,
+          output: 80,
+          reasoning: 20,
+          cache: { write: 0, read: 0 },
+        },
+      },
+      parts: [
+        { type: 'step-start' },
+        {
+          type: 'reasoning',
+          text: 'I should brainstorm first.',
+          time: { start: 1781587732648, end: 1781587734965 },
+          id: 'pt_r1',
+          sessionID: 'ses_abc123',
+          messageID: 'msg_a1',
+        },
+        {
+          type: 'text',
+          text: 'Using brainstorming skill.',
+          time: { start: 1781587734968, end: 1781587734974 },
+          id: 'pt_t1',
+          sessionID: 'ses_abc123',
+          messageID: 'msg_a1',
+        },
+        {
+          type: 'tool',
+          tool: 'todowrite',
+          callID: 'call_REAL123',
+          state: {
+            status: 'completed',
+            input: {
+              todos: [{ content: 'Explore project', status: 'in_progress' }],
+            },
+            output: '[{"content":"Explore project","status":"in_progress"}]',
+          },
+          time: { start: 1781587735000, end: 1781587735500 },
+          id: 'pt_tool1',
+          sessionID: 'ses_abc123',
+          messageID: 'msg_a1',
+        },
+        { type: 'step-finish' },
+      ],
+    },
+    {
+      info: {
+        role: 'assistant',
+        id: 'msg_a2',
+        sessionID: 'ses_abc123',
+        modelID: 'claude-sonnet-4-5',
+        providerID: 'anthropic',
+        cost: 0.003,
+        tokens: {
+          total: 100,
+          input: 80,
+          output: 20,
+          reasoning: 0,
+          cache: { write: 0, read: 0 },
+        },
+      },
+      parts: [
+        { type: 'step-start' },
+        {
+          type: 'text',
+          text: 'Done with the todo list.',
+          time: { start: 1781587740000, end: 1781587740100 },
+          id: 'pt_t2',
+          sessionID: 'ses_abc123',
+          messageID: 'msg_a2',
+        },
+        { type: 'step-finish' },
+      ],
+    },
+  ],
+};
+
+test('full-fidelity: session_id extracted from info.id', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  expect(traj.session_id).toBe('ses_abc123');
+});
+
+test('full-fidelity: session_id absent when info.id missing', () => {
+  const noId = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          { type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(noId), '0.5.0');
+  expect(traj.session_id).toBeUndefined();
+});
+
+test('full-fidelity: real callID used as tool_call_id', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const todoStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'TodoWrite',
+  );
+  expect(todoStep).toBeDefined();
+  expect(todoStep!.tool_calls![0]!.tool_call_id).toBe('call_REAL123');
+});
+
+test('full-fidelity: tool without callID falls back to synthetic id', () => {
+  const noCallId = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          { type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(noCallId), '0.5.0');
+  const bashStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(bashStep).toBeDefined();
+  // Falls back to a non-empty synthetic id — format is implementation detail,
+  // just confirm it is a non-empty string.
+  expect(typeof bashStep!.tool_calls![0]!.tool_call_id).toBe('string');
+  expect(bashStep!.tool_calls![0]!.tool_call_id.length).toBeGreaterThan(0);
+});
+
+test('full-fidelity: text parts → step.message on first tool step of message', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const todoStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'TodoWrite',
+  );
+  expect(todoStep).toBeDefined();
+  expect(todoStep!.message).toBe('Using brainstorming skill.');
+});
+
+test('full-fidelity: multiple text parts joined on first tool step', () => {
+  const multiText = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          { type: 'text', text: 'First sentence.' },
+          { type: 'text', text: 'Second sentence.' },
+          { type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(multiText), '0.5.0');
+  const bashStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(bashStep!.message).toBe('First sentence.\n\nSecond sentence.');
+});
+
+test('full-fidelity: text-only message gets step.message on its metrics-only step', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const finalStep = traj.steps.find((s) => s.metrics?.cost_usd === 0.003);
+  expect(finalStep).toBeDefined();
+  expect(finalStep!.message).toBe('Done with the todo list.');
+});
+
+test('full-fidelity: reasoning parts → step.reasoning_content on first tool step', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const todoStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'TodoWrite',
+  );
+  expect(todoStep).toBeDefined();
+  expect(todoStep!.reasoning_content).toBe('I should brainstorm first.');
+});
+
+test('full-fidelity: multiple reasoning parts joined with double newline', () => {
+  const multiReasoning = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          { type: 'reasoning', text: 'First thought.' },
+          { type: 'reasoning', text: 'Second thought.' },
+          { type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(multiReasoning), '0.5.0');
+  const bashStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(bashStep!.reasoning_content).toBe('First thought.\n\nSecond thought.');
+});
+
+test('full-fidelity: state.output → observation on the tool step', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const todoStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'TodoWrite',
+  );
+  expect(todoStep).toBeDefined();
+  expect(todoStep!.observation).toBeDefined();
+  expect(todoStep!.observation!.results).toHaveLength(1);
+  expect(todoStep!.observation!.results[0]!.content).toBe(
+    '[{"content":"Explore project","status":"in_progress"}]',
+  );
+  // source_call_id must match the tool_call_id in the same step
+  expect(todoStep!.observation!.results[0]!.source_call_id).toBe(
+    'call_REAL123',
+  );
+});
+
+test('full-fidelity: observation source_call_id matches tool_call_id (ATIF valid)', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
+test('full-fidelity: tool without state.output has no observation', () => {
+  const noOutput = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_X',
+            state: { status: 'completed', input: { command: 'ls' } },
+          },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(noOutput), '0.5.0');
+  const bashStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(bashStep!.observation).toBeUndefined();
+});
+
+test('full-fidelity: part timestamp extracted from time.start (ms → ISO)', () => {
+  const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
+  const todoStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'TodoWrite',
+  );
+  expect(todoStep).toBeDefined();
+  // time.start = 1781587735000 → ISO string
+  expect(todoStep!.timestamp).toBe(new Date(1781587735000).toISOString());
+});
+
+test('full-fidelity: step without time has no timestamp', () => {
+  const noTime = {
+    messages: [
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_Y',
+            state: { input: { command: 'ls' } },
+          },
+        ],
+      },
+    ],
+  };
+  const traj = normalizeOpencode(JSON.stringify(noTime), '0.5.0');
+  const bashStep = traj.steps[0];
+  expect(bashStep!.timestamp).toBeUndefined();
+});
