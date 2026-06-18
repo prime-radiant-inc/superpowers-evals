@@ -39,7 +39,9 @@ function doneView(over: Partial<CellView> = {}): CellView {
       { kind: 'fail', height: 0.5 },
       { kind: 'pass', height: 1 },
     ],
-    bottom: '$1.25',
+    bottom: '—',
+    face_time: '2m5s',
+    face_cost: '$1.25',
     drift: false,
     opacity: 0.84,
     card: null,
@@ -98,6 +100,8 @@ test('empty cell renders the not_run glyph (middle dot) and no inner ribbon', ()
     error_stage: null,
     slots: ghostSlots(),
     bottom: '—',
+    face_time: '—',
+    face_cost: '—',
     drift: false,
     opacity: 1,
     card: null,
@@ -119,6 +123,8 @@ test('ineligible cell (title set) renders dimmed ineligible glyph + tooltip', ()
     error_stage: null,
     slots: ghostSlots(),
     bottom: '—',
+    face_time: '—',
+    face_cost: '—',
     drift: false,
     opacity: 0.3,
     card: null,
@@ -171,6 +177,8 @@ test('running cell carries the running class, a shimmer runslot, and the phase b
       { kind: 'running', height: 0.18 },
     ],
     bottom: 'agent',
+    face_time: '—',
+    face_cost: '—',
     drift: false,
     opacity: 1,
     card: null,
@@ -195,6 +203,8 @@ test('running cell renders the queued-phase word verbatim for each phase', () =>
       error_stage: null,
       slots: ghostSlots(),
       bottom: phase,
+      face_time: '—',
+      face_cost: '—',
       drift: false,
       opacity: 1,
       card: null,
@@ -249,17 +259,22 @@ test('cellHtml renders the detail card markup when card is present', () => {
           {
             verdict: 'pass',
             cost: '$1.25',
+            time: '2m5s',
+            tokens: '12.3k',
             timestamp: '2026-06-12 00:00',
             run_id: '20260612T000000Z-1a2b',
           },
           {
             verdict: 'fail',
             cost: '$0.90',
+            time: '1m30s',
+            tokens: '—',
             timestamp: '2026-06-12 01:00',
             run_id: '20260612T010000Z-3c4d',
           },
         ],
         drift_line: 'last run cost 1.6× the prior median',
+        run_total: '$2.00',
       },
     }),
   );
@@ -271,6 +286,12 @@ test('cellHtml renders the detail card markup when card is present', () => {
   expect(html).toContain(
     'class="card-drift">last run cost 1.6× the prior median<',
   );
+  // new: time, tokens, and run-total appear in the card
+  expect(html).toContain('class="ccr-dur">2m5s<');
+  expect(html).toContain('class="ccr-tok">12.3k<');
+  expect(html).toContain('class="card-run-total"');
+  expect(html).toContain('run total');
+  expect(html).toContain('$2.00');
 });
 
 test('cellHtml omits the card block when card is null', () => {
@@ -288,11 +309,14 @@ test('cellHtml escapes card row run_id and drift_line', () => {
           {
             verdict: 'pass',
             cost: '$1.25',
+            time: '—',
+            tokens: '—',
             timestamp: 't',
             run_id: '<script>',
           },
         ],
         drift_line: 'a & b',
+        run_total: '$—',
       },
     }),
   );
@@ -317,7 +341,9 @@ test('incomplete cell with error_stage shows stage as tooltip on status glyph', 
       { kind: 'ghost', height: 0.18 },
       { kind: 'unknown', height: 0.5 },
     ],
-    bottom: '$0.50',
+    bottom: '—',
+    face_time: '—',
+    face_cost: '$0.50',
     drift: false,
     opacity: 1,
     card: null,

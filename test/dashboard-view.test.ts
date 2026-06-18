@@ -1,12 +1,18 @@
 import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Cell, Grid, RunRecord } from '../src/dashboard/contracts.ts';
 import { cellKey } from '../src/dashboard/contracts.ts';
+import { scanResults } from '../src/dashboard/scan.ts';
 import {
   cellStatus,
   cellView,
   costBarHeights,
   driftFlag,
   formatAge,
+  formatDuration,
+  formatTokens,
   headerTally,
   latestAgeDays,
   median,
@@ -21,6 +27,9 @@ function rec(over: Partial<RunRecord> = {}): RunRecord {
     started_at: '20260612T000000Z',
     final: 'pass',
     cost_usd: 1,
+    run_total_cost_usd: null,
+    duration_ms: null,
+    total_tokens: null,
     finished_at: null,
     error_stage: null,
     ...over,
@@ -237,7 +246,7 @@ test('cellView: pure running cell shimmers the newest slot, phase bottom', () =>
   expect(v.drift).toBe(false);
 });
 
-test('cellView: done cell shows latest cost bottom + stale opacity', () => {
+test('cellView: done cell shows face_cost + stale opacity (bottom is "—")', () => {
   const now = new Date('2026-06-13T00:00:00Z');
   const c = cell({
     window: [
@@ -247,7 +256,9 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
   });
   const v = cellView(c, 's', 'claude', 'linux', null, now);
   expect(v.state).toBe('done');
-  expect(v.bottom).toBe('$2.00');
+  // bottom is '—' for done cells; the face is driven by face_time + face_cost
+  expect(v.bottom).toBe('—');
+  expect(v.face_cost).toBe('$2.00');
   expect(v.opacity).toBeCloseTo(staleOpacity(1.0), 6);
   // 2 real slots, ghost-padded to 5, newest rightmost.
   expect(v.slots.length).toBe(5);
@@ -261,10 +272,12 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
   expect(v.card?.rows.length).toBe(2);
 });
 
-test('cellView: done cell with unknown cost shows "$—" (never "$0.00")', () => {
+test('cellView: done cell with unknown cost shows face_cost "$—" (never "$0.00")', () => {
   const c = cell({ window: [rec({ cost_usd: null, final: 'pass' })] });
   const v = cellView(c, 's', 'claude', 'linux', null);
-  expect(v.bottom).toBe('$—');
+  // face_cost carries the agent-scoped cost; "$—" means cost unknown, not $0.
+  expect(v.face_cost).toBe('$—');
+  expect(v.bottom).toBe('—');
 });
 
 test('cellView: running on top of history shimmers newest, phase bottom', () => {
@@ -366,4 +379,243 @@ test('unknown verdict = incomplete', () => {
   expect(cellStatus({ window: [{ final: 'unknown' }] }, null)).toBe(
     'incomplete',
   );
+});
+
+// --- formatDuration ----------------------------------------------------------
+
+test('formatDuration: 161000ms -> "2m41s"', () => {
+  expect(formatDuration(161000)).toBe('2m41s');
+});
+
+test('formatDuration: null -> "—"', () => {
+  expect(formatDuration(null)).toBe('—');
+});
+
+test('formatDuration: 9000ms -> "9s"', () => {
+  expect(formatDuration(9000)).toBe('9s');
+});
+
+test('formatDuration: 3661000ms -> "1h1m"', () => {
+  expect(formatDuration(3661000)).toBe('1h1m');
+});
+
+test('formatDuration: 65000ms -> "1m5s"', () => {
+  expect(formatDuration(65000)).toBe('1m5s');
+});
+
+test('formatDuration: 0ms -> "0s"', () => {
+  expect(formatDuration(0)).toBe('0s');
+});
+
+// --- formatTokens ------------------------------------------------------------
+
+test('formatTokens: 48200 -> "48.2k"', () => {
+  expect(formatTokens(48200)).toBe('48.2k');
+});
+
+test('formatTokens: null -> "—"', () => {
+  expect(formatTokens(null)).toBe('—');
+});
+
+test('formatTokens: 999 -> "999"', () => {
+  expect(formatTokens(999)).toBe('999');
+});
+
+test('formatTokens: 1_500_000 -> "1.5M"', () => {
+  expect(formatTokens(1_500_000)).toBe('1.5M');
+});
+
+// --- agent-scoped cost + new RunRecord fields via scanResults ----------------
+
+// Helper to write a run dir with a verdict
+function writeRun(root: string, runId: string, verdict: unknown): void {
+  const d = join(root, runId);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'verdict.json'), JSON.stringify(verdict));
+}
+
+test('scanResults: cost_usd is agent-scoped when coding_agent.est_cost_usd is present', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
+  writeRun(root, 's-claude-linux-20260618T000000Z-aaaa', {
+    final: 'pass',
+    economics: {
+      total_est_cost_usd: 5.0,
+      coding_agent: {
+        est_cost_usd: 3.0,
+        duration_ms: 161000,
+        tokens: { total: 48200 },
+      },
+    },
+    finished_at: '2026-06-18T00:01:00Z',
+  });
+  const grid = scanResults({
+    resultsDir: root,
+    knownAgents: ['claude'],
+    manifest: null,
+  });
+  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  // cost_usd is the AGENT cost, not the run total
+  expect(r?.cost_usd).toBe(3.0);
+  expect(r?.run_total_cost_usd).toBe(5.0);
+  expect(r?.duration_ms).toBe(161000);
+  expect(r?.total_tokens).toBe(48200);
+});
+
+test('scanResults: cost_usd falls back to run total when agent cost is absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
+  writeRun(root, 's-claude-linux-20260618T000000Z-bbbb', {
+    final: 'pass',
+    economics: { total_est_cost_usd: 4.5 },
+    finished_at: '2026-06-18T00:01:00Z',
+  });
+  const grid = scanResults({
+    resultsDir: root,
+    knownAgents: ['claude'],
+    manifest: null,
+  });
+  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  // no agent block -> falls back to run total
+  expect(r?.cost_usd).toBe(4.5);
+  expect(r?.run_total_cost_usd).toBe(4.5);
+  expect(r?.duration_ms).toBeNull();
+  expect(r?.total_tokens).toBeNull();
+});
+
+test('scanResults: duration_ms null when coding_agent block is absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
+  writeRun(root, 's-claude-linux-20260618T000000Z-cccc', {
+    final: 'pass',
+    economics: { total_est_cost_usd: 1.0 },
+  });
+  const grid = scanResults({
+    resultsDir: root,
+    knownAgents: ['claude'],
+    manifest: null,
+  });
+  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  expect(r?.duration_ms).toBeNull();
+  expect(r?.total_tokens).toBeNull();
+});
+
+// --- cellView: two-line face (face_time + face_cost) -------------------------
+
+test('cellView done: face_time comes from duration_ms', () => {
+  const c = cell({
+    window: [rec({ duration_ms: 161000, cost_usd: 2.5, final: 'pass' })],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.face_time).toBe('2m41s');
+  expect(v.face_cost).toBe('$2.50');
+});
+
+test('cellView done: face_time falls back to wall-clock when duration_ms is null', () => {
+  const now = new Date('2026-06-18T00:05:00Z');
+  const c = cell({
+    window: [
+      rec({
+        duration_ms: null,
+        started_at: '20260618T000000Z',
+        finished_at: '2026-06-18T00:02:00Z',
+        cost_usd: 1.0,
+        final: 'pass',
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null, now);
+  // wall-clock: finished_at - started_at = 2 min = 120000ms -> "2m0s"
+  expect(v.face_time).toBe('2m0s');
+});
+
+test('cellView done: face_time is "—" when no timing info', () => {
+  const c = cell({
+    window: [
+      rec({
+        duration_ms: null,
+        started_at: 'bad-stamp',
+        finished_at: null,
+        cost_usd: 1.0,
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.face_time).toBe('—');
+});
+
+test('cellView done: face_cost "$—" when cost_usd is null', () => {
+  const c = cell({ window: [rec({ cost_usd: null })] });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.face_cost).toBe('$—');
+});
+
+test('cellView running: face_time and face_cost are "—"', () => {
+  const c = cell({ window: [], running: { run_id: 'r', phase: 'agent' } });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.face_time).toBe('—');
+  expect(v.face_cost).toBe('—');
+});
+
+test('cellView empty: face_time and face_cost are "—"', () => {
+  const c = cell({ window: [] });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.face_time).toBe('—');
+  expect(v.face_cost).toBe('—');
+});
+
+// --- card rows carry time + tokens -------------------------------------------
+
+test('cellView card rows carry time and tokens', () => {
+  const c = cell({
+    window: [
+      rec({
+        run_id: 's-claude-20260612T133000Z-aaaa',
+        started_at: '20260612T133000Z',
+        duration_ms: 9000,
+        total_tokens: 48200,
+        cost_usd: 1.5,
+        final: 'fail',
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  const row = v.card?.rows[0];
+  expect(row?.time).toBe('9s');
+  expect(row?.tokens).toBe('48.2k');
+  expect(row?.cost).toBe('$1.50');
+});
+
+test('cellView card rows: time "—" when no duration, tokens "—" when none', () => {
+  const c = cell({
+    window: [
+      rec({
+        duration_ms: null,
+        started_at: 'bad-stamp',
+        finished_at: null,
+        total_tokens: null,
+        cost_usd: 1.0,
+        final: 'pass',
+      }),
+    ],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  const row = v.card?.rows[0];
+  expect(row?.time).toBe('—');
+  expect(row?.tokens).toBe('—');
+});
+
+// --- CardView has run_total field --------------------------------------------
+
+test('cellView card has run_total from newest run_total_cost_usd', () => {
+  const c = cell({
+    window: [rec({ cost_usd: 3.0, run_total_cost_usd: 5.0, final: 'pass' })],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.card?.run_total).toBe('$5.00');
+});
+
+test('cellView card run_total is "$—" when run_total_cost_usd is null', () => {
+  const c = cell({
+    window: [rec({ cost_usd: 3.0, run_total_cost_usd: null, final: 'pass' })],
+  });
+  const v = cellView(c, 's', 'claude', 'linux', null);
+  expect(v.card?.run_total).toBe('$—');
 });

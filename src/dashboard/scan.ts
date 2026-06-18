@@ -238,11 +238,15 @@ export function scanResults(args: {
       const verdict = readDashboardVerdict(runDir);
       if (verdict !== null) {
         const economics = verdict.economics ?? null;
+        const ca = economics?.coding_agent ?? null;
         records.push({
           run_id: runId,
           started_at: p.started_at,
           final: finalOf(verdict),
-          cost_usd: economics?.total_est_cost_usd ?? null,
+          cost_usd: ca?.est_cost_usd ?? economics?.total_est_cost_usd ?? null,
+          run_total_cost_usd: economics?.total_est_cost_usd ?? null,
+          duration_ms: ca?.duration_ms ?? null,
+          total_tokens: ca?.tokens?.total ?? null,
           finished_at: verdict.finished_at ?? null,
           error_stage: verdict.error?.stage ?? null,
         });

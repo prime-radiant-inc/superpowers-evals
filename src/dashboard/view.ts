@@ -19,6 +19,28 @@ import {
 
 const SECONDS_PER_DAY = 86_400;
 
+// Format a duration in milliseconds as a human-readable string.
+// 161000 -> '2m41s'; 65000 -> '1m5s'; 9000 -> '9s'; 3661000 -> '1h1m'; null -> '—'
+export function formatDuration(ms: number | null): string {
+  if (ms === null) return '—';
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h${m}m`;
+  if (m > 0) return `${m}m${sec}s`;
+  return `${sec}s`;
+}
+
+// Format a token count compactly.
+// 48200 -> '48.2k'; 999 -> '999'; 1_500_000 -> '1.5M'; null -> '—'
+export function formatTokens(n: number | null): string {
+  if (n === null) return '—';
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 // Median of a non-empty list. Even length averages the two middles.
 export function median(values: readonly number[]): number {
   const s = [...values].sort((a, b) => a - b);
@@ -125,6 +147,18 @@ function parseDirStamp(stamp: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+// The effective duration of a run in ms. Uses rec.duration_ms when available;
+// otherwise derives it from started_at (dir-stamp) and finished_at (ISO-8601).
+// Returns null when neither source provides enough data.
+function effectiveDuration(rec: RunRecord): number | null {
+  if (rec.duration_ms !== null) return rec.duration_ms;
+  const start = parseDirStamp(rec.started_at);
+  if (start === null) return null;
+  const end = rec.finished_at !== null ? Date.parse(rec.finished_at) : null;
+  if (end === null || Number.isNaN(end)) return null;
+  return Math.max(0, end - start);
+}
+
 function cellCosts(cell: Cell): number[] {
   const out: number[] = [];
   for (const r of cell.window) {
@@ -218,6 +252,8 @@ function cardView(
   const rows: CardRow[] = cell.window.map((r) => ({
     verdict: r.final,
     cost: rowCost(r.cost_usd),
+    time: formatDuration(effectiveDuration(r)),
+    tokens: formatTokens(r.total_tokens),
     timestamp: rowTimestamp(r),
     run_id: r.run_id,
   }));
@@ -229,7 +265,9 @@ function cardView(
     const med = median(presentCosts.slice(0, -1));
     driftLine = `▲ latest $${latest.toFixed(2)} vs median $${med.toFixed(2)} of prior runs`;
   }
-  return { age, rows, drift_line: driftLine };
+  const newest = cell.window[cell.window.length - 1] as RunRecord;
+  const runTotal = rowCost(newest.run_total_cost_usd);
+  return { age, rows, drift_line: driftLine, run_total: runTotal };
 }
 
 // Map a cell + manifest cell to one of the 5 outcome statuses. Exported for
@@ -295,6 +333,8 @@ export function cellView(
       drift: false,
       opacity: 1.0,
       card: null,
+      face_time: '—',
+      face_cost: '—',
     };
   }
 
@@ -312,21 +352,29 @@ export function cellView(
       drift: false,
       opacity: 1.0,
       card: null,
+      face_time: '—',
+      face_cost: '—',
     };
   }
 
   let slots = paddedSlots(cell.window);
   let bottom: string;
   let drift: boolean;
+  let face_time: string;
+  let face_cost: string;
   if (cell.running !== null) {
     // In-flight on top of history: newest slot shimmers, no latest $ yet.
     slots = [...slots.slice(1), { kind: 'running', height: 0 }];
     bottom = cell.running.phase;
     drift = false;
+    face_time = '—';
+    face_cost = '—';
   } else {
     const latest = cell.window[cell.window.length - 1] as RunRecord;
-    bottom = latest.cost_usd !== null ? `$${latest.cost_usd.toFixed(2)}` : '$—';
+    bottom = '—';
     drift = driftFlag(cellCosts(cell));
+    face_time = formatDuration(effectiveDuration(latest));
+    face_cost = rowCost(latest.cost_usd);
   }
   const state = cell.running !== null ? 'running' : 'done';
   const opacity =
@@ -344,6 +392,8 @@ export function cellView(
     drift,
     opacity,
     card: cardView(cell, drift, now),
+    face_time,
+    face_cost,
   };
 }
 

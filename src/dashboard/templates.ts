@@ -85,6 +85,8 @@ function costBarHtml(slots: readonly SlotView[]): string {
 // The detail hover card (`.cell-card[data-card][hidden]`). Rendered inside the
 // cell so SSE partial swaps carry it; app.js clones it to #card-host on hover.
 // Rows are oldest..newest. Every interpolated string is escaped.
+// Each row shows: verdict | agent cost | duration | tokens | timestamp | run_id.
+// The card footer shows the run-total cost (gauntlet + agent), labeled.
 function cardHtml(card: CardView): string {
   const rows = card.rows
     .map(
@@ -92,6 +94,8 @@ function cardHtml(card: CardView): string {
         `<div class="cell-card-row">` +
         `<span class="ccr-verdict v-${esc(row.verdict)}">${esc(row.verdict)}</span>` +
         `<span class="ccr-cost">${esc(row.cost)}</span>` +
+        `<span class="ccr-dur">${esc(row.time)}</span>` +
+        `<span class="ccr-tok">${esc(row.tokens)}</span>` +
         `<span class="ccr-time">${esc(row.timestamp)}</span>` +
         `<span class="ccr-id">${esc(row.run_id)}</span>` +
         `</div>`,
@@ -101,11 +105,17 @@ function cardHtml(card: CardView): string {
     card.drift_line !== null
       ? `<div class="card-drift">${esc(card.drift_line)}</div>`
       : '';
+  const runTotal =
+    `<div class="card-run-total">` +
+    `<span class="crt-label">run total</span>` +
+    `<span class="crt-value">${esc(card.run_total)}</span>` +
+    `</div>`;
   return (
     `<div class="cell-card" data-card hidden>` +
     `<div class="cell-card-age">${esc(card.age)}</div>` +
     `<div class="cell-card-rows">${rows}</div>` +
     drift +
+    runTotal +
     `</div>`
   );
 }
@@ -175,13 +185,27 @@ export function cellHtml(view: CellView): string {
       ? `<span class="${sg.cls}"${stageTitle}>${sg.glyph}</span>`
       : '';
 
+  // For done cells: two-line face (time headline + agent cost).
+  // For running cells: phase word. Bottom is '—' for done cells (not rendered).
+  let faceHtml: string;
+  if (view.state === 'done') {
+    faceHtml =
+      `<div class="dc">` +
+      `${drift}${statusSpan}` +
+      `<span class="face-time">${esc(view.face_time)}</span>` +
+      `<span class="face-cost">${esc(view.face_cost)}</span>` +
+      `</div>`;
+  } else {
+    faceHtml = `<div class="dc">${drift}${statusSpan}${esc(view.bottom)}</div>`;
+  }
+
   return (
     `${open}` +
     `<div class="cell${stateClass}" style="opacity:${f3(view.opacity)}">` +
     `<div class="inner">` +
     `<div class="vs">${ribbonHtml(view.slots)}</div>` +
     `<div class="cb">${costBarHtml(view.slots)}</div>` +
-    `<div class="dc">${drift}${statusSpan}${esc(view.bottom)}</div>` +
+    faceHtml +
     `</div>` +
     card +
     `</div>` +
@@ -244,6 +268,8 @@ export function gridHtml(args: GridArgs): string {
               error_stage: null,
               slots: [],
               bottom: '—',
+              face_time: '—',
+              face_cost: '—',
               drift: false,
               opacity: 1,
               card: null,

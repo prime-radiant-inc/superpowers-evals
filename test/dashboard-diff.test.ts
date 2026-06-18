@@ -9,6 +9,9 @@ function rec(runId: string): RunRecord {
     started_at: '20260612T000000Z',
     final: 'pass',
     cost_usd: 1,
+    run_total_cost_usd: null,
+    duration_ms: null,
+    total_tokens: null,
     finished_at: null,
     error_stage: null,
   };

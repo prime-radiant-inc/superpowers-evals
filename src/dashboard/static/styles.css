@@ -79,7 +79,9 @@ body {
 .cb-slot { display: inline-block; width: 11px; background: var(--cost-bar); border-radius: 1px 1px 0 0; height: calc(2px + var(--h, 0) * 12px); }
 .cb-slot.gh { background: var(--cost-bar-none); }
 
-.dc { font-size: 12px; color: var(--text-primary); white-space: nowrap; text-align: right; }
+.dc { font-size: 12px; color: var(--text-primary); white-space: nowrap; text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.face-time { font-size: 12px; color: var(--text-primary); font-weight: 600; line-height: 1.2; }
+.face-cost { font-size: 11px; color: var(--text-label); line-height: 1.2; }
 .drift { color: var(--verdict-fail); font-size: 11px; margin-right: 3px; }
 
 /* running shimmer */
@@ -101,12 +103,19 @@ body {
 }
 .cell-card-age { color: var(--text-label); font-weight: 600; margin-bottom: 8px; }
 .cell-card-rows { display: flex; flex-direction: column; gap: 5px; }
-.cell-card-row { display: grid; grid-template-columns: auto auto 1fr; gap: 4px 10px; align-items: baseline; }
+/* verdict | agent-cost | duration | tokens | timestamp */
+.cell-card-row { display: grid; grid-template-columns: auto auto auto auto 1fr; gap: 4px 10px; align-items: baseline; }
 .ccr-verdict { font-weight: 600; }
 .v-pass { color: var(--verdict-pass); }
 .v-fail { color: var(--verdict-fail); }
 .v-indeterminate, .v-unknown { color: var(--verdict-indet); }
 .ccr-cost { color: var(--text-primary); }
+.ccr-dur { color: var(--text-label); }
+.ccr-tok { color: var(--text-label); }
 .ccr-time { color: var(--text-label); }
 .ccr-id { grid-column: 1 / -1; color: var(--text-label); font-size: 11px; user-select: all; word-break: break-all; }
 .card-drift { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border-grid); color: var(--verdict-fail); }
+/* Run-total footer: labeled so scope (gauntlet + agent) is unambiguous. */
+.card-run-total { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border-subtle); display: flex; gap: 8px; align-items: baseline; }
+.crt-label { color: var(--text-label); font-size: 11px; }
+.crt-value { color: var(--text-primary); }
