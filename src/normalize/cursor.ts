@@ -7,7 +7,6 @@
 
 import {
   ATIF_SCHEMA_VERSION,
-  type AtifFinalMetrics,
   type AtifStep,
   type AtifTrajectory,
 } from '../atif/types.ts';
@@ -41,13 +40,16 @@ const CURSOR_TOOL_MAP: Record<string, string> = {
 
 // ---------------------------------------------------------------------------
 // Accumulated usage from result events (disjoint buckets, session total).
-// Cursor reports usage per result event (one per turn); we sum across them.
+// Cursor reports usage per result event (one per turn).
+// We accumulate the LAST result event's usage (session-total, not incremental),
+// and attach it to the terminal assistant step as per-step metrics.
+//
 // Harbor's formula (INCLUSIVE):
 //   total_prompt_tokens = inputTokens + cacheReadTokens + cacheWriteTokens
 // OUR formula (DISJOINT):
 //   prompt_tokens   = inputTokens           (exclusive of cache — already uncached)
-//   cached_tokens   = cacheReadTokens       (in final_metrics.extra)
-//   cache_write     = cacheWriteTokens      (in final_metrics.extra)
+//   cached_tokens   = cacheReadTokens
+//   cache_write     = cacheWriteTokens      (step.extra.cache_write, only when > 0)
 //   completion      = outputTokens
 //   cost_usd        = totalCost or cost, if the log reports it (never fabricated)
 // ---------------------------------------------------------------------------
@@ -94,35 +96,6 @@ function accumulateUsage(
   }
 }
 
-function buildFinalMetrics(
-  accum: CursorUsageAccum,
-  totalSteps: number,
-): AtifFinalMetrics {
-  const fm: AtifFinalMetrics = {};
-
-  // DISJOINT: prompt = uncached input (cursor log inputTokens excludes cache)
-  if (accum.inputTokens > 0 || accum.outputTokens > 0) {
-    fm.total_prompt_tokens = accum.inputTokens;
-    fm.total_completion_tokens = accum.outputTokens;
-  }
-
-  // Cache fields ride in extra (final_metrics has no first-class cached field)
-  const extra: Record<string, unknown> = {};
-  if (accum.cacheReadTokens > 0) {
-    extra['total_cached_tokens'] = accum.cacheReadTokens;
-  }
-  if (accum.cacheWriteTokens > 0) {
-    extra['total_cache_write_tokens'] = accum.cacheWriteTokens;
-  }
-  if (Object.keys(extra).length > 0) fm.extra = extra;
-
-  // Cost: only when the log itself reported it (never fabricated)
-  if (accum.totalCost !== undefined) fm.total_cost_usd = accum.totalCost;
-
-  fm.total_steps = totalSteps;
-  return fm;
-}
-
 // ---------------------------------------------------------------------------
 // Tool call normalization.
 // A cursor tool_call completed event carries:
@@ -155,23 +128,24 @@ function normalizeToolResult(result: unknown): string | null | undefined {
  *   result       - final result; carries usage (session-total per turn)
  *   interaction_query - permission-prompt request/response; silently skipped
  *
- * Token buckets follow OUR DISJOINT convention (not Harbor's inclusive):
- *   final_metrics.total_prompt_tokens     = inputTokens (exclusive of cache)
- *   final_metrics.total_completion_tokens = outputTokens
- *   final_metrics.extra.total_cached_tokens     = cacheReadTokens
- *   final_metrics.extra.total_cache_write_tokens = cacheWriteTokens
- *   final_metrics.total_cost_usd          = totalCost/cost (only if log reports it)
+ * Token buckets follow OUR DISJOINT convention (not Harbor's inclusive).
+ * Usage is attached as PER-STEP metrics on the terminal assistant step from
+ * each turn's result event. cache_write lives in step.extra.cache_write
+ * (obol ignores metrics.extra; step.extra is priced correctly).
  *
- * SINGLE-SOURCE: cursor reports usage only in result events (session total per
- * turn) — not per assistant turn. We accumulate across result events into
- * final_metrics only. No per-step metrics are emitted.
+ * SINGLE-SOURCE: cursor reports usage in result events (session total per
+ * turn). We attach usage to the last assistant step before each result event
+ * as per-step metrics. No final_metrics token totals.
+ *
+ * model_name: captured from the system init event's `model` field and set
+ * on traj.agent.model_name and on every metrics-bearing step as step.model_name.
  */
 export function normalizeCursor(raw: string, version: string): AtifTrajectory {
   const steps: AtifStep[] = [];
   let stepId = 1;
 
   let sessionId: string | undefined;
-  const usageAccum = emptyAccum();
+  let agentModelName: string | undefined;
 
   // model_call_id → step index in steps[]; for attaching tool calls and
   // observations to the right assistant step.
@@ -179,6 +153,10 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
 
   // Accumulated thinking blocks (cleared after each assistant step).
   const pendingThinking: string[] = [];
+
+  // Track the last assistant step index for usage attachment per turn.
+  // When a result event fires, we attach its usage to the last agent step.
+  let lastAgentStepIdx: number | undefined;
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -193,9 +171,12 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
 
     const evType = ev['type'];
 
-    // ── system: capture session_id ─────────────────────────────────────────
+    // ── system: capture session_id and model ──────────────────────────────
     if (evType === 'system') {
       if (typeof ev['session_id'] === 'string') sessionId = ev['session_id'];
+      if (typeof ev['model'] === 'string' && ev['model']) {
+        agentModelName = ev['model'] as string;
+      }
       continue;
     }
 
@@ -267,6 +248,7 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
         callIdStepIndex.set(modelCallId, steps.length);
       }
 
+      lastAgentStepIdx = steps.length;
       steps.push(step);
       continue;
     }
@@ -306,6 +288,7 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
         const implicitStep: AtifStep = { step_id: stepId++, source: 'agent' };
         steps.push(implicitStep);
         ownerIdx = steps.length - 1;
+        lastAgentStepIdx = ownerIdx;
         if (modelCallId) callIdStepIndex.set(modelCallId, ownerIdx);
       }
 
@@ -316,24 +299,34 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
       // Build the AtifToolCall and its observation result together so the
       // native tool name is unambiguous (avoids mis-matching when two entries
       // map to the same canonical name, e.g. list_dir and file_search → Glob).
-      for (const [nativeToolName, toolEntry] of Object.entries(toolDict)) {
+      // I2 fix: for the 2nd+ entry in a single event, suffix the id to avoid
+      // duplicate tool_call_id within a step (which validateTrajectory rejects).
+      const entries = Object.entries(toolDict);
+      for (let idx = 0; idx < entries.length; idx++) {
+        const entry = entries[idx];
+        if (!entry) continue;
+        const [nativeToolName, toolEntry] = entry;
         if (
           !toolEntry ||
           typeof toolEntry !== 'object' ||
           Array.isArray(toolEntry)
         )
           continue;
-        const entry = toolEntry as Record<string, unknown>;
+        const toolData = toolEntry as Record<string, unknown>;
         const args =
-          entry['args'] &&
-          typeof entry['args'] === 'object' &&
-          !Array.isArray(entry['args'])
-            ? (entry['args'] as Record<string, unknown>)
+          toolData['args'] &&
+          typeof toolData['args'] === 'object' &&
+          !Array.isArray(toolData['args'])
+            ? (toolData['args'] as Record<string, unknown>)
             : {};
+
+        // Disambiguate call_id for 2nd+ entries to prevent duplicate tool_call_id
+        const disambiguatedCallId =
+          idx === 0 ? callId : callId ? `${callId}#${idx}` : `#${idx}`;
 
         const canonicalName = CURSOR_TOOL_MAP[nativeToolName] ?? nativeToolName;
         const atifCall = canonicalizeAgentPrompt({
-          tool_call_id: callId,
+          tool_call_id: disambiguatedCallId,
           function_name: canonicalName,
           arguments: args,
         });
@@ -345,21 +338,64 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
         ownerStep.tool_calls.push(atifCall);
 
         // Attach the observation result
-        const resultContent = normalizeToolResult(entry['result']);
+        const resultContent = normalizeToolResult(toolData['result']);
         const obsResult: { source_call_id?: string; content?: string | null } =
           {};
-        if (callId) obsResult.source_call_id = callId;
+        if (disambiguatedCallId) obsResult.source_call_id = disambiguatedCallId;
         if (resultContent !== undefined) obsResult.content = resultContent;
         ownerStep.observation?.results.push(obsResult);
       }
       continue;
     }
 
-    // ── result: accumulate usage ───────────────────────────────────────────
+    // ── result: attach usage to the last agent step ────────────────────────
     if (evType === 'result') {
       const usage = ev['usage'];
       if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-        accumulateUsage(usageAccum, usage as Record<string, unknown>);
+        const u = usage as Record<string, unknown>;
+        const accum = emptyAccum();
+        accumulateUsage(accum, u);
+
+        // Attach to the last agent step as per-step metrics (single-source rule)
+        if (lastAgentStepIdx !== undefined) {
+          const targetStep = steps[lastAgentStepIdx];
+          if (targetStep && targetStep.source === 'agent') {
+            const hasAnyUsage =
+              accum.inputTokens > 0 ||
+              accum.outputTokens > 0 ||
+              accum.cacheReadTokens > 0 ||
+              accum.cacheWriteTokens > 0 ||
+              accum.totalCost !== undefined;
+
+            if (hasAnyUsage) {
+              const metrics: import('../atif/types.ts').AtifMetrics = {};
+              if (accum.inputTokens > 0)
+                metrics.prompt_tokens = accum.inputTokens;
+              if (accum.outputTokens > 0)
+                metrics.completion_tokens = accum.outputTokens;
+              if (accum.cacheReadTokens > 0)
+                metrics.cached_tokens = accum.cacheReadTokens;
+              if (accum.totalCost !== undefined)
+                metrics.cost_usd = accum.totalCost;
+              targetStep.metrics = metrics;
+
+              // cache_write goes on step.extra (NOT metrics.extra — obol ignores that)
+              if (accum.cacheWriteTokens > 0) {
+                targetStep.extra = {
+                  ...targetStep.extra,
+                  cache_write: accum.cacheWriteTokens,
+                };
+              }
+
+              // Stamp model_name on the metrics-bearing step so obol can price it
+              if (agentModelName) {
+                targetStep.model_name = agentModelName;
+              }
+            }
+          }
+          // Reset so the next result event targets the next agent step
+          lastAgentStepIdx = undefined;
+        }
       }
     }
 
@@ -379,21 +415,13 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
     if (step) step.step_id = i + 1;
   }
 
-  const hasAnyUsage =
-    usageAccum.inputTokens > 0 ||
-    usageAccum.outputTokens > 0 ||
-    usageAccum.cacheReadTokens > 0 ||
-    usageAccum.cacheWriteTokens > 0 ||
-    usageAccum.totalCost !== undefined;
-
   const traj: AtifTrajectory = {
     schema_version: ATIF_SCHEMA_VERSION,
     agent: { name: 'cursor', version },
     steps,
   };
   if (sessionId) traj.session_id = sessionId;
-  if (hasAnyUsage)
-    traj.final_metrics = buildFinalMetrics(usageAccum, steps.length);
+  if (agentModelName) traj.agent.model_name = agentModelName;
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

@@ -117,21 +117,29 @@ function assistantParts(content: unknown): {
  * Harbor's _usage_metrics emits prompt_tokens = input + cacheRead (INCLUSIVE).
  * We emit prompt_tokens = input (EXCLUSIVE / uncached only), cached_tokens = cacheRead.
  * The openclaw session log's `input` field is already exclusive of cache reads.
+ *
+ * Returns the metrics object AND the cache_write value separately.
+ * Callers must set cache_write on step.extra (NOT metrics.extra) —
+ * obol ignores metrics.extra; only step.extra.cache_write is priced.
  */
-function usageMetricsFromJsonl(usage: unknown): AtifMetrics | undefined {
-  if (typeof usage !== 'object' || usage === null) return undefined;
+function usageMetricsFromJsonl(usage: unknown): {
+  metrics: AtifMetrics | undefined;
+  cacheWrite: number | undefined;
+} {
+  if (typeof usage !== 'object' || usage === null)
+    return { metrics: undefined, cacheWrite: undefined };
   const u = usage as Record<string, unknown>;
   const inp = Number(u['input'] ?? 0);
   const out = Number(u['output'] ?? 0);
   const cr = Number(u['cacheRead'] ?? 0);
   const cw = Number(u['cacheWrite'] ?? 0);
-  if (!inp && !out && !cr) return undefined;
+  if (!inp && !out && !cr) return { metrics: undefined, cacheWrite: undefined };
   const m: AtifMetrics = {};
   if (inp) m.prompt_tokens = inp;
   if (out) m.completion_tokens = out;
   if (cr) m.cached_tokens = cr;
-  if (cw) m.extra = { cache_write: cw };
-  return m;
+  const cacheWrite = cw > 0 ? cw : undefined;
+  return { metrics: m, cacheWrite };
 }
 
 interface JsonlRow {
@@ -264,8 +272,14 @@ function parseJsonlSteps(
       if (modelName) step.model_name = modelName;
       if (toolCalls.length > 0) step.tool_calls = toolCalls;
       if (obsResults.length > 0) step.observation = { results: obsResults };
-      const m = usageMetricsFromJsonl(msg['usage']);
-      if (m) step.metrics = m;
+      const { metrics: stepMetrics, cacheWrite } = usageMetricsFromJsonl(
+        msg['usage'],
+      );
+      if (stepMetrics) step.metrics = stepMetrics;
+      // cache_write goes on step.extra (obol ignores metrics.extra)
+      if (cacheWrite !== undefined) {
+        step.extra = { ...step.extra, cache_write: cacheWrite };
+      }
 
       steps.push(step);
       i = j;
@@ -332,21 +346,26 @@ function loadJsonObject(raw: string): Record<string, unknown> | undefined {
 /**
  * Map envelope usage to ATIF disjoint buckets.
  * Same convention as JSONL: input is uncached-only, cacheRead → cached_tokens.
+ *
+ * Returns the metrics object AND the cache_write value separately.
+ * Callers must set cache_write on step.extra (NOT metrics.extra) —
+ * obol ignores metrics.extra; only step.extra.cache_write is priced.
  */
-function usageMetricsFromEnvelope(
-  usage: Record<string, unknown>,
-): AtifMetrics | undefined {
+function usageMetricsFromEnvelope(usage: Record<string, unknown>): {
+  metrics: AtifMetrics | undefined;
+  cacheWrite: number | undefined;
+} {
   const inp = Number(usage['input'] ?? 0);
   const out = Number(usage['output'] ?? 0);
   const cr = Number(usage['cacheRead'] ?? 0);
   const cw = Number(usage['cacheWrite'] ?? 0);
-  if (!inp && !out && !cr) return undefined;
+  if (!inp && !out && !cr) return { metrics: undefined, cacheWrite: undefined };
   const m: AtifMetrics = {};
   if (inp) m.prompt_tokens = inp;
   if (out) m.completion_tokens = out;
   if (cr) m.cached_tokens = cr;
-  if (cw) m.extra = { cache_write: cw };
-  return m;
+  const cacheWrite = cw > 0 ? cw : undefined;
+  return { metrics: m, cacheWrite };
 }
 
 /**
@@ -450,7 +469,9 @@ function parseEnvelope(
     !Array.isArray(rawUsage)
       ? (rawUsage as Record<string, unknown>)
       : null;
-  const stepMetrics = usageRaw ? usageMetricsFromEnvelope(usageRaw) : undefined;
+  const { metrics: stepMetrics, cacheWrite: stepCacheWrite } = usageRaw
+    ? usageMetricsFromEnvelope(usageRaw)
+    : { metrics: undefined, cacheWrite: undefined };
 
   const userStep: AtifStep = {
     step_id: 1,
@@ -469,6 +490,10 @@ function parseEnvelope(
   }
   if (toolCalls.length > 0) agentStep.tool_calls = toolCalls;
   if (stepMetrics) agentStep.metrics = stepMetrics;
+  // cache_write goes on step.extra (obol ignores metrics.extra)
+  if (stepCacheWrite !== undefined) {
+    agentStep.extra = { ...agentStep.extra, cache_write: stepCacheWrite };
+  }
 
   const traj: AtifTrajectory = {
     schema_version: ATIF_SCHEMA_VERSION,

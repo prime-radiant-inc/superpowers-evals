@@ -1,4 +1,8 @@
 import { expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { estimatePath } from '@primeradianthq/obol';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeCursor } from '../src/normalize/cursor.ts';
@@ -315,7 +319,7 @@ const costLog = [
   }),
 ].join('\n');
 
-/** Multiple result events accumulate usage correctly across two turns. */
+/** Multiple result events — each attaches usage to the preceding agent step. */
 const multiResultLog = [
   JSON.stringify({
     type: 'system',
@@ -323,7 +327,7 @@ const multiResultLog = [
     apiKeySource: 'env',
     cwd: '/workspace',
     session_id: 'session-multi',
-    model: 'cursor/composer-2.5',
+    model: 'anthropic/claude-sonnet-4-5',
     permissionMode: 'default',
   }),
   JSON.stringify({
@@ -475,6 +479,20 @@ const unknownEventLog = [
 ].join('\n');
 
 // ---------------------------------------------------------------------------
+// Helper: write a trajectory to a temp file and price it via obol
+// ---------------------------------------------------------------------------
+async function priceTrajectory(
+  traj: ReturnType<typeof normalizeCursor>,
+): Promise<import('@primeradianthq/obol').CostEstimate> {
+  const file = join(
+    tmpdir(),
+    `cursor-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+  );
+  writeFileSync(file, JSON.stringify(traj), 'utf8');
+  return estimatePath(file, 'atif');
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -491,6 +509,11 @@ test('produces a valid ATIF v1.7 trajectory', () => {
 test('session_id captured from system init event', () => {
   const traj = normalizeCursor(minimalLog, '0.1.0');
   expect(traj.session_id).toBe('session-abc');
+});
+
+test('model captured from system init event and set on traj.agent.model_name', () => {
+  const traj = normalizeCursor(minimalLog, '0.1.0');
+  expect(traj.agent.model_name).toBe('anthropic/claude-sonnet-4-5');
 });
 
 test('user and assistant steps have correct sources', () => {
@@ -512,37 +535,45 @@ test('assistant message content is set', () => {
   expect(agentStep?.message).toBe('I will help you.');
 });
 
-test('disjoint token buckets: prompt=inputTokens (exclusive of cache), cached=cacheReadTokens, cache_write=cacheWriteTokens', () => {
+test('per-step metrics: prompt=inputTokens (exclusive of cache), cached=cacheReadTokens', () => {
   // inputTokens=100, cacheReadTokens=50, cacheWriteTokens=30, outputTokens=20
   const traj = normalizeCursor(minimalLog, '0.1.0');
-  const fm = traj.final_metrics;
-  expect(fm).toBeDefined();
-  // prompt = inputTokens only (exclusive of cache in cursor log)
-  expect(fm!.total_prompt_tokens).toBe(100);
-  expect(fm!.total_completion_tokens).toBe(20);
-  // cached rides in extra.total_cached_tokens (final_metrics has no first-class cached field)
-  expect(fm!.extra?.['total_cached_tokens']).toBe(50);
-  // cache_write rides in extra.total_cache_write_tokens
-  expect(fm!.extra?.['total_cache_write_tokens']).toBe(30);
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep).toBeDefined();
+  const m = agentStep!.metrics;
+  expect(m).toBeDefined();
+  expect(m!.prompt_tokens).toBe(100);
+  expect(m!.completion_tokens).toBe(20);
+  expect(m!.cached_tokens).toBe(50);
+  // No final_metrics token totals (single-source rule)
+  expect(traj.final_metrics).toBeUndefined();
 });
 
-test('disjoint-bucket conservation: prompt + cached + cache_write + completion == all raw tokens', () => {
-  // minimalLog: input=100, cacheRead=50, cacheWrite=30, output=20 → total=200
+test('cache_write goes to step.extra.cache_write (not metrics.extra)', () => {
+  // cacheWriteTokens=30 in minimalLog
   const traj = normalizeCursor(minimalLog, '0.1.0');
-  const fm = traj.final_metrics!;
-  const prompt = fm.total_prompt_tokens ?? 0;
-  const completion = fm.total_completion_tokens ?? 0;
-  const cached = (fm.extra?.['total_cached_tokens'] as number) ?? 0;
-  const cacheWrite = (fm.extra?.['total_cache_write_tokens'] as number) ?? 0;
-  expect(prompt + completion + cached + cacheWrite).toBe(200);
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep!.extra?.['cache_write']).toBe(30);
+  // metrics.extra must NOT carry cache_write (obol ignores metrics.extra)
+  expect(agentStep!.metrics?.extra?.['cache_write']).toBeUndefined();
 });
 
-test('single-source invariant: no per-step metrics (final_metrics only)', () => {
+test('step.model_name set on metrics-bearing agent step', () => {
+  const traj = normalizeCursor(minimalLog, '0.1.0');
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep!.model_name).toBe('anthropic/claude-sonnet-4-5');
+});
+
+test('single-source invariant: no final_metrics token totals', () => {
   const traj = normalizeCursor(toolCallLog, '0.1.0');
-  for (const step of traj.steps) {
-    expect(step.metrics).toBeUndefined();
-  }
-  expect(traj.final_metrics).toBeDefined();
+  expect(traj.final_metrics?.total_prompt_tokens).toBeUndefined();
+  expect(traj.final_metrics?.total_completion_tokens).toBeUndefined();
+});
+
+test('per-step metrics attached to agent step (not absent)', () => {
+  const traj = normalizeCursor(toolCallLog, '0.1.0');
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep?.metrics).toBeDefined();
 });
 
 test('tool calls attached to the assistant step via model_call_id', () => {
@@ -644,25 +675,34 @@ test('null tool result maps to null content (ported from Harbor test_tool_call_r
 
 test('cost_usd passed through when totalCost is in the log', () => {
   const traj = normalizeCursor(costLog, '0.1.0');
-  expect(traj.final_metrics?.total_cost_usd).toBe(0.42);
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep?.metrics?.cost_usd).toBe(0.42);
 });
 
 test('no cost fabricated when totalCost is absent (no litellm/pricing)', () => {
   const traj = normalizeCursor(minimalLog, '0.1.0');
   // minimalLog usage has no totalCost/cost; we do not fabricate
-  expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
+  expect(
+    traj.steps.find((s) => s.source === 'agent')?.metrics?.cost_usd,
+  ).toBeUndefined();
 });
 
-test('multiple result events accumulate usage (two turns summed)', () => {
+test('multiple result events: each attaches to its preceding agent step', () => {
   // Turn 1: input=100, output=20, cacheRead=10, cacheWrite=5
   // Turn 2: input=200, output=30, cacheRead=20, cacheWrite=0
-  // Sum:    input=300, output=50, cacheRead=30, cacheWrite=5
   const traj = normalizeCursor(multiResultLog, '0.1.0');
-  const fm = traj.final_metrics!;
-  expect(fm.total_prompt_tokens).toBe(300);
-  expect(fm.total_completion_tokens).toBe(50);
-  expect(fm.extra?.['total_cached_tokens']).toBe(30);
-  expect(fm.extra?.['total_cache_write_tokens']).toBe(5);
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  expect(agentSteps.length).toBe(2);
+  const s1 = agentSteps[0]!;
+  const s2 = agentSteps[1]!;
+  expect(s1.metrics?.prompt_tokens).toBe(100);
+  expect(s1.metrics?.completion_tokens).toBe(20);
+  expect(s1.metrics?.cached_tokens).toBe(10);
+  expect(s1.extra?.['cache_write']).toBe(5);
+  expect(s2.metrics?.prompt_tokens).toBe(200);
+  expect(s2.metrics?.completion_tokens).toBe(30);
+  expect(s2.metrics?.cached_tokens).toBe(20);
+  expect(s2.extra?.['cache_write']).toBeUndefined();
 });
 
 test('thinking blocks become reasoning_content on the following assistant step', () => {
@@ -747,4 +787,165 @@ test('full trajectory validates as ATIF v1.7', () => {
   const r = validateTrajectory(traj);
   expect(r.errors).toEqual([]);
   expect(r.ok).toBe(true);
+});
+
+test('I2: multi-entry tool_call event assigns unique call_ids (no duplicate tool_call_id)', () => {
+  // A single tool_call completed event with two entries in the dict
+  const fixture = [
+    JSON.stringify({
+      type: 'system',
+      subtype: 'init',
+      apiKeySource: 'env',
+      cwd: '/workspace',
+      session_id: 'multi-entry',
+      model: 'cursor/composer-2.5',
+      permissionMode: 'default',
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      session_id: 'multi-entry',
+      model_call_id: 'mcall-me',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    }),
+    JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'shared-id',
+      session_id: 'multi-entry',
+      model_call_id: 'mcall-me',
+      timestamp_ms: 1700000001000,
+      tool_call: {
+        run_terminal_cmd: { args: { command: 'ls' }, result: 'a' },
+        read_file: { args: { target_file: 'x.ts' }, result: 'content' },
+      },
+    }),
+  ].join('\n');
+  const traj = normalizeCursor(fixture, '0.1.0');
+  const r = validateTrajectory(traj);
+  // Must not fail with "duplicate tool_call_id"
+  expect(r.errors).toEqual([]);
+  expect(r.ok).toBe(true);
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  const callIds = agentStep!.tool_calls!.map((tc) => tc.tool_call_id);
+  // Both ids must be distinct
+  expect(new Set(callIds).size).toBe(callIds.length);
+  expect(callIds[0]).toBe('shared-id');
+  expect(callIds[1]).toBe('shared-id#1');
+});
+
+// ---------------------------------------------------------------------------
+// I3: Pricing tests — prove obol prices the trajectory non-zero (C1 fix)
+// and that cache_write is reflected in the cost (C2 fix).
+// Note: 'anthropic/claude-sonnet-4-5' is NOT in obol's rate table (unpriced).
+// These fixtures use 'claude-sonnet-4-5' (without provider prefix) which IS priced.
+// ---------------------------------------------------------------------------
+
+// Fixture with cache_write for pricing test (uses a priced model)
+const pricingLogWith = [
+  JSON.stringify({
+    type: 'system',
+    subtype: 'init',
+    apiKeySource: 'env',
+    cwd: '/workspace',
+    session_id: 'session-price-with',
+    model: 'claude-sonnet-4-5',
+    permissionMode: 'default',
+  }),
+  JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'Go.' }] },
+  }),
+  JSON.stringify({
+    type: 'assistant',
+    session_id: 'session-price-with',
+    model_call_id: 'mcall-pw',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+  }),
+  JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    session_id: 'session-price-with',
+    usage: {
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 30, // cache_write present
+    },
+  }),
+].join('\n');
+
+// Same fixture but without cache_write
+const pricingLogWithout = [
+  JSON.stringify({
+    type: 'system',
+    subtype: 'init',
+    apiKeySource: 'env',
+    cwd: '/workspace',
+    session_id: 'session-price-without',
+    model: 'claude-sonnet-4-5',
+    permissionMode: 'default',
+  }),
+  JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'Go.' }] },
+  }),
+  JSON.stringify({
+    type: 'assistant',
+    session_id: 'session-price-without',
+    model_call_id: 'mcall-pwo',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+  }),
+  JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    session_id: 'session-price-without',
+    usage: {
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0, // no cache_write
+    },
+  }),
+].join('\n');
+
+test('I3: traj.agent.model_name is set from the system init model field', () => {
+  const traj = normalizeCursor(minimalLog, '0.1.0');
+  // minimalLog uses 'anthropic/claude-sonnet-4-5'
+  expect(traj.agent.model_name).toBe('anthropic/claude-sonnet-4-5');
+});
+
+test('I3: pricing via obol returns non-null, non-zero cost (model_name present)', async () => {
+  // Uses claude-sonnet-4-5 (priced in obol's rate table)
+  const traj = normalizeCursor(pricingLogWith, '0.1.0');
+  expect(traj.agent.model_name).toBe('claude-sonnet-4-5');
+  const est = await priceTrajectory(traj);
+  expect(est).toBeDefined();
+  // Should have at least one per_model entry with real tokens
+  expect(est.per_model.length).toBeGreaterThan(0);
+  const totalSubtotal = est.per_model.reduce(
+    (sum, m) => sum + m.subtotal_usd,
+    0,
+  );
+  expect(totalSubtotal).toBeGreaterThan(0);
+});
+
+test('I3: fixture WITH cacheWriteTokens produces more cost than fixture WITHOUT (cache_write is priced)', async () => {
+  // Both use claude-sonnet-4-5 (priced). pricingLogWith has cacheWriteTokens=30;
+  // pricingLogWithout has cacheWriteTokens=0. cache_write on step.extra is priced by obol.
+  const trajWith = normalizeCursor(pricingLogWith, '0.1.0');
+  const trajWithout = normalizeCursor(pricingLogWithout, '0.1.0');
+
+  const [estWith, estWithout] = await Promise.all([
+    priceTrajectory(trajWith),
+    priceTrajectory(trajWithout),
+  ]);
+
+  const costWith = estWith.per_model.reduce((s, m) => s + m.subtotal_usd, 0);
+  const costWithout = estWithout.per_model.reduce(
+    (s, m) => s + m.subtotal_usd,
+    0,
+  );
+
+  // cache_write on step.extra is priced by obol; costWith must exceed costWithout
+  expect(costWith).toBeGreaterThan(costWithout);
 });

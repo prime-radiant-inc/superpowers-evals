@@ -7,7 +7,6 @@
 
 import {
   ATIF_SCHEMA_VERSION,
-  type AtifFinalMetrics,
   type AtifMetrics,
   type AtifObservationResult,
   type AtifStep,
@@ -255,8 +254,11 @@ function buildStepMetrics(usage: MessageUsage): AtifMetrics | undefined {
  * - completion_tokens stays as-is
  * - No cache_write bucket (mini-swe-agent logs don't carry cache_creation)
  *
- * Cost: info.model_stats.instance_cost is a session total → placed on
- * final_metrics.total_cost_usd only (passthrough, not computed).
+ * Cost: info.model_stats.instance_cost is a session total → distributed across
+ * agent steps as per-step metrics.cost_usd (proportional to completion tokens),
+ * passthrough not computed. obol honors per-step cost_usd but ignores
+ * final_metrics.total_cost_usd when per-step token metrics are present, so the
+ * cost must ride per-step to be counted.
  *
  * Token SINGLE-SOURCE: per-message usage is present → per-step metrics only,
  * NO final_metrics token totals (to avoid obol double-count).
@@ -468,11 +470,36 @@ export function normalizeMiniSwe(raw: string, version: string): AtifTrajectory {
     if (step) step.step_id = i + 1;
   }
 
-  // final_metrics: only cost_usd if > 0; NO token totals (per-step metrics carry them).
-  // SINGLE-SOURCE invariant: per-step metrics → no final_metrics token totals.
-  let finalMetrics: AtifFinalMetrics | undefined;
+  // Distribute instance_cost across agent steps as per-step cost_usd.
+  // obol ignores final_metrics.total_cost_usd when per-step metrics are present
+  // (it re-prices from tokens). To preserve the log's real cost we must place it
+  // on step.metrics.cost_usd. Proportional to each step's completion_tokens;
+  // if all completion tokens are 0, split evenly across agent steps.
   if (instanceCost > 0) {
-    finalMetrics = { total_cost_usd: instanceCost };
+    const agentSteps = steps.filter((s) => s.source === 'agent');
+    if (agentSteps.length > 0) {
+      const totalCompletion = agentSteps.reduce(
+        (sum, s) => sum + (s.metrics?.completion_tokens ?? 0),
+        0,
+      );
+      if (totalCompletion > 0) {
+        for (const s of agentSteps) {
+          const completion = s.metrics?.completion_tokens ?? 0;
+          if (completion > 0) {
+            const share = instanceCost * (completion / totalCompletion);
+            s.metrics = s.metrics ?? {};
+            s.metrics.cost_usd = share;
+          }
+        }
+      } else {
+        // All-zero completion: split evenly across agent steps
+        const share = instanceCost / agentSteps.length;
+        for (const s of agentSteps) {
+          s.metrics = s.metrics ?? {};
+          s.metrics.cost_usd = share;
+        }
+      }
+    }
   }
 
   const traj: AtifTrajectory = {
@@ -488,8 +515,6 @@ export function normalizeMiniSwe(raw: string, version: string): AtifTrajectory {
     },
     steps,
   };
-
-  if (finalMetrics) traj.final_metrics = finalMetrics;
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

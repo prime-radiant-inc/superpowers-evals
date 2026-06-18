@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeMimo } from '../src/normalize/mimo.ts';
@@ -705,4 +706,56 @@ test('error events produce no extra steps', () => {
   const traj = normalizeMimo(withError, '0.1.0');
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
   expect(agentSteps.length).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// I5: Harbor fixture file test
+// Loads the real harbor fixture from test/fixtures/harbor/mimo/logs-agent/mimo.txt
+// and asserts it normalizes to a valid trajectory with token conservation.
+// ---------------------------------------------------------------------------
+
+test('I5: harbor fixture file normalizes to a valid ATIF trajectory', () => {
+  const raw = readFileSync(
+    new URL(
+      '../test/fixtures/harbor/mimo/logs-agent/mimo.txt',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const traj = normalizeMimo(raw, '0.0.0');
+  const result = validateTrajectory(traj);
+  expect(result.ok).toBe(true);
+  expect(result.errors).toEqual([]);
+});
+
+test('I5: harbor fixture file token conservation — per-step buckets sum correctly', () => {
+  // Fixture step_finish tokens:
+  //   step1: input=450, output=60, reasoning=15, cache.read=0, cache.write=100
+  //   step2: input=600, output=40, reasoning=0, cache.read=100, cache.write=0
+  //   step3: input=250, output=20, reasoning=0, cache.read=100, cache.write=0
+  // Our mapping: prompt=input, cached=cache.read, completion=output+reasoning, extra.cache_write=cache.write
+  const raw = readFileSync(
+    new URL(
+      '../test/fixtures/harbor/mimo/logs-agent/mimo.txt',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const traj = normalizeMimo(raw, '0.0.0');
+  let totalPrompt = 0,
+    totalCached = 0,
+    totalCompletion = 0,
+    totalCacheWrite = 0;
+  for (const step of traj.steps) {
+    totalPrompt += step.metrics?.prompt_tokens ?? 0;
+    totalCached += step.metrics?.cached_tokens ?? 0;
+    totalCompletion += step.metrics?.completion_tokens ?? 0;
+    totalCacheWrite += (step.extra?.['cache_write'] as number) ?? 0;
+  }
+  // From fixture: input totals: 450+600+250=1300, cache.read: 0+100+100=200,
+  // completion (output+reasoning): 75+40+20=135, cache.write: 100+0+0=100
+  expect(totalPrompt).toBe(1300);
+  expect(totalCached).toBe(200);
+  expect(totalCompletion).toBe(135);
+  expect(totalCacheWrite).toBe(100);
 });

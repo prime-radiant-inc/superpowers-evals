@@ -33,7 +33,6 @@ function sumStepTokens(
           prompt_tokens?: number;
           cached_tokens?: number;
           completion_tokens?: number;
-          extra?: Record<string, unknown>;
         }
       | undefined;
     extra?: Record<string, unknown>;
@@ -50,11 +49,15 @@ function sumStepTokens(
   let cacheWrite = 0;
   for (const step of steps) {
     const m = step.metrics;
-    if (!m) continue;
-    prompt += m.prompt_tokens ?? 0;
-    cached += m.cached_tokens ?? 0;
-    completion += m.completion_tokens ?? 0;
-    cacheWrite += Number((m.extra?.['cache_write'] as number | undefined) ?? 0);
+    if (m) {
+      prompt += m.prompt_tokens ?? 0;
+      cached += m.cached_tokens ?? 0;
+      completion += m.completion_tokens ?? 0;
+    }
+    // cache_write lives on step.extra (not metrics.extra) — obol ignores metrics.extra
+    cacheWrite += Number(
+      (step.extra?.['cache_write'] as number | undefined) ?? 0,
+    );
   }
   return { prompt, cached, completion, cacheWrite };
 }
@@ -369,7 +372,7 @@ test('jsonl: timestamps preserved on steps', () => {
   expect(traj.steps[1]?.timestamp).toBe('2026-01-01T00:00:01Z');
 });
 
-test('jsonl: cacheWrite goes to step.metrics.extra.cache_write', () => {
+test('jsonl: cacheWrite goes to step.extra.cache_write (not metrics.extra — obol ignores metrics.extra)', () => {
   const withCacheWrite = makeJsonlRaw([
     {
       type: 'message',
@@ -386,11 +389,14 @@ test('jsonl: cacheWrite goes to step.metrics.extra.cache_write', () => {
   ]);
   const traj = normalizeOpenclaw(withCacheWrite, '1.0.0');
   expect(validateTrajectory(traj).errors).toEqual([]);
-  const m = traj.steps[1]?.metrics;
+  const step = traj.steps[1];
+  const m = step?.metrics;
   expect(m?.prompt_tokens).toBe(10);
   expect(m?.cached_tokens).toBe(3);
   expect(m?.completion_tokens).toBe(5);
-  expect(m?.extra?.['cache_write']).toBe(7);
+  // cache_write must be on step.extra (NOT metrics.extra)
+  expect(step?.extra?.['cache_write']).toBe(7);
+  expect(m?.extra?.['cache_write']).toBeUndefined();
 });
 
 test('jsonl: fewer than 2 usable steps falls back to envelope', () => {

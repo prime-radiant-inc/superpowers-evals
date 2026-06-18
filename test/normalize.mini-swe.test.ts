@@ -609,13 +609,30 @@ describe('token metrics — disjoint buckets', () => {
     expect(traj.final_metrics?.total_completion_tokens).toBeUndefined();
   });
 
-  test('cost_usd from info.model_stats.instance_cost is set on final_metrics', () => {
-    // Session cost is a single value in info.model_stats.instance_cost → passthrough to final_metrics
+  test('I1: instance_cost distributed as per-step cost_usd proportional to completion tokens', () => {
+    // V2_TOOL_CALLING_TRAJECTORY: 3 agent steps with completion_tokens 120, 80, 50.
+    // instance_cost = 0.25. Total completion = 250.
+    // step1: 120/250 * 0.25 = 0.12
+    // step2: 80/250 * 0.25 = 0.08
+    // step3: 50/250 * 0.25 = 0.05
+    // Sum = 0.25
     const traj = normalizeMiniSwe(V2_TOOL_CALLING_TRAJECTORY, '2.1.0');
-    expect(traj.final_metrics?.total_cost_usd).toBeCloseTo(0.25);
+    const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+    expect(agentSteps.length).toBe(3);
+    const totalCost = agentSteps.reduce(
+      (sum, s) => sum + (s.metrics?.cost_usd ?? 0),
+      0,
+    );
+    expect(totalCost).toBeCloseTo(0.25);
+    // Verify proportional distribution
+    expect(agentSteps[0]?.metrics?.cost_usd).toBeCloseTo((120 / 250) * 0.25);
+    expect(agentSteps[1]?.metrics?.cost_usd).toBeCloseTo((80 / 250) * 0.25);
+    expect(agentSteps[2]?.metrics?.cost_usd).toBeCloseTo((50 / 250) * 0.25);
+    // No final_metrics.total_cost_usd (cost is on steps now)
+    expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
   });
 
-  test('no cost_usd when instance_cost is 0', () => {
+  test('I1: no cost_usd on steps when instance_cost is 0', () => {
     const raw = JSON.stringify({
       info: {
         mini_version: '2.0.0',
@@ -629,20 +646,24 @@ describe('token metrics — disjoint buckets', () => {
       ],
     });
     const traj = normalizeMiniSwe(raw, '2.0.0');
+    for (const s of traj.steps) {
+      expect(s.metrics?.cost_usd).toBeUndefined();
+    }
     expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
   });
 
-  test('exit message tokens excluded: only assistant step contributes usage', () => {
+  test('I1: exit message tokens excluded: only assistant step contributes usage and cost', () => {
     // V2_WITH_EXIT_MESSAGE: only the one assistant step contributes usage
     const traj = normalizeMiniSwe(V2_WITH_EXIT_MESSAGE, '2.1.0');
     const agentStep = traj.steps.find((s) => s.source === 'agent');
     expect(agentStep?.metrics?.prompt_tokens).toBe(100); // 100-0=100
     expect(agentStep?.metrics?.completion_tokens).toBe(20);
-    // cost is on final_metrics
-    expect(traj.final_metrics?.total_cost_usd).toBeCloseTo(0.001);
+    // instance_cost = 0.001 distributed to the single agent step
+    expect(agentStep?.metrics?.cost_usd).toBeCloseTo(0.001);
+    expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
   });
 
-  test('missing info yields no cost_usd', () => {
+  test('I1: missing info yields no cost_usd on steps', () => {
     const raw = JSON.stringify({
       messages: [
         { role: 'system', content: 'sys', extra: {} },
@@ -651,6 +672,9 @@ describe('token metrics — disjoint buckets', () => {
       ],
     });
     const traj = normalizeMiniSwe(raw, 'unknown');
+    for (const s of traj.steps) {
+      expect(s.metrics?.cost_usd).toBeUndefined();
+    }
     expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
   });
 });

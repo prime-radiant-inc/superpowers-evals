@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeQwen } from '../src/normalize/qwen.ts';
@@ -590,4 +591,52 @@ test('distinct assistant events produce distinct steps (no unexpected dedup)', (
   // Each step has its own observation
   expect(agentSteps[0]!.observation?.results[0]?.content).toBe('content');
   expect(agentSteps[1]!.observation?.results[0]?.content).toBe('ok');
+});
+
+// ---------------------------------------------------------------------------
+// I5: Harbor fixture file test
+// Loads the real harbor fixture from test/fixtures/harbor/qwen/qwen-sessions/session.jsonl
+// and asserts it normalizes to a valid trajectory with token conservation.
+// ---------------------------------------------------------------------------
+
+test('I5: harbor qwen fixture file normalizes to a valid ATIF trajectory', () => {
+  const raw = readFileSync(
+    new URL(
+      '../test/fixtures/harbor/qwen/qwen-sessions/session.jsonl',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const traj = normalizeQwen(raw, '1.0.0');
+  const result = validateTrajectory(traj);
+  expect(result.ok).toBe(true);
+  expect(result.errors).toEqual([]);
+});
+
+test('I5: harbor qwen fixture file token conservation — per-step disjoint buckets', () => {
+  // Fixture assistant turns:
+  //   turn1: promptTokenCount=500, cachedContentTokenCount=100, candidatesTokenCount=60, thoughtsTokenCount=0
+  //          → uncached_prompt=400, cached=100, completion=60
+  //   turn2: promptTokenCount=620, cachedContentTokenCount=200, candidatesTokenCount=20, thoughtsTokenCount=5
+  //          → uncached_prompt=420, cached=200, completion=25
+  // Totals: prompt=820, cached=300, completion=85
+  const raw = readFileSync(
+    new URL(
+      '../test/fixtures/harbor/qwen/qwen-sessions/session.jsonl',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const traj = normalizeQwen(raw, '1.0.0');
+  let totalPrompt = 0,
+    totalCached = 0,
+    totalCompletion = 0;
+  for (const step of traj.steps) {
+    totalPrompt += step.metrics?.prompt_tokens ?? 0;
+    totalCached += step.metrics?.cached_tokens ?? 0;
+    totalCompletion += step.metrics?.completion_tokens ?? 0;
+  }
+  expect(totalPrompt).toBe(820); // 400+420
+  expect(totalCached).toBe(300); // 100+200
+  expect(totalCompletion).toBe(85); // 60+25 (candidates+thoughts folded)
 });
