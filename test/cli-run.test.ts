@@ -24,7 +24,10 @@ function scenario(): string {
   return scn;
 }
 
-function runCli(fixture: string): { status: number | null; stdout: string } {
+function runCli(
+  fixture: string,
+  extraArgs: string[] = [],
+): { status: number | null; stdout: string } {
   const proc = spawnSync(
     'bun',
     [
@@ -37,6 +40,7 @@ function runCli(fixture: string): { status: number | null; stdout: string } {
       REAL_CODING_AGENTS,
       '--out-root',
       mkdtempSync(join(tmpdir(), 'out-')),
+      ...extraArgs,
     ],
     {
       env: {
@@ -63,5 +67,23 @@ test('quorum run exits 1 on a fail verdict and prints run-id', () => {
 test('quorum run exits 0 on a pass verdict', () => {
   const { status, stdout } = runCli('pass');
   expect(stdout).toContain('run-id:');
+  expect(status).toBe(0);
+});
+
+test('quorum run embeds linux in run-id by default (no --os flag)', () => {
+  const { status, stdout } = runCli('pass');
+  expect(stdout).toContain('run-id:');
+  // The run-id format is <scenario>-<agent>-<os>-<stamp>-<nonce>; the OS
+  // segment must be 'linux' when --os is not supplied.
+  const runIdLine = stdout.split('\n').find((l) => l.startsWith('run-id:'));
+  expect(runIdLine).toMatch(/-linux-/);
+  expect(status).toBe(0);
+});
+
+test('quorum run embeds linux in run-id when --os linux is explicit', () => {
+  const { status, stdout } = runCli('pass', ['--os', 'linux']);
+  expect(stdout).toContain('run-id:');
+  const runIdLine = stdout.split('\n').find((l) => l.startsWith('run-id:'));
+  expect(runIdLine).toMatch(/-linux-/);
   expect(status).toBe(0);
 });

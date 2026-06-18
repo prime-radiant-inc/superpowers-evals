@@ -101,6 +101,7 @@ function csvList(csv: string | undefined): string[] | undefined {
 
 interface RunOptions {
   readonly codingAgent: string;
+  readonly os: string;
   readonly codingAgentsDir: string;
   readonly outRoot: string;
   readonly scenariosRoot: string;
@@ -135,6 +136,7 @@ program
     'scenario dir or name (a bare name resolves under --scenarios-root)',
   )
   .requiredOption('--coding-agent <name>', 'coding agent to run')
+  .option('--os <os>', 'target OS (linux|windows)', 'linux')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
   .option('--out-root <dir>', 'results root', 'results')
   .option(
@@ -174,6 +176,7 @@ program
     const { runDir, verdict } = await runScenario({
       scenarioDir: resolve(scn),
       codingAgent: opts.codingAgent,
+      os: opts.os,
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
       startedAt,

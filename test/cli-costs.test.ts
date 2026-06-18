@@ -623,3 +623,35 @@ test('costs renders a batch matrix as one row per produced run', () => {
   expect(proc.stdout).toContain('unpriced');
   expect(proc.stdout).toMatch(/1 priced/);
 });
+
+// ── identityFromRunDirName: 5-segment run-id (Task 7 format) ─────────────
+// The new run-id format is <scenario>-<agent>-<os>-<stamp>-<nonce>.
+// identityFromRunDirName is tested indirectly via loadCostRows fallback: the
+// fallback fires when verdict.json exists but cannot be schema-parsed, so
+// identity is extracted from the dir name alone.
+
+test('identityFromRunDirName extracts agent from a 5-segment run-id (via fallback)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-5seg-'));
+  // A run dir whose verdict.json is corrupt triggers the fallback parser.
+  const runId = 'myscenario-claude-windows-20260101T000000Z-abcd';
+  mkdirSync(join(root, runId), { recursive: true });
+  writeFileSync(join(root, runId, 'verdict.json'), 'not-json{{{');
+  const rows = loadCostRows(join(root, runId), root);
+  expect(rows).toHaveLength(1);
+  const row = rows[0] as CostRow;
+  expect(row.scenario).toBe('myscenario');
+  expect(row.agent).toBe('claude');
+});
+
+test('identityFromRunDirName extracts agent from a 5-segment run-id with hyphenated scenario', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-5seg-hyph-'));
+  // Scenario name itself contains hyphens: my-cool-scenario
+  const runId = 'my-cool-scenario-codex-linux-20260101T000000Z-abcd';
+  mkdirSync(join(root, runId), { recursive: true });
+  writeFileSync(join(root, runId, 'verdict.json'), 'not-json{{{');
+  const rows = loadCostRows(join(root, runId), root);
+  expect(rows).toHaveLength(1);
+  const row = rows[0] as CostRow;
+  expect(row.scenario).toBe('my-cool-scenario');
+  expect(row.agent).toBe('codex');
+});

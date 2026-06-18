@@ -238,20 +238,21 @@ function batchRows(batchDir: string): CostRow[] {
   return rows;
 }
 
-// Parse scenario/agent from a run-dir name (`<scenario>-<agent>-<stamp>-<nonce>`,
-// allocateRunDir): the last two dash-segments are the stamp + nonce, the second
-// from last is the agent, the rest is the scenario. A name that doesn't match
-// falls back to ('?', '?') — only used when the verdict lacks identity fields.
+// Parse scenario/agent from a run-dir name (`<scenario>-<agent>-<os>-<stamp>-<nonce>`,
+// allocateRunDir): the last two dash-segments are the stamp + nonce, the third
+// from last is the os, the fourth from last is the agent, the rest is the
+// scenario. A name that doesn't match falls back to ('?', '?') — only used
+// when the verdict lacks identity fields.
 function identityFromRunDirName(name: string): {
   scenario: string;
   agent: string;
 } {
   const parts = name.split('-');
-  if (parts.length < 4) {
+  if (parts.length < 5) {
     return { scenario: '?', agent: '?' };
   }
-  const agent = parts[parts.length - 3] ?? '?';
-  const scenario = parts.slice(0, parts.length - 3).join('-');
+  const agent = parts[parts.length - 4] ?? '?';
+  const scenario = parts.slice(0, parts.length - 4).join('-');
   return { scenario: scenario === '' ? '?' : scenario, agent };
 }
 
