@@ -1,5 +1,6 @@
 import type {
   CardView,
+  CellStatus,
   CellView,
   HeaderTally,
   SlotKind,
@@ -109,6 +110,23 @@ function cardHtml(card: CardView): string {
   );
 }
 
+// The status glyph and CSS class for a cell outcome status. Each status gets
+// a distinct shape glyph so the triad is not color-only.
+function statusGlyph(status: CellStatus): { glyph: string; cls: string } {
+  switch (status) {
+    case 'pass':
+      return { glyph: '✓', cls: 'status-pass' };
+    case 'failed':
+      return { glyph: '✗', cls: 'status-failed' };
+    case 'incomplete':
+      return { glyph: '~', cls: 'status-incomplete' };
+    case 'not_run':
+      return { glyph: '·', cls: 'status-not_run' };
+    case 'ineligible':
+      return { glyph: '·', cls: 'status-ineligible' };
+  }
+}
+
 // The cell <td>. The single source of truth for first paint and SSE swaps: the
 // <td> carries id + sse-swap both equal to the cell id and hx-swap="outerHTML",
 // so each cell listens for its own SSE event and a swap never bleeds into a
@@ -118,17 +136,24 @@ export function cellHtml(view: CellView): string {
   const open = `<td class="c" id="${id}" sse-swap="${id}" hx-swap="outerHTML">`;
 
   if (view.state === 'empty') {
-    // A "not applicable" cell (title set) can never run here (directive/draft):
-    // dim it, show "n/a", and carry a hover tooltip explaining why — visually
-    // distinct from a plain never-run cell, which shows the em-dash.
+    const sg = statusGlyph(view.status);
+    // Ineligible cell: title set by server (naTitle), opacity dimmed, status
+    // class carries the ineligible glyph. This is the ONE ineligible rendering
+    // path — the title/opacity overlay from server.ts handles the tooltip/dim;
+    // the status span here handles the glyph.
     if (view.title !== undefined) {
       return (
         `<td class="c c-na" id="${id}" sse-swap="${id}" hx-swap="outerHTML" title="${esc(view.title)}">` +
         `<div class="cell" style="opacity:${f3(view.opacity)}">` +
-        `<span class="empty">n/a</span></div></td>`
+        `<span class="${sg.cls}">${sg.glyph}</span></div></td>`
       );
     }
-    return `${open}<div class="cell"><span class="empty">—</span></div></td>`;
+    // not_run: plain middle-dot, no tooltip, default opacity.
+    return (
+      `${open}` +
+      `<div class="cell"><span class="${sg.cls}">${sg.glyph}</span></div>` +
+      `</td>`
+    );
   }
 
   const stateClass = view.state === 'running' ? ' running' : '';
@@ -136,13 +161,27 @@ export function cellHtml(view: CellView): string {
   const drift = view.drift ? `<span class="drift">▲</span>` : '';
   const card = view.card !== null ? cardHtml(view.card) : '';
 
+  // Status glyph: shown for done cells. For running cells, the shimmer
+  // communicates in-progress state — skip the outcome glyph.
+  const sg = statusGlyph(view.status);
+  // For incomplete cells, surface the error stage (if any) as a tooltip on
+  // the status glyph so it's visible on hover without consuming bottom space.
+  const stageTitle =
+    view.status === 'incomplete' && view.error_stage !== null
+      ? ` title="${esc(view.error_stage)}"`
+      : '';
+  const statusSpan =
+    view.state !== 'running'
+      ? `<span class="${sg.cls}"${stageTitle}>${sg.glyph}</span>`
+      : '';
+
   return (
     `${open}` +
     `<div class="cell${stateClass}" style="opacity:${f3(view.opacity)}">` +
     `<div class="inner">` +
     `<div class="vs">${ribbonHtml(view.slots)}</div>` +
     `<div class="cb">${costBarHtml(view.slots)}</div>` +
-    `<div class="dc">${drift}${esc(view.bottom)}</div>` +
+    `<div class="dc">${drift}${statusSpan}${esc(view.bottom)}</div>` +
     `</div>` +
     card +
     `</div>` +
@@ -201,6 +240,8 @@ export function gridHtml(args: GridArgs): string {
               // OS column header to this table).
               os: '',
               state: 'empty',
+              status: 'not_run',
+              error_stage: null,
               slots: [],
               bottom: '—',
               drift: false,

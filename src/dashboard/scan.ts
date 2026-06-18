@@ -244,6 +244,7 @@ export function scanResults(args: {
           final: finalOf(verdict),
           cost_usd: economics?.total_est_cost_usd ?? null,
           finished_at: verdict.finished_at ?? null,
+          error_stage: verdict.error?.stage ?? null,
         });
         continue;
       }

@@ -9,6 +9,17 @@ import { z } from 'zod';
 export const CELL_STATES = ['empty', 'done', 'running'] as const;
 export type CellState = (typeof CELL_STATES)[number];
 
+// The five outcome statuses for a (scenario, agent, os) cell. Orthogonal to
+// `state` (empty/done/running), which drives slot/shimmer rendering.
+export const CELL_STATUSES = [
+  'pass',
+  'failed',
+  'incomplete',
+  'not_run',
+  'ineligible',
+] as const;
+export type CellStatus = (typeof CELL_STATUSES)[number];
+
 // The six verdict-ribbon slot kinds. `ghost` is left-padding; `running` is the
 // shimmer slot for an in-flight run.
 export const SLOT_KINDS = [
@@ -56,6 +67,11 @@ export const DashboardVerdictSchema = z.object({
   scenario: z.string().optional().catch(undefined),
   coding_agent: z.string().optional().catch(undefined),
   started_at: z.string().optional().catch(undefined),
+  error: z
+    .object({ stage: z.string().optional().catch(undefined) })
+    .nullable()
+    .optional()
+    .catch(null),
 });
 export type DashboardVerdict = z.infer<typeof DashboardVerdictSchema>;
 
@@ -67,6 +83,7 @@ export interface RunRecord {
   readonly final: RunFinal;
   readonly cost_usd: number | null;
   readonly finished_at: string | null;
+  readonly error_stage: string | null;
 }
 
 // An in-flight run: a dir with phase.json + a live pid and no verdict yet.
@@ -137,6 +154,12 @@ export interface CellView {
   readonly drift: boolean;
   readonly opacity: number;
   readonly card: CardView | null;
+  // The outcome status for this cell: pass/failed/incomplete/not_run/ineligible.
+  // Orthogonal to `state` (empty/done/running). Set for all cells.
+  readonly status: CellStatus;
+  // The error stage from the newest run's verdict, when status is 'incomplete'.
+  // null for all other statuses.
+  readonly error_stage: string | null;
   // A hover tooltip for the cell. Set for "not applicable" cells (an empty cell
   // that can never run here — the scenario's coding-agents directive excludes
   // this agent, or it's a draft) to explain why it shows "n/a" rather than "—".

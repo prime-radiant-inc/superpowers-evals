@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import type { Cell, Grid, RunRecord } from '../src/dashboard/contracts.ts';
 import { cellKey } from '../src/dashboard/contracts.ts';
 import {
+  cellStatus,
   cellView,
   costBarHeights,
   driftFlag,
@@ -21,6 +22,7 @@ function rec(over: Partial<RunRecord> = {}): RunRecord {
     final: 'pass',
     cost_usd: 1,
     finished_at: null,
+    error_stage: null,
     ...over,
   };
 }
@@ -210,7 +212,7 @@ test('headerTally treats an empty-window cell as not_run', () => {
 // --- cellView ----------------------------------------------------------------
 
 test('cellView: empty cell renders state empty with em-dash bottom', () => {
-  const v = cellView(cell({ window: [] }), 's', 'claude', 'linux');
+  const v = cellView(cell({ window: [] }), 's', 'claude', 'linux', null);
   expect(v.state).toBe('empty');
   expect(v.bottom).toBe('—');
   expect(v.slots).toEqual([]);
@@ -224,7 +226,7 @@ test('cellView: pure running cell shimmers the newest slot, phase bottom', () =>
     window: [],
     running: { run_id: 'r', phase: 'agent' },
   });
-  const v = cellView(c, 's', 'claude', 'linux');
+  const v = cellView(c, 's', 'claude', 'linux', null);
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('agent');
   expect(v.opacity).toBe(1);
@@ -243,7 +245,7 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
       rec({ cost_usd: 2, final: 'fail', finished_at: '2026-06-12T00:00:00Z' }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', now);
+  const v = cellView(c, 's', 'claude', 'linux', null, now);
   expect(v.state).toBe('done');
   expect(v.bottom).toBe('$2.00');
   expect(v.opacity).toBeCloseTo(staleOpacity(1.0), 6);
@@ -261,7 +263,7 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
 
 test('cellView: done cell with unknown cost shows "$—" (never "$0.00")', () => {
   const c = cell({ window: [rec({ cost_usd: null, final: 'pass' })] });
-  const v = cellView(c, 's', 'claude', 'linux');
+  const v = cellView(c, 's', 'claude', 'linux', null);
   expect(v.bottom).toBe('$—');
 });
 
@@ -270,7 +272,7 @@ test('cellView: running on top of history shimmers newest, phase bottom', () => 
     window: [rec({ cost_usd: 1, final: 'pass' })],
     running: { run_id: 'r', phase: 'checks' },
   });
-  const v = cellView(c, 's', 'claude', 'linux');
+  const v = cellView(c, 's', 'claude', 'linux', null);
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('checks');
   expect(v.opacity).toBe(1);
@@ -294,7 +296,7 @@ test('cellView: drift flag set and drift_line populated when latest spikes', () 
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', now);
+  const v = cellView(c, 's', 'claude', 'linux', null, now);
   expect(v.drift).toBe(true);
   expect(v.card?.drift_line).toBe(
     '▲ latest $3.00 vs median $1.00 of prior runs',
@@ -305,7 +307,7 @@ test('cellView: no drift_line when there is no drift', () => {
   const c = cell({
     window: [rec({ cost_usd: 1 }), rec({ cost_usd: 1 }), rec({ cost_usd: 1 })],
   });
-  const v = cellView(c, 's', 'claude', 'linux');
+  const v = cellView(c, 's', 'claude', 'linux', null);
   expect(v.drift).toBe(false);
   expect(v.card?.drift_line).toBeNull();
 });
@@ -321,10 +323,41 @@ test('cellView: card rows carry compact timestamp + run id', () => {
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux');
+  const v = cellView(c, 's', 'claude', 'linux', null);
   const row = v.card?.rows[0];
   expect(row?.verdict).toBe('fail');
   expect(row?.cost).toBe('$1.50');
   expect(row?.timestamp).toBe('2026-06-12 13:30');
   expect(row?.run_id).toBe('s-claude-20260612T133000Z-aaaa');
+});
+
+// --- cellStatus --------------------------------------------------------------
+
+test('pass verdict = pass', () => {
+  expect(cellStatus({ window: [{ final: 'pass' }] }, null)).toBe('pass');
+});
+
+test('fail verdict = failed-grading (ran to completion)', () => {
+  expect(cellStatus({ window: [{ final: 'fail' }] }, null)).toBe('failed');
+});
+
+test('indeterminate verdict = incomplete', () => {
+  expect(cellStatus({ window: [{ final: 'indeterminate' }] }, null)).toBe(
+    'incomplete',
+  );
+});
+
+test('no runs + manifest ineligible = ineligible', () => {
+  expect(
+    cellStatus(
+      { window: [] },
+      { eligible: false, skipped_reason: 'directive' },
+    ),
+  ).toBe('ineligible');
+});
+
+test('no runs + eligible = not_run', () => {
+  expect(
+    cellStatus({ window: [] }, { eligible: true, skipped_reason: null }),
+  ).toBe('not_run');
 });

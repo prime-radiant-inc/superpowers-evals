@@ -211,12 +211,11 @@ test('GET / shows the drift marker and omits the abandoned cell', async () => {
   // drift x claude carries the ▲ marker.
   expect(sliceCell(html, 'cell-drift-claude-linux')).toContain('▲');
 
-  // drift x codex is abandoned (dead pid, no verdict) -> renders as empty (the
-  // em-dash placeholder), NOT a running/done cell. Slice out just that cell's
+  // drift x codex is abandoned (dead pid, no verdict) -> renders as not_run (the
+  // middle-dot placeholder), NOT a running/done cell. Slice out just that cell's
   // <td>…</td> so the assertion can't bleed into a later cell's bands.
   const codexTd = sliceCell(html, 'cell-drift-codex-linux');
-  expect(codexTd).toContain('class="empty"');
-  expect(codexTd).toContain('—');
+  expect(codexTd).toContain('status-not_run');
   expect(codexTd).not.toContain('b-pass');
   expect(codexTd).not.toContain('running');
 });

@@ -2,11 +2,13 @@ import {
   type CardRow,
   type CardView,
   type Cell,
+  type CellStatus,
   type CellView,
   cellId,
   cellKey,
   type Grid,
   type HeaderTally,
+  type RunFinal,
   type RunRecord,
   type SlotView,
 } from './contracts.ts';
@@ -230,6 +232,36 @@ function cardView(
   return { age, rows, drift_line: driftLine };
 }
 
+// Map a cell + manifest cell to one of the 5 outcome statuses. Exported for
+// direct unit testing — the type is kept loose so test objects satisfy it.
+export function cellStatus(
+  cell: { readonly window: readonly { readonly final: RunFinal }[] },
+  manifestCell: {
+    readonly eligible: boolean;
+    readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+  } | null,
+): CellStatus {
+  const newest = cell.window[cell.window.length - 1];
+  if (newest !== undefined) {
+    if (newest.final === 'pass') return 'pass';
+    if (newest.final === 'fail') return 'failed';
+    if (newest.final === 'indeterminate') return 'incomplete';
+    // 'unknown' (malformed/legacy verdict): treat as incomplete (it ran but we can't grade it)
+    return 'incomplete';
+  }
+  // empty window:
+  if (manifestCell !== null && manifestCell.eligible === false)
+    return 'ineligible';
+  return 'not_run';
+}
+
+// The error stage of the newest run, or null. Only relevant when status is
+// 'incomplete', but computed for all cells (returns null when no runs or no stage).
+function newestErrorStage(cell: Cell): string | null {
+  const newest = cell.window[cell.window.length - 1];
+  return newest?.error_stage ?? null;
+}
+
 // Resolve a Cell into a render-ready view. Always 5 slots, ghost-padded on the
 // left so the newest run is rightmost. Opacity: running -> 1.0, else the stale
 // fade.
@@ -238,6 +270,10 @@ export function cellView(
   scenario: string,
   agent: string,
   os: string,
+  manifestCell: {
+    readonly eligible: boolean;
+    readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+  } | null,
   now?: Date,
 ): CellView {
   const id = cellId(scenario, agent, os);
@@ -252,6 +288,8 @@ export function cellView(
       agent,
       os,
       state: 'running',
+      status: cellStatus(cell, manifestCell),
+      error_stage: null,
       slots,
       bottom: cell.running.phase,
       drift: false,
@@ -267,6 +305,8 @@ export function cellView(
       agent,
       os,
       state: 'empty',
+      status: cellStatus(cell, manifestCell),
+      error_stage: null,
       slots: [],
       bottom: '—',
       drift: false,
@@ -297,6 +337,8 @@ export function cellView(
     agent,
     os,
     state,
+    status: cellStatus(cell, manifestCell),
+    error_stage: newestErrorStage(cell),
     slots,
     bottom,
     drift,

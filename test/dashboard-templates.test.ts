@@ -30,6 +30,8 @@ function doneView(over: Partial<CellView> = {}): CellView {
     agent: 'claude',
     os: 'linux',
     state: 'done',
+    status: 'pass',
+    error_stage: null,
     slots: [
       { kind: 'ghost', height: 0.18 },
       { kind: 'ghost', height: 0.18 },
@@ -85,13 +87,15 @@ test('cellHtml escapes the cell id (scenario/agent are interpolated)', () => {
 
 // --- cell-state smoke matrix ---------------------------------------------------
 
-test('empty cell renders the em-dash placeholder and no inner ribbon', () => {
+test('empty cell renders the not_run glyph (middle dot) and no inner ribbon', () => {
   const html = cellHtml({
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
     os: 'linux',
     state: 'empty',
+    status: 'not_run',
+    error_stage: null,
     slots: ghostSlots(),
     bottom: '—',
     drift: false,
@@ -99,18 +103,20 @@ test('empty cell renders the em-dash placeholder and no inner ribbon', () => {
     card: null,
   });
   expect(html).toContain('id="cell-s-claude"');
-  expect(html).toContain('<span class="empty">—</span>');
+  expect(html).toContain('class="status-not_run"');
   expect(html).not.toContain('class="inner"');
   expect(html).not.toContain('class="vs"');
 });
 
-test('not-applicable cell (title set) renders dimmed n/a + tooltip, not the em-dash', () => {
+test('ineligible cell (title set) renders dimmed ineligible glyph + tooltip', () => {
   const html = cellHtml({
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
     os: 'linux',
     state: 'empty',
+    status: 'ineligible',
+    error_stage: null,
     slots: ghostSlots(),
     bottom: '—',
     drift: false,
@@ -120,9 +126,8 @@ test('not-applicable cell (title set) renders dimmed n/a + tooltip, not the em-d
   });
   expect(html).toContain('c-na');
   expect(html).toContain('title="not eligible — directive"');
-  expect(html).toContain('<span class="empty">n/a</span>');
+  expect(html).toContain('class="status-ineligible"');
   expect(html).toContain('opacity:0.300');
-  expect(html).not.toContain('<span class="empty">—</span>');
 });
 
 test('done cell carries solid bands, a cost-bar with --h, and the cost bottom', () => {
@@ -156,6 +161,8 @@ test('running cell carries the running class, a shimmer runslot, and the phase b
     agent: 'claude',
     os: 'linux',
     state: 'running',
+    status: 'not_run',
+    error_stage: null,
     slots: [
       { kind: 'ghost', height: 0.18 },
       { kind: 'ghost', height: 0.18 },
@@ -184,6 +191,8 @@ test('running cell renders the queued-phase word verbatim for each phase', () =>
       agent: 'claude',
       os: 'linux',
       state: 'running',
+      status: 'not_run',
+      error_stage: null,
       slots: ghostSlots(),
       bottom: phase,
       drift: false,

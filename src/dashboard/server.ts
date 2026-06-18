@@ -140,9 +140,27 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   // The last scan snapshot the scanner diffs against; warmed on the first GET /.
   let lastGrid: Grid = scan();
 
+  // Look up the manifest cell for a (scenario, agent, os), or null when no
+  // manifest is loaded. Used to pass eligibility context into cellView.
+  const manifestCellFor = (
+    scenario: string,
+    agent: string,
+    os: string,
+  ): import('./manifest.ts').GridManifestCell | null => {
+    if (manifest === null) {
+      return null;
+    }
+    return (
+      manifest.cells.find(
+        (c) => c.scenario === scenario && c.agent === agent && c.os === os,
+      ) ?? null
+    );
+  };
+
   // Render + publish a cell partial for (scenario, agent, os) from a Cell.
   const publishCell = (cell: Cell): void => {
-    const view = cellView(cell, cell.scenario, cell.agent, cell.os);
+    const mc = manifestCellFor(cell.scenario, cell.agent, cell.os);
+    const view = cellView(cell, cell.scenario, cell.agent, cell.os, mc);
     bus.publish({
       event: cellId(cell.scenario, cell.agent, cell.os),
       data: oneLine(cellHtml(view)),
@@ -225,12 +243,14 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       const key = cellKey(id.scenario, id.agent, id.os);
       const cell =
         grid.cells.get(key) ?? emptyCell(id.scenario, id.agent, id.os);
-      const view = cellView(cell, id.scenario, id.agent, id.os);
-      // An empty cell that can never run here renders dimmed "n/a" + tooltip
-      // (vs the plain never-run em-dash). A cell with history keeps it even
-      // if it's no longer eligible. gridHtml keys views by 2-part
-      // `${scenario}\t${agent}` (Task 7 adds the OS column header), so the views
-      // map is keyed that way here too.
+      const mc = manifestCellFor(id.scenario, id.agent, id.os);
+      const view = cellView(cell, id.scenario, id.agent, id.os, mc);
+      // Ineligible cells: the status field already carries 'ineligible' (set by
+      // cellView via cellStatus). The opacity/title overlay is kept for backward
+      // compatibility with the existing "n/a" rendering in cellHtml (state=empty
+      // + title => c-na class). This is the single ineligible rendering path:
+      // cellStatus drives the status glyph; the title/opacity overlay drives the
+      // "n/a" tooltip/dimming in cellHtml.
       const naReason = skipped.get(key);
       views.set(
         `${id.scenario}\t${id.agent}`,
