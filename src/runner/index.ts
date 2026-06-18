@@ -42,6 +42,7 @@ import {
   OpenCodeCaptureError,
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
+import { WindowsHost } from '../agents/windows-host.ts';
 import {
   captureTokenUsage,
   captureToolCallsWithRetry,
@@ -59,6 +60,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
+import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
   CheckRecord,
   FinalVerdict,
@@ -91,15 +93,16 @@ const CAPTURE_RETRY_ATTEMPTS = 3;
 const CAPTURE_RETRY_DELAY_MS = 2000;
 
 // Create and return the per-run output dir
-// <outRoot>/<scenario>-<agent>-<stamp>-<nonce>/.
+// <outRoot>/<scenario>-<agent>-<os>-<stamp>-<nonce>/.
 export function allocateRunDir(
   outRoot: string,
   scenario: string,
   agent: string,
+  os = 'linux',
 ): string {
   const dir = join(
     outRoot,
-    `${scenario}-${agent}-${nowStampUtc()}-${hexNonce()}`,
+    `${scenario}-${agent}-${os}-${nowStampUtc()}-${hexNonce()}`,
   );
   mkdirSync(dir, { recursive: true });
   return dir;
@@ -332,6 +335,7 @@ export interface RunScenarioArgs {
   readonly codingAgentsDir: string;
   readonly outRoot: string;
   readonly skeletonRoot?: string | undefined;
+  readonly os?: string | undefined;
   // Caller-supplied run-start stamp (ISO8601). When set, the verdict's
   // started_at uses it so a CLI SIGINT handler and the happy path agree.
   readonly startedAt?: string | undefined;
@@ -792,7 +796,12 @@ export async function runScenario(
   a: RunScenarioArgs,
 ): Promise<RunScenarioResult> {
   const scenario = scenarioName(a.scenarioDir);
-  const runDir = allocateRunDir(a.outRoot, scenario, a.codingAgent);
+  const runDir = allocateRunDir(
+    a.outRoot,
+    scenario,
+    a.codingAgent,
+    a.os ?? 'linux',
+  );
   // Fire onRunDir right after allocation so a caller (the CLI SIGINT handler)
   // learns the run dir before the long await — it needs it to write a stopped
   // verdict if the run is interrupted mid-flight.
@@ -858,11 +867,22 @@ function errorStage(err: unknown): RunErrorStage {
 // remote agent (e.g. claude-windows) installs its OWN context dir by name so it
 // gets its SSH launcher, not the runtime_family's local launcher. A non-remote
 // agent installs its family's shared launcher.
-export function contextDirName(cfg: {
-  name: string;
-  runtime_family?: string | undefined;
-  remote?: unknown;
-}): string {
+// When os is provided: linux returns runtime_family (or name); non-linux returns
+// `${runtime_family ?? name}-${os}`. The legacy cfg.remote overload is preserved
+// for callers that still pass it.
+export function contextDirName(
+  cfg: {
+    name: string;
+    runtime_family?: string | undefined;
+    remote?: unknown;
+  },
+  os?: string,
+): string {
+  if (os !== undefined) {
+    return os === 'linux'
+      ? (cfg.runtime_family ?? cfg.name)
+      : `${cfg.runtime_family ?? cfg.name}-${os}`;
+  }
   return cfg.remote !== undefined ? cfg.name : (cfg.runtime_family ?? cfg.name);
 }
 
@@ -922,10 +942,25 @@ async function runInner(
   runDir: string,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
+  const os = a.os ?? 'linux';
   try {
     return await runInnerBody(a, runDir, cleanupDirs);
   } finally {
     cleanupAgentRuntime(cleanupDirs);
+    // Windows runtime: best-effort removal of the per-run guest directory.
+    // Teardown failure must NOT mask the verdict — the try/catch is intentional.
+    if (os !== 'linux') {
+      try {
+        const osTarget = loadOsTarget(join(repoRoot(), 'os-targets'), os);
+        if (osTarget.remote !== undefined) {
+          new WindowsHost(osTarget.remote, defaultCommandRunner).ssh(
+            `powershell -NoProfile -Command "Remove-Item -Recurse -Force '${osTarget.remote.win_run_root}\\${basename(runDir)}' -ErrorAction SilentlyContinue"`,
+          );
+        }
+      } catch {
+        // Swallow — teardown failure must not mask the verdict.
+      }
+    }
   }
 }
 
@@ -935,6 +970,7 @@ async function runInnerBody(
   cleanupDirs: string[],
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup');
+  const os = a.os ?? 'linux';
   // Early guards run BEFORE any side effect (workdir creation, provisioning,
   // setup.sh, gauntlet).
 
@@ -948,6 +984,16 @@ async function runInnerBody(
     );
   }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+  const osTarget = loadOsTarget(join(repoRoot(), 'os-targets'), os);
+  // loadOsTarget guarantees remote is defined for any non-linux os target;
+  // extract it to a typed const so downstream hooks can use it without `!`.
+  const remoteConfig = osTarget.remote;
+  if (!cfg.os_support.includes(os)) {
+    throw new RunnerError(
+      `coding-agent '${a.codingAgent}' does not support os '${os}'; supported: ${cfg.os_support.join(', ')}`,
+      'setup',
+    );
+  }
 
   // 2. story.md is required (gauntlet needs it); a missing file is a clean
   //    setup error, not a deferred ENOENT from readQuorumMaxTime.
@@ -996,7 +1042,7 @@ async function runInnerBody(
       );
     }
   }
-  const agent = resolveAgent(cfg);
+  const agent = resolveAgent(cfg, os, osTarget);
 
   // setup: isolated config + workdir, claude provisioning, then setup.sh.
   const workdir = join(runDir, 'coding-agent-workdir');
@@ -1050,8 +1096,8 @@ async function runInnerBody(
   runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
   // Windows runtime: runSetup built the workdir locally; push it to the guest so
   // the SSH-launched agent works in it. (Local model: agent runs here, no push.)
-  if (cfg.remote !== undefined) {
-    new RemoteExecution(cfg.remote, defaultCommandRunner).pushWorkdir(
+  if (os !== 'linux' && remoteConfig !== undefined) {
+    new RemoteExecution(remoteConfig, defaultCommandRunner).pushWorkdir(
       workdir,
       basename(runDir),
     );
@@ -1144,7 +1190,7 @@ async function runInnerBody(
   // strips arbitrary env from new sessions, so the QA agent reads concrete
   // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
-  const isRemote = cfg.remote !== undefined;
+  const isRemote = os !== 'linux';
   const launchAgentPath = join(
     runDir,
     'gauntlet-agent',
@@ -1207,12 +1253,12 @@ async function runInnerBody(
   }
   // Windows runtime: the WindowsClaudeAgent.provision return value carries the
   // $WIN_* launcher substitutions; merge them so the SSH launcher resolves.
-  if (cfg.remote !== undefined) {
+  if (os !== 'linux') {
     Object.assign(substitutions, extraEnv);
   }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
-    codingAgent: contextDirName(cfg),
+    codingAgent: contextDirName(cfg, os),
     runDir,
     substitutions,
     required: family === 'claude',
@@ -1340,12 +1386,21 @@ async function runInnerBody(
   // Windows runtime: pull the guest's session logs + workdir into the local run
   // dir so the pre-run snapshot diff and post-checks see them (reproduce the
   // local artifact layout). Must precede the capture diff below.
-  if (cfg.remote !== undefined) {
-    new RemoteExecution(cfg.remote, defaultCommandRunner).captureBack(
-      runHomeDir,
-      workdir,
-      basename(runDir),
-    );
+  if (os !== 'linux' && remoteConfig !== undefined) {
+    try {
+      new RemoteExecution(remoteConfig, defaultCommandRunner).captureBack(
+        runHomeDir,
+        workdir,
+        basename(runDir),
+      );
+    } catch (e: unknown) {
+      return writeIndeterminate({
+        finalReason: `capture: ${(e as Error).message}`,
+        gauntlet,
+        checks: pre.records,
+        error: { stage: 'capture', message: (e as Error).message },
+      });
+    }
   }
 
   // capture tool calls + token usage from the new session logs. The

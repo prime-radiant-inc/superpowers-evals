@@ -8,13 +8,19 @@ import {
   contextDirName,
 } from '../src/runner/index.ts';
 
-test('allocateRunDir names <scenario>-<agent>-<stamp>-<nonce> and creates it', () => {
+test('allocateRunDir names <scenario>-<agent>-<os>-<stamp>-<nonce> and creates it', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
   const dir = allocateRunDir(out, '00-quorum-smoke-hello-world', 'claude');
   expect(basename(dir)).toMatch(
-    /^00-quorum-smoke-hello-world-claude-\d{8}T\d{6}Z-[0-9a-f]{4}$/,
+    /^00-quorum-smoke-hello-world-claude-linux-\d{8}T\d{6}Z-[0-9a-f]{4}$/,
   );
   expect(existsSync(dir)).toBe(true);
+});
+
+test('allocateRunDir with os=windows id contains -claude-windows-', () => {
+  const out = mkdtempSync(join(tmpdir(), 'out-'));
+  const dir = allocateRunDir(out, 'sc', 'claude', 'windows');
+  expect(basename(dir)).toMatch(/^sc-claude-windows-\d{8}T\d{6}Z-[0-9a-f]{4}$/);
 });
 
 test('allocateRunDir is unique across calls (distinct nonces)', () => {
@@ -40,6 +46,18 @@ test('contextDirName: a non-remote claude installs its family context dir', () =
   expect(contextDirName({ name: 'claude', runtime_family: 'claude' })).toBe(
     'claude',
   );
+});
+
+test('contextDirName(cfg, os): linux returns runtime_family', () => {
+  expect(
+    contextDirName({ name: 'claude', runtime_family: 'claude' }, 'linux'),
+  ).toBe('claude');
+});
+
+test('contextDirName(cfg, os): windows returns runtime_family-windows', () => {
+  expect(
+    contextDirName({ name: 'claude', runtime_family: 'claude' }, 'windows'),
+  ).toBe('claude-windows');
 });
 
 test('buildGauntletArgv is exact and order-stable with all optional flags', () => {
