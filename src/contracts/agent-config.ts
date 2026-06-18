@@ -18,6 +18,22 @@ const KNOWN_RUNTIME_FAMILIES: ReadonlySet<string> = new Set([
   'pi',
 ]);
 
+// Remote-execution block: present only for runtimes that run the Coding-Agent on
+// another host over SSH (the Windows runtime). Its presence is what selects the
+// remote provisioning/launcher/capture path; absence keeps the local model.
+export const RemoteConfigSchema = z.object({
+  host: z.string().default('127.0.0.1'),
+  port: z.number().int().min(1).default(2222),
+  user: z.string().default('user'),
+  // Name of the env var holding the guest SSH password (read via getEnv at run
+  // time, never stored in the config). The dockur default is 'password'.
+  password_env: z.string().default('WIN_EVAL_PASSWORD'),
+  // Windows-side roots (backslash paths). Per-run dir = <win_run_root>\<runId>.
+  win_run_root: z.string().default('C:\\eval-runs'),
+  win_superpowers_dir: z.string().default('C:\\eval-superpowers'),
+});
+export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
+
 export const AgentConfigSchema = z.object({
   name: z.string(),
   runtime_family: z.string().optional(),
@@ -38,6 +54,7 @@ export const AgentConfigSchema = z.object({
   // Scheduler keys: per-agent concurrency cap and launch spacing.
   max_concurrency: z.number().int().min(1).optional(),
   launch_spacing_seconds: z.number().min(0).optional(),
+  remote: RemoteConfigSchema.optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 

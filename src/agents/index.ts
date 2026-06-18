@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
+import { WindowsClaudeAgent } from './claude-windows.ts';
 import { CodexAgent } from './codex.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { CopilotAgent } from './copilot.ts';
@@ -192,10 +193,14 @@ const CUSTOM_AGENTS: Readonly<
   antigravity: (config) => new AntigravityAgent(config),
 };
 
-/** Resolve the agent implementation for a config: the Claude provisioner when
- *  the runtime family (or, absent that, the name) is `claude`; a registered
- *  custom adapter when the name matches; else the declarative default. */
+/** Resolve the agent implementation for a config: the Windows SSH runner when
+ *  a `remote` block is present; the Claude provisioner when the runtime family
+ *  (or, absent that, the name) is `claude`; a registered custom adapter when
+ *  the name matches; else the declarative default. */
 export function resolveAgent(config: AgentConfig): CodingAgent {
+  if (config.remote !== undefined) {
+    return new WindowsClaudeAgent(config);
+  }
   const name = config.runtime_family ?? config.name;
   if (name === 'claude') {
     return new ClaudeAgent(config);
