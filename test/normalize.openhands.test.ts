@@ -145,7 +145,10 @@ const USAGE_1 = makeUsage(1200, 80, 200, 0.0012);
 const USAGE_2 = makeUsage(2000, 150, 400, 0.0025);
 
 const BASIC_EVENTS: Record<string, unknown>[] = [
-  makeSystemEvent(0, { openhands_version: '0.42.1', agent_class: 'CodeActAgent' }),
+  makeSystemEvent(0, {
+    openhands_version: '0.42.1',
+    agent_class: 'CodeActAgent',
+  }),
   makeUserEvent(1, 'Please implement the fibonacci function.'),
   // agent action (call-001, no observation yet)
   makeAgentToolEvent(2, {
@@ -258,7 +261,9 @@ test('action==system produces a system step', () => {
 test('user source produces a user step', () => {
   const traj = normalizeOpenhands(BASIC_RAW, '0.42.1');
   const userStep = traj.steps.find(
-    (s) => s.source === 'user' && s.message === 'Please implement the fibonacci function.',
+    (s) =>
+      s.source === 'user' &&
+      s.message === 'Please implement the fibonacci function.',
   );
   expect(userStep).toBeDefined();
 });
@@ -277,7 +282,9 @@ test('environment source maps to system', () => {
   const traj = normalizeOpenhands(toRaw(events), '1.0');
   expect(validateTrajectory(traj).ok).toBe(true);
   // environment observation step should appear as system
-  const sysStep = traj.steps.find((s) => s.source === 'system' && s.message === 'Workspace loaded');
+  const sysStep = traj.steps.find(
+    (s) => s.source === 'system' && s.message === 'Workspace loaded',
+  );
   expect(sysStep).toBeDefined();
 });
 
@@ -313,18 +320,40 @@ test('unknown tool names pass through verbatim', () => {
   ];
   const traj = normalizeOpenhands(toRaw(events), '1.0');
   expect(validateTrajectory(traj).ok).toBe(true);
-  const step = traj.steps.find((s) => s.tool_calls?.[0]?.function_name === 'some_exotic_tool');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'some_exotic_tool',
+  );
   expect(step).toBeDefined();
 });
 
 test('tool name canonicalization coverage — read_file→Read, str_replace_editor→Edit, web_search→WebSearch', () => {
   const events: Record<string, unknown>[] = [
     makeUserEvent(0, 'go'),
-    makeAgentToolEvent(1, { toolCallId: 'r1', functionName: 'read_file', args: { path: 'f.ts' } }),
-    makeAgentToolEvent(2, { toolCallId: 'r2', functionName: 'str_replace_editor', args: {} }),
-    makeAgentToolEvent(3, { toolCallId: 'r3', functionName: 'web_search', args: { query: 'bun' } }),
-    makeAgentToolEvent(4, { toolCallId: 'r4', functionName: 'browser_action', args: {} }),
-    makeAgentToolEvent(5, { toolCallId: 'r5', functionName: 'create_file', args: {} }),
+    makeAgentToolEvent(1, {
+      toolCallId: 'r1',
+      functionName: 'read_file',
+      args: { path: 'f.ts' },
+    }),
+    makeAgentToolEvent(2, {
+      toolCallId: 'r2',
+      functionName: 'str_replace_editor',
+      args: {},
+    }),
+    makeAgentToolEvent(3, {
+      toolCallId: 'r3',
+      functionName: 'web_search',
+      args: { query: 'bun' },
+    }),
+    makeAgentToolEvent(4, {
+      toolCallId: 'r4',
+      functionName: 'browser_action',
+      args: {},
+    }),
+    makeAgentToolEvent(5, {
+      toolCallId: 'r5',
+      functionName: 'create_file',
+      args: {},
+    }),
   ];
   const traj = normalizeOpenhands(toRaw(events), '1.0');
   expect(validateTrajectory(traj).ok).toBe(true);
@@ -351,8 +380,8 @@ test('tool name canonicalization coverage — read_file→Read, str_replace_edit
 test('action and observation events with same tool_call_id merge into a single step', () => {
   const traj = normalizeOpenhands(BASIC_RAW, '0.42.1');
   // call-001 appears in events 2 (action) and 3 (action+obs) — should be 1 step
-  const stepsWithCall001 = traj.steps.filter(
-    (s) => s.tool_calls?.some((tc) => tc.tool_call_id === 'call-001'),
+  const stepsWithCall001 = traj.steps.filter((s) =>
+    s.tool_calls?.some((tc) => tc.tool_call_id === 'call-001'),
   );
   expect(stepsWithCall001).toHaveLength(1);
   // The merged step should have both tool_calls and observation
@@ -366,7 +395,9 @@ test('observation source_call_id matches the tool_call_id in the same step', () 
   expect(validateTrajectory(traj).ok).toBe(true); // validator enforces same-step invariant
   for (const step of traj.steps) {
     if (!step.observation) continue;
-    const callIds = new Set((step.tool_calls ?? []).map((tc) => tc.tool_call_id));
+    const callIds = new Set(
+      (step.tool_calls ?? []).map((tc) => tc.tool_call_id),
+    );
     for (const result of step.observation.results) {
       if (result.source_call_id != null) {
         expect(callIds.has(result.source_call_id)).toBe(true);
@@ -380,7 +411,9 @@ test('observation content is captured on the merged step', () => {
   const bashStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.tool_call_id === 'call-001',
   );
-  expect(bashStep?.observation?.results[0]?.content).toBe('def fib(n):\n    pass\n');
+  expect(bashStep?.observation?.results[0]?.content).toBe(
+    'def fib(n):\n    pass\n',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -590,7 +623,10 @@ test('system heuristic patterns map source user→system', () => {
 test('normalizer accepts a JSON array of events (native-log format)', () => {
   // Directly verify the raw-array contract: JSON.stringify(events[]) → normalizer
   const events: Record<string, unknown>[] = [
-    makeSystemEvent(0, { openhands_version: '0.42.1', agent_class: 'CodeActAgent' }),
+    makeSystemEvent(0, {
+      openhands_version: '0.42.1',
+      agent_class: 'CodeActAgent',
+    }),
     makeUserEvent(1, 'Implement it.'),
     makeAgentToolEvent(2, {
       toolCallId: 'tc-1',
@@ -617,7 +653,9 @@ test('normalizer accepts a JSON array of events (native-log format)', () => {
   expect(validateTrajectory(traj).ok).toBe(true);
   expect(traj.agent.version).toBe('0.42.1');
   // Merged step for tc-1
-  const merged = traj.steps.find((s) => s.tool_calls?.[0]?.tool_call_id === 'tc-1');
+  const merged = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.tool_call_id === 'tc-1',
+  );
   expect(merged).toBeDefined();
   expect(merged?.observation?.results[0]?.content).toBe('# Project\n');
 });

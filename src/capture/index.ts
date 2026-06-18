@@ -9,30 +9,59 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { Glob } from 'bun';
 import { flattenToolCalls } from '../atif/project.ts';
 import type { AtifStep, AtifTrajectory } from '../atif/types.ts';
+import { normalizeAcp } from '../normalize/acp.ts';
 import { normalizeAntigravity } from '../normalize/antigravity.ts';
 import { normalizeClaudeLegacy } from '../normalize/claude.ts';
+import { normalizeCline } from '../normalize/cline.ts';
 import { normalizeCodex } from '../normalize/codex.ts';
 import { normalizeCopilot } from '../normalize/copilot.ts';
+import { normalizeCursor } from '../normalize/cursor.ts';
 import { normalizeGemini } from '../normalize/gemini.ts';
+import { normalizeGoose } from '../normalize/goose.ts';
+import { normalizeHermes } from '../normalize/hermes.ts';
 import { normalizeKimi } from '../normalize/kimi.ts';
+import { normalizeMimo } from '../normalize/mimo.ts';
+import { normalizeMiniSwe } from '../normalize/mini-swe.ts';
+import { normalizeOpenclaw } from '../normalize/openclaw.ts';
 import { normalizeOpencode } from '../normalize/opencode.ts';
+import { normalizeOpenhands } from '../normalize/openhands.ts';
 import { normalizePi } from '../normalize/pi.ts';
+import { normalizeQwen } from '../normalize/qwen.ts';
+import { normalizeRovodev } from '../normalize/rovodev.ts';
+import { normalizeSweAgent } from '../normalize/swe-agent.ts';
+import { normalizeTrae } from '../normalize/trae.ts';
 import { estimateTrajectory, kimiToolResultTotalBytes } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
 
-// Backend (coding-agent name) -> ATIF normalizer; all eight dialects produce an
-// ATIF Trajectory.
+// Backend (coding-agent name) -> ATIF normalizer; every supported dialect
+// produces an ATIF Trajectory. The acp/cursor/goose/hermes/mimo/mini-swe/
+// openclaw/openhands/qwen/rovodev/swe-agent/trae/cline normalizers are ported
+// from Harbor (see docs/superpowers/reference/porting-harbor-converters.md and
+// src/normalize/harbor-pin.ts).
 type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
 
 const NORMALIZERS: Record<string, AtifNormalizer> = {
+  acp: normalizeAcp,
   antigravity: normalizeAntigravity,
   claude: normalizeClaudeLegacy,
+  cline: normalizeCline,
   codex: normalizeCodex,
   copilot: normalizeCopilot,
+  cursor: normalizeCursor,
   gemini: normalizeGemini,
+  goose: normalizeGoose,
+  hermes: normalizeHermes,
   kimi: normalizeKimi,
+  mimo: normalizeMimo,
+  'mini-swe': normalizeMiniSwe,
   opencode: normalizeOpencode,
+  openclaw: normalizeOpenclaw,
+  openhands: normalizeOpenhands,
   pi: normalizePi,
+  qwen: normalizeQwen,
+  rovodev: normalizeRovodev,
+  'swe-agent': normalizeSweAgent,
+  trae: normalizeTrae,
 };
 
 // The agent.version carried into ATIF when capture has no version to thread.

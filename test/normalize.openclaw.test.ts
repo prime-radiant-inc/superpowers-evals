@@ -27,7 +27,17 @@ import {
 // ---------------------------------------------------------------------------
 
 function sumStepTokens(
-  steps: { metrics?: { prompt_tokens?: number; cached_tokens?: number; completion_tokens?: number; extra?: Record<string, unknown> } | undefined; extra?: Record<string, unknown> }[],
+  steps: {
+    metrics?:
+      | {
+          prompt_tokens?: number;
+          cached_tokens?: number;
+          completion_tokens?: number;
+          extra?: Record<string, unknown>;
+        }
+      | undefined;
+    extra?: Record<string, unknown>;
+  }[],
 ): {
   prompt: number;
   cached: number;
@@ -164,8 +174,16 @@ test('envelope: tool call canonicalization', () => {
     meta: {
       agentMeta: { sessionId: 's', usage: {} },
       pendingToolCalls: [
-        { id: 'c1', name: 'exec', arguments: JSON.stringify({ command: 'ls' }) },
-        { id: 'c2', name: 'read_file', arguments: JSON.stringify({ path: '/etc' }) },
+        {
+          id: 'c1',
+          name: 'exec',
+          arguments: JSON.stringify({ command: 'ls' }),
+        },
+        {
+          id: 'c2',
+          name: 'read_file',
+          arguments: JSON.stringify({ path: '/etc' }),
+        },
       ],
     },
   });
@@ -180,9 +198,7 @@ test('envelope: unknown tool names pass through', () => {
     payloads: [],
     meta: {
       agentMeta: { sessionId: 's', usage: {} },
-      pendingToolCalls: [
-        { id: 'c1', name: 'my_custom_tool', arguments: '{}' },
-      ],
+      pendingToolCalls: [{ id: 'c1', name: 'my_custom_tool', arguments: '{}' }],
     },
   });
   const traj = normalizeOpenclaw(raw, '1.0.0');
@@ -215,7 +231,7 @@ test('envelope: empty usage produces no metrics', () => {
 // ---------------------------------------------------------------------------
 
 function makeJsonlRaw(lines: object[]): string {
-  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+  return `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`;
 }
 
 const minimalJsonl = makeJsonlRaw([
@@ -385,7 +401,9 @@ test('jsonl: fewer than 2 usable steps falls back to envelope', () => {
   });
   const envelope = JSON.stringify({
     payloads: [{ text: 'envelope answer', isReasoning: false }],
-    meta: { agentMeta: { sessionId: 'env-sid', usage: { input: 5, output: 3 } } },
+    meta: {
+      agentMeta: { sessionId: 'env-sid', usage: { input: 5, output: 3 } },
+    },
   });
   const traj = normalizeOpenclawJsonl(
     singleLine,
@@ -440,9 +458,7 @@ test('jsonl: toolResult content from details.aggregated preferred', () => {
       type: 'message',
       message: {
         role: 'assistant',
-        content: [
-          { type: 'toolCall', id: 'c2', name: 'exec', arguments: {} },
-        ],
+        content: [{ type: 'toolCall', id: 'c2', name: 'exec', arguments: {} }],
         usage: { input: 1, output: 1, cacheRead: 0 },
       },
     },
@@ -458,7 +474,9 @@ test('jsonl: toolResult content from details.aggregated preferred', () => {
   ]);
   const traj = normalizeOpenclaw(raw, '1.0.0');
   // details.aggregated wins over content text
-  expect(traj.steps[1]?.observation?.results[0]?.content).toBe('aggregated-text');
+  expect(traj.steps[1]?.observation?.results[0]?.content).toBe(
+    'aggregated-text',
+  );
 });
 
 // ---------------------------------------------------------------------------

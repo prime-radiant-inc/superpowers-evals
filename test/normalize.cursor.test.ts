@@ -22,7 +22,10 @@ const minimalLog = [
   }),
   JSON.stringify({
     type: 'user',
-    message: { role: 'user', content: [{ type: 'text', text: 'Hello, agent!' }] },
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: 'Hello, agent!' }],
+    },
     session_id: 'session-abc',
   }),
   JSON.stringify({
@@ -86,7 +89,9 @@ const toolCallLog = [
     session_id: 'session-tool',
     model_call_id: 'mcall-1',
     timestamp_ms: 1700000002100,
-    tool_call: { run_terminal_cmd: { args: { command: 'ls -la' }, result: null } },
+    tool_call: {
+      run_terminal_cmd: { args: { command: 'ls -la' }, result: null },
+    },
   }),
   JSON.stringify({
     type: 'tool_call',
@@ -148,7 +153,10 @@ const toolMapLog = [
     type: 'assistant',
     session_id: 'session-tools',
     model_call_id: 'mcall-tools',
-    message: { role: 'assistant', content: [{ type: 'text', text: 'Working.' }] },
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Working.' }],
+    },
   }),
   // run_terminal_cmd → Bash
   JSON.stringify({
@@ -158,7 +166,9 @@ const toolMapLog = [
     session_id: 'session-tools',
     model_call_id: 'mcall-tools',
     timestamp_ms: 1700000010000,
-    tool_call: { run_terminal_cmd: { args: { command: 'echo hi' }, result: 'hi' } },
+    tool_call: {
+      run_terminal_cmd: { args: { command: 'echo hi' }, result: 'hi' },
+    },
   }),
   // read_file → Read
   JSON.stringify({
@@ -168,7 +178,9 @@ const toolMapLog = [
     session_id: 'session-tools',
     model_call_id: 'mcall-tools',
     timestamp_ms: 1700000011000,
-    tool_call: { read_file: { args: { target_file: 'x.ts' }, result: 'content' } },
+    tool_call: {
+      read_file: { args: { target_file: 'x.ts' }, result: 'content' },
+    },
   }),
   // edit_file → Edit
   JSON.stringify({
@@ -247,7 +259,9 @@ const toolMapLog = [
     session_id: 'session-tools',
     model_call_id: 'mcall-tools',
     timestamp_ms: 1700000017000,
-    tool_call: { web_search: { args: { query: 'atif spec' }, result: 'link1' } },
+    tool_call: {
+      web_search: { args: { query: 'atif spec' }, result: 'link1' },
+    },
   }),
   // unknown tool passes through unchanged
   JSON.stringify({
@@ -347,7 +361,10 @@ const multiResultLog = [
     type: 'assistant',
     session_id: 'session-multi',
     model_call_id: 'mcall-b',
-    message: { role: 'assistant', content: [{ type: 'text', text: 'Second.' }] },
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Second.' }],
+    },
   }),
   JSON.stringify({
     type: 'result',
@@ -396,7 +413,10 @@ const thinkingLog = [
     session_id: 'session-think',
     model_call_id: 'mcall-think',
     timestamp_ms: 1700000003000,
-    message: { role: 'assistant', content: [{ type: 'text', text: 'Answer.' }] },
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Answer.' }],
+    },
   }),
 ].join('\n');
 
@@ -501,9 +521,9 @@ test('disjoint token buckets: prompt=inputTokens (exclusive of cache), cached=ca
   expect(fm!.total_prompt_tokens).toBe(100);
   expect(fm!.total_completion_tokens).toBe(20);
   // cached rides in extra.total_cached_tokens (final_metrics has no first-class cached field)
-  expect(fm!.extra?.total_cached_tokens).toBe(50);
+  expect(fm!.extra?.['total_cached_tokens']).toBe(50);
   // cache_write rides in extra.total_cache_write_tokens
-  expect(fm!.extra?.total_cache_write_tokens).toBe(30);
+  expect(fm!.extra?.['total_cache_write_tokens']).toBe(30);
 });
 
 test('disjoint-bucket conservation: prompt + cached + cache_write + completion == all raw tokens', () => {
@@ -512,8 +532,8 @@ test('disjoint-bucket conservation: prompt + cached + cache_write + completion =
   const fm = traj.final_metrics!;
   const prompt = fm.total_prompt_tokens ?? 0;
   const completion = fm.total_completion_tokens ?? 0;
-  const cached = (fm.extra?.total_cached_tokens as number) ?? 0;
-  const cacheWrite = (fm.extra?.total_cache_write_tokens as number) ?? 0;
+  const cached = (fm.extra?.['total_cached_tokens'] as number) ?? 0;
+  const cacheWrite = (fm.extra?.['total_cache_write_tokens'] as number) ?? 0;
   expect(prompt + completion + cached + cacheWrite).toBe(200);
 });
 
@@ -641,8 +661,8 @@ test('multiple result events accumulate usage (two turns summed)', () => {
   const fm = traj.final_metrics!;
   expect(fm.total_prompt_tokens).toBe(300);
   expect(fm.total_completion_tokens).toBe(50);
-  expect(fm.extra?.total_cached_tokens).toBe(30);
-  expect(fm.extra?.total_cache_write_tokens).toBe(5);
+  expect(fm.extra?.['total_cached_tokens']).toBe(30);
+  expect(fm.extra?.['total_cache_write_tokens']).toBe(5);
 });
 
 test('thinking blocks become reasoning_content on the following assistant step', () => {
@@ -656,7 +676,9 @@ test('thinking blocks are cleared after being consumed by an assistant step', ()
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
   expect(agentSteps).toHaveLength(1);
   // The single agent step should have the concatenated thinking
-  expect(agentSteps[0]!.reasoning_content).toBe('First thought. Second thought.');
+  expect(agentSteps[0]!.reasoning_content).toBe(
+    'First thought. Second thought.',
+  );
 });
 
 test('interaction_query events are skipped without crashing', () => {
@@ -690,7 +712,9 @@ test('tool_call with no preceding assistant message creates an implicit agent st
       session_id: 'orphan-call',
       model_call_id: 'mcall-orphan',
       timestamp_ms: 1700000001000,
-      tool_call: { run_terminal_cmd: { args: { command: 'ls' }, result: 'out' } },
+      tool_call: {
+        run_terminal_cmd: { args: { command: 'ls' }, result: 'out' },
+      },
     }),
   ].join('\n');
   const traj = normalizeCursor(fixture, '0.1.0');

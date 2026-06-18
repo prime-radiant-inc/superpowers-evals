@@ -140,7 +140,9 @@ test('rovodev: ReadFile → Read canonical tool name', () => {
     ];
   }
   const traj = normalizeRovodev(JSON.stringify(session), '1.0.0');
-  const step = traj.steps.find((s) => s.tool_calls?.[0]?.function_name === 'Read');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  );
   expect(step).toBeDefined();
 });
 
@@ -267,7 +269,9 @@ test('rovodev: disjoint conservation — per-step sum equals raw token total', (
         : 0;
     totalCompletion += step.metrics?.completion_tokens ?? 0;
   }
-  expect(totalPrompt + totalCached + totalCacheWrite + totalCompletion).toBe(185);
+  expect(totalPrompt + totalCached + totalCacheWrite + totalCompletion).toBe(
+    185,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -297,9 +301,7 @@ test('rovodev: tool observation with source_call_id and content', () => {
   const traj = normalizeRovodev(makeSession(), '1.0.0');
   const stepWithObs = traj.steps.find(
     (s) =>
-      s.source === 'agent' &&
-      s.observation &&
-      s.observation.results.length > 0,
+      s.source === 'agent' && s.observation && s.observation.results.length > 0,
   );
   expect(stepWithObs).toBeDefined();
   expect(stepWithObs?.observation?.results[0]?.source_call_id).toBe('tc-1');
@@ -468,9 +470,7 @@ test('rovodev: tool call JSON args parsed correctly', () => {
   const traj = normalizeRovodev(session, '1.0.0');
   const result = validateTrajectory(traj);
   expect(result.ok).toBe(true);
-  const step = traj.steps.find(
-    (s) => s.tool_calls && s.tool_calls.length > 0,
-  );
+  const step = traj.steps.find((s) => s.tool_calls && s.tool_calls.length > 0);
   expect(step?.tool_calls?.[0]?.function_name).toBe('Bash');
   expect(step?.tool_calls?.[0]?.arguments).toEqual({ command: 'ls -la' });
 });
@@ -502,9 +502,7 @@ test('rovodev: invalid JSON tool args — raw_args fallback', () => {
   const traj = normalizeRovodev(session, '1.0.0');
   const result = validateTrajectory(traj);
   expect(result.ok).toBe(true);
-  const step = traj.steps.find(
-    (s) => s.tool_calls && s.tool_calls.length > 0,
-  );
+  const step = traj.steps.find((s) => s.tool_calls && s.tool_calls.length > 0);
   expect(step?.tool_calls?.[0]?.arguments).toHaveProperty('raw_args');
 });
 

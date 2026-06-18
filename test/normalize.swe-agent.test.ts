@@ -1,6 +1,6 @@
+import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test } from 'bun:test';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeSweAgent } from '../src/normalize/swe-agent.ts';
@@ -115,7 +115,9 @@ const withSystemTraj = JSON.stringify({
       action: 'ls',
       observation: 'file1',
       state: 'open file: None',
-      query: [{ role: 'system', content: 'You are SWE-agent, a coding agent.' }],
+      query: [
+        { role: 'system', content: 'You are SWE-agent, a coding agent.' },
+      ],
     },
     {
       response: 'Done.',

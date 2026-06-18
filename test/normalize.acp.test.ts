@@ -16,7 +16,7 @@ import { normalizeAcp } from '../src/normalize/acp.ts';
  * Events: thought, message chunk × 2, request_permission, tool_call (pending),
  * tool_call_update (completed with output), final message chunk.
  */
-const singleCycleEvents = [
+const singleCycleEvents = `${[
   {
     event_type: 'session_update',
     payload: {
@@ -96,7 +96,9 @@ const singleCycleEvents = [
       },
     },
   },
-].map((e) => JSON.stringify(e)).join('\n') + '\n';
+]
+  .map((e) => JSON.stringify(e))
+  .join('\n')}\n`;
 
 /**
  * Fixture 2: Multiple tool cycles with usage_update events — mirrors
@@ -105,11 +107,14 @@ const singleCycleEvents = [
  * usage_update (flushes), tool_call + tool_call_update, usage_update (flushes),
  * final message, usage_update (flushes).
  */
-const multiCycleEvents = [
+const multiCycleEvents = `${[
   {
     event_type: 'session_update',
     payload: {
-      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Plan' } },
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Plan' },
+      },
     },
   },
   {
@@ -179,21 +184,26 @@ const multiCycleEvents = [
   {
     event_type: 'session_update',
     payload: {
-      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done' } },
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Done' },
+      },
     },
   },
   {
     event_type: 'session_update',
     payload: { update: { sessionUpdate: 'usage_update', used: 13 } },
   },
-].map((e) => JSON.stringify(e)).join('\n') + '\n';
+]
+  .map((e) => JSON.stringify(e))
+  .join('\n')}\n`;
 
 /**
  * Fixture 3: usage_update events carrying inputTokens / outputTokens.
  * These are real-world ACP events where agents include per-step token counts
  * in usage_update payloads.
  */
-const usageUpdateWithTokensEvents = [
+const usageUpdateWithTokensEvents = `${[
   {
     event_type: 'session_update',
     payload: {
@@ -232,12 +242,14 @@ const usageUpdateWithTokensEvents = [
       },
     },
   },
-].map((e) => JSON.stringify(e)).join('\n') + '\n';
+]
+  .map((e) => JSON.stringify(e))
+  .join('\n')}\n`;
 
 /**
  * Fixture 4: Tool name canonicalization — exercises ACP_TOOL_MAP and kind→title→"tool" logic.
  */
-const toolNameEvents = [
+const toolNameEvents = `${[
   // kind is a known canonical key → maps directly
   {
     event_type: 'session_update',
@@ -315,7 +327,9 @@ const toolNameEvents = [
       },
     },
   },
-].map((e) => JSON.stringify(e)).join('\n') + '\n';
+]
+  .map((e) => JSON.stringify(e))
+  .join('\n')}\n`;
 
 // ---------------------------------------------------------------------------
 // Tests

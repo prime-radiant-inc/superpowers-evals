@@ -88,12 +88,19 @@ interface SweAgentTraj {
  * No dedup: the .traj format is a sequential JSON array, not a streaming
  * JSONL; rows are never re-emitted, so no id-based dedup is needed.
  */
-export function normalizeSweAgent(raw: string, version: string): AtifTrajectory {
+export function normalizeSweAgent(
+  raw: string,
+  version: string,
+): AtifTrajectory {
   // Parse the raw .traj JSON. On parse failure, return a minimal valid trajectory.
   let parsed: SweAgentTraj;
   try {
     parsed = JSON.parse(raw) as SweAgentTraj;
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       parsed = {};
     }
   } catch {

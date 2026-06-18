@@ -101,8 +101,7 @@ function assistantParts(content: unknown): {
       }
       const cid = part['id'];
       const tc: AtifToolCall = {
-        tool_call_id:
-          cid !== null && cid !== undefined ? String(cid) : '',
+        tool_call_id: cid !== null && cid !== undefined ? String(cid) : '',
         function_name: canonicalName(part['name'] as string),
         arguments: args,
       };
@@ -162,11 +161,7 @@ function parseJsonlSteps(
     }
     if (rec['type'] !== 'message') continue;
     const inner = rec['message'];
-    if (
-      typeof inner !== 'object' ||
-      inner === null ||
-      Array.isArray(inner)
-    )
+    if (typeof inner !== 'object' || inner === null || Array.isArray(inner))
       continue;
     const msg = inner as Record<string, unknown>;
     const role = msg['role'];
@@ -315,9 +310,7 @@ function decodeLastJsonDictSuffix(
   return undefined;
 }
 
-function loadJsonObject(
-  raw: string,
-): Record<string, unknown> | undefined {
+function loadJsonObject(raw: string): Record<string, unknown> | undefined {
   const text = raw.trim();
   if (!text) return undefined;
   // Try direct parse first (clean JSON with no prefix noise)
@@ -370,9 +363,7 @@ function parseEnvelope(
 ): AtifTrajectory {
   const rawMeta = envelope['meta'];
   const meta =
-    typeof rawMeta === 'object' &&
-    rawMeta !== null &&
-    !Array.isArray(rawMeta)
+    typeof rawMeta === 'object' && rawMeta !== null && !Array.isArray(rawMeta)
       ? (rawMeta as Record<string, unknown>)
       : {};
 
@@ -409,10 +400,7 @@ function parseEnvelope(
   }
 
   let assistantText = textParts.join('\n\n');
-  if (
-    !assistantText &&
-    typeof meta['finalAssistantVisibleText'] === 'string'
-  ) {
+  if (!assistantText && typeof meta['finalAssistantVisibleText'] === 'string') {
     assistantText = (meta['finalAssistantVisibleText'] as string).trim();
   }
 
@@ -446,8 +434,7 @@ function parseEnvelope(
       }
       const cid = call['id'];
       const tc: AtifToolCall = {
-        tool_call_id:
-          cid !== null && cid !== undefined ? String(cid) : '',
+        tool_call_id: cid !== null && cid !== undefined ? String(cid) : '',
         function_name: canonicalName(name),
         arguments: args,
       };
@@ -463,9 +450,7 @@ function parseEnvelope(
     !Array.isArray(rawUsage)
       ? (rawUsage as Record<string, unknown>)
       : null;
-  const stepMetrics = usageRaw
-    ? usageMetricsFromEnvelope(usageRaw)
-    : undefined;
+  const stepMetrics = usageRaw ? usageMetricsFromEnvelope(usageRaw) : undefined;
 
   const userStep: AtifStep = {
     step_id: 1,
@@ -518,7 +503,10 @@ function parseEnvelope(
  * envelope. In envelope mode that total is placed on the single agent step's
  * metrics, not in final_metrics, to satisfy the single-source rule.
  */
-export function normalizeOpenclaw(raw: string, version: string): AtifTrajectory {
+export function normalizeOpenclaw(
+  raw: string,
+  version: string,
+): AtifTrajectory {
   // Detect JSONL layout: look for any "type: message" record
   const isJsonl = raw.split('\n').some((line) => {
     const trimmed = line.trim();
@@ -603,9 +591,7 @@ export function normalizeOpenclawJsonl(
   if (envelope) {
     const rawMeta = envelope['meta'];
     const meta =
-      typeof rawMeta === 'object' &&
-      rawMeta !== null &&
-      !Array.isArray(rawMeta)
+      typeof rawMeta === 'object' && rawMeta !== null && !Array.isArray(rawMeta)
         ? (rawMeta as Record<string, unknown>)
         : {};
     const rawAgentMeta = meta['agentMeta'];
@@ -615,10 +601,7 @@ export function normalizeOpenclawJsonl(
       !Array.isArray(rawAgentMeta)
         ? (rawAgentMeta as Record<string, unknown>)
         : {};
-    if (
-      typeof agentMeta['sessionId'] === 'string' &&
-      agentMeta['sessionId']
-    ) {
+    if (typeof agentMeta['sessionId'] === 'string' && agentMeta['sessionId']) {
       sessionId = agentMeta['sessionId'];
     }
   }

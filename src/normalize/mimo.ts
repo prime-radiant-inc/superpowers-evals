@@ -185,12 +185,13 @@ export function normalizeMimo(raw: string, version: string): AtifTrajectory {
         if (typeof text === 'string' && text) reasoningParts.push(text);
       } else if (ptype === 'tool') {
         const toolName = typeof part['tool'] === 'string' ? part['tool'] : '';
-        const callId =
-          (typeof part['callID'] === 'string' && part['callID']
+        const callId = (
+          typeof part['callID'] === 'string' && part['callID']
             ? part['callID']
             : typeof part['id'] === 'string' && part['id']
               ? part['id']
-              : '') as string;
+              : ''
+        ) as string;
 
         const state = asRecord(part['state']) ?? {};
         const rawInput = state['input'];

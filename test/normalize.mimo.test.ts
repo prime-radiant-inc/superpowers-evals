@@ -60,7 +60,12 @@ const stepFinishEvent = {
   },
 };
 
-const basicLog = makeEvents([stepStartEvent, textPartEvent, toolUseEvent, stepFinishEvent]);
+const basicLog = makeEvents([
+  stepStartEvent,
+  textPartEvent,
+  toolUseEvent,
+  stepFinishEvent,
+]);
 
 // Two-step log: step1 has a tool call, step2 is text-only (final answer).
 const twoStepLog = makeEvents([
@@ -69,7 +74,12 @@ const twoStepLog = makeEvents([
   {
     type: 'step_finish',
     part: {
-      tokens: { input: 300, output: 80, reasoning: 0, cache: { read: 0, write: 0 } },
+      tokens: {
+        input: 300,
+        output: 80,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
       cost: 0.003,
     },
   },
@@ -78,7 +88,12 @@ const twoStepLog = makeEvents([
   {
     type: 'step_finish',
     part: {
-      tokens: { input: 120, output: 30, reasoning: 0, cache: { read: 50, write: 0 } },
+      tokens: {
+        input: 120,
+        output: 30,
+        reasoning: 0,
+        cache: { read: 50, write: 0 },
+      },
       cost: 0.001,
     },
   },
@@ -107,7 +122,14 @@ const unknownToolLog = makeEvents([
   },
   {
     type: 'step_finish',
-    part: { tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } },
+    part: {
+      tokens: {
+        input: 50,
+        output: 10,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    },
   },
 ]);
 
@@ -125,7 +147,14 @@ const nonDictInputLog = makeEvents([
   },
   {
     type: 'step_finish',
-    part: { tokens: { input: 40, output: 8, reasoning: 0, cache: { read: 0, write: 0 } } },
+    part: {
+      tokens: {
+        input: 40,
+        output: 8,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    },
   },
 ]);
 
@@ -201,18 +230,116 @@ test('tool-name canonicalization: read → Read', () => {
 test('tool-name canonicalization: full canonical sequence across all tool types', () => {
   const allToolsLog = makeEvents([
     stepStartEvent,
-    { type: 'tool_use', part: { type: 'tool', tool: 'bash',      callID: 'c1',  state: { input: { command: 'ls' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'read',      callID: 'c2',  state: { input: { file_path: 'f.ts' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'write',     callID: 'c3',  state: { input: { file_path: 'out.ts', content: 'x' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'edit',      callID: 'c4',  state: { input: { file_path: 'out.ts' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'grep',      callID: 'c5',  state: { input: { pattern: 'foo' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'glob',      callID: 'c6',  state: { input: { pattern: '*.ts' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'todowrite', callID: 'c7',  state: { input: { todos: [] } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'webfetch',  callID: 'c8',  state: { input: { url: 'https://x.com' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'websearch', callID: 'c9',  state: { input: { query: 'bun' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'task',      callID: 'c10', state: { input: { prompt: 'review PR' } } } },
-    { type: 'tool_use', part: { type: 'tool', tool: 'skill',     callID: 'c11', state: { input: { name: 'brainstorming' } } } },
-    { type: 'step_finish', part: { tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } } } },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'bash',
+        callID: 'c1',
+        state: { input: { command: 'ls' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'read',
+        callID: 'c2',
+        state: { input: { file_path: 'f.ts' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'write',
+        callID: 'c3',
+        state: { input: { file_path: 'out.ts', content: 'x' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'edit',
+        callID: 'c4',
+        state: { input: { file_path: 'out.ts' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'grep',
+        callID: 'c5',
+        state: { input: { pattern: 'foo' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'glob',
+        callID: 'c6',
+        state: { input: { pattern: '*.ts' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'todowrite',
+        callID: 'c7',
+        state: { input: { todos: [] } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'webfetch',
+        callID: 'c8',
+        state: { input: { url: 'https://x.com' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'websearch',
+        callID: 'c9',
+        state: { input: { query: 'bun' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'task',
+        callID: 'c10',
+        state: { input: { prompt: 'review PR' } },
+      },
+    },
+    {
+      type: 'tool_use',
+      part: {
+        type: 'tool',
+        tool: 'skill',
+        callID: 'c11',
+        state: { input: { name: 'brainstorming' } },
+      },
+    },
+    {
+      type: 'step_finish',
+      part: {
+        tokens: {
+          input: 10,
+          output: 5,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      },
+    },
   ]);
   const traj = normalizeMimo(allToolsLog, '0.1.0');
   const r = validateTrajectory(traj);
@@ -221,8 +348,17 @@ test('tool-name canonicalization: full canonical sequence across all tool types'
     (s.tool_calls ?? []).map((tc) => tc.function_name),
   );
   expect(names).toEqual([
-    'Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob',
-    'TodoWrite', 'WebFetch', 'WebSearch', 'Agent', 'Skill',
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'Grep',
+    'Glob',
+    'TodoWrite',
+    'WebFetch',
+    'WebSearch',
+    'Agent',
+    'Skill',
   ]);
 });
 
@@ -263,8 +399,8 @@ test('token buckets are DISJOINT: prompt=input, cached=cache.read, completion=ou
   const step = traj.steps.find((s) => s.metrics !== undefined);
   expect(step).toBeDefined();
   const m = step!.metrics!;
-  expect(m.prompt_tokens).toBe(200);    // input (exclusive of cache)
-  expect(m.cached_tokens).toBe(100);    // cache.read
+  expect(m.prompt_tokens).toBe(200); // input (exclusive of cache)
+  expect(m.cached_tokens).toBe(100); // cache.read
   expect(m.completion_tokens).toBe(60); // output(50) + reasoning(10)
   expect(m.cost_usd).toBe(0.005);
 });
@@ -289,7 +425,10 @@ test('disjoint-bucket conservation: sum across steps equals session total', () =
   //   step2: input=120, output=30, reasoning=0, cache.read=50, cache.write=0
   // expected totals: prompt=420, cached=50, completion=110, cache_write=0
   const traj = normalizeMimo(twoStepLog, '0.1.0');
-  let prompt = 0, cached = 0, completion = 0, cacheWrite = 0;
+  let prompt = 0,
+    cached = 0,
+    completion = 0,
+    cacheWrite = 0;
   for (const step of traj.steps) {
     prompt += step.metrics?.prompt_tokens ?? 0;
     cached += step.metrics?.cached_tokens ?? 0;
@@ -318,7 +457,14 @@ test('step with all-zero tokens leaves metrics unset', () => {
     toolUseEvent,
     {
       type: 'step_finish',
-      part: { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      part: {
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      },
     },
   ]);
   const traj = normalizeMimo(zeroTokens, '0.1.0');
@@ -338,7 +484,12 @@ test('cost_usd absent when cost is zero', () => {
     {
       type: 'step_finish',
       part: {
-        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+        tokens: {
+          input: 100,
+          output: 20,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
         cost: 0,
       },
     },
@@ -421,7 +572,14 @@ test('observation absent when tool has no output in state', () => {
     },
     {
       type: 'step_finish',
-      part: { tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } },
+      part: {
+        tokens: {
+          input: 50,
+          output: 10,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      },
     },
   ]);
   const traj = normalizeMimo(noOutput, '0.1.0');
@@ -446,7 +604,9 @@ test('timestamp: step_start timestamp (epoch ms) converted to ISO-8601', () => {
 
 test('non-dict tool input is wrapped in {value: ...}', () => {
   const traj = normalizeMimo(nonDictInputLog, '0.1.0');
-  const step = traj.steps.find((s) => s.tool_calls?.[0]?.function_name === 'Bash');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
   expect(step).toBeDefined();
   const args = step!.tool_calls![0]!.arguments;
   expect(args['value']).toBe('echo hello');
@@ -491,18 +651,37 @@ test('each step_start..step_finish boundary produces exactly one agent step', ()
     { type: 'step_start', sessionID: 'mimo-ses-001', timestamp: 1750000001000 },
     {
       type: 'tool_use',
-      part: { type: 'tool', tool: 'bash', callID: 'c2', state: { input: { command: 'ls' } } },
+      part: {
+        type: 'tool',
+        tool: 'bash',
+        callID: 'c2',
+        state: { input: { command: 'ls' } },
+      },
     },
     {
       type: 'step_finish',
-      part: { tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } },
+      part: {
+        tokens: {
+          input: 50,
+          output: 10,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      },
     },
     // Turn 3 (text only)
     { type: 'step_start', sessionID: 'mimo-ses-001', timestamp: 1750000002000 },
     { type: 'text', part: { type: 'text', text: 'Done.' } },
     {
       type: 'step_finish',
-      part: { tokens: { input: 30, output: 5, reasoning: 0, cache: { read: 0, write: 0 } } },
+      part: {
+        tokens: {
+          input: 30,
+          output: 5,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      },
     },
   ]);
   const traj = normalizeMimo(threeStepLog, '0.1.0');

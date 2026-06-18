@@ -70,7 +70,9 @@ const SYSTEM_MESSAGE_PATTERNS = [
  * Map an OpenHands event source + action to an ATIF source.
  * Mirrors Harbor's _convert_event_to_step source-mapping logic.
  */
-function mapSource(event: Record<string, unknown>): 'system' | 'user' | 'agent' {
+function mapSource(
+  event: Record<string, unknown>,
+): 'system' | 'user' | 'agent' {
   if (event['action'] === 'system') return 'system';
 
   const rawSource = event['source'];
@@ -96,8 +98,10 @@ function extractToolCall(event: Record<string, unknown>): AtifToolCall | null {
   const meta = event['tool_call_metadata'];
   if (!isObject(meta)) return null;
 
-  const toolCallId = typeof meta['tool_call_id'] === 'string' ? meta['tool_call_id'] : '';
-  const rawName = typeof meta['function_name'] === 'string' ? meta['function_name'] : '';
+  const toolCallId =
+    typeof meta['tool_call_id'] === 'string' ? meta['tool_call_id'] : '';
+  const rawName =
+    typeof meta['function_name'] === 'string' ? meta['function_name'] : '';
 
   // Parse arguments from model_response.choices[0].message.tool_calls[0].function.arguments
   let args: Record<string, unknown> = {};
@@ -177,20 +181,31 @@ interface AccumulatedUsage {
  * Extract accumulated token usage from an event's llm_metrics.
  * Returns null when llm_metrics is absent or has no usage data.
  */
-function extractAccumulatedUsage(event: Record<string, unknown>): AccumulatedUsage | null {
+function extractAccumulatedUsage(
+  event: Record<string, unknown>,
+): AccumulatedUsage | null {
   const llmMetrics = event['llm_metrics'];
   if (!isObject(llmMetrics)) return null;
 
   const accUsage = llmMetrics['accumulated_token_usage'];
   if (!isObject(accUsage)) return null;
 
-  const prompt = typeof accUsage['prompt_tokens'] === 'number' ? accUsage['prompt_tokens'] : 0;
+  const prompt =
+    typeof accUsage['prompt_tokens'] === 'number'
+      ? accUsage['prompt_tokens']
+      : 0;
   const completion =
-    typeof accUsage['completion_tokens'] === 'number' ? accUsage['completion_tokens'] : 0;
+    typeof accUsage['completion_tokens'] === 'number'
+      ? accUsage['completion_tokens']
+      : 0;
   const cacheRead =
-    typeof accUsage['cache_read_tokens'] === 'number' ? accUsage['cache_read_tokens'] : 0;
+    typeof accUsage['cache_read_tokens'] === 'number'
+      ? accUsage['cache_read_tokens']
+      : 0;
   const cost =
-    typeof llmMetrics['accumulated_cost'] === 'number' ? llmMetrics['accumulated_cost'] : 0;
+    typeof llmMetrics['accumulated_cost'] === 'number'
+      ? llmMetrics['accumulated_cost']
+      : 0;
 
   return { prompt, completion, cacheRead, cost };
 }
@@ -221,7 +236,10 @@ function extractAccumulatedUsage(event: Record<string, unknown>): AccumulatedUsa
  * - cost_usd: the log carries accumulated_cost; we emit per-step cost deltas
  *   since the log itself records them.
  */
-export function normalizeOpenhands(raw: string, version: string): AtifTrajectory {
+export function normalizeOpenhands(
+  raw: string,
+  version: string,
+): AtifTrajectory {
   // Parse events array
   let events: Record<string, unknown>[];
   try {
@@ -248,7 +266,10 @@ export function normalizeOpenhands(raw: string, version: string): AtifTrajectory
 
     const args = event['args'];
     if (isObject(args)) {
-      if (typeof args['openhands_version'] === 'string' && args['openhands_version']) {
+      if (
+        typeof args['openhands_version'] === 'string' &&
+        args['openhands_version']
+      ) {
         agentVersion = args['openhands_version'];
       }
       const extraData: Record<string, unknown> = {};
@@ -306,8 +327,10 @@ export function normalizeOpenhands(raw: string, version: string): AtifTrajectory
 
   for (const event of events) {
     const source = mapSource(event);
-    const message = typeof event['message'] === 'string' ? event['message'] : undefined;
-    const timestamp = typeof event['timestamp'] === 'string' ? event['timestamp'] : undefined;
+    const message =
+      typeof event['message'] === 'string' ? event['message'] : undefined;
+    const timestamp =
+      typeof event['timestamp'] === 'string' ? event['timestamp'] : undefined;
 
     // Only agent steps have tool_call_metadata
     const toolCall = source === 'agent' ? extractToolCall(event) : null;
@@ -338,11 +361,7 @@ export function normalizeOpenhands(raw: string, version: string): AtifTrajectory
       !stepHasObs.has(prevIdx)
     ) {
       const prev = steps[prevIdx];
-      if (
-        prev &&
-        prev.source === 'agent' &&
-        prev.tool_calls !== undefined
-      ) {
+      if (prev && prev.source === 'agent' && prev.tool_calls !== undefined) {
         const prevCallId = prev.tool_calls[0]?.tool_call_id;
         const currCallId = toolCall.tool_call_id;
         if (prevCallId && currCallId && prevCallId === currCallId) {
@@ -363,7 +382,10 @@ export function normalizeOpenhands(raw: string, version: string): AtifTrajectory
       // know it's finished (a new event is starting a new step).
       // We commit the previous step's usage here because the step is complete.
       commitPendingUsage(steps, pendingUsage, prevIdx, {
-        prevPrompt, prevCompletion, prevCacheRead, prevCost,
+        prevPrompt,
+        prevCompletion,
+        prevCacheRead,
+        prevCost,
       });
       // After committing the previous step, update our running baseline
       const prevStep = steps[prevIdx];
@@ -393,7 +415,10 @@ export function normalizeOpenhands(raw: string, version: string): AtifTrajectory
   const lastIdx = steps.length - 1;
   if (lastIdx >= 0) {
     commitPendingUsage(steps, pendingUsage, lastIdx, {
-      prevPrompt, prevCompletion, prevCacheRead, prevCost,
+      prevPrompt,
+      prevCompletion,
+      prevCacheRead,
+      prevCost,
     });
   }
 
@@ -438,7 +463,12 @@ function commitPendingUsage(
   steps: AtifStep[],
   pendingUsage: Map<number, AccumulatedUsage>,
   stepIdx: number,
-  baseline: { prevPrompt: number; prevCompletion: number; prevCacheRead: number; prevCost: number },
+  baseline: {
+    prevPrompt: number;
+    prevCompletion: number;
+    prevCacheRead: number;
+    prevCost: number;
+  },
 ): void {
   const usage = pendingUsage.get(stepIdx);
   if (!usage) return;

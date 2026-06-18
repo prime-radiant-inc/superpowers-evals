@@ -243,13 +243,16 @@ export function normalizeHermes(raw: string, version: string): AtifTrajectory {
           tool_calls: toolCalls,
         };
         if (text) step.message = text;
-        if (obsResults.length > 0)
-          step.observation = { results: obsResults };
+        if (obsResults.length > 0) step.observation = { results: obsResults };
         if (metrics !== undefined) step.metrics = metrics;
         steps.push(step);
       } else if (text) {
         // Text-only assistant message
-        const step: AtifStep = { step_id: stepId++, source: 'agent', message: text };
+        const step: AtifStep = {
+          step_id: stepId++,
+          source: 'agent',
+          message: text,
+        };
 
         // Extract usage from this assistant message
         const usage = msg['usage'];

@@ -129,9 +129,7 @@ function stringifyToolOutput(
       'exit_code' in obj ||
       'status' in obj
     ) {
-      return JSON.stringify(
-        Object.fromEntries(Object.entries(obj).sort()),
-      );
+      return JSON.stringify(Object.fromEntries(Object.entries(obj).sort()));
     }
   } else if (rawOutput !== null && rawOutput !== undefined) {
     return String(rawOutput);
@@ -251,26 +249,26 @@ function getOrCreateToolState(
  */
 export function normalizeAcp(raw: string, version: string): AtifTrajectory {
   const stepStates: AcpStepState[] = [];
-  let currentStep: AcpStepState | null = null;
-  const pendingPermissionRequests = new Map<
-    string,
-    Record<string, unknown>
-  >();
+  // Wrapped in an object so TypeScript does not narrow the property through
+  // closure calls — `let currentStep` would be reset to `never` by tsc's
+  // control-flow analysis after any call to ensureStep/flushCurrentStep.
+  const state = { currentStep: null as AcpStepState | null };
+  const pendingPermissionRequests = new Map<string, Record<string, unknown>>();
   const orphanUsageUpdates: Record<string, unknown>[] = [];
 
   function ensureStep(): AcpStepState {
-    if (currentStep === null) {
-      currentStep = newStepState();
+    if (state.currentStep === null) {
+      state.currentStep = newStepState();
     }
-    return currentStep;
+    return state.currentStep;
   }
 
   function flushCurrentStep(): void {
-    if (currentStep === null) return;
-    if (stepHasContent(currentStep)) {
-      stepStates.push(currentStep);
+    if (state.currentStep === null) return;
+    if (stepHasContent(state.currentStep)) {
+      stepStates.push(state.currentStep);
     }
-    currentStep = null;
+    state.currentStep = null;
   }
 
   for (const line of raw.split('\n')) {
@@ -315,7 +313,7 @@ export function normalizeAcp(raw: string, version: string): AtifTrajectory {
 
     // ── agent_thought_chunk → reasoning ──────────────────────────────────────
     if (sessionUpdate === 'agent_thought_chunk') {
-      if (currentStep !== null && currentStep.hasCompletedToolCycle) {
+      if (state.currentStep?.hasCompletedToolCycle) {
         flushCurrentStep();
       }
       const step = ensureStep();
@@ -327,7 +325,7 @@ export function normalizeAcp(raw: string, version: string): AtifTrajectory {
 
     // ── agent_message_chunk → message ─────────────────────────────────────────
     if (sessionUpdate === 'agent_message_chunk') {
-      if (currentStep !== null && currentStep.hasCompletedToolCycle) {
+      if (state.currentStep?.hasCompletedToolCycle) {
         flushCurrentStep();
       }
       const step = ensureStep();
@@ -339,12 +337,12 @@ export function normalizeAcp(raw: string, version: string): AtifTrajectory {
 
     // ── usage_update → flush current step ────────────────────────────────────
     if (sessionUpdate === 'usage_update') {
-      if (currentStep === null || !stepHasContent(currentStep)) {
+      if (state.currentStep === null || !stepHasContent(state.currentStep)) {
         orphanUsageUpdates.push(u);
         continue;
       }
-      countEvent(currentStep, sessionUpdate);
-      currentStep.usageUpdates.push(u);
+      countEvent(state.currentStep, sessionUpdate);
+      state.currentStep.usageUpdates.push(u);
       flushCurrentStep();
       continue;
     }
@@ -359,9 +357,8 @@ export function normalizeAcp(raw: string, version: string): AtifTrajectory {
 
     // Start a new step if we're mid-cycle and this is a new tool
     if (
-      currentStep !== null &&
-      currentStep.hasCompletedToolCycle &&
-      !currentStep.toolStates.has(toolCallId)
+      state.currentStep?.hasCompletedToolCycle &&
+      !state.currentStep.toolStates.has(toolCallId)
     ) {
       flushCurrentStep();
     }

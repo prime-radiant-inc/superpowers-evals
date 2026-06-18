@@ -129,8 +129,10 @@ function buildMetrics(
 
   const metrics: AtifMetrics = {};
   if (typeof inputTokens === 'number') metrics.prompt_tokens = inputTokens;
-  if (typeof outputTokens === 'number') metrics.completion_tokens = outputTokens;
-  if (typeof cacheReadTokens === 'number') metrics.cached_tokens = cacheReadTokens;
+  if (typeof outputTokens === 'number')
+    metrics.completion_tokens = outputTokens;
+  if (typeof cacheReadTokens === 'number')
+    metrics.cached_tokens = cacheReadTokens;
 
   const cacheWrite =
     typeof cacheWriteTokens === 'number' && cacheWriteTokens > 0
@@ -144,9 +146,7 @@ function buildMetrics(
 // Tool argument parsing
 // ---------------------------------------------------------------------------
 
-function parseToolArgs(
-  raw: unknown,
-): Record<string, unknown> {
+function parseToolArgs(raw: unknown): Record<string, unknown> {
   if (raw === null || raw === undefined) return {};
   if (typeof raw === 'object' && !Array.isArray(raw)) {
     return raw as Record<string, unknown>;
@@ -154,7 +154,11 @@ function parseToolArgs(
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
         return parsed as Record<string, unknown>;
       }
       return { raw_args: raw };

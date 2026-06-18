@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { validateTrajectory } from '../src/atif/validate.ts';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
+import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeHermes } from '../src/normalize/hermes.ts';
 
 // ---------------------------------------------------------------------------
@@ -301,11 +301,17 @@ test('multiple tool calls in one message are bundled in one step', () => {
         tool_calls: [
           {
             id: 'tc-a',
-            function: { name: 'terminal', arguments: JSON.stringify({ command: 'ls' }) },
+            function: {
+              name: 'terminal',
+              arguments: JSON.stringify({ command: 'ls' }),
+            },
           },
           {
             id: 'tc-b',
-            function: { name: 'read_file', arguments: JSON.stringify({ path: 'f.txt' }) },
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: 'f.txt' }),
+            },
           },
         ],
       },

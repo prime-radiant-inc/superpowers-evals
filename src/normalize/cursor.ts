@@ -9,7 +9,6 @@ import {
   ATIF_SCHEMA_VERSION,
   type AtifFinalMetrics,
   type AtifStep,
-  type AtifToolCall,
   type AtifTrajectory,
 } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
@@ -216,7 +215,9 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
                 !Array.isArray(block),
             )
             .filter((block) => block['type'] === 'text')
-            .map((block) => (typeof block['text'] === 'string' ? block['text'] : ''))
+            .map((block) =>
+              typeof block['text'] === 'string' ? block['text'] : '',
+            )
             .join('')
             .trim();
         }
@@ -243,7 +244,9 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
                 !Array.isArray(block),
             )
             .filter((block) => block['type'] === 'text')
-            .map((block) => (typeof block['text'] === 'string' ? block['text'] : ''))
+            .map((block) =>
+              typeof block['text'] === 'string' ? block['text'] : '',
+            )
             .join('')
             .trim();
         }
@@ -314,7 +317,11 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
       // native tool name is unambiguous (avoids mis-matching when two entries
       // map to the same canonical name, e.g. list_dir and file_search → Glob).
       for (const [nativeToolName, toolEntry] of Object.entries(toolDict)) {
-        if (!toolEntry || typeof toolEntry !== 'object' || Array.isArray(toolEntry))
+        if (
+          !toolEntry ||
+          typeof toolEntry !== 'object' ||
+          Array.isArray(toolEntry)
+        )
           continue;
         const entry = toolEntry as Record<string, unknown>;
         const args =
@@ -339,10 +346,11 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
 
         // Attach the observation result
         const resultContent = normalizeToolResult(entry['result']);
-        const obsResult: { source_call_id?: string; content?: string | null } = {};
+        const obsResult: { source_call_id?: string; content?: string | null } =
+          {};
         if (callId) obsResult.source_call_id = callId;
         if (resultContent !== undefined) obsResult.content = resultContent;
-        ownerStep.observation!.results.push(obsResult);
+        ownerStep.observation?.results.push(obsResult);
       }
       continue;
     }
@@ -353,7 +361,6 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
       if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
         accumulateUsage(usageAccum, usage as Record<string, unknown>);
       }
-      continue;
     }
 
     // ── interaction_query: silently skipped ────────────────────────────────
@@ -385,7 +392,8 @@ export function normalizeCursor(raw: string, version: string): AtifTrajectory {
     steps,
   };
   if (sessionId) traj.session_id = sessionId;
-  if (hasAnyUsage) traj.final_metrics = buildFinalMetrics(usageAccum, steps.length);
+  if (hasAnyUsage)
+    traj.final_metrics = buildFinalMetrics(usageAccum, steps.length);
 
   const result = validateTrajectory(traj);
   if (!result.ok) {
