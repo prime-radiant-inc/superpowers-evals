@@ -21,9 +21,8 @@ const SCENARIOS = ['drift', 'flaky', 'good'] as const; // sorted
 
 interface Fixture {
   readonly root: string;
-  readonly scenariosRoot: string;
-  readonly codingAgentsDir: string;
   readonly resultsRoot: string;
+  readonly manifestPath: string;
 }
 
 // A dir name parts → dir path. Stamps are lexicographically ordered by index so
@@ -56,22 +55,35 @@ function writePhaseOnly(dir: string, phase: string, pid: number): void {
   );
 }
 
+// The grid manifest the dashboard reads to render the full (scenario × agent ×
+// os) product — every cell eligible on linux. Without it the board would be
+// results-only and the abandoned drift×codex cell would not render at all.
+function writeManifest(root: string): string {
+  const cells = SCENARIOS.flatMap((scenario) =>
+    KNOWN_AGENTS.map((agent) => ({
+      scenario,
+      agent,
+      os: 'linux',
+      eligible: true,
+      skipped_reason: null,
+    })),
+  );
+  const path = join(root, 'grid-manifest.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      generated_at: '2026-06-12T00:00:00Z',
+      scenarios: [...SCENARIOS],
+      agents: [...KNOWN_AGENTS],
+      cells,
+    }),
+  );
+  return path;
+}
+
 function makeFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'dash-srv-'));
-  const scenariosRoot = join(root, 'scenarios');
-  const codingAgentsDir = join(root, 'coding-agents');
   const resultsRoot = join(root, 'results');
-
-  for (const s of SCENARIOS) {
-    const dir = join(scenariosRoot, s);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'story.md'), '# story\n');
-    writeFileSync(join(dir, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
-  }
-  mkdirSync(codingAgentsDir, { recursive: true });
-  for (const a of KNOWN_AGENTS) {
-    writeFileSync(join(codingAgentsDir, `${a}.yaml`), 'max_concurrency: 4\n');
-  }
   mkdirSync(resultsRoot, { recursive: true });
 
   // good x claude -> pass
@@ -94,14 +106,16 @@ function makeFixture(): Fixture {
   writeVerdict(runDir(resultsRoot, 'drift', 'claude', 0, 'e001'), 'pass', 1.0);
   writeVerdict(runDir(resultsRoot, 'drift', 'claude', 1, 'e002'), 'pass', 1.0);
   writeVerdict(runDir(resultsRoot, 'drift', 'claude', 2, 'e003'), 'pass', 3.0);
-  // drift x codex -> abandoned dir (dead pid, no verdict) -> excluded
+  // drift x codex -> abandoned dir (dead pid, no verdict) -> renders empty (the
+  // manifest cell exists, but there is no displayable run).
   writePhaseOnly(
     runDir(resultsRoot, 'drift', 'codex', 0, 'ffff'),
     'agent',
     2_000_000_000, // out-of-range pid: never alive
   );
 
-  return { root, scenariosRoot, codingAgentsDir, resultsRoot };
+  const manifestPath = writeManifest(root);
+  return { root, resultsRoot, manifestPath };
 }
 
 // Slice out a single cell's <td …id="<cellId>"…>…</td> from the rendered page
@@ -144,8 +158,7 @@ function start(
   const handle = startDashboard({
     port: 0,
     resultsRoot: fixture.resultsRoot,
-    scenariosRoot: fixture.scenariosRoot,
-    codingAgentsDir: fixture.codingAgentsDir,
+    manifestPath: fixture.manifestPath,
     ...fixtureOverride,
   });
   handles.push(handle);
@@ -167,10 +180,10 @@ test('GET / renders the grid with the tally header and every cell id', async () 
   expect(html).toContain('<b>quorum</b>');
   expect(html).toContain('scenarios ×');
 
-  // Every (scenario, agent) cell id is present (cartesian product).
+  // Every (scenario, agent, os) cell id is present (cartesian product).
   for (const s of SCENARIOS) {
     for (const a of KNOWN_AGENTS) {
-      expect(html).toContain(`id="cell-${s}-${a}"`);
+      expect(html).toContain(`id="cell-${s}-${a}-linux"`);
     }
   }
 });
@@ -180,13 +193,13 @@ test('GET / reflects pass/fail/indeterminate and the live in-flight cell', async
   const html = await fetch(`${base}/`).then((r) => r.text());
 
   // good x claude pass -> b-pass band, cost bottom.
-  expect(sliceCell(html, 'cell-good-claude')).toContain('b-pass');
+  expect(sliceCell(html, 'cell-good-claude-linux')).toContain('b-pass');
   // good x codex fail -> b-fail band.
-  expect(sliceCell(html, 'cell-good-codex')).toContain('b-fail');
+  expect(sliceCell(html, 'cell-good-codex-linux')).toContain('b-fail');
   // flaky x claude indeterminate -> b-indet band.
-  expect(sliceCell(html, 'cell-flaky-claude')).toContain('b-indet');
+  expect(sliceCell(html, 'cell-flaky-claude-linux')).toContain('b-indet');
   // flaky x codex live -> running class + the phase word.
-  const liveTd = sliceCell(html, 'cell-flaky-codex');
+  const liveTd = sliceCell(html, 'cell-flaky-codex-linux');
   expect(liveTd).toContain('running');
   expect(liveTd).toContain('agent');
 });
@@ -196,12 +209,12 @@ test('GET / shows the drift marker and omits the abandoned cell', async () => {
   const html = await fetch(`${base}/`).then((r) => r.text());
 
   // drift x claude carries the ▲ marker.
-  expect(sliceCell(html, 'cell-drift-claude')).toContain('▲');
+  expect(sliceCell(html, 'cell-drift-claude-linux')).toContain('▲');
 
   // drift x codex is abandoned (dead pid, no verdict) -> renders as empty (the
   // em-dash placeholder), NOT a running/done cell. Slice out just that cell's
   // <td>…</td> so the assertion can't bleed into a later cell's bands.
-  const codexTd = sliceCell(html, 'cell-drift-codex');
+  const codexTd = sliceCell(html, 'cell-drift-codex-linux');
   expect(codexTd).toContain('class="empty"');
   expect(codexTd).toContain('—');
   expect(codexTd).not.toContain('b-pass');
@@ -270,7 +283,7 @@ test('an SSE cell frame is delivered after a scanner tick mutates a dir', async 
 
   // Land a verdict.json into the previously-live (flaky x codex) dir so the next
   // scanner tick sees its signature change (running -> verdict-appeared) and
-  // publishes a cell-flaky-codex frame.
+  // publishes a cell-flaky-codex-linux frame.
   writeVerdict(
     runDir(fixture.resultsRoot, 'flaky', 'codex', 0, 'dddd'),
     'pass',
@@ -293,12 +306,12 @@ test('an SSE cell frame is delivered after a scanner tick mutates a dir', async 
     if (chunk.value !== undefined) {
       buf += decoder.decode(chunk.value, { stream: true });
     }
-    if (buf.includes('event: cell-flaky-codex')) {
+    if (buf.includes('event: cell-flaky-codex-linux')) {
       sawCellFrame = true;
     }
   }
   await reader.cancel();
   expect(sawCellFrame).toBe(true);
   // The frame's data line is single-line HTML carrying the cell id.
-  expect(buf).toContain('cell-flaky-codex');
+  expect(buf).toContain('cell-flaky-codex-linux');
 });

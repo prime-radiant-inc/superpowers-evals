@@ -14,16 +14,18 @@ function rec(runId: string): RunRecord {
 }
 
 // Minimal cell builder: `latest` is the newest run_id (or null = no window),
-// `phase` is the running phase (or null = not running).
+// `phase` is the running phase (or null = not running). os defaults to linux.
 function makeCell(
   scenario: string,
   agent: string,
   latest: string | null,
   phase: string | null,
+  os = 'linux',
 ): Cell {
   return {
     scenario,
     agent,
+    os,
     window: latest === null ? [] : [rec(latest)],
     running: phase === null ? null : { run_id: `${latest ?? 'r'}-live`, phase },
   };
@@ -32,7 +34,7 @@ function makeCell(
 function grid(cells: Cell[]): Grid {
   const map = new Map<string, Cell>();
   for (const c of cells) {
-    map.set(cellKey(c.scenario, c.agent), c);
+    map.set(cellKey(c.scenario, c.agent, c.os), c);
   }
   return { cells: map };
 }
@@ -48,14 +50,18 @@ test('diffGrids: a new cell yields "appeared"', () => {
   const before = grid([]);
   const after = grid([makeCell('s', 'claude', 'r1', null)]);
   const changes = diffGrids(before, after);
-  expect(changes).toEqual([{ cell_id: 'cell-s-claude', reason: 'appeared' }]);
+  expect(changes).toEqual([
+    { cell_id: 'cell-s-claude-linux', reason: 'appeared' },
+  ]);
 });
 
 test('diffGrids: a dropped cell yields "vanished"', () => {
   const before = grid([makeCell('s', 'claude', 'r1', null)]);
   const after = grid([]);
   const changes = diffGrids(before, after);
-  expect(changes).toEqual([{ cell_id: 'cell-s-claude', reason: 'vanished' }]);
+  expect(changes).toEqual([
+    { cell_id: 'cell-s-claude-linux', reason: 'vanished' },
+  ]);
 });
 
 test('diffGrids: a running cell that gains a verdict yields "verdict-appeared"', () => {
@@ -63,21 +69,21 @@ test('diffGrids: a running cell that gains a verdict yields "verdict-appeared"',
   const before = grid([makeCell('s', 'claude', null, 'agent')]);
   const after = grid([makeCell('s', 'claude', 'r1', null)]);
   const changes = diffGrids(before, after);
-  expect(reasonFor(changes, 'cell-s-claude')).toBe('verdict-appeared');
+  expect(reasonFor(changes, 'cell-s-claude-linux')).toBe('verdict-appeared');
 });
 
 test('diffGrids: a phase advance on a still-running cell yields "phase-changed"', () => {
   const before = grid([makeCell('s', 'claude', null, 'setup')]);
   const after = grid([makeCell('s', 'claude', null, 'agent')]);
   const changes = diffGrids(before, after);
-  expect(reasonFor(changes, 'cell-s-claude')).toBe('phase-changed');
+  expect(reasonFor(changes, 'cell-s-claude-linux')).toBe('phase-changed');
 });
 
 test('diffGrids: a newest run_id change with no running yields "verdict-appeared"', () => {
   const before = grid([makeCell('s', 'claude', 'r1', null)]);
   const after = grid([makeCell('s', 'claude', 'r2', null)]);
   const changes = diffGrids(before, after);
-  expect(reasonFor(changes, 'cell-s-claude')).toBe('verdict-appeared');
+  expect(reasonFor(changes, 'cell-s-claude-linux')).toBe('verdict-appeared');
 });
 
 test('diffGrids: identical grids produce no changes', () => {
@@ -90,19 +96,21 @@ test('diffGrids: window-length change alone is detected', () => {
   const before: Cell = {
     scenario: 's',
     agent: 'claude',
+    os: 'linux',
     window: [rec('r1')],
     running: null,
   };
   const after: Cell = {
     scenario: 's',
     agent: 'claude',
+    os: 'linux',
     window: [rec('r0'), rec('r1')], // same newest, longer window
     running: null,
   };
   const changes = diffGrids(grid([before]), grid([after]));
   // Signature differs by window length -> a change is emitted (reason advisory).
   expect(changes.length).toBe(1);
-  expect(changes[0]?.cell_id).toBe('cell-s-claude');
+  expect(changes[0]?.cell_id).toBe('cell-s-claude-linux');
 });
 
 test('diffGrids: multiple changes across several cells', () => {
@@ -117,8 +125,8 @@ test('diffGrids: multiple changes across several cells', () => {
     makeCell('d', 'claude', 'r1', null), // -> appeared
   ]);
   const changes = diffGrids(before, after);
-  expect(reasonFor(changes, 'cell-a-claude')).toBeUndefined();
-  expect(reasonFor(changes, 'cell-b-claude')).toBe('verdict-appeared');
-  expect(reasonFor(changes, 'cell-c-claude')).toBe('vanished');
-  expect(reasonFor(changes, 'cell-d-claude')).toBe('appeared');
+  expect(reasonFor(changes, 'cell-a-claude-linux')).toBeUndefined();
+  expect(reasonFor(changes, 'cell-b-claude-linux')).toBe('verdict-appeared');
+  expect(reasonFor(changes, 'cell-c-claude-linux')).toBe('vanished');
+  expect(reasonFor(changes, 'cell-d-claude-linux')).toBe('appeared');
 });

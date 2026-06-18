@@ -1,4 +1,3 @@
-import { assertNever } from '../invariant.ts';
 import type {
   CardView,
   CellView,
@@ -6,6 +5,7 @@ import type {
   SlotKind,
   SlotView,
 } from './contracts.ts';
+import { assertNever } from './invariant.ts';
 
 // Typed template-literal HTML renderers. No templating dependency — pure string
 // functions, no IO. Every class name and data-* attribute here must match what
@@ -196,6 +196,10 @@ export function gridHtml(args: GridArgs): string {
               cell_id: `cell-${scenario}-${agent}`,
               scenario,
               agent,
+              // The server populates every (scenario, agent) pair, so this
+              // fallback is defensive only; os is unknown here (Task 7 adds the
+              // OS column header to this table).
+              os: '',
               state: 'empty',
               slots: [],
               bottom: '—',

@@ -1,17 +1,21 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runnable, type SkippedReason } from '../contracts/batch.ts';
-import { buildMatrix } from '../run-all/matrix.ts';
 import { type Cell, cellId, cellKey, type Grid } from './contracts.ts';
 import { EventBus } from './event-bus.ts';
+import type { GridManifest } from './manifest.ts';
 import { scanResults } from './scan.ts';
 import { cellHtml, gridHtml, layoutHtml, tallyHtml } from './templates.ts';
-import { cellView, diffGrids, headerTally } from './view.ts';
+import { type CellIdentity, cellView, diffGrids, headerTally } from './view.ts';
 
 // The Bun.serve fetch handler + scanner loop for the quorum dashboard. Native
 // Bun.serve + a ReadableStream SSE body; no external web stack. Read-only: the
 // filesystem is the single source of truth and the dashboard never launches runs.
+//
+// The dashboard imports NOTHING from the harness: its only inputs are the
+// filesystem — results/ (via scanResults) and grid-manifest.json (the eligibility
+// matrix, passed in as `manifest`). When the manifest is null it falls back to a
+// results-only grid (only cells with observed runs).
 //
 // Three layers:
 //  - GET /            warm scan -> full grid (first paint).
@@ -25,9 +29,9 @@ import { cellView, diffGrids, headerTally } from './view.ts';
 
 export interface CreateDashboardArgs {
   readonly resultsRoot: string;
-  readonly scenariosRoot: string;
-  readonly codingAgentsDir: string;
   readonly knownAgents: readonly string[];
+  // The scenario × agent × os eligibility matrix, or null (results-only board).
+  readonly manifest: GridManifest | null;
 }
 
 export interface Dashboard {
@@ -68,47 +72,10 @@ function contentTypeFor(path: string): string {
   return 'application/octet-stream';
 }
 
-// Sorted scenario dir names with a story.md (the same set `quorum list` shows).
-// The grid's row order.
-function discoverScenarios(scenariosRoot: string): string[] {
-  if (!existsSync(scenariosRoot)) {
-    return [];
-  }
-  const out: string[] = [];
-  for (const name of readdirSync(scenariosRoot)) {
-    const dir = join(scenariosRoot, name);
-    if (!statSync(dir).isDirectory()) {
-      continue;
-    }
-    if (existsSync(join(dir, 'story.md'))) {
-      out.push(name);
-    }
-  }
-  out.sort();
-  return out;
-}
-
-// Sorted *.yaml stems under coding_agents_dir. The grid's column order. The
-// dashboard accepts knownAgents for the read-side longest-suffix parse
-// separately; this is the DISPLAY column set.
-function discoverAgents(codingAgentsDir: string): string[] {
-  if (!existsSync(codingAgentsDir)) {
-    return [];
-  }
-  const out: string[] = [];
-  for (const name of readdirSync(codingAgentsDir)) {
-    if (name.endsWith('.yaml')) {
-      out.push(name.slice(0, -'.yaml'.length));
-    }
-  }
-  out.sort();
-  return out;
-}
-
 // The hover "why" for a not-applicable cell (an empty cell that can never run
-// here), by skip reason. directive is the common case (a scenario's
-// `# coding-agents:` line excludes this agent).
-function naTitle(reason: SkippedReason): string {
+// here), by the manifest's skip reason. directive is the common case (a
+// scenario's `# coding-agents:` line excludes this agent).
+function naTitle(reason: 'directive' | 'draft' | 'tier' | null): string {
   switch (reason) {
     case 'directive':
       return "not eligible — this scenario's coding-agents directive excludes this agent";
@@ -121,18 +88,63 @@ function naTitle(reason: SkippedReason): string {
   }
 }
 
+// Distinct, sorted scenario names observed in the grid (the manifest-null
+// fallback for the row axis).
+function distinctScenarios(grid: Grid): string[] {
+  const out = new Set<string>();
+  for (const cell of grid.cells.values()) {
+    out.add(cell.scenario);
+  }
+  return [...out].sort();
+}
+
+// Distinct, sorted agent names observed in the grid (the manifest-null fallback
+// for the column axis).
+function distinctAgents(grid: Grid): string[] {
+  const out = new Set<string>();
+  for (const cell of grid.cells.values()) {
+    out.add(cell.agent);
+  }
+  return [...out].sort();
+}
+
+// The cell identities to render, in row-major (scenario, then agent) order. With
+// a manifest, this is its declared cells (so ineligible/not-run cells render);
+// without one, the observed grid cells.
+function gridIdentities(
+  grid: Grid,
+  manifest: GridManifest | null,
+): CellIdentity[] {
+  if (manifest !== null) {
+    return manifest.cells.map((c) => ({
+      scenario: c.scenario,
+      agent: c.agent,
+      os: c.os,
+    }));
+  }
+  return [...grid.cells.values()].map((c) => ({
+    scenario: c.scenario,
+    agent: c.agent,
+    os: c.os,
+  }));
+}
+
 export function createDashboard(args: CreateDashboardArgs): Dashboard {
-  const { resultsRoot, scenariosRoot, codingAgentsDir, knownAgents } = args;
+  const { resultsRoot, knownAgents, manifest } = args;
   const bus = new EventBus();
 
-  // The last scan snapshot the scanner diffs against; warmed on the first GET /.
-  let lastGrid: Grid = scanResults(resultsRoot, knownAgents);
+  // Scan results/ overlaid with the manifest's eligibility matrix.
+  const scan = (): Grid =>
+    scanResults({ resultsDir: resultsRoot, knownAgents, manifest });
 
-  // Render + publish a cell partial for (scenario, agent) from a Cell.
-  const publishCell = (cell: Cell, scenario: string, agent: string): void => {
-    const view = cellView(cell, scenario, agent);
+  // The last scan snapshot the scanner diffs against; warmed on the first GET /.
+  let lastGrid: Grid = scan();
+
+  // Render + publish a cell partial for (scenario, agent, os) from a Cell.
+  const publishCell = (cell: Cell): void => {
+    const view = cellView(cell, cell.scenario, cell.agent, cell.os);
     bus.publish({
-      event: cellId(scenario, agent),
+      event: cellId(cell.scenario, cell.agent, cell.os),
       data: oneLine(cellHtml(view)),
     });
   };
@@ -149,14 +161,14 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     // No clients: don't burn IO maintaining the SSE view, but keep rescheduling
     // so the loop resumes the instant a client connects.
     if (bus.subscriberCount > 0) {
-      const next = scanResults(resultsRoot, knownAgents);
+      const next = scan();
       for (const change of diffGrids(lastGrid, next)) {
         const cell = cellForId(next, change.cell_id);
         if (cell === null) {
           // A vanished cell — no new cell to render; a reload reconciles.
           continue;
         }
-        publishCell(cell, cell.scenario, cell.agent);
+        publishCell(cell);
       }
       lastGrid = next;
     }
@@ -180,55 +192,59 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
 
   // --- routes ----------------------------------------------------------------
 
-  // The cells that can NEVER run here (directive/draft/tier skips), keyed by
-  // cellKey -> a human "why" string. Drives the dimmed "n/a" tooltip in the
-  // read-only grid. buildMatrix throws only on a bad filter (none here); guard
-  // so GET / never 500s.
+  // The cells that can NEVER run here (ineligible: directive/draft/tier), keyed
+  // by 3-part cellKey -> a human "why" string. Drives the dimmed "n/a" tooltip.
+  // Sourced from the manifest (the eligibility matrix); empty when manifest-null.
   const skipReasons = (): Map<string, string> => {
     const skipped = new Map<string, string>();
-    try {
-      for (const e of buildMatrix({ scenariosRoot, codingAgentsDir })) {
-        if (!runnable(e)) {
-          skipped.set(
-            cellKey(e.scenario, e.codingAgent),
-            naTitle(e.skippedReason),
-          );
-        }
+    if (manifest === null) {
+      return skipped;
+    }
+    for (const c of manifest.cells) {
+      if (!c.eligible) {
+        skipped.set(
+          cellKey(c.scenario, c.agent, c.os),
+          naTitle(c.skipped_reason),
+        );
       }
-    } catch {
-      // Missing/unreadable dir — fall back to empty info so GET / still renders
-      // the grid (no cell is marked n/a) rather than 500ing.
     }
     return skipped;
   };
 
   const renderRoot = (): Response => {
-    const scenarios = discoverScenarios(scenariosRoot);
-    const agents = discoverAgents(codingAgentsDir);
-    const grid = scanResults(resultsRoot, knownAgents);
+    const grid = scan();
     lastGrid = grid;
 
+    const scenarios = manifest?.scenarios ?? distinctScenarios(grid);
+    const agents = manifest?.agents ?? distinctAgents(grid);
+    const identities = gridIdentities(grid, manifest);
     const skipped = skipReasons();
 
     const views = new Map<string, ReturnType<typeof cellView>>();
-    for (const scenario of scenarios) {
-      for (const agent of agents) {
-        const key = cellKey(scenario, agent);
-        const cell = grid.cells.get(key) ?? emptyCell(scenario, agent);
-        const view = cellView(cell, scenario, agent);
-        // An empty cell that can never run here renders dimmed "n/a" + tooltip
-        // (vs the plain never-run em-dash). A cell with history keeps it even
-        // if it's no longer eligible.
-        const naReason = skipped.get(key);
-        views.set(
-          key,
-          view.state === 'empty' && naReason !== undefined
-            ? { ...view, opacity: 0.3, title: naReason }
-            : view,
-        );
-      }
+    for (const id of identities) {
+      const key = cellKey(id.scenario, id.agent, id.os);
+      const cell =
+        grid.cells.get(key) ?? emptyCell(id.scenario, id.agent, id.os);
+      const view = cellView(cell, id.scenario, id.agent, id.os);
+      // An empty cell that can never run here renders dimmed "n/a" + tooltip
+      // (vs the plain never-run em-dash). A cell with history keeps it even
+      // if it's no longer eligible. gridHtml keys views by 2-part
+      // `${scenario}\t${agent}` (Task 7 adds the OS column header), so the views
+      // map is keyed that way here too.
+      const naReason = skipped.get(key);
+      views.set(
+        `${id.scenario}\t${id.agent}`,
+        view.state === 'empty' && naReason !== undefined
+          ? { ...view, opacity: 0.3, title: naReason }
+          : view,
+      );
     }
-    const tally = headerTally(grid, scenarios, agents);
+    const tally = headerTally(
+      grid,
+      identities,
+      scenarios.length,
+      agents.length,
+    );
 
     const page = layoutHtml({
       tallyHtml: tallyHtml(tally),
@@ -340,16 +356,16 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   };
 }
 
-// An empty placeholder cell for a (scenario, agent) with no scan entry.
-function emptyCell(scenario: string, agent: string): Cell {
-  return { scenario, agent, window: [], running: null };
+// An empty placeholder cell for a (scenario, agent, os) with no scan entry.
+function emptyCell(scenario: string, agent: string, os: string): Cell {
+  return { scenario, agent, os, window: [], running: null };
 }
 
 // The cell in `grid` whose cell id equals `cellId`, or null. The scanner's diff
 // returns ids; this maps an id back to a Cell to re-render.
 function cellForId(grid: Grid, id: string): Cell | null {
   for (const cell of grid.cells.values()) {
-    if (cellId(cell.scenario, cell.agent) === id) {
+    if (cellId(cell.scenario, cell.agent, cell.os) === id) {
       return cell;
     }
   }

@@ -29,6 +29,7 @@ function cell(over: Partial<Cell> = {}): Cell {
   return {
     scenario: 's',
     agent: 'claude',
+    os: 'linux',
     window: [],
     running: null,
     ...over,
@@ -38,9 +39,19 @@ function cell(over: Partial<Cell> = {}): Cell {
 function grid(cells: Cell[]): Grid {
   const map = new Map<string, Cell>();
   for (const c of cells) {
-    map.set(cellKey(c.scenario, c.agent), c);
+    map.set(cellKey(c.scenario, c.agent, c.os), c);
   }
   return { cells: map };
+}
+
+// Build the (scenario, agent, os) identities for a list of cells — what
+// headerTally now iterates.
+function identitiesOf(cells: Cell[]) {
+  return cells.map((c) => ({
+    scenario: c.scenario,
+    agent: c.agent,
+    os: c.os,
+  }));
 }
 
 // --- median ------------------------------------------------------------------
@@ -140,7 +151,7 @@ test('latestAgeDays clamps to 0 for a future timestamp', () => {
 
 // --- headerTally -------------------------------------------------------------
 
-test('headerTally counts the latest verdict per cell and not_run for absences', () => {
+test('headerTally counts the latest verdict per identity and not_run for absences', () => {
   const passCell = cell({
     scenario: 'a',
     agent: 'claude',
@@ -152,8 +163,13 @@ test('headerTally counts the latest verdict per cell and not_run for absences', 
     window: [rec({ final: 'fail' })],
   });
   const g = grid([passCell, failCell]);
-  // 3 scenarios x 1 agent = 3 pairs; a=pass, b=fail, c=absent(not_run).
-  const t = headerTally(g, ['a', 'b', 'c'], ['claude']);
+  // 3 identities (a/b/c x claude/linux); a=pass, b=fail, c=absent(not_run).
+  const identities = [
+    { scenario: 'a', agent: 'claude', os: 'linux' },
+    { scenario: 'b', agent: 'claude', os: 'linux' },
+    { scenario: 'c', agent: 'claude', os: 'linux' },
+  ];
+  const t = headerTally(g, identities, 3, 1);
   expect(t.scenarios).toBe(3);
   expect(t.agents).toBe(1);
   expect(t.passed).toBe(1);
@@ -173,7 +189,8 @@ test('headerTally counts unknown/indeterminate latest as indeterminate', () => {
     agent: 'claude',
     window: [rec({ final: 'indeterminate' })],
   });
-  const t = headerTally(grid([unkCell, indetCell]), ['a', 'b'], ['claude']);
+  const cells = [unkCell, indetCell];
+  const t = headerTally(grid(cells), identitiesOf(cells), 2, 1);
   expect(t.indeterminate).toBe(2);
   expect(t.passed).toBe(0);
   expect(t.not_run).toBe(0);
@@ -186,20 +203,20 @@ test('headerTally treats an empty-window cell as not_run', () => {
     window: [],
     running: { run_id: 'r', phase: 'agent' },
   });
-  const t = headerTally(grid([runningOnly]), ['a'], ['claude']);
+  const t = headerTally(grid([runningOnly]), identitiesOf([runningOnly]), 1, 1);
   expect(t.not_run).toBe(1);
 });
 
 // --- cellView ----------------------------------------------------------------
 
 test('cellView: empty cell renders state empty with em-dash bottom', () => {
-  const v = cellView(cell({ window: [] }), 's', 'claude');
+  const v = cellView(cell({ window: [] }), 's', 'claude', 'linux');
   expect(v.state).toBe('empty');
   expect(v.bottom).toBe('—');
   expect(v.slots).toEqual([]);
   expect(v.opacity).toBe(1);
   expect(v.card).toBeNull();
-  expect(v.cell_id).toBe('cell-s-claude');
+  expect(v.cell_id).toBe('cell-s-claude-linux');
 });
 
 test('cellView: pure running cell shimmers the newest slot, phase bottom', () => {
@@ -207,7 +224,7 @@ test('cellView: pure running cell shimmers the newest slot, phase bottom', () =>
     window: [],
     running: { run_id: 'r', phase: 'agent' },
   });
-  const v = cellView(c, 's', 'claude');
+  const v = cellView(c, 's', 'claude', 'linux');
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('agent');
   expect(v.opacity).toBe(1);
@@ -226,7 +243,7 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
       rec({ cost_usd: 2, final: 'fail', finished_at: '2026-06-12T00:00:00Z' }),
     ],
   });
-  const v = cellView(c, 's', 'claude', now);
+  const v = cellView(c, 's', 'claude', 'linux', now);
   expect(v.state).toBe('done');
   expect(v.bottom).toBe('$2.00');
   expect(v.opacity).toBeCloseTo(staleOpacity(1.0), 6);
@@ -244,7 +261,7 @@ test('cellView: done cell shows latest cost bottom + stale opacity', () => {
 
 test('cellView: done cell with unknown cost shows "$—" (never "$0.00")', () => {
   const c = cell({ window: [rec({ cost_usd: null, final: 'pass' })] });
-  const v = cellView(c, 's', 'claude');
+  const v = cellView(c, 's', 'claude', 'linux');
   expect(v.bottom).toBe('$—');
 });
 
@@ -253,7 +270,7 @@ test('cellView: running on top of history shimmers newest, phase bottom', () => 
     window: [rec({ cost_usd: 1, final: 'pass' })],
     running: { run_id: 'r', phase: 'checks' },
   });
-  const v = cellView(c, 's', 'claude');
+  const v = cellView(c, 's', 'claude', 'linux');
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('checks');
   expect(v.opacity).toBe(1);
@@ -277,7 +294,7 @@ test('cellView: drift flag set and drift_line populated when latest spikes', () 
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', now);
+  const v = cellView(c, 's', 'claude', 'linux', now);
   expect(v.drift).toBe(true);
   expect(v.card?.drift_line).toBe(
     '▲ latest $3.00 vs median $1.00 of prior runs',
@@ -288,7 +305,7 @@ test('cellView: no drift_line when there is no drift', () => {
   const c = cell({
     window: [rec({ cost_usd: 1 }), rec({ cost_usd: 1 }), rec({ cost_usd: 1 })],
   });
-  const v = cellView(c, 's', 'claude');
+  const v = cellView(c, 's', 'claude', 'linux');
   expect(v.drift).toBe(false);
   expect(v.card?.drift_line).toBeNull();
 });
@@ -304,7 +321,7 @@ test('cellView: card rows carry compact timestamp + run id', () => {
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude');
+  const v = cellView(c, 's', 'claude', 'linux');
   const row = v.card?.rows[0];
   expect(row?.verdict).toBe('fail');
   expect(row?.cost).toBe('$1.50');

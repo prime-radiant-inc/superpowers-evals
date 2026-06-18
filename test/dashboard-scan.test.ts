@@ -139,8 +139,14 @@ function writeRun(
 
 // --- scanResults -------------------------------------------------------------
 
+// Scan a results dir with a fixed known-agent list and no manifest (the common
+// shape these unit tests assert against).
+function scan(root: string) {
+  return scanResults({ resultsDir: root, knownAgents: AGENTS, manifest: null });
+}
+
 test('scanResults returns an empty grid for a missing root', () => {
-  const grid = scanResults(join(tmpdir(), 'does-not-exist-xyz'), AGENTS);
+  const grid = scan(join(tmpdir(), 'does-not-exist-xyz'));
   expect(grid.cells.size).toBe(0);
 });
 
@@ -151,8 +157,8 @@ test('scanResults buckets runs into cells and windows to 5 newest', () => {
       verdict: { final: 'pass', economics: { total_est_cost_usd: i } },
     });
   }
-  const grid = scanResults(root, AGENTS);
-  const cell = grid.cells.get(cellKey('s', 'claude'));
+  const grid = scan(root);
+  const cell = grid.cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.window.length).toBe(5);
   // Newest rightmost: the 7 stamps sort, window keeps the 5 newest (i=2..6),
   // newest is i=6 with cost 6.
@@ -167,9 +173,9 @@ test('scanResults skips batches and unparseable dirs', () => {
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     verdict: { final: 'pass' },
   });
-  const grid = scanResults(root, AGENTS);
+  const grid = scan(root);
   expect(grid.cells.size).toBe(1);
-  expect(grid.cells.has(cellKey('s', 'claude'))).toBe(true);
+  expect(grid.cells.has(cellKey('s', 'claude', 'linux'))).toBe(true);
 });
 
 test('scanResults reads final/cost/finished_at off the verdict', () => {
@@ -181,7 +187,7 @@ test('scanResults reads final/cost/finished_at off the verdict', () => {
       finished_at: '2026-06-12T00:01:00Z',
     },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   const rec = cell?.window[0];
   expect(rec?.final).toBe('fail');
   expect(rec?.cost_usd).toBe(3.14);
@@ -195,7 +201,7 @@ test('scanResults collapses an unknown final to "unknown"', () => {
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     verdict: { final: 'weird-value' },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.window[0]?.final).toBe('unknown');
   expect(cell?.window[0]?.cost_usd).toBeNull();
   expect(cell?.window[0]?.finished_at).toBeNull();
@@ -206,7 +212,7 @@ test('scanResults: a live-pid phase.json with no verdict is the running run', ()
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     phase: { phase: 'agent', updated_at: 'x', pid: process.pid },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.running?.phase).toBe('agent');
   expect(cell?.window.length).toBe(0);
 });
@@ -218,7 +224,7 @@ test('scanResults: running phase is taken verbatim from phase.json', () => {
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     phase: { phase: 'setup', updated_at: 'x', pid: process.pid },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.running?.phase).toBe('setup');
 });
 
@@ -228,7 +234,7 @@ test('AUTHORITY RULE: verdict present means phase.json is ignored (not running)'
     verdict: { final: 'pass', economics: { total_est_cost_usd: 1 } },
     phase: { phase: 'agent', updated_at: 'x', pid: process.pid },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.running).toBeNull();
   expect(cell?.window.length).toBe(1);
   expect(cell?.window[0]?.final).toBe('pass');
@@ -239,8 +245,8 @@ test('ABANDONED EXCLUSION: dead-pid phase.json with no verdict omits the cell', 
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     phase: { phase: 'agent', updated_at: 'x', pid: 2147483646 },
   });
-  const grid = scanResults(root, AGENTS);
-  expect(grid.cells.has(cellKey('s', 'claude'))).toBe(false);
+  const grid = scan(root);
+  expect(grid.cells.has(cellKey('s', 'claude', 'linux'))).toBe(false);
   expect(grid.cells.size).toBe(0);
 });
 
@@ -250,7 +256,7 @@ test('ABANDONED EXCLUSION: phase.json without a pid omits the cell', () => {
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {
     phase: { phase: 'agent', updated_at: 'x' },
   });
-  expect(scanResults(root, AGENTS).cells.size).toBe(0);
+  expect(scan(root).cells.size).toBe(0);
 });
 
 test('scanResults: only the newest in-flight dir sets the cell running state', () => {
@@ -262,7 +268,7 @@ test('scanResults: only the newest in-flight dir sets the cell running state', (
   writeRun(root, 's-claude-linux-20260613T000000Z-bbbb', {
     phase: { phase: 'checks', updated_at: 'x', pid: process.pid },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   expect(cell?.running?.phase).toBe('checks');
   expect(cell?.running?.run_id).toBe('s-claude-linux-20260613T000000Z-bbbb');
   // The resolved run still shows in the window.
@@ -279,7 +285,7 @@ test('scanResults: window ordering is (started_at, nonce) ascending', () => {
   writeRun(root, 's-claude-linux-20260612T000000Z-00aa', {
     verdict: { final: 'fail', economics: { total_est_cost_usd: 1 } },
   });
-  const cell = scanResults(root, AGENTS).cells.get(cellKey('s', 'claude'));
+  const cell = scan(root).cells.get(cellKey('s', 'claude', 'linux'));
   // 00aa < 00ff lexicographically, so 00aa is older (window[0]).
   expect(cell?.window[0]?.cost_usd).toBe(1);
   expect(cell?.window[1]?.cost_usd).toBe(2);
@@ -289,5 +295,35 @@ test('scanResults omits a cell whose only run is non-displayable', () => {
   const root = mkdtempSync(join(tmpdir(), 'res-'));
   // A dir with neither verdict nor a live phase: no record, no running.
   writeRun(root, 's-claude-linux-20260612T000000Z-aaaa', {});
-  expect(scanResults(root, AGENTS).cells.size).toBe(0);
+  expect(
+    scanResults({ resultsDir: root, knownAgents: AGENTS, manifest: null }).cells
+      .size,
+  ).toBe(0);
+});
+
+// --- 3-part (scenario, agent, os) identity -----------------------------------
+
+test('cellKey is 3-part', () => {
+  expect(cellKey('s1', 'claude', 'windows')).toBe('s1\tclaude\twindows');
+});
+
+test('different-os runs of the same scenario/agent are distinct cells', () => {
+  // fixture: two run dirs s1-claude-linux-… and s1-claude-windows-…
+  const grid = scanResults({
+    resultsDir: 'test/fixtures/scan/results',
+    knownAgents: ['claude'],
+    manifest: null,
+  });
+  expect(grid.cells.has(cellKey('s1', 'claude', 'linux'))).toBe(true);
+  expect(grid.cells.has(cellKey('s1', 'claude', 'windows'))).toBe(true);
+});
+
+test('results-only bootstraps agents from verdict.json coding_agent', () => {
+  // fixture run dir whose verdict.json has coding_agent:"claude"; knownAgents empty
+  const grid = scanResults({
+    resultsDir: 'test/fixtures/scan/results',
+    knownAgents: [],
+    manifest: null,
+  });
+  expect([...grid.cells.values()].some((c) => c.agent === 'claude')).toBe(true);
 });

@@ -75,29 +75,30 @@ export interface RunningRun {
   readonly phase: string;
 }
 
-// One (scenario, agent) cell. `window` is oldest..newest, length <= 5.
+// One (scenario, agent, os) cell. `window` is oldest..newest, length <= 5.
 export interface Cell {
   readonly scenario: string;
   readonly agent: string;
+  readonly os: string;
   readonly window: readonly RunRecord[];
   readonly running: RunningRun | null;
 }
 
-// A scan snapshot. Key = `${scenario}\t${agent}` (tab is absent from names).
-// Never-run cells are absent from the map (not null entries).
+// A scan snapshot. Key = `${scenario}\t${agent}\t${os}` (tab is absent from
+// names). Never-run cells are absent from the map (not null entries).
 export interface Grid {
   readonly cells: Map<string, Cell>;
 }
 
 // The cell map key helper — the one place the composite key is formed.
-export function cellKey(scenario: string, agent: string): string {
-  return `${scenario}\t${agent}`;
+export function cellKey(scenario: string, agent: string, os: string): string {
+  return `${scenario}\t${agent}\t${os}`;
 }
 
 // The DOM id / SSE event name for a cell. Both the `id` and `sse-swap`
 // attributes equal this; cell events are addressed to it.
-export function cellId(scenario: string, agent: string): string {
-  return `cell-${scenario}-${agent}`;
+export function cellId(scenario: string, agent: string, os: string): string {
+  return `cell-${scenario}-${agent}-${os}`;
 }
 
 // One verdict ribbon slot: a kind plus a normalized cost-bar height (0..1).
@@ -129,6 +130,7 @@ export interface CellView {
   readonly cell_id: string;
   readonly scenario: string;
   readonly agent: string;
+  readonly os: string;
   readonly state: CellState;
   readonly slots: readonly SlotView[];
   readonly bottom: string;

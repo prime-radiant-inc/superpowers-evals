@@ -133,37 +133,47 @@ function cellCosts(cell: Cell): number[] {
   return out;
 }
 
-// Grid-wide rollup over the latest verdict of each cell. `not_run` is every
-// (scenario, agent) pair with no window (absent or running-only cells).
+// A (scenario, agent, os) cell identity — the unit the tally iterates. The grid
+// renders one cell per identity; the identity set is the manifest's cells when a
+// manifest is present, else the observed grid cells.
+export interface CellIdentity {
+  readonly scenario: string;
+  readonly agent: string;
+  readonly os: string;
+}
+
+// Grid-wide rollup over the latest verdict of each identity. `not_run` is every
+// identity with no window (absent or running-only cells). `scenarioCount` /
+// `agentCount` are the header's "N scenarios × M agents" figures (the manifest's
+// list lengths, or the observed distinct counts when manifest-null).
 export function headerTally(
   grid: Grid,
-  scenarios: readonly string[],
-  agents: readonly string[],
+  identities: readonly CellIdentity[],
+  scenarioCount: number,
+  agentCount: number,
 ): HeaderTally {
   let passed = 0;
   let failed = 0;
   let indeterminate = 0;
   let notRun = 0;
-  for (const scenario of scenarios) {
-    for (const agent of agents) {
-      const cell = grid.cells.get(cellKey(scenario, agent));
-      if (cell === undefined || cell.window.length === 0) {
-        notRun += 1;
-        continue;
-      }
-      const latest = (cell.window[cell.window.length - 1] as RunRecord).final;
-      if (latest === 'pass') {
-        passed += 1;
-      } else if (latest === 'fail') {
-        failed += 1;
-      } else {
-        indeterminate += 1;
-      }
+  for (const id of identities) {
+    const cell = grid.cells.get(cellKey(id.scenario, id.agent, id.os));
+    if (cell === undefined || cell.window.length === 0) {
+      notRun += 1;
+      continue;
+    }
+    const latest = (cell.window[cell.window.length - 1] as RunRecord).final;
+    if (latest === 'pass') {
+      passed += 1;
+    } else if (latest === 'fail') {
+      failed += 1;
+    } else {
+      indeterminate += 1;
     }
   }
   return {
-    scenarios: scenarios.length,
-    agents: agents.length,
+    scenarios: scenarioCount,
+    agents: agentCount,
     passed,
     failed,
     indeterminate,
@@ -227,9 +237,10 @@ export function cellView(
   cell: Cell,
   scenario: string,
   agent: string,
+  os: string,
   now?: Date,
 ): CellView {
-  const id = cellId(scenario, agent);
+  const id = cellId(scenario, agent, os);
 
   if (cell.running !== null && cell.window.length === 0) {
     // Pure running cell (no resolved history yet): shimmer the newest slot.
@@ -239,6 +250,7 @@ export function cellView(
       cell_id: id,
       scenario,
       agent,
+      os,
       state: 'running',
       slots,
       bottom: cell.running.phase,
@@ -253,6 +265,7 @@ export function cellView(
       cell_id: id,
       scenario,
       agent,
+      os,
       state: 'empty',
       slots: [],
       bottom: '—',
@@ -282,6 +295,7 @@ export function cellView(
     cell_id: id,
     scenario,
     agent,
+    os,
     state,
     slots,
     bottom,
@@ -369,7 +383,7 @@ export function diffGrids(oldGrid: Grid, newGrid: Grid): GridChange[] {
   const newCells = newGrid.cells;
 
   for (const [key, newCell] of newCells) {
-    const id = cellId(newCell.scenario, newCell.agent);
+    const id = cellId(newCell.scenario, newCell.agent, newCell.os);
     const oldCell = oldCells.get(key);
     if (oldCell === undefined) {
       changes.push({ cell_id: id, reason: 'appeared' });
@@ -398,7 +412,7 @@ export function diffGrids(oldGrid: Grid, newGrid: Grid): GridChange[] {
   for (const [key, oldCell] of oldCells) {
     if (!newCells.has(key)) {
       changes.push({
-        cell_id: cellId(oldCell.scenario, oldCell.agent),
+        cell_id: cellId(oldCell.scenario, oldCell.agent, oldCell.os),
         reason: 'vanished',
       });
     }

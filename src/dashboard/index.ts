@@ -1,15 +1,17 @@
-import { knownAgentNames } from '../run-all/matrix.ts';
+import { loadGridManifest } from './manifest.ts';
 import { createDashboard } from './server.ts';
 
 // The dashboard entry point. Binds createDashboard's fetch handler to a
 // Bun.serve instance and starts the scanner loop. The read-only web dashboard
 // and the e2e tests both go through here.
+//
+// The dashboard's only inputs are the filesystem: results/ and the grid manifest
+// at `manifestPath`. It imports nothing from the harness.
 
 export interface StartDashboardArgs {
   readonly port: number;
   readonly resultsRoot: string;
-  readonly scenariosRoot: string;
-  readonly codingAgentsDir: string;
+  readonly manifestPath: string;
 }
 
 export interface DashboardHandle {
@@ -18,15 +20,15 @@ export interface DashboardHandle {
 }
 
 export function startDashboard(args: StartDashboardArgs): DashboardHandle {
-  // knownAgents is the read-side longest-suffix list (the same *.yaml stems
-  // buildMatrix derives `available` from), so a run dir's agent segment resolves
-  // identically whether run-all or the dashboard launched it.
-  const knownAgents = knownAgentNames(args.codingAgentsDir);
+  // The grid manifest is the scenario × agent × os eligibility matrix; null when
+  // absent/malformed (a results-only board). Its `agents` are the read-side
+  // longest-suffix list a run dir's agent segment resolves against.
+  const manifest = loadGridManifest(args.manifestPath);
+  const knownAgents = manifest?.agents ?? [];
   const dash = createDashboard({
     resultsRoot: args.resultsRoot,
-    scenariosRoot: args.scenariosRoot,
-    codingAgentsDir: args.codingAgentsDir,
     knownAgents,
+    manifest,
   });
   // idleTimeout: 0 disables Bun.serve's per-request idle timeout (default 10s).
   // The GET /events SSE stream is intentionally long-lived; with the default a

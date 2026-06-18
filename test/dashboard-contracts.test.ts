@@ -69,6 +69,6 @@ test('DashboardVerdictSchema: a non-object economics degrades to null', () => {
 });
 
 test('cellKey + cellId form the composite key and DOM id', () => {
-  expect(cellKey('s', 'claude')).toBe('s\tclaude');
-  expect(cellId('s', 'claude')).toBe('cell-s-claude');
+  expect(cellKey('s', 'claude', 'linux')).toBe('s\tclaude\tlinux');
+  expect(cellId('s', 'claude', 'linux')).toBe('cell-s-claude-linux');
 });

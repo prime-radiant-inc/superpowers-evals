@@ -11,6 +11,7 @@ import {
   type RunningRun,
   type RunRecord,
 } from './contracts.ts';
+import type { GridManifest } from './manifest.ts';
 
 // Read side of the dashboard: scan results/, bucket runs into cells, and resolve
 // each cell's window, liveness, and verdicts. The filesystem is the single
@@ -145,34 +146,79 @@ function finalOf(verdict: DashboardVerdict): RunFinal {
   return 'unknown';
 }
 
-// Enumerate results/, skip batches/, bucket by (scenario, agent), window to the
-// 5 newest by (started_at, nonce) (newest rightmost). For each windowed dir:
-// verdict.json present ⇒ a RunRecord (the authority rule — phase.json is then
-// ignored); absent + live pid ⇒ the cell's `running` (only the newest live dir
-// wins); absent + dead/no pid ⇒ abandoned (excluded). Cells with no displayable
-// run are omitted from the Grid.
-export function scanResults(
-  resultsRoot: string,
-  knownAgents: readonly string[],
-): Grid {
-  const cells = new Map<string, Cell>();
-  if (!existsSync(resultsRoot)) {
-    return { cells };
+// The list of run-dir base names under results/ (excluding batches/ and
+// non-directories), or [] when results/ is absent.
+function listRunDirNames(resultsDir: string): string[] {
+  if (!existsSync(resultsDir)) {
+    return [];
   }
-
-  const buckets = new Map<string, ParsedRunDir[]>();
-  for (const name of readdirSync(resultsRoot)) {
+  const names: string[] = [];
+  for (const name of readdirSync(resultsDir)) {
     if (name === 'batches') {
       continue;
     }
-    if (!statSync(join(resultsRoot, name)).isDirectory()) {
+    if (!statSync(join(resultsDir, name)).isDirectory()) {
       continue;
     }
+    names.push(name);
+  }
+  return names;
+}
+
+// Collect the distinct `coding_agent` values across every completed verdict.json
+// under results/. The results-only bootstrap: with no known-agent list (no
+// manifest), the run-dir parser can't tell where the agent segment ends, so we
+// seed the agent set from the verdicts the runs already wrote.
+function bootstrapKnownAgents(
+  resultsDir: string,
+  runDirNames: readonly string[],
+): string[] {
+  const agents = new Set<string>();
+  for (const name of runDirNames) {
+    const verdict = readDashboardVerdict(join(resultsDir, name));
+    if (verdict?.coding_agent !== undefined) {
+      agents.add(verdict.coding_agent);
+    }
+  }
+  return [...agents];
+}
+
+// Enumerate results/, skip batches/, bucket by (scenario, agent, os), window to
+// the 5 newest by (started_at, nonce) (newest rightmost). For each windowed dir:
+// verdict.json present ⇒ a RunRecord (the authority rule — phase.json is then
+// ignored); absent + live pid ⇒ the cell's `running` (only the newest live dir
+// wins); absent + dead/no pid ⇒ abandoned (excluded).
+//
+// When `manifest` is null the cell set is exactly the observed runs (a
+// results-only board). When a manifest is present, EVERY manifest cell exists in
+// the grid — observed runs filled in, and an empty cell for any manifest cell
+// with no displayable run, so not_run/ineligible cells render.
+export function scanResults(args: {
+  resultsDir: string;
+  knownAgents: readonly string[];
+  manifest: GridManifest | null;
+}): Grid {
+  const { resultsDir, manifest } = args;
+  const cells = new Map<string, Cell>();
+
+  const runDirNames = listRunDirNames(resultsDir);
+
+  // With an empty known-agent list (manifest-null, results-only), seed it from
+  // the verdicts so parseRunDirName can split off the agent segment. When a
+  // manifest is present its agents are passed in as knownAgents, so this is a
+  // no-op for the manifest case.
+  const knownAgents =
+    args.knownAgents.length > 0
+      ? args.knownAgents
+      : bootstrapKnownAgents(resultsDir, runDirNames);
+
+  const buckets = new Map<string, ParsedRunDir[]>();
+  for (const name of runDirNames) {
     const parsed = parseRunDirName(name, knownAgents);
     if (parsed === null) {
       continue;
     }
-    const key = cellKey(parsed.scenario, parsed.agent);
+    const key = cellKey(parsed.scenario, parsed.agent, parsed.os);
     const bucket = buckets.get(key);
     if (bucket === undefined) {
       buckets.set(key, [parsed]);
@@ -188,7 +234,7 @@ export function scanResults(
     let running: RunningRun | null = null;
     for (const p of windowDirs) {
       const runId = `${p.scenario}-${p.agent}-${p.os}-${p.started_at}-${p.nonce}`;
-      const runDir = join(resultsRoot, runId);
+      const runDir = join(resultsDir, runId);
       const verdict = readDashboardVerdict(runDir);
       if (verdict !== null) {
         const economics = verdict.economics ?? null;
@@ -219,10 +265,29 @@ export function scanResults(
     cells.set(key, {
       scenario: first.scenario,
       agent: first.agent,
+      os: first.os,
       window: records,
       running,
     });
   }
+
+  // Manifest overlay: ensure every manifest cell exists (an empty cell where no
+  // run was observed), so ineligible / not-yet-run cells still render.
+  if (manifest !== null) {
+    for (const mc of manifest.cells) {
+      const key = cellKey(mc.scenario, mc.agent, mc.os);
+      if (!cells.has(key)) {
+        cells.set(key, {
+          scenario: mc.scenario,
+          agent: mc.agent,
+          os: mc.os,
+          window: [],
+          running: null,
+        });
+      }
+    }
+  }
+
   return { cells };
 }
 
