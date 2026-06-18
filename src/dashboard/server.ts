@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Cell, cellId, cellKey, type Grid } from './contracts.ts';
 import { EventBus } from './event-bus.ts';
-import type { GridManifest } from './manifest.ts';
+import type { GridManifest, GridManifestCell } from './manifest.ts';
 import { scanResults } from './scan.ts';
 import { cellHtml, gridHtml, layoutHtml, tallyHtml } from './templates.ts';
 import { type CellIdentity, cellView, diffGrids, headerTally } from './view.ts';
@@ -146,7 +146,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     scenario: string,
     agent: string,
     os: string,
-  ): import('./manifest.ts').GridManifestCell | null => {
+  ): GridManifestCell | null => {
     if (manifest === null) {
       return null;
     }

@@ -301,6 +301,31 @@ test('cellHtml escapes card row run_id and drift_line', () => {
   expect(html).toContain('a &amp; b');
 });
 
+test('incomplete cell with error_stage shows stage as tooltip on status glyph', () => {
+  const html = cellHtml({
+    cell_id: 'cell-s-claude-linux',
+    scenario: 's',
+    agent: 'claude',
+    os: 'linux',
+    state: 'done',
+    status: 'incomplete',
+    error_stage: 'checks',
+    slots: [
+      { kind: 'ghost', height: 0.18 },
+      { kind: 'ghost', height: 0.18 },
+      { kind: 'ghost', height: 0.18 },
+      { kind: 'ghost', height: 0.18 },
+      { kind: 'unknown', height: 0.5 },
+    ],
+    bottom: '$0.50',
+    drift: false,
+    opacity: 1,
+    card: null,
+  });
+  expect(html).toContain('title="checks"');
+  expect(html).toContain('class="status-incomplete"');
+});
+
 // --- tallyHtml -----------------------------------------------------------------
 
 test('tallyHtml renders the quorum header tally line', () => {

@@ -361,3 +361,9 @@ test('no runs + eligible = not_run', () => {
     cellStatus({ window: [] }, { eligible: true, skipped_reason: null }),
   ).toBe('not_run');
 });
+
+test('unknown verdict = incomplete', () => {
+  expect(cellStatus({ window: [{ final: 'unknown' }] }, null)).toBe(
+    'incomplete',
+  );
+});
