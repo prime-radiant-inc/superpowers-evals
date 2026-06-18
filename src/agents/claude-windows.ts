@@ -103,12 +103,17 @@ export class WindowsClaudeAgent implements CodingAgent {
     );
 
     // 4. Ensure the superpowers checkout is present on the guest (cached).
+    //    rsync is not available on the Windows guest; use scp instead.
     const sp = getEnv('SUPERPOWERS_ROOT') ?? '';
     if (sp === '') throw new ProvisionError('SUPERPOWERS_ROOT not set');
-    const rsync = host.rsyncTo(sp, p.superpowers);
-    if (rsync.status !== 0)
+    this.run(
+      host,
+      `powershell -NoProfile -Command "Remove-Item -Recurse -Force '${p.superpowers}' -ErrorAction SilentlyContinue"`,
+    );
+    const sync = host.scpTo(sp, p.superpowers);
+    if (sync.status !== 0)
       throw new ProvisionError(
-        `superpowers rsync to guest failed: ${rsync.stderr}`,
+        `superpowers scp to guest failed: ${sync.stderr}`,
       );
 
     // 5. Launcher substitutions consumed by claude-windows-context/launch-agent.

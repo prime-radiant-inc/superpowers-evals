@@ -61,7 +61,12 @@ case "$cmd" in
   sync-superpowers)
     [[ -n "${SUPERPOWERS_ROOT:-}" ]] || die "SUPERPOWERS_ROOT not set"
     [[ -d "$SUPERPOWERS_ROOT" ]] || die "SUPERPOWERS_ROOT not a dir: $SUPERPOWERS_ROOT"
-    rsync -a --delete -e "sshpass -p $password ssh ${mux[*]} -p $port" "$SUPERPOWERS_ROOT/" "$user@$host:$win_sp_dir"
+    # rsync is not available on the Windows guest; use ssh Remove-Item + scp instead.
+    # Convert backslash path to forward slashes for the scp remote endpoint.
+    win_sp_fwd="${win_sp_dir//\\//}"
+    sshpass -p "$password" ssh -tt "${mux[@]}" -p "$port" "$user@$host" \
+      "powershell -NoProfile -Command \"Remove-Item -Recurse -Force '$win_sp_dir' -ea 0; New-Item -ItemType Directory -Force -Path '$win_sp_dir' | Out-Null\""
+    sshpass -p "$password" scp -r "${mux[@]}" -P "$port" "$SUPERPOWERS_ROOT/." "$user@$host:$win_sp_fwd"
     ;;
   ''|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;

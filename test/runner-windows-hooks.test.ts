@@ -30,7 +30,8 @@ describe('RemoteExecution', () => {
     );
     expect(r.calls[0]).toContain('scp');
     expect(r.calls[0]).toContain('coding-agent-workdir');
-    expect(r.calls[0]).toContain('eval-runs\\abc');
+    // Remote endpoint uses forward slashes (Windows OpenSSH scp requirement)
+    expect(r.calls[0]).toContain('eval-runs/abc');
   });
 
   test('captureBack pulls projects logs and workdir from the guest', () => {
@@ -46,10 +47,9 @@ describe('RemoteExecution', () => {
       localWorkdir,
       'abc',
     );
-    expect(r.calls.join('\n')).toContain('.claude\\projects');
-    expect(r.calls.join('\n')).toContain(
-      'eval-runs\\abc\\coding-agent-workdir',
-    );
+    // Remote endpoints use forward slashes (Windows OpenSSH scp requirement)
+    expect(r.calls.join('\n')).toContain('.claude/projects');
+    expect(r.calls.join('\n')).toContain('eval-runs/abc/coding-agent-workdir');
   });
 
   // C2 regression guard: the dir name pushWorkdir's scp DESTINATION lands as on
@@ -74,9 +74,9 @@ describe('RemoteExecution', () => {
       localWorkdir,
       'abc',
     );
-    // captureBack's workdir-source basename matches the pushed dir name.
+    // captureBack's workdir-source basename matches the pushed dir name (forward slashes).
     expect(captureRunner.calls.join('\n')).toContain(
-      'eval-runs\\abc\\coding-agent-workdir',
+      'eval-runs/abc/coding-agent-workdir',
     );
   });
 });

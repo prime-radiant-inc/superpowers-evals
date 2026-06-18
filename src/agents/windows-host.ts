@@ -16,10 +16,10 @@ const MUX_OFF = [
   'UserKnownHostsFile=/dev/null',
 ];
 
-// Single-quote a value for the shell rsync runs for its -e transport. Inlined
-// (not imported from ./index.ts) to avoid an import cycle.
-function shQuote(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
+// Windows OpenSSH scp requires forward slashes in the remote endpoint even
+// though the guest uses backslash paths everywhere else.
+function toScpRemotePath(winPath: string): string {
+  return winPath.replaceAll('\\', '/');
 }
 
 // Agent-neutral SSH/scp/rsync seam into a Windows guest, over the injectable
@@ -72,7 +72,7 @@ export class WindowsHost {
       ...MUX_OFF,
       '-P',
       String(this.remote.port),
-      `${this.target()}:${winPath}`,
+      `${this.target()}:${toScpRemotePath(winPath)}`,
       localDir,
     ];
     return this.runner.run('sshpass', args);
@@ -88,22 +88,8 @@ export class WindowsHost {
       '-P',
       String(this.remote.port),
       localPath,
-      `${this.target()}:${winPath}`,
+      `${this.target()}:${toScpRemotePath(winPath)}`,
     ];
     return this.runner.run('sshpass', args);
-  }
-
-  // rsync over the same mux-off ssh. Used for the cached superpowers checkout.
-  rsyncTo(localDir: string, winDir: string): CommandResult {
-    const sshCmd = `sshpass -p ${shQuote(this.password())} ssh -tt ${MUX_OFF.join(' ')} -p ${this.remote.port}`;
-    const args = [
-      '-a',
-      '--delete',
-      '-e',
-      sshCmd,
-      `${localDir}/`,
-      `${this.target()}:${winDir}`,
-    ];
-    return this.runner.run('rsync', args);
   }
 }

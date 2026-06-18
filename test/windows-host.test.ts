@@ -34,7 +34,7 @@ describe('WindowsHost', () => {
     expect(args[args.length - 1]).toBe('whoami');
   });
 
-  test('scpFrom pulls a guest path to a local dir, mux off', () => {
+  test('scpFrom pulls a guest path to a local dir, mux off, using forward slashes in remote endpoint', () => {
     Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).scpFrom('C:\\eval-runs\\x\\workdir', '/tmp/out');
@@ -45,11 +45,13 @@ describe('WindowsHost', () => {
     expect(args).toContain('scp');
     expect(args).toContain('-r');
     expect(args).toContain('ControlMaster=no');
-    expect(args.join(' ')).toContain('user@127.0.0.1:');
+    // Remote endpoint must use forward slashes (Windows OpenSSH scp requirement)
+    expect(args).toContain('user@127.0.0.1:C:/eval-runs/x/workdir');
+    expect(args).not.toContain('user@127.0.0.1:C:\\eval-runs\\x\\workdir');
     expect(args[args.length - 1]).toBe('/tmp/out');
   });
 
-  test('scpTo pushes a local path to a guest dir, mux off', () => {
+  test('scpTo pushes a local path to a guest dir, mux off, using forward slashes in remote endpoint', () => {
     Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).scpTo('/tmp/x', 'C:\\dst');
@@ -60,44 +62,13 @@ describe('WindowsHost', () => {
     expect(args).toContain('scp');
     expect(args).toContain('-P');
     expect(args).toContain('ControlMaster=no');
-    // Local source precedes the dest
+    // Local source precedes the dest; remote endpoint uses forward slashes
     const localIdx = args.indexOf('/tmp/x');
-    const destIdx = args.indexOf('user@127.0.0.1:C:\\dst');
+    const destIdx = args.indexOf('user@127.0.0.1:C:/dst');
     expect(localIdx).toBeGreaterThanOrEqual(0);
     expect(destIdx).toBeGreaterThanOrEqual(0);
     expect(localIdx).toBeLessThan(destIdx);
-  });
-
-  test('rsyncTo pushes a local dir to guest, mux off, with proper ssh flags', () => {
-    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
-    const r = new FakeRunner();
-    new WindowsHost(remote, r).rsyncTo('/tmp/src', 'C:\\sp');
-    const call = r.calls[0];
-    if (call === undefined) throw new Error('No call recorded');
-    const { command, args } = call;
-    expect(command).toBe('rsync');
-    expect(args).toContain('-a');
-    expect(args).toContain('--delete');
-    expect(args).toContain('-e');
-    // The -e arg should contain the mux-off flags
-    const eIdx = args.indexOf('-e');
-    expect(eIdx).toBeGreaterThanOrEqual(0);
-    const sshCmd = args[eIdx + 1];
-    expect(sshCmd).toContain('ControlMaster=no');
-  });
-
-  test('rsyncTo quotes password to prevent shell injection', () => {
-    Bun.env['WIN_EVAL_PASSWORD'] = "a b'c";
-    const r = new FakeRunner();
-    new WindowsHost(remote, r).rsyncTo('/tmp/src', 'C:\\sp');
-    const call = r.calls[0];
-    if (call === undefined) throw new Error('No call recorded');
-    const { args } = call;
-    const eIdx = args.indexOf('-e');
-    const sshCmd = args[eIdx + 1];
-    // The password should be single-quoted with inner quotes escaped
-    expect(sshCmd).toContain(`'a b'\\''c'`);
-    // Should NOT contain the raw unquoted password
-    expect(sshCmd).not.toContain("a b'c");
+    // Must NOT contain backslash form
+    expect(args).not.toContain('user@127.0.0.1:C:\\dst');
   });
 });

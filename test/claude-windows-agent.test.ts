@@ -74,8 +74,24 @@ describe('WindowsClaudeAgent.provision', () => {
     expect(
       sshCalls.some((c) => c.args.join(' ').includes(`eval-runs\\${runId}`)),
     ).toBe(true);
-    // rsync pushed superpowers to the cache
-    expect(runner.calls.some((c) => c.command === 'rsync')).toBe(true);
+    // rsync is not available on the Windows guest; must NOT be called
+    expect(runner.calls.some((c) => c.command === 'rsync')).toBe(false);
+    // Remove-Item for the superpowers dir was issued over ssh before scp
+    const spDir = 'C:\\eval-superpowers';
+    expect(
+      sshCalls.some(
+        (c) =>
+          c.args.join(' ').includes('Remove-Item') &&
+          c.args.join(' ').includes(spDir),
+      ),
+    ).toBe(true);
+    // scp (scpTo) copied the superpowers checkout to the guest
+    const scpCalls = runner.calls.filter(
+      (c) => c.command === 'sshpass' && c.args.includes('scp'),
+    );
+    expect(
+      scpCalls.some((c) => c.args.join(' ').includes('C:/eval-superpowers')),
+    ).toBe(true);
     // launcher substitutions present
     expect(subs['$WIN_SSH_HOST']).toBe('127.0.0.1');
     expect(subs['$WIN_SSH_PORT']).toBe('2222');
