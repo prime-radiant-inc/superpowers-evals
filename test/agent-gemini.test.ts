@@ -30,6 +30,7 @@ const CONFIG: AgentConfig = {
   session_log_glob: '**/chats/**/*.json*',
   normalizer: 'gemini',
   required_env: ['GEMINI_API_KEY', 'SUPERPOWERS_ROOT'],
+  os_support: ['linux'],
 };
 
 const API_KEY = 'gem-test-key';

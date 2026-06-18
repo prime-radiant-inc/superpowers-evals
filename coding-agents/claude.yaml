@@ -11,3 +11,4 @@ required_env:
 max_time: 10m
 project_prompt: claude.project-prompt.md
 model: opus
+os_support: [linux, windows]

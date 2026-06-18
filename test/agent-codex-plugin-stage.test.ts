@@ -26,6 +26,7 @@ const CODEX_CONFIG: AgentConfig = {
   session_log_glob: '**/rollout-*.jsonl',
   normalizer: 'codex',
   required_env: ['SUPERPOWERS_ROOT'],
+  os_support: ['linux'],
   max_time: '10m',
 };
 

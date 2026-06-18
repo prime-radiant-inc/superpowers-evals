@@ -22,6 +22,7 @@ function claudeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
     session_log_glob: '*.jsonl',
     normalizer: 'claude',
     required_env: ['ANTHROPIC_API_KEY', 'SUPERPOWERS_ROOT'],
+    os_support: ['linux'],
     runtime_family: 'claude',
     ...overrides,
   };

@@ -34,6 +34,7 @@ const OPENCODE_CONFIG: AgentConfig = {
   session_log_glob: '[0-9]*-ses_*.json',
   normalizer: 'opencode',
   required_env: ['SUPERPOWERS_ROOT'],
+  os_support: ['linux'],
   max_time: '10m',
   max_concurrency: 1,
 };

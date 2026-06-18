@@ -19,6 +19,7 @@ function cfg(name: string, runtimeFamily?: string): AgentConfig {
     session_log_glob: '*.jsonl',
     normalizer: name,
     required_env: [],
+    os_support: ['linux'],
     max_time: '10m',
     max_concurrency: 1,
     ...(runtimeFamily === undefined ? {} : { runtime_family: runtimeFamily }),

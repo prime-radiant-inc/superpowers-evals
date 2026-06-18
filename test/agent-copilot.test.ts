@@ -37,6 +37,7 @@ const CONFIG: AgentConfig = {
   session_log_glob: '**/events.jsonl',
   normalizer: 'copilot',
   required_env: ['SUPERPOWERS_ROOT'],
+  os_support: ['linux'],
   max_time: '10m',
   max_concurrency: 1,
 };

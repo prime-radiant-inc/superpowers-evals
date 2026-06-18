@@ -17,8 +17,14 @@ function winJoin(...parts: string[]): string {
 }
 
 // Per-run Windows paths derived from the local runDir's basename (the runId).
+// The superpowers dir is a sibling of win_run_root (e.g. C:\eval-superpowers
+// alongside C:\eval-runs); this is a stable shared cache, not per-run.
 function winPaths(remote: RemoteConfig, runId: string) {
   const runRoot = winJoin(remote.win_run_root, runId);
+  // Derive superpowers dir as a sibling of win_run_root named eval-superpowers
+  // (e.g. C:\eval-superpowers when win_run_root is C:\eval-runs).
+  const winRunsParent = remote.win_run_root.replace(/\\[^\\]+$/, '');
+  const superpowers = winJoin(winRunsParent, 'eval-superpowers');
   return {
     runRoot,
     home: winJoin(runRoot, 'home'),
@@ -27,7 +33,7 @@ function winPaths(remote: RemoteConfig, runId: string) {
     // captureBack pulls it back to the same local name.
     workdir: winJoin(runRoot, 'coding-agent-workdir'),
     launchCmd: winJoin(runRoot, 'launch.cmd'),
-    superpowers: remote.win_superpowers_dir,
+    superpowers,
   };
 }
 

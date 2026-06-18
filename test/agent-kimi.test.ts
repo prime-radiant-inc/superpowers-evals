@@ -40,6 +40,7 @@ const KIMI_CONFIG: AgentConfig = {
   session_log_glob: '**/wire.jsonl',
   normalizer: 'kimi',
   required_env: ['SUPERPOWERS_ROOT', 'KIMI_MODEL_API_KEY'],
+  os_support: ['linux'],
   max_time: '10m',
 };
 

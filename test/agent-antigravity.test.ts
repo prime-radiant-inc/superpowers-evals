@@ -79,6 +79,7 @@ const ANTIGRAVITY_CONFIG: AgentConfig = {
   session_log_glob: '**/transcript.jsonl',
   normalizer: 'antigravity',
   required_env: ['SUPERPOWERS_ROOT'],
+  os_support: ['linux'],
   max_time: '10m',
   max_concurrency: 1,
 };
