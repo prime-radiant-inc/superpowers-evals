@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizePi } from '../src/normalize/pi.ts';
 
@@ -166,7 +167,7 @@ test('all standard Pi tool names map correctly', () => {
   const r = validateTrajectory(traj);
   expect(r.ok).toBe(true);
   const names = traj.steps
-    .filter((s) => s.source === 'agent')
+    .filter((s) => s.tool_calls)
     .map((s) => s.tool_calls![0]!.function_name);
   expect(names).toEqual([
     'Read',
@@ -221,25 +222,33 @@ test('subagent execution calls alias to Agent, management calls stay subagent', 
   expect(names).toEqual(['Agent', 'Agent', 'Agent', 'subagent', 'subagent']);
 });
 
-test('toolResult messages are ignored (only assistant role is processed)', () => {
+test('toolResult messages attach as observations on their owning call step', () => {
   const traj = normalizePi(allToolsLines, '0.3.0');
-  // allToolsLines has a toolResult row — it should not produce an agent step
-  const toolResultSteps = traj.steps.filter(
-    (s) =>
-      s.source === 'agent' && s.tool_calls?.[0]?.function_name === undefined,
+  // allToolsLines has a toolResult row for call-read → it links to the Read
+  // step as an observation, not a separate step.
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.tool_call_id === 'call-read',
+  )!;
+  expect(readStep.observation!.results[0]!.source_call_id).toBe('call-read');
+  expect(readStep.observation!.results[0]!.content).toContain('README');
+  // A toolResult never produces a step with a tool-less, content-less shape.
+  const orphanSteps = traj.steps.filter(
+    (s) => s.source === 'agent' && !s.tool_calls && !s.message && !s.metrics,
   );
-  expect(toolResultSteps.length).toBe(0);
+  expect(orphanSteps.length).toBe(0);
 });
 
-test('text-only assistant messages produce no agent step', () => {
+test('text-only assistant message becomes a content-only agent step', () => {
   const lines = [
     sessionHeader,
     makeMessage([{ type: 'text', text: 'done' }]),
   ].join('\n');
   const traj = normalizePi(lines, '0.3.0');
-  // No toolCall blocks → no agent steps
+  // Full fidelity: the assistant text is captured as a content-only agent step.
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
-  expect(agentSteps.length).toBe(0);
+  expect(agentSteps.length).toBe(1);
+  expect(agentSteps[0]!.message).toBe('done');
+  expect(agentSteps[0]!.tool_calls).toBeUndefined();
 });
 
 test('session and model_change rows are ignored', () => {
@@ -445,4 +454,181 @@ test('messages without usage produce no metrics', () => {
     expect(step.metrics).toBeUndefined();
     expect(step.model_name).toBeUndefined();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Full-fidelity content (reverse-engineered from a real captured pi session,
+// see test/fixtures/pi-session.slice.jsonl). Asserts message text, reasoning,
+// linked observations, session_id, model_change tracking, and per-step cost.
+// ---------------------------------------------------------------------------
+
+const fixtureSlice = readFileSync(
+  new URL('./fixtures/pi-session.slice.jsonl', import.meta.url),
+  'utf8',
+);
+
+test('session id is read from the type:session entry', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  expect(traj.session_id).toBe('019ecd1e-996e-70ba-8042-aeaa4c391744');
+});
+
+test('the produced trajectory is valid ATIF', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const r = validateTrajectory(traj);
+  expect(r.errors).toEqual([]);
+  expect(r.ok).toBe(true);
+});
+
+test('user text becomes a user step with the message', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const userSteps = traj.steps.filter((s) => s.source === 'user');
+  expect(userSteps.length).toBe(1);
+  expect(userSteps[0]!.message).toBe(
+    'I have a plan at plan.md. Use subagent-driven-development.',
+  );
+});
+
+test('assistant text is carried as step.message on the first tool step', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  )!;
+  expect(readStep.message).toBe(
+    'Using subagent-driven-development to execute the plan end-to-end.',
+  );
+});
+
+test('thinking blocks become reasoning_content', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  )!;
+  expect(readStep.reasoning_content).toBe(
+    '**Considering skill requirements**\n\nI think I need to read the skill.',
+  );
+});
+
+test('tool results link to their owning tool call (same-step observation)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  )!;
+  expect(readStep.observation).toBeDefined();
+  const result = readStep.observation!.results[0]!;
+  expect(result.source_call_id).toBe('call_read_1');
+  expect(result.content).toContain('subagent-driven-development');
+});
+
+test('subagent execution call aliases to Agent and links its result', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const agentStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Agent',
+  )!;
+  expect(agentStep).toBeDefined();
+  // task → prompt canonicalization
+  expect(agentStep.tool_calls![0]!.arguments['prompt']).toBe(
+    'Implement Task 1: project scaffolding.',
+  );
+  expect(agentStep.tool_calls![0]!.arguments['agent']).toBe('worker');
+  // result linked to the same step's call id
+  const result = agentStep.observation!.results[0]!;
+  expect(result.source_call_id).toBe('call_sub_1');
+  expect(result.content).toContain('Worker completed Task 1');
+});
+
+test('subagent management call stays subagent (action key present)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const mgmtStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'subagent',
+  );
+  expect(mgmtStep).toBeDefined();
+  expect(mgmtStep!.tool_calls![0]!.arguments['action']).toBe('list');
+});
+
+test('every usage-bearing step carries the tracked model_name (gpt-5.5)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  for (const step of traj.steps) {
+    if (step.metrics) {
+      expect(step.model_name).toBe('gpt-5.5');
+    }
+  }
+});
+
+test('disjoint buckets preserved and per-step cost is present', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  )!;
+  expect(readStep.metrics).toEqual({
+    prompt_tokens: 5149,
+    completion_tokens: 103,
+    cached_tokens: 9728,
+    cost_usd: 0.033699,
+  });
+  expect(readStep.extra).toEqual({ provider: 'openai-codex' });
+});
+
+test('cache_write rides on step.extra.cache_write (not metrics.extra)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const agentStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Agent',
+  )!;
+  expect(agentStep.extra).toEqual({ provider: 'openai-codex', cache_write: 8 });
+  // cache_write must NOT be under metrics.extra (obol ignores that location)
+  expect(agentStep.metrics!.extra).toBeUndefined();
+});
+
+test('text-only final assistant message with usage records a metrics step with cost', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const finalStep = traj.steps.find(
+    (s) => s.message === 'All tasks complete. The work is merged.',
+  )!;
+  expect(finalStep.source).toBe('agent');
+  expect(finalStep.metrics).toEqual({
+    prompt_tokens: 200,
+    completion_tokens: 40,
+    cached_tokens: 12000,
+    cost_usd: 0.0082,
+  });
+  expect(finalStep.model_name).toBe('gpt-5.5');
+});
+
+test('total per-step cost across the fixture is the sum of message costs (non-zero)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  const total = traj.steps.reduce(
+    (acc, s) => acc + (s.metrics?.cost_usd ?? 0),
+    0,
+  );
+  // 0.033699 + 0.085855 + 0.0082 (mgmt call has no usage)
+  expect(total).toBeCloseTo(0.127754, 6);
+  expect(total).toBeGreaterThan(0);
+});
+
+test('no final_metrics token totals (single-source: per-step only)', () => {
+  const traj = normalizePi(fixtureSlice, '0.3.0');
+  expect(traj.final_metrics).toBeUndefined();
+});
+
+test('model_change is tracked forward when a message omits its own model', () => {
+  // An assistant message with usage but NO message.model still gets gpt-5.5
+  // from the preceding model_change entry.
+  const lines = [
+    JSON.stringify({ type: 'session', id: 'sess-x', cwd: '/tmp' }),
+    JSON.stringify({
+      type: 'model_change',
+      provider: 'openai-codex',
+      modelId: 'gpt-5.5',
+    }),
+    JSON.stringify({
+      type: 'message',
+      message: {
+        role: 'assistant',
+        usage: { input: 10, output: 5, cacheRead: 0, cost: { total: 0.01 } },
+        content: [{ type: 'toolCall', id: 'c1', name: 'read', arguments: {} }],
+      },
+    }),
+  ].join('\n');
+  const traj = normalizePi(lines, '0.3.0');
+  const step = traj.steps.find((s) => s.metrics)!;
+  expect(step.model_name).toBe('gpt-5.5');
 });
