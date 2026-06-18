@@ -12,12 +12,18 @@ const MUX_OFF = [
   '-o', 'UserKnownHostsFile=/dev/null',
 ];
 
+// Single-quote a value for the shell rsync runs for its -e transport. Inlined
+// (not imported from ./index.ts) to avoid an import cycle.
+function shQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 // Agent-neutral SSH/scp/rsync seam into a Windows guest, over the injectable
 // CommandRunner so tests assert exact argv with a fake. A future non-Claude
 // Windows agent reuses this unchanged.
 export class WindowsHost {
-  readonly remote: RemoteConfig;
-  readonly runner: CommandRunner;
+  private readonly remote: RemoteConfig;
+  private readonly runner: CommandRunner;
 
   constructor(remote: RemoteConfig, runner: CommandRunner) {
     this.remote = remote;
@@ -71,7 +77,7 @@ export class WindowsHost {
 
   // rsync over the same mux-off ssh. Used for the cached superpowers checkout.
   rsyncTo(localDir: string, winDir: string): CommandResult {
-    const sshCmd = `sshpass -p ${this.password()} ssh -tt ${MUX_OFF.join(' ')} -p ${this.remote.port}`;
+    const sshCmd = `sshpass -p ${shQuote(this.password())} ssh -tt ${MUX_OFF.join(' ')} -p ${this.remote.port}`;
     const args = ['-a', '--delete', '-e', sshCmd, `${localDir}/`, `${this.target()}:${winDir}`];
     return this.runner.run('rsync', args);
   }
