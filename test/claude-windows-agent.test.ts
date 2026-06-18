@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -158,5 +158,32 @@ describe('RemoteExecution.captureBack', () => {
     expect(() =>
       exec.captureBack(localRunHomeDir, localWorkdir, runId),
     ).toThrow();
+  });
+
+  test('captureBack tolerates a fully-missing guest (no-log run), workdir untouched', () => {
+    const cfg = loadAgentConfig(
+      join(import.meta.dir, '..', 'coding-agents'),
+      'claude-windows',
+    );
+    const remote = cfg.remote;
+    if (!remote) throw new Error('remote config required');
+
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+    const home = mkdtempSync(join(tmpdir(), 'h-'));
+    const wd = mkdtempSync(join(tmpdir(), 'w-'));
+    writeFileSync(join(wd, 'fixture.txt'), 'orig');
+    const r = new (class implements CommandRunner {
+      run(_c: string, _a: readonly string[]): CommandResult {
+        return {
+          status: 1,
+          stdout: '',
+          stderr: 'scp: No such file or directory',
+        };
+      }
+    })();
+    expect(() =>
+      new RemoteExecution(remote, r).captureBack(home, wd, 'abc'),
+    ).not.toThrow();
+    expect(readFileSync(join(wd, 'fixture.txt'), 'utf8')).toBe('orig');
   });
 });

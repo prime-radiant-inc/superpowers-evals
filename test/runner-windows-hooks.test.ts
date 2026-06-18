@@ -10,10 +10,24 @@ import type {
 import { RemoteConfigSchema } from '../src/contracts/agent-config.ts';
 import { setProcessEnv } from '../src/env.ts';
 
+// Simulates scp pulling the guest workdir: creates coding-agent-workdir inside
+// the local destination so the safe-swap renameSync succeeds.
 class FakeRunner implements CommandRunner {
   calls: string[] = [];
   run(command: string, args: readonly string[]): CommandResult {
     this.calls.push(`${command} ${args.join(' ')}`);
+    // When scpFrom pulls the guest workdir, create the expected subdir so the
+    // safe-swap renameSync has something to rename (mirrors real scp behaviour).
+    if (
+      command === 'sshpass' &&
+      args.includes('scp') &&
+      args.some((a) => a.includes('coding-agent-workdir'))
+    ) {
+      const dest = args[args.length - 1];
+      if (typeof dest === 'string' && !dest.includes(':')) {
+        mkdirSync(join(dest, 'coding-agent-workdir'), { recursive: true });
+      }
+    }
     return { status: 0, stdout: '', stderr: '' };
   }
 }

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { AgentConfig, RemoteConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
@@ -155,6 +155,11 @@ export class RemoteExecution {
   }
 
   // After the drive, pull session logs + workdir back into the local run dir.
+  // A missing guest projects dir (no-log run) is tolerated — logs capture is
+  // skipped. A missing guest workdir is also tolerated — the local workdir is
+  // left untouched. The guest workdir is pulled to a temp sibling and swapped
+  // onto localWorkdir only on success, so a failed pull never destroys the
+  // pre-run fixture (#5, #7).
   captureBack(
     localRunHomeDir: string,
     localWorkdir: string,
@@ -164,22 +169,27 @@ export class RemoteExecution {
     // Create the local .claude dir first so `scp -r host:...\projects
     // <dest>/.claude` lands the projects tree at <dest>/.claude/projects
     // (rather than renaming projects -> .claude into an absent parent).
-    const localClaudeDir = join(localRunHomeDir, '.claude');
-    mkdirSync(localClaudeDir, { recursive: true });
-    const r1 = this.host.scpFrom(
+    mkdirSync(join(localRunHomeDir, '.claude'), { recursive: true });
+    const logs = this.host.scpFrom(
       winJoin(p.home, '.claude', 'projects'),
-      localClaudeDir,
+      join(localRunHomeDir, '.claude'),
     );
-    if (r1.status !== 0)
-      throw new Error(`capture session logs from guest failed: ${r1.stderr}`);
-    // The local coding-agent-workdir already exists (the pre-run fixture).
-    // Remove it before the pull so (a) scp does not nest the pulled dir inside
-    // it and (b) post-checks see the GUEST's final state, not the pre-run
-    // fixture. With p.workdir basename now coding-agent-workdir, the pull lands
-    // at dirname(localWorkdir)/coding-agent-workdir === localWorkdir.
+    if (logs.status !== 0 && !/no such file|not exist/i.test(logs.stderr)) {
+      throw new Error(`capture session logs from guest failed: ${logs.stderr}`);
+    }
+    // Pull the guest workdir to a temp sibling, then atomic-rename onto
+    // localWorkdir so a failed pull never destroys the pre-run fixture.
+    const tmp = `${localWorkdir}.incoming-${runId}`;
+    rmSync(tmp, { recursive: true, force: true });
+    mkdirSync(tmp, { recursive: true });
+    const wd = this.host.scpFrom(p.workdir, tmp);
+    if (wd.status !== 0) {
+      rmSync(tmp, { recursive: true, force: true });
+      if (/no such file|not exist/i.test(wd.stderr)) return;
+      throw new Error(`capture workdir from guest failed: ${wd.stderr}`);
+    }
     rmSync(localWorkdir, { recursive: true, force: true });
-    const r2 = this.host.scpFrom(p.workdir, dirname(localWorkdir));
-    if (r2.status !== 0)
-      throw new Error(`capture workdir from guest failed: ${r2.stderr}`);
+    renameSync(join(tmp, 'coding-agent-workdir'), localWorkdir);
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
