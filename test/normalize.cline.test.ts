@@ -149,14 +149,11 @@ test('simple exchange: disjoint token buckets on agent step', () => {
   expect(step.extra?.['cache_write']).toBeUndefined();
 });
 
-test('simple exchange: final_metrics totals', () => {
+test('single-source metrics: per-step usage, NO final_metrics token totals', () => {
+  // Cline carries per-message usage, so usage lives on per-step metrics only.
+  // Emitting final_metrics token totals as well would double-count in obol.
   const traj = normalizeCline(simpleExchangeDoc, '1.0.0');
-  const fm = traj.final_metrics;
-  expect(fm).toBeDefined();
-  expect(fm!.total_steps).toBe(2);
-  expect(fm!.total_prompt_tokens).toBe(100);
-  expect(fm!.total_completion_tokens).toBe(10);
-  expect(fm!.total_cost_usd).toBeCloseTo(0.001, 6);
+  expect(traj.final_metrics).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------
@@ -261,13 +258,11 @@ const noMetricsDoc = makeDoc([
   { role: 'assistant', content: [{ type: 'text', text: 'b' }] },
 ]);
 
-test('missing metrics: no final_metrics token fields', () => {
+test('missing metrics: no per-step metrics and no final_metrics', () => {
   const traj = normalizeCline(noMetricsDoc, '1.0.0');
-  const fm = traj.final_metrics;
-  expect(fm).toBeDefined();
-  expect(fm!.total_steps).toBe(2);
-  expect(fm!.total_prompt_tokens).toBeUndefined();
-  expect(fm!.total_cost_usd).toBeUndefined();
+  expect(traj.final_metrics).toBeUndefined();
+  // assistant step carries no metrics when the log has none
+  expect(traj.steps[1]!.metrics).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------
@@ -545,15 +540,6 @@ test('disjoint-bucket conservation: per-step sums match known totals', () => {
   expect(totalCompletion).toBe(30);
   expect(totalCacheWrite).toBe(200);
   expect(totalCost).toBeCloseTo(0.005, 6);
-});
-
-test('disjoint-bucket conservation: final_metrics totals match per-step sums', () => {
-  const traj = normalizeCline(multiTurnMetricsDoc, '1.0.0');
-  const fm = traj.final_metrics!;
-  // Harbor sums inputTokens which are EXCLUSIVE of cache → same as our prompt_tokens
-  expect(fm.total_prompt_tokens).toBe(250);
-  expect(fm.total_completion_tokens).toBe(30);
-  expect(fm.total_cost_usd).toBeCloseTo(0.005, 6);
 });
 
 // ---------------------------------------------------------------------------

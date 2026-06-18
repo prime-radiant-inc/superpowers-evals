@@ -7,7 +7,6 @@
 
 import {
   ATIF_SCHEMA_VERSION,
-  type AtifFinalMetrics,
   type AtifMetrics,
   type AtifObservationResult,
   type AtifStep,
@@ -317,13 +316,6 @@ export function normalizeCline(raw: string, version: string): AtifTrajectory {
 
   const steps: AtifStep[] = [];
 
-  // Running totals for final_metrics
-  let totalPrompt = 0;
-  let totalCompletion = 0;
-  let totalCached = 0;
-  let totalCost = 0.0;
-  let sawAnyMetrics = false;
-
   for (const msg of messages) {
     if (!msg || typeof msg !== 'object') continue;
 
@@ -361,14 +353,6 @@ export function normalizeCline(raw: string, version: string): AtifTrajectory {
       steps.push(step);
     } else if (role === 'assistant') {
       const { metrics, cacheWrite } = buildMetrics(msg.metrics ?? null);
-
-      if (metrics !== undefined) {
-        sawAnyMetrics = true;
-        totalPrompt += metrics.prompt_tokens ?? 0;
-        totalCompletion += metrics.completion_tokens ?? 0;
-        totalCached += metrics.cached_tokens ?? 0;
-        totalCost += metrics.cost_usd ?? 0;
-      }
 
       // Resolve model: from this message's modelInfo, or the session default
       const mi = msg.modelInfo;
@@ -436,25 +420,14 @@ export function normalizeCline(raw: string, version: string): AtifTrajectory {
     if (step) step.step_id = i + 1;
   }
 
-  const finalMetrics: AtifFinalMetrics = {
-    total_steps: steps.length,
-  };
-  if (sawAnyMetrics) {
-    finalMetrics.total_prompt_tokens = totalPrompt;
-    finalMetrics.total_completion_tokens = totalCompletion;
-    finalMetrics.total_cost_usd = totalCost;
-    // AtifFinalMetrics has no first-class cached field; cached rides in
-    // extra.total_cached_tokens per the shared convention.
-    if (totalCached > 0) {
-      finalMetrics.extra = { total_cached_tokens: totalCached };
-    }
-  }
-
+  // SINGLE-SOURCE metrics: Cline's log carries per-message usage, so usage lives
+  // on per-step `metrics` ONLY (the claude/gemini/opencode pattern). We do NOT
+  // also emit final_metrics token totals — obol prices whatever buckets it finds,
+  // and emitting both per-step and final totals double-counts.
   const traj: AtifTrajectory = {
     schema_version: ATIF_SCHEMA_VERSION,
     agent: { name: 'cline', version },
     steps,
-    final_metrics: finalMetrics,
   };
   if (sessionId) traj.session_id = sessionId;
   if (defaultModel) traj.agent.model_name = defaultModel;

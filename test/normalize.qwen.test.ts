@@ -7,7 +7,10 @@ import { normalizeQwen } from '../src/normalize/qwen.ts';
 // Helper builders — qwen-code JSONL event format (Gemini-style fork)
 // ---------------------------------------------------------------------------
 
-function makeUserEvent(text: string, opts: { timestamp?: string; sessionId?: string } = {}): string {
+function makeUserEvent(
+  text: string,
+  opts: { timestamp?: string; sessionId?: string } = {},
+): string {
   const ev: Record<string, unknown> = {
     type: 'user',
     message: { parts: [{ text }] },
@@ -20,7 +23,11 @@ function makeUserEvent(text: string, opts: { timestamp?: string; sessionId?: str
 function makeAssistantEvent(
   opts: {
     text?: string;
-    functionCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+    functionCalls?: Array<{
+      id: string;
+      name: string;
+      args: Record<string, unknown>;
+    }>;
     usageMetadata?: Record<string, unknown>;
     timestamp?: string;
     model?: string;
@@ -59,11 +66,17 @@ function makeToolResultEvent(
 // Minimal representative log: user turn, assistant with tool call + text,
 // tool result, then a text-only assistant turn (no tool calls).
 const BASIC_LOG = [
-  JSON.stringify({ sessionId: 'sess-qwen-1', version: '1.2.3', model: 'qwen3-coder-plus' }),
+  JSON.stringify({
+    sessionId: 'sess-qwen-1',
+    version: '1.2.3',
+    model: 'qwen3-coder-plus',
+  }),
   makeUserEvent('implement the feature', { sessionId: 'sess-qwen-1' }),
   makeAssistantEvent({
     text: 'I will read the file first.',
-    functionCalls: [{ id: 'call-1', name: 'read_file', args: { file_path: 'src/main.ts' } }],
+    functionCalls: [
+      { id: 'call-1', name: 'read_file', args: { file_path: 'src/main.ts' } },
+    ],
     usageMetadata: {
       promptTokenCount: 1200,
       candidatesTokenCount: 80,
@@ -94,8 +107,16 @@ const TOOL_MAP_LOG = [
     functionCalls: [
       { id: 't1', name: 'run_shell_command', args: { command: 'git status' } },
       { id: 't2', name: 'read_file', args: { file_path: 'README.md' } },
-      { id: 't3', name: 'write_file', args: { file_path: 'out.txt', content: 'x' } },
-      { id: 't4', name: 'replace', args: { file_path: 'out.txt', old_string: 'x', new_string: 'y' } },
+      {
+        id: 't3',
+        name: 'write_file',
+        args: { file_path: 'out.txt', content: 'x' },
+      },
+      {
+        id: 't4',
+        name: 'replace',
+        args: { file_path: 'out.txt', old_string: 'x', new_string: 'y' },
+      },
       { id: 't5', name: 'grep_search', args: { pattern: 'foo', path: '.' } },
       { id: 't6', name: 'glob', args: { pattern: '**/*.ts' } },
       { id: 't7', name: 'list_directory', args: { path: 'src' } },
@@ -135,10 +156,9 @@ test('session_id is populated from the log metadata', () => {
 });
 
 test('session_id is absent when not in the log', () => {
-  const log = [
-    makeUserEvent('hello'),
-    makeAssistantEvent({ text: 'hi' }),
-  ].join('\n');
+  const log = [makeUserEvent('hello'), makeAssistantEvent({ text: 'hi' })].join(
+    '\n',
+  );
   const traj = normalizeQwen(log, '1.0.0');
   expect(traj.session_id).toBeUndefined();
 });
@@ -157,7 +177,11 @@ test('run_shell_command maps to Bash', () => {
 function findTc(
   traj: ReturnType<typeof normalizeQwen>,
   id: string,
-): ReturnType<typeof normalizeQwen>['steps'][0]['tool_calls'][0] | undefined {
+):
+  | NonNullable<
+      ReturnType<typeof normalizeQwen>['steps'][number]['tool_calls']
+    >[number]
+  | undefined {
   for (const step of traj.steps) {
     const tc = (step.tool_calls ?? []).find((t) => t.tool_call_id === id);
     if (tc) return tc;
@@ -300,7 +324,9 @@ test('no usageMetadata → no metrics emitted', () => {
   const log = [
     makeUserEvent('hi'),
     makeAssistantEvent({
-      functionCalls: [{ id: 'x1', name: 'read_file', args: { file_path: 'a.ts' } }],
+      functionCalls: [
+        { id: 'x1', name: 'read_file', args: { file_path: 'a.ts' } },
+      ],
     }),
   ].join('\n');
   const traj = normalizeQwen(log, '1.0.0');
@@ -331,9 +357,7 @@ test('user text surfaces as user step.message', () => {
 test('tool result output surfaces as observation on the assistant step', () => {
   const traj = normalizeQwen(BASIC_LOG, '1.2.3');
   const readStep = traj.steps.find(
-    (s) =>
-      s.source === 'agent' &&
-      s.tool_calls?.[0]?.function_name === 'Read',
+    (s) => s.source === 'agent' && s.tool_calls?.[0]?.function_name === 'Read',
   );
   expect(readStep).toBeDefined();
   expect(readStep!.observation).toBeDefined();
@@ -388,7 +412,9 @@ test('observation source_call_id matches a tool_call in the same step', () => {
   expect(validateTrajectory(traj).ok).toBe(true); // validator enforces this
   for (const step of traj.steps) {
     if (!step.observation) continue;
-    const callIds = new Set((step.tool_calls ?? []).map((tc) => tc.tool_call_id));
+    const callIds = new Set(
+      (step.tool_calls ?? []).map((tc) => tc.tool_call_id),
+    );
     for (const result of step.observation.results) {
       if (result.source_call_id != null) {
         expect(callIds.has(result.source_call_id)).toBe(true);
@@ -435,7 +461,9 @@ test('tolerates blank lines and bad JSON', () => {
     '{not valid json}',
     makeUserEvent('hi'),
     makeAssistantEvent({
-      functionCalls: [{ id: 'x', name: 'read_file', args: { file_path: 'f.ts' } }],
+      functionCalls: [
+        { id: 'x', name: 'read_file', args: { file_path: 'f.ts' } },
+      ],
     }),
     '',
   ].join('\n');
@@ -474,14 +502,20 @@ test('non-dict functionCall args wrapped as raw_args', () => {
       type: 'assistant',
       message: {
         parts: [
-          { functionCall: { id: 'q1', name: 'run_shell_command', args: 'git status' } },
+          {
+            functionCall: {
+              id: 'q1',
+              name: 'run_shell_command',
+              args: 'git status',
+            },
+          },
         ],
       },
     }),
   ].join('\n');
   const traj = normalizeQwen(log, '1.0.0');
   expect(validateTrajectory(traj).ok).toBe(true);
-  const tc = traj.steps.find((s) => s.tool_calls)?.tool_calls?.[0]!;
+  const tc = traj.steps.find((s) => s.tool_calls)?.tool_calls?.[0];
   expect(tc?.function_name).toBe('Bash');
   expect(tc?.arguments).toEqual({ raw_args: 'git status' });
 });
@@ -514,13 +548,31 @@ test('distinct assistant events produce distinct steps (no unexpected dedup)', (
   const log = [
     makeUserEvent('start'),
     makeAssistantEvent({
-      functionCalls: [{ id: 'c1', name: 'read_file', args: { file_path: 'a.ts' } }],
-      usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, cachedContentTokenCount: 0, thoughtsTokenCount: 0 },
+      functionCalls: [
+        { id: 'c1', name: 'read_file', args: { file_path: 'a.ts' } },
+      ],
+      usageMetadata: {
+        promptTokenCount: 100,
+        candidatesTokenCount: 10,
+        cachedContentTokenCount: 0,
+        thoughtsTokenCount: 0,
+      },
     }),
     makeToolResultEvent([{ id: 'c1', output: 'content' }]),
     makeAssistantEvent({
-      functionCalls: [{ id: 'c2', name: 'write_file', args: { file_path: 'b.ts', content: 'x' } }],
-      usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 20, cachedContentTokenCount: 50, thoughtsTokenCount: 0 },
+      functionCalls: [
+        {
+          id: 'c2',
+          name: 'write_file',
+          args: { file_path: 'b.ts', content: 'x' },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 200,
+        candidatesTokenCount: 20,
+        cachedContentTokenCount: 50,
+        thoughtsTokenCount: 0,
+      },
     }),
     makeToolResultEvent([{ id: 'c2', output: 'ok' }]),
   ].join('\n');

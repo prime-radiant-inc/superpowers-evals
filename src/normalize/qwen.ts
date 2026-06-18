@@ -211,8 +211,7 @@ export function normalizeQwen(raw: string, version: string): AtifTrajectory {
             : { raw_args: rawArgs };
 
           const tc: AtifToolCall = canonicalizeAgentPrompt({
-            tool_call_id:
-              typeof fcObj['id'] === 'string' ? fcObj['id'] : '',
+            tool_call_id: typeof fcObj['id'] === 'string' ? fcObj['id'] : '',
             function_name: canonical,
             arguments: args,
           });
@@ -231,7 +230,8 @@ export function normalizeQwen(raw: string, version: string): AtifTrajectory {
         }
       }
 
-      const messageText = textParts.length > 0 ? textParts.join('\n') : undefined;
+      const messageText =
+        textParts.length > 0 ? textParts.join('\n') : undefined;
 
       const step: AtifStep = {
         step_id: stepId++,
@@ -263,8 +263,7 @@ export function normalizeQwen(raw: string, version: string): AtifTrajectory {
         if (typeof fr !== 'object' || fr === null) continue;
         const frObj = fr as Record<string, unknown>;
 
-        const callId =
-          typeof frObj['id'] === 'string' ? frObj['id'] : '';
+        const callId = typeof frObj['id'] === 'string' ? frObj['id'] : '';
         const responseObj = frObj['response'];
         const output =
           typeof responseObj === 'object' &&
@@ -275,7 +274,8 @@ export function normalizeQwen(raw: string, version: string): AtifTrajectory {
 
         // Walk backward to find the most recent agent step with matching tool_call_id
         for (let i = steps.length - 1; i >= 0; i--) {
-          const candidate = steps[i]!;
+          const candidate = steps[i];
+          if (!candidate) continue;
           if (candidate.source !== 'agent' || !candidate.tool_calls) continue;
           const matched = candidate.tool_calls.some(
             (tc) => tc.tool_call_id === callId,
@@ -294,7 +294,6 @@ export function normalizeQwen(raw: string, version: string): AtifTrajectory {
           break;
         }
       }
-      continue;
     }
   }
 
