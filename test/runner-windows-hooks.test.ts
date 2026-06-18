@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { RemoteExecution } from '../src/agents/claude-windows.ts';
 import type {
   CommandResult,
@@ -33,12 +36,47 @@ describe('RemoteExecution', () => {
   test('captureBack pulls projects logs and workdir from the guest', () => {
     setProcessEnv('WIN_EVAL_PASSWORD', 'password');
     const r = new FakeRunner();
+    // captureBack now mkdir/rm's the local paths it is handed, so they must be
+    // REAL temp dirs, not fake /run/abc/... strings.
+    const localRunHomeDir = mkdtempSync(join(tmpdir(), 'cap-home-'));
+    const localWorkdir = join(localRunHomeDir, 'coding-agent-workdir');
+    mkdirSync(localWorkdir, { recursive: true });
     new RemoteExecution(remote, r).captureBack(
-      '/run/abc/home',
-      '/run/abc/coding-agent-workdir',
+      localRunHomeDir,
+      localWorkdir,
       'abc',
     );
     expect(r.calls.join('\n')).toContain('.claude\\projects');
-    expect(r.calls.join('\n')).toContain('eval-runs\\abc\\workdir');
+    expect(r.calls.join('\n')).toContain(
+      'eval-runs\\abc\\coding-agent-workdir',
+    );
+  });
+
+  // C2 regression guard: the dir name pushWorkdir's scp DESTINATION lands as on
+  // the guest must be the SAME dir name captureBack's scp SOURCE pulls back, so
+  // the workdir round-trips (push -> guest -> pull -> same local name).
+  test('pushWorkdir destination and captureBack source share one guest dir name', () => {
+    setProcessEnv('WIN_EVAL_PASSWORD', 'password');
+    const pushRunner = new FakeRunner();
+    new RemoteExecution(remote, pushRunner).pushWorkdir(
+      '/run/abc/coding-agent-workdir',
+      'abc',
+    );
+    // scpTo lands the local dir under its own basename inside <runRoot>.
+    expect(pushRunner.calls[0]).toContain('coding-agent-workdir');
+
+    const captureRunner = new FakeRunner();
+    const localRunHomeDir = mkdtempSync(join(tmpdir(), 'cap-home-'));
+    const localWorkdir = join(localRunHomeDir, 'coding-agent-workdir');
+    mkdirSync(localWorkdir, { recursive: true });
+    new RemoteExecution(remote, captureRunner).captureBack(
+      localRunHomeDir,
+      localWorkdir,
+      'abc',
+    );
+    // captureBack's workdir-source basename matches the pushed dir name.
+    expect(captureRunner.calls.join('\n')).toContain(
+      'eval-runs\\abc\\coding-agent-workdir',
+    );
   });
 });

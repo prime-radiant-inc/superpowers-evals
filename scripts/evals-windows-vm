@@ -46,7 +46,9 @@ case "$cmd" in
     docker start "$container" >/dev/null
     wait_for_sshd
     ;;
-  down)   docker stop "$container" >/dev/null && echo "$container stopped" ;;
+  down)
+    if docker stop "$container" >/dev/null 2>&1; then echo "$container stopped"; else echo "$container not running"; fi
+    ;;
   status)
     if docker container inspect "$container" >/dev/null 2>&1; then
       running=$(docker container inspect -f '{{.State.Running}}' "$container")

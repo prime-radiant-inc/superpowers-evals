@@ -854,6 +854,18 @@ function errorStage(err: unknown): RunErrorStage {
   return 'unknown';
 }
 
+// The context dir an agent installs into <runDir>/gauntlet-agent/context/. A
+// remote agent (e.g. claude-windows) installs its OWN context dir by name so it
+// gets its SSH launcher, not the runtime_family's local launcher. A non-remote
+// agent installs its family's shared launcher.
+export function contextDirName(cfg: {
+  name: string;
+  runtime_family?: string | undefined;
+  remote?: unknown;
+}): string {
+  return cfg.remote !== undefined ? cfg.name : (cfg.runtime_family ?? cfg.name);
+}
+
 // Claude-family binary PATH preflight: a claude run whose CLI is not installed
 // fails fast at setup, not deep in the gauntlet drive. Other families are
 // launched by gauntlet's own resolution, so this is claude-only. PATH is read
@@ -862,8 +874,14 @@ function preflightCodingAgentBinary(cfg: {
   runtime_family?: string | undefined;
   name: string;
   binary: string;
+  remote?: unknown;
 }): void {
   const family = cfg.runtime_family ?? cfg.name;
+  // A remote (e.g. Windows) agent runs claude on the GUEST, not the Linux host,
+  // so the host-PATH preflight does not apply.
+  if (cfg.remote !== undefined) {
+    return;
+  }
   if (family !== 'claude') {
     return;
   }
@@ -1126,6 +1144,7 @@ async function runInnerBody(
   // strips arbitrary env from new sessions, so the QA agent reads concrete
   // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
+  const isRemote = cfg.remote !== undefined;
   const launchAgentPath = join(
     runDir,
     'gauntlet-agent',
@@ -1142,11 +1161,13 @@ async function runInnerBody(
     // splices $QUORUM_HOME_ENV into its `exec env …` line.
     ...homeEnvSubstitutions(runHomeDir),
   };
-  // Provision-supplied substitutions. For claude these are the auth env-file path
-  // the launcher sources; the path is deterministic (configDir/.claude-env,
-  // written by ClaudeAgent.provision), so the runner derives it rather than
-  // threading it back through provision().
-  if (family === 'claude') {
+  // Provision-supplied substitutions. For LOCAL claude these are the auth
+  // env-file path the launcher sources; the path is deterministic
+  // (configDir/.claude-env, written by ClaudeAgent.provision), so the runner
+  // derives it rather than threading it back through provision(). A remote
+  // claude (claude-windows) uses neither — its launcher SSHes to the guest and
+  // the model is baked into the guest launch.cmd.
+  if (family === 'claude' && !isRemote) {
     const claudeEnvFile = join(configDir, CLAUDE_ENV_FILE_NAME);
     substitutions['$CLAUDE_ENV_FILE'] = claudeEnvFile;
     substitutions['$CLAUDE_ENV_FILE_SH'] = shellSingleQuote(claudeEnvFile);
@@ -1191,11 +1212,12 @@ async function runInnerBody(
   }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
-    codingAgent: family,
+    codingAgent: contextDirName(cfg),
     runDir,
     substitutions,
     required: family === 'claude',
-    forbiddenPlaceholders: family === 'claude' ? ['$CLAUDE_MODEL'] : [],
+    forbiddenPlaceholders:
+      family === 'claude' && !isRemote ? ['$CLAUDE_MODEL'] : [],
   });
 
   // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full

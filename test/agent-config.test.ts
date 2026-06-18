@@ -284,6 +284,10 @@ describe('AgentConfigSchema remote block', () => {
     });
     expect(cfg.remote?.port).toBe(2222);
     expect(cfg.remote?.win_run_root).toBe('C:\\eval-runs');
+    expect(cfg.remote?.host).toBe('127.0.0.1');
+    expect(cfg.remote?.user).toBe('user');
+    expect(cfg.remote?.password_env).toBe('WIN_EVAL_PASSWORD');
+    expect(cfg.remote?.win_superpowers_dir).toBe('C:\\eval-superpowers');
   });
 
   test('absent remote block is undefined', () => {

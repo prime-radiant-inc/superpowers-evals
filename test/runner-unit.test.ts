@@ -2,7 +2,11 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { allocateRunDir, buildGauntletArgv } from '../src/runner/index.ts';
+import {
+  allocateRunDir,
+  buildGauntletArgv,
+  contextDirName,
+} from '../src/runner/index.ts';
 
 test('allocateRunDir names <scenario>-<agent>-<stamp>-<nonce> and creates it', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
@@ -18,6 +22,24 @@ test('allocateRunDir is unique across calls (distinct nonces)', () => {
   const a = allocateRunDir(out, 'scn', 'codex');
   const b = allocateRunDir(out, 'scn', 'codex');
   expect(a).not.toBe(b);
+});
+
+test('contextDirName: a remote agent installs its OWN context dir by name', () => {
+  // claude-windows has runtime_family "claude" but a remote block, so it must
+  // install claude-windows-context (its SSH launcher), not claude-context.
+  expect(
+    contextDirName({
+      name: 'claude-windows',
+      runtime_family: 'claude',
+      remote: { port: 2222 },
+    }),
+  ).toBe('claude-windows');
+});
+
+test('contextDirName: a non-remote claude installs its family context dir', () => {
+  expect(contextDirName({ name: 'claude', runtime_family: 'claude' })).toBe(
+    'claude',
+  );
 });
 
 test('buildGauntletArgv is exact and order-stable with all optional flags', () => {

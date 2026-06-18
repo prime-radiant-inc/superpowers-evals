@@ -16,6 +16,8 @@ describe('claude-windows launcher', () => {
     expect(launcher).toContain('ssh -tt');
     expect(launcher).toContain('ControlMaster=no');
     expect(launcher).toContain('ControlPath=none');
+    expect(launcher).toContain('StrictHostKeyChecking=no');
+    expect(launcher).toContain('UserKnownHostsFile=/dev/null');
     expect(launcher).toContain('$WIN_LAUNCH_CMD');
     expect(launcher.startsWith('#!/usr/bin/env bash')).toBe(true);
   });
