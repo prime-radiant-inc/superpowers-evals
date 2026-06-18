@@ -192,7 +192,13 @@ and troubleshooting, use [docs/coding-agent-care-and-feeding.md](docs/coding-age
 
 ## Windows Runtime
 
-For evals against native Windows Claude, see [docs/windows/eval-runtime.md](docs/windows/eval-runtime.md) (Linux+KVM hosts only).
+For evals on Windows 11, use `--os windows` (Linux+KVM hosts only):
+
+```bash
+bun run quorum run scenarios/<name> --coding-agent claude --os windows
+```
+
+See [docs/windows/eval-runtime.md](docs/windows/eval-runtime.md) for setup and deployment.
 
 ## Canonical Actors
 
