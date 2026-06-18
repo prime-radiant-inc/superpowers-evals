@@ -74,6 +74,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '@continuedev/cli',
     'cline',
     '@mariozechner/pi-coding-agent',
+    '@xai-official/grok',
   ]) {
     expectInstallIntent(source, npmPackage);
   }

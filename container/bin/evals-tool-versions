@@ -26,6 +26,7 @@ agent_tools=(
   opencode
   pi
   copilot
+  grok
   droid
   qodercli
   qwen

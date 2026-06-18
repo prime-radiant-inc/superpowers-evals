@@ -100,6 +100,7 @@ RUN npm install -g \
     @continuedev/cli \
     cline \
     @mariozechner/pi-coding-agent \
+    @xai-official/grok \
   && if command -v kilocode >/dev/null 2>&1 && ! command -v kilo >/dev/null 2>&1; then ln -s "$(command -v kilocode)" /usr/local/bin/kilo; fi \
   && if command -v factory >/dev/null 2>&1 && ! command -v droid >/dev/null 2>&1; then ln -s "$(command -v factory)" /usr/local/bin/droid; fi \
   && if command -v continue >/dev/null 2>&1 && ! command -v cn >/dev/null 2>&1; then ln -s "$(command -v continue)" /usr/local/bin/cn; fi \
