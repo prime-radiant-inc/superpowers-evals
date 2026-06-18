@@ -95,4 +95,26 @@ export class WindowsHost {
     ];
     return this.runner.run('sshpass', args);
   }
+
+  // Quoting-safe + secret-safe guest write: base64 the content (chars [A-Za-z0-9+/=]
+  // only, so it never breaks the PowerShell single-quote literal), decode on the
+  // guest. Raw content/secrets never appear in argv. opts.secret redacts the error.
+  writeFileBase64(
+    winPath: string,
+    content: string,
+    opts?: { secret?: boolean },
+  ): void {
+    const b64 = Buffer.from(content, 'utf8').toString('base64');
+    const ps =
+      `powershell -NoProfile -Command "` +
+      `$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}'));` +
+      `[IO.File]::WriteAllText('${winPath}', $d)"`;
+    const r = this.ssh(ps);
+    if (r.status !== 0) {
+      const where = opts?.secret ? `<redacted> -> ${winPath}` : ps;
+      throw new Error(
+        `guest writeFile failed (${r.status}) ${where}\n${r.stderr}`,
+      );
+    }
+  }
 }

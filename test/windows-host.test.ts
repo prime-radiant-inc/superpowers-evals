@@ -4,13 +4,14 @@ import type {
   CommandRunner,
 } from '../src/agents/command-runner.ts';
 import { WindowsHost } from '../src/agents/windows-host.ts';
-import { RemoteConfigSchema } from '../src/contracts/agent-config.ts';
+import { RemoteConfigSchema } from '../src/contracts/os-target.ts';
 
 class FakeRunner implements CommandRunner {
   calls: { command: string; args: string[] }[] = [];
+  result: CommandResult = { status: 0, stdout: '', stderr: '' };
   run(command: string, args: readonly string[]): CommandResult {
     this.calls.push({ command, args: [...args] });
-    return { status: 0, stdout: '', stderr: '' };
+    return this.result;
   }
 }
 
@@ -71,5 +72,35 @@ describe('WindowsHost', () => {
     expect(localIdx).toBeLessThan(destIdx);
     // Must NOT contain backslash form
     expect(args).not.toContain('user@127.0.0.1:C:\\dst');
+  });
+});
+
+describe('writeFileBase64', () => {
+  test('sends base64 + FromBase64String, never raw content', () => {
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+    const r = new FakeRunner();
+    const json = '{"a":"b\'c"}';
+    new WindowsHost(remote, r).writeFileBase64('C:\\x\\f.json', json);
+    const argv = r.calls[0]!.args.join(' ');
+    expect(argv).toContain('FromBase64String');
+    expect(argv).toContain(Buffer.from(json, 'utf8').toString('base64'));
+    expect(argv).not.toContain(json);
+  });
+  test('secret write redacts content + b64 from error', () => {
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+    const r = new FakeRunner();
+    r.result = { status: 1, stdout: '', stderr: 'boom' };
+    const secret = 'sk-ant-SECRET';
+    const body = `set KEY=${secret}`;
+    try {
+      new WindowsHost(remote, r).writeFileBase64('C:\\x\\launch.cmd', body, {
+        secret: true,
+      });
+      expect(true).toBe(false);
+    } catch (e) {
+      const m = String((e as Error).message);
+      expect(m).not.toContain(secret);
+      expect(m).not.toContain(Buffer.from(body).toString('base64'));
+    }
   });
 });
