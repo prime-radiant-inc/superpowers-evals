@@ -16,21 +16,24 @@ import {
 // each cell's window, liveness, and verdicts. The filesystem is the single
 // source of truth; the only in-memory state here is the immutable verdict cache.
 
-// <scenario>-<agent>-<timestamp>-<nonce>, e.g. ...-20260527T202301Z-f7fc
+// <scenario>-<agent>-<os>-<timestamp>-<nonce>, e.g. ...-linux-20260527T202301Z-f7fc
 const RUN_DIR_RE = /-(\d{8}T\d{6}Z)-([0-9a-f]{4})$/;
 
 // The parsed identity of a run dir: which cell it belongs to plus its sort keys.
 export interface ParsedRunDir {
   readonly scenario: string;
   readonly agent: string;
+  readonly os: string;
   readonly started_at: string;
   readonly nonce: string;
 }
 
-// Parse <scenario>-<agent>-<timestamp>-<nonce>. Agent is a longest-suffix match
-// against knownAgents (so `claude-haiku` beats `haiku`/`claude`). Returns null
-// for dirs that don't match the timestamp/nonce tail, whose agent segment is not
-// a known agent, or whose scenario half is empty — callers log + skip those.
+// Parse <scenario>-<agent>-<os>-<timestamp>-<nonce>. Agent is a longest-suffix
+// match against knownAgents (so `claude-haiku` beats `haiku`/`claude`). The os
+// segment is a single hyphen-free token (e.g. `linux`, `windows`) that is
+// stripped before the agent match runs. Returns null for dirs that don't match
+// the timestamp/nonce tail, whose agent segment is not a known agent, or whose
+// scenario half is empty — callers log + skip those.
 export function parseRunDirName(
   name: string,
   knownAgents: readonly string[],
@@ -44,15 +47,24 @@ export function parseRunDirName(
   if (timestamp === undefined || nonce === undefined) {
     return null;
   }
-  const head = name.slice(0, m.index); // "<scenario>-<agent>"
-  // Longest known agent that is a hyphen-delimited suffix of head wins.
+  // head = "<scenario>-<agent>-<os>" (new format) or "<scenario>-<agent>" (legacy)
+  const head = name.slice(0, m.index);
+  // Strip the trailing os segment (a single hyphen-free token) before the
+  // agent match, so the match always runs on "<scenario>-<agent>".
+  const lastHyphen = head.lastIndexOf('-');
+  if (lastHyphen === -1) {
+    return null;
+  }
+  const os = head.slice(lastHyphen + 1);
+  const agentHead = head.slice(0, lastHyphen); // "<scenario>-<agent>"
+  // Longest known agent that is a hyphen-delimited suffix of agentHead wins.
   const candidates = [...knownAgents].sort((a, b) => b.length - a.length);
   for (const agent of candidates) {
     const suffix = `-${agent}`;
-    if (head.endsWith(suffix)) {
-      const scenario = head.slice(0, head.length - suffix.length);
+    if (agentHead.endsWith(suffix)) {
+      const scenario = agentHead.slice(0, agentHead.length - suffix.length);
       if (scenario.length > 0) {
-        return { scenario, agent, started_at: timestamp, nonce };
+        return { scenario, agent, os, started_at: timestamp, nonce };
       }
     }
   }
@@ -175,7 +187,7 @@ export function scanResults(
     const records: RunRecord[] = [];
     let running: RunningRun | null = null;
     for (const p of windowDirs) {
-      const runId = `${p.scenario}-${p.agent}-${p.started_at}-${p.nonce}`;
+      const runId = `${p.scenario}-${p.agent}-${p.os}-${p.started_at}-${p.nonce}`;
       const runDir = join(resultsRoot, runId);
       const verdict = readDashboardVerdict(runDir);
       if (verdict !== null) {

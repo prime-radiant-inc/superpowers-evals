@@ -38,7 +38,7 @@ function runDir(
   nonce: string,
 ): string {
   const stamp = `2026061${idx}T000000Z`;
-  return join(resultsRoot, `${scenario}-${agent}-${stamp}-${nonce}`);
+  return join(resultsRoot, `${scenario}-${agent}-linux-${stamp}-${nonce}`);
 }
 
 function writeVerdict(dir: string, final: string, cost: number | null): void {
