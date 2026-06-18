@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { backupCredential } from '../agents/agy-creds.ts';
 import { killRunTmuxServer } from '../agents/agy-teardown.ts';
@@ -21,6 +21,7 @@ import {
   prepareAntigravityLaunchCwd,
   writeAntigravitySettings,
 } from '../agents/antigravity.ts';
+import { RemoteExecution } from '../agents/claude-windows.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
   CopilotAgent,
@@ -1029,6 +1030,14 @@ async function runInnerBody(
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
   // setup-helpers against it).
   runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
+  // Windows runtime: runSetup built the workdir locally; push it to the guest so
+  // the SSH-launched agent works in it. (Local model: agent runs here, no push.)
+  if (cfg.remote !== undefined) {
+    new RemoteExecution(cfg.remote, defaultCommandRunner).pushWorkdir(
+      workdir,
+      basename(runDir),
+    );
+  }
 
   const checksRepoRoot = repoRoot();
 
@@ -1175,6 +1184,11 @@ async function runInnerBody(
     // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`.
     Object.assign(substitutions, kimiLaunchSubstitutions(extraEnv));
   }
+  // Windows runtime: the WindowsClaudeAgent.provision return value carries the
+  // $WIN_* launcher substitutions; merge them so the SSH launcher resolves.
+  if (cfg.remote !== undefined) {
+    Object.assign(substitutions, extraEnv);
+  }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
     codingAgent: family,
@@ -1299,6 +1313,17 @@ async function runInnerBody(
       }
       throw e;
     }
+  }
+
+  // Windows runtime: pull the guest's session logs + workdir into the local run
+  // dir so the pre-run snapshot diff and post-checks see them (reproduce the
+  // local artifact layout). Must precede the capture diff below.
+  if (cfg.remote !== undefined) {
+    new RemoteExecution(cfg.remote, defaultCommandRunner).captureBack(
+      runHomeDir,
+      workdir,
+      basename(runDir),
+    );
   }
 
   // capture tool calls + token usage from the new session logs. The
