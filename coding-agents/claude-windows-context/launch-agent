@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for Claude Code running on a Windows guest.
+#
+# It SSHes (mux OFF — a ControlMaster host would otherwise run this on the host,
+# not the guest) into the Windows VM with a real PTY (ssh -tt) and runs the
+# per-run Windows launch script, which cds into the prepared workdir, pins
+# HOME/USERPROFILE to the per-run throwaway home, exports ANTHROPIC_API_KEY, and
+# starts Claude with --plugin-dir and --model. quorum substitutes the $… values
+# below at runtime, so the installed copy contains literal connection values and
+# the guest launch-cmd path.
+#
+# Equivalent manual command (for debugging):
+#   sshpass -p "$WIN_SSH_PASSWORD" ssh -tt -o ControlMaster=no -o ControlPath=none \
+#     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+#     -p "$WIN_SSH_PORT" "$WIN_SSH_USER@$WIN_SSH_HOST" "$WIN_LAUNCH_CMD"
+set -euo pipefail
+exec sshpass -p "$WIN_SSH_PASSWORD" ssh -tt \
+  -o ControlMaster=no -o ControlPath=none \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -p "$WIN_SSH_PORT" "$WIN_SSH_USER@$WIN_SSH_HOST" "$WIN_LAUNCH_CMD"
