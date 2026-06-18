@@ -6,10 +6,14 @@ import type { CommandResult, CommandRunner } from './command-runner.ts';
 // `ControlMaster auto` otherwise multiplexes the connection back onto itself and
 // runs the command on the host instead of the guest (observed on magic-kingdom).
 const MUX_OFF = [
-  '-o', 'ControlMaster=no',
-  '-o', 'ControlPath=none',
-  '-o', 'StrictHostKeyChecking=no',
-  '-o', 'UserKnownHostsFile=/dev/null',
+  '-o',
+  'ControlMaster=no',
+  '-o',
+  'ControlPath=none',
+  '-o',
+  'StrictHostKeyChecking=no',
+  '-o',
+  'UserKnownHostsFile=/dev/null',
 ];
 
 // Single-quote a value for the shell rsync runs for its -e transport. Inlined
@@ -33,7 +37,9 @@ export class WindowsHost {
   private password(): string {
     const pw = getEnv(this.remote.password_env);
     if (pw === undefined || pw === '') {
-      throw new Error(`guest SSH password env ${this.remote.password_env} not set`);
+      throw new Error(
+        `guest SSH password env ${this.remote.password_env} not set`,
+      );
     }
     return pw;
   }
@@ -44,9 +50,13 @@ export class WindowsHost {
 
   ssh(remoteCmd: string): CommandResult {
     const args = [
-      '-p', this.password(),
-      'ssh', '-tt', ...MUX_OFF,
-      '-p', String(this.remote.port),
+      '-p',
+      this.password(),
+      'ssh',
+      '-tt',
+      ...MUX_OFF,
+      '-p',
+      String(this.remote.port),
       this.target(),
       remoteCmd,
     ];
@@ -55,9 +65,13 @@ export class WindowsHost {
 
   scpFrom(winPath: string, localDir: string): CommandResult {
     const args = [
-      '-p', this.password(),
-      'scp', '-r', ...MUX_OFF,
-      '-P', String(this.remote.port),
+      '-p',
+      this.password(),
+      'scp',
+      '-r',
+      ...MUX_OFF,
+      '-P',
+      String(this.remote.port),
       `${this.target()}:${winPath}`,
       localDir,
     ];
@@ -66,9 +80,13 @@ export class WindowsHost {
 
   scpTo(localPath: string, winPath: string): CommandResult {
     const args = [
-      '-p', this.password(),
-      'scp', '-r', ...MUX_OFF,
-      '-P', String(this.remote.port),
+      '-p',
+      this.password(),
+      'scp',
+      '-r',
+      ...MUX_OFF,
+      '-P',
+      String(this.remote.port),
       localPath,
       `${this.target()}:${winPath}`,
     ];
@@ -78,7 +96,14 @@ export class WindowsHost {
   // rsync over the same mux-off ssh. Used for the cached superpowers checkout.
   rsyncTo(localDir: string, winDir: string): CommandResult {
     const sshCmd = `sshpass -p ${shQuote(this.password())} ssh -tt ${MUX_OFF.join(' ')} -p ${this.remote.port}`;
-    const args = ['-a', '--delete', '-e', sshCmd, `${localDir}/`, `${this.target()}:${winDir}`];
+    const args = [
+      '-a',
+      '--delete',
+      '-e',
+      sshCmd,
+      `${localDir}/`,
+      `${this.target()}:${winDir}`,
+    ];
     return this.runner.run('rsync', args);
   }
 }

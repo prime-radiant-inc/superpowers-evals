@@ -288,9 +288,12 @@ describe('AgentConfigSchema remote block', () => {
 
   test('absent remote block is undefined', () => {
     const cfg = AgentConfigSchema.parse({
-      name: 'claude', binary: 'claude',
-      session_log_dir: 'x', session_log_glob: 'y',
-      normalizer: 'claude', home_config_subdir: '.claude',
+      name: 'claude',
+      binary: 'claude',
+      session_log_dir: 'x',
+      session_log_glob: 'y',
+      normalizer: 'claude',
+      home_config_subdir: '.claude',
     });
     expect(cfg.remote).toBeUndefined();
   });

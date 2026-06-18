@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { CommandResult, CommandRunner } from '../src/agents/command-runner.ts';
-import { RemoteConfigSchema } from '../src/contracts/agent-config.ts';
+import type {
+  CommandResult,
+  CommandRunner,
+} from '../src/agents/command-runner.ts';
 import { WindowsHost } from '../src/agents/windows-host.ts';
+import { RemoteConfigSchema } from '../src/contracts/agent-config.ts';
 
 class FakeRunner implements CommandRunner {
   calls: { command: string; args: string[] }[] = [];
@@ -15,7 +18,7 @@ const remote = RemoteConfigSchema.parse({ password_env: 'WIN_EVAL_PASSWORD' });
 
 describe('WindowsHost', () => {
   test('ssh disables mux and runs the remote command', () => {
-    process.env['WIN_EVAL_PASSWORD'] = 'password';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).ssh('whoami');
     const call = r.calls[0];
@@ -32,7 +35,7 @@ describe('WindowsHost', () => {
   });
 
   test('scpFrom pulls a guest path to a local dir, mux off', () => {
-    process.env['WIN_EVAL_PASSWORD'] = 'password';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).scpFrom('C:\\eval-runs\\x\\workdir', '/tmp/out');
     const call = r.calls[0];
@@ -47,7 +50,7 @@ describe('WindowsHost', () => {
   });
 
   test('scpTo pushes a local path to a guest dir, mux off', () => {
-    process.env['WIN_EVAL_PASSWORD'] = 'password';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).scpTo('/tmp/x', 'C:\\dst');
     const call = r.calls[0];
@@ -66,7 +69,7 @@ describe('WindowsHost', () => {
   });
 
   test('rsyncTo pushes a local dir to guest, mux off, with proper ssh flags', () => {
-    process.env['WIN_EVAL_PASSWORD'] = 'password';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     new WindowsHost(remote, r).rsyncTo('/tmp/src', 'C:\\sp');
     const call = r.calls[0];
@@ -84,7 +87,7 @@ describe('WindowsHost', () => {
   });
 
   test('rsyncTo quotes password to prevent shell injection', () => {
-    process.env['WIN_EVAL_PASSWORD'] = "a b'c";
+    Bun.env['WIN_EVAL_PASSWORD'] = "a b'c";
     const r = new FakeRunner();
     new WindowsHost(remote, r).rsyncTo('/tmp/src', 'C:\\sp');
     const call = r.calls[0];

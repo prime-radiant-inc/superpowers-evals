@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+usage: scripts/evals-windows-vm <up|down|status|ssh|sync-superpowers> [args...]
+
+env (all optional, with defaults):
+  WIN_EVAL_CONTAINER  (windows11)   docker container name
+  WIN_EVAL_HOST       (127.0.0.1)   ssh host
+  WIN_EVAL_PORT       (2222)        ssh port
+  WIN_EVAL_USER       (user)        ssh user
+  WIN_EVAL_PASSWORD   (password)    ssh password
+  WIN_EVAL_SUPERPOWERS_DIR (C:\eval-superpowers)  guest superpowers cache
+  SUPERPOWERS_ROOT                  source checkout (sync-superpowers only)
+USAGE
+}
+
+die() { printf 'evals-windows-vm: %s\n' "$*" >&2; exit 1; }
+
+container=${WIN_EVAL_CONTAINER:-windows11}
+host=${WIN_EVAL_HOST:-127.0.0.1}
+port=${WIN_EVAL_PORT:-2222}
+user=${WIN_EVAL_USER:-user}
+password=${WIN_EVAL_PASSWORD:-password}
+win_sp_dir=${WIN_EVAL_SUPERPOWERS_DIR:-C:\\eval-superpowers}
+
+mux=(-o ControlMaster=no -o ControlPath=none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+
+guest_ssh() { sshpass -p "$password" ssh -tt "${mux[@]}" -p "$port" "$user@$host" "$@"; }
+
+wait_for_sshd() {
+  local i out
+  for i in $(seq 1 48); do
+    out=$(sshpass -p "$password" ssh "${mux[@]}" -o ConnectTimeout=4 -p "$port" "$user@$host" "echo READY" 2>/dev/null || true)
+    [[ "$out" == READY ]] && { echo "guest sshd up"; return 0; }
+    sleep 5
+  done
+  die "guest sshd did not answer on $host:$port after ~4min"
+}
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  up)
+    docker container inspect "$container" >/dev/null 2>&1 || die "container $container missing; create it with the windows-vm skill recipe"
+    docker start "$container" >/dev/null
+    wait_for_sshd
+    ;;
+  down)   docker stop "$container" >/dev/null && echo "$container stopped" ;;
+  status)
+    if docker container inspect "$container" >/dev/null 2>&1; then
+      running=$(docker container inspect -f '{{.State.Running}}' "$container")
+      echo "$container: exists, running=$running"
+    else
+      echo "$container: missing"
+    fi
+    ;;
+  ssh)    guest_ssh "$@" ;;
+  sync-superpowers)
+    [[ -n "${SUPERPOWERS_ROOT:-}" ]] || die "SUPERPOWERS_ROOT not set"
+    [[ -d "$SUPERPOWERS_ROOT" ]] || die "SUPERPOWERS_ROOT not a dir: $SUPERPOWERS_ROOT"
+    rsync -a --delete -e "sshpass -p $password ssh ${mux[*]} -p $port" "$SUPERPOWERS_ROOT/" "$user@$host:$win_sp_dir"
+    ;;
+  ''|-h|--help) usage ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac
