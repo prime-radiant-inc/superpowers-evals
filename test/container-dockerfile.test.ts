@@ -92,6 +92,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'mimo.xiaomi.com/install',
     'acli.atlassian.com/gpg/public-key.asc',
     'acli.atlassian.com/linux/deb',
+    'antigravity.google/cli/install.sh',
   ]) {
     expectInstallIntent(source, externalInstall);
   }
@@ -105,6 +106,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '/usr/local/bin/sweagent',
     '/usr/local/bin/hermes',
     '/usr/local/bin/mimo',
+    '/usr/local/bin/agy',
   ]) {
     expectInstallIntent(source, commandIntent);
   }
@@ -128,6 +130,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain('hermes version');
   expect(source).toContain('mimo --version');
   expect(source).toContain('acli --version');
+  expect(source).toContain('agy --version');
   expect(source).not.toContain('[[');
   expect(source).not.toContain('uv tool install --tool-dir');
   expect(source).toContain('ARG TARGETARCH');
@@ -144,7 +147,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'novnc',
     'cursor.deb',
     'kiro',
-    'antigravity',
   ]) {
     expect(source.toLowerCase()).not.toContain(forbidden);
   }

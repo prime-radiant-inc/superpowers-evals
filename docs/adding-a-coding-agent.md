@@ -23,6 +23,70 @@ Decide:
 
 Do not add public-CI live runs. Live evals are trusted-maintainer operations.
 
+## Step 0 — Install The CLI In The Eval Container
+
+The eval container (`container/Dockerfile`, `ubuntu:26.04`) bundles every
+agent CLI so quorum can launch the target headlessly. A new target's CLI must
+be installed here before any live run. (A desktop-only IDE integration with no
+headless CLI cannot be containerized and cannot be a quorum target.)
+
+**Source the install recipe, don't guess one.** In priority order:
+
+1. **Harbor** (`/tmp/harbor-inspect/src/harbor/agents/installed/<agent>.py`,
+   pinned — see `docs/superpowers/reference/porting-harbor-converters.md`): its
+   `install()` method is the authoritative, tested recipe for every agent Harbor
+   supports. Read it for the package name, version, and any pre-reqs.
+2. The vendor's official installer (npm package, PyPI package, `uv tool`, a
+   `curl … | sh` installer, or a signed apt repo).
+
+Verify the package/URL actually exists before editing (`npm view <pkg> version`,
+`curl -fsSIL <url> | head -1`) — never commit an unverified install.
+
+**Match the existing Dockerfile patterns:**
+
+- npm-distributed CLI → add the package to the existing `npm install -g` block.
+- Python CLI → `uv tool install <pkg>` (grouped with the other uv-tool installs),
+  or, for a heavy one, a dedicated `uv venv` + a small wrapper script in
+  `/usr/local/bin`.
+- Single binary → download + `install -m 0755` (see goose).
+- apt-distributed → add a signed keyring + repo, then `apt-get install`.
+
+End every install block with a `--version`/`--help` check so a bad recipe fails
+the build, and symlink the entrypoint into `/usr/local/bin` if the install dir
+isn't already on `PATH`. Then update:
+
+- `test/container-dockerfile.test.ts` — add the install-intent token(s).
+- `container/bin/evals-tool-versions` — add the CLI's command name.
+
+**Build and smoke it locally** (the build is the real gate; the static test only
+checks the Dockerfile *mentions* the install):
+
+```bash
+orb start                       # ensure the OrbStack docker daemon is up
+scripts/evals-container build    # multi-stage; resolves the gauntlet build-context
+docker run --rm superpowers-evals:local bash -lc '<cmd> --version'
+```
+
+**Gotchas (each cost a failed build — watch for them):**
+
+1. **Meta-package / restructured CLI.** A package can install but expose no
+   console script or a moved entrypoint (openhands 1.x is a meta-package with no
+   `openhands.core.main`). Pin a known-good version whose layout matches the
+   normalizer, or skip the agent.
+2. **Package-relative data dir.** A tool that resolves a `CONFIG_DIR` relative to
+   its own package and asserts it exists breaks under a normal install (the data
+   dir is left in the repo). Use an **editable** install (`uv pip install -e`) so
+   the package resolves from the checkout (swe-agent).
+3. **Installers that self-link as root.** A `curl | sh` installer run as root may
+   already place its binary on `PATH` (FHS layout). Adding your own symlink then
+   clobbers it with a dangling link (hermes — drop the manual `ln`).
+4. **Auth-gated version check.** Some subcommands require login even for
+   `--version`. Verify with the auth-free top-level command (`acli --version`,
+   not `acli rovodev --version`); real auth is supplied at run time.
+5. **Per-installer `$HOME` paths.** As root, an installer's `$HOME/.foo/bin` is
+   `/root/.foo/bin` — symlink the binary from there (mimo), or rely on the
+   installer's own PATH linking.
+
 ## Files To Add
 
 1. Add `coding-agents/<name>.yaml`.

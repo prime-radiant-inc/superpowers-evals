@@ -156,6 +156,11 @@ RUN curl -fsSL https://mimo.xiaomi.com/install | bash \
   && ln -sf /root/.mimocode/bin/mimo /usr/local/bin/mimo \
   && mimo --version
 
+# Google Antigravity CLI (binary: agy, installs to $HOME/.local/bin/agy).
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+  && ln -sf /root/.local/bin/agy /usr/local/bin/agy \
+  && agy --version
+
 RUN mkdir -p -m 755 /etc/apt/keyrings \
   && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc \
     | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
