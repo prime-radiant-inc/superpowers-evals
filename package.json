@@ -10,6 +10,7 @@
   },
   "scripts": {
     "quorum": "bun run src/cli/index.ts",
+    "dashboard": "bun src/dashboard/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",

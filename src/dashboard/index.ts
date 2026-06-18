@@ -1,3 +1,4 @@
+import { join, resolve } from 'node:path';
 import { loadGridManifest } from './manifest.ts';
 import { createDashboard } from './server.ts';
 
@@ -17,6 +18,42 @@ export interface StartDashboardArgs {
 export interface DashboardHandle {
   readonly port: number;
   stop(): void;
+}
+
+export interface DashboardCliArgs {
+  readonly resultsDir: string;
+  readonly port: number;
+  readonly manifestPath: string;
+  readonly root: string;
+}
+
+// Parse argv (the part AFTER the script name). Flags: --results <dir> (default
+// 'results'), --port <n> (default 8787), --root <repo> (default process.cwd()),
+// --manifest <path> (default <root>/grid-manifest.json). Unknown flags are
+// ignored. `cwd` is injectable for testability (defaults to process.cwd()).
+export function parseArgs(
+  argv: readonly string[],
+  cwd: string = process.cwd(),
+): DashboardCliArgs {
+  let resultsDir = 'results';
+  let port = 8787;
+  let root = cwd;
+  let manifest: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--results') {
+      resultsDir = argv[++i] ?? resultsDir;
+    } else if (a === '--port') {
+      const n = Number(argv[++i]);
+      if (Number.isFinite(n)) port = n;
+    } else if (a === '--root') {
+      root = argv[++i] ?? root;
+    } else if (a === '--manifest') {
+      manifest = argv[++i];
+    }
+  }
+  const manifestPath = manifest ?? join(root, 'grid-manifest.json');
+  return { resultsDir, port, manifestPath, root };
 }
 
 export function startDashboard(args: StartDashboardArgs): DashboardHandle {
@@ -52,4 +89,19 @@ export function startDashboard(args: StartDashboardArgs): DashboardHandle {
       server.stop(true);
     },
   };
+}
+
+function main(): void {
+  const cli = parseArgs(process.argv.slice(2));
+  const handle = startDashboard({
+    port: cli.port,
+    resultsRoot: resolve(cli.resultsDir),
+    manifestPath: resolve(cli.manifestPath),
+  });
+  // Print the bound URL so the user knows where to point a browser.
+  process.stdout.write(`dashboard: http://localhost:${handle.port}/\n`);
+}
+
+if (import.meta.main) {
+  main();
 }
