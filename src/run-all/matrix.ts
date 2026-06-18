@@ -4,6 +4,10 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { MatrixEntry, SkippedReason } from '../contracts/batch.ts';
+import type {
+  GridManifest,
+  GridManifestCell,
+} from '../contracts/grid-manifest.ts';
 import { readQuorumTier, readStoryStatus } from '../story-meta.ts';
 
 // quorum run-all matrix construction. Reuses parseCodingAgentsDirective +
@@ -202,4 +206,59 @@ export function agentLaunchSpacingSeconds(
   agent: string,
 ): number {
   return readSchedulerKeys(codingAgentsDir, agent)?.launch_spacing_seconds ?? 0;
+}
+
+// Narrow view just for os_support — never throws (returns ['linux'] on any error).
+const OsSupportViewSchema = z.object({
+  os_support: z.array(z.string()).optional(),
+});
+
+// Read an agent's os_support from its YAML, defaulting to ['linux'] when the
+// key is absent or the file is missing/unreadable/malformed.
+function readOsSupport(codingAgentsDir: string, agent: string): string[] {
+  let raw: unknown;
+  try {
+    raw = parseYaml(
+      readFileSync(join(codingAgentsDir, `${agent}.yaml`), 'utf8'),
+    );
+  } catch {
+    return ['linux'];
+  }
+  const view = OsSupportViewSchema.safeParse(raw ?? {});
+  if (!view.success) return ['linux'];
+  return view.data.os_support ?? ['linux'];
+}
+
+// Build the grid manifest: every (scenario, agent, os) cell with eligibility.
+// `now` is stamped into generated_at; omit it (or pass '') in tests to keep the
+// output deterministic. Task 2 will pass a real ISO timestamp.
+export function buildGridManifest(
+  args: BuildMatrixArgs,
+  now = '',
+): GridManifest {
+  const entries = buildMatrix(args);
+  const cells: GridManifestCell[] = [];
+
+  for (const entry of entries) {
+    const osList = readOsSupport(args.codingAgentsDir, entry.codingAgent);
+    for (const os of osList) {
+      cells.push({
+        scenario: entry.scenario,
+        agent: entry.codingAgent,
+        os,
+        eligible: entry.skippedReason === null,
+        skipped_reason: entry.skippedReason,
+      });
+    }
+  }
+
+  const scenarios = [...new Set(cells.map((c) => c.scenario))].sort();
+  const agents = [...new Set(cells.map((c) => c.agent))].sort();
+
+  return {
+    generated_at: now,
+    scenarios,
+    agents,
+    cells,
+  };
 }
