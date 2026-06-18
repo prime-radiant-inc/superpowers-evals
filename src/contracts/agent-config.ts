@@ -42,7 +42,6 @@ export const AgentConfigSchema = z.object({
   max_concurrency: z.number().int().min(1).optional(),
   launch_spacing_seconds: z.number().min(0).optional(),
   os_support: z.array(z.string()).default(['linux']),
-  remote: RemoteConfigSchema.optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 

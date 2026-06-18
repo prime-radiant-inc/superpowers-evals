@@ -863,43 +863,37 @@ function errorStage(err: unknown): RunErrorStage {
   return 'unknown';
 }
 
-// The context dir an agent installs into <runDir>/gauntlet-agent/context/. A
-// remote agent (e.g. claude-windows) installs its OWN context dir by name so it
-// gets its SSH launcher, not the runtime_family's local launcher. A non-remote
-// agent installs its family's shared launcher.
-// When os is provided: linux returns runtime_family (or name); non-linux returns
-// `${runtime_family ?? name}-${os}`. The legacy cfg.remote overload is preserved
-// for callers that still pass it.
+// The context dir an agent installs into <runDir>/gauntlet-agent/context/.
+// Linux returns the runtime_family (or name); non-linux returns
+// `${runtime_family ?? name}-${os}` (e.g. claude-windows for os=windows).
 export function contextDirName(
   cfg: {
     name: string;
     runtime_family?: string | undefined;
-    remote?: unknown;
   },
-  os?: string,
+  os = 'linux',
 ): string {
-  if (os !== undefined) {
-    return os === 'linux'
-      ? (cfg.runtime_family ?? cfg.name)
-      : `${cfg.runtime_family ?? cfg.name}-${os}`;
-  }
-  return cfg.remote !== undefined ? cfg.name : (cfg.runtime_family ?? cfg.name);
+  return os === 'linux'
+    ? (cfg.runtime_family ?? cfg.name)
+    : `${cfg.runtime_family ?? cfg.name}-${os}`;
 }
 
 // Claude-family binary PATH preflight: a claude run whose CLI is not installed
 // fails fast at setup, not deep in the gauntlet drive. Other families are
 // launched by gauntlet's own resolution, so this is claude-only. PATH is read
 // through the sanctioned env snapshot, never process.env directly.
-function preflightCodingAgentBinary(cfg: {
-  runtime_family?: string | undefined;
-  name: string;
-  binary: string;
-  remote?: unknown;
-}): void {
+function preflightCodingAgentBinary(
+  cfg: {
+    runtime_family?: string | undefined;
+    name: string;
+    binary: string;
+  },
+  os: string,
+): void {
   const family = cfg.runtime_family ?? cfg.name;
-  // A remote (e.g. Windows) agent runs claude on the GUEST, not the Linux host,
-  // so the host-PATH preflight does not apply.
-  if (cfg.remote !== undefined) {
+  // A non-linux (e.g. Windows) agent runs claude on the GUEST, not the Linux
+  // host, so the host-PATH preflight does not apply.
+  if (os !== 'linux') {
     return;
   }
   if (family !== 'claude') {
@@ -1032,7 +1026,7 @@ async function runInnerBody(
 
   // 6. Claude-family binary PATH preflight: fail fast at setup if the CLI is
   //    not installed, rather than deep in the gauntlet run.
-  preflightCodingAgentBinary(cfg);
+  preflightCodingAgentBinary(cfg, os);
 
   for (const key of cfg.required_env) {
     if (!getEnv(key)) {

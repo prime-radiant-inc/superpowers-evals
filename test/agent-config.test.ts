@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -267,37 +267,4 @@ test('agentConfigDir: a config-dir-like subdir roots under the throwaway home', 
 test('agentConfigDir: "." means the throwaway home itself (a HOME-like var)', () => {
   const cfg = { ...CONFIG_DIR_BASE, home_config_subdir: '.' };
   expect(agentConfigDir(cfg, '/run/home')).toBe('/run/home');
-});
-
-describe('AgentConfigSchema remote block', () => {
-  test('parses a remote block with defaults', () => {
-    const cfg = AgentConfigSchema.parse({
-      name: 'claude-windows',
-      runtime_family: 'claude',
-      binary: 'claude',
-      session_log_dir: '${QUORUM_AGENT_HOME}/.claude/projects',
-      session_log_glob: '**/*.jsonl',
-      normalizer: 'claude',
-      home_config_subdir: '.claude',
-      model: 'opus',
-      remote: { password_env: 'WIN_EVAL_PASSWORD' },
-    });
-    expect(cfg.remote?.port).toBe(2222);
-    expect(cfg.remote?.win_run_root).toBe('C:\\eval-runs');
-    expect(cfg.remote?.host).toBe('127.0.0.1');
-    expect(cfg.remote?.user).toBe('user');
-    expect(cfg.remote?.password_env).toBe('WIN_EVAL_PASSWORD');
-  });
-
-  test('absent remote block is undefined', () => {
-    const cfg = AgentConfigSchema.parse({
-      name: 'claude',
-      binary: 'claude',
-      session_log_dir: 'x',
-      session_log_glob: 'y',
-      normalizer: 'claude',
-      home_config_subdir: '.claude',
-    });
-    expect(cfg.remote).toBeUndefined();
-  });
 });

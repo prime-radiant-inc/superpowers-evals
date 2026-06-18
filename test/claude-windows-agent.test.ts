@@ -10,7 +10,10 @@ import type {
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
-import { loadAgentConfig } from '../src/contracts/agent-config.ts';
+import {
+  loadAgentConfig,
+  RemoteConfigSchema,
+} from '../src/contracts/agent-config.ts';
 
 class FakeRunner implements CommandRunner {
   calls: { command: string; args: string[]; input: string | undefined }[] = [];
@@ -49,9 +52,11 @@ describe('WindowsClaudeAgent.provision', () => {
   test('creates the per-run guest tree and returns launcher substitutions', () => {
     const cfg = loadAgentConfig(
       join(import.meta.dir, '..', 'coding-agents'),
-      'claude-windows',
+      'claude',
     );
-    const remote = cfg.remote!;
+    const remote = RemoteConfigSchema.parse({
+      password_env: 'WIN_EVAL_PASSWORD',
+    });
     const runDir = mkdtempSync(
       join(tmpdir(), 'myscenario-claude-windows-run-'),
     );
@@ -118,9 +123,11 @@ describe('WindowsClaudeAgent.provision', () => {
     // then clear it so provision() itself throws ProvisionError.
     const cfg = loadAgentConfig(
       join(import.meta.dir, '..', 'coding-agents'),
-      'claude-windows',
+      'claude',
     );
-    const remote = cfg.remote!;
+    const remote = RemoteConfigSchema.parse({
+      password_env: 'WIN_EVAL_PASSWORD',
+    });
     Bun.env['ANTHROPIC_API_KEY'] = '';
     const runDir = mkdtempSync(join(tmpdir(), 's-claude-windows-'));
     const home = {
@@ -141,12 +148,9 @@ describe('RemoteExecution.captureBack', () => {
   });
 
   test('throws when scpFrom fails', () => {
-    const cfg = loadAgentConfig(
-      join(import.meta.dir, '..', 'coding-agents'),
-      'claude-windows',
-    );
-    const remote = cfg.remote;
-    if (!remote) throw new Error('remote config required');
+    const remote = RemoteConfigSchema.parse({
+      password_env: 'WIN_EVAL_PASSWORD',
+    });
 
     const localRunHomeDir = mkdtempSync(join(tmpdir(), 'capture-test-'));
     const localWorkdir = join(localRunHomeDir, 'coding-agent-workdir');
@@ -161,12 +165,9 @@ describe('RemoteExecution.captureBack', () => {
   });
 
   test('captureBack tolerates a fully-missing guest (no-log run), workdir untouched', () => {
-    const cfg = loadAgentConfig(
-      join(import.meta.dir, '..', 'coding-agents'),
-      'claude-windows',
-    );
-    const remote = cfg.remote;
-    if (!remote) throw new Error('remote config required');
+    const remote = RemoteConfigSchema.parse({
+      password_env: 'WIN_EVAL_PASSWORD',
+    });
 
     Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const home = mkdtempSync(join(tmpdir(), 'h-'));

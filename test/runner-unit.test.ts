@@ -30,19 +30,7 @@ test('allocateRunDir is unique across calls (distinct nonces)', () => {
   expect(a).not.toBe(b);
 });
 
-test('contextDirName: a remote agent installs its OWN context dir by name', () => {
-  // claude-windows has runtime_family "claude" but a remote block, so it must
-  // install claude-windows-context (its SSH launcher), not claude-context.
-  expect(
-    contextDirName({
-      name: 'claude-windows',
-      runtime_family: 'claude',
-      remote: { port: 2222 },
-    }),
-  ).toBe('claude-windows');
-});
-
-test('contextDirName: a non-remote claude installs its family context dir', () => {
+test('contextDirName: linux (default) returns the family context dir', () => {
   expect(contextDirName({ name: 'claude', runtime_family: 'claude' })).toBe(
     'claude',
   );

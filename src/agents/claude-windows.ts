@@ -136,7 +136,8 @@ export class WindowsClaudeAgent implements CodingAgent {
   }
 }
 
-// Remote artifact movement, gated by the runner on cfg.remote (Task 6).
+// Remote artifact movement: push the local workdir to the guest before the run,
+// pull session logs and workdir back after.
 export class RemoteExecution {
   private readonly remote: RemoteConfig;
   private readonly host: WindowsHost;
