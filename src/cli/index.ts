@@ -13,6 +13,7 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { startDashboard } from '../dashboard/index.ts';
 import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
+import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
 import { currentGauntletChild, runScenario } from '../runner/index.ts';
 import { writeStoppedVerdict } from '../runner/stopped.ts';
 import {
@@ -353,6 +354,30 @@ program
       process.stderr.write(`error: ${message}\n`);
       process.exit(1);
     }
+    process.exit(0);
+  });
+
+interface GridManifestOptions {
+  readonly scenariosRoot: string;
+  readonly codingAgentsDir: string;
+  readonly out: string;
+}
+
+program
+  .command('grid-manifest')
+  .description('emit grid-manifest.json (scenario × agent × os eligibility)')
+  .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
+  .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
+  .option('--out <path>', 'output path', 'grid-manifest.json')
+  .action((opts: GridManifestOptions) => {
+    const outPath = resolve(opts.out);
+    writeGridManifest({
+      scenariosRoot: resolve(opts.scenariosRoot),
+      codingAgentsDir: resolve(opts.codingAgentsDir),
+      outPath,
+      now: new Date().toISOString(),
+    });
+    process.stdout.write(`grid-manifest written to ${outPath}\n`);
     process.exit(0);
   });
 

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
@@ -29,6 +29,7 @@ import {
   agentMaxConcurrency,
   buildMatrix,
 } from './matrix.ts';
+import { writeGridManifest } from './write-grid-manifest.ts';
 
 // quorum run-all orchestrator: invokeChild + runBatch.
 // The run-all COMMAND is wired by the integrator (src/cli/index.ts); this
@@ -306,6 +307,12 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   });
 
   const batchDir = allocateBatchDir({ outRoot });
+  writeGridManifest({
+    scenariosRoot,
+    codingAgentsDir,
+    outPath: join(dirname(resolve(outRoot)), 'grid-manifest.json'),
+    now: new Date().toISOString(),
+  });
   const startedAt = new Date();
   const total = entries.length;
   const indexed = entries.map((e, i): readonly [number, MatrixEntry] => [
