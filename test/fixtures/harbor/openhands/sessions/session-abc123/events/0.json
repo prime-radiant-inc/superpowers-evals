@@ -1,0 +1,12 @@
+{
+  "id": 0,
+  "action": "system",
+  "args": {
+    "resume_state": null,
+    "openhands_version": "0.42.1",
+    "agent_class": "CodeActAgent"
+  },
+  "source": "user",
+  "message": "System: OpenHands is starting",
+  "timestamp": "2026-06-17T10:00:00.000Z"
+}
