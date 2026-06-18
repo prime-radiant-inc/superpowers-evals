@@ -5,7 +5,7 @@
     "": {
       "name": "quorum",
       "dependencies": {
-        "@primeradianthq/obol": "^0.5.0",
+        "@primeradianthq/obol": "^0.6.0",
         "commander": "^12",
         "yaml": "^2",
         "zod": "^3",
@@ -36,7 +36,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.0", "", { "os": "win32", "cpu": "x64" }, "sha512-VT/lF+GId+67j8aDfLkxdxNoVApsPSTbyAtB3jJq0IWTrY77WXfbPfpngxq0bA6JCEv/7k8C9qWjDRKRznDlyw=="],
 
-    "@primeradianthq/obol": ["@primeradianthq/obol@0.5.0", "", { "dependencies": { "koffi": "2.16.2" } }, "sha512-Qy7KPrIFKBgqmjxjPIgSDtMRH5W7vg2RqCqW4TIjWoyB+XCPKTsF2aELpBbALBPHlUhdUKVQUQLh2wjn1apwnA=="],
+    "@primeradianthq/obol": ["@primeradianthq/obol@0.6.0", "", { "dependencies": { "koffi": "2.16.2" } }, "sha512-mTHbiG/c6uiVxS3QycI+RT6nVkLwUB4KS1pE1vFLXi+8oPJfdVHk/8s3PPrgFHyxC+7A/LNXRf8ZS0v0R+wWQQ=="],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
