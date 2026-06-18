@@ -1,0 +1,5 @@
+{"sessionId":"qwen-fixture-session-1","version":"1.0.0","model":"qwen3-coder-plus"}
+{"type":"user","timestamp":"2026-06-17T10:00:00.000Z","message":{"parts":[{"text":"Read the README file and summarize it."}]}}
+{"type":"assistant","timestamp":"2026-06-17T10:00:01.000Z","model":"qwen3-coder-plus","message":{"parts":[{"text":"I'll read the README file for you."},{"functionCall":{"id":"call-read-1","name":"read_file","args":{"file_path":"README.md"}}}]},"usageMetadata":{"promptTokenCount":500,"candidatesTokenCount":60,"cachedContentTokenCount":100,"thoughtsTokenCount":0}}
+{"type":"tool_result","timestamp":"2026-06-17T10:00:02.000Z","message":{"parts":[{"functionResponse":{"id":"call-read-1","response":{"output":"# My Project\n\nThis is a sample project README."}}}]}}
+{"type":"assistant","timestamp":"2026-06-17T10:00:03.000Z","model":"qwen3-coder-plus","message":{"parts":[{"text":"The README describes a sample project called My Project."}]},"usageMetadata":{"promptTokenCount":620,"candidatesTokenCount":20,"cachedContentTokenCount":200,"thoughtsTokenCount":5}}
