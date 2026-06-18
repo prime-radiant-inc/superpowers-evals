@@ -149,13 +149,3 @@ recorded at equal billing to wins**. Before proposing an optimization or
 behavioral change, check the log: it exists so disproofs don't get
 re-purchased. Specs in the parent repo cite these entries rather than being
 their only copy.
-
-## Parent Superpowers Submodule
-
-`superpowers-evals` is consumed by `superpowers` as the `evals` submodule.
-After any PR merges to `main` here, open a follow-up PR against the parent
-`superpowers` repo targeting `dev` that bumps the `evals` submodule pointer to
-the merged `superpowers-evals` commit.
-
-Do not treat a `superpowers-evals` merge as fully propagated until that parent
-submodule bump PR exists.
