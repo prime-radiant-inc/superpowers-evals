@@ -1,0 +1,12 @@
+{"type":"step_start","sessionID":"mimo-fixture-ses-001","timestamp":1750000000000}
+{"type":"reasoning","part":{"type":"reasoning","text":"I should read the README file to understand the project."}}
+{"type":"text","part":{"type":"text","text":"I will read the README file."}}
+{"type":"tool_use","part":{"type":"tool","tool":"read","callID":"call-read-1","state":{"input":{"file_path":"README.md"},"output":"# My Project\n\nThis is a sample project."}}}
+{"type":"step_finish","part":{"tokens":{"input":450,"output":60,"reasoning":15,"cache":{"read":0,"write":100}},"cost":0.0035}}
+{"type":"step_start","sessionID":"mimo-fixture-ses-001","timestamp":1750000005000}
+{"type":"text","part":{"type":"text","text":"Let me now write a summary file."}}
+{"type":"tool_use","part":{"type":"tool","tool":"write","callID":"call-write-1","state":{"input":{"file_path":"SUMMARY.md","content":"# Summary\n\nSample project."},"output":"File written successfully."}}}
+{"type":"step_finish","part":{"tokens":{"input":600,"output":40,"reasoning":0,"cache":{"read":100,"write":0}},"cost":0.0028}}
+{"type":"step_start","sessionID":"mimo-fixture-ses-001","timestamp":1750000010000}
+{"type":"text","part":{"type":"text","text":"The SUMMARY.md file has been created with the project summary."}}
+{"type":"step_finish","part":{"tokens":{"input":250,"output":20,"reasoning":0,"cache":{"read":100,"write":0}},"cost":0.0012}}
