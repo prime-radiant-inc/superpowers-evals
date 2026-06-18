@@ -49,11 +49,14 @@ export class WindowsHost {
   }
 
   ssh(remoteCmd: string): CommandResult {
+    // No -tt: this is a non-interactive exec seam; a forced PTY over
+    // spawnSync's non-TTY stdin silently no-ops the remote command on Windows
+    // OpenSSH. The interactive launcher (claude-windows-context/launch-agent)
+    // keeps -tt because it runs in a tmux PTY.
     const args = [
       '-p',
       this.password(),
       'ssh',
-      '-tt',
       ...MUX_OFF,
       '-p',
       String(this.remote.port),

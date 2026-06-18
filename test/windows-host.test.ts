@@ -27,7 +27,8 @@ describe('WindowsHost', () => {
     expect(command).toBe('sshpass');
     expect(args).toContain('-p');
     expect(args).toContain('password');
-    expect(args.join(' ')).toContain('ssh -tt');
+    expect(args).toContain('ssh');
+    expect(args).not.toContain('-tt');
     expect(args).toContain('ControlMaster=no');
     expect(args).toContain('ControlPath=none');
     expect(args).toContain('user@127.0.0.1');
