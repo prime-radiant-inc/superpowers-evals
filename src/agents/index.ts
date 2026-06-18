@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { OsTarget } from '../contracts/os-target.ts';
 import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
 import { WindowsClaudeAgent } from './claude-windows.ts';
@@ -193,13 +194,32 @@ const CUSTOM_AGENTS: Readonly<
   antigravity: (config) => new AntigravityAgent(config),
 };
 
-/** Resolve the agent implementation for a config: the Windows SSH runner when
- *  a `remote` block is present; the Claude provisioner when the runtime family
- *  (or, absent that, the name) is `claude`; a registered custom adapter when
- *  the name matches; else the declarative default. */
-export function resolveAgent(config: AgentConfig): CodingAgent {
-  if (config.remote !== undefined) {
-    return new WindowsClaudeAgent(config, config.remote);
+/** Resolve the agent implementation for a config.
+ *
+ *  - `os === 'linux'` (default) → today's resolution: ClaudeAgent for the
+ *    claude family, registered custom adapters by name, else DefaultAgent.
+ *  - `os === 'windows'` + family `claude` → WindowsClaudeAgent using
+ *    `osTarget.remote`.
+ *  - `os !== 'linux'` + any other family → throws ProvisionError.
+ *
+ *  The `os` and `osTarget` parameters default so existing `resolveAgent(cfg)`
+ *  call sites keep compiling unchanged. */
+export function resolveAgent(
+  config: AgentConfig,
+  os: string = 'linux',
+  osTarget?: OsTarget,
+): CodingAgent {
+  if (os !== 'linux') {
+    const family = config.runtime_family ?? config.name;
+    if (family === 'claude') {
+      if (osTarget === undefined || osTarget.remote === undefined) {
+        throw new ProvisionError(
+          `agent ${config.name}: windows provisioner requires osTarget.remote`,
+        );
+      }
+      return new WindowsClaudeAgent(config, osTarget.remote);
+    }
+    throw new ProvisionError(`agent ${config.name} has no ${os} provisioner`);
   }
   const name = config.runtime_family ?? config.name;
   if (name === 'claude') {
