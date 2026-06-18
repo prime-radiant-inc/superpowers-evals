@@ -1,20 +1,15 @@
-import type { InvokeFn } from '../run-all/index.ts';
 import { knownAgentNames } from '../run-all/matrix.ts';
 import { createDashboard } from './server.ts';
 
 // The dashboard entry point. Binds createDashboard's fetch handler to a
-// Bun.serve instance and starts the scanner loop. The CLI `dashboard` command
-// (src/cli/index.ts) and the e2e tests both go through here.
+// Bun.serve instance and starts the scanner loop. The read-only web dashboard
+// and the e2e tests both go through here.
 
 export interface StartDashboardArgs {
   readonly port: number;
   readonly resultsRoot: string;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
-  readonly jobs: number;
-  // Injectable child launcher — tests stub it so no real `quorum run` spawns. The
-  // server's orchestrator uses the live invokeChild by default.
-  readonly invoke?: InvokeFn;
 }
 
 export interface DashboardHandle {
@@ -31,9 +26,7 @@ export function startDashboard(args: StartDashboardArgs): DashboardHandle {
     resultsRoot: args.resultsRoot,
     scenariosRoot: args.scenariosRoot,
     codingAgentsDir: args.codingAgentsDir,
-    jobs: args.jobs,
     knownAgents,
-    ...(args.invoke !== undefined ? { invoke: args.invoke } : {}),
   });
   // idleTimeout: 0 disables Bun.serve's per-request idle timeout (default 10s).
   // The GET /events SSE stream is intentionally long-lived; with the default a

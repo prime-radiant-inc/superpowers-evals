@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 // Dashboard read-side contracts. The literal unions and zod schemas here are the
 // single source of truth for the grid model; scan.ts, view.ts, templates.ts,
-// orchestrator.ts, and server.ts all import from here.
+// and server.ts all import from here.
 
-// The four cell display states. Closed union so renders + state machines stay
+// The three cell display states. Closed union so renders + state machines stay
 // exhaustive (assertNever on the default).
-export const CELL_STATES = ['empty', 'done', 'running', 'queued'] as const;
+export const CELL_STATES = ['empty', 'done', 'running'] as const;
 export type CellState = (typeof CELL_STATES)[number];
 
 // The six verdict-ribbon slot kinds. `ghost` is left-padding; `running` is the
@@ -75,14 +75,12 @@ export interface RunningRun {
   readonly phase: string;
 }
 
-// One (scenario, agent) cell. `window` is oldest..newest, length <= 5. `queued`
-// is ephemeral — set only by orchestrator cell_queued events, never by a scan.
+// One (scenario, agent) cell. `window` is oldest..newest, length <= 5.
 export interface Cell {
   readonly scenario: string;
   readonly agent: string;
   readonly window: readonly RunRecord[];
   readonly running: RunningRun | null;
-  queued: boolean;
 }
 
 // A scan snapshot. Key = `${scenario}\t${agent}` (tab is absent from names).
@@ -125,8 +123,8 @@ export interface CardView {
 }
 
 // The render-ready cell. `slots` is always length 5 (ghost-padded left, newest
-// rightmost). `bottom` is '$X.XX' | '—' | 'queued' | a phase word. `opacity` is
-// 1.0 (running) | 0.5 (queued) | stale-fade (done).
+// rightmost). `bottom` is '$X.XX' | '—' | a phase word. `opacity` is
+// 1.0 (running) | stale-fade (done).
 export interface CellView {
   readonly cell_id: string;
   readonly scenario: string;

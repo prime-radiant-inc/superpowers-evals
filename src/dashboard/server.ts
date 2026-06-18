@@ -2,67 +2,32 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runnable, type SkippedReason } from '../contracts/batch.ts';
-import type { InvokeFn } from '../run-all/index.ts';
 import { buildMatrix } from '../run-all/matrix.ts';
-import type { SchedulerEvent } from '../scheduler/index.ts';
 import { type Cell, cellId, cellKey, type Grid } from './contracts.ts';
 import { EventBus } from './event-bus.ts';
-import {
-  LaunchBusyError,
-  type LaunchKind,
-  Orchestrator,
-} from './orchestrator.ts';
-import { readDashboardVerdict, scanResults } from './scan.ts';
-import {
-  cellHtml,
-  esc,
-  gridHtml,
-  layoutHtml,
-  runStripHtml,
-  tallyHtml,
-} from './templates.ts';
-import { cellView, diffGrids, headerTally, launchEstimate } from './view.ts';
+import { scanResults } from './scan.ts';
+import { cellHtml, gridHtml, layoutHtml, tallyHtml } from './templates.ts';
+import { cellView, diffGrids, headerTally } from './view.ts';
 
 // The Bun.serve fetch handler + scanner loop for the quorum dashboard. Native
-// Bun.serve + a ReadableStream SSE body; no external web stack.
+// Bun.serve + a ReadableStream SSE body; no external web stack. Read-only: the
+// filesystem is the single source of truth and the dashboard never launches runs.
 //
-// Three layers, filesystem as the single source of truth:
+// Three layers:
 //  - GET /            warm scan -> full grid (first paint).
-//  - GET /events      one SSE stream per client; cell + strip partials.
-//  - POST /launch     start a session (409 if one is active); returns the strip.
-//  - POST /stop       SIGINT in-flight children + cancel queued cells.
+//  - GET /events      one SSE stream per client; cell partials.
 //  - GET /static/*    the vendored CSS/JS/fonts.
 //
-// Reconciliation (the trickiest seam): TWO publishers feed ONE EventBus.
-//  - The ORCHESTRATOR pushes on scheduler progress via onSchedulerEvent —
-//    cell_started marks the cell running (neutral 'setup' phase) and bumps
-//    in-flight; cell_finished re-derives the cell from a fresh scan and bumps
-//    done + spent.
-//  - The SCANNER pushes on filesystem diff every ~1s while a client is connected
-//    — it picks up phase.json advances and verdict.json landings (including
-//    terminal-launched runs the orchestrator never saw).
-// Both publish the SAME idempotent full-state cell partial through the bus, so
-// whichever fires first, the cell converges. The run strip reflects the
-// dashboard's OWN session counts only (build spec); the grid reflects all runs.
-
-// The session counters behind the run strip. The dashboard's OWN launch session
-// only — a terminal run-all alongside it is grid activity the strip excludes.
-interface Session {
-  running: number;
-  inFlight: number;
-  done: number;
-  spent: number;
-}
+// The SCANNER pushes on filesystem diff every ~1s while a client is connected —
+// it picks up phase.json advances and verdict.json landings (the `running` cell
+// state is scan-detected liveness: a run dir with phase.json + a live pid and no
+// verdict yet). The cell partial is an idempotent full-state swap.
 
 export interface CreateDashboardArgs {
   readonly resultsRoot: string;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
-  readonly jobs: number;
   readonly knownAgents: readonly string[];
-  // Injectable child launcher (tests stub it; the orchestrator defaults to the
-  // live invokeChild). Passed straight through to the Orchestrator.
-  readonly invoke?: InvokeFn;
 }
 
 export interface Dashboard {
@@ -140,12 +105,6 @@ function discoverAgents(codingAgentsDir: string): string[] {
   return out;
 }
 
-// Pre-format a launch estimate: a fixed-2 dollar string or "" when unknown.
-// Carried verbatim in the data-estimate attribute; app.js reparses.
-function fmtEst(value: number | undefined): string {
-  return value !== undefined ? value.toFixed(2) : '';
-}
-
 // The hover "why" for a not-applicable cell (an empty cell that can never run
 // here), by skip reason. directive is the common case (a scenario's
 // `# coding-agents:` line excludes this agent).
@@ -163,28 +122,11 @@ function naTitle(reason: SkippedReason): string {
 }
 
 export function createDashboard(args: CreateDashboardArgs): Dashboard {
-  const { resultsRoot, scenariosRoot, codingAgentsDir, jobs, knownAgents } =
-    args;
+  const { resultsRoot, scenariosRoot, codingAgentsDir, knownAgents } = args;
   const bus = new EventBus();
-  const session: Session = { running: 0, inFlight: 0, done: 0, spent: 0 };
 
   // The last scan snapshot the scanner diffs against; warmed on the first GET /.
   let lastGrid: Grid = scanResults(resultsRoot, knownAgents);
-
-  // Publish the run strip reflecting the current session counts.
-  const publishStrip = (): void => {
-    bus.publish({
-      event: 'strip',
-      data: oneLine(
-        runStripHtml({
-          running: session.running,
-          inFlight: session.inFlight,
-          done: session.done,
-          spent: session.spent,
-        }),
-      ),
-    });
-  };
 
   // Render + publish a cell partial for (scenario, agent) from a Cell.
   const publishCell = (cell: Cell, scenario: string, agent: string): void => {
@@ -194,82 +136,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       data: oneLine(cellHtml(view)),
     });
   };
-
-  // The orchestrator's SSE sink. cell_started shows a neutral running cell +
-  // bumps in-flight; cell_finished re-scans the cell to pick up the landed
-  // verdict + bumps done/spent. cell_queued dims the cell.
-  const onSchedulerEvent = (event: SchedulerEvent): void => {
-    if (event.kind === 'cell_queued') {
-      const { scenario, codingAgent: agent } = event.entry;
-      const grid = scanResults(resultsRoot, knownAgents);
-      const base =
-        grid.cells.get(cellKey(scenario, agent)) ?? emptyCell(scenario, agent);
-      publishCell({ ...base, queued: true }, scenario, agent);
-      return;
-    }
-    if (event.kind === 'cell_started') {
-      const { scenario, codingAgent: agent } = event.entry;
-      // A just-started child is in setup (the runner writes phase.json "setup"
-      // first); show that neutral phase. The accurate live phase + the run_id
-      // flow from the scanner tick reading phase.json — the cell_started event
-      // carries no run_id, so the running marker uses an empty placeholder.
-      const cell: Cell = {
-        scenario,
-        agent,
-        window: [],
-        running: { run_id: '', phase: 'setup' },
-        queued: false,
-      };
-      publishCell(cell, scenario, agent);
-      session.inFlight += 1;
-      publishStrip();
-      return;
-    }
-    if (event.kind === 'cell_finished') {
-      const { scenario, codingAgent: agent } = event.entry;
-      const grid = scanResults(resultsRoot, knownAgents);
-      const cell =
-        grid.cells.get(cellKey(scenario, agent)) ?? emptyCell(scenario, agent);
-      publishCell(cell, scenario, agent);
-      session.done += 1;
-      session.inFlight = Math.max(0, session.inFlight - 1);
-      // Attribute "$ spent" to the EXACT run the dashboard launched (the
-      // event's run_id), not the newest window slot. Reading the newest slot
-      // would let a sibling terminal run-all that lands a later run for the same
-      // cell corrupt the strip total in the post-finish rescan.
-      const cost =
-        event.run_id !== null
-          ? (readDashboardVerdict(join(resultsRoot, event.run_id))?.economics
-              ?.total_est_cost_usd ?? null)
-          : null;
-      if (cost !== null) {
-        session.spent += cost;
-      }
-      publishStrip();
-      return;
-    }
-    if (event.kind === 'batch_done') {
-      // The session is over. Clear the run strip so #runbar doesn't linger with
-      // a misleading "Running N · ■ Stop" that the user can click into a no-op
-      // stop. The grid cells carry the results; a fresh launch re-seeds the
-      // strip. The run strip describes the dashboard's own launch session, so it
-      // should be empty between sessions.
-      session.running = 0;
-      session.inFlight = 0;
-      session.done = 0;
-      session.spent = 0;
-      bus.publish({ event: 'strip', data: '' });
-    }
-  };
-
-  const orchestrator = new Orchestrator({
-    resultsRoot,
-    scenariosRoot,
-    codingAgentsDir,
-    jobs,
-    onEvent: onSchedulerEvent,
-    ...(args.invoke !== undefined ? { invoke: args.invoke } : {}),
-  });
 
   // --- scanner loop ----------------------------------------------------------
 
@@ -292,12 +158,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         }
         publishCell(cell, cell.scenario, cell.agent);
       }
-      // The scanner publishes ONLY cell partials. The run strip is driven by
-      // launch + cell_started/cell_finished events alone — publishing it here
-      // pushed the idle "Running 0 · 0 in flight · ■ Stop" strip into #runbar the
-      // moment any client connected, showing a session that isn't running. Idle ⇒
-      // #runbar stays empty (its first-paint state). The SSE stream stays warm
-      // via its own keepalive (handleEvents), not a phantom strip.
       lastGrid = next;
     }
     scannerTimer = setTimeout(tick, 1000);
@@ -320,32 +180,15 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
 
   // --- routes ----------------------------------------------------------------
 
-  // Launch info for the grid: per-column/row RUNNABLE counts (the confirm's
-  // "Run N cells") AND the set of cells that can NEVER run here (directive/
-  // draft/tier skips), keyed by cellKey -> a human "why" string. buildMatrix
-  // throws only on a bad filter (none here); guard so GET / never 500s.
-  const launchInfo = (
-    scenarios: readonly string[],
-    agents: readonly string[],
-  ): {
-    counts: { row: Record<string, number>; column: Record<string, number> };
-    skipped: Map<string, string>;
-  } => {
-    const row: Record<string, number> = {};
-    const column: Record<string, number> = {};
+  // The cells that can NEVER run here (directive/draft/tier skips), keyed by
+  // cellKey -> a human "why" string. Drives the dimmed "n/a" tooltip in the
+  // read-only grid. buildMatrix throws only on a bad filter (none here); guard
+  // so GET / never 500s.
+  const skipReasons = (): Map<string, string> => {
     const skipped = new Map<string, string>();
-    for (const s of scenarios) {
-      row[s] = 0;
-    }
-    for (const a of agents) {
-      column[a] = 0;
-    }
     try {
       for (const e of buildMatrix({ scenariosRoot, codingAgentsDir })) {
-        if (runnable(e)) {
-          row[e.scenario] = (row[e.scenario] ?? 0) + 1;
-          column[e.codingAgent] = (column[e.codingAgent] ?? 0) + 1;
-        } else {
+        if (!runnable(e)) {
           skipped.set(
             cellKey(e.scenario, e.codingAgent),
             naTitle(e.skippedReason),
@@ -354,9 +197,9 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       }
     } catch {
       // Missing/unreadable dir — fall back to empty info so GET / still renders
-      // the grid (counts show 0, no cell is marked n/a) rather than 500ing.
+      // the grid (no cell is marked n/a) rather than 500ing.
     }
-    return { counts: { row, column }, skipped };
+    return skipped;
   };
 
   const renderRoot = (): Response => {
@@ -365,7 +208,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     const grid = scanResults(resultsRoot, knownAgents);
     lastGrid = grid;
 
-    const { counts, skipped } = launchInfo(scenarios, agents);
+    const skipped = skipReasons();
 
     const views = new Map<string, ReturnType<typeof cellView>>();
     for (const scenario of scenarios) {
@@ -386,30 +229,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       }
     }
     const tally = headerTally(grid, scenarios, agents);
-    const firstAgent = agents[0];
-    const firstScenario = scenarios[0];
-    const estimates = {
-      row: Object.fromEntries(
-        scenarios.map((s) => [
-          s,
-          fmtEst(
-            firstAgent !== undefined
-              ? launchEstimate(grid, s, firstAgent)
-              : undefined,
-          ),
-        ]),
-      ),
-      column: Object.fromEntries(
-        agents.map((a) => [
-          a,
-          fmtEst(
-            firstScenario !== undefined
-              ? launchEstimate(grid, firstScenario, a)
-              : undefined,
-          ),
-        ]),
-      ),
-    };
 
     const page = layoutHtml({
       tallyHtml: tallyHtml(tally),
@@ -418,75 +237,9 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         agents,
         views,
         tally,
-        estimates,
-        counts,
       }),
     });
     return new Response(page, {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
-    });
-  };
-
-  const handleLaunch = async (req: Request): Promise<Response> => {
-    const form = await req.formData();
-    const kindRaw = form.get('kind');
-    const kind = parseKind(kindRaw);
-    if (kind === null) {
-      return new Response(
-        '<div class="runbar">launch error: missing or invalid kind</div>',
-        {
-          status: 400,
-          headers: { 'content-type': 'text/html; charset=utf-8' },
-        },
-      );
-    }
-    const scenario = formString(form.get('scenario'));
-    const agent = formString(form.get('agent'));
-    try {
-      orchestrator.launch({
-        kind,
-        ...(scenario !== undefined ? { scenario } : {}),
-        ...(agent !== undefined ? { agent } : {}),
-      });
-    } catch (err: unknown) {
-      if (err instanceof LaunchBusyError) {
-        return new Response(
-          '<div class="runbar">A launch session is already active.</div>',
-          {
-            status: 409,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          },
-        );
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      return new Response(
-        `<div class="runbar">launch error: ${esc(message)}</div>`,
-        {
-          status: 400,
-          headers: { 'content-type': 'text/html; charset=utf-8' },
-        },
-      );
-    }
-    // Seed the strip from the runnable total so "Running N" is correct from
-    // first paint (S4); reset the per-session counters.
-    session.running = orchestrator.runnableTotal;
-    session.inFlight = 0;
-    session.done = 0;
-    session.spent = 0;
-    return new Response(
-      runStripHtml({
-        running: session.running,
-        inFlight: 0,
-        done: 0,
-        spent: 0,
-      }),
-      { headers: { 'content-type': 'text/html; charset=utf-8' } },
-    );
-  };
-
-  const handleStop = (): Response => {
-    orchestrator.stop();
-    return new Response('<div class="runbar">Stopping…</div>', {
       headers: { 'content-type': 'text/html; charset=utf-8' },
     });
   };
@@ -565,7 +318,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     });
   };
 
-  const fetchHandler = async (req: Request): Promise<Response> => {
+  const fetchHandler = (req: Request): Response => {
     const url = new URL(req.url);
     const { pathname } = url;
     if (req.method === 'GET' && pathname === '/') {
@@ -573,12 +326,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     }
     if (req.method === 'GET' && pathname === '/events') {
       return handleEvents();
-    }
-    if (req.method === 'POST' && pathname === '/launch') {
-      return handleLaunch(req);
-    }
-    if (req.method === 'POST' && pathname === '/stop') {
-      return handleStop();
     }
     if (req.method === 'GET' && pathname.startsWith('/static/')) {
       return handleStatic(pathname);
@@ -595,7 +342,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
 
 // An empty placeholder cell for a (scenario, agent) with no scan entry.
 function emptyCell(scenario: string, agent: string): Cell {
-  return { scenario, agent, window: [], running: null, queued: false };
+  return { scenario, agent, window: [], running: null };
 }
 
 // The cell in `grid` whose cell id equals `cellId`, or null. The scanner's diff
@@ -607,24 +354,4 @@ function cellForId(grid: Grid, id: string): Cell | null {
     }
   }
   return null;
-}
-
-// Parse the /launch kind form field into a LaunchKind, or null when invalid. The
-// field value is a string | File | null (FormData); only a known kind string is
-// accepted.
-function parseKind(raw: string | File | null): LaunchKind | null {
-  if (raw === 'row' || raw === 'column' || raw === 'all') {
-    return raw;
-  }
-  return null;
-}
-
-// A form field as a non-empty string, or undefined (so optional fields are
-// passed conditionally under exactOptionalPropertyTypes). A File value (no
-// file uploads on these forms) is treated as absent.
-function formString(raw: string | File | null): string | undefined {
-  if (typeof raw === 'string' && raw.length > 0) {
-    return raw;
-  }
-  return undefined;
 }

@@ -26,7 +26,6 @@ function makeCell(
     agent,
     window: latest === null ? [] : [rec(latest)],
     running: phase === null ? null : { run_id: `${latest ?? 'r'}-live`, phase },
-    queued: false,
   };
 }
 
@@ -93,14 +92,12 @@ test('diffGrids: window-length change alone is detected', () => {
     agent: 'claude',
     window: [rec('r1')],
     running: null,
-    queued: false,
   };
   const after: Cell = {
     scenario: 's',
     agent: 'claude',
     window: [rec('r0'), rec('r1')], // same newest, longer window
     running: null,
-    queued: false,
   };
   const changes = diffGrids(grid([before]), grid([after]));
   // Signature differs by window length -> a change is emitted (reason advisory).

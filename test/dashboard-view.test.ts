@@ -8,7 +8,6 @@ import {
   formatAge,
   headerTally,
   latestAgeDays,
-  launchEstimate,
   median,
   staleOpacity,
 } from '../src/dashboard/view.ts';
@@ -32,7 +31,6 @@ function cell(over: Partial<Cell> = {}): Cell {
     agent: 'claude',
     window: [],
     running: null,
-    queued: false,
     ...over,
   };
 }
@@ -138,54 +136,6 @@ test('latestAgeDays clamps to 0 for a future timestamp', () => {
     window: [rec({ finished_at: '2026-06-13T00:00:00Z' })],
   });
   expect(latestAgeDays(c, now)).toBe(0);
-});
-
-// --- launchEstimate ----------------------------------------------------------
-
-test('launchEstimate uses the cell-window mean first', () => {
-  const c = cell({
-    window: [rec({ cost_usd: 2 }), rec({ cost_usd: 4 })],
-  });
-  expect(launchEstimate(grid([c]), 's', 'claude')).toBe(3);
-});
-
-test('launchEstimate falls back to the agent grid-wide latest mean', () => {
-  const other = cell({
-    scenario: 'other',
-    agent: 'claude',
-    window: [rec({ cost_usd: 1 }), rec({ cost_usd: 5 })], // latest = 5
-  });
-  // Target cell (s, claude) absent -> agent mean of latest costs.
-  expect(launchEstimate(grid([other]), 's', 'claude')).toBe(5);
-});
-
-test('launchEstimate falls back to the global latest mean', () => {
-  const codexCell = cell({
-    scenario: 'other',
-    agent: 'codex',
-    window: [rec({ cost_usd: 8 })], // latest = 8
-  });
-  // No claude cell at all -> global latest mean.
-  expect(launchEstimate(grid([codexCell]), 's', 'claude')).toBe(8);
-});
-
-test('launchEstimate returns undefined when there is nothing to estimate from', () => {
-  expect(launchEstimate(grid([]), 's', 'claude')).toBeUndefined();
-});
-
-test('launchEstimate ignores cells whose latest cost is null in the fallbacks', () => {
-  const target = cell({
-    scenario: 's',
-    agent: 'claude',
-    window: [rec({ cost_usd: null })], // present cell but no usable cell cost
-  });
-  const codexCell = cell({
-    scenario: 'other',
-    agent: 'codex',
-    window: [rec({ cost_usd: 6 })],
-  });
-  // Cell window has no present costs -> fall through to global latest = 6.
-  expect(launchEstimate(grid([target, codexCell]), 's', 'claude')).toBe(6);
 });
 
 // --- headerTally -------------------------------------------------------------
@@ -311,30 +261,6 @@ test('cellView: running on top of history shimmers newest, phase bottom', () => 
   expect(v.slots[4]?.kind).toBe('running');
   expect(v.drift).toBe(false);
   // Card present because there is resolved history.
-  expect(v.card).not.toBeNull();
-});
-
-test('cellView: queued cell is dimmed, bottom reads "queued"', () => {
-  const c = cell({ window: [], queued: true });
-  const v = cellView(c, 's', 'claude');
-  expect(v.state).toBe('queued');
-  expect(v.bottom).toBe('queued');
-  expect(v.opacity).toBe(0.5);
-  expect(v.slots.length).toBe(5);
-  expect(v.slots.every((s) => s.kind === 'ghost')).toBe(true);
-});
-
-test('cellView: queued cell with history keeps the ribbon beneath', () => {
-  const c = cell({
-    window: [rec({ cost_usd: 1, final: 'pass' })],
-    queued: true,
-  });
-  const v = cellView(c, 's', 'claude');
-  expect(v.state).toBe('queued');
-  expect(v.bottom).toBe('queued');
-  expect(v.opacity).toBe(0.5);
-  expect(v.slots[4]?.kind).toBe('pass');
-  expect(v.slots[0]?.kind).toBe('ghost');
   expect(v.card).not.toBeNull();
 });
 

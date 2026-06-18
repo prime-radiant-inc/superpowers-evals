@@ -2,9 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChildResult } from '../src/contracts/batch.ts';
 import { startDashboard } from '../src/dashboard/index.ts';
-import type { InvokeChildArgs } from '../src/run-all/index.ts';
 
 // The e2e dashboard fixture: a results/ tree with one of each cell state, plus a
 // scenarios/ + coding-agents/ tree so the grid renders the full cartesian
@@ -148,7 +146,6 @@ function start(
     resultsRoot: fixture.resultsRoot,
     scenariosRoot: fixture.scenariosRoot,
     codingAgentsDir: fixture.codingAgentsDir,
-    jobs: 4,
     ...fixtureOverride,
   });
   handles.push(handle);
@@ -258,68 +255,6 @@ test('GET / on an unknown route is 404', async () => {
   const { base } = start();
   const res = await fetch(`${base}/nope`);
   expect(res.status).toBe(404);
-});
-
-// A gated invoke for the launch/409 path: the first launch's child blocks so the
-// session stays active while we probe a second launch.
-function gatedInvoke(): {
-  invoke: (args: InvokeChildArgs) => Promise<ChildResult>;
-  release: () => void;
-} {
-  let releaseGate: (() => void) | null = null;
-  const gate = new Promise<void>((r) => {
-    releaseGate = r;
-  });
-  const invoke = async (args: InvokeChildArgs): Promise<ChildResult> => {
-    args.onPid?.(1_900_000);
-    await gate;
-    return { run_id: null, exit_code: 0, error: null };
-  };
-  return {
-    invoke,
-    release: () => {
-      releaseGate?.();
-    },
-  };
-}
-
-test('POST /launch returns the run strip; a second launch while active is 409', async () => {
-  const g = gatedInvoke();
-  const { base } = start({ invoke: g.invoke });
-
-  const body = new URLSearchParams({ kind: 'all' });
-  const first = await fetch(`${base}/launch`, {
-    method: 'POST',
-    body,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  });
-  expect(first.status).toBe(200);
-  const stripHtml = await first.text();
-  expect(stripHtml).toContain('runbar');
-  expect(stripHtml).toContain('Running');
-
-  // Second launch while the first is still active (gated) -> 409.
-  const second = await fetch(`${base}/launch`, {
-    method: 'POST',
-    body: new URLSearchParams({ kind: 'all' }),
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  });
-  expect(second.status).toBe(409);
-  const busyHtml = await second.text();
-  expect(busyHtml).toContain('runbar');
-
-  // Release the gated child so the session drains before teardown.
-  g.release();
-  await new Promise((r) => setTimeout(r, 50));
-});
-
-test('POST /stop returns the Stopping runbar', async () => {
-  const { base } = start();
-  const res = await fetch(`${base}/stop`, { method: 'POST' });
-  expect(res.status).toBe(200);
-  const html = await res.text();
-  expect(html).toContain('runbar');
-  expect(html).toContain('Stopping');
 });
 
 test('an SSE cell frame is delivered after a scanner tick mutates a dir', async () => {

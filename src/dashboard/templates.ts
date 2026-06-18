@@ -131,12 +131,7 @@ export function cellHtml(view: CellView): string {
     return `${open}<div class="cell"><span class="empty">—</span></div></td>`;
   }
 
-  const stateClass =
-    view.state === 'running'
-      ? ' running'
-      : view.state === 'queued'
-        ? ' queued'
-        : '';
+  const stateClass = view.state === 'running' ? ' running' : '';
 
   const drift = view.drift ? `<span class="drift">▲</span>` : '';
   const card = view.card !== null ? cardHtml(view.card) : '';
@@ -170,41 +165,6 @@ export function tallyHtml(tally: HeaderTally): string {
   );
 }
 
-// The run strip (`#runbar` body), swapped in by the `strip` SSE event:
-// "Running N · M in flight · K done · $X spent · ■ Stop". The `.stop` element is
-// what app.js's click handler keys off to POST /stop.
-export interface RunStripArgs {
-  readonly running: number;
-  readonly inFlight: number;
-  readonly done: number;
-  readonly spent: number;
-}
-
-export function runStripHtml(a: RunStripArgs): string {
-  return (
-    `<div class="runbar"><span class="spin"></span>` +
-    `<span><b>Running ${a.running}</b> · ${a.inFlight} in flight · ${a.done} done</span>` +
-    `<span class="sub">$${a.spent.toFixed(2)} spent</span>` +
-    `<span class="stop">■ Stop</span></div>`
-  );
-}
-
-// Pre-formatted launch estimates: a fixed-2 dollar string or "" when unknown.
-// Carried verbatim in the `data-estimate` attribute, which app.js re-parses with
-// parseFloat (NaN ⇒ "~$—").
-export interface GridEstimates {
-  readonly row: Readonly<Record<string, string>>;
-  readonly column: Readonly<Record<string, string>>;
-}
-
-// Per-column (agent) and per-row (scenario) RUNNABLE cell counts — what a
-// column/row launch will actually run. Surfaced in `data-count` so app.js's
-// confirm reads "Run N cells" (build spec) instead of the placeholder "Run ?".
-export interface GridCounts {
-  readonly row: Readonly<Record<string, number>>;
-  readonly column: Readonly<Record<string, number>>;
-}
-
 export interface GridArgs {
   readonly scenarios: readonly string[];
   readonly agents: readonly string[];
@@ -212,35 +172,20 @@ export interface GridArgs {
   // in the cartesian product must be present.
   readonly views: ReadonlyMap<string, CellView>;
   readonly tally: HeaderTally;
-  readonly estimates: GridEstimates;
-  readonly counts: GridCounts;
 }
 
-// The matrix table (`grid.html.j2`). Sticky-header table with the run-all corner
-// button, per-agent column headers (data-launch="column"), per-scenario row
-// labels (data-launch="row"), and inlined cell <td>s. data-count on the run-all
-// button is the runnable total = pass+fail+indeterminate+not_run.
+// The matrix table. Sticky-header table with per-agent column headers,
+// per-scenario row labels, and inlined cell <td>s. Read-only: no launch
+// affordances.
 export function gridHtml(args: GridArgs): string {
-  const { scenarios, agents, views, tally, estimates, counts } = args;
-
-  const runnableCount =
-    tally.passed + tally.failed + tally.indeterminate + tally.not_run;
+  const { scenarios, agents, views } = args;
 
   const headerCells = agents
-    .map((agent) => {
-      const est = esc(estimates.column[agent] ?? '');
-      const count = counts.column[agent] ?? 0;
-      return (
-        `<th data-launch="column" data-agent="${esc(agent)}" data-count="${count}" data-estimate="${est}">` +
-        `${esc(agent)}<span class="play">▶</span></th>`
-      );
-    })
+    .map((agent) => `<th data-agent="${esc(agent)}">${esc(agent)}</th>`)
     .join('');
 
   const bodyRows = scenarios
     .map((scenario) => {
-      const est = esc(estimates.row[scenario] ?? '');
-      const rowCount = counts.row[scenario] ?? 0;
       const cells = agents
         .map((agent) => {
           const view = views.get(`${scenario}\t${agent}`);
@@ -264,8 +209,7 @@ export function gridHtml(args: GridArgs): string {
         .join('');
       return (
         `<tr>` +
-        `<td class="rl" data-launch="row" data-scenario="${esc(scenario)}" data-count="${rowCount}" data-estimate="${est}">` +
-        `<span class="play">▶</span>${esc(scenario)}</td>` +
+        `<td class="rl" data-scenario="${esc(scenario)}">${esc(scenario)}</td>` +
         cells +
         `</tr>`
       );
@@ -275,9 +219,7 @@ export function gridHtml(args: GridArgs): string {
   return (
     `<table class="mx" id="grid">` +
     `<thead><tr class="agent-header">` +
-    `<th class="corner">` +
-    `<span class="allbtn" data-launch="all" data-count="${runnableCount}">▶ Run all</span>` +
-    `</th>${headerCells}</tr></thead>` +
+    `<th class="corner"></th>${headerCells}</tr></thead>` +
     `<tbody>${bodyRows}</tbody>` +
     `</table>`
   );
@@ -285,8 +227,7 @@ export function gridHtml(args: GridArgs): string {
 
 // The full page. References the vendored static assets and wires the SSE
 // extension on <body> (hx-ext="sse" + sse-connect="/events"). The tally + grid
-// bodies are already-rendered HTML inlined unescaped. #runbar is the strip swap
-// target (sse-swap="strip").
+// bodies are already-rendered HTML inlined unescaped.
 export interface LayoutArgs {
   readonly tallyHtml: string;
   readonly gridHtml: string;
@@ -306,9 +247,7 @@ export function layoutHtml(args: LayoutArgs): string {
     `</head>\n` +
     `<body hx-ext="sse" sse-connect="/events">\n` +
     `  <div class="pghead" id="tally">${args.tallyHtml}</div>\n` +
-    `  <div class="runbar-slot" id="runbar" sse-swap="strip" hx-swap="innerHTML"></div>\n` +
     `  <div class="mxwrap">${args.gridHtml}</div>\n` +
-    `  <div id="confirm-host"></div>\n` +
     `  <div id="card-host"></div>\n` +
     `  <script src="/static/app.js" defer></script>\n` +
     `</body>\n` +

@@ -9,7 +9,6 @@ import {
   esc,
   gridHtml,
   layoutHtml,
-  runStripHtml,
   tallyHtml,
 } from '../src/dashboard/templates.ts';
 
@@ -190,24 +189,6 @@ test('running cell renders the queued-phase word verbatim for each phase', () =>
   }
 });
 
-test('queued cell carries the queued class and the queued bottom word', () => {
-  const html = cellHtml({
-    cell_id: 'cell-s-claude',
-    scenario: 's',
-    agent: 'claude',
-    state: 'queued',
-    slots: ghostSlots(),
-    bottom: 'queued',
-    drift: false,
-    opacity: 0.5,
-    card: null,
-  });
-  expect(html).toContain('class="cell queued"');
-  expect(html).toContain('style="opacity:0.500"');
-  expect(html).toContain('queued');
-  expect(html).not.toContain('$');
-});
-
 test('a padded <5-window cell left-pads ghosts (newest rightmost)', () => {
   // Two real runs, three ghost pads on the left.
   const html = cellHtml(
@@ -327,22 +308,9 @@ test('tallyHtml renders the quorum header tally line', () => {
   expect(html).toContain('class="sep">·<');
 });
 
-// --- runStripHtml --------------------------------------------------------------
-
-test('runStripHtml renders Running/in-flight/done/spent + the Stop affordance', () => {
-  const html = runStripHtml({ running: 12, inFlight: 4, done: 8, spent: 23.5 });
-  expect(html).toContain('class="runbar"');
-  expect(html).toContain('class="spin"');
-  expect(html).toContain('<b>Running 12</b>');
-  expect(html).toContain('4 in flight');
-  expect(html).toContain('8 done');
-  expect(html).toContain('$23.50 spent'); // two-decimal cost
-  expect(html).toContain('class="stop">■ Stop<');
-});
-
 // --- gridHtml ------------------------------------------------------------------
 
-test('gridHtml renders the matrix table, run-all button, headers, and row labels', () => {
+test('gridHtml renders the matrix table, headers, and row labels', () => {
   const scenarios = ['scn-a', 'scn-b'];
   const agents = ['claude', 'codex'];
   const views = new Map<string, CellView>();
@@ -367,39 +335,19 @@ test('gridHtml renders the matrix table, run-all button, headers, and row labels
     agents,
     views,
     tally,
-    estimates: {
-      row: { 'scn-a': '4.50', 'scn-b': '' },
-      column: { claude: '4.50', codex: '3.20' },
-    },
-    counts: {
-      row: { 'scn-a': 2, 'scn-b': 1 },
-      column: { claude: 2, codex: 1 },
-    },
   });
   expect(html).toContain('<table class="mx" id="grid">');
-  // run-all corner button with the runnable count = pass+fail+indet+not_run.
-  expect(html).toContain('data-launch="all"');
-  expect(html).toContain('data-count="4"');
-  // column headers carry data-launch + data-agent + data-count + data-estimate;
-  // the per-column data-count drives app.js's "Run N cells" confirm.
-  expect(html).toContain(
-    'data-launch="column" data-agent="claude" data-count="2" data-estimate="4.50"',
-  );
-  expect(html).toContain(
-    'data-launch="column" data-agent="codex" data-count="1" data-estimate="3.20"',
-  );
-  // row labels carry data-launch + data-scenario + data-count + data-estimate.
-  expect(html).toContain(
-    'data-launch="row" data-scenario="scn-a" data-count="2" data-estimate="4.50"',
-  );
-  expect(html).toContain(
-    'data-launch="row" data-scenario="scn-b" data-count="1" data-estimate=""',
-  );
+  // read-only: no launch affordances.
+  expect(html).not.toContain('data-launch');
+  expect(html).not.toContain('class="play"');
+  // column headers carry data-agent; row labels carry data-scenario.
+  expect(html).toContain('<th data-agent="claude">claude</th>');
+  expect(html).toContain('<th data-agent="codex">codex</th>');
+  expect(html).toContain('data-scenario="scn-a"');
+  expect(html).toContain('data-scenario="scn-b"');
   // cells are inlined (cell ids present).
   expect(html).toContain('id="cell-scn-a-claude"');
   expect(html).toContain('id="cell-scn-b-codex"');
-  // the play affordances on headers and row labels.
-  expect(html).toContain('class="play">▶<');
 });
 
 test('gridHtml escapes scenario and agent names in data attributes and labels', () => {
@@ -422,8 +370,6 @@ test('gridHtml escapes scenario and agent names in data attributes and labels', 
       indeterminate: 0,
       not_run: 0,
     },
-    estimates: { row: { 's&x': '' }, column: { 'a"b': '' } },
-    counts: { row: { 's&x': 1 }, column: { 'a"b': 1 } },
   });
   expect(html).toContain('data-agent="a&quot;b"');
   expect(html).toContain('data-scenario="s&amp;x"');
@@ -446,11 +392,11 @@ test('layoutHtml wires htmx + the SSE extension and references the static assets
   // SSE wiring on the body.
   expect(html).toContain('hx-ext="sse"');
   expect(html).toContain('sse-connect="/events"');
-  // tally + runbar (strip swap target) + grid hosts.
+  // tally + grid + the detail card host (read-only: no runbar/confirm host).
   expect(html).toContain('id="tally"');
-  expect(html).toContain('id="runbar" sse-swap="strip" hx-swap="innerHTML"');
-  expect(html).toContain('id="confirm-host"');
   expect(html).toContain('id="card-host"');
+  expect(html).not.toContain('id="runbar"');
+  expect(html).not.toContain('id="confirm-host"');
   // the slotted bodies are inlined unescaped (already-rendered HTML).
   expect(html).toContain('<b>quorum</b>');
   expect(html).toContain('<table></table>');

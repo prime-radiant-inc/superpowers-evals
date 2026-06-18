@@ -32,7 +32,7 @@ export function median(values: readonly number[]): number {
 }
 
 // Continuous stale fade: fresh ~1.0, ~3d ~0.74, a week ~0.54, multi-week -> the
-// 0.34 floor. Queued cells use a fixed 0.5 and running cells 1.0 (set in cellView).
+// 0.34 floor. Running cells use a fixed 1.0 (set in cellView).
 export function staleOpacity(ageDays: number): number {
   return 0.34 + 0.66 * Math.exp(-ageDays / 6.0);
 }
@@ -133,45 +133,6 @@ function cellCosts(cell: Cell): number[] {
   return out;
 }
 
-// Launch-cost estimate, cascading: the target cell's window mean -> that agent's
-// grid-wide latest-cost mean -> the global latest-cost mean -> undefined (the
-// chip shows `~$—`).
-export function launchEstimate(
-  grid: Grid,
-  scenario: string,
-  agent: string,
-): number | undefined {
-  const cell = grid.cells.get(cellKey(scenario, agent));
-  if (cell !== undefined) {
-    const costs = cellCosts(cell);
-    if (costs.length > 0) {
-      return costs.reduce((a, b) => a + b, 0) / costs.length;
-    }
-  }
-  const agentCosts: number[] = [];
-  const globalCosts: number[] = [];
-  for (const c of grid.cells.values()) {
-    if (c.window.length === 0) {
-      continue;
-    }
-    const latest = c.window[c.window.length - 1] as RunRecord;
-    if (latest.cost_usd === null) {
-      continue;
-    }
-    globalCosts.push(latest.cost_usd);
-    if (c.agent === agent) {
-      agentCosts.push(latest.cost_usd);
-    }
-  }
-  if (agentCosts.length > 0) {
-    return agentCosts.reduce((a, b) => a + b, 0) / agentCosts.length;
-  }
-  if (globalCosts.length > 0) {
-    return globalCosts.reduce((a, b) => a + b, 0) / globalCosts.length;
-  }
-  return undefined;
-}
-
 // Grid-wide rollup over the latest verdict of each cell. `not_run` is every
 // (scenario, agent) pair with no window (absent or running-only cells).
 export function headerTally(
@@ -234,10 +195,6 @@ function rowTimestamp(rec: RunRecord): string {
   return rec.finished_at ?? rec.started_at;
 }
 
-// Fixed dim for a queued cell (not the stale-fade curve — a queued cell hasn't
-// run, so its "age" is meaningless).
-const QUEUED_OPACITY = 0.5;
-
 function cardView(
   cell: Cell,
   showDrift: boolean,
@@ -264,8 +221,8 @@ function cardView(
 }
 
 // Resolve a Cell into a render-ready view. Always 5 slots, ghost-padded on the
-// left so the newest run is rightmost. Opacity: running -> 1.0, queued -> 0.5,
-// else the stale fade.
+// left so the newest run is rightmost. Opacity: running -> 1.0, else the stale
+// fade.
 export function cellView(
   cell: Cell,
   scenario: string,
@@ -273,28 +230,6 @@ export function cellView(
   now?: Date,
 ): CellView {
   const id = cellId(scenario, agent);
-
-  if (cell.queued) {
-    // Scheduler queued the cell; child not started (no phase yet). Dimmed,
-    // bottom reads "queued". Prior history (if any) still shows as the ribbon.
-    let slots: SlotView[];
-    if (cell.window.length > 0) {
-      slots = paddedSlots(cell.window);
-    } else {
-      slots = ghostSlots(5);
-    }
-    return {
-      cell_id: id,
-      scenario,
-      agent,
-      state: 'queued',
-      slots,
-      bottom: 'queued',
-      drift: false,
-      opacity: QUEUED_OPACITY,
-      card: cardView(cell, false, now),
-    };
-  }
 
   if (cell.running !== null && cell.window.length === 0) {
     // Pure running cell (no resolved history yet): shimmer the newest slot.

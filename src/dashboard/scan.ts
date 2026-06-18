@@ -221,7 +221,6 @@ export function scanResults(
       agent: first.agent,
       window: records,
       running,
-      queued: false,
     });
   }
   return { cells };
