@@ -83,6 +83,14 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'aider-chat',
     'AGY_OAUTH_HOME',
     'KIMI_OAUTH_HOME',
+    'mini-swe-agent',
+    'git+https://github.com/bytedance/trae-agent.git',
+    'SWE-agent/SWE-agent',
+    '/opt/sweagent-venv',
+    'NousResearch/hermes-agent',
+    'mimo.xiaomi.com/install',
+    'acli.atlassian.com/gpg/public-key.asc',
+    'acli.atlassian.com/linux/deb',
   ]) {
     expectInstallIntent(source, externalInstall);
   }
@@ -93,6 +101,9 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '/usr/local/bin/cn',
     '/usr/local/bin/kimi',
     '/usr/local/bin/cursor-agent',
+    '/usr/local/bin/sweagent',
+    '/usr/local/bin/hermes',
+    '/usr/local/bin/mimo',
   ]) {
     expectInstallIntent(source, commandIntent);
   }
@@ -110,6 +121,12 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain(
     'chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR"',
   );
+  expect(source).toContain('mini-swe-agent --help');
+  expect(source).toContain('trae-cli --version');
+  expect(source).toContain('sweagent --help');
+  expect(source).toContain('hermes version');
+  expect(source).toContain('mimo --version');
+  expect(source).toContain('acli --version');
   expect(source).not.toContain('[[');
   expect(source).not.toContain('uv tool install --tool-dir');
   expect(source).toContain('ARG TARGETARCH');
@@ -126,7 +143,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'novnc',
     'cursor.deb',
     'kiro',
-    'trae',
     'antigravity',
   ]) {
     expect(source.toLowerCase()).not.toContain(forbidden);

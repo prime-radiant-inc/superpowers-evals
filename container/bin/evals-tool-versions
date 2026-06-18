@@ -40,6 +40,12 @@ agent_tools=(
   goose
   agy
   kimi
+  mini-swe-agent
+  sweagent
+  trae-cli
+  hermes
+  mimo
+  acli
 )
 
 print_version() {

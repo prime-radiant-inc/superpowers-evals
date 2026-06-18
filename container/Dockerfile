@@ -114,8 +114,26 @@ RUN mkdir -p /opt/cursor-agent \
   && agent --version
 
 RUN uv tool install --python 3.12 aider-chat \
+  && uv tool install mini-swe-agent \
+  && uv tool install --python 3.12 "trae-agent[test,evaluation] @ git+https://github.com/bytedance/trae-agent.git" \
   && chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" \
-  && aider --version
+  && aider --version \
+  && mini-swe-agent --help >/dev/null \
+  && trae-cli --version
+
+# Editable install: SWE-agent resolves CONFIG_DIR relative to its package and
+# asserts it exists; a non-editable install leaves config/ behind in the repo,
+# so install -e to keep the package pointed at /opt/sweagent-repo (which has config/).
+RUN uv venv /opt/sweagent-venv --python 3.12 \
+  && git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo \
+  && uv pip install --python /opt/sweagent-venv -e /opt/sweagent-repo \
+  && printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'source /opt/sweagent-venv/bin/activate' \
+    'exec python -m sweagent.run.run "$@"' \
+    > /usr/local/bin/sweagent \
+  && chmod +x /usr/local/bin/sweagent \
+  && sweagent --help >/dev/null
 
 RUN case "$TARGETARCH" in \
       amd64) goose_arch=x86_64 ;; \
@@ -127,6 +145,26 @@ RUN case "$TARGETARCH" in \
   && install -m 0755 /tmp/goose /usr/local/bin/goose \
   && rm -f /tmp/goose /tmp/goose.tar.gz \
   && goose --version
+
+# Run as root, the hermes installer uses the FHS layout: code at
+# /usr/local/lib/hermes-agent, command at /usr/local/bin/hermes (already on PATH).
+RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup \
+  && hermes version
+
+RUN curl -fsSL https://mimo.xiaomi.com/install | bash \
+  && ln -sf /root/.mimocode/bin/mimo /usr/local/bin/mimo \
+  && mimo --version
+
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+  && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
+  && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
+    > /etc/apt/sources.list.d/acli.list \
+  && apt-get update \
+  && apt-get install -y acli \
+  && rm -rf /var/lib/apt/lists/* \
+  && acli --version
 
 COPY --from=gauntlet /package.json /opt/gauntlet/
 COPY --from=gauntlet /bun.lock /opt/gauntlet/
