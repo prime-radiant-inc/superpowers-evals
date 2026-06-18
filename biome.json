@@ -103,7 +103,6 @@
         "test/cli-run.test.ts",
         "test/cli-run-sigint.test.ts",
         "test/agent-*.test.ts",
-        "test/claude-windows-agent.test.ts",
         "test/setup-helpers-shim.test.ts",
         "test/check-transcript.test.ts",
         "test/check-tool.test.ts",

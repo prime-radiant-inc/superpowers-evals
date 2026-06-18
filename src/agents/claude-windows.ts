@@ -149,10 +149,14 @@ export class RemoteExecution {
     runId: string,
   ): void {
     const p = winPaths(this.remote, runId);
-    this.host.scpFrom(
+    const r1 = this.host.scpFrom(
       winJoin(p.home, '.claude', 'projects'),
       `${localRunHomeDir}/.claude`,
     );
-    this.host.scpFrom(p.workdir, dirname(localWorkdir));
+    if (r1.status !== 0)
+      throw new Error(`capture session logs from guest failed: ${r1.stderr}`);
+    const r2 = this.host.scpFrom(p.workdir, dirname(localWorkdir));
+    if (r2.status !== 0)
+      throw new Error(`capture workdir from guest failed: ${r2.stderr}`);
   }
 }

@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WindowsClaudeAgent } from '../src/agents/claude-windows.ts';
+import {
+  RemoteExecution,
+  WindowsClaudeAgent,
+} from '../src/agents/claude-windows.ts';
 import type {
   CommandResult,
   CommandRunner,
@@ -21,11 +24,26 @@ class FakeRunner implements CommandRunner {
   }
 }
 
+class FailingScpRunner implements CommandRunner {
+  calls: { command: string; args: string[]; input: string | undefined }[] = [];
+  run(
+    command: string,
+    args: readonly string[],
+    options?: { input?: string },
+  ): CommandResult {
+    this.calls.push({ command, args: [...args], input: options?.input });
+    if (command === 'sshpass' && args.some((a) => a.includes('scp'))) {
+      return { status: 1, stdout: '', stderr: 'scp failed' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  }
+}
+
 describe('WindowsClaudeAgent.provision', () => {
   beforeEach(() => {
-    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test';
-    process.env['WIN_EVAL_PASSWORD'] = 'password';
-    process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sp-'));
+    Bun.env['ANTHROPIC_API_KEY'] = 'sk-ant-test';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+    Bun.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sp-'));
   });
 
   test('creates the per-run guest tree and returns launcher substitutions', () => {
@@ -73,7 +91,7 @@ describe('WindowsClaudeAgent.provision', () => {
       join(import.meta.dir, '..', 'coding-agents'),
       'claude-windows',
     );
-    process.env['ANTHROPIC_API_KEY'] = '';
+    Bun.env['ANTHROPIC_API_KEY'] = '';
     const runDir = mkdtempSync(join(tmpdir(), 's-claude-windows-'));
     const home = {
       configDir: join(runDir, 'home', '.claude'),
@@ -82,6 +100,33 @@ describe('WindowsClaudeAgent.provision', () => {
     };
     expect(() =>
       new WindowsClaudeAgent(cfg).provision(home, new FakeRunner()),
+    ).toThrow();
+  });
+});
+
+describe('RemoteExecution.captureBack', () => {
+  beforeEach(() => {
+    Bun.env['ANTHROPIC_API_KEY'] = 'sk-ant-test';
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+  });
+
+  test('throws when scpFrom fails', () => {
+    const cfg = loadAgentConfig(
+      join(import.meta.dir, '..', 'coding-agents'),
+      'claude-windows',
+    );
+    const remote = cfg.remote;
+    if (!remote) throw new Error('remote config required');
+
+    const localRunHomeDir = mkdtempSync(join(tmpdir(), 'capture-test-'));
+    const localWorkdir = join(localRunHomeDir, 'coding-agent-workdir');
+    const runId = localRunHomeDir.split('/').pop()!;
+
+    const runner = new FailingScpRunner();
+    const exec = new RemoteExecution(remote, runner);
+
+    expect(() =>
+      exec.captureBack(localRunHomeDir, localWorkdir, runId),
     ).toThrow();
   });
 });
