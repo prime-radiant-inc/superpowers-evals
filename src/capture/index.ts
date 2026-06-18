@@ -27,7 +27,6 @@ import { normalizeOpencode } from '../normalize/opencode.ts';
 import { normalizeOpenhands } from '../normalize/openhands.ts';
 import { normalizePi } from '../normalize/pi.ts';
 import { normalizeQwen } from '../normalize/qwen.ts';
-import { normalizeRovodev } from '../normalize/rovodev.ts';
 import { normalizeSweAgent } from '../normalize/swe-agent.ts';
 import { normalizeTrae } from '../normalize/trae.ts';
 import { estimateTrajectory, kimiToolResultTotalBytes } from '../obol/index.ts';
@@ -35,7 +34,7 @@ import { filterLogsByCwd } from './cwd-filter.ts';
 
 // Backend (coding-agent name) -> ATIF normalizer; every supported dialect
 // produces an ATIF Trajectory. The acp/cursor/goose/hermes/mimo/mini-swe/
-// openclaw/openhands/qwen/rovodev/swe-agent/trae/cline normalizers are ported
+// openclaw/openhands/qwen/swe-agent/trae/cline normalizers are ported
 // from Harbor (see docs/superpowers/reference/porting-harbor-converters.md and
 // src/normalize/harbor-pin.ts).
 type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
@@ -59,7 +58,6 @@ const NORMALIZERS: Record<string, AtifNormalizer> = {
   openhands: normalizeOpenhands,
   pi: normalizePi,
   qwen: normalizeQwen,
-  rovodev: normalizeRovodev,
   'swe-agent': normalizeSweAgent,
   trae: normalizeTrae,
 };

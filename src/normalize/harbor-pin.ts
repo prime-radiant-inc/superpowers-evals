@@ -34,7 +34,6 @@ export const HARBOR_PIN = {
     openclaw: '5352049de712613e58459cad41afcf0bf8645738',
     openhands: '5352049de712613e58459cad41afcf0bf8645738',
     qwen: '5352049de712613e58459cad41afcf0bf8645738',
-    rovodev: '5352049de712613e58459cad41afcf0bf8645738',
     'swe-agent': '5352049de712613e58459cad41afcf0bf8645738',
     trae: '5352049de712613e58459cad41afcf0bf8645738',
   },

@@ -90,20 +90,16 @@ RUN npm install -g \
     opencode-ai \
     @github/copilot \
     @factory/cli \
-    @qoder-ai/qodercli \
     @qwen-code/qwen-code \
     @moonshot-ai/kimi-code@0.15.0 \
     @kilocode/cli \
     openclaw \
     @sourcegraph/amp \
-    @augmentcode/auggie \
-    @continuedev/cli \
     cline \
     @mariozechner/pi-coding-agent \
     @xai-official/grok \
   && if command -v kilocode >/dev/null 2>&1 && ! command -v kilo >/dev/null 2>&1; then ln -s "$(command -v kilocode)" /usr/local/bin/kilo; fi \
   && if command -v factory >/dev/null 2>&1 && ! command -v droid >/dev/null 2>&1; then ln -s "$(command -v factory)" /usr/local/bin/droid; fi \
-  && if command -v continue >/dev/null 2>&1 && ! command -v cn >/dev/null 2>&1; then ln -s "$(command -v continue)" /usr/local/bin/cn; fi \
   && if command -v kimi >/dev/null 2>&1 && [ "$(command -v kimi)" != /usr/local/bin/kimi ]; then ln -s "$(command -v kimi)" /usr/local/bin/kimi; fi
 
 RUN mkdir -p /opt/cursor-agent \
@@ -114,11 +110,9 @@ RUN mkdir -p /opt/cursor-agent \
   && ln -sf /opt/cursor-agent/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
   && agent --version
 
-RUN uv tool install --python 3.12 aider-chat \
-  && uv tool install mini-swe-agent \
+RUN uv tool install mini-swe-agent \
   && uv tool install --python 3.12 "trae-agent[test,evaluation] @ git+https://github.com/bytedance/trae-agent.git" \
   && chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" \
-  && aider --version \
   && mini-swe-agent --help >/dev/null \
   && trae-cli --version
 
@@ -160,17 +154,6 @@ RUN curl -fsSL https://mimo.xiaomi.com/install | bash \
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
   && ln -sf /root/.local/bin/agy /usr/local/bin/agy \
   && agy --version
-
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-  && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc \
-    | gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg \
-  && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/acli-archive-keyring.gpg] https://acli.atlassian.com/linux/deb stable main" \
-    > /etc/apt/sources.list.d/acli.list \
-  && apt-get update \
-  && apt-get install -y acli \
-  && rm -rf /var/lib/apt/lists/* \
-  && acli --version
 
 COPY --from=gauntlet /package.json /opt/gauntlet/
 COPY --from=gauntlet /bun.lock /opt/gauntlet/

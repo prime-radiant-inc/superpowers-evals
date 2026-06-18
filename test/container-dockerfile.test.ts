@@ -64,14 +64,11 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'opencode-ai',
     '@github/copilot',
     '@factory/cli',
-    '@qoder-ai/qodercli',
     '@qwen-code/qwen-code',
     '@moonshot-ai/kimi-code@0.15.0',
     '@kilocode/cli',
     'openclaw',
     '@sourcegraph/amp',
-    '@augmentcode/auggie',
-    '@continuedev/cli',
     'cline',
     '@mariozechner/pi-coding-agent',
     '@xai-official/grok',
@@ -81,7 +78,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
 
   for (const externalInstall of [
     'cursor.com/install',
-    'aider-chat',
     'AGY_OAUTH_HOME',
     'KIMI_OAUTH_HOME',
     'mini-swe-agent',
@@ -90,8 +86,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '/opt/sweagent-venv',
     'NousResearch/hermes-agent',
     'mimo.xiaomi.com/install',
-    'acli.atlassian.com/gpg/public-key.asc',
-    'acli.atlassian.com/linux/deb',
     'antigravity.google/cli/install.sh',
   ]) {
     expectInstallIntent(source, externalInstall);
@@ -100,7 +94,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   for (const commandIntent of [
     '/usr/local/bin/kilo',
     '/usr/local/bin/droid',
-    '/usr/local/bin/cn',
     '/usr/local/bin/kimi',
     '/usr/local/bin/cursor-agent',
     '/usr/local/bin/sweagent',
@@ -129,7 +122,6 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain('sweagent --help');
   expect(source).toContain('hermes version');
   expect(source).toContain('mimo --version');
-  expect(source).toContain('acli --version');
   expect(source).toContain('agy --version');
   expect(source).not.toContain('[[');
   expect(source).not.toContain('uv tool install --tool-dir');

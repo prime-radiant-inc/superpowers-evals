@@ -28,16 +28,12 @@ agent_tools=(
   copilot
   grok
   droid
-  qodercli
   qwen
   kilo
   openclaw
   amp
-  auggie
-  cn
   cline
   cursor-agent
-  aider
   goose
   agy
   kimi
@@ -46,7 +42,6 @@ agent_tools=(
   trae-cli
   hermes
   mimo
-  acli
 )
 
 print_version() {
