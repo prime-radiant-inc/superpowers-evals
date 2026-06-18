@@ -765,6 +765,7 @@ const BOOTSTRAP_NO_CHECK = new Set([
   'claude',
   'claude-haiku',
   'claude-sonnet',
+  'claude-windows',
   'pi',
 ]);
 
