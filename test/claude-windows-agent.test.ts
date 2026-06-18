@@ -51,6 +51,7 @@ describe('WindowsClaudeAgent.provision', () => {
       join(import.meta.dir, '..', 'coding-agents'),
       'claude-windows',
     );
+    const remote = cfg.remote!;
     const runDir = mkdtempSync(
       join(tmpdir(), 'myscenario-claude-windows-run-'),
     );
@@ -62,10 +63,10 @@ describe('WindowsClaudeAgent.provision', () => {
     };
     const runner = new FakeRunner();
 
-    const subs = new WindowsClaudeAgent(cfg).provision(home, runner) as Record<
-      string,
-      string
-    >;
+    const subs = new WindowsClaudeAgent(cfg, remote).provision(
+      home,
+      runner,
+    ) as Record<string, string>;
 
     // mkdir of the per-run tree happened over ssh
     const sshCalls = runner.calls.filter(
@@ -76,21 +77,26 @@ describe('WindowsClaudeAgent.provision', () => {
     ).toBe(true);
     // rsync is not available on the Windows guest; must NOT be called
     expect(runner.calls.some((c) => c.command === 'rsync')).toBe(false);
-    // Remove-Item for the superpowers dir was issued over ssh before scp
-    const spDir = 'C:\\eval-superpowers';
+    // Remove-Item for the shared C:\eval-superpowers must NOT appear
     expect(
       sshCalls.some(
         (c) =>
           c.args.join(' ').includes('Remove-Item') &&
-          c.args.join(' ').includes(spDir),
+          c.args.join(' ').includes('C:\\eval-superpowers'),
       ),
+    ).toBe(false);
+    // .claude.json and launch.cmd are written via base64 (FromBase64String in argv)
+    expect(
+      sshCalls.some((c) => c.args.join(' ').includes('FromBase64String')),
     ).toBe(true);
-    // scp (scpTo) copied the superpowers checkout to the guest
+    // scp (scpTo) copied the superpowers checkout to the per-run dir
     const scpCalls = runner.calls.filter(
       (c) => c.command === 'sshpass' && c.args.includes('scp'),
     );
     expect(
-      scpCalls.some((c) => c.args.join(' ').includes('C:/eval-superpowers')),
+      scpCalls.some((c) =>
+        c.args.join(' ').includes(`eval-runs/${runId}/superpowers`),
+      ),
     ).toBe(true);
     // launcher substitutions present
     expect(subs['$WIN_SSH_HOST']).toBe('127.0.0.1');
@@ -107,6 +113,7 @@ describe('WindowsClaudeAgent.provision', () => {
       join(import.meta.dir, '..', 'coding-agents'),
       'claude-windows',
     );
+    const remote = cfg.remote!;
     Bun.env['ANTHROPIC_API_KEY'] = '';
     const runDir = mkdtempSync(join(tmpdir(), 's-claude-windows-'));
     const home = {
@@ -115,7 +122,7 @@ describe('WindowsClaudeAgent.provision', () => {
       skeletonRoot: undefined,
     };
     expect(() =>
-      new WindowsClaudeAgent(cfg).provision(home, new FakeRunner()),
+      new WindowsClaudeAgent(cfg, remote).provision(home, new FakeRunner()),
     ).toThrow();
   });
 });

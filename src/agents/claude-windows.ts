@@ -3,12 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import type { AgentConfig, RemoteConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
-import {
-  type CodingAgent,
-  ProvisionError,
-  type RunHome,
-  shellSingleQuote,
-} from './index.ts';
+import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { WindowsHost } from './windows-host.ts';
 
 // Join Windows path segments with backslashes (the guest is native Windows).
@@ -17,14 +12,9 @@ function winJoin(...parts: string[]): string {
 }
 
 // Per-run Windows paths derived from the local runDir's basename (the runId).
-// The superpowers dir is a sibling of win_run_root (e.g. C:\eval-superpowers
-// alongside C:\eval-runs); this is a stable shared cache, not per-run.
+// superpowers is per-run under runRoot so each run gets a clean plugin copy.
 function winPaths(remote: RemoteConfig, runId: string) {
   const runRoot = winJoin(remote.win_run_root, runId);
-  // Derive superpowers dir as a sibling of win_run_root named eval-superpowers
-  // (e.g. C:\eval-superpowers when win_run_root is C:\eval-runs).
-  const winRunsParent = remote.win_run_root.replace(/\\[^\\]+$/, '');
-  const superpowers = winJoin(winRunsParent, 'eval-superpowers');
   return {
     runRoot,
     home: winJoin(runRoot, 'home'),
@@ -33,25 +23,20 @@ function winPaths(remote: RemoteConfig, runId: string) {
     // captureBack pulls it back to the same local name.
     workdir: winJoin(runRoot, 'coding-agent-workdir'),
     launchCmd: winJoin(runRoot, 'launch.cmd'),
-    superpowers,
+    superpowers: winJoin(runRoot, 'superpowers'),
   };
 }
 
 export class WindowsClaudeAgent implements CodingAgent {
   readonly config: AgentConfig;
-  constructor(config: AgentConfig) {
+  readonly remote: RemoteConfig;
+  constructor(config: AgentConfig, remote: RemoteConfig) {
     this.config = config;
-  }
-
-  private remote(): RemoteConfig {
-    const r = this.config.remote;
-    if (r === undefined)
-      throw new ProvisionError('claude-windows config missing remote block');
-    return r;
+    this.remote = remote;
   }
 
   provision(home: RunHome, runner: CommandRunner): Record<string, string> {
-    const remote = this.remote();
+    const remote = this.remote;
     const apiKey = getEnv('ANTHROPIC_API_KEY') ?? '';
     if (apiKey === '')
       throw new ProvisionError(
@@ -73,8 +58,8 @@ export class WindowsClaudeAgent implements CodingAgent {
     );
 
     // 2. Seed .claude.json: trust the workdir + approve the API key fingerprint
-    //    (same surface ClaudeAgent writes locally). Built as JSON on Linux and
-    //    written to the guest via a here-string over ssh stdin-safe powershell.
+    //    (same surface ClaudeAgent writes locally). Written via base64 so the
+    //    JSON content never appears raw in argv.
     const claudeJson = JSON.stringify({
       projects: {
         [p.workdir]: {
@@ -86,14 +71,15 @@ export class WindowsClaudeAgent implements CodingAgent {
       },
       customApiKeyResponses: { approved: [apiKey.slice(-20)], rejected: [] },
     });
-    this.run(
-      host,
-      `powershell -NoProfile -Command "Set-Content -LiteralPath '${p.home}\\.claude\\.claude.json' -Value ${shellSingleQuote(claudeJson)} -Encoding utf8"`,
+    host.writeFileBase64(
+      winJoin(p.home, '.claude', '.claude.json'),
+      claudeJson,
     );
 
-    // 3. Per-run launch.cmd: env + cd + claude. ANTHROPIC_API_KEY lives only on
-    //    the guest (outside captured artifacts: capture pulls \workdir and
-    //    \home\.claude\projects, not \launch.cmd).
+    // 3. Per-run launch.cmd: env + cd + claude. ANTHROPIC_API_KEY is written
+    //    via base64 so the key never appears raw in argv. The file itself lives
+    //    outside captured artifacts (\launch.cmd, not \workdir or
+    //    \home\.claude\projects).
     const launchCmd = [
       '@echo off',
       `set "HOME=${p.home}"`,
@@ -103,19 +89,14 @@ export class WindowsClaudeAgent implements CodingAgent {
       `cd /d "${p.workdir}"`,
       `claude --dangerously-skip-permissions --plugin-dir "${p.superpowers}" --model ${this.config.model ?? 'opus'}`,
     ].join('\r\n');
-    this.run(
-      host,
-      `powershell -NoProfile -Command "Set-Content -LiteralPath '${p.launchCmd}' -Value ${shellSingleQuote(launchCmd)} -Encoding ascii"`,
-    );
+    host.writeFileBase64(p.launchCmd, launchCmd, { secret: true });
 
-    // 4. Ensure the superpowers checkout is present on the guest (cached).
-    //    rsync is not available on the Windows guest; use scp instead.
+    // 4. Copy the superpowers checkout into the per-run dir on the guest.
+    //    Each run gets its own copy (no shared dir). rsync is not available on
+    //    the Windows guest; use scp. Dest is absent + parent runRoot exists, so
+    //    scp lands contents at p.superpowers directly.
     const sp = getEnv('SUPERPOWERS_ROOT') ?? '';
     if (sp === '') throw new ProvisionError('SUPERPOWERS_ROOT not set');
-    this.run(
-      host,
-      `powershell -NoProfile -Command "Remove-Item -Recurse -Force '${p.superpowers}' -ErrorAction SilentlyContinue"`,
-    );
     const sync = host.scpTo(sp, p.superpowers);
     if (sync.status !== 0)
       throw new ProvisionError(

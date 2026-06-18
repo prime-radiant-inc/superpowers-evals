@@ -199,7 +199,7 @@ const CUSTOM_AGENTS: Readonly<
  *  the name matches; else the declarative default. */
 export function resolveAgent(config: AgentConfig): CodingAgent {
   if (config.remote !== undefined) {
-    return new WindowsClaudeAgent(config);
+    return new WindowsClaudeAgent(config, config.remote);
   }
   const name = config.runtime_family ?? config.name;
   if (name === 'claude') {
