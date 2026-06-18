@@ -19,7 +19,19 @@ The transport and artifact-movement code built for v1 is already agent-agnostic;
 5. **Context dir is keyed by `(family, os)`.** `contextDirName(cfg, os)` returns `<family>` for linux and `<family>-<os>` for non-linux — so `(claude, windows)` resolves to the existing `coding-agents/claude-windows-context/` (the launcher + HOWTO are reused unchanged).
 6. **Run-id always includes the os** (your call): `<scenario>-<agent>-<os>-<stamp>-<nonce>`. This renames existing linux run dirs going forward; accepted for uniformity.
 7. **`run-all` matrix is scenario × agent × os**; the dashboard gains os as a dimension (column/filter); batch dir allocation includes os.
-8. **No new transport.** `WindowsHost`/`RemoteExecution`/the wrapper are reused as-is. This refactor is selection + config + matrix, not new execution code.
+8. **Transport seam reused; provisioning/capture hardened.** `WindowsHost`/`RemoteExecution`/the wrapper are reused, but the per-`(claude, windows)` provisioning and capture take the adversarial-review fixes in the next section. The refactor is selection + config + matrix PLUS those fixes.
+
+## Correctness & security requirements (from adversarial /par review)
+
+Seven real issues an adversarial review found in the v1 code (the green smokes hid #2/#3/#4 because `--dangerously-skip-permissions` masks a broken `.claude.json` and the failure paths weren't exercised). The refactor MUST fix all seven; each is a plan task.
+
+1. **Per-run plugin dir (no shared-dir race).** The guest superpowers checkout moves from a single shared `C:\eval-superpowers` to a per-run path under the run root: `<win_run_root>\<runId>\superpowers`. Each run scp's superpowers into its own dir and points `--plugin-dir` there. This removes the concurrency hazard (concurrent run-all cells were `Remove-Item`+re-scp'ing the shared dir, deleting it under in-flight runs). The os-target config carries `win_run_root` only; the superpowers dir is derived per-run, never a fixed shared path. (Cost: a per-run superpowers scp; the `.git`-stripped tree is seconds.)
+2. **No secret in error/argv.** `ANTHROPIC_API_KEY` must never be embedded in a command string that can land in `verdict.json`. Today the launch.cmd write interpolates the key into the `cmd` string, which `ProvisionError` throws verbatim into the persisted verdict on any failure. Fix: write the key to the guest via stdin/base64 (not argv), and the provisioning error must redact (never include) the command payload.
+3. **Quoting-safe guest writes.** `.claude.json` and `launch.cmd` must NOT be written by inlining their contents into `powershell -Command "… -Value '<json>'"` — JSON `"`/`'` break the outer command. Write file contents to the guest via base64 (`-EncodedCommand`/`[Convert]::FromBase64String`) or stdin, so arbitrary content (and paths containing quotes) round-trips intact.
+4. **Guest-side teardown.** A run's `finally` path must remove the per-run guest root (`ssh Remove-Item -Recurse -Force <win_run_root>\<runId>`), gated on `os === 'windows'`. Without it, every run leaks a tree whose `launch.cmd` holds the plaintext API key (secret-at-rest) and the guest disk fills over a batch.
+5. **Capture safe-swap.** `captureBack` must not `rmSync` the local workdir before the pull. Pull the guest workdir into a temp sibling and swap on success, so a pull failure leaves the pre-run fixture intact and recoverable.
+6. **Capture failures are `capture`-stage.** A capture-back failure must return a `capture`-stage indeterminate that preserves the gauntlet verdict + pre-check records (like the other capture paths), not throw a bare `Error` that `errorStage()` misattributes to the `unknown` stage (discarding the gauntlet layer).
+7. **No-log runs are honest.** If the agent never wrote a session (crash/auth failure), the missing guest `…\.claude\projects` must yield an empty-capture → the normal strict-capture indeterminate, not a hard scp error that masks the real agent failure. Create `projects` during provision, or treat a missing scp source as empty.
 
 ## Architecture
 
@@ -29,11 +41,12 @@ quorum run <scenario> --coding-agent claude --os windows
   ├─ load os-target (os-targets/windows.yaml → remote conn block)   [linux: built-in, no remote]
   ├─ resolveAgent(cfg, os) -> (claude, windows) provisioner
   ├─ run-id: <scenario>-claude-windows-<stamp>-<nonce>
-  ├─ provision (remote: ssh/scp to guest)      ─┐
-  ├─ runSetup (build local workdir)             │  os === 'windows'
-  ├─ push-workdir (scp local -> guest)          │  gated; identical to
-  ├─ gauntlet drive (tmux -> ssh -tt -> guest)  │  v1, just keyed on os
-  ├─ capture-back (scp guest -> local)         ─┘
+  ├─ provision (per-run home + per-run plugin dir; secret-safe base64 writes) ─┐
+  ├─ runSetup (build local workdir)                                            │  os === 'windows'
+  ├─ push-workdir (scp local -> guest)                                         │  gated
+  ├─ gauntlet drive (tmux -> ssh -tt -> guest)                                 │
+  ├─ capture-back (scp guest -> local; safe-swap; no-log tolerant)            ─┘
+  ├─ guest teardown (rm per-run root)   [run finally, gated on os]
   └─ capture/normalize/checks/verdict (unchanged)
 ```
 
