@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startDashboard } from '../src/dashboard/index.ts';
+import { startDashboard } from '../src/index.ts';
 
 // The e2e dashboard fixture: a results/ tree with one of each cell state, plus a
 // scenarios/ + coding-agents/ tree so the grid renders the full cartesian

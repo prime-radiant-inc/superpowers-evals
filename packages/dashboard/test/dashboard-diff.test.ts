@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import type { Cell, Grid, RunRecord } from '../src/dashboard/contracts.ts';
-import { cellKey } from '../src/dashboard/contracts.ts';
-import { diffGrids } from '../src/dashboard/view.ts';
+import type { Cell, Grid, RunRecord } from '../src/contracts.ts';
+import { cellKey } from '../src/contracts.ts';
+import { diffGrids } from '../src/view.ts';
 
 function rec(runId: string): RunRecord {
   return {

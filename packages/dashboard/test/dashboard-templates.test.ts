@@ -4,15 +4,15 @@ import type {
   CellView,
   HeaderTally,
   SlotView,
-} from '../src/dashboard/contracts.ts';
-import { cellKey } from '../src/dashboard/contracts.ts';
+} from '../src/contracts.ts';
+import { cellKey } from '../src/contracts.ts';
 import {
   cellHtml,
   esc,
   gridHtml,
   layoutHtml,
   tallyHtml,
-} from '../src/dashboard/templates.ts';
+} from '../src/templates.ts';
 
 // Typed template-literal renderers (Task 8). These tests pin the parity-critical
 // htmx wiring + class/data-attr contract the copied CSS/JS depend on — not exact

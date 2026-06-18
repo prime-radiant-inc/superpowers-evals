@@ -50,10 +50,10 @@ function discoverAgents(codingAgentsDir: string): string[] {
   return out;
 }
 
-// The exported known-agent name list (sorted *.yaml stems). The dashboard's
-// read-side (parseRunDirName longest-suffix match) and `startDashboard` use the
-// SAME list buildMatrix derives `available` from, so a run dir's agent segment
-// resolves identically whether it was launched by run-all or the dashboard.
+// The exported known-agent name list (sorted *.yaml stems) buildMatrix derives
+// `available` from. The dashboard is a separate zero-harness-dep package: it
+// bootstraps known agents from the grid manifest's `agents` (or, in results-only
+// mode, from each `verdict.json`'s `coding_agent`), not from this list.
 // Returns [] when the dir is missing/unreadable (a fresh checkout with no agents
 // configured still serves an empty grid rather than throwing).
 export function knownAgentNames(codingAgentsDir: string): readonly string[] {

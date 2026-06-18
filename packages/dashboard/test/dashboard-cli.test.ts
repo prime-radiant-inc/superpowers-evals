@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { parseArgs } from '../src/dashboard/index.ts';
+import { parseArgs } from '../src/index.ts';
 
 test('parseArgs reads flags', () => {
   const a = parseArgs(['--results', 'r', '--port', '9'], '/repo');

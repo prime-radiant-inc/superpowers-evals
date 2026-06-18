@@ -2,9 +2,9 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Cell, Grid, RunRecord } from '../src/dashboard/contracts.ts';
-import { cellKey } from '../src/dashboard/contracts.ts';
-import { scanResults } from '../src/dashboard/scan.ts';
+import type { Cell, Grid, RunRecord } from '../src/contracts.ts';
+import { cellKey } from '../src/contracts.ts';
+import { scanResults } from '../src/scan.ts';
 import {
   cellStatus,
   cellView,
@@ -17,7 +17,7 @@ import {
   latestAgeDays,
   median,
   staleOpacity,
-} from '../src/dashboard/view.ts';
+} from '../src/view.ts';
 
 // --- builders ----------------------------------------------------------------
 

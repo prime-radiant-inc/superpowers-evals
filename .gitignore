@@ -1,7 +1,7 @@
 results/
 # Committed dashboard-scan test fixture (a results/ tree the unit tests read).
-!test/fixtures/scan/results/
-!test/fixtures/scan/results/**
+!packages/dashboard/test/fixtures/scan/results/
+!packages/dashboard/test/fixtures/scan/results/**
 .worktrees/
 __pycache__/
 *.pyc

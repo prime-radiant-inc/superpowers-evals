@@ -4,7 +4,7 @@ import {
   cellKey,
   DashboardVerdictSchema,
   PhaseJsonSchema,
-} from '../src/dashboard/contracts.ts';
+} from '../src/contracts.ts';
 
 // The dashboard contracts keystone — the literal unions + zod schemas every
 // other dashboard module imports.

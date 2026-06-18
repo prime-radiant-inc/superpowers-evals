@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cellKey } from '../src/dashboard/contracts.ts';
+import { cellKey } from '../src/contracts.ts';
 import {
   parseRunDirName,
   pidAlive,
   readDashboardVerdict,
   scanResults,
-} from '../src/dashboard/scan.ts';
+} from '../src/scan.ts';
 
 const AGENTS = ['claude', 'claude-haiku', 'codex'];
 

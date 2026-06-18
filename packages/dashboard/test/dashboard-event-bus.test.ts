@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import type { SseMessage } from '../src/dashboard/contracts.ts';
-import { BoundedQueue, EventBus } from '../src/dashboard/event-bus.ts';
+import type { SseMessage } from '../src/contracts.ts';
+import { BoundedQueue, EventBus } from '../src/event-bus.ts';
 
 test('BoundedQueue drops the oldest past capacity', () => {
   const q = new BoundedQueue<number>(2);

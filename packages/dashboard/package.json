@@ -1,0 +1,16 @@
+{
+  "name": "@quorum/dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && bun test",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
