@@ -27,9 +27,10 @@ artifacts without checking them first.
 `claude-haiku` and `claude-sonnet` are Claude Code target variants. They use the
 same Claude runtime, context, and `ANTHROPIC_API_KEY` path as `claude`.
 
-When this repo is checked out as `superpowers/evals`, quorum defaults
-`SUPERPOWERS_ROOT` to the parent `superpowers` checkout. In a standalone
-`superpowers-evals` clone, set it explicitly:
+Raw quorum runs require `SUPERPOWERS_ROOT` in the launching environment. The
+container and appliance shims export `SUPERPOWERS_ROOT=/workspace/superpowers`
+inside the runtime from their configured Superpowers checkout. For local
+host-side runs, set it explicitly:
 
 ```bash
 export SUPERPOWERS_ROOT=/path/to/superpowers
@@ -37,6 +38,46 @@ export SUPERPOWERS_ROOT=/path/to/superpowers
 
 Use a different `SUPERPOWERS_ROOT` when running RED/GREEN comparisons against
 modified Superpowers skill text.
+
+## Shared Appliance
+
+On a configured shared remote appliance where the Phase 1 helper is installed,
+agents should use `evals-appliance`, not raw `bun run quorum ...` or raw
+`scripts/evals-container exec quorum ...`. The appliance helper owns repo sync,
+exact Superpowers ref resolution, the blessed credential bundle, locks, job
+records, status, cancellation, and provenance.
+
+Start with:
+
+```bash
+evals-appliance doctor --json
+evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
+```
+
+Run the first sentinel batch detached:
+
+```bash
+evals-appliance run-all --json --detach \
+  --superpowers-ref <branch-tag-or-sha> \
+  -- --tier sentinel \
+     --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+     --jobs 4
+```
+
+Recover and inspect with:
+
+```bash
+evals-appliance status --json <job-id>
+evals-appliance show <job-id>
+evals-appliance costs <job-id>
+```
+
+Phase 1 appliance `run-all` is Linux-container-only. Antigravity and Windows
+remain trusted-maintainer break-glass paths until the appliance explicitly
+supports their auth and runtime preflights. See
+[appliance-runbook.md](appliance-runbook.md) for the agent-facing workflow and
+[2026-06-18-shared-eval-appliance-design.md](superpowers/specs/2026-06-18-shared-eval-appliance-design.md)
+for the security and provenance contract.
 
 ## Credentials
 
@@ -98,7 +139,8 @@ done
 
 Run the same commands without `--tier sentinel` for the full ready suite.
 `run-all` writes each batch under `results/batches/<batch-id>/` and each run
-under `results/<scenario>-<agent>-<timestamp>-<nonce>/`; render a batch with:
+under `results/<scenario>-<agent>-<os>-<timestamp>-<nonce>/`; render a batch
+with:
 
 ```bash
 scripts/evals-container exec quorum show <batch-id>
@@ -109,10 +151,10 @@ headless `agy` install path, so Antigravity remains host-side.
 
 ## Host-Side Sweeps
 
-For all-harness trusted-maintainer sweeps, split batches when you need a hard
-global concurrency cap. Agents with `max_concurrency: 1` in
-`coding-agents/*.yaml` run in dedicated lanes beside the shared `--jobs` pool,
-so one broad `run-all --jobs N` batch can exceed `N` live cells.
+For all-harness trusted-maintainer sweeps, `--jobs` is the global live-cell cap
+within one `run-all` process, with per-agent caps and launch spacing layered
+inside that pool. Separate `run-all` processes still need operator discipline or
+host-level appliance locks.
 
 Prefer grouped batches:
 

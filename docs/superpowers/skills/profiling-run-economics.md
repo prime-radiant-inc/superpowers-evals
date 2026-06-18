@@ -39,13 +39,13 @@ passed (pasted diffs, constraints, suppression phrases like "do not flag").
 
 ## Per-subagent turn/tool profile (the money table)
 
-Subagent transcripts live at
-`results/<run>/coding-agent-config/projects/*/<session-id>/subagents/*.jsonl`.
+Claude subagent transcripts live at
+`results/<run>/home/.claude/projects/*/<session-id>/subagents/*.jsonl`.
 
 ```python
 import json, glob, collections
 roles = collections.Counter(); turns = collections.Counter()
-for f in glob.glob(f'results/{run}/coding-agent-config/projects/*/*/subagents/*.jsonl'):
+for f in glob.glob(f'results/{run}/home/.claude/projects/*/*/subagents/*.jsonl'):
     t = 0; tools = 0; desc = ''
     for line in open(f):
         try: r = json.loads(line)
@@ -77,7 +77,7 @@ turns; haiku subagents take 2-3× sonnet's turns for the same work.
 When several runs with different SUPERPOWERS_ROOT checkouts are in flight,
 the root path leaks into the main transcript (skill paths, script
 invocations). `grep -l 'sdd-exp/<variant>'
-results/<run>/coding-agent-config/projects/*/*.jsonl` identifies the
+results/<run>/home/.claude/projects/*/*.jsonl` identifies the
 variant. Note: `trajectory.json` is only finalized at run
 end — mid-run progress lives in the session transcript (count
 `"name":"Agent"` lines).
@@ -88,11 +88,11 @@ The coding agent's session is resumable:
 
 ```bash
 cd results/<run>/coding-agent-workdir
-CLAUDE_CONFIG_DIR=$PWD/../coding-agent-config \
+HOME=$PWD/../home \
   claude --resume <session-id> -p "Retrospective question: why did you ...?"
 ```
 
-(Session id = the jsonl filename under `coding-agent-config/projects/*/`.)
+(Session id = the jsonl filename under `home/.claude/projects/*/`.)
 Agents answer retrospective questions candidly; this resolves "what were you
 thinking" questions that transcripts can't.
 

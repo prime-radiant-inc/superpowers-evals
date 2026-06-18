@@ -13,7 +13,7 @@ patterns below are the model you match against.
 
 ## How to use this atlas
 
-1. Run **`uv run quorum show <target>`** to see the verdict (or `quorum show`
+1. Run **`bun run quorum show <target>`** to see the verdict (or `quorum show`
    alone for the latest run; `quorum show <scenario-name>` for the latest
    run of that scenario).
 2. Match the verdict's shape to one of the seven **Signature** lines below.
@@ -251,7 +251,7 @@ a misaligned test.
 
 ## Pi Capture Triage
 
-Pi raw sessions are run-local at `<run>/coding-agent-config/sessions/*.jsonl`.
+Pi raw sessions are run-local at `<run>/home/.pi/agent/sessions/**/*.jsonl`.
 If a Pi run is indeterminate before post-checks, distinguish:
 
 - no new `*.jsonl` file: Pi did not launch or wrote outside the isolated

@@ -41,6 +41,7 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **show batch**: `bun run quorum show <batch-id>` (matrix view)
 - **grid-manifest**: `bun run quorum grid-manifest [--out <path>]` (emit the scenario × agent × os eligibility matrix the dashboard reads)
 - **dashboard**: `bun run dashboard [--results <dir>] [--port N] [--manifest <path>]` (read-only web matrix over results/ + grid-manifest.json)
+- **shared appliance design/runbook**: `docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md` and `docs/appliance-runbook.md`
 
 Per-coding-agent config: `coding-agents/<name>.yaml`. Per-coding-agent HOWTO:
 `coding-agents/<name>-context/HOWTO.md`. Each agent seeds its config under the
@@ -120,6 +121,22 @@ Live `quorum run ...` evals are trusted-maintainer operations only. They
 launch agent CLIs in permissive modes and can capture sensitive transcripts,
 tool calls, filesystem state, and token data. Do not add live evals, API keys,
 or dangerous-mode launches to public CI.
+
+## Shared Appliance
+
+For shared remote live evals on a configured appliance, agents should operate
+through the installed Phase 1 appliance helper described in
+`docs/appliance-runbook.md`, not by typing raw `quorum run` / `run-all`
+commands directly. The helper owns repo sync, exact ref resolution, the blessed
+credential bundle, host locks, job records, provenance, status, and
+cancellation. Raw `bun run quorum ...` and
+`scripts/evals-container exec quorum ...` remain local or trusted break-glass
+workflows.
+
+The appliance is Linux-container-only for Phase 1 `run-all`. Windows and
+Antigravity remain separate trusted-maintainer paths until their appliance
+preflight/auth support is explicit. Treat appliance `results/`, run homes, raw
+transcripts, and credential-bundle material as sensitive.
 
 ## Host Env For Live Evals
 

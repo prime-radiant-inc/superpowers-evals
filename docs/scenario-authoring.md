@@ -591,7 +591,7 @@ real (Pattern 2).
 
 ### Run-dir layout
 
-A run dir (`results/<scenario>-<agent>-<stamp>-<nonce>/`) holds:
+A run dir (`results/<scenario>-<agent>-<os>-<stamp>-<nonce>/`) holds:
 `verdict.json` (the composed verdict, schema `src/contracts/verdict.ts`);
 `trajectory.json` (the normalized ATIF transcript — what transcript verbs read);
 `coding-agent-token-usage.json` (priced usage, when obol can price);

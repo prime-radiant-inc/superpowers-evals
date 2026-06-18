@@ -81,7 +81,7 @@ bun run check
 bun run quorum check
 ```
 
-Run one local scenario outside the container:
+Run one local or break-glass scenario outside the container:
 
 ```bash
 export SUPERPOWERS_ROOT=/path/to/superpowers
@@ -93,6 +93,30 @@ bun run quorum show <run-dir>
 Agent names are `claude`, `claude-haiku`, `claude-sonnet`, `codex`,
 `antigravity`, `gemini`, `kimi`, `opencode`, `pi`, and `copilot`. Not every
 scenario is valid for every agent.
+
+## Shared Eval Appliance
+
+Shared remote live evals are designed to run from a trusted appliance host with
+one blessed credential bundle, exact repo/ref provenance, host locks, and
+recoverable job records. Agents should use the appliance helper once it exists
+on the configured host:
+
+```bash
+evals-appliance doctor --json
+evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
+evals-appliance run-all --json --detach \
+  --superpowers-ref <branch-tag-or-sha> \
+  -- --tier sentinel --coding-agents claude,codex,kimi --jobs 4
+evals-appliance status --json <job-id>
+evals-appliance show <job-id>
+evals-appliance costs <job-id>
+```
+
+The target interface and operating rules are in
+[docs/appliance-runbook.md](docs/appliance-runbook.md), backed by
+[docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md](docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md).
+Raw `bun run quorum ...` and `scripts/evals-container exec quorum ...` remain
+local or trusted break-glass workflows for shared live evals.
 
 ## Container Runtime
 
@@ -166,7 +190,8 @@ done
 
 Run the same commands without `--tier sentinel` for the full ready suite.
 `run-all` writes each batch under `results/batches/<batch-id>/` and each run
-under `results/<scenario>-<agent>-<timestamp>-<nonce>/`; render a batch with:
+under `results/<scenario>-<agent>-<os>-<timestamp>-<nonce>/`; render a batch
+with:
 
 ```bash
 scripts/evals-container exec quorum show <batch-id>
@@ -221,6 +246,8 @@ costs.
 
 - [docs/scenario-authoring.md](docs/scenario-authoring.md) - scenario anatomy,
   story/AC craft, setup helpers, check verbs, and authoring traps.
+- [docs/appliance-runbook.md](docs/appliance-runbook.md) - shared remote
+  appliance operating rules for agents.
 - [docs/coding-agent-care-and-feeding.md](docs/coding-agent-care-and-feeding.md)
   - credentials, sweeps, per-agent runtime notes, and troubleshooting.
 - [docs/adding-a-coding-agent.md](docs/adding-a-coding-agent.md) - checklist
@@ -259,7 +286,7 @@ Exit codes are 0 for `pass`, 1 for `fail`, and 2 for `indeterminate`.
 Each run produces one directory under `results/`:
 
 ```text
-results/<scenario>-<coding-agent>-<timestamp>-<nonce>/
+results/<scenario>-<coding-agent>-<os>-<timestamp>-<nonce>/
 |-- verdict.json                     composed result; start here
 |-- gauntlet-agent/                  Gauntlet-Agent evidence
 |-- coding-agent-workdir/            files the Coding-Agent produced
@@ -302,14 +329,14 @@ throwaway per-run `$HOME` (`<run>/home`), and `normalize/` turns that agent's
 session log into a uniform tool-call trace. Live agent-CLI calls and other
 non-hermetic subprocesses go through the
 `agents/command-runner.ts` seam, so the unit suite injects fakes and never
-launches a real CLI. `scheduler/` is the shared concurrency engine under both
-`run-all/` and the `dashboard/`. `env.ts` is the only module that reads
-`process.env`.
+launches a real CLI. `scheduler/` is the shared concurrency engine under
+`run-all/`. The dashboard is a separate read-only package that scans `results/`
+and `grid-manifest.json`. `env.ts` is the only module that reads `process.env`.
 
 ```text
 src/
-  cli/                  commander CLI: run, list, new, check, show, costs, run-all, dashboard
-    index.ts              command wiring + run / costs / run-all / dashboard actions
+  cli/                  commander CLI: run, list, new, check, show, costs, run-all, grid-manifest
+    index.ts              command wiring + run / costs / run-all / grid-manifest actions
     render.ts             verdict renderer for triage (quorum show)
     render-batch.ts       batch-matrix renderer (quorum show <batch>)
     resolve-target.ts     run/batch target resolution; scenario.ts scenario loading
@@ -332,7 +359,6 @@ src/
                           delegates to the TS dispatchers (no bin/ shims, no PATH prepend)
   scheduler/            central concurrency dispatcher (one global slot pool, per-harness limits + spacing)
   run-all/              scenario × Coding-Agent matrix over the scheduler; batch index
-  dashboard/            web matrix UI: read-side scan/view, typed HTML templates, SSE bus, orchestrator, Bun.serve
   setup-helpers/        scenario fixture builders + the `setup-helpers` CLI (dispatch registry)
   contracts/            zod schemas at the JSON boundaries (verdict, batch, economics, gauntlet, agent-config)
   scaffold.ts           `quorum new` / `quorum check`
@@ -356,6 +382,7 @@ scenarios/              scenarios (one directory each)
 fixtures/               shared static fixture repos (e.g. template-repo/, sdd-*/)
 test/                   bun test suite
 docs/                   design notes, specs, plans, testing protocols, baselines
+packages/dashboard/     read-only web matrix UI: scan/view, typed HTML templates, SSE bus, Bun.serve
 ```
 
 ## Triage
