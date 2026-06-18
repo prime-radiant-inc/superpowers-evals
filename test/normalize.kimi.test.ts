@@ -67,9 +67,10 @@ test('kimi tool names are preserved canonically', () => {
   expect(names).toEqual(['Read', 'Bash', 'FetchURL']);
 });
 
-test('tool.result rows are ignored', () => {
+test('tool.result rows do not produce new steps (they attach to their call)', () => {
   const traj = normalizeKimi(basicLines, '0.1.0');
-  // Only the three tool.call rows produce steps.
+  // The tool.result in basicLines has no matching call (uses 'tool_1' which no call emits),
+  // so it's dropped. Only the three tool.call rows produce steps.
   expect(traj.steps.filter((s) => s.source === 'agent').length).toBe(3);
 });
 
@@ -262,4 +263,207 @@ test('usage rows with no tokens are ignored', () => {
   );
   const traj = normalizeKimi(raw, '0.1.0');
   expect(traj.steps.filter((s) => s.metrics).length).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// tool.result → observation (verified against real wire.jsonl, 2026-06-17)
+// ---------------------------------------------------------------------------
+
+function toolCallWithId(name: string, args: unknown, id: string): string {
+  return JSON.stringify({
+    type: 'context.append_loop_event',
+    event: {
+      type: 'tool.call',
+      name,
+      args,
+      toolCallId: id,
+      stepUuid: `step-${id}`,
+    },
+  });
+}
+
+function toolResult(callId: string, output: string, isError?: boolean): string {
+  const result: Record<string, unknown> = { output };
+  if (isError !== undefined) result['isError'] = isError;
+  return JSON.stringify({
+    type: 'context.append_loop_event',
+    event: {
+      type: 'tool.result',
+      toolCallId: callId,
+      parentUuid: callId,
+      result,
+    },
+  });
+}
+
+test('tool.result rows become observations linked to their call step', () => {
+  const raw = [
+    toolCallWithId('Bash', { command: 'ls' }, 'call-1'),
+    toolResult('call-1', 'file.txt\n'),
+  ].join('\n');
+  const traj = normalizeKimi(raw, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(step).toBeDefined();
+  expect(step!.observation).toBeDefined();
+  expect(step!.observation!.results).toHaveLength(1);
+  expect(step!.observation!.results[0]!.source_call_id).toBe('call-1');
+  expect(step!.observation!.results[0]!.content).toBe('file.txt\n');
+});
+
+test('tool.result row with isError=true is flagged in observation', () => {
+  const raw = [
+    toolCallWithId('Bash', { command: 'bad' }, 'call-err'),
+    toolResult('call-err', 'Command not found', true),
+  ].join('\n');
+  const traj = normalizeKimi(raw, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(step!.observation!.results[0]!.content).toBe('Command not found');
+  // isError carried in observation result extra
+  expect(step!.observation!.results[0]!.extra?.['is_error']).toBe(true);
+});
+
+test('tool.result rows without a matching call are ignored', () => {
+  const raw = toolResult('no-such-call', 'orphaned output');
+  const traj = normalizeKimi(raw, '0.1.0');
+  // No steps with observations for orphan results; only the fallback user step
+  const withObs = traj.steps.filter((s) => s.observation);
+  expect(withObs.length).toBe(0);
+});
+
+test('tool.result rows do not generate separate steps', () => {
+  const raw = [
+    toolCallWithId('Read', { path: 'x.txt' }, 'call-2'),
+    toolResult('call-2', 'content'),
+  ].join('\n');
+  const traj = normalizeKimi(raw, '0.1.0');
+  // Only one agent step (for the tool.call); the tool.result attaches to it
+  expect(traj.steps.filter((s) => s.source === 'agent').length).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// content.part think/text → reasoning_content / message
+// (verified against real wire.jsonl — stepUuid links parts to their tool step)
+// ---------------------------------------------------------------------------
+
+test('think content.part rows become reasoning_content on the matching tool step', () => {
+  // toolCallWithId uses stepUuid `step-${id}` → 'step-call-abc'; manually build
+  // matching stepUuid so the think part links to the tool.call step.
+  const rawFixed = [
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'content.part',
+        stepUuid: 'step-abc',
+        part: { type: 'think', think: 'I should read the file first.' },
+      },
+    }),
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'tool.call',
+        name: 'Read',
+        args: { path: 'a.txt' },
+        toolCallId: 'call-abc',
+        stepUuid: 'step-abc',
+      },
+    }),
+  ].join('\n');
+  const traj = normalizeKimi(rawFixed, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  );
+  expect(step!.reasoning_content).toBe('I should read the file first.');
+});
+
+test('text content.part rows become message on the matching step', () => {
+  const raw = [
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'content.part',
+        stepUuid: 'step-final',
+        part: { type: 'text', text: 'Done.' },
+      },
+    }),
+    // A step.end with matching stepUuid but no tool.call (final answer step)
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: { type: 'step.begin', uuid: 'step-final' },
+    }),
+  ].join('\n');
+  const traj = normalizeKimi(raw, '0.1.0');
+  // A message-only step should have been created for the text content
+  const msgStep = traj.steps.find((s) => s.message === 'Done.');
+  expect(msgStep).toBeDefined();
+  expect(msgStep!.source).toBe('agent');
+});
+
+// ---------------------------------------------------------------------------
+// Agent tool calls (kimi orchestrator session — real wire.jsonl verified)
+// Real evidence: results/sdd-go-fractals-elicited-kimi-20260615T224239Z-86f5/
+//   home/.kimi-code/sessions/wd_.../session_.../agents/main/wire.jsonl
+//   has 18 tool.call rows with name:"Agent" and args {description,subagent_type,prompt}.
+// kimi emits Agent+prompt natively — no alias or prompt-key rewrite needed.
+// ---------------------------------------------------------------------------
+
+test('kimi orchestrator emits Agent tool calls natively with prompt arg preserved', () => {
+  const raw = toolCall('Agent', {
+    description: 'Implement Task 1: scaffolding',
+    subagent_type: 'coder',
+    prompt:
+      'model: cheap\n\nYou are implementing Task 1: Project scaffolding and module setup for the Go Fractals CLI.',
+  });
+  const traj = normalizeKimi(raw, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Agent',
+  );
+  expect(step).toBeDefined();
+  const call = step!.tool_calls![0]!;
+  expect(call.function_name).toBe('Agent');
+  // prompt arg is preserved verbatim — kimi emits it natively, no rewrite
+  expect(call.arguments['prompt']).toContain('Project scaffolding');
+  // description and subagent_type are also carried through
+  expect(call.arguments['description']).toBe('Implement Task 1: scaffolding');
+  expect(call.arguments['subagent_type']).toBe('coder');
+});
+
+test('multiple think parts on the same step are joined with newlines', () => {
+  const raw = [
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'content.part',
+        stepUuid: 'step-x',
+        part: { type: 'think', think: 'First thought.' },
+      },
+    }),
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'content.part',
+        stepUuid: 'step-x',
+        part: { type: 'think', think: 'Second thought.' },
+      },
+    }),
+    JSON.stringify({
+      type: 'context.append_loop_event',
+      event: {
+        type: 'tool.call',
+        name: 'Bash',
+        args: { command: 'ls' },
+        toolCallId: 'call-x',
+        stepUuid: 'step-x',
+      },
+    }),
+  ].join('\n');
+  const traj = normalizeKimi(raw, '0.1.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(step!.reasoning_content).toContain('First thought.');
+  expect(step!.reasoning_content).toContain('Second thought.');
 });

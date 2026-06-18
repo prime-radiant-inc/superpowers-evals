@@ -342,3 +342,340 @@ test('no token_count events => no final_metrics, no model_name', () => {
   expect(traj.final_metrics).toBeUndefined();
   expect(traj.agent.model_name).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// Full-fidelity adds: messages, reasoning, observations, web_search_call,
+// session_id, agent.version, agent.extra
+// ---------------------------------------------------------------------------
+
+// session_meta event — real format from rollout logs
+const sessionMetaLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:32.929Z',
+  type: 'session_meta',
+  payload: {
+    id: 'session-abc-123',
+    cwd: '/workspace/proj',
+    originator: 'codex-tui',
+    cli_version: '0.140.0',
+    git: { branch: 'main' },
+    instructions: 'You are a coding agent.',
+  },
+});
+
+test('session_meta populates session_id, agent.version, and agent.extra', () => {
+  const raw = [sessionMetaLine, functionCallLine].join('\n');
+  const traj = normalizeCodex(raw, 'fallback-ver');
+  expect(traj.session_id).toBe('session-abc-123');
+  expect(traj.agent.version).toBe('0.140.0');
+  expect(traj.agent.extra).toBeDefined();
+  expect(traj.agent.extra!['cwd']).toBe('/workspace/proj');
+  expect(traj.agent.extra!['originator']).toBe('codex-tui');
+  expect(traj.agent.extra!['git']).toEqual({ branch: 'main' });
+  expect(traj.agent.extra!['instructions']).toBe('You are a coding agent.');
+});
+
+test('agent.version falls back to passed version when cli_version absent', () => {
+  const metaNoVersion = JSON.stringify({
+    type: 'session_meta',
+    payload: { id: 'sid-1', cwd: '/tmp' },
+  });
+  const traj = normalizeCodex(
+    [metaNoVersion, functionCallLine].join('\n'),
+    'v1.2.3',
+  );
+  expect(traj.agent.version).toBe('v1.2.3');
+  expect(traj.session_id).toBe('sid-1');
+});
+
+// message events
+const userMessageLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:32.966Z',
+  type: 'response_item',
+  payload: {
+    type: 'message',
+    role: 'user',
+    content: [{ type: 'input_text', text: 'Let’s make a react todo list' }],
+  },
+});
+
+const assistantMessageLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:34.793Z',
+  type: 'response_item',
+  payload: {
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'output_text', text: 'Using brainstorming first.' }],
+  },
+});
+
+const developerMessageLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:32.965Z',
+  type: 'response_item',
+  payload: {
+    type: 'message',
+    role: 'developer',
+    content: [{ type: 'input_text', text: 'system prompt text' }],
+  },
+});
+
+test('response_item:message (user) becomes a user step with message text', () => {
+  const traj = normalizeCodex(userMessageLine, '1.0.0');
+  const step = traj.steps.find((s) => s.source === 'user');
+  expect(step).toBeDefined();
+  expect(step!.message).toBe('Let’s make a react todo list');
+});
+
+test('response_item:message (assistant) becomes an agent step with message text', () => {
+  const traj = normalizeCodex(assistantMessageLine, '1.0.0');
+  const step = traj.steps.find((s) => s.source === 'agent');
+  expect(step).toBeDefined();
+  expect(step!.message).toBe('Using brainstorming first.');
+  expect(step!.tool_calls).toBeUndefined();
+});
+
+test('response_item:message (developer) becomes a system step', () => {
+  const traj = normalizeCodex(developerMessageLine, '1.0.0');
+  const step = traj.steps.find((s) => s.source === 'system');
+  expect(step).toBeDefined();
+  expect(step!.message).toBe('system prompt text');
+});
+
+test('message steps are emitted before tool steps when interleaved', () => {
+  const raw = [userMessageLine, functionCallLine, assistantMessageLine].join(
+    '\n',
+  );
+  const traj = normalizeCodex(raw, '1.0.0');
+  const sources = traj.steps.map((s) => s.source);
+  expect(sources[0]).toBe('user');
+  expect(sources[1]).toBe('agent'); // tool call (function_call)
+  expect(sources[2]).toBe('agent'); // message
+});
+
+// reasoning events — real traces have summary:[] with substance in encrypted_content
+const reasoningLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:59.398Z',
+  type: 'response_item',
+  payload: {
+    type: 'reasoning',
+    summary: [],
+    encrypted_content: 'gAAAAA...',
+  },
+});
+
+const reasoningWithSummaryLine = JSON.stringify({
+  timestamp: '2026-06-16T05:26:59.000Z',
+  type: 'response_item',
+  payload: {
+    type: 'reasoning',
+    summary: ['First thought.', 'Second thought.'],
+  },
+});
+
+test('reasoning with empty summary produces null reasoning_content on next step', () => {
+  // summary:[] (encrypted_content only) → Harbor emits None → we emit undefined
+  const raw = [reasoningLine, assistantMessageLine].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep).toBeDefined();
+  expect(agentStep!.reasoning_content).toBeUndefined();
+});
+
+test('reasoning with non-empty summary attaches reasoning_content to next assistant step', () => {
+  const raw = [reasoningWithSummaryLine, assistantMessageLine].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const agentStep = traj.steps.find((s) => s.source === 'agent');
+  expect(agentStep).toBeDefined();
+  expect(agentStep!.reasoning_content).toBe('First thought.\nSecond thought.');
+});
+
+test('reasoning is carried forward to next tool-call step too', () => {
+  const raw = [reasoningWithSummaryLine, functionCallLine].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const toolStep = traj.steps.find((s) => s.tool_calls?.length);
+  expect(toolStep).toBeDefined();
+  expect(toolStep!.reasoning_content).toBe('First thought.\nSecond thought.');
+});
+
+test('reasoning is cleared after being attached to a step', () => {
+  // reasoning → tool_call → another tool_call: only the first tool gets reasoning
+  const secondCallLine = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name: 'exec_command',
+      arguments: JSON.stringify({ cmd: 'ls', workdir: '/' }),
+      call_id: 'call_second',
+    },
+  });
+  const raw = [reasoningWithSummaryLine, functionCallLine, secondCallLine].join(
+    '\n',
+  );
+  const traj = normalizeCodex(raw, '1.0.0');
+  const [first, second] = traj.steps.filter((s) => s.tool_calls?.length);
+  expect(first!.reasoning_content).toBe('First thought.\nSecond thought.');
+  expect(second!.reasoning_content).toBeUndefined();
+});
+
+// observations — function_call_output paired to call by call_id
+const callId = 'call_zdg6vGxF';
+const functionCallWithIdLine = JSON.stringify({
+  type: 'response_item',
+  payload: {
+    type: 'function_call',
+    name: 'exec_command',
+    arguments: JSON.stringify({ cmd: 'git status', workdir: '/workspace' }),
+    call_id: callId,
+  },
+});
+
+const functionCallOutputLine = JSON.stringify({
+  type: 'response_item',
+  payload: {
+    type: 'function_call_output',
+    call_id: callId,
+    output: 'On branch main\nnothing to commit',
+  },
+});
+
+test('function_call_output is attached as observation on the call step', () => {
+  const raw = [functionCallWithIdLine, functionCallOutputLine].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  // Should produce exactly 1 step (output merges into the call)
+  expect(traj.steps.length).toBe(1);
+  const step = traj.steps[0]!;
+  expect(step.tool_calls![0]!.function_name).toBe('Bash');
+  expect(step.observation).toBeDefined();
+  expect(step.observation!.results[0]!.source_call_id).toBe(callId);
+  expect(step.observation!.results[0]!.content).toContain('On branch main');
+});
+
+test('function_call_output output parsed as JSON blob (output key)', () => {
+  const outputWithMeta = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'function_call_output',
+      call_id: callId,
+      output: JSON.stringify({
+        output: 'file contents here',
+        metadata: { size: 42 },
+      }),
+    },
+  });
+  const raw = [functionCallWithIdLine, outputWithMeta].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const step = traj.steps[0]!;
+  expect(step.observation!.results[0]!.content).toBe('file contents here');
+});
+
+test('orphan function_call_output (no matching call) creates its own step', () => {
+  // Output arrives before or without the call — should not crash, creates a step
+  const raw = functionCallOutputLine;
+  const traj = normalizeCodex(raw, '1.0.0');
+  expect(traj.steps.length).toBeGreaterThan(0);
+  // The orphan step has an observation
+  const stepWithObs = traj.steps.find((s) => s.observation);
+  expect(stepWithObs).toBeDefined();
+});
+
+// custom_tool_call_output paired by call_id
+const customCallId = 'call_custom_1';
+const customToolCallLine = JSON.stringify({
+  type: 'response_item',
+  payload: {
+    type: 'custom_tool_call',
+    name: 'apply_patch',
+    input: '*** Begin Patch\n*** Add File: foo.ts\n+hello\n*** End Patch\n',
+    call_id: customCallId,
+  },
+});
+const customToolCallOutputLine = JSON.stringify({
+  type: 'response_item',
+  payload: {
+    type: 'custom_tool_call_output',
+    call_id: customCallId,
+    output: 'Patch applied successfully',
+  },
+});
+
+test('custom_tool_call_output is attached as observation on the custom call step', () => {
+  const raw = [customToolCallLine, customToolCallOutputLine].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  expect(traj.steps.length).toBe(1);
+  const step = traj.steps[0]!;
+  expect(step.tool_calls![0]!.function_name).toBe('Edit');
+  expect(step.observation).toBeDefined();
+  expect(step.observation!.results[0]!.content).toBe(
+    'Patch applied successfully',
+  );
+});
+
+test('repeated output for same call_id is handled gracefully (idempotency)', () => {
+  const raw = [
+    functionCallWithIdLine,
+    functionCallOutputLine,
+    functionCallOutputLine,
+  ].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  // Should not crash; first output wins (or second is attached gracefully)
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
+// web_search_call
+const webSearchCallLine = JSON.stringify({
+  timestamp: '2026-06-16T05:30:00.000Z',
+  type: 'response_item',
+  payload: {
+    type: 'web_search_call',
+    action: {
+      type: 'search',
+      query: 'react todo list typescript',
+    },
+    status: 'completed',
+  },
+});
+
+test('web_search_call payload becomes a tool-call step with WebSearch function_name', () => {
+  const traj = normalizeCodex(webSearchCallLine, '1.0.0');
+  const step = traj.steps.find((s) => s.tool_calls?.length);
+  expect(step).toBeDefined();
+  expect(step!.tool_calls![0]!.function_name).toBe('WebSearch');
+  expect(step!.tool_calls![0]!.arguments['action_type']).toBe('search');
+  expect(step!.tool_calls![0]!.arguments['query']).toBe(
+    'react todo list typescript',
+  );
+});
+
+test('web_search_call with url action type', () => {
+  const line = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'web_search_call',
+      action: { type: 'open_url', url: 'https://react.dev' },
+    },
+  });
+  const traj = normalizeCodex(line, '1.0.0');
+  const tc = traj.steps[0]!.tool_calls![0]!;
+  expect(tc.function_name).toBe('WebSearch');
+  expect(tc.arguments['action_type']).toBe('open_url');
+  expect(tc.arguments['url']).toBe('https://react.dev');
+});
+
+test('full trajectory with all new features validates against ATIF schema', () => {
+  const raw = [
+    sessionMetaLine,
+    turnContextLine,
+    userMessageLine,
+    reasoningWithSummaryLine,
+    functionCallWithIdLine,
+    functionCallOutputLine,
+    assistantMessageLine,
+    webSearchCallLine,
+    tokenCountFinal,
+  ].join('\n');
+  const traj = normalizeCodex(raw, 'fallback');
+  const r = validateTrajectory(traj);
+  expect(r.errors).toEqual([]);
+  expect(r.ok).toBe(true);
+  expect(traj.session_id).toBe('session-abc-123');
+  expect(traj.agent.version).toBe('0.140.0');
+});

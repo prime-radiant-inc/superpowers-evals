@@ -59,6 +59,11 @@ function canonicalToolName(name: string): string {
 }
 
 interface AntigravityEntry {
+  step_index?: unknown;
+  source?: unknown;
+  type?: unknown;
+  content?: unknown;
+  thinking?: unknown;
   tool_calls?: unknown;
   toolCalls?: unknown;
   PLANNER_RESPONSE?: unknown;
@@ -199,16 +204,87 @@ export function normalizeAntigravity(
     }
     if (!entry || typeof entry !== 'object') continue;
 
+    const entryType = typeof entry.type === 'string' ? entry.type : undefined;
+    const entryContent =
+      typeof entry.content === 'string' && entry.content
+        ? entry.content
+        : undefined;
+    const entryThinking =
+      typeof entry.thinking === 'string' && entry.thinking
+        ? entry.thinking
+        : undefined;
+
+    // USER_INPUT rows → user step with message
+    if (entryType === 'USER_INPUT' && entryContent !== undefined) {
+      steps.push({
+        step_id: stepId++,
+        source: 'user',
+        message: entryContent,
+      });
+      continue;
+    }
+
+    // PLANNER_RESPONSE rows: extract tool calls + attach content/thinking
+    if (entryType === 'PLANNER_RESPONSE') {
+      const toolCallList = antigravityToolCalls(entry);
+      const turnSteps: AtifStep[] = [];
+
+      for (const toolCall of toolCallList) {
+        const name = toolCall['name'];
+        if (typeof name !== 'string' || !name) continue;
+        const canonical = canonicalToolName(name);
+        const normalizedArgs = normalizeAntigravityArgs(
+          name,
+          toolCall['args'] ?? {},
+        );
+
+        const tc: AtifToolCall = {
+          tool_call_id: `${stepId}`,
+          function_name: canonical,
+          arguments: normalizedArgs,
+        };
+
+        const step: AtifStep = {
+          step_id: stepId++,
+          source: 'agent',
+          tool_calls: [tc],
+        };
+        turnSteps.push(step);
+        steps.push(step);
+      }
+
+      // Attach message/reasoning to first tool-call step, or emit standalone
+      let carrier = turnSteps[0];
+      if (
+        carrier === undefined &&
+        (entryContent !== undefined || entryThinking !== undefined)
+      ) {
+        carrier = { step_id: stepId++, source: 'agent' };
+        steps.push(carrier);
+      }
+      if (carrier !== undefined) {
+        if (entryContent !== undefined) carrier.message = entryContent;
+        if (entryThinking !== undefined)
+          carrier.reasoning_content = entryThinking;
+      }
+      continue;
+    }
+
+    // All other entry types (CODE_ACTION, RUN_COMMAND, etc.):
+    // extract tool calls at the top level if present (legacy shape support)
     for (const toolCall of antigravityToolCalls(entry)) {
       const name = toolCall['name'];
       if (typeof name !== 'string' || !name) continue;
       const canonical = canonicalToolName(name);
-      const args = normalizeAntigravityArgs(name, toolCall['args'] ?? {});
+      const normalizedArgs = normalizeAntigravityArgs(
+        name,
+        toolCall['args'] ?? {},
+      );
 
       const tc: AtifToolCall = {
         tool_call_id: `${stepId}`,
         function_name: canonical,
-        arguments: args,
+        arguments: normalizedArgs,
       };
 
       steps.push({

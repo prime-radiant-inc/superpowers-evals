@@ -396,3 +396,179 @@ test('multi-toolRequest message produces one step per tool call, no per-step usa
   // Usage is final_metrics-only (from shutdown); tool steps carry no metrics.
   for (const s of agentSteps) expect(s.metrics).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// Content fidelity: assistant message text + tool observations
+// Verified against real captured logs:
+//   results/copilot-superpowers-bootstrap-copilot-20260613T225716Z-22e5/...events.jsonl
+//
+// What the copilot session-state log actually carries:
+//   - assistant.message.content: a plain string; USUALLY empty string (the real
+//     text is in encryptedContent which is not decodable). Occasionally non-empty
+//     when the agent emits text alongside tool calls.
+//   - tool.execution_complete.data.toolCallId: matches assistant.message
+//     toolRequests[].toolCallId — links results back to their calls.
+//   - tool.execution_complete.data.result.content: plain text tool output.
+//
+// We extract message text (when non-empty) onto the FIRST step of each
+// assistant.message block, and attach each tool result as an observation on
+// the step whose tool_call_id matches.
+// ---------------------------------------------------------------------------
+
+// Real-shape fixture: one message with non-empty content + three parallel tool
+// requests, followed by their results in separate tool.execution_complete events.
+const contentFidelityLog = [
+  JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      content:
+        'Using **brainstorming** to shape the todo app before any implementation.',
+      toolRequests: [
+        {
+          toolCallId: 'call_aaa',
+          name: 'bash',
+          arguments: { command: 'git log' },
+        },
+        {
+          toolCallId: 'call_bbb',
+          name: 'view',
+          arguments: { file: 'README.md' },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({
+    type: 'tool.execution_complete',
+    data: {
+      toolCallId: 'call_aaa',
+      success: true,
+      result: {
+        content: 'abc123 initial commit',
+        detailedContent: 'abc123 initial commit',
+      },
+    },
+  }),
+  JSON.stringify({
+    type: 'tool.execution_complete',
+    data: {
+      toolCallId: 'call_bbb',
+      success: true,
+      result: { content: '# Test Project', detailedContent: '# Test Project' },
+    },
+  }),
+].join('\n');
+
+test('non-empty assistant.message.content is set as message on the first step of that message block', () => {
+  const traj = normalizeCopilot(contentFidelityLog, '1.0.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  // Two tool calls → two steps; message text goes on the first one.
+  expect(agentSteps.length).toBe(2);
+  expect(agentSteps[0]!.message).toBe(
+    'Using **brainstorming** to shape the todo app before any implementation.',
+  );
+  // Second step of the same message block: no message (text belongs to the turn, not repeated).
+  expect(agentSteps[1]!.message).toBeUndefined();
+});
+
+test('empty assistant.message.content is not set on any step', () => {
+  const raw = JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      content: '',
+      toolRequests: [
+        {
+          toolCallId: 'call_x',
+          name: 'bash',
+          arguments: { command: 'ls' },
+        },
+      ],
+    },
+  });
+  const traj = normalizeCopilot(raw, '1.0.0');
+  for (const s of traj.steps) expect(s.message).toBeUndefined();
+});
+
+test('tool.execution_complete result is set as observation on the matching step', () => {
+  const traj = normalizeCopilot(contentFidelityLog, '1.0.0');
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  // Step 0 has tool_call_id 'call_aaa' → observation with that source_call_id.
+  expect(agentSteps[0]!.tool_calls![0]!.tool_call_id).toBe('call_aaa');
+  expect(agentSteps[0]!.observation).toBeDefined();
+  expect(agentSteps[0]!.observation!.results).toHaveLength(1);
+  expect(agentSteps[0]!.observation!.results[0]!.source_call_id).toBe(
+    'call_aaa',
+  );
+  expect(agentSteps[0]!.observation!.results[0]!.content).toBe(
+    'abc123 initial commit',
+  );
+  // Step 1 has tool_call_id 'call_bbb' → observation with that source_call_id.
+  expect(agentSteps[1]!.tool_calls![0]!.tool_call_id).toBe('call_bbb');
+  expect(agentSteps[1]!.observation).toBeDefined();
+  expect(agentSteps[1]!.observation!.results[0]!.source_call_id).toBe(
+    'call_bbb',
+  );
+  expect(agentSteps[1]!.observation!.results[0]!.content).toBe(
+    '# Test Project',
+  );
+});
+
+test('tool result with no matching step is ignored (no crash)', () => {
+  const raw = [
+    JSON.stringify({
+      type: 'tool.execution_complete',
+      data: { toolCallId: 'orphan', success: true, result: { content: 'x' } },
+    }),
+    JSON.stringify({
+      type: 'assistant.message',
+      data: {
+        toolRequests: [
+          { toolCallId: 'call_z', name: 'bash', arguments: { command: 'ls' } },
+        ],
+      },
+    }),
+  ].join('\n');
+  // Should not throw; the orphan result is silently dropped.
+  const traj = normalizeCopilot(raw, '1.0.0');
+  expect(traj.steps.length).toBeGreaterThanOrEqual(1);
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.tool_call_id === 'call_z',
+  );
+  expect(step?.observation).toBeUndefined();
+});
+
+test('tool.execution_complete without result.content does not set observation', () => {
+  const raw = [
+    JSON.stringify({
+      type: 'assistant.message',
+      data: {
+        toolRequests: [
+          { toolCallId: 'call_y', name: 'bash', arguments: { command: 'x' } },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: 'tool.execution_complete',
+      data: { toolCallId: 'call_y', success: true, result: {} },
+    }),
+  ].join('\n');
+  const traj = normalizeCopilot(raw, '1.0.0');
+  const step = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.tool_call_id === 'call_y',
+  );
+  expect(step?.observation).toBeUndefined();
+});
+
+test('content fidelity: trajectory validates as ATIF v1.7', () => {
+  const traj = normalizeCopilot(contentFidelityLog, '1.0.0');
+  const r = validateTrajectory(traj);
+  expect(r.errors).toEqual([]);
+  expect(r.ok).toBe(true);
+});
+
+test('content fidelity: token guardrail — no per-step metrics introduced', () => {
+  const traj = normalizeCopilot(contentFidelityLog, '1.0.0');
+  for (const s of traj.steps.filter((s) => s.source === 'agent')) {
+    expect(s.metrics).toBeUndefined();
+    expect(s.model_name).toBeUndefined();
+  }
+});

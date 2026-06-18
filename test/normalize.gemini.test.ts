@@ -174,8 +174,11 @@ test('JSON messages format: maps all expected tool names', () => {
   const traj = normalizeGemini(messagesJson, '0.1.18');
   const r = validateTrajectory(traj);
   expect(r.ok).toBe(true);
+  // The second "duplicate" gemini message's only tool call (shell-1) is deduped
+  // away, but its content is still preserved on a message-only carrier step, so
+  // filter to tool-call steps when reading tool names.
   const names = traj.steps
-    .filter((s) => s.source === 'agent')
+    .filter((s) => s.tool_calls)
     .map((s) => s.tool_calls![0]!.function_name);
   expect(names).toEqual(['Skill', 'Glob', 'Write', 'Edit', 'Bash']);
 });
@@ -533,18 +536,20 @@ test("usage: gemini turn metrics attach to the turn's first emitted step", () =>
   expect(writeStep!.model_name).toBe('gemini-3.5-flash');
 });
 
-test('usage: gemini turn whose first snapshot lacks tool calls gets a metrics-only step', () => {
+test('usage: gemini running-snapshot turn (same id) collapses to its final snapshot', () => {
   // Running-snapshot reality: the same id appears first without tool calls, then
-  // with them. Tokens are counted once, on the first snapshot's metrics-only
-  // step; the later tool-call step (same id) carries no metrics (already counted).
+  // with them. The event-log reconstruction collapses both snapshots to the
+  // LAST record (last-write-wins by id) — the one carrying the tool call — so
+  // the turn's tokens attach to that Write step and are counted exactly once.
   const traj = normalizeGemini(usageLog, '0.1.18');
-  const a1Metrics = traj.steps.find((s) => s.metrics?.prompt_tokens === 15813);
-  expect(a1Metrics).toBeDefined();
-  expect(a1Metrics!.tool_calls).toBeUndefined();
   const writeStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.function_name === 'Write',
   );
-  expect(writeStep!.metrics).toBeUndefined();
+  expect(writeStep).toBeDefined();
+  expect(writeStep!.metrics?.prompt_tokens).toBe(15813);
+  // a1 contributes its prompt tokens exactly once (no duplicate metrics step).
+  const a1Steps = traj.steps.filter((s) => s.metrics?.prompt_tokens === 15813);
+  expect(a1Steps.length).toBe(1);
 });
 
 test('usage: gemini text-only turn (no tool calls) still surfaces its tokens', () => {
@@ -564,4 +569,374 @@ test('usage: no tokens on any row leaves step.metrics unset', () => {
   });
   const traj = normalizeGemini(raw, '0.1.18');
   expect(traj.steps.every((s) => s.metrics === undefined)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Full-fidelity ATIF (Task 3) — ported from Harbor's gemini_cli.py converter
+// (_convert_gemini_to_atif) + reconstructor (_load_gemini_session) and its
+// test_gemini_cli.py cases. The real gemini-cli log is a $set / $rewindTo /
+// bare-row EVENT LOG, not the legacy {messages:[]} envelope; the reconstructor
+// runs first, then the converter.
+// ---------------------------------------------------------------------------
+
+// A real-shaped event log: a `sessionId` header row, a `$set` metadata row, two
+// bare user/gemini rows, each gemini row re-snapshotted (same id, second time
+// carrying toolCalls).
+const eventLog = [
+  {
+    sessionId: 'sess-abc',
+    projectHash: 'h',
+    startTime: '2026-06-13T22:55:00.000Z',
+    kind: 'main',
+  },
+  { $set: { lastUpdated: '2026-06-13T22:55:01.000Z' } },
+  {
+    id: 'u1',
+    type: 'user',
+    content: 'do it',
+    timestamp: '2026-06-13T22:55:02.000Z',
+  },
+  {
+    id: 'g1',
+    type: 'gemini',
+    content: '',
+    timestamp: '2026-06-13T22:55:03.000Z',
+    model: 'gemini-3-flash',
+    thoughts: [{ subject: 'Plan', description: 'Inspect first.' }],
+    tokens: { input: 100, output: 5, thoughts: 10, tool: 2, cached: 0 },
+  },
+  // re-snapshot of g1 (same id) now carrying the tool call + its result.
+  {
+    id: 'g1',
+    type: 'gemini',
+    content: 'Reading the file.',
+    timestamp: '2026-06-13T22:55:03.500Z',
+    model: 'gemini-3-flash',
+    thoughts: [{ subject: 'Plan', description: 'Inspect first.' }],
+    tokens: { input: 100, output: 5, thoughts: 10, tool: 2, cached: 0 },
+    toolCalls: [
+      {
+        id: 'read-1',
+        name: 'read_file',
+        args: { file_path: 'GEMINI.md' },
+        result: [
+          {
+            functionResponse: {
+              id: 'read-1',
+              name: 'read_file',
+              response: { output: 'file contents here' },
+            },
+          },
+        ],
+      },
+    ],
+  },
+]
+  .map((r) => JSON.stringify(r))
+  .join('\n');
+
+test('event log: reconstructs from bare rows (last-write-wins by id, dedups snapshot)', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  // g1 is snapshotted twice but counts ONCE: one Read tool call.
+  const reads = traj.steps.filter(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  );
+  expect(reads.length).toBe(1);
+  // Tokens counted once for g1.
+  const totalPrompt = traj.steps.reduce(
+    (acc, s) => acc + (s.metrics?.prompt_tokens ?? 0),
+    0,
+  );
+  expect(totalPrompt).toBe(100);
+});
+
+test('reasoning: thoughts become reasoning_content as "subject: description"', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  const withReasoning = traj.steps.find((s) => s.reasoning_content);
+  expect(withReasoning).toBeDefined();
+  expect(withReasoning!.reasoning_content).toBe('Plan: Inspect first.');
+});
+
+test('reasoning: description-only thought renders without a subject prefix', () => {
+  const raw = JSON.stringify({
+    id: 'g1',
+    type: 'gemini',
+    content: '',
+    thoughts: [{ description: 'Just a thought.' }],
+    tokens: { input: 1, output: 1, cached: 0 },
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  const step = traj.steps.find((s) => s.reasoning_content);
+  expect(step!.reasoning_content).toBe('Just a thought.');
+});
+
+test('reasoning: multiple thoughts join with newline', () => {
+  const raw = JSON.stringify({
+    id: 'g1',
+    type: 'gemini',
+    content: '',
+    thoughts: [
+      { subject: 'A', description: 'one' },
+      { subject: 'B', description: 'two' },
+    ],
+    tokens: { input: 1, output: 1, cached: 0 },
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  const step = traj.steps.find((s) => s.reasoning_content);
+  expect(step!.reasoning_content).toBe('A: one\nB: two');
+});
+
+test('message: gemini content surfaces as step.message', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  );
+  // The tool-call step is the turn's carrier, so the turn's message lands here.
+  expect(readStep!.message).toBe('Reading the file.');
+});
+
+test('observation: tool result output becomes an observation on the tool step', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  const readStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Read',
+  );
+  expect(readStep!.observation).toBeDefined();
+  const result = readStep!.observation!.results[0]!;
+  expect(result.content).toBe('file contents here');
+  // The same-step ATIF invariant: source_call_id matches a tool_call in the step.
+  expect(result.source_call_id).toBe('read-1');
+});
+
+test('observation: a tool call with no result yields no observation', () => {
+  const raw = JSON.stringify({
+    id: 'g1',
+    type: 'gemini',
+    toolCalls: [{ id: 't1', name: 'read_file', args: { file_path: 'a' } }],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  expect(traj.steps[0]!.observation).toBeUndefined();
+});
+
+test('tokens: tool tokens fold into completion (output + thoughts + tool)', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  const withMetrics = traj.steps.find((s) => s.metrics);
+  // output 5 + thoughts 10 + tool 2 = 17
+  expect(withMetrics!.metrics!.completion_tokens).toBe(5 + 10 + 2);
+});
+
+test('session_id: populated from the log header sessionId', () => {
+  const traj = normalizeGemini(eventLog, '0.1.18');
+  expect(traj.session_id).toBe('sess-abc');
+});
+
+// --- $rewindTo handling (correctness fix) -----------------------------------
+
+test('$rewindTo to a known id truncates that turn and everything after it', () => {
+  // g2 is appended, then a $rewindTo back to g1 abandons g2. Only g1's tool
+  // call + tokens should survive.
+  const lines = [
+    { sessionId: 's', kind: 'main' },
+    {
+      id: 'g1',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 100, output: 5, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'a1', name: 'read_file', args: { file_path: 'a' } }],
+    },
+    {
+      id: 'g2',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 200, output: 9, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'b1', name: 'write_file', args: { file_path: 'b' } }],
+    },
+    { $rewindTo: 'g2' },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join('\n');
+  const traj = normalizeGemini(lines, '0.1.18');
+  const names = traj.steps
+    .filter((s) => s.tool_calls)
+    .map((s) => s.tool_calls![0]!.function_name);
+  // g2's Write is rewound away; only g1's Read remains.
+  expect(names).toEqual(['Read']);
+  const totalPrompt = traj.steps.reduce(
+    (acc, s) => acc + (s.metrics?.prompt_tokens ?? 0),
+    0,
+  );
+  expect(totalPrompt).toBe(100);
+});
+
+test('$rewindTo to an UNKNOWN id clears all accumulated messages', () => {
+  const lines = [
+    { sessionId: 's', kind: 'main' },
+    {
+      id: 'g1',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 100, output: 5, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'a1', name: 'read_file', args: { file_path: 'a' } }],
+    },
+    { $rewindTo: 'does-not-exist' },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join('\n');
+  const traj = normalizeGemini(lines, '0.1.18');
+  // Everything cleared → no agent steps, only the empty-trajectory placeholder.
+  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
+  expect(agentSteps).toEqual([]);
+});
+
+test('$rewindTo mid-stream keeps surviving turns and re-adds new ones after', () => {
+  const lines = [
+    { sessionId: 's', kind: 'main' },
+    {
+      id: 'g1',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 10, output: 1, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'a1', name: 'read_file', args: { file_path: 'a' } }],
+    },
+    {
+      id: 'g2',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 20, output: 2, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'b1', name: 'write_file', args: { file_path: 'b' } }],
+    },
+    { $rewindTo: 'g2' },
+    {
+      id: 'g3',
+      type: 'gemini',
+      content: '',
+      tokens: { input: 30, output: 3, thoughts: 0, tool: 0, cached: 0 },
+      toolCalls: [{ id: 'c1', name: 'glob', args: { path: '.' } }],
+    },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join('\n');
+  const traj = normalizeGemini(lines, '0.1.18');
+  const names = traj.steps
+    .filter((s) => s.tool_calls)
+    .map((s) => s.tool_calls![0]!.function_name);
+  // g2 rewound away; g1 (Read) and g3 (Glob) survive, in order.
+  expect(names).toEqual(['Read', 'Glob']);
+  const totalPrompt = traj.steps.reduce(
+    (acc, s) => acc + (s.metrics?.prompt_tokens ?? 0),
+    0,
+  );
+  expect(totalPrompt).toBe(10 + 30);
+});
+
+// --- $set.messages fallback -------------------------------------------------
+
+test('$set.messages fallback: reconstructs when no bare rows are present', () => {
+  // No bare {id,type} rows — only a $set carrying a messages array. The
+  // reconstructor must fall back to that array (defensive vs a log-shape change).
+  const lines = [
+    { sessionId: 's', kind: 'main' },
+    {
+      $set: {
+        lastUpdated: 'now',
+        messages: [
+          {
+            type: 'gemini',
+            content: 'hi',
+            tokens: { input: 50, output: 3, thoughts: 0, tool: 0, cached: 0 },
+            toolCalls: [
+              { id: 'x', name: 'run_shell_command', args: { command: 'ls' } },
+            ],
+          },
+        ],
+      },
+    },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join('\n');
+  const traj = normalizeGemini(lines, '0.1.18');
+  const bashStep = traj.steps.find(
+    (s) => s.tool_calls?.[0]?.function_name === 'Bash',
+  );
+  expect(bashStep).toBeDefined();
+  expect(bashStep!.metrics?.prompt_tokens).toBe(50);
+});
+
+test('$set.messages fallback yields to real bare rows when both are present', () => {
+  // When bare rows exist they win; the $set.messages array is ignored.
+  const lines = [
+    { sessionId: 's', kind: 'main' },
+    {
+      $set: {
+        messages: [
+          {
+            type: 'gemini',
+            content: 'stale',
+            toolCalls: [
+              { id: 'stale', name: 'write_file', args: { file_path: 'z' } },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      id: 'g1',
+      type: 'gemini',
+      content: 'fresh',
+      toolCalls: [{ id: 'r1', name: 'read_file', args: { file_path: 'a' } }],
+    },
+  ]
+    .map((r) => JSON.stringify(r))
+    .join('\n');
+  const traj = normalizeGemini(lines, '0.1.18');
+  const names = traj.steps
+    .filter((s) => s.tool_calls)
+    .map((s) => s.tool_calls![0]!.function_name);
+  expect(names).toEqual(['Read']);
+});
+
+// --- text-only / reasoning-only turns ---------------------------------------
+
+test('reasoning-only turn (no tool calls, no message) gets a dedicated step', () => {
+  // Harbor test_thoughts_do_not_fill_empty_assistant_message: empty content +
+  // thoughts → message empty/undefined, reasoning populated.
+  const raw = JSON.stringify({
+    id: 'g1',
+    type: 'gemini',
+    content: '',
+    model: 'gemini-3-flash-preview',
+    thoughts: [
+      { subject: 'Plan', description: 'Inspect the workspace first.' },
+    ],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  const step = traj.steps.find((s) => s.reasoning_content);
+  expect(step).toBeDefined();
+  expect(step!.source).toBe('agent');
+  expect(step!.reasoning_content).toBe('Plan: Inspect the workspace first.');
+  expect(step!.tool_calls).toBeUndefined();
+  // Empty content does not fabricate a message.
+  expect(step!.message).toBeUndefined();
+});
+
+test('legacy {messages:[]} envelope still converts (text + tokens)', () => {
+  // The legacy single-JSON shape used by older logs and existing fixtures.
+  const raw = JSON.stringify({
+    sessionId: 'legacy-1',
+    messages: [
+      { type: 'user', content: 'Hello' },
+      {
+        type: 'gemini',
+        content: 'Hi there!',
+        model: 'gemini-3-flash-preview',
+        tokens: { input: 10, output: 5, thoughts: 0, tool: 0, cached: 0 },
+      },
+    ],
+  });
+  const traj = normalizeGemini(raw, '0.1.18');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  expect(traj.session_id).toBe('legacy-1');
+  const agentStep = traj.steps.find((s) => s.message === 'Hi there!');
+  expect(agentStep).toBeDefined();
+  expect(agentStep!.metrics?.prompt_tokens).toBe(10);
 });
