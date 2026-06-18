@@ -190,6 +190,10 @@ bun run quorum run-all --coding-agents antigravity --jobs 1
 For grouped all-agent host sweeps, per-agent credentials, auth mount details,
 and troubleshooting, use [docs/coding-agent-care-and-feeding.md](docs/coding-agent-care-and-feeding.md).
 
+## Windows Runtime
+
+For evals against native Windows Claude, see [docs/windows/eval-runtime.md](docs/windows/eval-runtime.md) (Linux+KVM hosts only).
+
 ## Canonical Actors
 
 Keep the actors straight; confusing them is the most common triage error.
