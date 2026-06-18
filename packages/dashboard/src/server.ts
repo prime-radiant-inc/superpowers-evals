@@ -190,6 +190,13 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   };
 
   // Render + publish a cell partial for (scenario, agent, os) from a Cell.
+  //
+  // NOTE: the ineligible dim+tooltip overlay (opacity: 0.3, title) is applied at
+  // first paint only (in renderRoot's views map). SSE re-renders of an ineligible
+  // cell omit it — but this is safe today: ineligible cells have a constant
+  // signature (no runs ever land for them), so diffGrids never re-emits them, and
+  // they're present from the very first scan. If that invariant ever changed (e.g.
+  // a manifest hot-reload), publishCell would need the same overlay logic.
   const publishCell = (cell: Cell): void => {
     const mc = manifestCellFor(cell.scenario, cell.agent, cell.os);
     const view = cellView(cell, cell.scenario, cell.agent, cell.os, mc);
@@ -325,7 +332,6 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
         agentColumns,
         views,
         collapseOsRow,
-        tally,
       }),
       mode,
     });

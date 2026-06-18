@@ -95,7 +95,9 @@ function main(): void {
   const cli = parseArgs(process.argv.slice(2));
   const handle = startDashboard({
     port: cli.port,
-    resultsRoot: resolve(cli.resultsDir),
+    // Resolve resultsDir against root (not cwd) so --root /repo always reads
+    // results from /repo/results, whether or not --results was also given.
+    resultsRoot: resolve(cli.root, cli.resultsDir),
     manifestPath: resolve(cli.manifestPath),
   });
   // Print the bound URL so the user knows where to point a browser.

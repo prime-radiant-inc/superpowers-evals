@@ -402,20 +402,6 @@ test('tallyHtml reports the OS sub-column count and a distinct ineligible segmen
 
 // --- gridHtml test helpers -----------------------------------------------------
 
-function tally(over: Partial<HeaderTally> = {}): HeaderTally {
-  return {
-    scenarios: 0,
-    agents: 0,
-    columns: 0,
-    passed: 0,
-    failed: 0,
-    indeterminate: 0,
-    not_run: 0,
-    ineligible: 0,
-    ...over,
-  };
-}
-
 // Build a 3-part views map (cellKey) for the cartesian product of scenarios ×
 // agentColumns(agent, os).
 function viewsFor(
@@ -453,13 +439,6 @@ test('gridHtml renders the matrix table, headers, and row labels', () => {
     agentColumns,
     views,
     collapseOsRow: true,
-    tally: tally({
-      scenarios: 2,
-      agents: 2,
-      columns: 2,
-      passed: 3,
-      failed: 1,
-    }),
   });
   expect(html).toContain('<table class="mx" id="grid">');
   // read-only: no launch affordances.
@@ -484,7 +463,6 @@ test('gridHtml escapes scenario and agent names in data attributes and labels', 
     agentColumns,
     views,
     collapseOsRow: true,
-    tally: tally({ scenarios: 1, agents: 1, columns: 1, passed: 1 }),
   });
   expect(html).toContain('data-agent="a&quot;b"');
   expect(html).toContain('data-scenario="s&amp;x"');
@@ -502,7 +480,6 @@ test('gridHtml renders one OS sub-column per agent OS with data-os', () => {
     agentColumns,
     views,
     collapseOsRow: false,
-    tally: tally({ scenarios: 1, agents: 1, columns: 2 }),
   });
   // The agent header spans both OS sub-columns.
   expect(html).toContain('class="agent-col" data-agent="claude" colspan="2"');
@@ -531,7 +508,6 @@ test('gridHtml keeps the OS-header row in the DOM (collapsed) for an all-linux g
     agentColumns,
     views,
     collapseOsRow: true,
-    tally: tally({ scenarios: 1, agents: 2, columns: 2 }),
   });
   // The OS-header row is present in the DOM, marked collapsed (not removed).
   expect(html).toContain('class="os-header collapsed"');
@@ -545,7 +521,6 @@ test('gridHtml renders the empty-state message when there are no scenarios or ag
     agentColumns: [{ agent: 'claude', oses: ['linux'] }],
     views: new Map(),
     collapseOsRow: true,
-    tally: tally({ agents: 1, columns: 1 }),
   });
   expect(noScenarios).toContain('class="empty-state"');
   expect(noScenarios).not.toContain('<table class="mx"');
@@ -555,7 +530,6 @@ test('gridHtml renders the empty-state message when there are no scenarios or ag
     agentColumns: [],
     views: new Map(),
     collapseOsRow: true,
-    tally: tally({ scenarios: 1 }),
   });
   expect(noAgents).toContain('class="empty-state"');
   expect(noAgents).not.toContain('<table class="mx"');

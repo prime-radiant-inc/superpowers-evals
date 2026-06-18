@@ -249,7 +249,6 @@ export interface GridArgs {
   // True when the displayed OS set is exactly {linux}: the OS-label row stays in
   // the DOM (for stable column indices) but is CSS-collapsed.
   readonly collapseOsRow: boolean;
-  readonly tally: HeaderTally;
 }
 
 // A defensive empty cell for an (scenario, agent, os) sub-column the views map

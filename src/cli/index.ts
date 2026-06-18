@@ -152,12 +152,12 @@ program
       );
       process.exit(2);
     }
-    // Graceful SIGINT (dashboard Stop sends SIGINT to this process). The handler
-    // must know the run dir + identity before the await resolves, so the run dir
-    // is captured via onRunDir and startedAt is stamped here (shared with the
-    // happy path). On SIGINT: forward the signal to the gauntlet child, write a
-    // stopped (indeterminate) verdict so the cell resolves instead of vanishing
-    // under the dead-pid rule, then exit 2.
+    // Graceful SIGINT handler. The handler must know the run dir + identity
+    // before the await resolves, so the run dir is captured via onRunDir and
+    // startedAt is stamped here (shared with the happy path). On SIGINT:
+    // forward the signal to the gauntlet child, write a stopped (indeterminate)
+    // verdict so the cell resolves instead of vanishing under the dead-pid
+    // rule, then exit 2.
     const startedAt = new Date().toISOString();
     const scenarioId = scenarioName(scn);
     let runDirForStop: string | null = null;
