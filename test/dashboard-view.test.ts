@@ -162,6 +162,10 @@ test('latestAgeDays clamps to 0 for a future timestamp', () => {
 
 // --- headerTally -------------------------------------------------------------
 
+// headerTally resolves each identity's manifest cell through a callback; with no
+// manifest every lookup returns null (so empty-window cells read as not_run).
+const noManifest = () => null;
+
 test('headerTally counts the latest verdict per identity and not_run for absences', () => {
   const passCell = cell({
     scenario: 'a',
@@ -180,13 +184,15 @@ test('headerTally counts the latest verdict per identity and not_run for absence
     { scenario: 'b', agent: 'claude', os: 'linux' },
     { scenario: 'c', agent: 'claude', os: 'linux' },
   ];
-  const t = headerTally(g, identities, 3, 1);
+  const t = headerTally(g, identities, 3, 1, 3, noManifest);
   expect(t.scenarios).toBe(3);
   expect(t.agents).toBe(1);
+  expect(t.columns).toBe(3);
   expect(t.passed).toBe(1);
   expect(t.failed).toBe(1);
   expect(t.indeterminate).toBe(0);
   expect(t.not_run).toBe(1);
+  expect(t.ineligible).toBe(0);
 });
 
 test('headerTally counts unknown/indeterminate latest as indeterminate', () => {
@@ -201,7 +207,7 @@ test('headerTally counts unknown/indeterminate latest as indeterminate', () => {
     window: [rec({ final: 'indeterminate' })],
   });
   const cells = [unkCell, indetCell];
-  const t = headerTally(grid(cells), identitiesOf(cells), 2, 1);
+  const t = headerTally(grid(cells), identitiesOf(cells), 2, 1, 2, noManifest);
   expect(t.indeterminate).toBe(2);
   expect(t.passed).toBe(0);
   expect(t.not_run).toBe(0);
@@ -214,7 +220,30 @@ test('headerTally treats an empty-window cell as not_run', () => {
     window: [],
     running: { run_id: 'r', phase: 'agent' },
   });
-  const t = headerTally(grid([runningOnly]), identitiesOf([runningOnly]), 1, 1);
+  const t = headerTally(
+    grid([runningOnly]),
+    identitiesOf([runningOnly]),
+    1,
+    1,
+    1,
+    noManifest,
+  );
+  expect(t.not_run).toBe(1);
+});
+
+test('headerTally counts ineligible identities separately from not_run', () => {
+  // One empty-window cell that the manifest marks ineligible, one that is
+  // eligible-but-unrun. They must NOT collapse into one not_run figure.
+  const identities = [
+    { scenario: 'a', agent: 'claude', os: 'linux' },
+    { scenario: 'b', agent: 'claude', os: 'linux' },
+  ];
+  const manifestCellFor = (_s: string, _a: string, _os: string) =>
+    _s === 'a'
+      ? { eligible: false, skipped_reason: 'directive' as const }
+      : { eligible: true, skipped_reason: null };
+  const t = headerTally(grid([]), identities, 2, 1, 2, manifestCellFor);
+  expect(t.ineligible).toBe(1);
   expect(t.not_run).toBe(1);
 });
 

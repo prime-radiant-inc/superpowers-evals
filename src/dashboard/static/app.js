@@ -36,15 +36,46 @@
     clone.style.top = top + "px";
   }
 
+  // Column highlight: light the whole (agent, os) column by ATTRIBUTE match —
+  // never positional index — so it survives the multi-OS two-tier header and SSE
+  // <td> swaps. An agent-group header (.agent-col) has no data-os, so hovering it
+  // lights every column for that agent.
+  function clearColumnHighlight() {
+    for (const el of document.querySelectorAll(".col-hi")) {
+      el.classList.remove("col-hi");
+    }
+  }
+
+  function highlightColumn(el) {
+    const agent = el.getAttribute("data-agent");
+    if (agent === null) return;
+    const os = el.getAttribute("data-os");
+    const a = CSS.escape(agent);
+    const selector =
+      os !== null
+        ? `[data-agent="${a}"][data-os="${CSS.escape(os)}"]`
+        : `[data-agent="${a}"]`;
+    for (const node of document.querySelectorAll(selector)) {
+      node.classList.add("col-hi");
+    }
+  }
+
   document.addEventListener("mouseover", (e) => {
     const cell = e.target.closest("td.c");
     if (cell) {
       if (cell.querySelector("[data-card]")) showCard(cell);
       else hideCard();
     }
+    const colSource = e.target.closest("[data-agent]");
+    clearColumnHighlight();
+    if (colSource) highlightColumn(colSource);
   });
   document.addEventListener("mouseout", (e) => {
     const cell = e.target.closest("td.c");
     if (cell && !cell.contains(e.relatedTarget)) hideCard();
+    const colSource = e.target.closest("[data-agent]");
+    if (colSource && !colSource.contains(e.relatedTarget)) {
+      clearColumnHighlight();
+    }
   });
 })();

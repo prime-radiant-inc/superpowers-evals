@@ -51,6 +51,7 @@ body {
 .kpass { color: var(--verdict-pass); }
 .kfail { color: var(--verdict-fail); }
 .kindet { color: var(--verdict-indet); }
+.kineligible { color: var(--text-label); font-style: italic; }
 
 .mxwrap { background: var(--surface-panel); border-radius: 8px; padding: 16px 18px; overflow: auto; max-height: 80vh; }
 .mx { border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -58,10 +59,54 @@ body {
   color: var(--text-label); font-weight: 600; padding: 6px 0 10px; font-size: 12px;
   text-align: center; width: 104px; position: sticky; top: 0; background: var(--surface-panel); z-index: 2;
 }
-.mx th.corner { text-align: left; width: 260px; }
-.mx td.rl { color: var(--text-primary); padding: 0 14px 0 6px; white-space: nowrap; font-size: 13px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+/* Two-tier header: agent groups (row 1) span their OS sub-columns (row 2). The
+   OS row sits below the agent row, so it sticks at the agent row's height. */
+.mx th.agent-col { top: 0; }
+.mx th.os-col { top: 28px; font-weight: 400; color: var(--text-label); padding: 2px 0 8px; }
+/* All-linux grids: keep the OS row in the DOM (stable column indices) but hide
+   it — visibility:hidden + zero box so it collapses without removing columns. */
+.mx tr.os-header.collapsed { visibility: hidden; }
+.mx tr.os-header.collapsed th { height: 0; padding: 0; border: 0; line-height: 0; }
+/* Subtle agent-group separation: a left border at each agent boundary. */
+.mx th.agent-col, .mx th.os-col:first-of-type { border-left: 1px solid var(--border-grid); }
+.mx th.corner {
+  text-align: left; width: 260px;
+  position: sticky; left: 0; top: 0; z-index: 4; background: var(--surface-panel);
+}
+/* Sticky-left scenario column — the OS axis widens past laptop width, so row
+   labels must stay visible on horizontal scroll. Sits above body cells, below
+   the sticky header. */
+.mx td.rl {
+  color: var(--text-primary); padding: 0 14px 0 6px; white-space: nowrap; font-size: 13px;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  position: sticky; left: 0; z-index: 1; background: var(--surface-panel);
+}
 .mx td.c { width: 104px; height: 54px; padding: 0; border-left: 1px solid var(--border-grid); vertical-align: middle; }
 .mx tr + tr td { border-top: 1px solid var(--border-subtle); }
+
+/* Column highlight (app.js): a subtle wash on every cell/header of the hovered
+   (agent, os) column. Attribute-matched, so it survives SSE <td> swaps. */
+.col-hi { background: var(--accent-wash); }
+
+/* SSE swap flash: HTMX adds .htmx-added to a freshly-swapped node. */
+.mx td.c.htmx-added { animation: cellflash 0.6s ease-out; }
+@keyframes cellflash {
+  from { background: var(--accent-wash); }
+  to { background: transparent; }
+}
+
+/* Mode banner: results-only coverage warning above the grid. */
+.mode-banner {
+  margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; font-size: 12px;
+  color: var(--verdict-indet);
+  background: rgba(212, 169, 92, 0.10);
+  border: 1px solid rgba(212, 169, 92, 0.35);
+}
+
+/* Empty/zero-state: centered, muted message when results/ is empty. */
+.empty-state {
+  padding: 48px 16px; text-align: center; color: var(--text-label); font-size: 14px;
+}
 
 .cell { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 54px; position: relative; }
 .cell.running { background: rgba(122, 162, 200, 0.06); }

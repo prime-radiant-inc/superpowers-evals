@@ -1,7 +1,13 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Cell, cellId, cellKey, type Grid } from './contracts.ts';
+import {
+  type AgentColumns,
+  type Cell,
+  cellId,
+  cellKey,
+  type Grid,
+} from './contracts.ts';
 import { EventBus } from './event-bus.ts';
 import type { GridManifest, GridManifestCell } from './manifest.ts';
 import { scanResults } from './scan.ts';
@@ -129,6 +135,32 @@ function gridIdentities(
   }));
 }
 
+// The per-agent OS sub-columns, in `agents` order. Each agent's OS list is its
+// distinct OSes, sorted ascending (so linux precedes windows). With a manifest,
+// the OSes come from its cells (the authoritative eligibility matrix); without
+// one, from the observed grid identities (results-only).
+function buildAgentColumns(
+  agents: readonly string[],
+  identities: readonly CellIdentity[],
+  manifest: GridManifest | null,
+): AgentColumns[] {
+  const source: readonly { agent: string; os: string }[] =
+    manifest !== null ? manifest.cells : identities;
+  const byAgent = new Map<string, Set<string>>();
+  for (const c of source) {
+    let set = byAgent.get(c.agent);
+    if (set === undefined) {
+      set = new Set<string>();
+      byAgent.set(c.agent, set);
+    }
+    set.add(c.os);
+  }
+  return agents.map((agent) => ({
+    agent,
+    oses: [...(byAgent.get(agent) ?? new Set<string>())].sort(),
+  }));
+}
+
 export function createDashboard(args: CreateDashboardArgs): Dashboard {
   const { resultsRoot, knownAgents, manifest } = args;
   const bus = new EventBus();
@@ -236,8 +268,11 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     const scenarios = manifest?.scenarios ?? distinctScenarios(grid);
     const agents = manifest?.agents ?? distinctAgents(grid);
     const identities = gridIdentities(grid, manifest);
+    const agentColumns = buildAgentColumns(agents, identities, manifest);
     const skipped = skipReasons();
 
+    // The views map is keyed by the 3-part cellKey(scenario, agent, os) — the
+    // grid renders one body cell per (scenario, agent, os) sub-column.
     const views = new Map<string, ReturnType<typeof cellView>>();
     for (const id of identities) {
       const key = cellKey(id.scenario, id.agent, id.os);
@@ -246,34 +281,53 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
       const mc = manifestCellFor(id.scenario, id.agent, id.os);
       const view = cellView(cell, id.scenario, id.agent, id.os, mc);
       // Ineligible cells: the status field already carries 'ineligible' (set by
-      // cellView via cellStatus). The opacity/title overlay is kept for backward
-      // compatibility with the existing "n/a" rendering in cellHtml (state=empty
-      // + title => c-na class). This is the single ineligible rendering path:
-      // cellStatus drives the status glyph; the title/opacity overlay drives the
-      // "n/a" tooltip/dimming in cellHtml.
+      // cellView via cellStatus). The opacity/title overlay is kept for the
+      // existing "n/a" rendering in cellHtml (state=empty + title => c-na class).
+      // This is the single ineligible rendering path: cellStatus drives the
+      // status glyph; the title/opacity overlay drives the tooltip/dimming.
       const naReason = skipped.get(key);
       views.set(
-        `${id.scenario}\t${id.agent}`,
+        key,
         view.state === 'empty' && naReason !== undefined
           ? { ...view, opacity: 0.3, title: naReason }
           : view,
       );
     }
+
+    // The displayed OS set across all agent columns. Collapse the OS-label row
+    // when it is exactly {linux} (or empty) — single-OS grids don't need the row.
+    const displayedOses = new Set<string>();
+    for (const ac of agentColumns) {
+      for (const os of ac.oses) {
+        displayedOses.add(os);
+      }
+    }
+    const collapseOsRow = displayedOses.size <= 1;
+    const columnCount = agentColumns.reduce(
+      (sum, ac) => sum + ac.oses.length,
+      0,
+    );
+
     const tally = headerTally(
       grid,
       identities,
       scenarios.length,
       agents.length,
+      columnCount,
+      manifestCellFor,
     );
 
+    const mode = manifest === null ? 'results-only' : 'full';
     const page = layoutHtml({
       tallyHtml: tallyHtml(tally),
       gridHtml: gridHtml({
         scenarios,
-        agents,
+        agentColumns,
         views,
+        collapseOsRow,
         tally,
       }),
+      mode,
     });
     return new Response(page, {
       headers: { 'content-type': 'text/html; charset=utf-8' },

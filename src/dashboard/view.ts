@@ -178,42 +178,74 @@ export interface CellIdentity {
   readonly os: string;
 }
 
-// Grid-wide rollup over the latest verdict of each identity. `not_run` is every
-// identity with no window (absent or running-only cells). `scenarioCount` /
-// `agentCount` are the header's "N scenarios × M agents" figures (the manifest's
-// list lengths, or the observed distinct counts when manifest-null).
+// A manifest cell as headerTally / cellStatus consume it: just eligibility +
+// the skip reason. Kept structural so callers can pass the harness manifest cell
+// or a test stub.
+export interface ManifestCellLike {
+  readonly eligible: boolean;
+  readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+}
+
+// Grid-wide rollup over the 5-state taxonomy (cellStatus) of each identity.
+// `scenarioCount` / `agentCount` are the header's "N scenarios × M agents"
+// figures; `columnCount` is the flattened (agent, os) sub-column count.
+// `manifestCellFor` resolves each identity's manifest cell so empty-window cells
+// split into `not_run` (eligible/unknown) vs `ineligible` (manifest eligible:false).
 export function headerTally(
   grid: Grid,
   identities: readonly CellIdentity[],
   scenarioCount: number,
   agentCount: number,
+  columnCount: number,
+  manifestCellFor: (
+    scenario: string,
+    agent: string,
+    os: string,
+  ) => ManifestCellLike | null,
 ): HeaderTally {
   let passed = 0;
   let failed = 0;
   let indeterminate = 0;
   let notRun = 0;
+  let ineligible = 0;
   for (const id of identities) {
-    const cell = grid.cells.get(cellKey(id.scenario, id.agent, id.os));
-    if (cell === undefined || cell.window.length === 0) {
-      notRun += 1;
-      continue;
-    }
-    const latest = (cell.window[cell.window.length - 1] as RunRecord).final;
-    if (latest === 'pass') {
-      passed += 1;
-    } else if (latest === 'fail') {
-      failed += 1;
-    } else {
-      indeterminate += 1;
+    const cell =
+      grid.cells.get(cellKey(id.scenario, id.agent, id.os)) ??
+      ({
+        scenario: id.scenario,
+        agent: id.agent,
+        os: id.os,
+        window: [],
+        running: null,
+      } as Cell);
+    const mc = manifestCellFor(id.scenario, id.agent, id.os);
+    switch (cellStatus(cell, mc)) {
+      case 'pass':
+        passed += 1;
+        break;
+      case 'failed':
+        failed += 1;
+        break;
+      case 'incomplete':
+        indeterminate += 1;
+        break;
+      case 'ineligible':
+        ineligible += 1;
+        break;
+      default:
+        notRun += 1;
+        break;
     }
   }
   return {
     scenarios: scenarioCount,
     agents: agentCount,
+    columns: columnCount,
     passed,
     failed,
     indeterminate,
     not_run: notRun,
+    ineligible,
   };
 }
 

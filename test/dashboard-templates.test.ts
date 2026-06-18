@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
 import type {
+  AgentColumns,
   CellView,
   HeaderTally,
   SlotView,
 } from '../src/dashboard/contracts.ts';
+import { cellKey } from '../src/dashboard/contracts.ts';
 import {
   cellHtml,
   esc,
@@ -358,10 +360,12 @@ test('tallyHtml renders the quorum header tally line', () => {
   const tally: HeaderTally = {
     scenarios: 54,
     agents: 10,
+    columns: 12,
     passed: 301,
     failed: 9,
     indeterminate: 4,
     not_run: 226,
+    ineligible: 0,
   };
   const html = tallyHtml(tally);
   expect(html).toContain('<b>quorum</b>');
@@ -373,72 +377,224 @@ test('tallyHtml renders the quorum header tally line', () => {
   expect(html).toContain('class="sep">·<');
 });
 
+test('tallyHtml reports the OS sub-column count and a distinct ineligible segment', () => {
+  const tally: HeaderTally = {
+    scenarios: 4,
+    agents: 3,
+    columns: 7,
+    passed: 5,
+    failed: 1,
+    indeterminate: 0,
+    not_run: 2,
+    ineligible: 3,
+  };
+  const html = tallyHtml(tally);
+  // The sub-column count is reported (OS sub-columns, not just agents).
+  expect(html).toContain('7 cells');
+  // not_run and ineligible are distinct segments with different counts.
+  expect(html).toContain('2 not run');
+  expect(html).toContain('class="kineligible">3 ineligible<');
+  // not_run is not inflated by ineligible.
+  expect(html).not.toContain('5 not run');
+});
+
 // --- gridHtml ------------------------------------------------------------------
+
+// --- gridHtml test helpers -----------------------------------------------------
+
+function tally(over: Partial<HeaderTally> = {}): HeaderTally {
+  return {
+    scenarios: 0,
+    agents: 0,
+    columns: 0,
+    passed: 0,
+    failed: 0,
+    indeterminate: 0,
+    not_run: 0,
+    ineligible: 0,
+    ...over,
+  };
+}
+
+// Build a 3-part views map (cellKey) for the cartesian product of scenarios ×
+// agentColumns(agent, os).
+function viewsFor(
+  scenarios: readonly string[],
+  agentColumns: readonly AgentColumns[],
+): Map<string, CellView> {
+  const views = new Map<string, CellView>();
+  for (const s of scenarios) {
+    for (const ac of agentColumns) {
+      for (const os of ac.oses) {
+        views.set(
+          cellKey(s, ac.agent, os),
+          doneView({
+            cell_id: `cell-${s}-${ac.agent}-${os}`,
+            scenario: s,
+            agent: ac.agent,
+            os,
+          }),
+        );
+      }
+    }
+  }
+  return views;
+}
 
 test('gridHtml renders the matrix table, headers, and row labels', () => {
   const scenarios = ['scn-a', 'scn-b'];
-  const agents = ['claude', 'codex'];
-  const views = new Map<string, CellView>();
-  for (const s of scenarios) {
-    for (const a of agents) {
-      views.set(
-        `${s}\t${a}`,
-        doneView({ cell_id: `cell-${s}-${a}`, scenario: s, agent: a }),
-      );
-    }
-  }
-  const tally: HeaderTally = {
-    scenarios: 2,
-    agents: 2,
-    passed: 3,
-    failed: 1,
-    indeterminate: 0,
-    not_run: 0,
-  };
+  const agentColumns: AgentColumns[] = [
+    { agent: 'claude', oses: ['linux'] },
+    { agent: 'codex', oses: ['linux'] },
+  ];
+  const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
     scenarios,
-    agents,
+    agentColumns,
     views,
-    tally,
+    collapseOsRow: true,
+    tally: tally({
+      scenarios: 2,
+      agents: 2,
+      columns: 2,
+      passed: 3,
+      failed: 1,
+    }),
   });
   expect(html).toContain('<table class="mx" id="grid">');
   // read-only: no launch affordances.
   expect(html).not.toContain('data-launch');
   expect(html).not.toContain('class="play"');
-  // column headers carry data-agent; row labels carry data-scenario.
-  expect(html).toContain('<th data-agent="claude">claude</th>');
-  expect(html).toContain('<th data-agent="codex">codex</th>');
+  // agent-group headers carry data-agent; OS sub-columns carry data-agent + data-os.
+  expect(html).toContain('data-agent="claude"');
+  expect(html).toContain('data-agent="codex"');
   expect(html).toContain('data-scenario="scn-a"');
   expect(html).toContain('data-scenario="scn-b"');
-  // cells are inlined (cell ids present).
-  expect(html).toContain('id="cell-scn-a-claude"');
-  expect(html).toContain('id="cell-scn-b-codex"');
+  // cells are inlined (3-part cell ids present).
+  expect(html).toContain('id="cell-scn-a-claude-linux"');
+  expect(html).toContain('id="cell-scn-b-codex-linux"');
 });
 
 test('gridHtml escapes scenario and agent names in data attributes and labels', () => {
   const scenarios = ['s&x'];
-  const agents = ['a"b'];
-  const views = new Map<string, CellView>();
-  views.set(
-    's&x\ta"b',
-    doneView({ cell_id: 'cell-s&x-a"b', scenario: 's&x', agent: 'a"b' }),
-  );
+  const agentColumns: AgentColumns[] = [{ agent: 'a"b', oses: ['linux'] }];
+  const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
     scenarios,
-    agents,
+    agentColumns,
     views,
-    tally: {
-      scenarios: 1,
-      agents: 1,
-      passed: 1,
-      failed: 0,
-      indeterminate: 0,
-      not_run: 0,
-    },
+    collapseOsRow: true,
+    tally: tally({ scenarios: 1, agents: 1, columns: 1, passed: 1 }),
   });
   expect(html).toContain('data-agent="a&quot;b"');
   expect(html).toContain('data-scenario="s&amp;x"');
   expect(html).not.toContain('data-agent="a"b"'); // no raw quote breaking the attr
+});
+
+test('gridHtml renders one OS sub-column per agent OS with data-os', () => {
+  const scenarios = ['scn-a'];
+  const agentColumns: AgentColumns[] = [
+    { agent: 'claude', oses: ['linux', 'windows'] },
+  ];
+  const views = viewsFor(scenarios, agentColumns);
+  const html = gridHtml({
+    scenarios,
+    agentColumns,
+    views,
+    collapseOsRow: false,
+    tally: tally({ scenarios: 1, agents: 1, columns: 2 }),
+  });
+  // The agent header spans both OS sub-columns.
+  expect(html).toContain('class="agent-col" data-agent="claude" colspan="2"');
+  // Two OS sub-column headers, each with data-agent + data-os.
+  expect(html).toContain('class="os-col" data-agent="claude" data-os="linux"');
+  expect(html).toContain(
+    'class="os-col" data-agent="claude" data-os="windows"',
+  );
+  // The OS-header row is NOT collapsed when multiple OSes are displayed.
+  expect(html).toContain('class="os-header"');
+  expect(html).not.toContain('class="os-header collapsed"');
+  // Both per-OS cells render.
+  expect(html).toContain('id="cell-scn-a-claude-linux"');
+  expect(html).toContain('id="cell-scn-a-claude-windows"');
+});
+
+test('gridHtml keeps the OS-header row in the DOM (collapsed) for an all-linux grid', () => {
+  const scenarios = ['scn-a'];
+  const agentColumns: AgentColumns[] = [
+    { agent: 'claude', oses: ['linux'] },
+    { agent: 'codex', oses: ['linux'] },
+  ];
+  const views = viewsFor(scenarios, agentColumns);
+  const html = gridHtml({
+    scenarios,
+    agentColumns,
+    views,
+    collapseOsRow: true,
+    tally: tally({ scenarios: 1, agents: 2, columns: 2 }),
+  });
+  // The OS-header row is present in the DOM, marked collapsed (not removed).
+  expect(html).toContain('class="os-header collapsed"');
+  // The OS sub-column th is still rendered (DOM-stable column indices).
+  expect(html).toContain('class="os-col" data-agent="claude" data-os="linux"');
+});
+
+test('gridHtml renders the empty-state message when there are no scenarios or agents', () => {
+  const noScenarios = gridHtml({
+    scenarios: [],
+    agentColumns: [{ agent: 'claude', oses: ['linux'] }],
+    views: new Map(),
+    collapseOsRow: true,
+    tally: tally({ agents: 1, columns: 1 }),
+  });
+  expect(noScenarios).toContain('class="empty-state"');
+  expect(noScenarios).not.toContain('<table class="mx"');
+
+  const noAgents = gridHtml({
+    scenarios: ['scn-a'],
+    agentColumns: [],
+    views: new Map(),
+    collapseOsRow: true,
+    tally: tally({ scenarios: 1 }),
+  });
+  expect(noAgents).toContain('class="empty-state"');
+  expect(noAgents).not.toContain('<table class="mx"');
+});
+
+test('cellHtml carries data-agent and data-os on the cell <td>', () => {
+  const html = cellHtml(
+    doneView({
+      cell_id: 'cell-s-claude-windows',
+      scenario: 's',
+      agent: 'claude',
+      os: 'windows',
+    }),
+  );
+  expect(html).toContain('data-agent="claude"');
+  expect(html).toContain('data-os="windows"');
+});
+
+test('cellHtml carries data-agent and data-os on an ineligible (c-na) cell', () => {
+  const html = cellHtml({
+    cell_id: 'cell-s-claude-linux',
+    scenario: 's',
+    agent: 'claude',
+    os: 'linux',
+    state: 'empty',
+    status: 'ineligible',
+    error_stage: null,
+    slots: [],
+    bottom: '—',
+    face_time: '—',
+    face_cost: '—',
+    drift: false,
+    opacity: 0.3,
+    card: null,
+    title: 'not eligible — directive',
+  });
+  expect(html).toContain('c-na');
+  expect(html).toContain('data-agent="claude"');
+  expect(html).toContain('data-os="linux"');
 });
 
 // --- layoutHtml ----------------------------------------------------------------
@@ -447,6 +603,7 @@ test('layoutHtml wires htmx + the SSE extension and references the static assets
   const html = layoutHtml({
     tallyHtml: '<b>quorum</b>',
     gridHtml: '<table></table>',
+    mode: 'full',
   });
   expect(html).toContain('<!doctype html>');
   expect(html).toContain('data-theme="dark"');
@@ -465,4 +622,21 @@ test('layoutHtml wires htmx + the SSE extension and references the static assets
   // the slotted bodies are inlined unescaped (already-rendered HTML).
   expect(html).toContain('<b>quorum</b>');
   expect(html).toContain('<table></table>');
+});
+
+test('layoutHtml renders the mode banner only in results-only mode', () => {
+  const resultsOnly = layoutHtml({
+    tallyHtml: '<b>quorum</b>',
+    gridHtml: '<table></table>',
+    mode: 'results-only',
+  });
+  expect(resultsOnly).toContain('class="mode-banner"');
+  expect(resultsOnly).toContain('grid-manifest.json not found');
+
+  const full = layoutHtml({
+    tallyHtml: '<b>quorum</b>',
+    gridHtml: '<table></table>',
+    mode: 'full',
+  });
+  expect(full).not.toContain('mode-banner');
 });

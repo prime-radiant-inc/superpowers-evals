@@ -1,4 +1,5 @@
 import type {
+  AgentColumns,
   CardView,
   CellStatus,
   CellView,
@@ -6,6 +7,7 @@ import type {
   SlotKind,
   SlotView,
 } from './contracts.ts';
+import { cellId, cellKey } from './contracts.ts';
 import { assertNever } from './invariant.ts';
 
 // Typed template-literal HTML renderers. No templating dependency — pure string
@@ -143,7 +145,10 @@ function statusGlyph(status: CellStatus): { glyph: string; cls: string } {
 // neighbour. Empty cells short-circuit to the em-dash placeholder.
 export function cellHtml(view: CellView): string {
   const id = esc(view.cell_id);
-  const open = `<td class="c" id="${id}" sse-swap="${id}" hx-swap="outerHTML">`;
+  // Column-highlight (app.js) keys on data-agent + data-os — attribute-matched,
+  // not positional — so the highlight survives the multi-OS two-tier header.
+  const col = `data-agent="${esc(view.agent)}" data-os="${esc(view.os)}"`;
+  const open = `<td class="c" id="${id}" sse-swap="${id}" hx-swap="outerHTML" ${col}>`;
 
   if (view.state === 'empty') {
     const sg = statusGlyph(view.status);
@@ -153,7 +158,7 @@ export function cellHtml(view: CellView): string {
     // the status span here handles the glyph.
     if (view.title !== undefined) {
       return (
-        `<td class="c c-na" id="${id}" sse-swap="${id}" hx-swap="outerHTML" title="${esc(view.title)}">` +
+        `<td class="c c-na" id="${id}" sse-swap="${id}" hx-swap="outerHTML" ${col} title="${esc(view.title)}">` +
         `<div class="cell" style="opacity:${f3(view.opacity)}">` +
         `<span class="${sg.cls}">${sg.glyph}</span></div></td>`
       );
@@ -214,73 +219,113 @@ export function cellHtml(view: CellView): string {
 }
 
 // The header tally line (`.pghead` body):
-//   quorum · N scenarios × M agents · P pass · F fail · I indeterminate · X not run
-// Counts are integers, so no escaping is needed.
+//   quorum · N scenarios × M agents · C cells · P pass · F fail · I indeterminate
+//     · X not run · Z ineligible
+// `cells` is the flattened (agent, os) sub-column count; `ineligible` is a
+// distinct segment so excluded cells don't read as not-run. Counts are integers,
+// so no escaping is needed.
 export function tallyHtml(tally: HeaderTally): string {
   const sep = `<span class="sep">·</span>`;
   return (
     `<b>quorum</b>${sep}` +
     `${tally.scenarios} scenarios × ${tally.agents} agents` +
+    `${sep}${tally.columns} cells` +
     `${sep}<span class="kpass">${tally.passed} pass</span>` +
     `${sep}<span class="kfail">${tally.failed} fail</span>` +
     `${sep}<span class="kindet">${tally.indeterminate} indeterminate</span>` +
-    `${sep}${tally.not_run} not run`
+    `${sep}${tally.not_run} not run` +
+    `${sep}<span class="kineligible">${tally.ineligible} ineligible</span>`
   );
 }
 
 export interface GridArgs {
   readonly scenarios: readonly string[];
-  readonly agents: readonly string[];
-  // Keyed by `${scenario}\t${agent}` (cellKey). Every (scenario, agent) pair
-  // in the cartesian product must be present.
+  // Per-agent column groups, in display order. Each group spans its sorted OS
+  // sub-columns (one body cell per OS).
+  readonly agentColumns: readonly AgentColumns[];
+  // Keyed by 3-part cellKey(scenario, agent, os). Every (scenario, agent, os)
+  // sub-column in the cartesian product should be present.
   readonly views: ReadonlyMap<string, CellView>;
+  // True when the displayed OS set is exactly {linux}: the OS-label row stays in
+  // the DOM (for stable column indices) but is CSS-collapsed.
+  readonly collapseOsRow: boolean;
   readonly tally: HeaderTally;
 }
 
-// The matrix table. Sticky-header table with per-agent column headers,
-// per-scenario row labels, and inlined cell <td>s. Read-only: no launch
-// affordances.
-export function gridHtml(args: GridArgs): string {
-  const { scenarios, agents, views } = args;
+// A defensive empty cell for an (scenario, agent, os) sub-column the views map
+// doesn't carry. The server populates every sub-column, so this is defensive
+// only — but it keeps a partial views map rendering a full grid.
+function fallbackCell(scenario: string, agent: string, os: string): CellView {
+  return {
+    cell_id: cellId(scenario, agent, os),
+    scenario,
+    agent,
+    os,
+    state: 'empty',
+    status: 'not_run',
+    error_stage: null,
+    slots: [],
+    bottom: '—',
+    face_time: '—',
+    face_cost: '—',
+    drift: false,
+    opacity: 1,
+    card: null,
+  };
+}
 
-  const headerCells = agents
-    .map((agent) => `<th data-agent="${esc(agent)}">${esc(agent)}</th>`)
+// The matrix table. Two-tier sticky header (agent groups spanning OS
+// sub-columns, then a per-OS label row), per-scenario row labels, and inlined
+// cell <td>s. Read-only: no launch affordances. When the grid has no scenarios
+// or no agent columns, an empty-state message renders in place of the table.
+export function gridHtml(args: GridArgs): string {
+  const { scenarios, agentColumns, views, collapseOsRow } = args;
+
+  if (scenarios.length === 0 || agentColumns.length === 0) {
+    return (
+      `<div class="empty-state">` +
+      `No runs yet — results/ is empty.` +
+      `</div>`
+    );
+  }
+
+  // Row 1: agent groups, each spanning its OS sub-columns.
+  const agentHeader = agentColumns
+    .map(
+      (ac) =>
+        `<th class="agent-col" data-agent="${esc(ac.agent)}" ` +
+        `colspan="${ac.oses.length}" scope="colgroup">${esc(ac.agent)}</th>`,
+    )
     .join('');
+
+  // Row 2: one OS-label sub-column per (agent, os). Always in the DOM; CSS
+  // collapses it when collapseOsRow is set.
+  const osHeader = agentColumns
+    .flatMap((ac) =>
+      ac.oses.map(
+        (os) =>
+          `<th class="os-col" data-agent="${esc(ac.agent)}" ` +
+          `data-os="${esc(os)}" scope="col">${esc(os)}</th>`,
+      ),
+    )
+    .join('');
+  const osHeaderClass = collapseOsRow ? 'os-header collapsed' : 'os-header';
 
   const bodyRows = scenarios
     .map((scenario) => {
-      const cells = agents
-        .map((agent) => {
-          const view = views.get(`${scenario}\t${agent}`);
-          // Every cartesian pair is expected; fall back to an empty cell rather
-          // than throwing so a partial views map still renders a full grid.
-          if (view === undefined) {
-            return cellHtml({
-              cell_id: `cell-${scenario}-${agent}`,
-              scenario,
-              agent,
-              // The server populates every (scenario, agent) pair, so this
-              // fallback is defensive only; os is unknown here (Task 7 adds the
-              // OS column header to this table).
-              os: '',
-              state: 'empty',
-              status: 'not_run',
-              error_stage: null,
-              slots: [],
-              bottom: '—',
-              face_time: '—',
-              face_cost: '—',
-              drift: false,
-              opacity: 1,
-              card: null,
-            });
-          }
-          return cellHtml(view);
-        })
+      const cells = agentColumns
+        .flatMap((ac) =>
+          ac.oses.map((os) => {
+            const view =
+              views.get(cellKey(scenario, ac.agent, os)) ??
+              fallbackCell(scenario, ac.agent, os);
+            return cellHtml(view);
+          }),
+        )
         .join('');
       return (
         `<tr>` +
-        `<td class="rl" data-scenario="${esc(scenario)}">${esc(scenario)}</td>` +
+        `<td class="rl" data-scenario="${esc(scenario)}" scope="row">${esc(scenario)}</td>` +
         cells +
         `</tr>`
       );
@@ -289,8 +334,10 @@ export function gridHtml(args: GridArgs): string {
 
   return (
     `<table class="mx" id="grid">` +
-    `<thead><tr class="agent-header">` +
-    `<th class="corner"></th>${headerCells}</tr></thead>` +
+    `<thead>` +
+    `<tr class="agent-header"><th class="corner" rowspan="2"></th>${agentHeader}</tr>` +
+    `<tr class="${osHeaderClass}">${osHeader}</tr>` +
+    `</thead>` +
     `<tbody>${bodyRows}</tbody>` +
     `</table>`
   );
@@ -302,9 +349,16 @@ export function gridHtml(args: GridArgs): string {
 export interface LayoutArgs {
   readonly tallyHtml: string;
   readonly gridHtml: string;
+  // 'full' when a grid manifest drove the columns/eligibility; 'results-only'
+  // when no manifest was found and the grid shows observed runs only.
+  readonly mode: 'full' | 'results-only';
 }
 
 export function layoutHtml(args: LayoutArgs): string {
+  const banner =
+    args.mode === 'results-only'
+      ? `  <div class="mode-banner">results-only — grid-manifest.json not found; showing observed runs only</div>\n`
+      : '';
   return (
     `<!doctype html>\n` +
     `<html lang="en" data-theme="dark">\n` +
@@ -318,6 +372,7 @@ export function layoutHtml(args: LayoutArgs): string {
     `</head>\n` +
     `<body hx-ext="sse" sse-connect="/events">\n` +
     `  <div class="pghead" id="tally">${args.tallyHtml}</div>\n` +
+    banner +
     `  <div class="mxwrap">${args.gridHtml}</div>\n` +
     `  <div id="card-host"></div>\n` +
     `  <script src="/static/app.js" defer></script>\n` +

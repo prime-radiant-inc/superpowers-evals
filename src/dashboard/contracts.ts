@@ -206,14 +206,25 @@ export interface CellView {
   readonly title?: string;
 }
 
-// The grid-wide rollup for the header tally line.
+// One agent column group in the two-tier header: an agent and the sorted list
+// of OS sub-columns it occupies (one body cell per OS).
+export interface AgentColumns {
+  readonly agent: string;
+  readonly oses: readonly string[];
+}
+
+// The grid-wide rollup for the header tally line. `columns` is the flattened
+// (agent, os) sub-column count (the grid's true width). `ineligible` is counted
+// separately from `not_run` so excluded cells don't inflate the not-run figure.
 export interface HeaderTally {
   readonly scenarios: number;
   readonly agents: number;
+  readonly columns: number;
   readonly passed: number;
   readonly failed: number;
   readonly indeterminate: number;
   readonly not_run: number;
+  readonly ineligible: number;
 }
 
 // An SSE message: an event name (a cell id or 'strip') and a one-line HTML body.
