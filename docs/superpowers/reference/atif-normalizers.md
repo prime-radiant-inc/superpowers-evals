@@ -20,6 +20,33 @@ Each Coding-Agent writes a different session-log format; `src/normalize/<agent>.
 - **provider** (when the log has one) → `step.extra.provider`.
 - Cost is **never fabricated**: no usage in the log → no metrics → null cost.
 
+## How to write a normalizer
+
+A normalizer is `src/normalize/<agent>.ts` exporting `normalize<Agent>(raw: string, version: string): AtifTrajectory` — the agent's raw session-log text plus the harness-supplied agent-version string in, a validated ATIF `Trajectory` out (`src/atif/types.ts`, `validate.ts`; the `AtifNormalizer` type in `src/capture/index.ts`). There are two ways to get one:
+
+- **Port an existing Harbor converter** (the agent ships in Harbor's `installed/<agent>`): follow `porting-harbor-converters.md`. That doc owns the port recipe, the pin/sync machinery, and the inclusive→disjoint + native→canonical translations. Return here for the conventions every normalizer must satisfy (above) and to add the per-agent row (below).
+- **Reverse-engineer from a real captured log** (the agent has NO Harbor converter — e.g. pi, droid, grok): use the recipe below.
+
+### Recipe: reverse-engineer from a real log
+
+1. **Get a real log.** Run the agent once in evals (or find a captured run) and open its raw session log under the run's throwaway `$HOME` — the path `coding-agents/<agent>.yaml`'s `session_log_dir`/`session_log_glob` point at. You CANNOT work from `trajectory.json`; that is the normalizer's *output*. You need the agent's own log, which carries the content the normalizer must learn to extract. (Worked example — pi: `results/sdd-go-fractals-elicited-pi-*/home/.pi/agent/sessions/**/*.jsonl`.)
+2. **Map the log's shape before writing code.** Histogram the entry types; for each, locate: assistant/user text, reasoning/thinking, tool calls + their results (and the id that links a result to its call), the token `usage` block (and whether it is per-message/turn or session-total), how the model is attributed (a per-message field vs. a separate `model_change`-style entry you must track *forward* across later messages), the session id, and how subagents appear. **Extract only fields the log actually carries — never fabricate.**
+3. **Pick the usage scope → SINGLE-SOURCE.** Per-message/turn usage → per-step `step.metrics` (+ `step.model_name`). Session-total-only → `trajectory.final_metrics` (+ `agent.model_name`). Never both — see the single-source invariant above.
+4. **Map tokens to the DISJOINT buckets** (above): uncached prompt / cached / cache_write (on `step.extra.cache_write`) / completion (reasoning folded in). Verify conservation against the log (`prompt + cached + completion == total`).
+5. **Content (full fidelity).** Emit `step.message`, `step.reasoning_content`, and `step.observation` (linked to its call via `source_call_id`) for whatever the log carries; set `trajectory.session_id`, `agent.version`, `agent.extra` when present. Model an existing full-fidelity normalizer — `claude.ts`, `opencode.ts`, or `pi.ts`.
+6. **Canonical tools + subagent alias.** Build an `<AGENT>_TOOL_MAP` (native→canonical) and route the subagent-spawn tool through `agent-prompt.ts` (alias to `Agent`, dispatch instruction → the `prompt` key). **Verify the spawn tool's real name and shape against the log — do NOT assume.** pi's is literally `subagent` (and its `action:"list"` management call must stay `subagent`); kimi emits `Agent` natively. Getting this wrong silently breaks the portable `tool-arg-match Agent --matches prompt=…` checks.
+7. **Stamp + validate.** Set `ATIF_SCHEMA_VERSION`; call `validateTrajectory`.
+8. **Register it.** Add `normalize<Agent>` to the `NORMALIZERS` map in `src/capture/index.ts`. For agents that share a `$HOME` tree (codex/pi/kimi), wire its cwd-filter (`src/capture/cwd-filter.ts`) so concurrent sessions in one home don't cross-contaminate.
+
+### TDD + the obol verification (do NOT skip)
+
+- Write the test FIRST against a small fixture sliced from the REAL log (a handful of entries covering text, reasoning, a tool call + its result, a usage block, and the model/session entries). RED → implement → GREEN. Keep existing tests; don't weaken them to pass.
+- **Token-conservation unit tests are necessary but NOT sufficient — they never catch a pricing bug.** Before committing, price the produced trajectory through obol's `atif` dialect and confirm a **NON-$0** cost when the log carries cost (or correct rate-table pricing when it doesn't). Every cost bug in the porting wave (cursor priced $0, cache_write on the wrong field, mini-swe cost discarded) passed the unit tests and surfaced only when priced. The obol rules that bite:
+  - obol prices ONLY per-step `step.metrics` buckets + `step.extra.cache_write` + per-step `step.metrics.cost_usd`, **keyed by `model_name`**. A missing/empty `model_name` → priced **$0**.
+  - `step.metrics.extra.cache_write` and `final_metrics.*` (whenever any step carries metrics) are **IGNORED**. Cache-write MUST live on `step.extra.cache_write`; per-step cost MUST live on `step.metrics.cost_usd`.
+- Gates: `bun run check` (biome + tsc + bun test) and `bun run quorum check` green.
+- **Update this doc:** add the agent's row under "Per-agent" (log path, bucket mapping, quirks, full-fidelity fields). This reference is only useful while it stays current.
+
 ## Per-agent
 
 ### claude (`normalize/claude.ts`) — per-step, disjoint
@@ -47,10 +74,11 @@ Each Coding-Agent writes a different session-log format; `src/normalize/<agent>.
 - **Full-fidelity:** emits `step.message` (assistant text), `step.reasoning_content` (reasoning blocks), `step.observation` (tool results with `source_call_id`), `trajectory.session_id` + `agent.version` (from session metadata).
 
 ### pi (`normalize/pi.ts`) — per-message, disjoint, **carries cost**
-- Log: pi session; `message.usage{input,output,cacheRead,cacheWrite,cost{total},totalTokens}` + `model` + `provider`.
-- `input`→prompt; `output`→completion; `cacheRead`→cached; `cacheWrite`→`extra.cache_write`; **`cost.total`→`cost_usd`**; `model`→model_name; `provider`→`extra.provider`.
-- **Disjoint** (verified: `input+output+cacheRead == totalTokens`). Usage attaches to the message's first toolCall step, or a metrics-only step for a usage-bearing text-only final message. Cost values are passed through unrounded (float noise from the log).
-- **Full-fidelity:** emits `step.message` (assistant text), `step.observation` (tool results), `agent.version` + `agent.extra` (from session header). Reasoning blocks: pi logs carry content but no dedicated reasoning field; `step.reasoning_content` is absent.
+- Log: pi session `.pi/agent/sessions/**/*.jsonl`. `type:"message"` rows carry `usage{input,output,cacheRead,cacheWrite,cost{total},totalTokens}`; the model arrives in a SEPARATE `type:"model_change"` entry (`provider`+`modelId`, e.g. `openai-codex`/`gpt-5.5`) tracked FORWARD to subsequent messages; `type:"session"` carries the session id.
+- `input`→prompt; `output`→completion; `cacheRead`→cached; `cacheWrite`→`extra.cache_write`; **`cost.total`→ per-step `cost_usd`** (unrounded passthrough — float noise from the log); tracked `modelId`→model_name; `provider`→`extra.provider`.
+- **Disjoint** (verified: `input+output+cacheRead == totalTokens`). Usage attaches to the message's first toolCall step, or a metrics-only step for a usage-bearing text-only message.
+- **Subagent:** pi's spawn tool is literally named `subagent`. Execution calls (carrying `agent`+`task`, no `action`) alias to canonical `Agent` with `task`→`prompt`; the management call (`action:"list"`) stays `subagent`. Verified against the real log — do not assume the name.
+- **Full-fidelity:** emits `step.message` (assistant text), `step.reasoning_content` (pi's `thinking` blocks — plain text), `step.observation` (tool results linked by `source_call_id`), `trajectory.session_id` (from the `session` entry). `agent.version` is the harness-supplied version string (pi's log header is not parsed for it); `agent.extra` is not emitted.
 
 ### copilot (`normalize/copilot.ts`) — **final_metrics-only** (single source)
 - Log: copilot session-state events. Copilot reports the full usage ONLY at `session.shutdown.tokenDetails`: `input.tokenCount`→`final_metrics.total_prompt_tokens`, `output.tokenCount`→`final_metrics.total_completion_tokens`, `cache_read.tokenCount`→`final_metrics.extra.total_cached_tokens`, `currentModel`→`agent.model_name`. Tool steps carry tool_calls but **no `metrics`**.
