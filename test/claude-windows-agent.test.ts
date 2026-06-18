@@ -86,8 +86,15 @@ describe('WindowsClaudeAgent.provision', () => {
       ),
     ).toBe(false);
     // .claude.json and launch.cmd are written via base64 (FromBase64String in argv)
+    const base64Writes = sshCalls.filter((c) =>
+      c.args.join(' ').includes('FromBase64String'),
+    );
+    expect(base64Writes.length).toBeGreaterThanOrEqual(2);
     expect(
-      sshCalls.some((c) => c.args.join(' ').includes('FromBase64String')),
+      base64Writes.some((c) => c.args.join(' ').includes('.claude.json')),
+    ).toBe(true);
+    expect(
+      base64Writes.some((c) => c.args.join(' ').includes('launch.cmd')),
     ).toBe(true);
     // scp (scpTo) copied the superpowers checkout to the per-run dir
     const scpCalls = runner.calls.filter(

@@ -71,10 +71,17 @@ export class WindowsClaudeAgent implements CodingAgent {
       },
       customApiKeyResponses: { approved: [apiKey.slice(-20)], rejected: [] },
     });
-    host.writeFileBase64(
-      winJoin(p.home, '.claude', '.claude.json'),
-      claudeJson,
-    );
+    try {
+      host.writeFileBase64(
+        winJoin(p.home, '.claude', '.claude.json'),
+        claudeJson,
+        { secret: true },
+      );
+    } catch (e) {
+      throw new ProvisionError(
+        `seed .claude.json failed: ${(e as Error).message}`,
+      );
+    }
 
     // 3. Per-run launch.cmd: env + cd + claude. ANTHROPIC_API_KEY is written
     //    via base64 so the key never appears raw in argv. The file itself lives
@@ -89,7 +96,13 @@ export class WindowsClaudeAgent implements CodingAgent {
       `cd /d "${p.workdir}"`,
       `claude --dangerously-skip-permissions --plugin-dir "${p.superpowers}" --model ${this.config.model ?? 'opus'}`,
     ].join('\r\n');
-    host.writeFileBase64(p.launchCmd, launchCmd, { secret: true });
+    try {
+      host.writeFileBase64(p.launchCmd, launchCmd, { secret: true });
+    } catch (e) {
+      throw new ProvisionError(
+        `seed launch.cmd failed: ${(e as Error).message}`,
+      );
+    }
 
     // 4. Copy the superpowers checkout into the per-run dir on the guest.
     //    Each run gets its own copy (no shared dir). rsync is not available on
