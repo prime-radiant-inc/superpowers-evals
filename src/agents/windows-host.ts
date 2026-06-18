@@ -105,10 +105,10 @@ export class WindowsHost {
     opts?: { secret?: boolean },
   ): void {
     const b64 = Buffer.from(content, 'utf8').toString('base64');
+    // Inline the base64 decode to avoid $var interpolation by outer SSH PowerShell.
     const ps =
       `powershell -NoProfile -Command "` +
-      `$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}'));` +
-      `[IO.File]::WriteAllText('${winPath}', $d)"`;
+      `[IO.File]::WriteAllText('${winPath}', [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')))"`;
     const r = this.ssh(ps);
     if (r.status !== 0) {
       const where = opts?.secret ? `<redacted> -> ${winPath}` : ps;

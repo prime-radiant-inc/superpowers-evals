@@ -76,7 +76,7 @@ describe('WindowsHost', () => {
 });
 
 describe('writeFileBase64', () => {
-  test('sends base64 + FromBase64String, never raw content', () => {
+  test('sends base64 + FromBase64String, never raw content, no variable interpolation', () => {
     Bun.env['WIN_EVAL_PASSWORD'] = 'password';
     const r = new FakeRunner();
     const json = '{"a":"b\'c"}';
@@ -85,6 +85,7 @@ describe('writeFileBase64', () => {
     expect(argv).toContain('FromBase64String');
     expect(argv).toContain(Buffer.from(json, 'utf8').toString('base64'));
     expect(argv).not.toContain(json);
+    expect(argv).not.toContain('$d');
   });
   test('secret write redacts content + b64 from error', () => {
     Bun.env['WIN_EVAL_PASSWORD'] = 'password';
