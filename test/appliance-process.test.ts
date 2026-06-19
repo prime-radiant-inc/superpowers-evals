@@ -35,6 +35,7 @@ class FakeRunner implements CommandRunner {
     stderr: '',
   };
   processGroupAlive = false;
+  cancelSignalFails = false;
 
   run(
     command: string,
@@ -82,7 +83,9 @@ class FakeRunner implements CommandRunner {
       command.endsWith('scripts/evals-container') &&
       args.join(' ').includes('kill -INT -456')
     ) {
-      return { status: 0, stdout: '', stderr: '' };
+      return this.cancelSignalFails
+        ? { status: 1, stdout: '', stderr: 'still running\n' }
+        : { status: 0, stdout: '', stderr: '' };
     }
     if (
       command.endsWith('scripts/evals-container') &&
@@ -396,6 +399,88 @@ test('cancel records cancelled for a stopped single-run verdict discovered after
   const updated = readJob(cfg, job.job_id);
   expect(updated.status).toBe('cancelled');
   expect(updated.artifacts.run_id).toBe(runId);
+});
+
+test('cancel records done for a completed single-run verdict discovered after SIGINT', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, {
+    kind: 'run',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
+  mkdirSync(join(cfg.config.container.results_root, runId), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(cfg.config.container.results_root, runId, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: 'pass',
+      final_reason: 'ok',
+      gauntlet: null,
+      checks: [],
+      error: null,
+      economics: null,
+      scenario: 'scenario-a',
+      coding_agent: 'codex',
+      started_at: new Date(Date.now() - 1000).toISOString(),
+      finished_at: new Date().toISOString(),
+    }),
+  );
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    started_at: new Date(Date.now() - 2000).toISOString(),
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.run_id).toBe(runId);
+});
+
+test('cancel leaves a running job retryable when SIGINT fails and the process is alive', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.cancelSignalFails = true;
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  let message = '';
+  try {
+    await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+
+  const updated = readJob(cfg, job.job_id);
+  expect(message).toContain('cancel signal failed');
+  expect(updated.status).toBe('running');
 });
 
 test('cancel keeps a job stopping when the process group is still alive after grace', async () => {

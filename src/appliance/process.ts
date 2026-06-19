@@ -139,7 +139,7 @@ function updateProcess(
     const existingContainerPgid = current.process?.container_pgid ?? null;
     const nextContainerPid = containerPid ?? existingContainerPid;
     const nextContainerPgid = containerPid ?? existingContainerPgid;
-    const hasSignalTarget = nextContainerPgid !== null;
+    const hasSignalTarget = hostPgid !== null || nextContainerPgid !== null;
     return {
       ...current,
       status:
@@ -194,6 +194,47 @@ function hasTerminalArtifact(
     }
   }
   return false;
+}
+
+function runArtifactStopped(
+  loaded: LoadedApplianceConfig,
+  runId: string,
+): boolean {
+  const verdictPath = join(
+    loaded.config.container.results_root,
+    runId,
+    'verdict.json',
+  );
+  if (!existsSync(verdictPath)) {
+    return false;
+  }
+  try {
+    const verdict = FinalVerdictSchema.parse(
+      JSON.parse(readFileSync(verdictPath, 'utf8')) as unknown,
+    );
+    return verdict.error?.stage === 'stopped';
+  } catch {
+    return false;
+  }
+}
+
+function cancellationTerminal(
+  loaded: LoadedApplianceConfig,
+  artifacts: ParsedArtifacts,
+): {
+  readonly status: 'cancelled' | 'done';
+  readonly exitCode: number;
+  readonly summary: string;
+} | null {
+  if (artifacts.batchId !== null && hasTerminalArtifact(loaded, artifacts)) {
+    return { status: 'cancelled', exitCode: 130, summary: 'cancelled' };
+  }
+  if (artifacts.runId !== null && hasTerminalArtifact(loaded, artifacts)) {
+    return runArtifactStopped(loaded, artifacts.runId)
+      ? { status: 'cancelled', exitCode: 130, summary: 'cancelled' }
+      : { status: 'done', exitCode: 0, summary: 'live command completed' };
+  }
+  return null;
 }
 
 function jobArtifacts(job: JobRecord): ParsedArtifacts {
@@ -374,11 +415,17 @@ function liveStatus(
     return { status: 'cancelled', summary: 'cancelled' };
   }
   if (current.status === 'lost' && terminalArtifact) {
-    return { status: 'cancelled', summary: 'cancelled' };
+    return (
+      cancellationTerminal(loaded, artifacts) ?? {
+        status: 'cancelled',
+        summary: 'cancelled',
+      }
+    );
   }
   if (current.status === 'stopping') {
-    return terminalArtifact
-      ? { status: 'cancelled', summary: 'cancelled' }
+    const terminal = cancellationTerminal(loaded, artifacts);
+    return terminal !== null
+      ? { status: terminal.status, summary: terminal.summary }
       : {
           status: 'lost',
           summary:
@@ -400,7 +447,7 @@ function liveStatus(
   };
 }
 
-function hasSignalTarget(job: JobRecord): boolean {
+function hasContainerProcessGroup(job: JobRecord): boolean {
   return (job.process?.container_pgid ?? null) !== null;
 }
 
@@ -609,6 +656,17 @@ export async function launchLiveCommand(
 
   if (args.runner !== undefined) {
     const processInfo = { host_pid: process.pid, host_pgid: process.pid };
+    try {
+      await args.onSpawn?.(processInfo);
+    } catch (error) {
+      callbackError ??= error;
+      return {
+        status: null,
+        stdout: '',
+        stderr: withCallbackError(''),
+        process: processInfo,
+      };
+    }
     const result = args.runner.run(args.command, args.args, args.options);
     if (result.stdout !== '') {
       emitStdout(result.stdout);
@@ -777,11 +835,19 @@ export async function runWorker(
       onStdout: streamStdout,
       onStderr: streamStderr,
       onSpawn: async (processInfo) => {
+        updateProcess(loaded, jobId, processInfo, null);
         const containerPid = await pollContainerPid(
           loaded,
           jobId,
-          PID_POLL_TIMEOUT_MS,
+          runner === undefined ? PID_POLL_TIMEOUT_MS : 0,
         );
+        if (containerPid === null) {
+          throw new ApplianceError(
+            'config_invalid',
+            'live-command',
+            'container process id was not captured',
+          );
+        }
         updateProcess(loaded, jobId, processInfo, containerPid);
       },
     });
@@ -799,7 +865,7 @@ export async function runWorker(
 
     const current = readJob(loaded, jobId);
     const terminalArtifact = hasTerminalArtifact(loaded, artifacts);
-    if (launchResult.status === 0 && !hasSignalTarget(current)) {
+    if (!hasContainerProcessGroup(current)) {
       markTerminal(
         loaded,
         jobId,
@@ -853,12 +919,7 @@ export async function cancelJob(
     );
   }
 
-  updateJob(loaded, jobId, (current) => ({
-    ...current,
-    status: 'stopping',
-    error: null,
-  }));
-
+  let signalAccepted = job.status === 'stopping';
   if (job.status === 'running') {
     let interrupted = false;
     if (containerPgid !== null) {
@@ -879,6 +940,7 @@ export async function cancelJob(
       const message = 'cancel signal failed while process group is still alive';
       updateJob(loaded, jobId, (current) => ({
         ...current,
+        status: 'running',
         error: {
           code: 'cancel_failed',
           step: 'cancel',
@@ -887,7 +949,20 @@ export async function cancelJob(
       }));
       throw new ApplianceError('cancel_failed', 'cancel', message);
     }
+    signalAccepted = interrupted;
   }
+
+  updateJob(loaded, jobId, (current) => ({
+    ...current,
+    status: 'stopping',
+    error: null,
+    result: signalAccepted
+      ? current.result
+      : {
+          exit_code: null,
+          summary: 'process group disappeared before cancel signal completed',
+        },
+  }));
 
   const sawTerminalArtifact = await waitForTerminalArtifact(
     loaded,
@@ -914,17 +989,22 @@ export async function cancelJob(
     }
   }
 
-  const terminalStatus: JobStatus = sawTerminalArtifact ? 'cancelled' : 'lost';
-  const summary = sawTerminalArtifact
-    ? 'cancelled'
-    : 'cancelled signal sent but terminal artifact was not observed';
+  const observedTerminal =
+    sawTerminalArtifact === true
+      ? cancellationTerminal(loaded, currentArtifacts(loaded, jobId))
+      : null;
+  const terminalStatus: JobStatus = observedTerminal?.status ?? 'lost';
+  const summary =
+    observedTerminal?.summary ??
+    'cancelled signal sent but terminal artifact was not observed';
+  const exitCode = observedTerminal?.exitCode ?? 130;
 
   return updateJob(loaded, jobId, (current) => ({
     ...current,
     status: terminalStatus,
     finished_at: new Date().toISOString(),
     result: {
-      exit_code: 130,
+      exit_code: exitCode,
       summary,
     },
     error:
