@@ -34,6 +34,7 @@ class FakeRunner implements CommandRunner {
     stdout: 'artifacts: results/batches/batch-1\n',
     stderr: '',
   };
+  processGroupAlive = false;
 
   run(
     command: string,
@@ -68,6 +69,20 @@ class FakeRunner implements CommandRunner {
         stdout: 'quorum-appliance: exists, running\n',
         stderr: '',
       };
+    }
+    if (
+      command.endsWith('scripts/evals-container') &&
+      args.join(' ').includes('kill -0 -456')
+    ) {
+      return this.processGroupAlive
+        ? { status: 0, stdout: '', stderr: '' }
+        : { status: 1, stdout: '', stderr: '' };
+    }
+    if (
+      command.endsWith('scripts/evals-container') &&
+      args.join(' ').includes('kill -INT -456')
+    ) {
+      return { status: 0, stdout: '', stderr: '' };
     }
     if (
       command.endsWith('scripts/evals-container') &&
@@ -141,6 +156,12 @@ function loaded(): LoadedApplianceConfig {
   };
 }
 
+function writePid(cfg: LoadedApplianceConfig, jobId: string, pid = 456): void {
+  const pidDir = join(cfg.config.container.results_root, '.appliance-pids');
+  mkdirSync(pidDir, { recursive: true });
+  writeFileSync(join(pidDir, `${jobId}.pid`), `${pid}\n`);
+}
+
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
   const cfg = loaded();
   const args = liveCommandArgs(cfg, 'job-1', [
@@ -175,6 +196,29 @@ test('launchLiveCommand delegates to the injected runner', async () => {
   ]);
 });
 
+test('launchLiveCommand streams stdout and stderr before process close', async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  const resultPromise = launchLiveCommand({
+    command: 'bash',
+    args: [
+      '-lc',
+      'printf "ready\\n"; printf "err-ready\\n" >&2; sleep 0.2; printf "done\\n"',
+    ],
+    onStdout: (chunk) => stdout.push(chunk),
+    onStderr: (chunk) => stderr.push(chunk),
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(stdout.join('')).toContain('ready');
+  expect(stderr.join('')).toContain('err-ready');
+
+  const result = await resultPromise;
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain('done');
+});
+
 test('runWorker preflights, runs live command, records artifacts, and releases locks', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -187,6 +231,7 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
   mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
     recursive: true,
   });
+  writePid(cfg, job.job_id);
 
   await runWorker(cfg, job.job_id, runner);
 
@@ -230,6 +275,7 @@ test('runWorker fails when a nonzero live command only created a batch shell', a
   mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
     recursive: true,
   });
+  writePid(cfg, job.job_id);
 
   await runWorker(cfg, job.job_id, runner);
 
@@ -239,6 +285,27 @@ test('runWorker fails when a nonzero live command only created a batch shell', a
     exit_code: 1,
     summary: 'live command exited 1',
   });
+});
+
+test('runWorker fails a successful live command without a captured container process group', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'feature/ref',
+    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
+  });
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('failed');
+  expect(updated.result.summary).toBe('container process id was not captured');
+  expect(updated.process?.container_pgid).toBe(null);
 });
 
 test('cancel sends SIGINT to the recorded in-container process group', async () => {
@@ -265,6 +332,34 @@ test('cancel sends SIGINT to the recorded in-container process group', async () 
     runner.calls.some((call) => call.args.join(' ').includes('kill -INT -456')),
   ).toBe(true);
   expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+test('cancel keeps a job stopping when the process group is still alive after grace', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('stopping');
+  expect(updated.finished_at).toBe(null);
 });
 
 test('cancel records cancelled when a terminal batch footer is visible', async () => {

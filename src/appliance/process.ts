@@ -36,6 +36,8 @@ export interface LiveCommandArgs {
   readonly runner?: CommandRunner;
   readonly options?: CommandOptions;
   readonly onSpawn?: (processInfo: LiveProcessInfo) => Promise<void> | void;
+  readonly onStdout?: (chunk: string) => void;
+  readonly onStderr?: (chunk: string) => void;
 }
 
 export interface LiveCommandResult extends CommandResult {
@@ -128,25 +130,23 @@ function updateProcess(
       processInfo.host_pgid ?? current.process?.host_pgid ?? hostPid;
     const existingContainerPid = current.process?.container_pid ?? null;
     const existingContainerPgid = current.process?.container_pgid ?? null;
+    const nextContainerPid = containerPid ?? existingContainerPid;
+    const nextContainerPgid = containerPid ?? existingContainerPgid;
+    const hasSignalTarget = nextContainerPgid !== null;
     return {
       ...current,
+      status:
+        current.status === 'preflighting' && hasSignalTarget
+          ? 'running'
+          : current.status,
       process: {
         host_pid: hostPid,
         host_pgid: hostPgid,
-        container_pid: containerPid ?? existingContainerPid,
-        container_pgid: containerPid ?? existingContainerPgid,
+        container_pid: nextContainerPid,
+        container_pgid: nextContainerPgid,
       },
     };
   });
-}
-
-function appendLogs(job: JobRecord, result: CommandResult): void {
-  if (result.stdout !== '') {
-    appendFileSync(job.artifacts.stdout_log, result.stdout);
-  }
-  if (result.stderr !== '') {
-    appendFileSync(job.artifacts.stderr_log, result.stderr);
-  }
 }
 
 function hasTerminalArtifact(
@@ -264,6 +264,9 @@ function liveStatus(
   if (current.status === 'cancelled') {
     return { status: 'cancelled', summary: 'cancelled' };
   }
+  if (current.status === 'lost' && terminalArtifact) {
+    return { status: 'cancelled', summary: 'cancelled' };
+  }
   if (current.status === 'stopping') {
     return terminalArtifact
       ? { status: 'cancelled', summary: 'cancelled' }
@@ -288,6 +291,10 @@ function liveStatus(
   };
 }
 
+function hasSignalTarget(job: JobRecord): boolean {
+  return (job.process?.container_pgid ?? null) !== null;
+}
+
 function markTerminal(
   loaded: LoadedApplianceConfig,
   jobId: string,
@@ -309,6 +316,24 @@ function markTerminal(
           }
         : null,
   }));
+}
+
+function appendLog(path: string, chunk: string): void {
+  if (chunk !== '') {
+    appendFileSync(path, chunk);
+  }
+}
+
+function containerProcessGroupAlive(
+  loaded: LoadedApplianceConfig,
+  pgid: number,
+  runner: CommandRunner,
+): boolean {
+  const result = runner.run(
+    evalsContainerPath(loaded),
+    execContainerArgs(loaded, ['bash', '-lc', `kill -0 -${pgid}`]),
+  );
+  return result.status === 0;
 }
 
 function markFailed(
@@ -398,11 +423,45 @@ export function liveCommandArgs(
 export async function launchLiveCommand(
   args: LiveCommandArgs,
 ): Promise<LiveCommandResult> {
+  let callbackError: unknown = null;
+  const emitStdout = (chunk: string): void => {
+    try {
+      args.onStdout?.(chunk);
+    } catch (error) {
+      callbackError ??= error;
+    }
+  };
+  const emitStderr = (chunk: string): void => {
+    try {
+      args.onStderr?.(chunk);
+    } catch (error) {
+      callbackError ??= error;
+    }
+  };
+  const withCallbackError = (stderr: string): string => {
+    if (callbackError === null) {
+      return stderr;
+    }
+    const message =
+      callbackError instanceof Error
+        ? callbackError.message
+        : String(callbackError);
+    return stderr + (stderr === '' ? '' : '\n') + message;
+  };
+
   if (args.runner !== undefined) {
     const processInfo = { host_pid: process.pid, host_pgid: process.pid };
     const result = args.runner.run(args.command, args.args, args.options);
+    if (result.stdout !== '') {
+      emitStdout(result.stdout);
+    }
+    if (result.stderr !== '') {
+      emitStderr(result.stderr);
+    }
     return {
       ...result,
+      status: callbackError === null ? result.status : null,
+      stderr: withCallbackError(result.stderr),
       process: processInfo,
     };
   }
@@ -430,26 +489,32 @@ export async function launchLiveCommand(
       });
 
     child.stdout?.on('data', (chunk) => {
-      stdout += String(chunk);
+      const text = String(chunk);
+      stdout += text;
+      emitStdout(text);
     });
     child.stderr?.on('data', (chunk) => {
-      stderr += String(chunk);
+      const text = String(chunk);
+      stderr += text;
+      emitStderr(text);
     });
     child.on('error', async (error) => {
       await onSpawnDone;
       resolve({
         status: null,
         stdout,
-        stderr: stderr + (stderr === '' ? '' : '\n') + error.message,
+        stderr: withCallbackError(
+          stderr + (stderr === '' ? '' : '\n') + error.message,
+        ),
         process: processInfo,
       });
     });
     child.on('close', async (status) => {
       await onSpawnDone;
       resolve({
-        status,
+        status: callbackError === null ? status : null,
         stdout,
-        stderr,
+        stderr: withCallbackError(stderr),
         process: processInfo,
       });
     });
@@ -526,7 +591,6 @@ export async function runWorker(
 
     const liveJob = updateJob(loaded, jobId, (current) => ({
       ...current,
-      status: 'running',
       started_at: current.started_at ?? new Date().toISOString(),
       error: null,
       process: current.process ?? {
@@ -540,10 +604,21 @@ export async function runWorker(
     mkdirSync(dirname(pidFilePath(loaded, jobId)), { recursive: true });
     const command = evalsContainerPath(loaded);
     const args = liveCommandArgs(loaded, jobId, liveJob.command.argv);
+    let observedStdout = '';
+    const streamStdout = (chunk: string): void => {
+      observedStdout += chunk;
+      appendLog(readJob(loaded, jobId).artifacts.stdout_log, chunk);
+      updateArtifacts(loaded, jobId, parseArtifacts(observedStdout));
+    };
+    const streamStderr = (chunk: string): void => {
+      appendLog(readJob(loaded, jobId).artifacts.stderr_log, chunk);
+    };
     const launchResult = await launchLiveCommand({
       command,
       args,
       ...(runner === undefined ? {} : { runner }),
+      onStdout: streamStdout,
+      onStderr: streamStderr,
       onSpawn: async (processInfo) => {
         const containerPid = await pollContainerPid(
           loaded,
@@ -559,7 +634,6 @@ export async function runWorker(
       updateProcess(loaded, jobId, launchResult.process, containerPid);
     }
 
-    appendLogs(readJob(loaded, jobId), launchResult);
     const artifacts = parseArtifacts(launchResult.stdout);
     updateArtifacts(loaded, jobId, artifacts);
     if (preflight !== null) {
@@ -567,7 +641,16 @@ export async function runWorker(
     }
 
     const current = readJob(loaded, jobId);
-    if (!isTerminal(current.status)) {
+    const terminalArtifact = hasTerminalArtifact(loaded, artifacts);
+    if (launchResult.status === 0 && !hasSignalTarget(current)) {
+      markTerminal(
+        loaded,
+        jobId,
+        'failed',
+        launchResult,
+        'container process id was not captured',
+      );
+    } else if (!isTerminal(current.status) || terminalArtifact) {
       const terminal = liveStatus(loaded, launchResult, artifacts, current);
       markTerminal(
         loaded,
@@ -644,6 +727,25 @@ export async function cancelJob(
     options.graceMs ?? CANCEL_GRACE_MS,
     options.pollIntervalMs ?? CANCEL_POLL_INTERVAL_MS,
   );
+  if (!sawTerminalArtifact) {
+    const stillAlive = containerProcessGroupAlive(
+      loaded,
+      containerPgid,
+      runner,
+    );
+    if (stillAlive) {
+      return updateJob(loaded, jobId, (current) => ({
+        ...current,
+        status: 'stopping',
+        result: {
+          exit_code: null,
+          summary: 'cancelled signal sent; waiting for terminal artifact',
+        },
+        error: null,
+      }));
+    }
+  }
+
   const terminalStatus: JobStatus = sawTerminalArtifact ? 'cancelled' : 'lost';
   const summary = sawTerminalArtifact
     ? 'cancelled'
