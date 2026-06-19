@@ -1,6 +1,13 @@
-import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { type ChildProcess, spawn } from 'node:child_process';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import type {
   CommandOptions,
   CommandResult,
@@ -196,6 +203,108 @@ function jobArtifacts(job: JobRecord): ParsedArtifacts {
   };
 }
 
+function runIdentity(job: JobRecord): {
+  readonly scenario: string;
+  readonly codingAgent: string;
+} | null {
+  if (job.kind !== 'run') {
+    return null;
+  }
+  const argv = job.command.argv;
+  if (argv[0] !== 'quorum' || argv[1] !== 'run') {
+    return null;
+  }
+  const scenario = argv[2];
+  const agentFlag = argv.indexOf('--coding-agent');
+  const codingAgent = agentFlag >= 0 ? argv[agentFlag + 1] : undefined;
+  if (scenario === undefined || codingAgent === undefined) {
+    return null;
+  }
+  return { scenario: basename(scenario), codingAgent };
+}
+
+function discoverRunArtifact(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+): string | null {
+  const identity = runIdentity(job);
+  if (identity === null || !existsSync(loaded.config.container.results_root)) {
+    return null;
+  }
+  const startedAt = Date.parse(job.started_at ?? job.created_at);
+  const earliestMtime = Number.isFinite(startedAt) ? startedAt - 5_000 : 0;
+  const candidates: { id: string; mtimeMs: number }[] = [];
+
+  for (const entry of readdirSync(loaded.config.container.results_root, {
+    withFileTypes: true,
+  })) {
+    if (
+      !entry.isDirectory() ||
+      entry.name === 'batches' ||
+      entry.name.startsWith('.')
+    ) {
+      continue;
+    }
+    const verdictPath = join(
+      loaded.config.container.results_root,
+      entry.name,
+      'verdict.json',
+    );
+    if (!existsSync(verdictPath)) {
+      continue;
+    }
+    const stat = statSync(verdictPath);
+    if (stat.mtimeMs < earliestMtime) {
+      continue;
+    }
+    try {
+      const verdict = FinalVerdictSchema.parse(
+        JSON.parse(readFileSync(verdictPath, 'utf8')) as unknown,
+      );
+      if (
+        verdict.scenario !== undefined &&
+        verdict.scenario !== identity.scenario
+      ) {
+        continue;
+      }
+      if (
+        verdict.coding_agent !== undefined &&
+        verdict.coding_agent !== identity.codingAgent
+      ) {
+        continue;
+      }
+      candidates.push({ id: entry.name, mtimeMs: stat.mtimeMs });
+    } catch {}
+  }
+
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.id ?? null;
+}
+
+function currentArtifacts(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+): ParsedArtifacts {
+  const job = readJob(loaded, jobId);
+  const artifacts = jobArtifacts(job);
+  if (artifacts.runId !== null || job.kind !== 'run') {
+    return artifacts;
+  }
+  const discoveredRunId = discoverRunArtifact(loaded, job);
+  if (discoveredRunId === null) {
+    return artifacts;
+  }
+  return jobArtifacts(
+    updateJob(loaded, jobId, (current) => ({
+      ...current,
+      artifacts: {
+        ...current.artifacts,
+        run_id: discoveredRunId,
+      },
+    })),
+  );
+}
+
 async function waitForTerminalArtifact(
   loaded: LoadedApplianceConfig,
   jobId: string,
@@ -204,7 +313,7 @@ async function waitForTerminalArtifact(
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, graceMs);
   while (true) {
-    if (hasTerminalArtifact(loaded, jobArtifacts(readJob(loaded, jobId)))) {
+    if (hasTerminalArtifact(loaded, currentArtifacts(loaded, jobId))) {
       return true;
     }
     if (Date.now() >= deadline) {
@@ -324,6 +433,24 @@ function appendLog(path: string, chunk: string): void {
   }
 }
 
+function interruptHostProcessGroup(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) {
+    child.kill('SIGINT');
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGINT');
+  } catch {
+    child.kill('SIGINT');
+  }
+  setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {}
+  }, 250).unref();
+}
+
 function containerProcessGroupAlive(
   loaded: LoadedApplianceConfig,
   pgid: number,
@@ -334,6 +461,37 @@ function containerProcessGroupAlive(
     execContainerArgs(loaded, ['bash', '-lc', `kill -0 -${pgid}`]),
   );
   return result.status === 0;
+}
+
+function hostProcessGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function signalHostProcessGroup(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 'SIGINT');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function jobProcessGroupAlive(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+  runner: CommandRunner,
+): boolean {
+  const containerPgid = job.process?.container_pgid ?? null;
+  if (containerPgid !== null) {
+    return containerProcessGroupAlive(loaded, containerPgid, runner);
+  }
+  const hostPgid = job.process?.host_pgid ?? null;
+  return hostPgid !== null && hostProcessGroupAlive(hostPgid);
 }
 
 function markFailed(
@@ -483,9 +641,8 @@ export async function launchLiveCommand(
     const onSpawnDone = Promise.resolve()
       .then(() => args.onSpawn?.(processInfo))
       .catch((error) => {
-        stderr +=
-          (stderr === '' ? '' : '\n') +
-          (error instanceof Error ? error.message : String(error));
+        callbackError ??= error;
+        interruptHostProcessGroup(child);
       });
 
     child.stdout?.on('data', (chunk) => {
@@ -634,8 +791,8 @@ export async function runWorker(
       updateProcess(loaded, jobId, launchResult.process, containerPid);
     }
 
-    const artifacts = parseArtifacts(launchResult.stdout);
-    updateArtifacts(loaded, jobId, artifacts);
+    updateArtifacts(loaded, jobId, parseArtifacts(launchResult.stdout));
+    const artifacts = currentArtifacts(loaded, jobId);
     if (preflight !== null) {
       writeArtifactProvenance(loaded, jobId, preflight);
     }
@@ -687,11 +844,12 @@ export async function cancelJob(
     );
   }
   const containerPgid = job.process?.container_pgid ?? null;
-  if (containerPgid === null) {
+  const hostPgid = job.process?.host_pgid ?? null;
+  if (containerPgid === null && hostPgid === null) {
     throw new ApplianceError(
       'job_not_running',
       'cancel',
-      `${jobId} has no recorded container process group`,
+      `${jobId} has no recorded process group`,
     );
   }
 
@@ -701,24 +859,34 @@ export async function cancelJob(
     error: null,
   }));
 
-  const result = runner.run(
-    evalsContainerPath(loaded),
-    execContainerArgs(loaded, ['bash', '-lc', `kill -INT -${containerPgid}`]),
-  );
+  if (job.status === 'running') {
+    let interrupted = false;
+    if (containerPgid !== null) {
+      const result = runner.run(
+        evalsContainerPath(loaded),
+        execContainerArgs(loaded, [
+          'bash',
+          '-lc',
+          `kill -INT -${containerPgid}`,
+        ]),
+      );
+      interrupted = result.status === 0;
+    } else if (hostPgid !== null) {
+      interrupted = signalHostProcessGroup(hostPgid);
+    }
 
-  if (result.status !== 0) {
-    const message = `cancel failed: status=${result.status ?? 'null'} stderr=${
-      result.stderr.trim() || '<empty>'
-    }`;
-    updateJob(loaded, jobId, (current) => ({
-      ...current,
-      error: {
-        code: 'cancel_failed',
-        step: 'cancel',
-        message,
-      },
-    }));
-    throw new ApplianceError('cancel_failed', 'cancel', message);
+    if (!interrupted && jobProcessGroupAlive(loaded, job, runner)) {
+      const message = 'cancel signal failed while process group is still alive';
+      updateJob(loaded, jobId, (current) => ({
+        ...current,
+        error: {
+          code: 'cancel_failed',
+          step: 'cancel',
+          message,
+        },
+      }));
+      throw new ApplianceError('cancel_failed', 'cancel', message);
+    }
   }
 
   const sawTerminalArtifact = await waitForTerminalArtifact(
@@ -728,9 +896,9 @@ export async function cancelJob(
     options.pollIntervalMs ?? CANCEL_POLL_INTERVAL_MS,
   );
   if (!sawTerminalArtifact) {
-    const stillAlive = containerProcessGroupAlive(
+    const stillAlive = jobProcessGroupAlive(
       loaded,
-      containerPgid,
+      readJob(loaded, jobId),
       runner,
     );
     if (stillAlive) {

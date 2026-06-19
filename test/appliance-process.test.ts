@@ -219,6 +219,22 @@ test('launchLiveCommand streams stdout and stderr before process close', async (
   expect(result.stdout).toContain('done');
 });
 
+test('launchLiveCommand interrupts the host process group when spawn setup fails', async () => {
+  const started = Date.now();
+
+  const result = await launchLiveCommand({
+    command: 'bash',
+    args: ['-lc', 'sleep 5'],
+    onSpawn: () => {
+      throw new Error('missing container pid');
+    },
+  });
+
+  expect(Date.now() - started).toBeLessThan(2000);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('missing container pid');
+});
+
 test('runWorker preflights, runs live command, records artifacts, and releases locks', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -334,6 +350,54 @@ test('cancel sends SIGINT to the recorded in-container process group', async () 
   expect(readJob(cfg, job.job_id).status).toBe('lost');
 });
 
+test('cancel records cancelled for a stopped single-run verdict discovered after SIGINT', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, {
+    kind: 'run',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
+  mkdirSync(join(cfg.config.container.results_root, runId), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(cfg.config.container.results_root, runId, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: 'indeterminate',
+      final_reason: 'run stopped by SIGINT',
+      gauntlet: null,
+      checks: [],
+      error: { stage: 'stopped', message: 'run stopped by SIGINT' },
+      economics: null,
+      scenario: 'scenario-a',
+      coding_agent: 'codex',
+      started_at: new Date(Date.now() - 1000).toISOString(),
+      finished_at: new Date().toISOString(),
+    }),
+  );
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    started_at: new Date(Date.now() - 2000).toISOString(),
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('cancelled');
+  expect(updated.artifacts.run_id).toBe(runId);
+});
+
 test('cancel keeps a job stopping when the process group is still alive after grace', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -360,6 +424,34 @@ test('cancel keeps a job stopping when the process group is still alive after gr
   const updated = readJob(cfg, job.job_id);
   expect(updated.status).toBe('stopping');
   expect(updated.finished_at).toBe(null);
+});
+
+test('cancel retry classifies an exited stopping process without sending another SIGINT', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'stopping',
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  expect(readJob(cfg, job.job_id).status).toBe('lost');
+  expect(
+    runner.calls.some((call) => call.args.join(' ').includes('kill -INT -456')),
+  ).toBe(false);
 });
 
 test('cancel records cancelled when a terminal batch footer is visible', async () => {
