@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 export function mkdirPrivate(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -24,6 +24,32 @@ export function atomicWriteJson(path: string, value: unknown): void {
   const fd = openSync(tmp, 'w', 0o600);
   try {
     writeFileSync(fd, JSON.stringify(value, null, 2));
+    fsyncSync(fd);
+  } catch (error) {
+    closeSync(fd);
+    unlinkSync(tmp);
+    throw error;
+  }
+
+  try {
+    closeSync(fd);
+    renameSync(tmp, path);
+    chmodSync(path, 0o600);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw error;
+  }
+}
+
+export function writePrivateText(path: string, value: string): void {
+  const parent = dirname(path);
+  mkdirPrivate(parent);
+  const tmp = join(parent, `.${basename(path)}.${process.pid}.tmp`);
+  const fd = openSync(tmp, 'w', 0o600);
+  try {
+    writeFileSync(fd, value);
     fsyncSync(fd);
   } catch (error) {
     closeSync(fd);
