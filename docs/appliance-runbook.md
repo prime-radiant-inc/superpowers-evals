@@ -19,9 +19,11 @@ scripts/install-evals-appliance /srv/quorum
 
 The installer writes `/srv/quorum/bin/evals-appliance` and prints that path. It
 does not write `appliance.json`, create credentials, or mutate repositories. The
-installed wrapper reads `EVALS_APPLIANCE_CONFIG` or
+installed wrapper uses the embedded host config path, normally
 `/srv/quorum/config/appliance.json`, verifies the evals checkout is clean and on
-the configured branch, then dispatches to the repo-owned TypeScript CLI.
+the configured branch, then exports that path to the repo-owned TypeScript CLI.
+Direct local `bun run appliance ...` use can still set `EVALS_APPLIANCE_CONFIG`
+when intentionally running outside the installed wrapper.
 
 ## Operator Rule
 

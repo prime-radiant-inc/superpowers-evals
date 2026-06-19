@@ -19,10 +19,13 @@ import { envSnapshot } from '../env.ts';
 import { evalsContainerPath, execContainerArgs } from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate } from './fs.ts';
-import { ensureCleanWorktree } from './git.ts';
 import { readJob, updateJob } from './jobs.ts';
 import { acquireLock, type LockHandle, updateLockRefs } from './locks.ts';
-import { type PreflightResult, preflightForJob } from './preflight.ts';
+import {
+  type PreflightResult,
+  postflightDirtyCheck,
+  preflightForJob,
+} from './preflight.ts';
 import { writeProvenance } from './provenance.ts';
 import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
 
@@ -63,14 +66,6 @@ export interface CancelOptions {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function managedRepos(loaded: LoadedApplianceConfig): string[] {
-  return [
-    loaded.config.evals.path,
-    loaded.config.superpowers.path,
-    loaded.config.gauntlet.path,
-  ];
 }
 
 function stableError(error: unknown, step = 'worker'): ApplianceError {
@@ -563,34 +558,6 @@ function markFailed(
       },
     }));
   } catch {}
-}
-
-function postflightDirtyCheck(
-  loaded: LoadedApplianceConfig,
-  jobId: string,
-  runner: CommandRunner,
-): void {
-  try {
-    for (const repo of managedRepos(loaded)) {
-      ensureCleanWorktree(repo, runner);
-    }
-  } catch (error) {
-    const stable = stableError(error, 'postflight');
-    updateJob(loaded, jobId, (current) => ({
-      ...current,
-      status: 'quarantined',
-      finished_at: current.finished_at ?? new Date().toISOString(),
-      result: {
-        exit_code: current.result.exit_code,
-        summary: `postflight dirty check failed: ${stable.message}`,
-      },
-      error: {
-        code: stable.code,
-        step: stable.step,
-        message: stable.message,
-      },
-    }));
-  }
 }
 
 function writeArtifactProvenance(

@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -14,8 +15,9 @@ import type {
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
+import { toErrorJson } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
-import { preflightForJob } from '../src/appliance/preflight.ts';
+import { preflightForJob, prepare } from '../src/appliance/preflight.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 class FakeRunner implements CommandRunner {
@@ -333,5 +335,115 @@ test('preflight maps container build failures to image_build_failed', async () =
   ).rejects.toMatchObject({
     code: 'image_build_failed',
     step: 'container',
+  });
+});
+
+test('prepare records a failed job when run.lock is already held', async () => {
+  const cfg = loaded();
+  mkdirSync(join(cfg.paths.locks, 'run.lock'), { recursive: true });
+
+  let caught: unknown = null;
+  try {
+    await prepare({
+      loaded: cfg,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+      runner: new FakeRunner(),
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toMatchObject({
+    code: 'lock_busy',
+    step: 'lock',
+    message: 'run.lock is held',
+  });
+  expect(toErrorJson(caught)).toEqual({
+    ok: false,
+    error: {
+      code: 'lock_busy',
+      step: 'lock',
+      message: 'run.lock is held',
+    },
+  });
+
+  const jobIds = readdirSync(cfg.paths.jobs);
+  expect(jobIds).toHaveLength(1);
+  const jobId = jobIds[0];
+  if (jobId === undefined) {
+    throw new Error('expected prepare job record');
+  }
+  const job = readJob(cfg, jobId);
+  expect(job.status).toBe('failed');
+  expect(job.finished_at).not.toBe(null);
+  expect(job.result).toEqual({
+    exit_code: 1,
+    summary: 'run.lock is held',
+  });
+  expect(job.error).toEqual({
+    code: 'lock_busy',
+    step: 'lock',
+    message: 'run.lock is held',
+  });
+});
+
+test('prepare quarantines a job when postflight finds a dirty managed repo', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  let quorumCheckSeen = false;
+  runner.results.push(
+    {
+      match: (command, args) =>
+        command === 'git' &&
+        args.includes('status') &&
+        quorumCheckSeen === true,
+      result: { status: 0, stdout: ' M mutated.txt\n', stderr: '' },
+    },
+    {
+      match: (command, args) => {
+        const matched =
+          command.endsWith('scripts/evals-container') &&
+          args.includes('exec') &&
+          args.includes('quorum') &&
+          args.includes('check');
+        if (matched) {
+          quorumCheckSeen = true;
+        }
+        return matched;
+      },
+      result: { status: 0, stdout: 'ok\n', stderr: '' },
+    },
+  );
+
+  await expect(
+    prepare({
+      loaded: cfg,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  });
+
+  const jobIds = readdirSync(cfg.paths.jobs);
+  expect(jobIds).toHaveLength(1);
+  const jobId = jobIds[0];
+  if (jobId === undefined) {
+    throw new Error('expected prepare job record');
+  }
+  const job = readJob(cfg, jobId);
+  expect(job.status).toBe('quarantined');
+  expect(job.finished_at).not.toBe(null);
+  expect(job.result.summary).toBe(
+    `postflight dirty check failed: dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  );
+  expect(job.error).toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
   });
 });

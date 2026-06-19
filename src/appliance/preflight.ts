@@ -25,6 +25,7 @@ import { withMutationLocks } from './locks.ts';
 import { writeProvenance } from './provenance.ts';
 import type {
   ApplianceCommandKind,
+  JobStatus,
   LoadedApplianceConfig,
   RefSnapshot,
 } from './types.ts';
@@ -75,30 +76,47 @@ function repos(loaded: LoadedApplianceConfig) {
   ];
 }
 
+const TERMINAL_JOB_STATUSES = new Set<JobStatus>([
+  'done',
+  'failed',
+  'cancelled',
+  'lost',
+  'quarantined',
+]);
+
+function isTerminalJobStatus(status: JobStatus): boolean {
+  return TERMINAL_JOB_STATUSES.has(status);
+}
+
 function failJob(
   loaded: LoadedApplianceConfig,
   jobId: string,
   error: ApplianceError,
 ): void {
-  updateJob(loaded, jobId, (current) => ({
-    ...current,
-    status: 'failed',
-    finished_at: new Date().toISOString(),
-    result: { exit_code: 1, summary: error.message },
-    error: {
-      code: error.code,
-      step: error.step,
-      message: error.message,
-    },
-  }));
+  updateJob(loaded, jobId, (current) => {
+    if (isTerminalJobStatus(current.status)) {
+      return current;
+    }
+    return {
+      ...current,
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      result: { exit_code: 1, summary: error.message },
+      error: {
+        code: error.code,
+        step: error.step,
+        message: error.message,
+      },
+    };
+  });
 }
 
-function stableError(error: unknown): ApplianceError {
+function stableError(error: unknown, step = 'preflight'): ApplianceError {
   if (error instanceof ApplianceError) {
     return error;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return new ApplianceError('config_invalid', 'preflight', message);
+  return new ApplianceError('config_invalid', step, message);
 }
 
 function jobToolVersionsPath(
@@ -106,6 +124,36 @@ function jobToolVersionsPath(
   jobId: string,
 ): string {
   return join(loaded.paths.jobs, jobId, 'evals-tool-versions.txt');
+}
+
+export function postflightDirtyCheck(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  runner: CommandRunner,
+): ApplianceError | null {
+  try {
+    for (const repo of repos(loaded)) {
+      ensureCleanWorktree(repo, runner);
+    }
+    return null;
+  } catch (error) {
+    const stable = stableError(error, 'postflight');
+    updateJob(loaded, jobId, (current) => ({
+      ...current,
+      status: 'quarantined',
+      finished_at: current.finished_at ?? new Date().toISOString(),
+      result: {
+        exit_code: current.result.exit_code,
+        summary: `postflight dirty check failed: ${stable.message}`,
+      },
+      error: {
+        code: stable.code,
+        step: stable.step,
+        message: stable.message,
+      },
+    }));
+    return stable;
+  }
 }
 
 export async function preflightForJob(
@@ -268,25 +316,46 @@ export async function prepare(args: PrepareArgs): Promise<PreflightResult> {
       : readJob(args.loaded, args.jobId);
   const command: ApplianceCommandKind = job.kind;
 
-  return withMutationLocks(args.loaded, job.job_id, command, async () => {
-    const preflightArgs: PreflightArgs = {
-      loaded: args.loaded,
-      jobId: job.job_id,
-      superpowersRef: args.superpowersRef,
-    };
-    const result = await preflightForJob(
-      args.runner === undefined
-        ? preflightArgs
-        : { ...preflightArgs, runner: args.runner },
+  try {
+    return await withMutationLocks(
+      args.loaded,
+      job.job_id,
+      command,
+      async () => {
+        const preflightArgs: PreflightArgs = {
+          loaded: args.loaded,
+          jobId: job.job_id,
+          superpowersRef: args.superpowersRef,
+        };
+        const result = await preflightForJob(
+          args.runner === undefined
+            ? preflightArgs
+            : { ...preflightArgs, runner: args.runner },
+        );
+        if (job.kind === 'prepare') {
+          const postflightError = postflightDirtyCheck(
+            args.loaded,
+            job.job_id,
+            args.runner ?? defaultCommandRunner,
+          );
+          if (postflightError !== null) {
+            throw postflightError;
+          }
+          updateJob(args.loaded, job.job_id, (current) => ({
+            ...current,
+            status: 'done',
+            finished_at: new Date().toISOString(),
+            result: { exit_code: 0, summary: 'preflight ok' },
+          }));
+        }
+        return result;
+      },
     );
-    if (job.kind === 'prepare') {
-      updateJob(args.loaded, job.job_id, (current) => ({
-        ...current,
-        status: 'done',
-        finished_at: new Date().toISOString(),
-        result: { exit_code: 0, summary: 'preflight ok' },
-      }));
-    }
-    return result;
-  });
+  } catch (error) {
+    const stable = stableError(error);
+    try {
+      failJob(args.loaded, job.job_id, stable);
+    } catch {}
+    throw stable;
+  }
 }
