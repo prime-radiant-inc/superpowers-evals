@@ -3,7 +3,8 @@ import { Command } from 'commander';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { getEnv } from '../env.ts';
 import { loadConfig } from './config.ts';
-import { toErrorJson } from './errors.ts';
+import { doctorPayload } from './doctor.ts';
+import { ApplianceError, toErrorJson } from './errors.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
@@ -78,6 +79,8 @@ interface JsonDetachOptions extends JsonOption {
   readonly detach?: boolean;
 }
 
+const UNSUPPORTED_APPLIANCE_AGENTS = new Set(['antigravity']);
+
 function requester(): {
   readonly agent: string | null;
   readonly thread: string | null;
@@ -110,25 +113,83 @@ function renderResult(value: unknown, json: boolean): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+function csv(value: string): string[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function optionValue(args: readonly string[], name: string): string | null {
+  const equalsPrefix = `${name}=`;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg.startsWith(equalsPrefix)) {
+      return arg.slice(equalsPrefix.length);
+    }
+    if (arg === name) {
+      return args[i + 1] ?? null;
+    }
+  }
+  return null;
+}
+
+function assertSupportedAgent(agent: string): void {
+  if (
+    agent.length === 0 ||
+    agent.startsWith('--') ||
+    UNSUPPORTED_APPLIANCE_AGENTS.has(agent.toLowerCase())
+  ) {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      `${agent} is not supported on the Phase 1 appliance`,
+    );
+  }
+}
+
+function assertSupportedRunAllArgs(args: readonly string[]): void {
+  const os = optionValue(args, '--os');
+  if (os !== null && os !== 'linux') {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      `run-all --os ${os} is not supported on the Phase 1 appliance`,
+    );
+  }
+
+  const codingAgents = optionValue(args, '--coding-agents');
+  if (codingAgents === null || codingAgents.trim() === '') {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      'appliance run-all requires explicit --coding-agents',
+    );
+  }
+  const agents = csv(codingAgents);
+  if (agents.length === 0) {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      'appliance run-all requires explicit --coding-agents',
+    );
+  }
+  for (const agent of agents) {
+    assertSupportedAgent(agent);
+  }
+}
+
 function defaultActions(): ApplianceActions {
   return {
     doctor: async () => {
       const loaded = loadConfig();
-      return {
-        ok: true,
-        config_path: loaded.configPath,
-        root: loaded.config.root,
-        evals_ref: loaded.config.evals.ref,
-        credential_bundle: {
-          name: loaded.config.credential_bundle.name,
-          bundle_id: loaded.bundle.bundle_id,
-          providers: loaded.bundle.providers,
-          rotated_at: loaded.bundle.rotated_at,
-        },
-      };
+      return doctorPayload(loaded);
     },
     prepare: async (args) => {
-      const loaded = loadConfig();
+      const loaded = loadConfig(undefined, { ensureState: true });
       const job = createJob(loaded, {
         kind: 'prepare',
         superpowersRef: args.superpowersRef,
@@ -191,7 +252,7 @@ async function submitLiveJob(args: {
   readonly argv: readonly string[];
   readonly detach: boolean;
 }): Promise<unknown> {
-  const loaded = loadConfig();
+  const loaded = loadConfig(undefined, { ensureState: true });
   const job = createJob(loaded, {
     kind: args.kind,
     superpowersRef: args.superpowersRef,
@@ -307,7 +368,10 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           scenario: options.scenario,
           agent: options.codingAgent,
         };
-        return handleAction(args, resolvedDeps, () => actions.run(args));
+        return handleAction(args, resolvedDeps, () => {
+          assertSupportedAgent(args.agent);
+          return actions.run(args);
+        });
       },
     );
 
@@ -327,7 +391,10 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           superpowersRef: options.superpowersRef,
           quorumArgs,
         };
-        return handleAction(args, resolvedDeps, () => actions.runAll(args));
+        return handleAction(args, resolvedDeps, () => {
+          assertSupportedRunAllArgs(args.quorumArgs);
+          return actions.runAll(args);
+        });
       },
     );
 

@@ -80,7 +80,8 @@ export function baseContainerArgs(loaded: LoadedApplianceConfig): string[] {
 
 export function buildContainerArgs(loaded: LoadedApplianceConfig): string[] {
   return [
-    ...baseContainerArgs(loaded),
+    '--name',
+    loaded.config.container.name,
     '--gauntlet-root',
     loaded.config.gauntlet.path,
     'build',

@@ -5,26 +5,41 @@ root="${1:-/srv/quorum}"
 evals="$root/superpowers-evals"
 bin_dir="$root/bin"
 target="$bin_dir/evals-appliance"
+default_config="$(printf '%q' "$root/config/appliance.json")"
 
 mkdir -p "$bin_dir"
 tmp="$target.$$"
-cat > "$tmp" <<'SH'
+cat > "$tmp" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-config="${EVALS_APPLIANCE_CONFIG:-/srv/quorum/config/appliance.json}"
-evals_path="$(jq -r '.evals.path' "$config")"
-expected_ref="$(jq -r '.evals.ref' "$config")"
+default_config=$default_config
+config="\${EVALS_APPLIANCE_CONFIG:-\$default_config}"
+evals_path="\$(jq -r '.evals.path' "\$config")"
+expected_remote="\$(jq -r '.evals.remote' "\$config")"
+expected_ref="\$(jq -r '.evals.ref' "\$config")"
 
-git -C "$evals_path" diff --quiet
-git -C "$evals_path" diff --cached --quiet
-current="$(git -C "$evals_path" rev-parse --abbrev-ref HEAD)"
-if [[ "$current" != "$expected_ref" ]]; then
-  printf 'evals-appliance: evals checkout on %s, expected %s\n' "$current" "$expected_ref" >&2
+status="\$(git -C "\$evals_path" status --porcelain)"
+if [[ -n "\$status" ]]; then
+  printf 'evals-appliance: evals checkout is not clean\n%s\n' "\$status" >&2
   exit 1
 fi
 
-cd "$evals_path"
-exec bun run src/appliance/cli.ts "$@"
+current="\$(git -C "\$evals_path" rev-parse --abbrev-ref HEAD)"
+if [[ "\$current" != "\$expected_ref" ]]; then
+  printf 'evals-appliance: evals checkout on %s, expected %s\n' "\$current" "\$expected_ref" >&2
+  exit 1
+fi
+
+head_sha="\$(git -C "\$evals_path" rev-parse HEAD)"
+remote_ref="refs/remotes/\${expected_remote}/\${expected_ref}^{commit}"
+remote_sha="\$(git -C "\$evals_path" rev-parse --verify "\$remote_ref")"
+if [[ "\$head_sha" != "\$remote_sha" ]]; then
+  printf 'evals-appliance: evals HEAD %s does not match %s %s\n' "\$head_sha" "\$expected_remote" "\$expected_ref" >&2
+  exit 1
+fi
+
+cd "\$evals_path"
+exec bun run src/appliance/cli.ts "\$@"
 SH
 chmod 0755 "$tmp"
 mv "$tmp" "$target"

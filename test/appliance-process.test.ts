@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,6 +35,7 @@ class FakeRunner implements CommandRunner {
     stdout: 'artifacts: results/batches/batch-1\n',
     stderr: '',
   };
+  onLiveCommand?: () => void;
   processGroupAlive = false;
   cancelSignalFails = false;
 
@@ -91,6 +93,7 @@ class FakeRunner implements CommandRunner {
       command.endsWith('scripts/evals-container') &&
       args.join(' ').includes('setsid')
     ) {
+      this.onLiveCommand?.();
       return this.liveResult;
     }
     if (
@@ -251,6 +254,12 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
     recursive: true,
   });
   writePid(cfg, job.job_id);
+  let liveLockRefs: unknown = null;
+  runner.onLiveCommand = () => {
+    liveLockRefs = JSON.parse(
+      readFileSync(join(cfg.paths.locks, 'run.lock/lock.json'), 'utf8'),
+    ).refs;
+  };
 
   await runWorker(cfg, job.job_id, runner);
 
@@ -262,6 +271,11 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
     summary: 'live command completed',
   });
   expect(updated.process?.host_pid).toBe(process.pid);
+  expect(liveLockRefs).toEqual(updated.refs);
+  expect(
+    statSync(join(cfg.config.container.results_root, '.appliance-pids')).mode &
+      0o777,
+  ).toBe(0o700);
   expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
   expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
   expect(

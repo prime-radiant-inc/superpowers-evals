@@ -2,7 +2,6 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
@@ -19,9 +18,10 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { envSnapshot } from '../env.ts';
 import { evalsContainerPath, execContainerArgs } from './container.ts';
 import { ApplianceError } from './errors.ts';
+import { mkdirPrivate } from './fs.ts';
 import { ensureCleanWorktree } from './git.ts';
 import { readJob, updateJob } from './jobs.ts';
-import { acquireLock, type LockHandle } from './locks.ts';
+import { acquireLock, type LockHandle, updateLockRefs } from './locks.ts';
 import { type PreflightResult, preflightForJob } from './preflight.ts';
 import { writeProvenance } from './provenance.ts';
 import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
@@ -801,6 +801,8 @@ export async function runWorker(
       superpowersRef: job.request.superpowers_ref,
       ...(runner === undefined ? {} : { runner }),
     });
+    updateLockRefs(runLock, preflight.refs);
+    updateLockRefs(syncLock, preflight.refs);
     syncLock.release();
     syncLock = null;
 
@@ -816,7 +818,7 @@ export async function runWorker(
       },
     }));
 
-    mkdirSync(dirname(pidFilePath(loaded, jobId)), { recursive: true });
+    mkdirPrivate(dirname(pidFilePath(loaded, jobId)));
     const command = evalsContainerPath(loaded);
     const args = liveCommandArgs(loaded, jobId, liveJob.command.argv);
     let observedStdout = '';

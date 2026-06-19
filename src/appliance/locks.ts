@@ -133,6 +133,14 @@ export function acquireLock(args: AcquireLockArgs): LockHandle {
   };
 }
 
+export function updateLockRefs(handle: LockHandle, refs: RefSnapshot): void {
+  const current = readLockRecord(handle.path);
+  if (current?.job_id !== handle.jobId) {
+    return;
+  }
+  atomicWriteJson(join(handle.path, 'lock.json'), { ...current, refs });
+}
+
 export async function withMutationLocks<T>(
   loaded: LoadedApplianceConfig,
   jobId: string,

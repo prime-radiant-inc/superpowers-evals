@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import {
   acquireLock,
   inspectLock,
+  updateLockRefs,
   withMutationLocks,
 } from '../src/appliance/locks.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
@@ -126,6 +127,46 @@ describe('appliance locks', () => {
     handle.release();
 
     expect(existsSync(lockDir)).toBe(true);
+  });
+
+  test('updateLockRefs rewrites refs only for the owning lock record', () => {
+    const cfg = loaded();
+    const handle = acquireLock({
+      loaded: cfg,
+      name: 'run.lock',
+      jobId: 'job-ref',
+      command: 'run-all',
+    });
+    const refs = {
+      superpowers_requested_ref: 'feature',
+      superpowers_resolved_sha: 'a'.repeat(40),
+      evals_ref: 'main',
+      evals_resolved_sha: 'b'.repeat(40),
+      gauntlet_ref: 'main',
+      gauntlet_built_sha: 'c'.repeat(40),
+    };
+
+    updateLockRefs(handle, refs);
+
+    expect(
+      JSON.parse(
+        readFileSync(join(cfg.paths.locks, 'run.lock/lock.json'), 'utf8'),
+      ).refs,
+    ).toEqual(refs);
+
+    const lockDir = join(cfg.paths.locks, 'run.lock');
+    const record = JSON.parse(readFileSync(join(lockDir, 'lock.json'), 'utf8'));
+    writeFileSync(
+      join(lockDir, 'lock.json'),
+      JSON.stringify({ ...record, job_id: 'job-other', refs: null }),
+    );
+
+    updateLockRefs(handle, refs);
+
+    expect(
+      JSON.parse(readFileSync(join(lockDir, 'lock.json'), 'utf8')).refs,
+    ).toBeNull();
+    handle.release();
   });
 
   test('inspectLock reports stale when pid is not alive', () => {

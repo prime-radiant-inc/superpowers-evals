@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -69,7 +70,7 @@ function fixture(): { root: string; configPath: string } {
 describe('appliance config', () => {
   test('loads host config and bundle metadata', () => {
     const { root, configPath } = fixture();
-    const loaded = loadConfig(configPath);
+    const loaded = loadConfig(configPath, { ensureState: true });
     expect(loaded.config.root).toBe(root);
     expect(loaded.bundle.bundle_id).toBe('blessed-2026-06-18-a');
     expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700);
@@ -87,6 +88,57 @@ describe('appliance config', () => {
     raw.credential_bundle.name = 'personal';
     writeFileSync(configPath, JSON.stringify(raw));
     expect(() => loadConfig(configPath)).toThrow(/blessed/);
+  });
+
+  test('read-only load does not create or chmod state directories', () => {
+    const root = mkdtempSync(join(tmpdir(), 'appliance-config-readonly-'));
+    for (const dir of [
+      'superpowers-evals',
+      'superpowers',
+      'gauntlet',
+      'credentials/blessed',
+    ]) {
+      mkdirSync(join(root, dir), { recursive: true });
+    }
+    writeFileSync(
+      join(root, 'credentials/blessed/metadata.json'),
+      JSON.stringify({
+        bundle_id: 'blessed-readonly',
+        rotated_at: '2026-06-18T00:00:00Z',
+        providers: [],
+      }),
+    );
+    const configPath = join(root, 'appliance.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        root,
+        evals: {
+          path: join(root, 'superpowers-evals'),
+          remote: 'origin',
+          ref: 'main',
+        },
+        superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+        gauntlet: {
+          path: join(root, 'gauntlet'),
+          remote: 'origin',
+          ref: 'main',
+        },
+        credential_bundle: {
+          name: 'blessed',
+          path: join(root, 'credentials/blessed'),
+        },
+        container: {
+          name: 'quorum-appliance',
+          results_root: join(root, 'superpowers-evals/results'),
+        },
+      }),
+    );
+
+    const loaded = loadConfig(configPath);
+
+    expect(loaded.paths.jobs).toBe(join(root, 'state/jobs'));
+    expect(existsSync(join(root, 'state'))).toBe(false);
   });
 });
 

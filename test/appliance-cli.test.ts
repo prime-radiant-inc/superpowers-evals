@@ -1,4 +1,8 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApplianceProgram } from '../src/appliance/cli.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 
@@ -155,4 +159,187 @@ test('json failures use appliance error shape', async () => {
       message: 'run.lock is busy',
     },
   });
+});
+
+test('run rejects antigravity on the Phase 1 appliance', async () => {
+  const stdout: string[] = [];
+  let exitCode = 0;
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: (code) => {
+      exitCode = code;
+    },
+    actions: {
+      doctor: async () => ({ ok: true }),
+      prepare: async () => ({ ok: true }),
+      run: async () => ({ ok: true }),
+      runAll: async () => ({ ok: true }),
+      status: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      show: async () => ({ ok: true }),
+      costs: async () => ({ ok: true }),
+    },
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'antigravity',
+  ]);
+
+  expect(exitCode).toBe(1);
+  expect(JSON.parse(stdout.join('')).error.code).toBe('unsupported_os');
+});
+
+test('run-all requires explicit supported coding agents', async () => {
+  const stdout: string[] = [];
+  let exitCode = 0;
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: (code) => {
+      exitCode = code;
+    },
+    actions: {
+      doctor: async () => ({ ok: true }),
+      prepare: async () => ({ ok: true }),
+      run: async () => ({ ok: true }),
+      runAll: async () => ({ ok: true }),
+      status: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      show: async () => ({ ok: true }),
+      costs: async () => ({ ok: true }),
+    },
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--tier',
+    'sentinel',
+  ]);
+
+  expect(exitCode).toBe(1);
+  expect(JSON.parse(stdout.join('')).error.code).toBe('unsupported_os');
+});
+
+test('run-all rejects empty coding agent lists', async () => {
+  const stdout: string[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    actions: {
+      doctor: async () => ({ ok: true }),
+      prepare: async () => ({ ok: true }),
+      run: async () => ({ ok: true }),
+      runAll: async () => ({ ok: true }),
+      status: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      show: async () => ({ ok: true }),
+      costs: async () => ({ ok: true }),
+    },
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents=',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    '--tier',
+    'sentinel',
+  ]);
+
+  const errors = stdout.map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
+});
+
+test('run-all rejects antigravity and windows requests', async () => {
+  const stdout: string[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    actions: {
+      doctor: async () => ({ ok: true }),
+      prepare: async () => ({ ok: true }),
+      run: async () => ({ ok: true }),
+      runAll: async () => ({ ok: true }),
+      status: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      show: async () => ({ ok: true }),
+      costs: async () => ({ ok: true }),
+    },
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex,antigravity',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--os',
+    'windows',
+  ]);
+
+  const errors = stdout.map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
+});
+
+test('install wrapper embeds the requested root and strict checkout checks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'appliance-install-'));
+  const proc = spawnSync('bash', ['scripts/install-evals-appliance', root], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  expect(proc.status).toBe(0);
+
+  const wrapper = readFileSync(join(root, 'bin/evals-appliance'), 'utf8');
+  expect(wrapper).toContain(`${root}/config/appliance.json`);
+  expect(wrapper).toContain('status --porcelain');
+  expect(wrapper).toContain(
+    'refs/remotes/${expected_remote}/${expected_ref}^{commit}',
+  );
 });

@@ -11,13 +11,20 @@ import {
 
 const DEFAULT_CONFIG_PATH = '/srv/quorum/config/appliance.json';
 
+export interface LoadConfigOptions {
+  readonly ensureState?: boolean;
+}
+
 function requirePath(path: string, label: string): void {
   if (!existsSync(path)) {
     throw new Error(`${label} does not exist: ${path}`);
   }
 }
 
-export function loadConfig(configPath?: string): LoadedApplianceConfig {
+export function loadConfig(
+  configPath?: string,
+  options: LoadConfigOptions = {},
+): LoadedApplianceConfig {
   const resolvedConfigPath =
     configPath ?? getEnv('EVALS_APPLIANCE_CONFIG') ?? DEFAULT_CONFIG_PATH;
 
@@ -46,10 +53,12 @@ export function loadConfig(configPath?: string): LoadedApplianceConfig {
       locks: join(stateRoot, 'locks'),
       provenance: join(stateRoot, 'provenance'),
     };
-    mkdirPrivate(stateRoot);
-    mkdirPrivate(paths.jobs);
-    mkdirPrivate(paths.locks);
-    mkdirPrivate(paths.provenance);
+    if (options.ensureState === true) {
+      mkdirPrivate(stateRoot);
+      mkdirPrivate(paths.jobs);
+      mkdirPrivate(paths.locks);
+      mkdirPrivate(paths.provenance);
+    }
 
     return {
       config,
