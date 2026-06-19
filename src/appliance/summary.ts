@@ -134,6 +134,10 @@ function runDir(loaded: LoadedApplianceConfig, runId: string): string {
   return join(loaded.config.container.results_root, runId);
 }
 
+function isRunDir(path: string): boolean {
+  return existsSync(join(path, 'verdict.json'));
+}
+
 function artifactIdFromPath(path: string): string {
   const id = path.split('/').at(-1);
   return id === undefined || id === '' ? path : id;
@@ -206,10 +210,17 @@ function resolveSummaryTarget(
       job: null,
     };
   }
+  const directRunPath = runDir(loaded, id);
+  if (isRunDir(directRunPath)) {
+    return { kind: 'run', path: directRunPath, id, job: null };
+  }
   try {
     return classifyResolvedTarget(resolveTarget(id, resultsRoot), null);
   } catch (error) {
     if (error instanceof ShowError) {
+      throw artifactMissing('artifact', error.message);
+    }
+    if (error instanceof Error) {
       throw artifactMissing('artifact', error.message);
     }
     throw error;
@@ -404,6 +415,9 @@ export function costsPayload(
       : renderCosts(rows, { color: false, withGauntlet: false });
   } catch (error) {
     if (error instanceof ShowError) {
+      throw artifactMissing('artifact', error.message);
+    }
+    if (error instanceof Error) {
       throw artifactMissing('artifact', error.message);
     }
     throw error;

@@ -209,6 +209,14 @@ test('show renders a single run from a job artifact', () => {
   });
 });
 
+test('show and costs accept exact run artifact ids', () => {
+  const cfg = loaded();
+  writeVerdict(cfg, 'run-1', 'pass');
+
+  expect(showPayload(cfg, 'run-1', false)).toContain('final     pass');
+  expect(costsPayload(cfg, 'run-1', true)).toHaveProperty('aggregate');
+});
+
 test('missing artifacts surface appliance artifact_missing errors', () => {
   const cfg = loaded();
   const job = createJob(cfg, {
@@ -226,6 +234,28 @@ test('missing artifacts surface appliance artifact_missing errors', () => {
   expect(() => statusPayload(cfg, job.job_id)).toThrow(ApplianceError);
   try {
     statusPayload(cfg, job.job_id);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApplianceError);
+    expect((error as ApplianceError).code).toBe('artifact_missing');
+  }
+});
+
+test('costs normalizes missing batch files to artifact_missing', () => {
+  const cfg = loaded();
+  const batchDir = join(cfg.config.container.results_root, 'batches/batch-1');
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'batch-1',
+      started_at: '2026-06-18T00:00:00Z',
+      finished_at: null,
+      coding_agents: ['codex'],
+    }),
+  );
+
+  expect(() => costsPayload(cfg, 'batch-1', true)).toThrow(ApplianceError);
+  try {
+    costsPayload(cfg, 'batch-1', true);
   } catch (error) {
     expect(error).toBeInstanceOf(ApplianceError);
     expect((error as ApplianceError).code).toBe('artifact_missing');
