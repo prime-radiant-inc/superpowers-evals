@@ -876,20 +876,31 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   const wrapper = readFileSync(join(root, 'bin/evals-appliance'), 'utf8');
   expect(wrapper).toContain(`${root}/config/appliance.json`);
   expect(wrapper).not.toContain('EVALS_APPLIANCE_CONFIG:-');
-  expect(wrapper).toContain('config="$default_config"');
-  expect(wrapper).toContain('EVALS_APPLIANCE_CONFIG="$default_config"');
+  expect(wrapper).toContain('sanitized_path=/usr/local/bin:/usr/bin:/bin');
+  expect(wrapper).toContain('sanitized_home=');
+  expect(wrapper).toContain('if [[ "${1:-}" != "--sanitized" ]]; then');
   expect(wrapper).toContain(
-    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$expected_ref"',
+    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" bash "$0" --sanitized "$@"',
+  );
+  expect(wrapper).toContain('shift');
+  expect(wrapper).toContain('config="$default_config"');
+  expect(wrapper).toContain(
+    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" bun run src/appliance/cli.ts "$@"',
+  );
+  expect(wrapper).toContain(
+    'fetch_refspec="+refs/heads/${expected_ref}:refs/remotes/${expected_remote}/${expected_ref}"',
+  );
+  expect(wrapper).toContain(
+    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$fetch_refspec"',
   );
   expect(wrapper).toContain('status --porcelain');
   expect(wrapper).toContain(
     'refs/remotes/${expected_remote}/${expected_ref}^{commit}',
   );
-  expect(wrapper).toContain('exec env -i');
-  expect(wrapper).toContain('PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"');
-  expect(wrapper).toContain('HOME="${HOME:-');
+  expect(wrapper).not.toContain('PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"');
+  expect(wrapper).not.toContain('HOME="${HOME:-');
   const fetchIndex = wrapper.indexOf(
-    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$expected_ref"',
+    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$fetch_refspec"',
   );
   const revParseIndex = wrapper.indexOf(
     'remote_sha="$(git -C "$evals_path" rev-parse --verify "$remote_ref")"',

@@ -6,6 +6,7 @@ evals="$root/superpowers-evals"
 bin_dir="$root/bin"
 target="$bin_dir/evals-appliance"
 default_config="$(printf '%q' "$root/config/appliance.json")"
+default_home="$(printf '%q' "$root")"
 
 mkdir -p "$bin_dir"
 tmp="$target.$$"
@@ -13,6 +14,12 @@ cat > "$tmp" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
 default_config=$default_config
+sanitized_path=/usr/local/bin:/usr/bin:/bin
+sanitized_home=$default_home
+if [[ "\${1:-}" != "--sanitized" ]]; then
+  exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" bash "\$0" --sanitized "\$@"
+fi
+shift
 config="\$default_config"
 evals_path="\$(jq -r '.evals.path' "\$config")"
 expected_remote="\$(jq -r '.evals.remote' "\$config")"
@@ -31,7 +38,8 @@ if [[ "\$current" != "\$expected_ref" ]]; then
 fi
 
 head_sha="\$(git -C "\$evals_path" rev-parse HEAD)"
-git -C "\$evals_path" fetch --prune --tags "\$expected_remote" "\$expected_ref"
+fetch_refspec="+refs/heads/\${expected_ref}:refs/remotes/\${expected_remote}/\${expected_ref}"
+git -C "\$evals_path" fetch --prune --tags "\$expected_remote" "\$fetch_refspec"
 remote_ref="refs/remotes/\${expected_remote}/\${expected_ref}^{commit}"
 remote_sha="\$(git -C "\$evals_path" rev-parse --verify "\$remote_ref")"
 if [[ "\$head_sha" != "\$remote_sha" ]]; then
@@ -40,7 +48,7 @@ if [[ "\$head_sha" != "\$remote_sha" ]]; then
 fi
 
 cd "\$evals_path"
-exec env -i PATH="\${PATH:-/usr/local/bin:/usr/bin:/bin}" HOME="\${HOME:-\$evals_path}" EVALS_APPLIANCE_CONFIG="\$default_config" bun run src/appliance/cli.ts "\$@"
+exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" bun run src/appliance/cli.ts "\$@"
 SH
 chmod 0755 "$tmp"
 mv "$tmp" "$target"

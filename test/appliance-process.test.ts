@@ -237,6 +237,7 @@ test('detachedWorkerEnv only carries the minimal appliance worker contract', () 
   const env = detachedWorkerEnv(cfg, 'job-7', {
     PATH: '/usr/local/bin:/usr/bin',
     HOME: '/Users/drew',
+    TMPDIR: '/tmp/caller',
     OPENAI_API_KEY: 'sk-test',
     BASH_ENV: '/tmp/evil.sh',
     GIT_CONFIG_GLOBAL: '/tmp/gitconfig',
@@ -245,9 +246,24 @@ test('detachedWorkerEnv only carries the minimal appliance worker contract', () 
 
   expect(env).toEqual({
     PATH: '/usr/local/bin:/usr/bin',
-    HOME: '/Users/drew',
+    HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-7',
+  });
+});
+
+test('detachedWorkerEnv falls back to a stable PATH when the caller did not provide one', () => {
+  const cfg = loaded();
+  const env = detachedWorkerEnv(cfg, 'job-8', {
+    HOME: '/Users/drew',
+    GIT_DIR: '/tmp/git-dir',
+  });
+
+  expect(env).toEqual({
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    HOME: cfg.config.root,
+    EVALS_APPLIANCE_CONFIG: cfg.configPath,
+    EVALS_APPLIANCE_JOB_ID: 'job-8',
   });
 });
 

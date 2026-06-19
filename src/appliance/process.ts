@@ -34,6 +34,7 @@ const PID_POLL_INTERVAL_MS = 100;
 const PID_POLL_TIMEOUT_MS = 10_000;
 const CANCEL_GRACE_MS = 120_000;
 const CANCEL_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_TRUSTED_PATH = '/usr/local/bin:/usr/bin:/bin';
 
 export interface LiveProcessInfo {
   readonly host_pid: number | null;
@@ -737,16 +738,13 @@ export function detachedWorkerEnv(
   jobId: string,
   source: Readonly<Record<string, string | undefined>> = envSnapshot(),
 ): Record<string, string> {
+  const path = source.PATH;
   const env: Record<string, string> = {
     EVALS_APPLIANCE_CONFIG: loaded.configPath,
     EVALS_APPLIANCE_JOB_ID: jobId,
+    PATH: typeof path === 'string' && path !== '' ? path : DEFAULT_TRUSTED_PATH,
+    HOME: loaded.config.root,
   };
-  for (const key of ['PATH', 'HOME', 'TMPDIR']) {
-    const value = source[key];
-    if (typeof value === 'string' && value !== '') {
-      env[key] = value;
-    }
-  }
   return env;
 }
 
