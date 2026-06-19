@@ -257,12 +257,32 @@ Everything after the separator is passed verbatim to `quorum run-all`; do not
 invent a `quorum run-all --json` flag in Phase 1.
 
 `run` and `run-all` may execute in the foreground for short jobs, but detached
-mode is the default for agent-run batches. A detached invocation returns a job id
-before launch, writes stdout/stderr to stable log paths, and lets the calling
-agent recover with `status` after SSH loss. Phase 1 does not need a general
-queue: one active live job at a time is enough, guarded by a run lock. The lock
-prevents two agents from accidentally launching competing live batches against
-the same blessed credential bundle.
+mode is the default for agent-run batches. A detached invocation creates a
+durable job record, starts a host-side supervisor process, returns the job id
+while the job is still `preflighting`, writes stdout/stderr to stable log paths,
+and lets the calling agent recover with `status` after SSH loss. Foreground mode
+runs the same preflight and launch path inline. Phase 1 does not need a general
+queue: one active live or mutating preflight job at a time is enough, guarded by
+a run lock. The lock prevents two agents from accidentally launching competing
+live batches against the same blessed credential bundle or mutating a shared
+checkout while a live batch is using it.
+
+`doctor` is read-only. It validates host config shape, required paths, bundle
+metadata presence, container existence/health when present, lock records, and
+whether referenced processes still exist. It must not fetch, checkout, build,
+start/recreate containers, source the credential env, remove locks, or mutate
+job records.
+
+`prepare --superpowers-ref <ref>` performs the same repo sync, exact-ref
+resolution, container validation/reconciliation, `evals-tool-versions`, and
+`quorum check` preflight used by a live launch, then exits without starting a
+live eval. Because it may mutate shared checkouts or container mounts, it must
+acquire the same run-lock gate as `run`/`run-all` for the duration of the
+prepare. If a live job is active, `prepare` fails with `lock_busy`; it must not
+change refs underneath an active containerized eval. A successful JSON response
+includes the requested/ref-resolved SHAs, credential bundle generation, image
+identity, mount signature, and the path to captured tool-version/preflight
+evidence.
 
 `superpowers-evals` and `gauntlet` are appliance-managed checkouts. They should
 normally track configured branches such as `main`. The helper must require clean
@@ -373,13 +393,22 @@ cell's `verdict.json`, not from the `run-all` process exit code alone.
 
 Locks are separate:
 
+- `run.lock` gates live eval launch and every command that can mutate shared
+  checkouts or container mounts. Live `run`/`run-all` jobs hold it until the job
+  reaches a terminal status. `prepare` holds it only for its preflight window.
 - `sync.lock` gates repo fetch, fast-forward, checkout, image build, and
-  container mount reconciliation.
-- `run.lock` gates live eval launch and is held by the active job until the job
-  reaches a terminal status.
+  container mount reconciliation while a command already owns or has been
+  admitted through `run.lock`.
 
-`status`, `show`, and `costs` are lock-free reads and must not source the
-blessed credential env. Lock records include the job id, host, pid/pgid,
+All mutating commands acquire locks in one order: `run.lock` first, then
+`sync.lock`. They release `sync.lock` before launching the live quorum command,
+but live `run`/`run-all` keep `run.lock` until completion, cancellation,
+quarantine, or loss is recorded. This avoids the shared-checkout race where one
+agent prepares or checks out a new Superpowers ref while another agent's live
+container is still executing against the mounted tree.
+
+`status`, `show`, `costs`, and `doctor` are lock-free reads and must not source
+the blessed credential env. Lock records include the job id, host, pid/pgid,
 started_at, command, and resolved refs. `doctor --json` reports stale locks but
 must not remove them while a matching live process or container exec is still
 present.
@@ -388,27 +417,32 @@ present.
 
 The Phase 1 helper performs preflight before live runs:
 
-1. acquire `sync.lock` or report the active job holding it;
-2. verify all configured repository paths exist;
-3. verify the three worktrees are clean before changing refs;
-4. fetch all three repositories;
-5. fast-forward `superpowers-evals` and `gauntlet` to their configured appliance
+1. acquire `run.lock` or report the active job holding it;
+2. acquire `sync.lock` or report the active job holding it;
+3. verify all configured repository paths exist;
+4. verify the three worktrees are clean before changing refs;
+5. fetch all three repositories;
+6. fast-forward `superpowers-evals` and `gauntlet` to their configured appliance
    refs;
-6. resolve the requested `superpowers` ref to a SHA and check out that SHA;
-7. build or validate the container image when runtime inputs changed, including
+7. resolve the requested `superpowers` ref to a SHA and check out that SHA;
+8. build or validate the container image when runtime inputs changed, including
    Gauntlet ref changes;
-8. inspect the current container mount signature and start or recreate the
-   container when desired mounts changed, only when no job holds `run.lock`;
-9. run `scripts/evals-container exec evals-tool-versions`;
-10. run `scripts/evals-container exec quorum check`;
-11. write a job-scoped provenance snapshot before launching any live run or
+9. inspect the current container mount signature and start or recreate the
+   container when desired mounts changed, as part of the command that already
+   holds `run.lock`;
+10. run `scripts/evals-container exec evals-tool-versions`;
+11. run `scripts/evals-container exec quorum check`;
+12. write a job-scoped provenance snapshot before launching any live run or
     batch;
-12. release `sync.lock` and acquire `run.lock` for live launch.
+13. release `sync.lock`;
+14. for live `run`/`run-all`, launch while continuing to hold `run.lock`; for
+    `prepare`, release `run.lock` after recording the preflight result.
 
 If any preflight step fails, the helper stops before launching a live eval.
 Failures must be machine-readable under `--json`, including a stable error code,
 the failed step, and enough detail for the calling agent to decide whether to
-retry, ask for help, or stop.
+retry, ask for help, or stop. Failed preflight releases both locks after the job
+record captures the failure.
 
 Stable Phase 1 error codes include `config_invalid`, `lock_busy`,
 `repo_dirty`, `fetch_failed`, `ref_ambiguous`, `ref_not_found`,
@@ -471,9 +505,9 @@ straight to SIGKILL unless a human uses the break-glass path.
 Agents inspect batches through the helper:
 
 ```bash
-evals-appliance status <job-id> --json
-evals-appliance show <job-id> --json
-evals-appliance costs <job-id> --json
+evals-appliance status --json <job-id>
+evals-appliance show --json <job-id>
+evals-appliance costs --json <job-id>
 ```
 
 Raw `scripts/evals-container exec quorum ...` remains the break-glass escape
@@ -564,22 +598,36 @@ costs`.
 
 ### Phase 1
 
-1. Add host-local appliance config and install the helper entrypoint outside the
+Infra/bootstrap:
+
+1. Provision the Terminus-managed private EC2 host, encrypted EBS volume,
+   `quorum-runner` Unix user, tailnet/SSM access, least-privilege instance
+   profile, and dashboard bind policy.
+2. Install host-local appliance config and the helper entrypoint outside the
    mutable repo.
+
+Repo/helper:
+
+1. Implement config loading plus `doctor --json` as a read-only inspection path.
 2. Implement clean-worktree, fetch, fast-forward, and ref-resolution checks,
    including ambiguous-ref failures.
-3. Wire the helper to the existing `scripts/evals-container` flags using the
+3. Implement the `run.lock`/`sync.lock` ordering and cover the no-checkout-
+   mutation-while-live invariant with tests.
+4. Wire the helper to the existing `scripts/evals-container` flags using the
    blessed credential bundle.
-4. Add file-backed job records, `sync.lock`, `run.lock`, lock inspection, stale
-   lock reporting, `status`, `cancel`, `show`, and `costs`.
-5. Capture `evals-tool-versions`, repo SHAs, command line, image identity, and
+5. Prove process control with a small detached container command before live eval
+   integration: capture host/container pid or pgid, send SIGINT through the
+   tracked process group, and observe a recorded terminal job state.
+6. Add file-backed job records, lock inspection, stale lock reporting, `prepare`,
+   `status`, `cancel`, `show`, and `costs`.
+7. Capture `evals-tool-versions`, repo SHAs, command line, image identity, and
    credential bundle generation into job-scoped provenance artifacts.
-6. Document agent workflows in `docs/appliance-runbook.md` for sentinel, full,
+8. Document agent workflows in `docs/appliance-runbook.md` for sentinel, full,
    single-scenario, stop, show, costs, dashboard, and break-glass.
-7. Fix documentation drift found during scouting: explicit `SUPERPOWERS_ROOT`
+9. Fix documentation drift found during scouting: explicit `SUPERPOWERS_ROOT`
    language, current Antigravity container status, per-agent auth matrix, and
    current run-directory shape.
-8. Add post-run repo dirty checks and quarantine status.
+10. Add post-run repo dirty checks and quarantine status.
 
 ### Phase 2
 
@@ -596,6 +644,8 @@ Phase 1 is ready when:
 
 - a clean appliance can sync `superpowers-evals`, `gauntlet`, and a selected
   `superpowers` branch/tag/SHA;
+- `prepare` and live launch commands cannot mutate shared checkouts while a live
+  job holds `run.lock`;
 - the helper records requested refs and resolved SHAs;
 - provenance records the Gauntlet SHA built into the image and the credential
   bundle generation id;
