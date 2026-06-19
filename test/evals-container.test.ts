@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -422,6 +423,28 @@ describe('scripts/evals-container', () => {
         join(REPO, 'results'),
       );
     } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('up creates and enforces a private host results root', () => {
+    const harness = makeHarness();
+    const results = join(REPO, 'results');
+    mkdirSync(results, { recursive: true });
+    chmodSync(results, 0o755);
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      expect(statSync(results).mode & 0o777).toBe(0o700);
+    } finally {
+      chmodSync(results, 0o700);
       rmSync(harness.root, { recursive: true, force: true });
     }
   });

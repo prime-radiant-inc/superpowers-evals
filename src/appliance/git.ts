@@ -145,7 +145,11 @@ export function resolveSuperpowersRef(
     candidates.push({ kind: 'branch', sha: branchSha });
   }
 
-  const tagSha = maybeRevParse(repo.path, `refs/tags/${requestedRef}`, runner);
+  const tagSha = maybeRevParse(
+    repo.path,
+    `refs/tags/${requestedRef}^{commit}`,
+    runner,
+  );
   if (tagSha !== null) {
     candidates.push({ kind: 'tag', sha: tagSha });
   }

@@ -77,6 +77,15 @@ test('container/bin/quorum preserves the in-container launch contract', () => {
   expect(source).toContain('exec bun run src/cli/index.ts "$@"');
 });
 
+test('container/bin/quorum tightens umask for live run artifacts', () => {
+  const source = readFileSync(QUORUM_SHIM, 'utf8');
+  const umaskIndex = source.indexOf('umask 077');
+  const execIndex = source.indexOf('exec bun run src/cli/index.ts "$@"');
+
+  expect(umaskIndex).toBeGreaterThanOrEqual(0);
+  expect(execIndex).toBeGreaterThan(umaskIndex);
+});
+
 test('evals-tool-versions reports available tools without failing on missing optional agents', () => {
   const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
   const bin = join(root, 'bin');

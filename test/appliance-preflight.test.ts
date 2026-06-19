@@ -50,7 +50,7 @@ class FakeRunner implements CommandRunner {
     if (
       command === 'git' &&
       args.includes('rev-parse') &&
-      args.includes('refs/tags/main')
+      args.some((arg) => arg.startsWith('refs/tags/main'))
     ) {
       return { status: 1, stdout: '', stderr: 'missing tag\n' };
     }

@@ -156,6 +156,26 @@ describe('appliance git helpers', () => {
     ).toBe(mainSha);
   });
 
+  test('resolveSuperpowersRef peels annotated tags to commit shas', () => {
+    const { work } = repo();
+    const mainSha = git(work, ['rev-parse', 'HEAD']);
+    git(work, ['tag', '-a', 'annotated-release', '-m', 'annotated release']);
+    const tagObjectSha = git(work, [
+      'rev-parse',
+      '--verify',
+      'refs/tags/annotated-release',
+    ]);
+    expect(tagObjectSha).not.toBe(mainSha);
+
+    expect(
+      resolveSuperpowersRef(
+        { path: work, remote: 'origin' },
+        'annotated-release',
+        runner,
+      ),
+    ).toBe(mainSha);
+  });
+
   test('resolveSuperpowersRef fails closed on branch tag ambiguity', () => {
     const { work } = repo();
     git(work, ['tag', 'same']);

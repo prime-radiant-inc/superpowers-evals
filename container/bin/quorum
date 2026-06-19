@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+umask 077
+
 cd /workspace/evals
 
 if [[ -f /run/evals/credentials.env ]]; then

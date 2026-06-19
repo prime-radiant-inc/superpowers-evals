@@ -853,7 +853,14 @@ export async function runWorker(
       );
     }
 
-    postflightDirtyCheck(loaded, jobId, runner ?? defaultCommandRunner);
+    const postflightError = postflightDirtyCheck(
+      loaded,
+      jobId,
+      runner ?? defaultCommandRunner,
+    );
+    if (postflightError !== null) {
+      throw postflightError;
+    }
   } catch (error) {
     const stable = stableError(error);
     markFailed(loaded, jobId, stable);

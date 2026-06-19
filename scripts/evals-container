@@ -279,8 +279,14 @@ mount_config_explicit() {
     || "$auth_pi_explicit" == true ]]
 }
 
+ensure_private_results_root() {
+  mkdir -p "$evals_root/results"
+  chmod 0700 "$evals_root/results"
+}
+
 probe_results_mount() {
   local cleanup_probe host_probe_path probe probe_name
+  ensure_private_results_root
   probe_name=".evals-container-probe.$$.$RANDOM"
   host_probe_path="$evals_root/results/$probe_name"
   probe='set -euo pipefail
@@ -303,7 +309,7 @@ test -w "$results_dir"
 }
 
 run_up() {
-  mkdir -p "$evals_root/results"
+  ensure_private_results_root
   local container_home=/workspace/evals/results/.container-home
   local container_cache_home="$container_home/.cache"
   local container_config_home="$container_home/.config"

@@ -36,6 +36,8 @@ class FakeRunner implements CommandRunner {
     stderr: '',
   };
   onLiveCommand?: () => void;
+  dirtyAfterLiveCommand = false;
+  private liveCommandSeen = false;
   processGroupAlive = false;
   cancelSignalFails = false;
 
@@ -48,6 +50,9 @@ class FakeRunner implements CommandRunner {
       options === undefined ? { command, args } : { command, args, options },
     );
     if (command === 'git' && args.includes('status')) {
+      if (this.dirtyAfterLiveCommand && this.liveCommandSeen) {
+        return { status: 0, stdout: ' M mutated.txt\n', stderr: '' };
+      }
       return { status: 0, stdout: '', stderr: '' };
     }
     if (
@@ -93,6 +98,7 @@ class FakeRunner implements CommandRunner {
       command.endsWith('scripts/evals-container') &&
       args.join(' ').includes('setsid')
     ) {
+      this.liveCommandSeen = true;
       this.onLiveCommand?.();
       return this.liveResult;
     }
@@ -289,6 +295,41 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
   expect(readFileSync(updated.artifacts.stdout_log, 'utf8')).toContain(
     'artifacts: results/batches/batch-1',
   );
+});
+
+test('runWorker throws and leaves a quarantined record when postflight finds a dirty repo', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.dirtyAfterLiveCommand = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'feature/ref',
+    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
+  });
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+  writePid(cfg, job.job_id);
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  });
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('quarantined');
+  expect(updated.finished_at).not.toBe(null);
+  expect(updated.result).toEqual({
+    exit_code: 0,
+    summary: `postflight dirty check failed: dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  });
+  expect(updated.error).toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  });
+  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
+  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
 });
 
 test('runWorker fails when a nonzero live command only created a batch shell', async () => {
