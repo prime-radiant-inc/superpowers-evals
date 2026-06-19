@@ -183,7 +183,6 @@ describe('appliance contracts', () => {
 
   test('accepts the planned lock record file shape', () => {
     const result = LockRecordSchema.safeParse({
-      schema_version: 1,
       job_id: 'job-123',
       name: 'run.lock',
       host: 'appliance-host',

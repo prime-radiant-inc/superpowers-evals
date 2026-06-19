@@ -137,7 +137,7 @@ export const JobRecordSchema = z.object({
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 
 export const LockRecordSchema = z.object({
-  schema_version: z.literal(1),
+  schema_version: z.literal(1).optional(),
   job_id: z.string(),
   name: z.enum(['run.lock', 'sync.lock']),
   host: z.string(),
