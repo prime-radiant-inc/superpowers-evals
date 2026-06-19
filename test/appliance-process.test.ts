@@ -17,6 +17,7 @@ import type {
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   cancelJob,
+  detachedWorkerEnv,
   launchLiveCommand,
   liveCommandArgs,
   runWorker,
@@ -229,6 +230,25 @@ test('launchLiveCommand streams stdout and stderr before process close', async (
   const result = await resultPromise;
   expect(result.status).toBe(0);
   expect(result.stdout).toContain('done');
+});
+
+test('detachedWorkerEnv only carries the minimal appliance worker contract', () => {
+  const cfg = loaded();
+  const env = detachedWorkerEnv(cfg, 'job-7', {
+    PATH: '/usr/local/bin:/usr/bin',
+    HOME: '/Users/drew',
+    OPENAI_API_KEY: 'sk-test',
+    BASH_ENV: '/tmp/evil.sh',
+    GIT_CONFIG_GLOBAL: '/tmp/gitconfig',
+    EVALS_APPLIANCE_AGENT: 'codex',
+  });
+
+  expect(env).toEqual({
+    PATH: '/usr/local/bin:/usr/bin',
+    HOME: '/Users/drew',
+    EVALS_APPLIANCE_CONFIG: cfg.configPath,
+    EVALS_APPLIANCE_JOB_ID: 'job-7',
+  });
 });
 
 test('launchLiveCommand interrupts the host process group when spawn setup fails', async () => {

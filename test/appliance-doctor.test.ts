@@ -108,7 +108,11 @@ describe('appliance doctor', () => {
       state: 'running',
       detail: 'quorum-appliance: exists, running',
     });
-    expect(runner.calls[0]?.args).toContain('status');
+    expect(runner.calls[0]?.args).toEqual([
+      '--name',
+      'quorum-appliance',
+      'status',
+    ]);
 
     runner.result = {
       status: 1,

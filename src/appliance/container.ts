@@ -102,7 +102,7 @@ export function downContainerArgs(loaded: LoadedApplianceConfig): string[] {
 }
 
 export function statusContainerArgs(loaded: LoadedApplianceConfig): string[] {
-  return [...baseContainerArgs(loaded), 'status'];
+  return ['--name', loaded.config.container.name, 'status'];
 }
 
 export function execContainerArgs(

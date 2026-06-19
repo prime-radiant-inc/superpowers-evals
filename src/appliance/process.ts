@@ -726,14 +726,28 @@ await runWorker(loaded, jobId);
   const child = spawn(process.execPath, ['--eval', script], {
     cwd: loaded.config.evals.path,
     detached: true,
-    env: {
-      ...envSnapshot(),
-      EVALS_APPLIANCE_CONFIG: loaded.configPath,
-      EVALS_APPLIANCE_JOB_ID: jobId,
-    },
+    env: detachedWorkerEnv(loaded, jobId),
     stdio: 'ignore',
   });
   child.unref();
+}
+
+export function detachedWorkerEnv(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  source: Readonly<Record<string, string | undefined>> = envSnapshot(),
+): Record<string, string> {
+  const env: Record<string, string> = {
+    EVALS_APPLIANCE_CONFIG: loaded.configPath,
+    EVALS_APPLIANCE_JOB_ID: jobId,
+  };
+  for (const key of ['PATH', 'HOME', 'TMPDIR']) {
+    const value = source[key];
+    if (typeof value === 'string' && value !== '') {
+      env[key] = value;
+    }
+  }
+  return env;
 }
 
 export async function runWorker(

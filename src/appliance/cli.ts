@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
@@ -263,6 +264,51 @@ function assertSupportedRunAllArgs(
   }
 }
 
+function normalizeScenarioPath(
+  scenario: string,
+  loaded: LoadedApplianceConfig,
+): string {
+  const value = scenario.trim();
+  if (value === '') {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      'scenario must not be blank',
+    );
+  }
+  if (value.startsWith('/')) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `scenario must stay under ${join(loaded.config.evals.path, 'scenarios')}: ${scenario}`,
+    );
+  }
+
+  const scenariosRoot = join(loaded.config.evals.path, 'scenarios');
+  const target = value.includes('/')
+    ? join(loaded.config.evals.path, value)
+    : join(scenariosRoot, value);
+  const normalizedRoot = `${scenariosRoot}/`;
+  const normalizedTarget = target.endsWith('/') ? target : `${target}/`;
+  if (!normalizedTarget.startsWith(normalizedRoot)) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `scenario must stay under ${scenariosRoot}: ${scenario}`,
+    );
+  }
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `trusted scenario not found: ${scenario}`,
+    );
+  }
+  return target.startsWith(`${scenariosRoot}/`)
+    ? `scenarios/${target.slice(scenariosRoot.length + 1)}`
+    : `scenarios/${value}`;
+}
+
 function defaultActions(): ApplianceActions {
   return {
     doctor: async () => {
@@ -287,13 +333,11 @@ function defaultActions(): ApplianceActions {
       return { ok: true, job_id: job.job_id, ...result };
     },
     run: async (args) => {
-      const argv = [
-        'quorum',
-        'run',
-        args.scenario,
-        '--coding-agent',
-        args.agent,
-      ];
+      const loaded = loadApplianceConfig();
+      const scenario = normalizeScenarioPath(args.scenario, loaded);
+      const codingAgentsDir = join(loaded.config.evals.path, 'coding-agents');
+      assertSupportedAgent(args.agent, codingAgentsDir);
+      const argv = ['quorum', 'run', scenario, '--coding-agent', args.agent];
       return submitLiveJob({
         kind: 'run',
         superpowersRef: args.superpowersRef,
@@ -452,8 +496,14 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           agent: options.codingAgent,
         };
         return handleAction(args, resolvedDeps, () => {
-          assertSupportedAgent(args.agent);
-          return actions.run(args);
+          const loaded = loadConfigForValidation();
+          const scenario = normalizeScenarioPath(args.scenario, loaded);
+          const codingAgentsDir = join(
+            loaded.config.evals.path,
+            'coding-agents',
+          );
+          assertSupportedAgent(args.agent, codingAgentsDir);
+          return actions.run({ ...args, scenario });
         });
       },
     );

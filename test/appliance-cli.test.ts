@@ -68,6 +68,14 @@ function writeAgentYaml(
   writeFileSync(join(dir, `${name}.yaml`), `${lines.join('\n')}\n`);
 }
 
+function writeScenario(evalsPath: string, relativePath: string): void {
+  const dir = join(evalsPath, 'scenarios', relativePath);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'story.md'), 'id: fixture\n');
+  writeFileSync(join(dir, 'setup.sh'), '#!/usr/bin/env bash\n');
+  writeFileSync(join(dir, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
+}
+
 test('run-all keeps appliance flags before separator and passes quorum args verbatim', async () => {
   const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
   writeAgentYaml(evalsPath, 'codex', [
@@ -163,10 +171,22 @@ test('status accepts --json before the id', async () => {
 });
 
 test('run forwards scenario and coding agent with appliance options', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeScenario(evalsPath, 'writing-plans');
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
   const calls: unknown[] = [];
   const program = createApplianceProgram({
     stdout: () => undefined,
     stderr: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
     actions: {
       doctor: async () => ({ ok: true }),
       prepare: async () => ({ ok: true }),
@@ -201,10 +221,136 @@ test('run forwards scenario and coding agent with appliance options', async () =
       json: true,
       detach: true,
       superpowersRef: 'feature/x',
-      scenario: 'writing-plans',
+      scenario: 'scenarios/writing-plans',
       agent: 'codex',
     },
   ]);
+});
+
+test('run accepts trusted bare and prefixed scenario paths', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeScenario(evalsPath, 'alpha');
+  writeScenario(evalsPath, 'nested/bravo');
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: () => undefined,
+    stderr: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
+    actions: noopActions({
+      run: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'alpha',
+    '--coding-agent',
+    'codex',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'scenarios/nested/bravo',
+    '--coding-agent',
+    'codex',
+  ]);
+
+  expect(calls).toEqual([
+    {
+      json: true,
+      detach: false,
+      superpowersRef: 'main',
+      scenario: 'scenarios/alpha',
+      agent: 'codex',
+    },
+    {
+      json: true,
+      detach: false,
+      superpowersRef: 'main',
+      scenario: 'scenarios/nested/bravo',
+      agent: 'codex',
+    },
+  ]);
+});
+
+test('run rejects absolute and traversing scenario paths before job submission', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeScenario(evalsPath, 'alpha');
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
+    actions: noopActions({
+      run: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    '/tmp/alpha',
+    '--coding-agent',
+    'codex',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    '../escape',
+    '--coding-agent',
+    'codex',
+  ]);
+
+  expect(calls).toEqual([]);
+  const errors = stdout.map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual(['config_invalid', 'config_invalid']);
 });
 
 test('json failures use appliance error shape', async () => {
@@ -244,6 +390,8 @@ test('json failures use appliance error shape', async () => {
 });
 
 test('run rejects antigravity on the Phase 1 appliance', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeScenario(evalsPath, 'writing-plans');
   const stdout: string[] = [];
   let exitCode = 0;
   const program = createApplianceProgram({
@@ -252,6 +400,7 @@ test('run rejects antigravity on the Phase 1 appliance', async () => {
     setExitCode: (code) => {
       exitCode = code;
     },
+    loadConfig: () => loadedForCli(evalsPath),
     actions: {
       doctor: async () => ({ ok: true }),
       prepare: async () => ({ ok: true }),
@@ -279,6 +428,81 @@ test('run rejects antigravity on the Phase 1 appliance', async () => {
 
   expect(exitCode).toBe(1);
   expect(JSON.parse(stdout.join('')).error.code).toBe('unsupported_os');
+});
+
+test('run validates the trusted coding-agent config for single-scenario runs', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeScenario(evalsPath, 'writing-plans');
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/*.jsonl"',
+    'normalizer: codex',
+    'required_env:',
+    '  - QUORUM_DEFINITELY_UNSET_VALIDATION',
+  ]);
+  writeAgentYaml(evalsPath, 'stealth', [
+    'name: stealth',
+    'runtime_family: antigravity',
+    'binary: agy',
+    'home_config_subdir: "."',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.gemini/antigravity-cli/brain"',
+    'session_log_glob: "**/transcript.jsonl"',
+    'normalizer: antigravity',
+    'required_env: []',
+  ]);
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
+    actions: noopActions({
+      run: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'stealth',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'codex',
+  ]);
+
+  expect(JSON.parse(stdout[0] ?? '').error.code).toBe('unsupported_os');
+  expect(calls).toEqual([
+    {
+      json: true,
+      detach: false,
+      superpowersRef: 'main',
+      scenario: 'scenarios/writing-plans',
+      agent: 'codex',
+    },
+  ]);
 });
 
 test('run-all requires explicit supported coding agents', async () => {
@@ -625,8 +849,22 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(wrapper).not.toContain('EVALS_APPLIANCE_CONFIG:-');
   expect(wrapper).toContain('config="$default_config"');
   expect(wrapper).toContain('EVALS_APPLIANCE_CONFIG="$default_config"');
+  expect(wrapper).toContain(
+    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$expected_ref"',
+  );
   expect(wrapper).toContain('status --porcelain');
   expect(wrapper).toContain(
     'refs/remotes/${expected_remote}/${expected_ref}^{commit}',
   );
+  expect(wrapper).toContain('exec env -i');
+  expect(wrapper).toContain('PATH="$PATH"');
+  expect(wrapper).toContain('HOME="${HOME:-');
+  const fetchIndex = wrapper.indexOf(
+    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$expected_ref"',
+  );
+  const revParseIndex = wrapper.indexOf(
+    'remote_sha="$(git -C "$evals_path" rev-parse --verify "$remote_ref")"',
+  );
+  expect(fetchIndex).toBeGreaterThanOrEqual(0);
+  expect(revParseIndex).toBeGreaterThan(fetchIndex);
 });
