@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "quorum": "./src/cli/index.ts"
+    "quorum": "./src/cli/index.ts",
+    "evals-appliance": "./src/appliance/cli.ts"
   },
   "engines": {
     "bun": ">=1.3.13"
@@ -13,6 +14,7 @@
   ],
   "scripts": {
     "quorum": "bun run src/cli/index.ts",
+    "appliance": "bun run src/appliance/cli.ts",
     "dashboard": "bun packages/dashboard/src/index.ts",
     "test": "bun test test/",
     "typecheck": "tsc --noEmit",

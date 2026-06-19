@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="${1:-/srv/quorum}"
+evals="$root/superpowers-evals"
+bin_dir="$root/bin"
+target="$bin_dir/evals-appliance"
+
+mkdir -p "$bin_dir"
+tmp="$target.$$"
+cat > "$tmp" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+config="${EVALS_APPLIANCE_CONFIG:-/srv/quorum/config/appliance.json}"
+evals_path="$(jq -r '.evals.path' "$config")"
+expected_ref="$(jq -r '.evals.ref' "$config")"
+
+git -C "$evals_path" diff --quiet
+git -C "$evals_path" diff --cached --quiet
+current="$(git -C "$evals_path" rev-parse --abbrev-ref HEAD)"
+if [[ "$current" != "$expected_ref" ]]; then
+  printf 'evals-appliance: evals checkout on %s, expected %s\n' "$current" "$expected_ref" >&2
+  exit 1
+fi
+
+cd "$evals_path"
+exec bun run src/appliance/cli.ts "$@"
+SH
+chmod 0755 "$tmp"
+mv "$tmp" "$target"
+printf '%s\n' "$target"
