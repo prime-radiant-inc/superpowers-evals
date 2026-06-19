@@ -347,10 +347,39 @@ test('run rejects absolute and traversing scenario paths before job submission',
     '--coding-agent',
     'codex',
   ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'scenarios/alpha/../alpha',
+    '--coding-agent',
+    'codex',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'scenarios/',
+    '--coding-agent',
+    'codex',
+  ]);
 
   expect(calls).toEqual([]);
   const errors = stdout.map((entry) => JSON.parse(entry).error.code);
-  expect(errors).toEqual(['config_invalid', 'config_invalid']);
+  expect(errors).toEqual([
+    'config_invalid',
+    'config_invalid',
+    'config_invalid',
+    'config_invalid',
+  ]);
 });
 
 test('json failures use appliance error shape', async () => {
@@ -857,7 +886,7 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
     'refs/remotes/${expected_remote}/${expected_ref}^{commit}',
   );
   expect(wrapper).toContain('exec env -i');
-  expect(wrapper).toContain('PATH="$PATH"');
+  expect(wrapper).toContain('PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"');
   expect(wrapper).toContain('HOME="${HOME:-');
   const fetchIndex = wrapper.indexOf(
     'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$expected_ref"',

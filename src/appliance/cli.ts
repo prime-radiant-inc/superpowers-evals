@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { Command } from 'commander';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
@@ -269,6 +269,7 @@ function normalizeScenarioPath(
   loaded: LoadedApplianceConfig,
 ): string {
   const value = scenario.trim();
+  const scenariosRoot = join(loaded.config.evals.path, 'scenarios');
   if (value === '') {
     throw new ApplianceError(
       'config_invalid',
@@ -276,27 +277,16 @@ function normalizeScenarioPath(
       'scenario must not be blank',
     );
   }
-  if (value.startsWith('/')) {
-    throw new ApplianceError(
-      'config_invalid',
-      'arguments',
-      `scenario must stay under ${join(loaded.config.evals.path, 'scenarios')}: ${scenario}`,
-    );
-  }
-
-  const scenariosRoot = join(loaded.config.evals.path, 'scenarios');
-  const target = value.includes('/')
-    ? join(loaded.config.evals.path, value)
-    : join(scenariosRoot, value);
-  const normalizedRoot = `${scenariosRoot}/`;
-  const normalizedTarget = target.endsWith('/') ? target : `${target}/`;
-  if (!normalizedTarget.startsWith(normalizedRoot)) {
+  if (value.startsWith('/') || value.split('/').includes('..')) {
     throw new ApplianceError(
       'config_invalid',
       'arguments',
       `scenario must stay under ${scenariosRoot}: ${scenario}`,
     );
   }
+
+  const relativeScenario = value.includes('/') ? value : `scenarios/${value}`;
+  const target = join(loaded.config.evals.path, relativeScenario);
   if (!existsSync(target) || !statSync(target).isDirectory()) {
     throw new ApplianceError(
       'config_invalid',
@@ -304,9 +294,21 @@ function normalizeScenarioPath(
       `trusted scenario not found: ${scenario}`,
     );
   }
-  return target.startsWith(`${scenariosRoot}/`)
-    ? `scenarios/${target.slice(scenariosRoot.length + 1)}`
-    : `scenarios/${value}`;
+  const realRoot = realpathSync(scenariosRoot);
+  const realTarget = realpathSync(target);
+  const targetWithinRoot = relative(realRoot, realTarget);
+  if (
+    targetWithinRoot === '' ||
+    targetWithinRoot.startsWith('..') ||
+    isAbsolute(targetWithinRoot)
+  ) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `scenario must stay under ${scenariosRoot}: ${scenario}`,
+    );
+  }
+  return `scenarios/${targetWithinRoot.split(sep).join('/')}`;
 }
 
 function defaultActions(): ApplianceActions {
