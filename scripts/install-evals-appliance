@@ -35,16 +35,6 @@ if [[ "\$current" != "\$expected_ref" ]]; then
   exit 1
 fi
 
-head_sha="\$(git -C "\$evals_path" rev-parse HEAD)"
-fetch_refspec="+refs/heads/\${expected_ref}:refs/remotes/\${expected_remote}/\${expected_ref}"
-git -C "\$evals_path" fetch --prune --tags "\$expected_remote" "\$fetch_refspec"
-remote_ref="refs/remotes/\${expected_remote}/\${expected_ref}^{commit}"
-remote_sha="\$(git -C "\$evals_path" rev-parse --verify "\$remote_ref")"
-if [[ "\$head_sha" != "\$remote_sha" ]]; then
-  printf 'evals-appliance: evals HEAD %s does not match %s %s\n' "\$head_sha" "\$expected_remote" "\$expected_ref" >&2
-  exit 1
-fi
-
 cd "\$evals_path"
 exec bun run src/appliance/cli.ts "\$@"
 EVALS_APPLIANCE_SANITIZED_SCRIPT

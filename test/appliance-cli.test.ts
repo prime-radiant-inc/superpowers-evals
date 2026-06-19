@@ -905,27 +905,16 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(wrapper).not.toContain('bash "$0"');
   expect(wrapper).not.toContain('--sanitized');
   expect(wrapper).not.toContain('shift');
-  expect(wrapper).toContain('exec bun run src/appliance/cli.ts "$@"');
-  expect(wrapper).toContain(
-    'fetch_refspec="+refs/heads/${expected_ref}:refs/remotes/${expected_remote}/${expected_ref}"',
+  expect(wrapper).not.toContain('fetch --prune');
+  expect(wrapper).not.toContain(
+    'refs/remotes/${expected_remote}/${expected_ref}',
   );
-  expect(wrapper).toContain(
-    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$fetch_refspec"',
-  );
+  expect(wrapper).not.toContain('remote_sha=');
   expect(wrapper).toContain('status --porcelain');
-  expect(wrapper).toContain(
-    'refs/remotes/${expected_remote}/${expected_ref}^{commit}',
-  );
+  expect(wrapper).toContain('rev-parse --abbrev-ref HEAD');
+  expect(wrapper).toContain('exec bun run src/appliance/cli.ts "$@"');
   expect(wrapper).not.toContain('PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"');
   expect(wrapper).not.toContain('HOME="${HOME:-');
-  const fetchIndex = wrapper.indexOf(
-    'git -C "$evals_path" fetch --prune --tags "$expected_remote" "$fetch_refspec"',
-  );
-  const revParseIndex = wrapper.indexOf(
-    'remote_sha="$(git -C "$evals_path" rev-parse --verify "$remote_ref")"',
-  );
-  expect(fetchIndex).toBeGreaterThanOrEqual(0);
-  expect(revParseIndex).toBeGreaterThan(fetchIndex);
 
   const hostileEnv = join(root, 'hostile-bash-env');
   const marker = join(root, 'hostile-marker');
