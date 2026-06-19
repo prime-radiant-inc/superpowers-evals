@@ -110,6 +110,9 @@ export const JobRecordSchema = z.object({
     argv: z.array(z.string()),
     sanitized: z.boolean(),
   }),
+  request: z.object({
+    superpowers_ref: z.string(),
+  }),
   refs: RefSnapshotSchema.nullable(),
   credential_bundle: JobCredentialBundleSchema.nullable(),
   container: JobContainerSchema.nullable(),
@@ -149,36 +152,38 @@ export const LockRecordSchema = z.object({
 });
 export type LockRecord = z.infer<typeof LockRecordSchema>;
 
-export const ProvenanceRecordSchema = z.object({
-  schema_version: z.literal(1),
-  job_id: z.string(),
-  created_at: z.string(),
-  refs: RefSnapshotSchema,
-  credential_bundle: z.object({
-    name: z.literal('blessed'),
-    bundle_id: z.string(),
-  }),
-  container: JobContainerSchema.extend({
-    code_mounts_read_only: z.boolean(),
-  }),
-  tool_versions_path: z.string().nullable(),
-  tool_versions_text: z.string().nullable(),
-  requester: z.object({
-    agent: z.string().nullable().optional(),
-    thread: z.string().nullable().optional(),
-    task: z.string().nullable().optional(),
-    host_user: z.string(),
-    remote_identity: z.string(),
-  }),
-  command_argv: z.array(z.string()),
-}).refine(
-  (record) =>
-    record.tool_versions_path !== null || record.tool_versions_text !== null,
-  {
-    message: 'tool_versions_path or tool_versions_text is required',
-    path: ['tool_versions_path'],
-  },
-);
+export const ProvenanceRecordSchema = z
+  .object({
+    schema_version: z.literal(1),
+    job_id: z.string(),
+    created_at: z.string(),
+    refs: RefSnapshotSchema,
+    credential_bundle: z.object({
+      name: z.literal('blessed'),
+      bundle_id: z.string(),
+    }),
+    container: JobContainerSchema.extend({
+      code_mounts_read_only: z.boolean(),
+    }),
+    tool_versions_path: z.string().nullable(),
+    tool_versions_text: z.string().nullable(),
+    requester: z.object({
+      agent: z.string().nullable().optional(),
+      thread: z.string().nullable().optional(),
+      task: z.string().nullable().optional(),
+      host_user: z.string(),
+      remote_identity: z.string(),
+    }),
+    command_argv: z.array(z.string()),
+  })
+  .refine(
+    (record) =>
+      record.tool_versions_path !== null || record.tool_versions_text !== null,
+    {
+      message: 'tool_versions_path or tool_versions_text is required',
+      path: ['tool_versions_path'],
+    },
+  );
 export type ProvenanceRecord = z.infer<typeof ProvenanceRecordSchema>;
 
 export interface LoadedApplianceConfig {

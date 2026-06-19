@@ -1,5 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
@@ -79,9 +86,20 @@ function allocateJobDir(
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const id = newJobId(now);
     const dir = jobDir(loaded, id);
-    if (!existsSync(dir)) {
-      mkdirPrivate(dir);
+    try {
+      mkdirSync(dir, { mode: 0o700 });
+      chmodSync(dir, 0o700);
       return { id, dir };
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'EEXIST'
+      ) {
+        continue;
+      }
+      throw error;
     }
   }
 
@@ -124,6 +142,9 @@ export function createJob(
     command: {
       argv: [...request.argv],
       sanitized: true,
+    },
+    request: {
+      superpowers_ref: request.superpowersRef,
     },
     refs: null,
     credential_bundle: null,

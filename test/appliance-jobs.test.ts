@@ -51,6 +51,7 @@ test('createJob writes a preflighting job with private log paths', () => {
 
   expect(job.job_id).toMatch(/^job-\d{8}T\d{6}Z-[0-9a-f]{4}$/);
   expect(job.status).toBe('preflighting');
+  expect(job.request.superpowers_ref).toBe('feature/ref');
   expect(job.refs).toBeNull();
   expect(job.artifacts.stdout_log).toEndWith('/stdout.log');
   expect(job.artifacts.stderr_log).toEndWith('/stderr.log');

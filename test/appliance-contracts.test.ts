@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -46,11 +46,21 @@ function fixture(): { root: string; configPath: string } {
     configPath,
     JSON.stringify({
       root,
-      evals: { path: join(root, 'superpowers-evals'), remote: 'origin', ref: 'main' },
+      evals: {
+        path: join(root, 'superpowers-evals'),
+        remote: 'origin',
+        ref: 'main',
+      },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
-      credential_bundle: { name: 'blessed', path: join(root, 'credentials/blessed') },
-      container: { name: 'quorum-appliance', results_root: join(root, 'superpowers-evals/results') },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'credentials/blessed'),
+      },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(root, 'superpowers-evals/results'),
+      },
     }),
   );
   return { root, configPath };
@@ -82,7 +92,11 @@ describe('appliance config', () => {
 
 describe('appliance error json', () => {
   test('serializes stable machine-readable failures', () => {
-    const err = new ApplianceError('lock_busy', 'preflight', 'run.lock is held');
+    const err = new ApplianceError(
+      'lock_busy',
+      'preflight',
+      'run.lock is held',
+    );
     expect(toErrorJson(err)).toEqual({
       ok: false,
       error: {
@@ -96,46 +110,49 @@ describe('appliance error json', () => {
 
 describe('appliance contracts', () => {
   test('accepts the planned initial job record shape with null lifecycle fields', () => {
-    expect(() =>
-      JobRecordSchema.parse({
-        schema_version: 1,
-        job_id: 'job-123',
-        kind: 'run',
-        status: 'queued',
-        created_at: '2026-06-18T00:00:00Z',
-        updated_at: '2026-06-18T00:00:00Z',
-        started_at: null,
-        finished_at: null,
-        requester: {
-          agent: 'codex',
-          thread: null,
-          task: null,
-          host_user: 'drew',
-          remote_identity: 'codex-session',
-        },
-        command: {
-          argv: ['appliance', 'run'],
-          sanitized: true,
-        },
-        refs: null,
-        credential_bundle: null,
-        container: null,
-        process: null,
-        artifacts: {
-          run_id: null,
-          batch_id: null,
-          stdout_log: '/tmp/stdout.log',
-          stderr_log: '/tmp/stderr.log',
-          provenance: '/tmp/provenance.json',
-        },
-        progress: null,
-        result: {
-          exit_code: null,
-          summary: null,
-        },
-        error: null,
-      }),
-    ).not.toThrow();
+    const parsed = JobRecordSchema.parse({
+      schema_version: 1,
+      job_id: 'job-123',
+      kind: 'run',
+      status: 'queued',
+      created_at: '2026-06-18T00:00:00Z',
+      updated_at: '2026-06-18T00:00:00Z',
+      started_at: null,
+      finished_at: null,
+      requester: {
+        agent: 'codex',
+        thread: null,
+        task: null,
+        host_user: 'drew',
+        remote_identity: 'codex-session',
+      },
+      command: {
+        argv: ['appliance', 'run'],
+        sanitized: true,
+      },
+      request: {
+        superpowers_ref: 'feature/ref',
+      },
+      refs: null,
+      credential_bundle: null,
+      container: null,
+      process: null,
+      artifacts: {
+        run_id: null,
+        batch_id: null,
+        stdout_log: '/tmp/stdout.log',
+        stderr_log: '/tmp/stderr.log',
+        provenance: '/tmp/provenance.json',
+      },
+      progress: null,
+      result: {
+        exit_code: null,
+        summary: null,
+      },
+      error: null,
+    });
+
+    expect(parsed.request.superpowers_ref).toBe('feature/ref');
   });
 
   test('accepts helper-created job records with no coding-agent identity', () => {
@@ -158,6 +175,9 @@ describe('appliance contracts', () => {
       command: {
         argv: ['evals-appliance', 'prepare', '--ref', 'main'],
         sanitized: true,
+      },
+      request: {
+        superpowers_ref: 'main',
       },
       refs: null,
       credential_bundle: null,
@@ -216,6 +236,9 @@ describe('appliance contracts', () => {
       command: {
         argv: ['appliance', 'run'],
         sanitized: true,
+      },
+      request: {
+        superpowers_ref: 'main',
       },
       refs: {
         superpowers_requested_ref: 'main',
