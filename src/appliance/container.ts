@@ -6,6 +6,7 @@ import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
 import type { LoadedApplianceConfig } from './types.ts';
 
 type AuthMountName = 'codex' | 'gemini' | 'kimi' | 'pi';
+type ContainerState = 'missing' | 'stopped' | 'running';
 
 export interface AuthMount {
   readonly name: AuthMountName;
@@ -90,6 +91,10 @@ export function upContainerArgs(loaded: LoadedApplianceConfig): string[] {
   return [...baseContainerArgs(loaded), 'up'];
 }
 
+export function downContainerArgs(loaded: LoadedApplianceConfig): string[] {
+  return ['--name', loaded.config.container.name, 'down'];
+}
+
 export function statusContainerArgs(loaded: LoadedApplianceConfig): string[] {
   return [...baseContainerArgs(loaded), 'status'];
 }
@@ -132,6 +137,61 @@ export function upContainer(
     upContainerArgs(loaded),
   );
   requireContainerCommand(result, 'container_unhealthy', 'container up failed');
+}
+
+export function downContainer(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+): void {
+  const result = runner.run(
+    evalsContainerPath(loaded),
+    downContainerArgs(loaded),
+  );
+  requireContainerCommand(
+    result,
+    'container_recreate_required',
+    'container down failed',
+  );
+}
+
+export function inspectContainerState(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+): ContainerState {
+  const result = runner.run(
+    evalsContainerPath(loaded),
+    statusContainerArgs(loaded),
+  );
+  requireContainerCommand(
+    result,
+    'container_unhealthy',
+    'container status failed',
+  );
+  if (result.stdout.includes('exists, running')) {
+    return 'running';
+  }
+  if (result.stdout.includes('exists, stopped')) {
+    return 'stopped';
+  }
+  if (result.stdout.includes('missing')) {
+    return 'missing';
+  }
+  throw new ApplianceError(
+    'container_unhealthy',
+    'container',
+    `container status is unknown: ${commandSummary(result)}`,
+  );
+}
+
+export function reconcileContainer(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+): void {
+  const state = inspectContainerState(loaded, runner);
+  if (state !== 'missing') {
+    downContainer(loaded, runner);
+  }
+  upContainer(loaded, runner);
 }
 
 export function statusContainer(

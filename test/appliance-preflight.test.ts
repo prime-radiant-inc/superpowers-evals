@@ -206,6 +206,10 @@ test('preflight shells through evals-container with blessed credentials and reco
   expect(evalsContainerCalls.some((call) => call.args.at(-1) === 'up')).toBe(
     true,
   );
+  const downCall = evalsContainerCalls.find((call) =>
+    call.args.includes('down'),
+  );
+  expect(downCall?.args).toEqual(['--name', 'quorum-appliance', 'down']);
   expect(
     evalsContainerCalls.some((call) => call.args.at(-1) === 'status'),
   ).toBe(true);
@@ -225,6 +229,8 @@ test('preflight shells through evals-container with blessed credentials and reco
   ).toBe(true);
   expect(commandSubsequence(evalsContainerCalls)).toEqual([
     'build',
+    'status',
+    'down',
     'up',
     'status',
     'evals-tool-versions',

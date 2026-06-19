@@ -6,9 +6,9 @@ import {
 import {
   buildContainer,
   containerMountSignature,
+  reconcileContainer,
   runInContainer,
   statusContainer,
-  upContainer,
 } from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { writePrivateText } from './fs.ts';
@@ -181,7 +181,7 @@ export async function preflightForJob(
     };
 
     buildContainer(args.loaded, runner);
-    upContainer(args.loaded, runner);
+    reconcileContainer(args.loaded, runner);
     statusContainer(args.loaded, runner);
 
     const toolVersions = runInContainer(
