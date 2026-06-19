@@ -9,6 +9,20 @@ interface. Until that helper exists on a configured appliance, raw local
 `bun run quorum ...` and `scripts/evals-container exec quorum ...` commands are
 local or break-glass workflows only.
 
+## Install And Bootstrap
+
+Install the host wrapper from the trusted evals checkout:
+
+```bash
+scripts/install-evals-appliance /srv/quorum
+```
+
+The installer writes `/srv/quorum/bin/evals-appliance` and prints that path. It
+does not write `appliance.json`, create credentials, or mutate repositories. The
+installed wrapper reads `EVALS_APPLIANCE_CONFIG` or
+`/srv/quorum/config/appliance.json`, verifies the evals checkout is clean and on
+the configured branch, then dispatches to the repo-owned TypeScript CLI.
+
 ## Operator Rule
 
 Agents operating shared live evals use the appliance helper, not raw quorum
@@ -21,7 +35,8 @@ and reviewed summaries.
 
 ## Before Launch
 
-Start with a read-only health check:
+Start with a read-only health check. `doctor` must not fetch, checkout, build,
+start containers, source credentials, remove locks, or mutate job records:
 
 ```bash
 evals-appliance doctor --json
@@ -33,9 +48,11 @@ Prepare the exact Superpowers ref to test:
 evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
 ```
 
-The helper must resolve mutable refs to exact SHAs. If `prepare` returns a busy
-lock, dirty checkout, ambiguous ref, stale lock, missing credential bundle, or
-failed container preflight, stop and report that result instead of guessing.
+The helper must resolve mutable refs to exact SHAs. If `prepare` returns
+`lock_busy` during an active live job, dirty checkout, ambiguous ref, stale
+lock, missing credential bundle, or failed container preflight, stop and report
+that result instead of guessing. `prepare` must not change refs underneath an
+active live eval.
 
 Phase 1 shared `run-all` is Linux-container-only. Windows evals and Antigravity
 remain trusted-maintainer break-glass paths until the appliance explicitly

@@ -106,15 +106,20 @@ evals-appliance doctor --json
 evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
 evals-appliance run-all --json --detach \
   --superpowers-ref <branch-tag-or-sha> \
-  -- --tier sentinel --coding-agents claude,codex,kimi --jobs 4
+  -- --tier sentinel \
+     --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+     --jobs 4
 evals-appliance status --json <job-id>
-evals-appliance show <job-id>
-evals-appliance costs <job-id>
+evals-appliance show --json <job-id>
+evals-appliance costs --json <job-id>
+evals-appliance cancel --json <job-id>
 ```
 
 The target interface and operating rules are in
 [docs/appliance-runbook.md](docs/appliance-runbook.md), backed by
 [docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md](docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md).
+`doctor` is read-only. `prepare` returns `lock_busy` rather than changing refs
+while a live job is active.
 Raw `bun run quorum ...` and `scripts/evals-container exec quorum ...` remain
 local or trusted break-glass workflows for shared live evals.
 

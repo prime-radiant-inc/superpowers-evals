@@ -54,6 +54,9 @@ evals-appliance doctor --json
 evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
 ```
 
+`doctor` is read-only. `prepare` resolves exact refs and returns `lock_busy`
+instead of changing checkouts while an appliance live job is active.
+
 Run the first sentinel batch detached:
 
 ```bash
@@ -68,8 +71,9 @@ Recover and inspect with:
 
 ```bash
 evals-appliance status --json <job-id>
-evals-appliance show <job-id>
-evals-appliance costs <job-id>
+evals-appliance show --json <job-id>
+evals-appliance costs --json <job-id>
+evals-appliance cancel --json <job-id>
 ```
 
 Phase 1 appliance `run-all` is Linux-container-only. Antigravity and Windows
