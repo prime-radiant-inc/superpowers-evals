@@ -47,6 +47,7 @@ export function loadConfig(configPath?: string): LoadedApplianceConfig {
       locks: join(stateRoot, 'locks'),
       provenance: join(stateRoot, 'provenance'),
     };
+    mkdirPrivate(stateRoot);
     mkdirPrivate(paths.jobs);
     mkdirPrivate(paths.locks);
     mkdirPrivate(paths.provenance);

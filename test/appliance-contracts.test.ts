@@ -23,9 +23,13 @@ function fixture(): { root: string; configPath: string } {
     'superpowers-evals',
     'superpowers',
     'gauntlet',
+    'state',
     'credentials/blessed',
   ]) {
-    mkdirSync(join(root, dir), { recursive: true });
+    mkdirSync(join(root, dir), {
+      recursive: true,
+      mode: dir === 'state' ? 0o755 : 0o700,
+    });
   }
   writeFileSync(
     join(root, 'credentials/blessed/metadata.json'),
@@ -57,6 +61,7 @@ describe('appliance config', () => {
     const loaded = loadConfig(configPath);
     expect(loaded.config.root).toBe(root);
     expect(loaded.bundle.bundle_id).toBe('blessed-2026-06-18-a');
+    expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700);
     expect(loaded.paths.jobs).toBe(join(root, 'state/jobs'));
     expect(loaded.paths.locks).toBe(join(root, 'state/locks'));
     expect(loaded.paths.provenance).toBe(join(root, 'state/provenance'));
