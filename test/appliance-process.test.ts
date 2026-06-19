@@ -245,7 +245,7 @@ test('detachedWorkerEnv only carries the minimal appliance worker contract', () 
   });
 
   expect(env).toEqual({
-    PATH: '/usr/local/bin:/usr/bin',
+    PATH: '/usr/local/bin:/usr/bin:/bin',
     HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-7',

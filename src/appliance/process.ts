@@ -736,13 +736,12 @@ await runWorker(loaded, jobId);
 export function detachedWorkerEnv(
   loaded: LoadedApplianceConfig,
   jobId: string,
-  source: Readonly<Record<string, string | undefined>> = envSnapshot(),
+  _source: Readonly<Record<string, string | undefined>> = envSnapshot(),
 ): Record<string, string> {
-  const path = source.PATH;
   const env: Record<string, string> = {
     EVALS_APPLIANCE_CONFIG: loaded.configPath,
     EVALS_APPLIANCE_JOB_ID: jobId,
-    PATH: typeof path === 'string' && path !== '' ? path : DEFAULT_TRUSTED_PATH,
+    PATH: DEFAULT_TRUSTED_PATH,
     HOME: loaded.config.root,
   };
   return env;
