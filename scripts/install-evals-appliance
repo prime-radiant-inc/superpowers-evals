@@ -11,15 +11,14 @@ default_home="$(printf '%q' "$root")"
 mkdir -p "$bin_dir"
 tmp="$target.$$"
 cat > "$tmp" <<SH
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 default_config=$default_config
 sanitized_path=/usr/local/bin:/usr/bin:/bin
 sanitized_home=$default_home
-if [[ "\${1:-}" != "--sanitized" ]]; then
-  exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" bash "\$0" --sanitized "\$@"
+if [[ "\${EVALS_APPLIANCE_SANITIZED:-}" != "1" ]]; then
+  exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" EVALS_APPLIANCE_SANITIZED=1 /bin/bash "\$0" "\$@"
 fi
-shift
 config="\$default_config"
 evals_path="\$(jq -r '.evals.path' "\$config")"
 expected_remote="\$(jq -r '.evals.remote' "\$config")"

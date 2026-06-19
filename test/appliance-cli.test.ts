@@ -878,11 +878,15 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(wrapper).not.toContain('EVALS_APPLIANCE_CONFIG:-');
   expect(wrapper).toContain('sanitized_path=/usr/local/bin:/usr/bin:/bin');
   expect(wrapper).toContain('sanitized_home=');
-  expect(wrapper).toContain('if [[ "${1:-}" != "--sanitized" ]]; then');
+  expect(wrapper).toStartWith('#!/bin/bash');
   expect(wrapper).toContain(
-    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" bash "$0" --sanitized "$@"',
+    'if [[ "${EVALS_APPLIANCE_SANITIZED:-}" != "1" ]]; then',
   );
-  expect(wrapper).toContain('shift');
+  expect(wrapper).toContain(
+    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" EVALS_APPLIANCE_SANITIZED=1 /bin/bash "$0" "$@"',
+  );
+  expect(wrapper).not.toContain('--sanitized');
+  expect(wrapper).not.toContain('shift');
   expect(wrapper).toContain('config="$default_config"');
   expect(wrapper).toContain(
     'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" bun run src/appliance/cli.ts "$@"',
