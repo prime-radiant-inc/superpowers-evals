@@ -195,6 +195,44 @@ test('status reports a nonterminal job as lost when its worker process is gone',
   expect(readJob(cfg, job.job_id).status).toBe('running');
 });
 
+test('status gives a freshly submitted job time to acquire its worker lock', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+
+  const status = statusPayload(cfg, job.job_id);
+
+  expect(status.status).toBe('preflighting');
+  expect(status.appliance_failed).toBe(false);
+});
+
+test('status reports an old nonterminal job without a worker as lost', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  const jobPath = join(cfg.paths.jobs, job.job_id, 'job.json');
+  writeFileSync(
+    jobPath,
+    JSON.stringify({
+      ...job,
+      updated_at: new Date(Date.now() - 60_000).toISOString(),
+    }),
+  );
+
+  const status = statusPayload(cfg, job.job_id);
+
+  expect(status.status).toBe('lost');
+  expect(status.appliance_failed).toBe(true);
+});
+
 test('show and costs do not require credential env', () => {
   const cfg = loaded();
   const batchDir = join(cfg.config.container.results_root, 'batches/batch-1');

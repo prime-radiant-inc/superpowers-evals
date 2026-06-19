@@ -16,6 +16,8 @@ import { readJob } from './jobs.ts';
 import { inspectLock } from './locks.ts';
 import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
 
+const STARTUP_GRACE_MS = 30_000;
+
 export interface BatchSummary {
   readonly pass: number;
   readonly fail: number;
@@ -218,6 +220,16 @@ function jobRunLockActive(
   return lock.state === 'active' && lock.record?.job_id === job.job_id;
 }
 
+function inStartupGrace(job: JobRecord): boolean {
+  if (job.process !== null) {
+    return false;
+  }
+  const updatedAt = Date.parse(job.updated_at);
+  return (
+    Number.isFinite(updatedAt) && Date.now() - updatedAt < STARTUP_GRACE_MS
+  );
+}
+
 function effectiveJobStatus(
   loaded: LoadedApplianceConfig,
   job: JobRecord,
@@ -230,6 +242,9 @@ function effectiveJobStatus(
     return 'done';
   }
   if (jobRunLockActive(loaded, job) || jobHostProcessAlive(job)) {
+    return job.status;
+  }
+  if (inStartupGrace(job)) {
     return job.status;
   }
   return 'lost';
