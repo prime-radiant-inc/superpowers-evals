@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpawnCommandRunner } from '../src/agents/command-runner.ts';
 import {
+  ApplianceError,
+  type ApplianceErrorCode,
+} from '../src/appliance/errors.ts';
+import {
   checkoutDetached,
   ensureCleanWorktree,
   fastForwardManagedRepo,
@@ -22,6 +26,17 @@ function git(cwd: string, args: string[]): string {
 
 function gitStatus(cwd: string, args: string[]): number | null {
   return spawnSync('git', args, { cwd, encoding: 'utf8' }).status;
+}
+
+function expectApplianceCode(fn: () => void, code: ApplianceErrorCode): void {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApplianceError);
+    expect((error as ApplianceError).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected ApplianceError ${code}`);
 }
 
 function repo(): { root: string; bare: string; work: string } {
@@ -56,7 +71,7 @@ describe('appliance git helpers', () => {
   test('ensureCleanWorktree rejects dirty files', () => {
     const { work } = repo();
     writeFileSync(join(work, 'dirty.txt'), 'dirty\n');
-    expect(() => ensureCleanWorktree(work, runner)).toThrow(/dirty/);
+    expectApplianceCode(() => ensureCleanWorktree(work, runner), 'repo_dirty');
   });
 
   test('fetchRepo prunes stale branches and fetches tags', () => {
@@ -148,20 +163,24 @@ describe('appliance git helpers', () => {
     git(work, ['checkout', '-B', 'same']);
     git(work, ['push', 'origin', 'refs/heads/same:refs/heads/same']);
     fetchRepo(work, 'origin', runner);
-    expect(() =>
-      resolveSuperpowersRef({ path: work, remote: 'origin' }, 'same', runner),
-    ).toThrow(/ambiguous/);
+    expectApplianceCode(
+      () =>
+        resolveSuperpowersRef({ path: work, remote: 'origin' }, 'same', runner),
+      'ref_ambiguous',
+    );
   });
 
   test('resolveSuperpowersRef fails closed for missing refs', () => {
     const { work } = repo();
-    expect(() =>
-      resolveSuperpowersRef(
-        { path: work, remote: 'origin' },
-        'missing',
-        runner,
-      ),
-    ).toThrow(/not found/);
+    expectApplianceCode(
+      () =>
+        resolveSuperpowersRef(
+          { path: work, remote: 'origin' },
+          'missing',
+          runner,
+        ),
+      'ref_not_found',
+    );
   });
 
   test('checkoutDetached leaves the repo detached at the requested sha', () => {
