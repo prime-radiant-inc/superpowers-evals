@@ -59,6 +59,19 @@ class FakeRunner implements CommandRunner {
       return { status: 0, stdout: '', stderr: '' };
     }
     if (
+      command === 'docker' &&
+      args[0] === 'container' &&
+      args[1] === 'inspect'
+    ) {
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          { Id: 'container-id-1', Image: 'sha256:image-id-1' },
+        ]),
+        stderr: '',
+      };
+    }
+    if (
       command.endsWith('scripts/evals-container') &&
       args.includes('status')
     ) {
@@ -227,12 +240,16 @@ test('preflight shells through evals-container with blessed credentials and reco
 
   expect(result.credential_bundle.bundle_id).toBe('blessed-2026-06-18-a');
   expect(result.refs.superpowers_resolved_sha).toBe('a'.repeat(40));
+  expect(result.container.id).toBe('container-id-1');
+  expect(result.container.image_id).toBe('sha256:image-id-1');
   expect(result.container.mount_signature).toMatch(/^[0-9a-f]{64}$/);
   const updated = readJob(cfg, job.job_id);
   expect(updated.status).toBe('preflighting');
   expect(updated.refs?.superpowers_resolved_sha).toBe('a'.repeat(40));
   expect(updated.credential_bundle?.bundle_id).toBe('blessed-2026-06-18-a');
   expect(updated.container?.name).toBe('quorum-appliance');
+  expect(updated.container?.id).toBe('container-id-1');
+  expect(updated.container?.image_id).toBe('sha256:image-id-1');
   expect(readFileSync(result.tool_versions_path, 'utf8')).toBe('bun 1.3.13\n');
   expect(statSync(result.tool_versions_path).mode & 0o777).toBe(0o600);
 
@@ -240,6 +257,8 @@ test('preflight shells through evals-container with blessed credentials and reco
     readFileSync(updated.artifacts.provenance, 'utf8'),
   );
   expect(provenance.job_id).toBe(job.job_id);
+  expect(provenance.container.id).toBe('container-id-1');
+  expect(provenance.container.image_id).toBe('sha256:image-id-1');
   expect(provenance.command_argv).toEqual([
     'evals-appliance',
     'prepare',

@@ -13,6 +13,7 @@ import { resolveTarget, ShowError } from '../cli/resolve-target.ts';
 import { type FinalStatus, FinalVerdictSchema } from '../contracts/verdict.ts';
 import { ApplianceError } from './errors.ts';
 import { readJob } from './jobs.ts';
+import { inspectLock } from './locks.ts';
 import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
 
 export interface BatchSummary {
@@ -173,6 +174,67 @@ function applianceFailed(status: JobStatus): boolean {
   return status === 'failed' || status === 'lost' || status === 'quarantined';
 }
 
+function isTerminalStatus(status: JobStatus): boolean {
+  return (
+    status === 'done' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'lost' ||
+    status === 'quarantined'
+  );
+}
+
+function hostProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ESRCH'
+    ) {
+      return false;
+    }
+    return true;
+  }
+}
+
+function jobHostProcessAlive(job: JobRecord): boolean {
+  const hostPgid = job.process?.host_pgid ?? null;
+  if (hostPgid !== null && hostProcessAlive(-hostPgid)) {
+    return true;
+  }
+  const hostPid = job.process?.host_pid ?? null;
+  return hostPid !== null && hostProcessAlive(hostPid);
+}
+
+function jobRunLockActive(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+): boolean {
+  const lock = inspectLock(join(loaded.paths.locks, 'run.lock'));
+  return lock.state === 'active' && lock.record?.job_id === job.job_id;
+}
+
+function effectiveJobStatus(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+  hasTerminalArtifact: boolean,
+): JobStatus {
+  if (isTerminalStatus(job.status)) {
+    return job.status;
+  }
+  if (hasTerminalArtifact) {
+    return 'done';
+  }
+  if (jobRunLockActive(loaded, job) || jobHostProcessAlive(job)) {
+    return job.status;
+  }
+  return 'lost';
+}
+
 function resolveJobArtifact(loaded: LoadedApplianceConfig, id: string): Target {
   const job = readJob(loaded, id);
   if (job.artifacts.batch_id !== null) {
@@ -331,10 +393,11 @@ export function statusPayload(
 ): StatusPayload {
   const target = resolveSummaryTarget(loaded, id);
   if (target.kind === 'job') {
+    const status = effectiveJobStatus(loaded, target.job, false);
     return {
       id,
-      status: target.job.status,
-      appliance_failed: applianceFailed(target.job.status),
+      status,
+      appliance_failed: applianceFailed(status),
       summary: null,
       job: jobPayload(target.job),
       artifact: null,
@@ -343,11 +406,17 @@ export function statusPayload(
 
   if (target.kind === 'batch') {
     const { header, summary } = batchSummary(loaded, target.path);
+    const artifactTerminal = header.finished_at !== null;
+    const status =
+      target.job === null
+        ? artifactTerminal
+          ? 'done'
+          : 'running'
+        : effectiveJobStatus(loaded, target.job, artifactTerminal);
     return {
       id,
-      status: target.job?.status ?? (header.finished_at ? 'done' : 'running'),
-      appliance_failed:
-        target.job !== null ? applianceFailed(target.job.status) : false,
+      status,
+      appliance_failed: target.job !== null ? applianceFailed(status) : false,
       summary,
       job: jobPayload(target.job),
       artifact: artifactPayload(target),
@@ -355,11 +424,12 @@ export function statusPayload(
   }
 
   const verdict = verdictFromRun(target.path);
+  const status =
+    target.job === null ? 'done' : effectiveJobStatus(loaded, target.job, true);
   return {
     id,
-    status: target.job?.status ?? 'done',
-    appliance_failed:
-      target.job !== null ? applianceFailed(target.job.status) : false,
+    status,
+    appliance_failed: target.job !== null ? applianceFailed(status) : false,
     summary: {
       final: verdict.final,
       final_reason: verdict.final_reason,

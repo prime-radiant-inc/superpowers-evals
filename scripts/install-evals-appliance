@@ -13,7 +13,7 @@ cat > "$tmp" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
 default_config=$default_config
-config="\${EVALS_APPLIANCE_CONFIG:-\$default_config}"
+config="\$default_config"
 evals_path="\$(jq -r '.evals.path' "\$config")"
 expected_remote="\$(jq -r '.evals.remote' "\$config")"
 expected_ref="\$(jq -r '.evals.ref' "\$config")"
@@ -39,7 +39,7 @@ if [[ "\$head_sha" != "\$remote_sha" ]]; then
 fi
 
 cd "\$evals_path"
-exec bun run src/appliance/cli.ts "\$@"
+exec env EVALS_APPLIANCE_CONFIG="\$default_config" bun run src/appliance/cli.ts "\$@"
 SH
 chmod 0755 "$tmp"
 mv "$tmp" "$target"

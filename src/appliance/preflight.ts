@@ -6,6 +6,7 @@ import {
 import {
   buildContainer,
   containerMountSignature,
+  inspectContainerIdentity,
   reconcileContainer,
   runInContainer,
   statusContainer,
@@ -183,6 +184,7 @@ export async function preflightForJob(
     buildContainer(args.loaded, runner);
     reconcileContainer(args.loaded, runner);
     statusContainer(args.loaded, runner);
+    const containerIdentity = inspectContainerIdentity(args.loaded, runner);
 
     const toolVersions = runInContainer(
       args.loaded,
@@ -210,8 +212,8 @@ export async function preflightForJob(
       },
       container: {
         name: args.loaded.config.container.name,
-        id: null,
-        image_id: null,
+        id: containerIdentity.id,
+        image_id: containerIdentity.image_id,
         mount_signature: containerMountSignature(args.loaded),
         code_mounts_read_only: false,
       },

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from '../src/appliance/errors.ts';
-import { createJob, updateJob } from '../src/appliance/jobs.ts';
+import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   costsPayload,
   showPayload,
@@ -133,6 +133,66 @@ test('status derives a completed batch summary from artifacts', () => {
     skipped: 0,
   });
   expect(status.appliance_failed).toBe(false);
+});
+
+test('status prefers terminal batch artifacts over stale nonterminal job status', () => {
+  const cfg = loaded();
+  writeBatch(cfg, [
+    {
+      scenario: 'alpha',
+      coding_agent: 'codex',
+      run_id: 'run-1',
+      skipped: null,
+    },
+  ]);
+  writeVerdict(cfg, 'run-1', 'pass');
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    artifacts: { ...current.artifacts, batch_id: 'batch-1' },
+    process: {
+      host_pid: 99999999,
+      host_pgid: 99999999,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  const status = statusPayload(cfg, job.job_id);
+  expect(status.status).toBe('done');
+  expect(status.appliance_failed).toBe(false);
+  expect(readJob(cfg, job.job_id).status).toBe('running');
+});
+
+test('status reports a nonterminal job as lost when its worker process is gone', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    process: {
+      host_pid: 99999999,
+      host_pgid: 99999999,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  const status = statusPayload(cfg, job.job_id);
+  expect(status.status).toBe('lost');
+  expect(status.appliance_failed).toBe(true);
+  expect(readJob(cfg, job.job_id).status).toBe('running');
 });
 
 test('show and costs do not require credential env', () => {

@@ -338,6 +338,9 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
 
   const wrapper = readFileSync(join(root, 'bin/evals-appliance'), 'utf8');
   expect(wrapper).toContain(`${root}/config/appliance.json`);
+  expect(wrapper).not.toContain('EVALS_APPLIANCE_CONFIG:-');
+  expect(wrapper).toContain('config="$default_config"');
+  expect(wrapper).toContain('EVALS_APPLIANCE_CONFIG="$default_config"');
   expect(wrapper).toContain('status --porcelain');
   expect(wrapper).toContain(
     'refs/remotes/${expected_remote}/${expected_ref}^{commit}',

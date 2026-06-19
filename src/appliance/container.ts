@@ -13,6 +13,11 @@ export interface AuthMount {
   readonly path: string;
 }
 
+export interface ContainerIdentity {
+  readonly id: string | null;
+  readonly image_id: string | null;
+}
+
 const AUTH_DIRS: readonly {
   readonly name: AuthMountName;
   readonly bundleSubdir: string;
@@ -214,6 +219,38 @@ export function statusContainer(
       'container',
       `container is not running: ${commandSummary(result)}`,
     );
+  }
+}
+
+function stringField(record: unknown, key: string): string | null {
+  if (typeof record === 'object' && record !== null) {
+    const value = (record as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : null;
+  }
+  return null;
+}
+
+export function inspectContainerIdentity(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+): ContainerIdentity {
+  const result = runner.run('docker', [
+    'container',
+    'inspect',
+    loaded.config.container.name,
+  ]);
+  if (result.status !== 0) {
+    return { id: null, image_id: null };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    const record = Array.isArray(parsed) ? parsed[0] : parsed;
+    return {
+      id: stringField(record, 'Id'),
+      image_id: stringField(record, 'Image') ?? stringField(record, 'ImageID'),
+    };
+  } catch {
+    return { id: null, image_id: null };
   }
 }
 
