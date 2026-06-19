@@ -261,6 +261,18 @@ describe('appliance contracts', () => {
         tool_versions_text: null,
       }).success,
     ).toBe(true);
+
+    expect(
+      ProvenanceRecordSchema.safeParse({
+        ...base,
+        container: {
+          ...base.container,
+          code_mounts_read_only: false,
+        },
+        tool_versions_path: null,
+        tool_versions_text: 'evals-tool-versions: available',
+      }).success,
+    ).toBe(true);
   });
 });
 
