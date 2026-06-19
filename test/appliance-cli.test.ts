@@ -874,23 +874,25 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(proc.status).toBe(0);
 
   const wrapper = readFileSync(join(root, 'bin/evals-appliance'), 'utf8');
+  const syntax = spawnSync('bash', ['-n', join(root, 'bin/evals-appliance')], {
+    encoding: 'utf8',
+  });
+  expect(syntax.status).toBe(0);
   expect(wrapper).toContain(`${root}/config/appliance.json`);
   expect(wrapper).not.toContain('EVALS_APPLIANCE_CONFIG:-');
   expect(wrapper).toContain('sanitized_path=/usr/local/bin:/usr/bin:/bin');
   expect(wrapper).toContain('sanitized_home=');
+  expect(wrapper).toContain(
+    'exec /usr/bin/env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" /bin/bash -s -- "$@"',
+  );
   expect(wrapper).toStartWith('#!/bin/bash');
-  expect(wrapper).toContain(
-    'if [[ "${EVALS_APPLIANCE_SANITIZED:-}" != "1" ]]; then',
-  );
-  expect(wrapper).toContain(
-    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" EVALS_APPLIANCE_SANITIZED=1 /bin/bash "$0" "$@"',
-  );
+  expect(wrapper).toContain("<<'EVALS_APPLIANCE_SANITIZED_SCRIPT'");
+  expect(wrapper).toContain('config="$EVALS_APPLIANCE_CONFIG"');
+  expect(wrapper).not.toContain('EVALS_APPLIANCE_SANITIZED=1');
+  expect(wrapper).not.toContain('bash "$0"');
   expect(wrapper).not.toContain('--sanitized');
   expect(wrapper).not.toContain('shift');
-  expect(wrapper).toContain('config="$default_config"');
-  expect(wrapper).toContain(
-    'exec env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" bun run src/appliance/cli.ts "$@"',
-  );
+  expect(wrapper).toContain('exec bun run src/appliance/cli.ts "$@"');
   expect(wrapper).toContain(
     'fetch_refspec="+refs/heads/${expected_ref}:refs/remotes/${expected_remote}/${expected_ref}"',
   );

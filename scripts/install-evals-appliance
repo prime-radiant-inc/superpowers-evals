@@ -16,10 +16,9 @@ set -euo pipefail
 default_config=$default_config
 sanitized_path=/usr/local/bin:/usr/bin:/bin
 sanitized_home=$default_home
-if [[ "\${EVALS_APPLIANCE_SANITIZED:-}" != "1" ]]; then
-  exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" EVALS_APPLIANCE_SANITIZED=1 /bin/bash "\$0" "\$@"
-fi
-config="\$default_config"
+exec /usr/bin/env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" /bin/bash -s -- "\$@" <<'EVALS_APPLIANCE_SANITIZED_SCRIPT'
+set -euo pipefail
+config="\$EVALS_APPLIANCE_CONFIG"
 evals_path="\$(jq -r '.evals.path' "\$config")"
 expected_remote="\$(jq -r '.evals.remote' "\$config")"
 expected_ref="\$(jq -r '.evals.ref' "\$config")"
@@ -47,7 +46,8 @@ if [[ "\$head_sha" != "\$remote_sha" ]]; then
 fi
 
 cd "\$evals_path"
-exec env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" bun run src/appliance/cli.ts "\$@"
+exec bun run src/appliance/cli.ts "\$@"
+EVALS_APPLIANCE_SANITIZED_SCRIPT
 SH
 chmod 0755 "$tmp"
 mv "$tmp" "$target"
