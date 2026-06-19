@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -56,6 +62,10 @@ function loadedForCli(evalsPath: string): LoadedApplianceConfig {
       provenance: join(root, 'state/provenance'),
     },
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function writeAgentYaml(
@@ -885,7 +895,10 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(wrapper).toContain(
     'exec /usr/bin/env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" /bin/bash -s -- "$@"',
   );
-  expect(wrapper).toStartWith('#!/bin/bash');
+  expect(wrapper).toStartWith('#!/bin/bash -p');
+  expect(wrapper).toContain(
+    'builtin exec /usr/bin/env -i PATH="$sanitized_path" HOME="$sanitized_home" EVALS_APPLIANCE_CONFIG="$default_config" /bin/bash -s -- "$@"',
+  );
   expect(wrapper).toContain("<<'EVALS_APPLIANCE_SANITIZED_SCRIPT'");
   expect(wrapper).toContain('config="$EVALS_APPLIANCE_CONFIG"');
   expect(wrapper).not.toContain('EVALS_APPLIANCE_SANITIZED=1');
@@ -913,4 +926,22 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   );
   expect(fetchIndex).toBeGreaterThanOrEqual(0);
   expect(revParseIndex).toBeGreaterThan(fetchIndex);
+
+  const hostileEnv = join(root, 'hostile-bash-env');
+  const marker = join(root, 'hostile-marker');
+  writeFileSync(
+    hostileEnv,
+    [
+      `printf sourced > ${shellQuote(marker)}`,
+      "exec() { printf 'intercepted exec\\n' >&2; exit 42; }",
+      '',
+    ].join('\n'),
+  );
+  const hostile = spawnSync(join(root, 'bin/evals-appliance'), ['status'], {
+    encoding: 'utf8',
+    env: { ...Bun.env, BASH_ENV: hostileEnv },
+  });
+  expect(hostile.status).not.toBe(42);
+  expect(hostile.stderr).not.toContain('intercepted exec');
+  expect(existsSync(marker)).toBe(false);
 });

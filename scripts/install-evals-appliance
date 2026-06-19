@@ -11,12 +11,12 @@ default_home="$(printf '%q' "$root")"
 mkdir -p "$bin_dir"
 tmp="$target.$$"
 cat > "$tmp" <<SH
-#!/bin/bash
+#!/bin/bash -p
 set -euo pipefail
 default_config=$default_config
 sanitized_path=/usr/local/bin:/usr/bin:/bin
 sanitized_home=$default_home
-exec /usr/bin/env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" /bin/bash -s -- "\$@" <<'EVALS_APPLIANCE_SANITIZED_SCRIPT'
+builtin exec /usr/bin/env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" /bin/bash -s -- "\$@" <<'EVALS_APPLIANCE_SANITIZED_SCRIPT'
 set -euo pipefail
 config="\$EVALS_APPLIANCE_CONFIG"
 evals_path="\$(jq -r '.evals.path' "\$config")"
