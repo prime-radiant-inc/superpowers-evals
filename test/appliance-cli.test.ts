@@ -1,17 +1,99 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApplianceProgram } from '../src/appliance/cli.ts';
+import {
+  type ApplianceActions,
+  createApplianceProgram,
+} from '../src/appliance/cli.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
+import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+
+function noopActions(
+  overrides: Partial<ApplianceActions> = {},
+): ApplianceActions {
+  return {
+    doctor: async () => ({ ok: true }),
+    prepare: async () => ({ ok: true }),
+    run: async () => ({ ok: true }),
+    runAll: async () => ({ ok: true }),
+    status: async () => ({ ok: true }),
+    cancel: async () => ({ ok: true }),
+    show: async () => ({ ok: true }),
+    costs: async () => ({ ok: true }),
+    ...overrides,
+  };
+}
+
+function loadedForCli(evalsPath: string): LoadedApplianceConfig {
+  const root = mkdtempSync(join(tmpdir(), 'appliance-cli-config-'));
+  return {
+    configPath: join(root, 'appliance.json'),
+    config: {
+      root,
+      evals: { path: evalsPath, remote: 'origin', ref: 'main' },
+      superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+      gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'credentials/blessed'),
+      },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(evalsPath, 'results'),
+      },
+    },
+    bundle: {
+      bundle_id: 'blessed-x',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+      note: '',
+    },
+    paths: {
+      jobs: join(root, 'state/jobs'),
+      locks: join(root, 'state/locks'),
+      provenance: join(root, 'state/provenance'),
+    },
+  };
+}
+
+function writeAgentYaml(
+  evalsPath: string,
+  name: string,
+  lines: readonly string[],
+): void {
+  const dir = join(evalsPath, 'coding-agents');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.yaml`), `${lines.join('\n')}\n`);
+}
 
 test('run-all keeps appliance flags before separator and passes quorum args verbatim', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/rollout-*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  writeAgentYaml(evalsPath, 'kimi', [
+    'name: kimi',
+    'binary: kimi',
+    'home_config_subdir: ".kimi-code"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.kimi-code/sessions"',
+    'session_log_glob: "**/wire.jsonl"',
+    'normalizer: kimi',
+    'required_env: []',
+  ]);
   const calls: unknown[] = [];
   const stdout: string[] = [];
   const program = createApplianceProgram({
     stdout: (s) => stdout.push(s),
     stderr: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
     actions: {
       doctor: async () => ({ ok: true }),
       prepare: async () => ({ ok: true }),
@@ -326,6 +408,208 @@ test('run-all rejects antigravity and windows requests', async () => {
 
   const errors = stdout.map((entry) => JSON.parse(entry).error.code);
   expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
+});
+
+test('run-all rejects duplicate coding-agent and os forwarded flags', async () => {
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    actions: noopActions({
+      runAll: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--coding-agents=codex',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--os=linux',
+    '--os',
+    'linux',
+  ]);
+
+  expect(calls).toEqual([]);
+  const errors = stdout.map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
+});
+
+test('run-all rejects forwarded root and result override flags', async () => {
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    actions: noopActions({
+      runAll: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--scenarios-root=/tmp/scenarios',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--coding-agents-dir',
+    '/tmp/agents',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--out-root=/tmp/results',
+  ]);
+
+  expect(calls).toEqual([]);
+  const errors = stdout.map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual([
+    'unsupported_os',
+    'unsupported_os',
+    'unsupported_os',
+  ]);
+});
+
+test('run-all validates requested agents against trusted checkout configs', async () => {
+  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  writeAgentYaml(evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  writeAgentYaml(evalsPath, 'broken', ['name: broken']);
+  writeAgentYaml(evalsPath, 'stealth', [
+    'name: stealth',
+    'runtime_family: antigravity',
+    'binary: agy',
+    'home_config_subdir: "."',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.gemini/antigravity-cli/brain"',
+    'session_log_glob: "**/transcript.jsonl"',
+    'normalizer: antigravity',
+    'required_env: []',
+  ]);
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: (s) => stdout.push(s),
+    stderr: () => undefined,
+    setExitCode: () => undefined,
+    loadConfig: () => loadedForCli(evalsPath),
+    actions: noopActions({
+      runAll: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'missing',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'broken',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'stealth',
+  ]);
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+  ]);
+
+  expect(calls).toHaveLength(1);
+  const errors = stdout
+    .slice(0, 3)
+    .map((entry) => JSON.parse(entry).error.code);
+  expect(errors).toEqual([
+    'unsupported_os',
+    'unsupported_os',
+    'unsupported_os',
+  ]);
 });
 
 test('install wrapper embeds the requested root and strict checkout checks', () => {

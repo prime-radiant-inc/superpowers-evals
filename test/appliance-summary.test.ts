@@ -285,6 +285,37 @@ test('status accepts a bare batch id and counts skipped and missing verdict cell
   });
 });
 
+test('status attaches a matching quarantined job for a bare batch id', () => {
+  const cfg = loaded();
+  writeBatch(cfg, [
+    {
+      scenario: 'alpha',
+      coding_agent: 'codex',
+      run_id: 'run-1',
+      skipped: null,
+    },
+  ]);
+  writeVerdict(cfg, 'run-1', 'pass');
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'quarantined',
+    artifacts: { ...current.artifacts, batch_id: 'batch-1' },
+  }));
+
+  const status = statusPayload(cfg, 'batch-1');
+
+  expect(status.status).toBe('quarantined');
+  expect(status.appliance_failed).toBe(true);
+  expect(status.job?.job_id).toBe(job.job_id);
+  expect(status.job?.status).toBe('quarantined');
+});
+
 test('show renders a single run from a job artifact', () => {
   const cfg = loaded();
   writeVerdict(cfg, 'run-1', 'pass');

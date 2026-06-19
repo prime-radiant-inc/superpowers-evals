@@ -1,14 +1,20 @@
 #!/usr/bin/env bun
+import { join } from 'node:path';
 import { Command } from 'commander';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
+import {
+  agentRuntimeFamily,
+  loadAgentConfigForValidation,
+} from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
-import { loadConfig } from './config.ts';
+import { loadConfig as loadApplianceConfig } from './config.ts';
 import { doctorPayload } from './doctor.ts';
 import { ApplianceError, toErrorJson } from './errors.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
+import type { LoadedApplianceConfig } from './types.ts';
 
 interface BaseCommandArgs {
   readonly json: boolean;
@@ -68,6 +74,7 @@ export interface ApplianceCliDeps {
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly setExitCode?: (code: number) => void;
+  readonly loadConfig?: () => LoadedApplianceConfig;
   readonly actions?: Partial<ApplianceActions>;
 }
 
@@ -80,6 +87,11 @@ interface JsonDetachOptions extends JsonOption {
 }
 
 const UNSUPPORTED_APPLIANCE_AGENTS = new Set(['antigravity']);
+const FORBIDDEN_RUN_ALL_FLAGS = new Set([
+  '--coding-agents-dir',
+  '--out-root',
+  '--scenarios-root',
+]);
 
 function requester(): {
   readonly agent: string | null;
@@ -120,38 +132,103 @@ function csv(value: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-function optionValue(args: readonly string[], name: string): string | null {
+function optionOccurrences(
+  args: readonly string[],
+  name: string,
+): readonly (string | null)[] {
   const equalsPrefix = `${name}=`;
+  const values: (string | null)[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) {
       continue;
     }
     if (arg.startsWith(equalsPrefix)) {
-      return arg.slice(equalsPrefix.length);
+      values.push(arg.slice(equalsPrefix.length));
+      continue;
     }
     if (arg === name) {
-      return args[i + 1] ?? null;
+      values.push(args[i + 1] ?? null);
     }
   }
-  return null;
+  return values;
 }
 
-function assertSupportedAgent(agent: string): void {
+function optionValue(args: readonly string[], name: string): string | null {
+  return optionOccurrences(args, name)[0] ?? null;
+}
+
+function rejectUnsupportedAgent(agent: string): never {
+  throw new ApplianceError(
+    'unsupported_os',
+    'arguments',
+    `${agent} is not supported on the Phase 1 appliance`,
+  );
+}
+
+function assertSupportedAgent(agent: string, codingAgentsDir?: string): void {
   if (
     agent.length === 0 ||
     agent.startsWith('--') ||
     UNSUPPORTED_APPLIANCE_AGENTS.has(agent.toLowerCase())
   ) {
+    rejectUnsupportedAgent(agent);
+  }
+
+  if (codingAgentsDir === undefined) {
+    return;
+  }
+
+  try {
+    const config = loadAgentConfigForValidation(codingAgentsDir, agent);
+    if (
+      UNSUPPORTED_APPLIANCE_AGENTS.has(agentRuntimeFamily(config).toLowerCase())
+    ) {
+      rejectUnsupportedAgent(agent);
+    }
+  } catch (error) {
+    if (error instanceof ApplianceError) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
     throw new ApplianceError(
       'unsupported_os',
       'arguments',
-      `${agent} is not supported on the Phase 1 appliance`,
+      `${agent} is not supported on the Phase 1 appliance: ${message}`,
     );
   }
 }
 
-function assertSupportedRunAllArgs(args: readonly string[]): void {
+function assertNoDuplicateOption(args: readonly string[], name: string): void {
+  if (optionOccurrences(args, name).length > 1) {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      `duplicate ${name} is not supported on the Phase 1 appliance`,
+    );
+  }
+}
+
+function assertNoForbiddenRunAllFlags(args: readonly string[]): void {
+  for (const flag of FORBIDDEN_RUN_ALL_FLAGS) {
+    if (optionOccurrences(args, flag).length > 0) {
+      throw new ApplianceError(
+        'unsupported_os',
+        'arguments',
+        `run-all ${flag} is controlled by the Phase 1 appliance`,
+      );
+    }
+  }
+}
+
+function assertSupportedRunAllArgs(
+  args: readonly string[],
+  loadConfig: () => LoadedApplianceConfig,
+): void {
+  assertNoDuplicateOption(args, '--coding-agents');
+  assertNoDuplicateOption(args, '--os');
+  assertNoForbiddenRunAllFlags(args);
+
   const os = optionValue(args, '--os');
   if (os !== null && os !== 'linux') {
     throw new ApplianceError(
@@ -180,16 +257,20 @@ function assertSupportedRunAllArgs(args: readonly string[]): void {
   for (const agent of agents) {
     assertSupportedAgent(agent);
   }
+  const codingAgentsDir = join(loadConfig().config.evals.path, 'coding-agents');
+  for (const agent of agents) {
+    assertSupportedAgent(agent, codingAgentsDir);
+  }
 }
 
 function defaultActions(): ApplianceActions {
   return {
     doctor: async () => {
-      const loaded = loadConfig();
+      const loaded = loadApplianceConfig();
       return doctorPayload(loaded);
     },
     prepare: async (args) => {
-      const loaded = loadConfig(undefined, { ensureState: true });
+      const loaded = loadApplianceConfig(undefined, { ensureState: true });
       const job = createJob(loaded, {
         kind: 'prepare',
         superpowersRef: args.superpowersRef,
@@ -228,19 +309,19 @@ function defaultActions(): ApplianceActions {
         detach: args.detach,
       }),
     status: async (args) => {
-      const loaded = loadConfig();
+      const loaded = loadApplianceConfig();
       return statusPayload(loaded, args.id);
     },
     cancel: async (args) => {
-      const loaded = loadConfig();
+      const loaded = loadApplianceConfig();
       return cancelJob(loaded, args.id, defaultCommandRunner);
     },
     show: async (args) => {
-      const loaded = loadConfig();
+      const loaded = loadApplianceConfig();
       return showPayload(loaded, args.id, args.json);
     },
     costs: async (args) => {
-      const loaded = loadConfig();
+      const loaded = loadApplianceConfig();
       return costsPayload(loaded, args.id, args.json);
     },
   };
@@ -252,7 +333,7 @@ async function submitLiveJob(args: {
   readonly argv: readonly string[];
   readonly detach: boolean;
 }): Promise<unknown> {
-  const loaded = loadConfig(undefined, { ensureState: true });
+  const loaded = loadApplianceConfig(undefined, { ensureState: true });
   const job = createJob(loaded, {
     kind: args.kind,
     superpowersRef: args.superpowersRef,
@@ -316,6 +397,8 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
       }),
   };
   const actions = mergedActions(deps.actions);
+  const loadConfigForValidation =
+    deps.loadConfig ?? (() => loadApplianceConfig());
   const program = new Command();
 
   program
@@ -392,7 +475,7 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           quorumArgs,
         };
         return handleAction(args, resolvedDeps, () => {
-          assertSupportedRunAllArgs(args.quorumArgs);
+          assertSupportedRunAllArgs(args.quorumArgs, loadConfigForValidation);
           return actions.runAll(args);
         });
       },

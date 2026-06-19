@@ -65,18 +65,29 @@ export class CodingAgentConfigError extends Error {
   }
 }
 
-export function loadAgentConfig(
+function readAgentConfigFile(
   codingAgentsDir: string,
   name: string,
-): AgentConfig {
+): {
+  readonly path: string;
+  readonly cfg: AgentConfig;
+} {
   const path = join(codingAgentsDir, `${name}.yaml`);
   const raw: unknown = parseYaml(readFileSync(path, 'utf8'));
-  const cfg = AgentConfigSchema.parse(raw);
+  return { path, cfg: AgentConfigSchema.parse(raw) };
+}
 
-  // Loader validations, in order: name==stem, runtime_family known, claude
-  // requires a non-blank model, then required_env present. Each is a
-  // CodingAgentConfigError -> setup indeterminate.
+export function agentRuntimeFamily(
+  cfg: Pick<AgentConfig, 'name' | 'runtime_family'>,
+): string {
+  return cfg.runtime_family ?? cfg.name;
+}
 
+function validateAgentConfigStatic(
+  path: string,
+  cfg: AgentConfig,
+  name: string,
+): string {
   // name must equal the file stem (the name arg, since path is `${name}.yaml`).
   if (cfg.name !== name) {
     throw new CodingAgentConfigError(
@@ -85,7 +96,7 @@ export function loadAgentConfig(
   }
 
   // runtime_family defaults to the name and must be a known family.
-  const family = cfg.runtime_family ?? cfg.name;
+  const family = agentRuntimeFamily(cfg);
   if (!KNOWN_RUNTIME_FAMILIES.has(family)) {
     const known = [...KNOWN_RUNTIME_FAMILIES].sort().join(', ');
     throw new CodingAgentConfigError(
@@ -104,17 +115,10 @@ export function loadAgentConfig(
     throw new CodingAgentConfigError(`${path}: model must not be blank`);
   }
 
-  // required_env must be set (a present-but-empty value counts as missing).
-  const missingEnv = cfg.required_env.filter((v) => {
-    const value = getEnv(v);
-    return value === undefined || value === '';
-  });
-  if (missingEnv.length > 0) {
-    throw new CodingAgentConfigError(
-      `${path}: required env vars not set: ${missingEnv.join(', ')}`,
-    );
-  }
+  return family;
+}
 
+function resolveProjectPrompt(path: string, cfg: AgentConfig): AgentConfig {
   // Resolve project_prompt relative to the YAML file's dir to an absolute path
   // and require it to exist. Gauntlet's --project-prompt needs an absolute,
   // existing file; the raw "claude.project-prompt.md" alone fails ("file not
@@ -130,6 +134,40 @@ export function loadAgentConfig(
     return { ...cfg, project_prompt: candidate };
   }
   return cfg;
+}
+
+export function loadAgentConfigForValidation(
+  codingAgentsDir: string,
+  name: string,
+): AgentConfig {
+  const { path, cfg } = readAgentConfigFile(codingAgentsDir, name);
+  validateAgentConfigStatic(path, cfg, name);
+  return resolveProjectPrompt(path, cfg);
+}
+
+export function loadAgentConfig(
+  codingAgentsDir: string,
+  name: string,
+): AgentConfig {
+  const { path, cfg } = readAgentConfigFile(codingAgentsDir, name);
+
+  // Loader validations, in order: name==stem, runtime_family known, claude
+  // requires a non-blank model, then required_env present. Each is a
+  // CodingAgentConfigError -> setup indeterminate.
+  validateAgentConfigStatic(path, cfg, name);
+
+  // required_env must be set (a present-but-empty value counts as missing).
+  const missingEnv = cfg.required_env.filter((v) => {
+    const value = getEnv(v);
+    return value === undefined || value === '';
+  });
+  if (missingEnv.length > 0) {
+    throw new CodingAgentConfigError(
+      `${path}: required env vars not set: ${missingEnv.join(', ')}`,
+    );
+  }
+
+  return resolveProjectPrompt(path, cfg);
 }
 
 /**

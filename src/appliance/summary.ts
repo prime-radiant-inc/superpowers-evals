@@ -153,6 +153,20 @@ function classifyResolvedTarget(path: string, job: JobRecord | null): Target {
   return { kind: 'run', path, id: artifactIdFromPath(path), job };
 }
 
+function matchingArtifactJob(
+  loaded: LoadedApplianceConfig,
+  id: string,
+): JobRecord | null {
+  try {
+    return readJob(loaded, id);
+  } catch (error) {
+    if (error instanceof ApplianceError && error.code === 'job_not_found') {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function jobPayload(job: JobRecord | null): JobStatusPayload | null {
   if (job === null) {
     return null;
@@ -284,15 +298,24 @@ function resolveSummaryTarget(
       kind: 'batch',
       path: batchDir(loaded, id),
       id,
-      job: null,
+      job: matchingArtifactJob(loaded, id),
     };
   }
   const directRunPath = runDir(loaded, id);
   if (isRunDir(directRunPath)) {
-    return { kind: 'run', path: directRunPath, id, job: null };
+    return {
+      kind: 'run',
+      path: directRunPath,
+      id,
+      job: matchingArtifactJob(loaded, id),
+    };
   }
   try {
-    return classifyResolvedTarget(resolveTarget(id, resultsRoot), null);
+    const path = resolveTarget(id, resultsRoot);
+    return classifyResolvedTarget(
+      path,
+      matchingArtifactJob(loaded, artifactIdFromPath(path)),
+    );
   } catch (error) {
     if (error instanceof ShowError) {
       throw artifactMissing('artifact', error.message);
