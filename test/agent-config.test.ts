@@ -7,6 +7,7 @@ import {
   agentConfigDir,
   CodingAgentConfigError,
   loadAgentConfig,
+  loadAgentConfigForValidation,
   resolveSessionLogDir,
   substituteEnv,
 } from '../src/contracts/agent-config.ts';
@@ -204,6 +205,20 @@ test('loadAgentConfig rejects an unset required_env var', () => {
     '  - QUORUM_DEFINITELY_UNSET_RX4',
   ]);
   expect(() => loadAgentConfig(dir, 'claude')).toThrow(/required env/);
+});
+
+test('loadAgentConfigForValidation does not require credential env', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agents-'));
+  writeYaml(dir, 'claude', [
+    'name: claude',
+    'runtime_family: claude',
+    'model: opus',
+    ...CLAUDE_BASE,
+    'required_env:',
+    '  - QUORUM_DEFINITELY_UNSET_VALIDATION',
+  ]);
+  const cfg = loadAgentConfigForValidation(dir, 'claude');
+  expect(cfg.required_env).toEqual(['QUORUM_DEFINITELY_UNSET_VALIDATION']);
 });
 
 // RX-5 — substituteEnv also handles bare $VAR and $$; resolveSessionLogDir

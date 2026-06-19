@@ -316,6 +316,29 @@ test('status attaches a matching quarantined job for a bare batch id', () => {
   expect(status.job?.status).toBe('quarantined');
 });
 
+test('status attaches a matching failed job for a bare run id', () => {
+  const cfg = loaded();
+  writeVerdict(cfg, 'run-1', 'fail');
+  const job = createJob(cfg, {
+    kind: 'run',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run', 'alpha', '--coding-agent', 'codex'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'failed',
+    artifacts: { ...current.artifacts, run_id: 'run-1' },
+  }));
+
+  const status = statusPayload(cfg, 'run-1');
+
+  expect(status.status).toBe('failed');
+  expect(status.appliance_failed).toBe(true);
+  expect(status.job?.job_id).toBe(job.job_id);
+  expect(status.job?.status).toBe('failed');
+});
+
 test('show renders a single run from a job artifact', () => {
   const cfg = loaded();
   writeVerdict(cfg, 'run-1', 'pass');
