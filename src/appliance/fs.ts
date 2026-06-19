@@ -6,6 +6,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -24,10 +25,22 @@ export function atomicWriteJson(path: string, value: unknown): void {
   try {
     writeFileSync(fd, JSON.stringify(value, null, 2));
     fsyncSync(fd);
-  } finally {
+  } catch (error) {
     closeSync(fd);
+    unlinkSync(tmp);
+    throw error;
   }
-  renameSync(tmp, path);
+
+  try {
+    closeSync(fd);
+    renameSync(tmp, path);
+    chmodSync(path, 0o600);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw error;
+  }
 }
 
 export function readJsonFile<T>(

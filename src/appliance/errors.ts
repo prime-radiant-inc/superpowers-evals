@@ -1,21 +1,25 @@
-export type ApplianceErrorCode =
-  | 'config_invalid'
-  | 'lock_busy'
-  | 'repo_dirty'
-  | 'fetch_failed'
-  | 'ref_ambiguous'
-  | 'ref_not_found'
-  | 'checkout_failed'
-  | 'image_build_failed'
-  | 'container_recreate_required'
-  | 'container_unhealthy'
-  | 'tool_versions_failed'
-  | 'quorum_check_failed'
-  | 'unsupported_os'
-  | 'job_not_found'
-  | 'job_not_running'
-  | 'cancel_failed'
-  | 'artifact_missing';
+import { z } from 'zod';
+
+export const ApplianceErrorCodeSchema = z.enum([
+  'config_invalid',
+  'lock_busy',
+  'repo_dirty',
+  'fetch_failed',
+  'ref_ambiguous',
+  'ref_not_found',
+  'checkout_failed',
+  'image_build_failed',
+  'container_recreate_required',
+  'container_unhealthy',
+  'tool_versions_failed',
+  'quorum_check_failed',
+  'unsupported_os',
+  'job_not_found',
+  'job_not_running',
+  'cancel_failed',
+  'artifact_missing',
+]);
+export type ApplianceErrorCode = z.infer<typeof ApplianceErrorCodeSchema>;
 
 export interface ErrorJson {
   readonly ok: false;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ApplianceErrorCodeSchema } from './errors.ts';
 
 export const ApplianceConfigSchema = z.object({
   root: z.string(),
@@ -63,6 +64,32 @@ export const RefSnapshotSchema = z.object({
 });
 export type RefSnapshot = z.infer<typeof RefSnapshotSchema>;
 
+const JobCredentialBundleSchema = z.object({
+  name: z.literal('blessed'),
+  bundle_id: z.string(),
+});
+
+const JobContainerSchema = z.object({
+  name: z.string(),
+  id: z.string().nullable(),
+  image_id: z.string().nullable(),
+  mount_signature: z.string(),
+});
+
+const JobProcessSchema = z.object({
+  host_pid: z.number().int(),
+  host_pgid: z.number().int(),
+  container_pid: z.number().int().nullable(),
+  container_pgid: z.number().int().nullable(),
+});
+
+const JobProgressSchema = z.object({
+  last_heartbeat_at: z.string().nullable(),
+  running: z.number().int().nullable(),
+  done: z.number().int().nullable(),
+  queued: z.number().int().nullable(),
+});
+
 export const JobRecordSchema = z.object({
   schema_version: z.literal(1),
   job_id: z.string(),
@@ -83,23 +110,10 @@ export const JobRecordSchema = z.object({
     argv: z.array(z.string()),
     sanitized: z.boolean(),
   }),
-  refs: RefSnapshotSchema,
-  credential_bundle: z.object({
-    name: z.literal('blessed'),
-    bundle_id: z.string(),
-  }),
-  container: z.object({
-    name: z.string(),
-    id: z.string().nullable(),
-    image_id: z.string().nullable(),
-    mount_signature: z.string(),
-  }),
-  process: z.object({
-    host_pid: z.number().int(),
-    host_pgid: z.number().int(),
-    container_pid: z.number().int().nullable(),
-    container_pgid: z.number().int().nullable(),
-  }),
+  refs: RefSnapshotSchema.nullable(),
+  credential_bundle: JobCredentialBundleSchema.nullable(),
+  container: JobContainerSchema.nullable(),
+  process: JobProcessSchema.nullable(),
   artifacts: z.object({
     run_id: z.string().nullable(),
     batch_id: z.string().nullable(),
@@ -107,19 +121,14 @@ export const JobRecordSchema = z.object({
     stderr_log: z.string(),
     provenance: z.string(),
   }),
-  progress: z.object({
-    last_heartbeat_at: z.string().nullable(),
-    running: z.number().int().nullable(),
-    done: z.number().int().nullable(),
-    queued: z.number().int().nullable(),
-  }),
+  progress: JobProgressSchema.nullable(),
   result: z.object({
     exit_code: z.number().int().nullable(),
     summary: z.string().nullable(),
   }),
   error: z
     .object({
-      code: z.string(),
+      code: ApplianceErrorCodeSchema,
       step: z.string(),
       message: z.string(),
     })
@@ -149,15 +158,11 @@ export const ProvenanceRecordSchema = z.object({
     name: z.literal('blessed'),
     bundle_id: z.string(),
   }),
-  container: z.object({
-    name: z.string(),
-    id: z.string().nullable(),
-    image_id: z.string().nullable(),
-    mount_signature: z.string(),
-    code_mounts_read_only: z.boolean().optional(),
+  container: JobContainerSchema.extend({
+    code_mounts_read_only: z.boolean(),
   }),
-  tool_versions_path: z.string().nullable().optional(),
-  tool_versions_text: z.string().nullable().optional(),
+  tool_versions_path: z.string().nullable(),
+  tool_versions_text: z.string().nullable(),
   requester: z.object({
     agent: z.string().nullable().optional(),
     thread: z.string().nullable().optional(),
@@ -166,7 +171,14 @@ export const ProvenanceRecordSchema = z.object({
     remote_identity: z.string(),
   }),
   command_argv: z.array(z.string()),
-});
+}).refine(
+  (record) =>
+    record.tool_versions_path !== null || record.tool_versions_text !== null,
+  {
+    message: 'tool_versions_path or tool_versions_text is required',
+    path: ['tool_versions_path'],
+  },
+);
 export type ProvenanceRecord = z.infer<typeof ProvenanceRecordSchema>;
 
 export interface LoadedApplianceConfig {
