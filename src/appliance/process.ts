@@ -7,6 +7,8 @@ import type {
   CommandRunner,
 } from '../agents/command-runner.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
+import { BatchHeaderSchema } from '../contracts/batch.ts';
+import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { envSnapshot } from '../env.ts';
 import { evalsContainerPath, execContainerArgs } from './container.ts';
 import { ApplianceError } from './errors.ts';
@@ -20,6 +22,8 @@ import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
 const PID_DIR = '/workspace/evals/results/.appliance-pids';
 const PID_POLL_INTERVAL_MS = 100;
 const PID_POLL_TIMEOUT_MS = 10_000;
+const CANCEL_GRACE_MS = 120_000;
+const CANCEL_POLL_INTERVAL_MS = 1_000;
 
 export interface LiveProcessInfo {
   readonly host_pid: number | null;
@@ -41,6 +45,11 @@ export interface LiveCommandResult extends CommandResult {
 interface ParsedArtifacts {
   readonly batchId: string | null;
   readonly runId: string | null;
+}
+
+export interface CancelOptions {
+  readonly graceMs?: number;
+  readonly pollIntervalMs?: number;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -140,25 +149,70 @@ function appendLogs(job: JobRecord, result: CommandResult): void {
   }
 }
 
-function artifactExists(
+function hasTerminalArtifact(
   loaded: LoadedApplianceConfig,
   artifacts: ParsedArtifacts,
 ): boolean {
-  if (
-    artifacts.batchId !== null &&
-    existsSync(
-      join(loaded.config.container.results_root, 'batches', artifacts.batchId),
-    )
-  ) {
-    return true;
+  if (artifacts.batchId !== null) {
+    const batchPath = join(
+      loaded.config.container.results_root,
+      'batches',
+      artifacts.batchId,
+      'batch.json',
+    );
+    if (existsSync(batchPath)) {
+      try {
+        const header = BatchHeaderSchema.parse(
+          JSON.parse(readFileSync(batchPath, 'utf8')) as unknown,
+        );
+        if (header.finished_at !== null) {
+          return true;
+        }
+      } catch {}
+    }
   }
-  if (
-    artifacts.runId !== null &&
-    existsSync(join(loaded.config.container.results_root, artifacts.runId))
-  ) {
-    return true;
+  if (artifacts.runId !== null) {
+    const verdictPath = join(
+      loaded.config.container.results_root,
+      artifacts.runId,
+      'verdict.json',
+    );
+    if (existsSync(verdictPath)) {
+      try {
+        FinalVerdictSchema.parse(
+          JSON.parse(readFileSync(verdictPath, 'utf8')) as unknown,
+        );
+        return true;
+      } catch {}
+    }
   }
   return false;
+}
+
+function jobArtifacts(job: JobRecord): ParsedArtifacts {
+  return {
+    batchId: job.artifacts.batch_id,
+    runId: job.artifacts.run_id,
+  };
+}
+
+async function waitForTerminalArtifact(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  graceMs: number,
+  pollIntervalMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, graceMs);
+  while (true) {
+    if (hasTerminalArtifact(loaded, jobArtifacts(readJob(loaded, jobId)))) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    const waitMs = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
+    await sleep(waitMs);
+  }
 }
 
 function parseArtifacts(stdout: string): ParsedArtifacts {
@@ -206,13 +260,20 @@ function liveStatus(
   status: JobStatus;
   summary: string;
 } {
+  const terminalArtifact = hasTerminalArtifact(loaded, artifacts);
   if (current.status === 'cancelled') {
     return { status: 'cancelled', summary: 'cancelled' };
   }
   if (current.status === 'stopping') {
-    return { status: 'cancelled', summary: 'cancelled' };
+    return terminalArtifact
+      ? { status: 'cancelled', summary: 'cancelled' }
+      : {
+          status: 'lost',
+          summary:
+            'cancelled signal sent but terminal artifact was not observed',
+        };
   }
-  if (result.status === 0 || artifactExists(loaded, artifacts)) {
+  if (result.status === 0 || terminalArtifact) {
     return { status: 'done', summary: 'live command completed' };
   }
   if (result.status === null) {
@@ -532,6 +593,7 @@ export async function cancelJob(
   loaded: LoadedApplianceConfig,
   jobId: string,
   runner: CommandRunner,
+  options: CancelOptions = {},
 ): Promise<JobRecord> {
   const job = readJob(loaded, jobId);
   if (job.status !== 'running' && job.status !== 'stopping') {
@@ -576,14 +638,32 @@ export async function cancelJob(
     throw new ApplianceError('cancel_failed', 'cancel', message);
   }
 
+  const sawTerminalArtifact = await waitForTerminalArtifact(
+    loaded,
+    jobId,
+    options.graceMs ?? CANCEL_GRACE_MS,
+    options.pollIntervalMs ?? CANCEL_POLL_INTERVAL_MS,
+  );
+  const terminalStatus: JobStatus = sawTerminalArtifact ? 'cancelled' : 'lost';
+  const summary = sawTerminalArtifact
+    ? 'cancelled'
+    : 'cancelled signal sent but terminal artifact was not observed';
+
   return updateJob(loaded, jobId, (current) => ({
     ...current,
-    status: 'cancelled',
+    status: terminalStatus,
     finished_at: new Date().toISOString(),
     result: {
       exit_code: 130,
-      summary: 'cancelled',
+      summary,
     },
-    error: null,
+    error:
+      terminalStatus === 'lost'
+        ? {
+            code: 'cancel_failed',
+            step: 'cancel',
+            message: summary,
+          }
+        : null,
   }));
 }

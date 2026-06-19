@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { getEnv } from '../env.ts';
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate, readJsonFile } from './fs.ts';
 import {
@@ -18,9 +19,7 @@ function requirePath(path: string, label: string): void {
 
 export function loadConfig(configPath?: string): LoadedApplianceConfig {
   const resolvedConfigPath =
-    configPath ??
-    process.env['EVALS_APPLIANCE_CONFIG'] ??
-    DEFAULT_CONFIG_PATH;
+    configPath ?? getEnv('EVALS_APPLIANCE_CONFIG') ?? DEFAULT_CONFIG_PATH;
 
   try {
     const config = readJsonFile(

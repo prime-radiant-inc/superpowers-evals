@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -207,6 +213,34 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
   );
 });
 
+test('runWorker fails when a nonzero live command only created a batch shell', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.liveResult = {
+    status: 1,
+    stdout: 'batch batch-1\nartifacts: results/batches/batch-1\n',
+    stderr: 'boom\n',
+  };
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'feature/ref',
+    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
+  });
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('failed');
+  expect(updated.result).toEqual({
+    exit_code: 1,
+    summary: 'live command exited 1',
+  });
+});
+
 test('cancel sends SIGINT to the recorded in-container process group', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -226,9 +260,52 @@ test('cancel sends SIGINT to the recorded in-container process group', async () 
       container_pgid: 456,
     },
   }));
-  await cancelJob(cfg, job.job_id, runner);
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
   expect(
     runner.calls.some((call) => call.args.join(' ').includes('kill -INT -456')),
   ).toBe(true);
+  expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+test('cancel records cancelled when a terminal batch footer is visible', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(cfg.config.container.results_root, 'batches/batch-1/batch.json'),
+    JSON.stringify({
+      schema_version: 1,
+      id: 'batch-1',
+      started_at: '2026-06-18T00:00:00.000Z',
+      finished_at: '2026-06-18T00:01:00.000Z',
+      coding_agents: ['codex'],
+      jobs: 1,
+    }),
+  );
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+    artifacts: {
+      ...current.artifacts,
+      batch_id: 'batch-1',
+    },
+  }));
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
   expect(readJob(cfg, job.job_id).status).toBe('cancelled');
 });
