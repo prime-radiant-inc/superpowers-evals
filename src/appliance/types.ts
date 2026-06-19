@@ -100,7 +100,7 @@ export const JobRecordSchema = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   requester: z.object({
-    agent: z.string(),
+    agent: z.string().nullable(),
     thread: z.string().nullable().optional(),
     task: z.string().nullable().optional(),
     host_user: z.string(),
@@ -139,13 +139,13 @@ export type JobRecord = z.infer<typeof JobRecordSchema>;
 export const LockRecordSchema = z.object({
   schema_version: z.literal(1),
   job_id: z.string(),
-  lock_name: z.string(),
+  name: z.enum(['run.lock', 'sync.lock']),
   host: z.string(),
   pid: z.number().int(),
   pgid: z.number().int(),
   started_at: z.string(),
-  command: z.array(z.string()),
-  refs: RefSnapshotSchema,
+  command: ApplianceCommandKindSchema,
+  refs: RefSnapshotSchema.nullable(),
 });
 export type LockRecord = z.infer<typeof LockRecordSchema>;
 

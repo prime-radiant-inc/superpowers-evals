@@ -14,6 +14,7 @@ import { ApplianceError, toErrorJson } from '../src/appliance/errors.ts';
 import { atomicWriteJson } from '../src/appliance/fs.ts';
 import {
   JobRecordSchema,
+  LockRecordSchema,
   ProvenanceRecordSchema,
 } from '../src/appliance/types.ts';
 
@@ -135,6 +136,65 @@ describe('appliance contracts', () => {
         error: null,
       }),
     ).not.toThrow();
+  });
+
+  test('accepts helper-created job records with no coding-agent identity', () => {
+    const result = JobRecordSchema.safeParse({
+      schema_version: 1,
+      job_id: 'job-prepare',
+      kind: 'prepare',
+      status: 'preflighting',
+      created_at: '2026-06-18T00:00:00Z',
+      updated_at: '2026-06-18T00:00:00Z',
+      started_at: null,
+      finished_at: null,
+      requester: {
+        agent: null,
+        thread: null,
+        task: null,
+        host_user: 'drew',
+        remote_identity: 'ssh:drew',
+      },
+      command: {
+        argv: ['evals-appliance', 'prepare', '--ref', 'main'],
+        sanitized: true,
+      },
+      refs: null,
+      credential_bundle: null,
+      container: null,
+      process: null,
+      artifacts: {
+        run_id: null,
+        batch_id: null,
+        stdout_log: '/tmp/stdout.log',
+        stderr_log: '/tmp/stderr.log',
+        provenance: '/tmp/provenance.json',
+      },
+      progress: null,
+      result: {
+        exit_code: null,
+        summary: null,
+      },
+      error: null,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts the planned lock record file shape', () => {
+    const result = LockRecordSchema.safeParse({
+      schema_version: 1,
+      job_id: 'job-123',
+      name: 'run.lock',
+      host: 'appliance-host',
+      pid: 12345,
+      pgid: 12345,
+      started_at: '2026-06-18T00:00:00Z',
+      command: 'run-all',
+      refs: null,
+    });
+
+    expect(result.success).toBe(true);
   });
 
   test('rejects job records with non-stable error codes', () => {
