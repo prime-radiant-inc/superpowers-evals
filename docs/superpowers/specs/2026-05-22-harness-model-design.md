@@ -26,7 +26,7 @@ names are used everywhere — docs, CLI output, code, filenames, commit messages
 
 | Actor | What it is | Where it lives / its files |
 |---|---|---|
-| **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `~/Code/prime/gauntlet`; on `PATH` as `gauntlet` |
+| **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `github.com/prime-radiant-inc/gauntlet`; on `PATH` as `gauntlet` (via `bun link` or `GAUNTLET_ROOT`) |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the system-under-test and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
 | **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**; future **Gemini**, **Pi**. | session log → `<run>/coding-agent-config/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Harness** | The Python wrapper. Owns setup, Coding-Agent adaptation, the deterministic checks, and the final verdict. | repo `superpowers-evals/harness/`; `<run>/verdict.json` |
