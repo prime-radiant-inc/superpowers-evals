@@ -1229,6 +1229,13 @@ async function runInnerBody(
   if (cfg.name === 'pi') {
     substitutions['$PI_ENV_FILE'] = join(configDir, 'pi.env');
   }
+  if (family === 'serf') {
+    // serf's launcher bakes `--model "$SERF_MODEL"`; resolve it from the YAML
+    // model pin, mirroring the $CLAUDE_MODEL pattern. The model-agnostic adapter
+    // keeps the provider/model entirely in serf.yaml.
+    substitutions['$SERF_MODEL'] = cfg.model ?? '';
+    substitutions['$SERF_MODEL_SH'] = shellSingleQuote(cfg.model ?? '');
+  }
   if (cfg.name === 'copilot' && copilotProvisioning !== undefined) {
     // Use the provisioning record's env file + minted session id so the
     // launcher's `--session-id "$QUORUM_COPILOT_SESSION_ID"` resolves and the
@@ -1255,9 +1262,13 @@ async function runInnerBody(
     codingAgent: contextDirName(cfg, os),
     runDir,
     substitutions,
-    required: family === 'claude',
+    required: family === 'claude' || family === 'serf',
     forbiddenPlaceholders:
-      family === 'claude' && !isRemote ? ['$CLAUDE_MODEL'] : [],
+      family === 'claude' && !isRemote
+        ? ['$CLAUDE_MODEL']
+        : family === 'serf'
+          ? ['$SERF_MODEL']
+          : [],
   });
 
   // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full
