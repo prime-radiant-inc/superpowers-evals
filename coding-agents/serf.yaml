@@ -1,0 +1,22 @@
+name: serf
+runtime_family: serf
+binary: serf
+# serf's config/state collapse into the throwaway $HOME at <runHome>/.serf: the
+# launcher pins HOME via $QUORUM_HOME_ENV and passes --state-dir
+# "$QUORUM_AGENT_HOME/.serf", so serf keeps all per-run state there.
+home_config_subdir: ".serf"
+# serf writes its native ATIF trajectory via --export-atif into this dir; capture
+# diffs the dir against a pre-run snapshot and normalizes the new file.
+session_log_dir: "${QUORUM_AGENT_HOME}/.serf/exports"
+session_log_glob: "*.json"
+normalizer: serf
+required_env:
+  - ANTHROPIC_API_KEY
+  - SUPERPOWERS_ROOT
+max_time: 10m
+# Pinned to Claude Sonnet for now; the adapter is model-agnostic, so additional
+# provider/model variants are just sibling YAMLs (serf-gpt5.yaml, …) reusing
+# SerfAgent with a different model pin.
+model: anthropic/claude-sonnet-4-6
+max_concurrency: 1
+os_support: [linux]

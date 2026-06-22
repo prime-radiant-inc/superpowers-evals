@@ -14,6 +14,7 @@ import { KimiAgent } from './kimi.ts';
 import { OpenCodeAgent } from './opencode.ts';
 import { PiAgent } from './pi.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { SerfAgent } from './serf.ts';
 
 /** The isolated home a run hands an agent to provision. Absence is undefined
  *  (§5.5): a missing skeleton root is undefined, never null. */
@@ -192,6 +193,7 @@ const CUSTOM_AGENTS: Readonly<
   opencode: (config) => new OpenCodeAgent(config),
   kimi: (config) => new KimiAgent(config),
   antigravity: (config) => new AntigravityAgent(config),
+  serf: (config) => new SerfAgent(config),
 };
 
 /** Resolve the agent implementation for a config.

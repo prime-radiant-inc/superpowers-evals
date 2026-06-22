@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for serf (the agent under test).
+#
+# serf is a NON-INTERACTIVE, one-shot coding agent: give it the task as an
+# argument and it runs the whole task autonomously (many tool rounds) until done,
+# then exits. There is no REPL to drive turn-by-turn. The QA agent passes the
+# task as a single argument; it arrives here as "$@" and is forwarded to serf.
+#
+# Baked in here (quorum substitutes the $… values at runtime, so the installed
+# copy holds literal absolute paths — tmux strips env from new sessions):
+#   - cd into the prepared workdir
+#   - an isolated $HOME via $QUORUM_HOME_ENV (all serf state under <home>/.serf)
+#   - --plugin-dir pointed straight at SUPERPOWERS_ROOT (like the claude
+#     launcher); serf loads the unmodified Superpowers Claude Code plugin and the
+#     SessionStart bootstrap auto-triggers skills
+#   - --export-atif: serf writes its native ATIF v1.7 trajectory here; capture
+#     normalizes it
+#   - the model pin from serf.yaml ($SERF_MODEL)
+#
+# SERF_PROVIDERS_CONFIG points at a fresh (nonexistent) per-run path so serf
+# re-seeds its provider instances from the environment (ANTHROPIC_API_KEY)
+# rather than reading a host ~/.serf/providers.toml that may not declare the
+# provider. serf reads the API key from the environment; only the keys actually
+# present are forwarded into the otherwise-clean env.
+set -euo pipefail
+cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+for name in \
+  ANTHROPIC_API_KEY OPENAI_API_KEY \
+  GEMINI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY; do
+  if [[ -n "${!name-}" ]]; then
+    env_args+=("$name=${!name}")
+  fi
+done
+
+exec env -i \
+  "${env_args[@]}" \
+  $QUORUM_HOME_ENV \
+  SERF_PROVIDERS_CONFIG="$QUORUM_AGENT_HOME/.serf/providers.toml" \
+  serf \
+    --model "$SERF_MODEL" \
+    --plugin-dir "$SUPERPOWERS_ROOT" \
+    --export-atif "$QUORUM_AGENT_HOME/.serf/exports/trajectory.json" \
+    --dir "$QUORUM_AGENT_CWD" \
+    --state-dir "$QUORUM_AGENT_HOME/.serf" \
+    "$@"

@@ -8,6 +8,7 @@ import { ProvisionError, resolveAgent } from '../src/agents/index.ts';
 import { KimiAgent } from '../src/agents/kimi.ts';
 import { OpenCodeAgent } from '../src/agents/opencode.ts';
 import { PiAgent } from '../src/agents/pi.ts';
+import { SerfAgent } from '../src/agents/serf.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import type { OsTarget } from '../src/contracts/os-target.ts';
 
@@ -36,6 +37,7 @@ test('resolveAgent dispatches each dialect name to its custom adapter', () => {
   expect(resolveAgent(cfg('opencode'))).toBeInstanceOf(OpenCodeAgent);
   expect(resolveAgent(cfg('kimi'))).toBeInstanceOf(KimiAgent);
   expect(resolveAgent(cfg('antigravity'))).toBeInstanceOf(AntigravityAgent);
+  expect(resolveAgent(cfg('serf'))).toBeInstanceOf(SerfAgent);
 });
 
 test('resolveAgent maps the claude runtime family to ClaudeAgent', () => {

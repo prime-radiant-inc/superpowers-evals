@@ -19,6 +19,7 @@ const KNOWN_RUNTIME_FAMILIES: ReadonlySet<string> = new Set([
   'kimi',
   'opencode',
   'pi',
+  'serf',
 ]);
 
 export const AgentConfigSchema = z.object({
