@@ -94,6 +94,54 @@ test('normalizeSerf maps delegate -> Agent (task -> prompt), bash -> Bash, read_
   );
 });
 
+test('normalizeSerf lifts serf cache-creation tokens to the obol-priced extra.cache_write key', () => {
+  // serf records cache-creation under metrics.extra.cache_write_tokens; obol
+  // prices it only from step.extra.cache_write (the key claude's normalizer
+  // uses). Without the lift, serf cost is undercounted.
+  const raw = readFileSync(REAL_FIXTURE, 'utf8');
+  const traj = normalizeSerf(raw, 'unknown');
+
+  let liftedTotal = 0;
+  let liftedSteps = 0;
+  for (const step of traj.steps) {
+    const cw = step.extra?.['cache_write'];
+    if (typeof cw === 'number' && cw > 0) {
+      liftedTotal += cw;
+      liftedSteps += 1;
+    }
+  }
+  // The real fixture carries 7 steps summing to 22201 cache-write tokens.
+  expect(liftedSteps).toBe(7);
+  expect(liftedTotal).toBe(22201);
+});
+
+test('normalizeSerf synthetic step lifts cache_write_tokens onto step.extra.cache_write', () => {
+  const traj = normalizeSerf(
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'serf', version: 'v0.9.0' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'agent',
+          message: 'x',
+          metrics: {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            cached_tokens: 100,
+            extra: { cache_write_tokens: 42 },
+          },
+          extra: { serf_kind: 'keep-me' },
+        },
+      ],
+    }),
+    'unknown',
+  );
+  expect(traj.steps[0]?.extra?.['cache_write']).toBe(42);
+  // existing step.extra is preserved.
+  expect(traj.steps[0]?.extra?.['serf_kind']).toBe('keep-me');
+});
+
 test('normalizeSerf fails closed on non-JSON and non-conformant input', () => {
   expect(() => normalizeSerf('not json{', 'unknown')).toThrow();
   expect(() => normalizeSerf('[]', 'unknown')).toThrow();
