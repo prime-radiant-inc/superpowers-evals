@@ -1003,6 +1003,7 @@ const BOOTSTRAP_NO_CHECK = new Set([
   'claude-sonnet',
   'claude-windows',
   'pi',
+  'serf',
 ]);
 
 export function verbBootstrapInstalled(

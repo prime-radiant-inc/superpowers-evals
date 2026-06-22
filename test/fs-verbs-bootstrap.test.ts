@@ -564,6 +564,18 @@ test('bootstrap-installed passes for pi (no dedicated check)', () => {
   expect(out.passed).toBe(true);
 });
 
+test('bootstrap-installed passes for serf (no dedicated check)', () => {
+  // serf loads Superpowers via --plugin-dir SUPERPOWERS_ROOT (no staging, like
+  // claude), so there is nothing to verify on disk; the bootstrap is proven
+  // behaviorally by the scenario.
+  const out = verbBootstrapInstalled(
+    [],
+    ctxFor(configDir(), { QUORUM_CODING_AGENT: 'serf' }),
+  );
+  expect(out.passed).toBe(true);
+  expect(out.detail).toContain('no dedicated install check');
+});
+
 test('bootstrap-installed fails for an unrecognized agent', () => {
   const out = verbBootstrapInstalled(
     [],
