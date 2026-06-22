@@ -64,7 +64,9 @@ function canonicalizeSerfToolCall(tc: AtifToolCall): AtifToolCall {
   return next;
 }
 
-function canonicalizeStepToolCalls(step: Record<string, unknown>): unknown {
+function canonicalizeStepToolCalls(
+  step: Record<string, unknown>,
+): Record<string, unknown> {
   const toolCalls = step['tool_calls'];
   if (!Array.isArray(toolCalls)) {
     return step;
@@ -77,6 +79,31 @@ function canonicalizeStepToolCalls(step: Record<string, unknown>): unknown {
         : tc,
     ),
   };
+}
+
+// serf records cache-creation tokens under `metrics.extra.cache_write_tokens`,
+// but obol prices cache-creation from the canonical `step.extra.cache_write` key
+// (the same key the claude normalizer writes — src/normalize/claude.ts). Lift it
+// onto step.extra so serf's cost isn't undercounted by the cache-creation
+// (most-expensive) token class.
+function liftSerfCacheWrite(
+  step: Record<string, unknown>,
+): Record<string, unknown> {
+  const metrics = step['metrics'];
+  if (metrics === null || typeof metrics !== 'object' || Array.isArray(metrics))
+    return step;
+  const mExtra = (metrics as Record<string, unknown>)['extra'];
+  if (mExtra === null || typeof mExtra !== 'object' || Array.isArray(mExtra))
+    return step;
+  const cacheWrite = (mExtra as Record<string, unknown>)['cache_write_tokens'];
+  if (typeof cacheWrite !== 'number' || cacheWrite <= 0) return step;
+  const existing =
+    step['extra'] !== null &&
+    typeof step['extra'] === 'object' &&
+    !Array.isArray(step['extra'])
+      ? (step['extra'] as Record<string, unknown>)
+      : {};
+  return { ...step, extra: { ...existing, cache_write: cacheWrite } };
 }
 
 /**
@@ -120,7 +147,9 @@ export function normalizeSerf(raw: string, version: string): AtifTrajectory {
     agent,
     steps: steps.map((step) =>
       step !== null && typeof step === 'object' && !Array.isArray(step)
-        ? canonicalizeStepToolCalls(step as Record<string, unknown>)
+        ? canonicalizeStepToolCalls(
+            liftSerfCacheWrite(step as Record<string, unknown>),
+          )
         : step,
     ),
   } as AtifTrajectory;
