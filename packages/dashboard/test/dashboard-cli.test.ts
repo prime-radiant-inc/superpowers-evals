@@ -7,14 +7,14 @@ test('parseArgs reads flags', () => {
   expect(a.resultsDir).toBe('r');
   expect(a.port).toBe(9);
   expect(a.root).toBe('/repo');
-  expect(a.manifestPath).toBe(join('/repo', 'grid-manifest.json'));
+  expect(a.manifestPath).toBe(join('/repo', 'r', 'grid-manifest.json'));
 });
 
 test('parseArgs defaults when omitted', () => {
   const a = parseArgs([], '/repo');
   expect(a.resultsDir).toBe('results');
   expect(a.port).toBe(8787);
-  expect(a.manifestPath).toBe(join('/repo', 'grid-manifest.json'));
+  expect(a.manifestPath).toBe(join('/repo', 'results', 'grid-manifest.json'));
 });
 
 test('parseArgs honors explicit --manifest and --root', () => {

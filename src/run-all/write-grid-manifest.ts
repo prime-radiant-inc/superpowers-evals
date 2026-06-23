@@ -1,4 +1,5 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { buildGridManifest } from './matrix.ts';
 
 export function writeGridManifest(args: {
@@ -14,5 +15,6 @@ export function writeGridManifest(args: {
     },
     args.now,
   );
+  mkdirSync(dirname(args.outPath), { recursive: true });
   writeFileSync(args.outPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
