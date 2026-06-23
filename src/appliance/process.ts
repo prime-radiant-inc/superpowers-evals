@@ -32,6 +32,8 @@ import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
 const PID_DIR = '/workspace/evals/results/.appliance-pids';
 const PID_POLL_INTERVAL_MS = 100;
 const PID_POLL_TIMEOUT_MS = 10_000;
+const LIVE_COMPLETION_POLL_INTERVAL_MS = 1_000;
+const LIVE_COMPLETION_POST_EXIT_GRACE_MS = 30_000;
 const CANCEL_GRACE_MS = 120_000;
 const CANCEL_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TRUSTED_PATH = '/usr/local/bin:/usr/bin:/bin';
@@ -318,17 +320,63 @@ function discoverRunArtifact(
   return candidates[0]?.id ?? null;
 }
 
+function discoverBatchArtifact(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+): string | null {
+  if (job.kind !== 'run-all') {
+    return null;
+  }
+  const batchRoot = join(loaded.config.container.results_root, 'batches');
+  if (!existsSync(batchRoot)) {
+    return null;
+  }
+  const startedAt = Date.parse(job.started_at ?? job.created_at);
+  const earliestStartedAt = Number.isFinite(startedAt) ? startedAt - 5_000 : 0;
+  const candidates: { id: string; mtimeMs: number }[] = [];
+
+  for (const entry of readdirSync(batchRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) {
+      continue;
+    }
+    const headerPath = join(batchRoot, entry.name, 'batch.json');
+    if (!existsSync(headerPath)) {
+      continue;
+    }
+    const stat = statSync(headerPath);
+    try {
+      const header = BatchHeaderSchema.parse(
+        JSON.parse(readFileSync(headerPath, 'utf8')) as unknown,
+      );
+      const batchStartedAt = Date.parse(header.started_at);
+      if (
+        Number.isFinite(batchStartedAt) &&
+        batchStartedAt < earliestStartedAt
+      ) {
+        continue;
+      }
+      candidates.push({ id: entry.name, mtimeMs: stat.mtimeMs });
+    } catch {}
+  }
+
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.id ?? null;
+}
+
 function currentArtifacts(
   loaded: LoadedApplianceConfig,
   jobId: string,
 ): ParsedArtifacts {
   const job = readJob(loaded, jobId);
   const artifacts = jobArtifacts(job);
-  if (artifacts.runId !== null || job.kind !== 'run') {
+  if (artifacts.runId !== null || artifacts.batchId !== null) {
     return artifacts;
   }
-  const discoveredRunId = discoverRunArtifact(loaded, job);
-  if (discoveredRunId === null) {
+  const discovered = {
+    runId: discoverRunArtifact(loaded, job),
+    batchId: discoverBatchArtifact(loaded, job),
+  };
+  if (discovered.runId === null && discovered.batchId === null) {
     return artifacts;
   }
   return jobArtifacts(
@@ -336,7 +384,8 @@ function currentArtifacts(
       ...current,
       artifacts: {
         ...current.artifacts,
-        run_id: discoveredRunId,
+        run_id: discovered.runId ?? current.artifacts.run_id,
+        batch_id: discovered.batchId ?? current.artifacts.batch_id,
       },
     })),
   );
@@ -428,8 +477,14 @@ function liveStatus(
             'cancelled signal sent but terminal artifact was not observed',
         };
   }
-  if (result.status === 0 || terminalArtifact) {
+  if (terminalArtifact) {
     return { status: 'done', summary: 'live command completed' };
+  }
+  if (result.status === 0) {
+    return {
+      status: 'lost',
+      summary: 'live command exited before terminal artifact',
+    };
   }
   if (result.status === null) {
     return {
@@ -535,6 +590,39 @@ function jobProcessGroupAlive(
   }
   const hostPgid = job.process?.host_pgid ?? null;
   return hostPgid !== null && hostProcessGroupAlive(hostPgid);
+}
+
+async function waitForLiveTerminalArtifact(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  runner: CommandRunner,
+  result: LiveCommandResult,
+): Promise<ParsedArtifacts> {
+  if (result.status !== 0) {
+    return currentArtifacts(loaded, jobId);
+  }
+
+  while (true) {
+    const artifacts = currentArtifacts(loaded, jobId);
+    if (hasTerminalArtifact(loaded, artifacts)) {
+      return artifacts;
+    }
+
+    const current = readJob(loaded, jobId);
+    if (!jobProcessGroupAlive(loaded, current, runner)) {
+      break;
+    }
+
+    await sleep(LIVE_COMPLETION_POLL_INTERVAL_MS);
+  }
+
+  await waitForTerminalArtifact(
+    loaded,
+    jobId,
+    LIVE_COMPLETION_POST_EXIT_GRACE_MS,
+    LIVE_COMPLETION_POLL_INTERVAL_MS,
+  );
+  return currentArtifacts(loaded, jobId);
 }
 
 function markFailed(
@@ -838,7 +926,12 @@ export async function runWorker(
     }
 
     updateArtifacts(loaded, jobId, parseArtifacts(launchResult.stdout));
-    const artifacts = currentArtifacts(loaded, jobId);
+    const artifacts = await waitForLiveTerminalArtifact(
+      loaded,
+      jobId,
+      runner ?? defaultCommandRunner,
+      launchResult,
+    );
     if (preflight !== null) {
       writeArtifactProvenance(loaded, jobId, preflight);
     }

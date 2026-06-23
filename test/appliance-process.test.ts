@@ -175,6 +175,26 @@ function writePid(cfg: LoadedApplianceConfig, jobId: string, pid = 456): void {
   writeFileSync(join(pidDir, `${jobId}.pid`), `${pid}\n`);
 }
 
+function writeFinishedBatch(
+  cfg: LoadedApplianceConfig,
+  batchId = 'batch-1',
+): void {
+  const batchDir = join(cfg.config.container.results_root, 'batches', batchId);
+  const now = Date.now();
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      schema_version: 1,
+      id: batchId,
+      started_at: new Date(now - 1_000).toISOString(),
+      finished_at: new Date(now).toISOString(),
+      coding_agents: ['codex'],
+      jobs: 1,
+    }),
+  );
+}
+
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
   const cfg = loaded();
   const args = liveCommandArgs(cfg, 'job-1', [
@@ -292,9 +312,7 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
     argv: ['quorum', 'run-all', '--tier', 'sentinel'],
     requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
   });
-  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
-    recursive: true,
-  });
+  writeFinishedBatch(cfg);
   writePid(cfg, job.job_id);
   let liveLockRefs: unknown = null;
   runner.onLiveCommand = () => {
@@ -333,6 +351,90 @@ test('runWorker preflights, runs live command, records artifacts, and releases l
   );
 });
 
+test('runWorker waits for a terminal single-run artifact after an early zero wrapper exit', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.liveResult = { status: 0, stdout: '', stderr: '' };
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run',
+    superpowersRef: 'feature/ref',
+    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+  });
+  const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
+  writePid(cfg, job.job_id);
+  runner.onLiveCommand = () => {
+    setTimeout(() => {
+      mkdirSync(join(cfg.config.container.results_root, runId), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(cfg.config.container.results_root, runId, 'verdict.json'),
+        JSON.stringify({
+          schema: 1,
+          final: 'pass',
+          final_reason: 'ok',
+          gauntlet: null,
+          checks: [],
+          error: null,
+          economics: null,
+          scenario: 'scenario-a',
+          coding_agent: 'codex',
+          started_at: new Date(Date.now() - 1000).toISOString(),
+          finished_at: new Date().toISOString(),
+        }),
+      );
+    }, 10);
+  };
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.run_id).toBe(runId);
+  expect(
+    existsSync(
+      join(
+        cfg.config.container.results_root,
+        runId,
+        'appliance-provenance.json',
+      ),
+    ),
+  ).toBe(true);
+});
+
+test('runWorker discovers a terminal batch after an early zero wrapper exit without stdout', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.liveResult = { status: 0, stdout: '', stderr: '' };
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'feature/ref',
+    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-8' },
+  });
+  writePid(cfg, job.job_id);
+  runner.onLiveCommand = () => {
+    setTimeout(() => writeFinishedBatch(cfg, 'batch-detached'), 10);
+  };
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.batch_id).toBe('batch-detached');
+  expect(
+    existsSync(
+      join(
+        cfg.config.container.results_root,
+        'batches/batch-detached/appliance-provenance.json',
+      ),
+    ),
+  ).toBe(true);
+});
+
 test('runWorker throws and leaves a quarantined record when postflight finds a dirty repo', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -343,9 +445,7 @@ test('runWorker throws and leaves a quarantined record when postflight finds a d
     argv: ['quorum', 'run-all', '--tier', 'sentinel'],
     requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
   });
-  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
-    recursive: true,
-  });
+  writeFinishedBatch(cfg);
   writePid(cfg, job.job_id);
 
   await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
