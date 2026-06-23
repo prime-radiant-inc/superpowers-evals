@@ -6,6 +6,7 @@
 // temp dirs only, no real $HOME.
 
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,7 @@ import {
   verbAntigravityPluginInstalled,
   verbBootstrapInstalled,
   verbCodexNativeHookConfigured,
+  verbCodexSessionStartHookExecutes,
   verbCopilotPluginInstalled,
   verbGeminiExtensionLinked,
   verbKimiPluginInstalled,
@@ -355,6 +357,59 @@ function stageCodexConfigWithToml(cfg: string, toml: string): void {
   writeUnder(cfg, join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'), ':\n');
 }
 
+function stageCodexSessionStartHook(cfg: string, command: string): void {
+  stageCodexConfig(cfg);
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, 'hooks/hooks-codex.json'),
+    JSON.stringify({
+      hooks: {
+        SessionStart: [
+          {
+            matcher: 'startup|resume|clear',
+            hooks: [{ type: 'command', command, async: false }],
+          },
+        ],
+      },
+    }),
+  );
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'),
+    [
+      '@echo off',
+      'echo {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"You have superpowers"}}',
+      '',
+    ].join('\r\n'),
+  );
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, 'hooks/session-start-codex'),
+    '#!/usr/bin/env bash\n',
+  );
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, 'skills/using-superpowers/SKILL.md'),
+    '# using-superpowers\nYou have superpowers\n',
+  );
+}
+
+function commandAvailable(binary: string): boolean {
+  const proc = spawnSync(binary, [
+    '-NoLogo',
+    '-NoProfile',
+    '-Command',
+    'exit 0',
+  ]);
+  return proc.error === undefined && (proc.status ?? 1) === 0;
+}
+
+const windowsPowerShellTest =
+  process.platform === 'win32' &&
+  (commandAvailable('pwsh') || commandAvailable('powershell'))
+    ? test
+    : test.skip;
+
 test('codex-native-hook-configured fails when config.toml omits plugin_hooks = true', () => {
   const cfg = configDir();
   const toml = CODEX_CONFIG_TOML.split('\n')
@@ -398,6 +453,39 @@ test('codex-native-hook-configured fails when the trusted hook hash is absent', 
   expect(out.passed).toBe(false);
   expect(out.detail).toContain('trusted hook hash missing');
 });
+
+test('codex-session-start-hook-executes fails when the command omits the PowerShell call operator', () => {
+  const cfg = configDir();
+  stageCodexSessionStartHook(
+    cfg,
+    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
+  );
+  const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('call operator');
+});
+
+test('codex-session-start-hook-executes fails when QUORUM_AGENT_CONFIG_DIR is unset', () => {
+  const out = verbCodexSessionStartHookExecutes([], {
+    cwd: '/tmp',
+    env: () => undefined,
+  });
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
+});
+
+windowsPowerShellTest(
+  'codex-session-start-hook-executes passes for the PowerShell call-operator command',
+  () => {
+    const cfg = configDir();
+    stageCodexSessionStartHook(
+      cfg,
+      '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
+    );
+    const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
+    expect(out.passed).toBe(true);
+  },
+);
 
 // ---------------------------------------------------------------------------
 // bootstrap-installed: dispatch on QUORUM_CODING_AGENT

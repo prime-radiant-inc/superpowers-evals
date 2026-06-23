@@ -16,6 +16,7 @@ import {
   verbAssertCheckoutClean,
   verbBootstrapInstalled,
   verbCodexNativeHookConfigured,
+  verbCodexSessionStartHookExecutes,
   verbCommandSucceeds,
   verbCopilotPluginInstalled,
   verbFileContains,
@@ -57,6 +58,7 @@ export const FS_VERBS: Record<string, VerbFn> = {
   'gemini-extension-linked': verbGeminiExtensionLinked,
   'kimi-plugin-installed': verbKimiPluginInstalled,
   'codex-native-hook-configured': verbCodexNativeHookConfigured,
+  'codex-session-start-hook-executes': verbCodexSessionStartHookExecutes,
   'bootstrap-installed': verbBootstrapInstalled,
 };
 

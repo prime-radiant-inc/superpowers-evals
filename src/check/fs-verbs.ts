@@ -12,13 +12,14 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
   statSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { getEnv } from '../env.ts';
+import { envSnapshot, getEnv } from '../env.ts';
 import { posixToJsRegex } from './regex.ts';
 
 /** A verb's verdict. `broken` routes through the non-invertible 127 band. */
@@ -707,6 +708,12 @@ function realpathOrNull(path: string): string | null {
   }
 }
 
+const CODEX_STAGED_PLUGIN_REL = 'plugins/cache/debug/superpowers/local';
+const PLUGIN_ROOT_PLACEHOLDER = '$' + '{PLUGIN_ROOT}';
+
+function codexStagedPluginRoot(codexHomeDir: string): string {
+  return join(codexHomeDir, CODEX_STAGED_PLUGIN_REL);
+}
 // codex-native-hook-configured — ports the toml greps to TS regex.
 export function verbCodexNativeHookConfigured(
   _args: string[],
@@ -718,7 +725,7 @@ export function verbCodexNativeHookConfigured(
   }
 
   const config = join(codexHomeDir, 'config.toml');
-  const plugin = join(codexHomeDir, 'plugins/cache/debug/superpowers/local');
+  const plugin = codexStagedPluginRoot(codexHomeDir);
 
   if (!isFile(config)) {
     return fail(`missing Codex config at ${config}`);
@@ -744,6 +751,209 @@ export function verbCodexNativeHookConfigured(
     return fail('trusted hook hash missing');
   }
   return pass('Codex native Superpowers hook configured');
+}
+
+function findCodexSessionStartCommand(manifestPath: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    return null;
+  }
+  const hooksRoot = (parsed as { hooks?: unknown }).hooks;
+  if (hooksRoot === null || typeof hooksRoot !== 'object') {
+    return null;
+  }
+  const sessionStart = (hooksRoot as { SessionStart?: unknown }).SessionStart;
+  if (!Array.isArray(sessionStart)) {
+    return null;
+  }
+  const commands: string[] = [];
+  for (const group of sessionStart) {
+    if (group === null || typeof group !== 'object') continue;
+    const hooks = (group as { hooks?: unknown }).hooks;
+    if (!Array.isArray(hooks)) continue;
+    for (const hook of hooks) {
+      if (hook === null || typeof hook !== 'object') continue;
+      const command = (hook as { command?: unknown }).command;
+      if (
+        typeof command === 'string' &&
+        command.includes('session-start-codex')
+      ) {
+        commands.push(command);
+      }
+    }
+  }
+  if (commands.length !== 1) {
+    return null;
+  }
+  return commands[0] ?? null;
+}
+
+function runPowerShellHookCommand(
+  command: string,
+  cwd: string,
+  env: Record<string, string>,
+  ctx: CheckContext,
+):
+  | { found: true; stdout: string; stderr: string; status: number | null }
+  | { found: false } {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$command = $env:QUORUM_CODEX_HOOK_COMMAND',
+    '$tokens = $null',
+    '$errors = $null',
+    '[System.Management.Automation.Language.Parser]::ParseInput($command, [ref]$tokens, [ref]$errors) | Out-Null',
+    'if ($errors.Count -gt 0) {',
+    '  [Console]::Error.WriteLine(($errors | ForEach-Object { $_.Message }) -join "`n")',
+    '  exit 64',
+    '}',
+    'Invoke-Expression $command',
+  ].join('\n');
+  const override = ctx.env('QUORUM_POWERSHELL_BIN');
+  const bins = [override, 'pwsh', 'powershell'].filter(
+    (bin): bin is string => bin !== undefined && bin !== '',
+  );
+  for (const bin of bins) {
+    const proc = spawnSync(bin, ['-NoLogo', '-NoProfile', '-Command', script], {
+      cwd,
+      env: { ...envSnapshot(), ...env, QUORUM_CODEX_HOOK_COMMAND: command },
+      encoding: 'utf8',
+      maxBuffer: Number.POSITIVE_INFINITY,
+    });
+    const code = (proc.error as (Error & { code?: string }) | undefined)?.code;
+    if (code === 'ENOENT') {
+      continue;
+    }
+    if (proc.error) {
+      return {
+        found: true,
+        stdout: '',
+        stderr: proc.error.message,
+        status: 1,
+      };
+    }
+    return {
+      found: true,
+      stdout: proc.stdout ?? '',
+      stderr: proc.stderr ?? '',
+      status: proc.status ?? null,
+    };
+  }
+  return { found: false };
+}
+
+function powershellPath(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
+function parseSessionStartJson(stdout: string): CheckOutcome {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return fail('Codex SessionStart hook did not emit valid JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    return fail('Codex SessionStart hook emitted non-object JSON');
+  }
+  const hookSpecificOutput = (parsed as { hookSpecificOutput?: unknown })
+    .hookSpecificOutput;
+  if (
+    hookSpecificOutput === null ||
+    typeof hookSpecificOutput !== 'object' ||
+    Array.isArray(hookSpecificOutput)
+  ) {
+    return fail('Codex SessionStart hook JSON missing hookSpecificOutput');
+  }
+  const output = hookSpecificOutput as Record<string, unknown>;
+  if (output['hookEventName'] !== 'SessionStart') {
+    return fail('Codex hookEventName was not SessionStart');
+  }
+  const additionalContext = output['additionalContext'];
+  if (
+    typeof additionalContext !== 'string' ||
+    !additionalContext.includes('You have superpowers')
+  ) {
+    return fail(
+      'Codex SessionStart additionalContext missing Superpowers text',
+    );
+  }
+  return pass('Codex SessionStart hook executes through PowerShell');
+}
+
+// codex-session-start-hook-executes â€” prove the staged Codex hook command is
+// PowerShell-callable and emits the expected SessionStart JSON. This catches the
+// Windows-only failure mode where a quoted executable path needs the `&` call
+// operator before arguments.
+export function verbCodexSessionStartHookExecutes(
+  _args: string[],
+  ctx: CheckContext,
+): CheckOutcome {
+  const codexHomeDir = ctx.env('QUORUM_AGENT_CONFIG_DIR');
+  if (!codexHomeDir) {
+    return fail('QUORUM_AGENT_CONFIG_DIR is not set');
+  }
+
+  const plugin = codexStagedPluginRoot(codexHomeDir);
+  const manifest = join(plugin, 'hooks/hooks-codex.json');
+  const runner = join(plugin, 'hooks/run-hook.cmd');
+  const script = join(plugin, 'hooks/session-start-codex');
+  const usingSkill = join(plugin, 'skills/using-superpowers/SKILL.md');
+
+  if (!isFile(manifest)) {
+    return fail(`missing Codex hook manifest at ${manifest}`);
+  }
+  if (!isFile(runner)) {
+    return fail(`missing staged Codex hook runner at ${runner}`);
+  }
+  if (!isFile(script)) {
+    return fail(`missing staged Codex SessionStart script at ${script}`);
+  }
+  if (!isFile(usingSkill)) {
+    return fail(`missing staged using-superpowers skill at ${usingSkill}`);
+  }
+
+  const command = findCodexSessionStartCommand(manifest);
+  if (command === null) {
+    return fail('expected exactly one Codex session-start-codex hook command');
+  }
+  if (!command.trimStart().startsWith('&')) {
+    return fail(
+      'Codex SessionStart hook command is missing PowerShell call operator (&)',
+    );
+  }
+
+  const powerShellCommand = command.replaceAll(
+    PLUGIN_ROOT_PLACEHOLDER,
+    powershellPath(plugin),
+  );
+  const dataDir = join(codexHomeDir, 'plugin-data');
+  mkdirSync(dataDir, { recursive: true });
+  const result = runPowerShellHookCommand(
+    powerShellCommand,
+    plugin,
+    {
+      PLUGIN_ROOT: plugin,
+      CLAUDE_PLUGIN_ROOT: plugin,
+      PLUGIN_DATA: dataDir,
+      CLAUDE_PLUGIN_DATA: dataDir,
+    },
+    ctx,
+  );
+  if (!result.found) {
+    return fail('PowerShell not found on PATH (tried pwsh, powershell)');
+  }
+  if ((result.status ?? 1) !== 0) {
+    const detail = `${result.stderr}${result.stdout}`.trim().slice(0, 500);
+    return fail(
+      `Codex SessionStart hook command failed in PowerShell: ${detail}`,
+    );
+  }
+  return parseSessionStartJson(result.stdout);
 }
 
 // bootstrap-installed — dispatch to the per-harness install check for the
