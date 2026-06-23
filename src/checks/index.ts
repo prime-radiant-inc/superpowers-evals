@@ -169,31 +169,24 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
   return records;
 }
 
-// The `# coding-agents:` directive matcher. Leading whitespace before the `#` is
-// allowed; the trailing `\s*$` plus the non-greedy `(.+?)` mean a bare
-// `# coding-agents:` (no value) does NOT match.
-const DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
+// Directive matchers. Leading whitespace before the `#` is allowed; the trailing
+// `\s*$` plus the non-greedy `(.+?)` mean a bare directive (no value) does NOT
+// match.
+const CODING_AGENTS_DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
+const OS_DIRECTIVE_RE = /^\s*#\s*os:\s*(.+?)\s*$/;
 
-/**
- * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
- * trimmed CSV members. A line that matches the directive but lists only
- * separators (e.g. `# coding-agents: ,`) is a *matched-but-empty* directive and
- * returns `[]` — the matrix gate reads `[]` as skip-all-agents, whereas a true
- * absence (no matching line, or a missing checks.sh) returns `undefined`.
- */
-export function parseCodingAgentsDirective(
-  checksSh: string,
-): string[] | undefined {
-  // A story-only scenario dir has no checks.sh and must be treated as un-gated
-  // rather than crashing the matrix build.
+// Scan the first 21 lines of a checks.sh for the first line matching `re` and
+// return its trimmed, comma-split, non-empty members. A line that matches but
+// lists only separators (e.g. `,`) is a matched-but-empty directive returning
+// `[]`; a true absence (no matching line, or a missing checks.sh — a story-only
+// scenario dir) returns `undefined`.
+function scanCsvDirective(checksSh: string, re: RegExp): string[] | undefined {
   if (!existsSync(checksSh)) {
     return undefined;
   }
-  // Scan the first 21 lines (indices 0..20 inclusive) for the directive.
   const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 21);
   for (const line of head) {
-    const match = DIRECTIVE_RE.exec(line);
-    const csv = match?.[1];
+    const csv = re.exec(line)?.[1];
     if (csv !== undefined) {
       return csv
         .split(',')
@@ -202,4 +195,28 @@ export function parseCodingAgentsDirective(
     }
   }
   return undefined;
+}
+
+/**
+ * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
+ * trimmed CSV members. A matched-but-empty directive returns `[]` (the matrix
+ * gate reads `[]` as skip-all-agents); a true absence returns `undefined`.
+ */
+export function parseCodingAgentsDirective(
+  checksSh: string,
+): string[] | undefined {
+  return scanCsvDirective(checksSh, CODING_AGENTS_DIRECTIVE_RE);
+}
+
+/**
+ * Read a leading `# os: linux, windows` directive from a checks.sh, returning the
+ * lower-cased OS names the scenario supports. Absence returns `undefined`,
+ * meaning "no OS restriction" — the matrix treats that as run-anywhere
+ * (back-compat). The matrix skips a cell ('os') when this is set and does not
+ * include the run OS (currently always linux).
+ */
+export function parseOsDirective(checksSh: string): string[] | undefined {
+  return scanCsvDirective(checksSh, OS_DIRECTIVE_RE)?.map((s) =>
+    s.toLowerCase(),
+  );
 }

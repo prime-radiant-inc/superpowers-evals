@@ -3,7 +3,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { parseCodingAgentsDirective, runPhase } from '../src/checks/index.ts';
+import {
+  parseCodingAgentsDirective,
+  parseOsDirective,
+  runPhase,
+} from '../src/checks/index.ts';
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -300,6 +304,21 @@ test('parseCodingAgentsDirective returns undefined when no directive present', (
   const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
   writeFileSync(checksSh, 'pre() { :; }\npost() { :; }\n');
   expect(parseCodingAgentsDirective(checksSh)).toBeUndefined();
+});
+
+test('parseOsDirective reads a leading "# os:" csv, lower-cased', () => {
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    '# coding-agents: codex\n# os: Windows, Linux\npre() { :; }\npost() { :; }\n',
+  );
+  expect(parseOsDirective(checksSh)).toEqual(['windows', 'linux']);
+});
+
+test('parseOsDirective returns undefined when no os directive present (run-anywhere)', () => {
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(checksSh, 'pre() { :; }\npost() { :; }\n');
+  expect(parseOsDirective(checksSh)).toBeUndefined();
 });
 
 // E-directive-missing-file-crash: Python guards `if not checks_sh.exists():

@@ -12,6 +12,7 @@ interface ScenarioSpec {
   readonly tier?: string;
   readonly status?: string;
   readonly directive?: string;
+  readonly os?: string;
 }
 
 interface AgentSpec {
@@ -46,9 +47,10 @@ function fixture(
     writeFileSync(join(dir, 'story.md'), story);
     const directiveLine =
       scn.directive !== undefined ? `# coding-agents: ${scn.directive}\n` : '';
+    const osLine = scn.os !== undefined ? `# os: ${scn.os}\n` : '';
     writeFileSync(
       join(dir, 'checks.sh'),
-      `${directiveLine}pre() { :; }\npost() { :; }\n`,
+      `${directiveLine}${osLine}pre() { :; }\npost() { :; }\n`,
     );
   }
 
@@ -111,6 +113,21 @@ test('directive excludes non-listed agents (skippedReason directive)', () => {
   const m = buildMatrix({ scenariosRoot, codingAgentsDir });
   expect(reasonOf(m, 'only-claude', 'claude')).toBeNull();
   expect(reasonOf(m, 'only-claude', 'codex')).toBe('directive');
+});
+
+test('# os: directive skips a non-linux scenario (skippedReason os)', () => {
+  const { scenariosRoot, codingAgentsDir } = fixture(
+    [
+      { name: 'win-only', directive: 'codex', os: 'windows' },
+      { name: 'cross', directive: 'codex', os: 'linux, windows' },
+    ],
+    ['codex'],
+  );
+  const m = buildMatrix({ scenariosRoot, codingAgentsDir });
+  // Windows-only scenario skips on the linux-targeted matrix.
+  expect(reasonOf(m, 'win-only', 'codex')).toBe('os');
+  // A scenario that lists linux is not skipped on the os axis.
+  expect(reasonOf(m, 'cross', 'codex')).toBeNull();
 });
 
 test('draft scenarios are skipped unless includeDrafts', () => {

@@ -2,7 +2,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { parseCodingAgentsDirective } from '../checks/index.ts';
+import {
+  parseCodingAgentsDirective,
+  parseOsDirective,
+} from '../checks/index.ts';
 import type { MatrixEntry, SkippedReason } from '../contracts/batch.ts';
 import type { Credential } from '../contracts/credential.ts';
 import type {
@@ -201,6 +204,9 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     const directive = parseCodingAgentsDirective(
       join(scenarioDir, 'checks.sh'),
     );
+    // Scenario OS restriction (`# os:` in checks.sh). Absent = run-anywhere.
+    // The matrix targets linux, so a scenario that doesn't list linux skips.
+    const osDirective = parseOsDirective(join(scenarioDir, 'checks.sh'));
     const storyPath = join(scenarioDir, 'story.md');
     const tier = readQuorumTier(storyPath);
     const status = readStoryStatus(storyPath);
@@ -210,6 +216,11 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
       let baseSkip: SkippedReason;
       if (directive !== undefined && !directive.includes(agent)) {
         baseSkip = 'directive';
+      } else if (osDirective !== undefined && !osDirective.includes('linux')) {
+        // Scenario restricted to non-linux OS(es) (e.g. `# os: windows`); the
+        // matrix targets linux, so skip it here rather than running to an
+        // env-missing indeterminate.
+        baseSkip = 'os';
       } else if (status === 'draft' && !includeDrafts) {
         baseSkip = 'draft';
       } else if (tierFilter !== null && tier !== tierFilter) {

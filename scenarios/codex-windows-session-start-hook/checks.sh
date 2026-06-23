@@ -1,4 +1,5 @@
 # coding-agents: codex
+# os: windows
 
 pre() {
     git-repo
