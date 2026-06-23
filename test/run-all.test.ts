@@ -234,3 +234,64 @@ test('cost cell shows — when a run has no economics', async () => {
   expect(stream.text).toContain('—');
   expect(stream.text).not.toContain('cost $');
 });
+
+test('invokeCell passes credential to invoke fn when non-empty', async () => {
+  // Fixture: one agent with a default credential; verify the fake invoke
+  // receives credential in its args.
+  const root = (await import('node:os')).tmpdir();
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { join: pathJoin } = await import('node:path');
+
+  const base = mkdtempSync(pathJoin(root, 'runall-cred-'));
+  const scenariosRoot = pathJoin(base, 'scenarios');
+  const codingAgentsDir = pathJoin(base, 'coding-agents');
+  const outRoot = pathJoin(base, 'results');
+  mkdirSync(scenariosRoot, { recursive: true });
+  mkdirSync(codingAgentsDir, { recursive: true });
+  mkdirSync(outRoot, { recursive: true });
+
+  // One scenario, one agent with a default_credential
+  mkdirSync(pathJoin(scenariosRoot, 'scn'), { recursive: true });
+  writeFileSync(pathJoin(scenariosRoot, 'scn', 'story.md'), 'body\n');
+  writeFileSync(
+    pathJoin(scenariosRoot, 'scn', 'checks.sh'),
+    'pre() { :; }\npost() { :; }\n',
+  );
+  writeFileSync(
+    pathJoin(codingAgentsDir, 'claude.yaml'),
+    'name: claude\ndefault_credential: my_cred\n',
+  );
+
+  const capturedArgs: InvokeChildArgs[] = [];
+  const { invoke } = fakeInvoke({ 'scn/claude': { final: 'pass' } });
+  const wrappedInvoke: InvokeFn = (a) => {
+    capturedArgs.push(a);
+    return invoke(a);
+  };
+
+  // Write a minimal credentials.yaml so loadCredentials can parse it
+  const { stringify: stringifyYaml } = await import('yaml');
+  writeFileSync(
+    pathJoin(base, 'credentials.yaml'),
+    stringifyYaml({
+      my_cred: {
+        model: 'm',
+        harnesses: ['claude'],
+        api: 'anthropic',
+        auth: 'api-key',
+      },
+    }),
+  );
+
+  await runBatch({
+    scenariosRoot,
+    codingAgentsDir,
+    outRoot,
+    jobs: 1,
+    invoke: wrappedInvoke,
+    credentialsPath: pathJoin(base, 'credentials.yaml'),
+  });
+
+  expect(capturedArgs).toHaveLength(1);
+  expect(capturedArgs[0]?.credential).toBe('my_cred');
+});

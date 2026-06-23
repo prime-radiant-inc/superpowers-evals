@@ -20,14 +20,21 @@ export type BatchHeader = z.infer<typeof BatchHeaderSchema>;
 export const ResultRecordSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
+  credential: z.string().optional(),
   run_id: z.string().nullable(),
   skipped: z.string().optional(),
 });
 export type ResultRecord = z.infer<typeof ResultRecordSchema>;
 
 // Why a cell is not runnable. null == runnable. Precedence (highest first):
-// directive > draft > tier (see buildMatrix).
-export type SkippedReason = 'directive' | 'draft' | 'tier' | null;
+// directive > draft > tier > harness > os (see buildMatrix).
+export type SkippedReason =
+  | 'directive'
+  | 'draft'
+  | 'tier'
+  | 'harness'
+  | 'os'
+  | null;
 
 // One (scenario, agent) cell of the batch matrix. `runnable` is the helper below
 // rather than a property to keep the type plain.

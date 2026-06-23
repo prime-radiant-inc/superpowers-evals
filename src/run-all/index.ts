@@ -67,6 +67,9 @@ export interface InvokeChildArgs {
   readonly codingAgent: string;
   readonly codingAgentsDir: string;
   readonly outRoot: string;
+  // Credential name to forward to the child as --credential. Empty string or
+  // absent means no --credential flag is appended (credential-less agents).
+  readonly credential?: string;
   readonly timeoutSeconds?: number;
   readonly extraEnv?: Readonly<Record<string, string>>;
   // Called once with the spawned child's OS pid, right after spawn. The
@@ -163,19 +166,23 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
     ...envSnapshot(),
     ...(args.extraEnv ?? {}),
   };
+  const childArgs: string[] = [
+    CLI_ENTRY,
+    'run',
+    args.scenarioDir,
+    '--coding-agent',
+    args.codingAgent,
+    '--coding-agents-dir',
+    args.codingAgentsDir,
+    '--out-root',
+    args.outRoot,
+  ];
+  if (args.credential !== undefined && args.credential !== '') {
+    childArgs.push('--credential', args.credential);
+  }
   return spawnCollectRunId({
     command: process.execPath,
-    args: [
-      CLI_ENTRY,
-      'run',
-      args.scenarioDir,
-      '--coding-agent',
-      args.codingAgent,
-      '--coding-agents-dir',
-      args.codingAgentsDir,
-      '--out-root',
-      args.outRoot,
-    ],
+    args: childArgs,
     env,
     ...(args.timeoutSeconds !== undefined
       ? { timeoutSeconds: args.timeoutSeconds }
@@ -195,6 +202,7 @@ export interface RunBatchArgs {
   readonly jobs: number;
   readonly agentFilter?: readonly string[];
   readonly scenarioFilter?: readonly string[];
+  readonly credentialFilter?: readonly string[];
   readonly tier?: 'sentinel' | 'full' | 'adhoc' | null;
   readonly includeDrafts?: boolean;
   readonly invoke?: InvokeFn;
@@ -330,6 +338,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     jobs,
     agentFilter,
     scenarioFilter,
+    credentialFilter,
     tier = null,
     includeDrafts = false,
     invoke = invokeChild,
@@ -356,6 +365,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     codingAgentsDir,
     ...(agentFilter !== undefined ? { agentFilter } : {}),
     ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
+    ...(credentialFilter !== undefined ? { credentialFilter } : {}),
     tierFilter: tier,
     includeDrafts,
     credentials,
@@ -439,6 +449,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
       codingAgent: entry.codingAgent,
       codingAgentsDir,
       outRoot,
+      ...(entry.credential !== '' ? { credential: entry.credential } : {}),
     });
 
   // The rate-limit latch hook: a finished child whose verdict.json carries the

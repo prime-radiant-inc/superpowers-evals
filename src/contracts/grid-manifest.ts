@@ -6,7 +6,13 @@ export interface GridManifestCell {
   readonly agent: string;
   readonly os: string;
   readonly eligible: boolean;
-  readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+  readonly skipped_reason:
+    | 'directive'
+    | 'draft'
+    | 'tier'
+    | 'harness'
+    | 'os'
+    | null;
 }
 
 export interface GridManifest {

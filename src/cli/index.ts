@@ -120,6 +120,7 @@ interface ShowOptions {
 interface RunAllOptions {
   readonly codingAgents?: string;
   readonly scenarios?: string;
+  readonly credentials?: string;
   readonly jobs: string;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
@@ -339,6 +340,10 @@ program
   .command('run-all')
   .option('--coding-agents <csv>', 'CSV agent filter (default: all)')
   .option('--scenarios <csv>', 'CSV scenario filter (default: all)')
+  .option(
+    '--credentials <csv>',
+    'CSV credential filter (default: agent default_credential)',
+  )
   .option('--jobs <n>', 'global slot pool size (>=1)', String(DEFAULT_JOBS))
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
@@ -355,6 +360,7 @@ program
     // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
     // -> foo), symmetric with run/check.
     const scenarioFilter = csvList(opts.scenarios)?.map(scenarioName);
+    const credentialFilter = csvList(opts.credentials);
     const jobs = parseIntegerOption(opts.jobs);
     if (jobs === undefined || jobs < 1) {
       process.stderr.write('error: --jobs must be an integer >= 1\n');
@@ -397,6 +403,7 @@ program
         jobs,
         ...(agentFilter !== undefined ? { agentFilter } : {}),
         ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
+        ...(credentialFilter !== undefined ? { credentialFilter } : {}),
         tier: tier ?? null,
         includeDrafts: opts.includeDrafts,
         heartbeatSeconds,
