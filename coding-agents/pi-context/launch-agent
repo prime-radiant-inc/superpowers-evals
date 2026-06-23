@@ -33,6 +33,13 @@ if [ ! -d "$PI_SUBAGENTS_PKG" ]; then
   exit 1
 fi
 
+# Ambient context-file discovery is intentionally LEFT ON (no --no-context-files):
+# the per-run throwaway $HOME (+ the container) already isolates pi from the
+# operator's real context, so the old --no-context-files isolation hack is
+# unnecessary — and the harness needs pi to read the workdir's context file, where
+# the Superpowers bootstrap and any injected user-preference instructions live.
+# --no-extensions / --no-skills stay: those scope pi to ONLY the explicitly-loaded
+# Superpowers extension + skills, not ambient ones — a separate concern.
 exec env \
   $QUORUM_HOME_ENV \
   PI_OFFLINE=1 \
@@ -45,6 +52,5 @@ exec env \
     --extension "$PI_SUBAGENTS_PKG" \
     --no-skills \
     --skill "$SUPERPOWERS_ROOT/skills" \
-    --no-context-files \
     --tools read,bash,edit,write,grep,find,ls,subagent \
     "$@"
