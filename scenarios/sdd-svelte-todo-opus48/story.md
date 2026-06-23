@@ -1,6 +1,6 @@
 ---
-id: sdd-svelte-todo-elicited
-title: Agent executes an opus-elicited svelte todo plan (fixture-realism replication)
+id: sdd-svelte-todo-opus48
+title: Agent executes an opus-4.8-elicited svelte todo plan (fixture-realism replication)
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 90m
