@@ -96,7 +96,8 @@ RUN npm install -g \
     openclaw \
     @sourcegraph/amp \
     cline \
-    @mariozechner/pi-coding-agent \
+    @earendil-works/pi-coding-agent@0.80.1 \
+    pi-subagents@0.28.0 \
     @xai-official/grok \
   && if command -v kilocode >/dev/null 2>&1 && ! command -v kilo >/dev/null 2>&1; then ln -s "$(command -v kilocode)" /usr/local/bin/kilo; fi \
   && if command -v factory >/dev/null 2>&1 && ! command -v droid >/dev/null 2>&1; then ln -s "$(command -v factory)" /usr/local/bin/droid; fi \
