@@ -121,6 +121,8 @@ describe('checkCredentials', () => {
     const result = checkCredentials(credsPath, agentsDir);
     expect(result.ok).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
+    // The error message must name the offending key so users can locate it
+    expect(result.errors.join(' ')).toMatch(/bad-name/);
     // Should not throw; error must be in errors array
   });
 
@@ -147,7 +149,10 @@ describe('checkCredentials', () => {
     expect(result).toEqual({ ok: true, errors: [] });
   });
 
-  test('runtime_family from explicit field is used for harness check', () => {
+  test('matches credential harness against runtime_family, not name', () => {
+    // When an agent's `name` differs from its `runtime_family`, the harness
+    // check must use runtime_family — otherwise agents like "claude-sonnet"
+    // would never match a credential listing harnesses: [claude].
     const credsDir = mkdtempSync(join(tmpdir(), 'cred-check-creds-'));
     const agentsDir = mkdtempSync(join(tmpdir(), 'cred-check-agents-'));
 
@@ -157,47 +162,17 @@ describe('checkCredentials', () => {
         'sonnet:',
         '  model: claude-sonnet',
         '  api: anthropic',
-        '  api_key_env: ANTHROPIC_API_KEY',
         '  harnesses: [claude]',
       ].join('\n'),
     );
 
-    // claude-sonnet agent: name is "claude-sonnet" but runtime_family is "claude"
-    // But name must be a known family or runtime_family must be set.
-    // Let's use name "pi" with runtime_family "claude" — but claude requires model.
-    // Use name "opencode" (known family) with runtime_family "claude" + model.
-    const lines = [
-      'name: opencode',
-      'runtime_family: claude',
-      'model: claude-sonnet',
-      'binary: claude',
-      'home_config_subdir: ".claude"',
-      'session_log_dir: /tmp/sessions',
-      'session_log_glob: "**/*.jsonl"',
-      'normalizer: claude',
-    ];
-    writeFileSync(join(agentsDir, 'opencode.yaml'), `${lines.join('\n')}\n`);
+    // Agent name is "claude-sonnet"; runtime_family overrides it to "claude".
+    writeAgentYaml(agentsDir, 'claude-sonnet', {
+      runtime_family: 'claude',
+      default_credential: 'sonnet',
+    });
 
-    writeAgentYaml(agentsDir, 'pi', { default_credential: 'sonnet' });
-    // pi's family is "pi" but sonnet.harnesses = [claude] → should fail
-    // Wait, re-read: we want to test that runtime_family is used for check.
-    // Let's simplify: write only the opencode agent that has runtime_family=claude
-    // and default_credential sonnet whose harnesses=[claude] → should PASS
-
-    // Remove pi agent file first — only write opencode
-    // Actually writeAgentYaml already wrote pi.yaml above. Let's redo the test.
-    // Let's use a fresh test approach:
-
-    // The opencode agent has runtime_family=claude; credential lists harnesses=[claude]
-    // That should pass.
     const result = checkCredentials(credsPath, agentsDir);
-    // pi will fail (sonnet.harnesses=[claude] not [pi]), opencode will pass
-    // The test is just checking the opencode pass via runtime_family
-    // But we also wrote pi with default_credential=sonnet which won't match
-    // This test is getting complicated - let's just check both
-    const piErrors = result.errors.filter((e) => e.includes('pi'));
-    const opencodeErrors = result.errors.filter((e) => e.includes('opencode'));
-    expect(opencodeErrors).toHaveLength(0); // opencode passes (runtime_family=claude, harnesses=[claude])
-    expect(piErrors).toHaveLength(1); // pi fails (family=pi, harnesses=[claude])
+    expect(result).toEqual({ ok: true, errors: [] });
   });
 });
