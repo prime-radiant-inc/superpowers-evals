@@ -57,6 +57,10 @@ evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
 `doctor` is read-only. `prepare` resolves exact refs and returns `lock_busy`
 instead of changing checkouts while an appliance live job is active.
 
+Host access and provider-specific break-glass procedures are intentionally kept
+out of this public repo. Use the private ops runbook when you need to connect to
+the shared host.
+
 Run the first sentinel batch detached:
 
 ```bash

@@ -70,8 +70,9 @@ Build this in two milestones:
 ## Phase 1: shared eval appliance
 
 Phase 1 is an agent-operated wrapper around today's runtime, not a new runner.
-Agents reach the appliance through an approved remote execution channel such as
-Tailscale SSH and call one installed helper. The helper is designed for agents:
+Agents reach the appliance through an approved private remote execution channel
+and call one installed helper. Provider-specific access details live in the
+private ops runbook, not this public design. The helper is designed for agents:
 noninteractive, idempotent where possible, structured-output capable, and safe
 to re-run after a dropped session.
 
@@ -117,29 +118,29 @@ human review rather than silently continuing to use the mutated checkout.
 
 ### Host and access boundary
 
-The Phase 1 box lives as a Terminus-managed AWS EC2 instance in the Prime
-Radiant AWS account. It should run in a private subnet with no public IP. Normal
-agent access is through the approved tailnet path; AWS Systems Manager Session
-Manager is the break-glass path and should not require inbound ports.
+The Phase 1 box lives as an organization-managed cloud host with no public
+interactive ingress. Normal agent access is through the approved private access
+path. Provider break-glass access is reserved for recovery when that normal path
+is unavailable.
 
 Security posture:
 
-- Tailscale/SSM access is limited to named maintainer and agent identities.
+- Remote access is limited to named maintainer and agent identities.
 - The appliance runs live evals as a dedicated `quorum-runner` Unix user.
 - The runner user does not have broad sudo and does not expose general
   Docker-group access to operators; the helper owns the narrow container
   lifecycle commands needed for evals.
-- The instance profile is least-privilege: SSM/CloudWatch basics, optional read
-  access to exact secret ARNs if bootstrap fetches credentials, and no broad S3,
-  Secrets Manager, or admin permissions.
+- The instance profile is least-privilege: host management and telemetry basics,
+  optional read access to exact secret references if bootstrap fetches
+  credentials, and no broad object-storage, secret-store, or admin permissions.
 - IMDSv2 is required. Container access to IMDS is blocked unless a future design
   explicitly needs it; credentials should be fetched outside the agent runtime
   and materialized as the blessed bundle.
 - `/srv/quorum` lives on encrypted EBS. Snapshots, if enabled, are encrypted and
   governed by the same retention policy as raw artifacts.
-- The dashboard binds only to loopback or a tailnet address. It is read-only, but
-  still exposes scenario names, timing, failure, and cost metadata, so it is not
-  public.
+- The dashboard binds only to loopback or the approved private network. It is
+  read-only, but still exposes scenario names, timing, failure, and cost
+  metadata, so it is not public.
 
 This is a trusted-operator box, not a sandbox for untrusted PRs or scenarios.
 
@@ -196,7 +197,7 @@ Credential incident response for Phase 1 is deliberately blunt:
 
 1. acquire the run lock if possible and stop active process groups;
 2. run `scripts/evals-container down`;
-3. disable tailnet/SSM access to the runner user;
+3. disable remote access to the runner user;
 4. mark the current bundle generation revoked;
 5. quarantine raw `results/` and preserve only reviewed summaries;
 6. rotate every provider token/OAuth source in the bundle;
@@ -333,7 +334,7 @@ Minimum schema:
     "thread": "optional-thread-id",
     "task": "optional-task-id",
     "host_user": "quorum-runner",
-    "remote_identity": "tailscale-or-ssm-identity"
+    "remote_identity": "private-access-identity"
   },
   "command": {
     "argv": ["quorum", "run-all", "--tier", "sentinel"],
@@ -600,8 +601,8 @@ costs`.
 
 Infra/bootstrap:
 
-1. Provision the Terminus-managed private EC2 host, encrypted EBS volume,
-   `quorum-runner` Unix user, tailnet/SSM access, least-privilege instance
+1. Provision the organization-managed cloud host, encrypted state volume,
+   `quorum-runner` Unix user, private remote access, least-privilege instance
    profile, and dashboard bind policy.
 2. Install host-local appliance config and the helper entrypoint outside the
    mutable repo.

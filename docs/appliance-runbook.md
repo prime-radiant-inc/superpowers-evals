@@ -35,6 +35,15 @@ Live eval artifacts are sensitive. Do not paste raw transcripts, run homes,
 tool-call logs, or credential-bearing files. Prefer `status`, `show`, `costs`,
 and reviewed summaries.
 
+## Access Boundary
+
+Routine appliance operation uses the approved private access path documented in
+the private ops runbook. Provider-specific break-glass access is for recovery
+only when the normal private path is unavailable; if it is used, record why.
+
+Do not add real hostnames, account identifiers, access-provider commands, or
+secret parameter names to this public runbook.
+
 ## Before Launch
 
 Start with a read-only health check. `doctor` must not fetch, checkout, build,
@@ -145,8 +154,8 @@ The dashboard is read-only and must not submit or stop jobs:
 bun run dashboard --results results --manifest grid-manifest.json
 ```
 
-On the shared box, bind it only to loopback or a tailnet address, and prefer
-SSM/Tailscale forwarding over public exposure.
+On the shared box, bind it only to loopback or the approved private network.
+Use the private ops runbook for operator access and forwarding details.
 
 ## Break-Glass
 
