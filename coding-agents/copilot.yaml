@@ -1,5 +1,6 @@
 name: copilot
 binary: copilot
+default_credential: copilot_default
 # Collapse the copilot config dir into the throwaway $HOME: with COPILOT_HOME
 # unset, copilot resolves its home to $HOME/.copilot (verified empirically — it
 # seeds config.json, logs/, session-state/, session-store.db there). With

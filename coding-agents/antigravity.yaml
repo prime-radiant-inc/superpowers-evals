@@ -1,5 +1,6 @@
 name: antigravity
 binary: agy
+default_credential: antigravity_default
 # Collapse the antigravity config dir into the throwaway $HOME. agy defaults its
 # gemini state dir to $HOME/.gemini when --gemini_dir is omitted (verified
 # empirically: `HOME=<tmp> agy plugin list` creates <tmp>/.gemini/config), and it
