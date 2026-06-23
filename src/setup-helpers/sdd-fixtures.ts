@@ -48,8 +48,8 @@ export function scaffoldSddSvelteTodo(ctx: HelperContext): void {
   scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo');
 }
 
-export function scaffoldSddSvelteTodoElicited(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo-elicited');
+export function scaffoldSddSvelteTodoOpus48(ctx: HelperContext): void {
+  scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo-opus48');
 }
 
 // The compact auth-system plan.
