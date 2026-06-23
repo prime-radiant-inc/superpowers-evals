@@ -17,6 +17,16 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'sdd-spec-context-consumed',
   'worktree-creation-under-pressure',
   'worktree-no-drift-to-main',
+  // User-override evals: pinned to the agents whose ambient-instructions file is
+  // verified (the inject-user-preference map) — pi/antigravity/opencode excluded
+  // until probed.
+  'user-pref-no-brainstorm',
+  'user-pref-no-tdd',
+  'user-pref-no-worktree',
+  'user-pref-react-no-tdd-met',
+  'user-pref-react-no-tdd-unmet',
+  'user-pref-corp-no-brainstorm-met',
+  'user-pref-corp-no-brainstorm-unmet',
 ]);
 
 test('harness pins are exactly the explicitly intentional scenarios', () => {
