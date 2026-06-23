@@ -60,7 +60,10 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
-import { parseCredentialsFile } from '../contracts/credential.ts';
+import {
+  type Credential,
+  parseCredentialsFile,
+} from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
   CheckRecord,
@@ -999,11 +1002,10 @@ async function runInnerBody(
   // Credential resolution: if a credential name was resolved, look it up in the
   // credentials file. Missing credential name means no credential (runs proceed
   // without one). A named credential that is absent in the file is a hard error.
-  let resolvedCredential:
-    | import('../contracts/credential.ts').Credential
-    | undefined;
+  let resolvedCredential: Credential | undefined;
   if (a.credential !== undefined && a.credential !== '') {
-    const credentialsPath = a.credentialsPath ?? 'credentials.yaml';
+    const credentialsPath =
+      a.credentialsPath ?? join(repoRoot(), 'credentials.yaml');
     let rawCreds: unknown;
     try {
       rawCreds = (await import('yaml')).parse(
