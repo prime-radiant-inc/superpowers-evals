@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
+import type { ApiKeyResolution } from '../credentials/resolve.ts';
 import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
@@ -240,15 +241,17 @@ function writePiModelsJson(
   const modelEntry: Record<string, unknown> = {
     id: model,
     name: model,
-    compat: {
-      ...(compat.thinkingFormat !== undefined
-        ? { thinkingFormat: compat.thinkingFormat }
-        : {}),
-      ...(compat.maxTokensField !== undefined
-        ? { maxTokensField: compat.maxTokensField }
-        : {}),
-    },
   };
+  const compatObj: Record<string, string> = {};
+  if (compat.thinkingFormat !== undefined) {
+    compatObj['thinkingFormat'] = compat.thinkingFormat;
+  }
+  if (compat.maxTokensField !== undefined) {
+    compatObj['maxTokensField'] = compat.maxTokensField;
+  }
+  if (Object.keys(compatObj).length > 0) {
+    modelEntry['compat'] = compatObj;
+  }
   if (reasoning) {
     modelEntry['reasoning'] = true;
   }
@@ -346,7 +349,12 @@ export class PiAgent implements CodingAgent {
       );
     }
 
-    const resolution = resolveApiKey(credential, 'PI_API_KEY');
+    let resolution: ApiKeyResolution;
+    try {
+      resolution = resolveApiKey(credential, 'PI_API_KEY');
+    } catch (e) {
+      throw new ProvisionError(e instanceof Error ? e.message : String(e));
+    }
     if (resolution.kind !== 'env') {
       // resolveApiKey returns 'native' only when auth !== 'api-key', which cannot
       // happen here, but guard explicitly.
