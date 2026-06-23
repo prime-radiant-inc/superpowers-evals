@@ -689,6 +689,6 @@ test('runOpencodeCommand surfaces a real timeout instead of swallowing it (integ
   }
 });
 
-test('OPENCODE_CAPTURE_TIMEOUT_MS is 30s', () => {
-  expect(OPENCODE_CAPTURE_TIMEOUT_MS).toBe(30_000);
+test('OPENCODE_CAPTURE_TIMEOUT_MS is 90s (headroom for session list/export under high concurrency)', () => {
+  expect(OPENCODE_CAPTURE_TIMEOUT_MS).toBe(90_000);
 });

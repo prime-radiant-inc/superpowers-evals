@@ -77,7 +77,11 @@ export const OPENCODE_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
   'AWS_SESSION_TOKEN',
 ]);
 
-export const OPENCODE_CAPTURE_TIMEOUT_MS = 30_000;
+// 90s (not 30s): under high run-all concurrency, `opencode session list` (the
+// pre-run snapshot) and `opencode export` contend for CPU and can exceed 30s,
+// which surfaced as setup-phase indeterminates in the 32× GLM batch
+// (docs/experiments/2026-06-23-glm-5.2-full-suite-benchmark.md).
+export const OPENCODE_CAPTURE_TIMEOUT_MS = 90_000;
 
 // Filter the host env to the allowlist, default PATH/TERM/LANG (PATH falls back
 // to the POSIX default "/bin:/usr/bin"), then overlay the XDG isolation vars.
