@@ -78,6 +78,23 @@ function writeBatch(
   return batchDir;
 }
 
+function writeBatchHeaderOnly(
+  cfg: LoadedApplianceConfig,
+  finishedAt: string | null,
+): string {
+  const batchDir = join(cfg.config.container.results_root, 'batches/batch-1');
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'batch-1',
+      started_at: '2026-06-18T00:00:00Z',
+      finished_at: finishedAt,
+      coding_agents: ['codex'],
+    }),
+  );
+  return batchDir;
+}
+
 function writeVerdict(
   cfg: LoadedApplianceConfig,
   runId: string,
@@ -168,6 +185,65 @@ test('status prefers terminal batch artifacts over stale nonterminal job status'
   expect(status.status).toBe('done');
   expect(status.appliance_failed).toBe(false);
   expect(readJob(cfg, job.job_id).status).toBe('running');
+});
+
+test('status reports active batch before first result record', () => {
+  const cfg = loaded();
+  writeBatchHeaderOnly(cfg, null);
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'running',
+    artifacts: { ...current.artifacts, batch_id: 'batch-1' },
+    process: {
+      host_pid: process.pid,
+      host_pgid: 99999999,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
+
+  const status = statusPayload(cfg, job.job_id);
+
+  expect(status.status).toBe('running');
+  expect(status.appliance_failed).toBe(false);
+  expect(status.summary).toEqual({
+    pass: 0,
+    fail: 0,
+    indeterminate: 0,
+    unknown: 0,
+    skipped: 0,
+  });
+  expect(status.artifact).toMatchObject({ type: 'batch', id: 'batch-1' });
+});
+
+test('status preserves artifact_missing for terminal batch without results', () => {
+  const cfg = loaded();
+  writeBatchHeaderOnly(cfg, '2026-06-18T00:10:00Z');
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: 'codex', thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    status: 'done',
+    artifacts: { ...current.artifacts, batch_id: 'batch-1' },
+  }));
+
+  expect(() => statusPayload(cfg, job.job_id)).toThrow(ApplianceError);
+  try {
+    statusPayload(cfg, job.job_id);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApplianceError);
+    expect((error as ApplianceError).code).toBe('artifact_missing');
+  }
 });
 
 test('status reports a nonterminal job as lost when its worker process is gone', () => {

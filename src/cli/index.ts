@@ -367,7 +367,7 @@ program
   .description('emit grid-manifest.json (scenario × agent × os eligibility)')
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
-  .option('--out <path>', 'output path', 'grid-manifest.json')
+  .option('--out <path>', 'output path', 'results/grid-manifest.json')
   .action((opts: GridManifestOptions) => {
     const outPath = resolve(opts.out);
     writeGridManifest({

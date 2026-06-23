@@ -1,7 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../src/agents/antigravity.ts';
 import {
   BatchHeaderSchema,
@@ -161,6 +167,25 @@ test('runBatch writes header+footer, records, and tallies cost', async () => {
   // Directive skip prints its reason label.
   expect(stream.text).toContain('(requires claude)');
   expect(stream.text).toContain('artifacts:');
+});
+
+test('runBatch writes grid manifest inside the results root', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }],
+    ['claude'],
+  );
+  const { invoke } = fakeInvoke({});
+  await runBatch({
+    scenariosRoot,
+    codingAgentsDir,
+    outRoot,
+    jobs: 1,
+    invoke,
+    heartbeatSeconds: 0,
+  });
+
+  expect(existsSync(join(outRoot, 'grid-manifest.json'))).toBe(true);
+  expect(existsSync(join(dirname(outRoot), 'grid-manifest.json'))).toBe(false);
 });
 
 test('unknown agentFilter throws', async () => {

@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { loadGridManifest } from './manifest.ts';
 import { createDashboard } from './server.ts';
 
@@ -29,7 +29,7 @@ export interface DashboardCliArgs {
 
 // Parse argv (the part AFTER the script name). Flags: --results <dir> (default
 // 'results'), --port <n> (default 8787), --root <repo> (default process.cwd()),
-// --manifest <path> (default <root>/grid-manifest.json). Unknown flags are
+// --manifest <path> (default <results>/grid-manifest.json). Unknown flags are
 // ignored. `cwd` is injectable for testability (defaults to process.cwd()).
 export function parseArgs(
   argv: readonly string[],
@@ -52,7 +52,10 @@ export function parseArgs(
       manifest = argv[++i];
     }
   }
-  const manifestPath = manifest ?? join(root, 'grid-manifest.json');
+  const defaultManifestPath = isAbsolute(resultsDir)
+    ? join(resultsDir, 'grid-manifest.json')
+    : join(root, resultsDir, 'grid-manifest.json');
+  const manifestPath = manifest ?? defaultManifestPath;
   return { resultsDir, port, manifestPath, root };
 }
 

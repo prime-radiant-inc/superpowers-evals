@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
@@ -343,7 +343,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   writeGridManifest({
     scenariosRoot,
     codingAgentsDir,
-    outPath: join(dirname(resolve(outRoot)), 'grid-manifest.json'),
+    outPath: join(resolve(outRoot), 'grid-manifest.json'),
     now: new Date().toISOString(),
   });
   const startedAt = new Date();

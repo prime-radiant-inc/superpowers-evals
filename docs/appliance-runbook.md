@@ -151,7 +151,7 @@ live job until `doctor --json` explains the lock and process state.
 The dashboard is read-only and must not submit or stop jobs:
 
 ```bash
-bun run dashboard --results results --manifest grid-manifest.json
+bun run dashboard --results results --manifest results/grid-manifest.json
 ```
 
 On the shared box, bind it only to loopback or the approved private network.

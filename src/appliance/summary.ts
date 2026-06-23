@@ -332,6 +332,20 @@ function requireBatchArtifacts(batchPath: string): void {
   readRequiredText(join(batchPath, 'results.jsonl'), 'batch');
 }
 
+function emptyBatchSummary(): BatchSummary {
+  return {
+    pass: 0,
+    fail: 0,
+    indeterminate: 0,
+    unknown: 0,
+    skipped: 0,
+  };
+}
+
+function readBatchHeader(batchPath: string): z.infer<typeof BatchHeaderSchema> {
+  return parseJson(BatchHeaderSchema, join(batchPath, 'batch.json'), 'batch');
+}
+
 function verdictFromRun(
   runPath: string,
   step = 'verdict',
@@ -376,19 +390,9 @@ function batchSummary(
   readonly header: z.infer<typeof BatchHeaderSchema>;
   readonly summary: BatchSummary;
 } {
-  const header = parseJson(
-    BatchHeaderSchema,
-    join(batchPath, 'batch.json'),
-    'batch',
-  );
+  const header = readBatchHeader(batchPath);
   const text = readRequiredText(join(batchPath, 'results.jsonl'), 'batch');
-  const summary: MutableBatchSummary = {
-    pass: 0,
-    fail: 0,
-    indeterminate: 0,
-    unknown: 0,
-    skipped: 0,
-  };
+  const summary: MutableBatchSummary = emptyBatchSummary();
   for (const line of text.split('\n')) {
     if (line.trim() === '') {
       continue;
@@ -443,7 +447,7 @@ export function statusPayload(
   }
 
   if (target.kind === 'batch') {
-    const { header, summary } = batchSummary(loaded, target.path);
+    const header = readBatchHeader(target.path);
     const artifactTerminal = header.finished_at !== null;
     const status =
       target.job === null
@@ -451,6 +455,11 @@ export function statusPayload(
           ? 'done'
           : 'running'
         : effectiveJobStatus(loaded, target.job, artifactTerminal);
+    const resultsPath = join(target.path, 'results.jsonl');
+    const summary =
+      existsSync(resultsPath) || artifactTerminal || isTerminalStatus(status)
+        ? batchSummary(loaded, target.path).summary
+        : emptyBatchSummary();
     return {
       id,
       status,
