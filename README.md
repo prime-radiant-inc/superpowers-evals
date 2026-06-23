@@ -88,6 +88,13 @@ bun run quorum run scenarios/triggering-writing-plans --coding-agent claude
 bun run quorum show <run-dir>
 ```
 
+The Gauntlet-Agent (QA driver) authenticates to Anthropic with `ANTHROPIC_API_KEY`
+by default. To drive it from a logged-in Claude subscription instead, set
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the environment (e.g.
+`.env`); the harness passes it through and gauntlet prefers it over the API key.
+Note: a subscription has usage caps sized for interactive use — high-concurrency
+`run-all` batches can hit them, so the API key remains the better fit for heavy load.
+
 Agent names are `claude`, `codex`, `antigravity`, `gemini`, `kimi`,
 `opencode`, `pi`, and `copilot`. Not every scenario is valid for every agent.
 
