@@ -92,15 +92,20 @@ export interface AppendResultRecordArgs {
   readonly codingAgent: string;
   readonly runId: string | null;
   readonly skipped: string | null;
+  readonly credential?: string;
 }
 
-// Append one record to results.jsonl. Omits the `skipped` key when null.
+// Append one record to results.jsonl. Omits the `skipped` key when null and
+// the `credential` key when absent or empty (backward compat for old batches).
 // Serialized with the ", " / ": " separators the on-disk format requires.
 export function appendResultRecord(args: AppendResultRecordArgs): void {
   const rec: ResultRecord = {
     scenario: args.scenario,
     coding_agent: args.codingAgent,
     run_id: args.runId,
+    ...(args.credential !== undefined && args.credential !== ''
+      ? { credential: args.credential }
+      : {}),
     ...(args.skipped !== null ? { skipped: args.skipped } : {}),
   };
   appendFileSync(

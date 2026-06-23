@@ -74,24 +74,6 @@ function readAgentView(
   return view.success ? view.data : undefined;
 }
 
-// Read an agent's default_credential from its YAML, or undefined when the file
-// is missing/malformed or the field is absent.
-function readAgentDefaultCredential(
-  codingAgentsDir: string,
-  agent: string,
-): string | undefined {
-  return readAgentView(codingAgentsDir, agent)?.default_credential;
-}
-
-// Resolve the runtime family for an agent: runtime_family field if present,
-// else the agent name (mirroring agentRuntimeFamily in agent-config.ts).
-function readAgentRuntimeFamily(
-  codingAgentsDir: string,
-  agent: string,
-): string {
-  return readAgentView(codingAgentsDir, agent)?.runtime_family ?? agent;
-}
-
 // Read an agent's os_support from the narrow view, defaulting to ['linux'].
 function readAgentOsSupport(codingAgentsDir: string, agent: string): string[] {
   return readAgentView(codingAgentsDir, agent)?.os_support ?? ['linux'];
@@ -198,21 +180,20 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
   }
 
   // Pre-compute per-agent fields: default credential, runtime_family, os_support.
+  // Parse each agent's YAML exactly once per agent (single readAgentView call).
   const agentDefaultCred = new Map<string, string>();
   const agentRuntimeFamily = new Map<string, string>();
   const agentOsSupport = new Map<string, string[]>();
   for (const agent of agents) {
-    const credName = readAgentDefaultCredential(codingAgentsDir, agent);
+    const view = readAgentView(codingAgentsDir, agent);
+    const credName = view?.default_credential;
     const cred = credName !== undefined ? credentials[credName] : undefined;
     agentDefaultCred.set(
       agent,
       credName !== undefined && cred !== undefined ? credName : '',
     );
-    agentRuntimeFamily.set(
-      agent,
-      readAgentRuntimeFamily(codingAgentsDir, agent),
-    );
-    agentOsSupport.set(agent, readAgentOsSupport(codingAgentsDir, agent));
+    agentRuntimeFamily.set(agent, view?.runtime_family ?? agent);
+    agentOsSupport.set(agent, view?.os_support ?? ['linux']);
   }
 
   const entries: MatrixEntry[] = [];

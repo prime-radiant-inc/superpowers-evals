@@ -426,6 +426,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
       codingAgent: entry.codingAgent,
       runId: null,
       skipped: entry.skippedReason,
+      credential: entry.credential,
     });
   }
 
@@ -483,6 +484,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
         codingAgent: event.entry.codingAgent,
         runId: event.run_id,
         skipped: null,
+        credential: event.entry.credential,
       });
       return;
     }
@@ -497,6 +499,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
           codingAgent: event.entry.codingAgent,
           runId: null,
           skipped: 'rate-limited',
+          credential: event.entry.credential,
         });
       } else {
         counts.stopped += 1;
@@ -507,6 +510,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
           codingAgent: event.entry.codingAgent,
           runId: null,
           skipped: 'stopped',
+          credential: event.entry.credential,
         });
       }
     }
