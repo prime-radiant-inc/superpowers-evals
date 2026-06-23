@@ -378,9 +378,12 @@ new `quorum check` pass (§11). No live evals in CI.
   gitignored inline-secret file; a back-compat alias layer for removed
   model-named agents (§10).
 
-## 17. Open decisions for sign-off
+## 17. Decisions (signed off 2026-06-22)
 
-1. Migration §10 (collapse to one harness per CLI name) is backward-incompatible
-   — confirm before implementation.
-2. §14 run-id consolidation: read identity from `verdict.json` (recommended,
-   deletes the parsers) vs. keep + extend the positional parsers.
+1. **APPROVED** — Migration §10 (collapse to one harness per CLI name) proceeds,
+   accepting the backward-incompatible break (`--coding-agent claude-sonnet`
+   stops resolving; historical model-named result keys shift). No alias layer.
+2. **APPROVED** — §14 run-id consolidation reads identity from the authoritative
+   `verdict.json` field and **deletes** the positional parsers
+   (`parseRunDirName`, the `scan.ts:236` reconstruction, `identityFromRunDirName`).
+   The run-dir name remains human-readable + unique but is no longer parsed.
