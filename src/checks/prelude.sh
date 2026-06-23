@@ -32,3 +32,9 @@ check-transcript() { bun run "$QUORUM_REPO_ROOT/src/cli/check-transcript.ts" "$@
 
 # setup-helpers run <helper> [<helper>...] — the fixture-helper CLI (used by setup.sh).
 setup-helpers() { bun run "$QUORUM_REPO_ROOT/src/setup-helpers/cli.ts" "$@"; }
+
+# inject-user-preference "<text>" — append a user preference to the ambient
+# instructions file the coding-agent-under-test honors (CLAUDE.md / AGENTS.md /
+# GEMINI.md, resolved from QUORUM_CODING_AGENT). Used by user-override scenarios'
+# setup.sh so they stay harness-agnostic. Errors loudly for an unmapped agent.
+inject-user-preference() { bun run "$QUORUM_REPO_ROOT/src/cli/inject-user-preference.ts" "$@"; }

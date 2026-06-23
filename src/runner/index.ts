@@ -1147,8 +1147,13 @@ async function runInnerBody(
   // covered here.
   cleanupDirs.push(...runtimeCleanupDirs(extraEnv));
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
-  // setup-helpers against it).
-  runSetup(a.scenarioDir, workdir, { QUORUM_REPO_ROOT: repoRoot() });
+  // setup-helpers against it). QUORUM_CODING_AGENT lets agent-aware setup steps
+  // (e.g. inject-user-preference) target the ambient instructions file THIS agent
+  // honors, so scenarios stay harness-agnostic.
+  runSetup(a.scenarioDir, workdir, {
+    QUORUM_REPO_ROOT: repoRoot(),
+    QUORUM_CODING_AGENT: a.codingAgent,
+  });
   // Windows runtime: runSetup built the workdir locally; push it to the guest so
   // the SSH-launched agent works in it. (Local model: agent runs here, no push.)
   if (os !== 'linux' && remoteConfig !== undefined) {
