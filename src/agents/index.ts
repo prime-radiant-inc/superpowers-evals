@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
@@ -152,13 +158,7 @@ class ClaudeAgent implements CodingAgent {
           'claude: could not resolve api key from credential',
         );
       }
-      const apiKey = resolution.value;
-      const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
-      writePrivateFileNoFollow(
-        envFile,
-        `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`,
-      );
-      approveClaudeApiKey(claudeJsonPath, apiKey);
+      seedClaudeAuth(configDir, claudeJsonPath, resolution.value);
     } else if (useLegacy) {
       // Legacy path: read the key through the one sanctioned env module (§6.5),
       // never process.env. Empty means unset; fail at the setup stage rather
@@ -169,17 +169,59 @@ class ClaudeAgent implements CodingAgent {
           'ANTHROPIC_API_KEY not set; cannot seed Claude auth',
         );
       }
-      const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
-      // The mode-0600 secret env file goes through the shared O_NOFOLLOW writer
-      // so a pre-placed symlink at the destination cannot redirect the API key.
-      writePrivateFileNoFollow(
-        envFile,
-        `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`,
-      );
-      approveClaudeApiKey(claudeJsonPath, apiKey);
+      seedClaudeAuth(configDir, claudeJsonPath, apiKey);
     }
     return {};
   }
+}
+
+/** Seed all three claude auth artifacts for a run:
+ *  1. `.claude-env` (mode 0600 via O_NOFOLLOW writer) — sourced by the launcher
+ *     to carry ANTHROPIC_API_KEY into the agent process.
+ *  2. `approveClaudeApiKey` — writes the key fingerprint into customApiKeyResponses
+ *     so claude doesn't prompt "Detected a custom API key…" headless.
+ *  3. `api-key-helper.sh` (mode 0700) + `settings.json` with `apiKeyHelper` —
+ *     the helper sits above the keychain in claude's auth precedence, so on macOS
+ *     the launcher can strip ANTHROPIC_API_KEY from the agent env (preventing the
+ *     "use this key?" TUI prompt triggered by a detected env key) while the helper
+ *     still delivers the key without reading the login keychain. */
+function seedClaudeAuth(
+  configDir: string,
+  claudeJsonPath: string,
+  apiKey: string,
+): void {
+  // Step 1: mode-0600 env file the launcher sources.
+  const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+  writePrivateFileNoFollow(
+    envFile,
+    `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`,
+  );
+  // Step 2: approval fingerprint so the "Detected a custom API key" prompt never fires.
+  approveClaudeApiKey(claudeJsonPath, apiKey);
+  // Step 3: apiKeyHelper auth — keychain-free interactive auth. On macOS the env-key
+  // path makes the interactive (TUI) agent read the login keychain at startup
+  // (a Keychain/"use this API key?" prompt per fresh throwaway $HOME). In
+  // claude's auth precedence apiKeyHelper sits ABOVE the keychain and is a
+  // configured helper (not a "detected env API key"), so it authenticates
+  // with no keychain read and no approval prompt. The launcher strips
+  // ANTHROPIC_API_KEY from the agent so this helper — not the env key — is
+  // what claude resolves; the key is embedded in the mode-0700, run-dir
+  // scoped helper because the agent's env has none.
+  const helperPath = join(configDir, 'api-key-helper.sh');
+  writePrivateFileNoFollow(
+    helperPath,
+    `#!/bin/sh\nprintf '%s' ${shellSingleQuote(apiKey)}\n`,
+  );
+  chmodSync(helperPath, 0o700);
+  const settingsPath = join(configDir, 'settings.json');
+  const settings: Record<string, unknown> = existsSync(settingsPath)
+    ? (JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<
+        string,
+        unknown
+      >)
+    : {};
+  settings['apiKeyHelper'] = helperPath;
+  writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
 /** Record a per-config approval for the run's API key so Claude Code does not
