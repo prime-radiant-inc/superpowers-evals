@@ -292,13 +292,15 @@ bun run quorum run-all --coding-agents claude,opencode --credentials sonnet,haik
 `quorum check` validates `credentials.yaml` and each agent's `default_credential`.
 
 The scheduler keys its concurrency cap and rate-limit latch on the credential's
-**limiterKey** (`base_url|api`). Cells sharing an endpoint share one cap and
-one rate-limit latch: a rate-limit response on any cell immediately skips all
-remaining queued cells for that endpoint.
+**limiterKey** — the credential's `base_url` if set, else the credential name,
+joined with its `api` (e.g. `https://…/v1|openai-chat`, or `opus|anthropic` for
+a native credential with no `base_url`). Cells sharing a limiterKey share one
+cap and one rate-limit latch: a rate-limit response on any cell immediately
+skips all remaining queued cells for that endpoint.
 
 Standard named credentials (see `credentials.yaml`): `opus`, `sonnet`, `haiku`
 (Claude harness), `codex_sub` (Codex subscription), `kimi_default`,
-`pi_default`, `opencode_gpt5`, `gemini_default`, `glm_5_2_chat`,
+`pi_default`, `opencode_gpt5`, `gemini_default`, `serf_default`, `glm_5_2_chat`,
 `glm_5_2_responses`, `ollama_local`.
 
 ## Core Commands
