@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { stageSuperpowersPlugin } from '../setup-helpers/plugin-stage.ts';
@@ -58,28 +58,39 @@ const REQUIRED_PLUGIN_FILES: readonly string[] = [
 ];
 
 // C1 OAuth-creds seed (spec docs/superpowers/specs/2026-06-15-per-run-home-
-// isolation.md §5C). agy reads its live, rotating OAuth token from
-// $HOME/.gemini/oauth_creds.json at RUNTIME (not from --gemini_dir). Once the
-// agent runs under the throwaway $HOME, that read would miss the operator's
-// creds, so provisioning copies them from the REAL home into the per-run
-// .gemini. These are the two files gemini's oauth-personal mode copies
-// (GEMINI_OAUTH_CREDENTIAL_FILES); agy shares the .gemini auth layout.
+// isolation.md §5C). agy reads its live OAuth token from
+// $HOME/.gemini/antigravity-cli/antigravity-oauth-token at RUNTIME — NOT from
+// oauth_creds.json (that file is Gemini-personal mode; agy ignores it). Once
+// the agent runs under the throwaway $HOME, that read would miss the operator's
+// token, so provisioning copies it from the REAL home into the per-run .gemini.
+// We keep oauth_creds.json + google_accounts.json in the list because they are
+// the shared .gemini auth layout for gemini.ts sibling and are harmless to
+// copy; but the nested antigravity-oauth-token is the one agy actually uses.
 const AGY_OAUTH_CREDENTIAL_FILES: readonly string[] = [
+  join('antigravity-cli', 'antigravity-oauth-token'),
   'oauth_creds.json',
   'google_accounts.json',
 ];
 
 // Copy agy's live OAuth credential files from the REAL home's .gemini into the
 // per-run .gemini at mode 0600. The source home is AGY_OAUTH_HOME (the test /
-// operator override) else ~/.gemini — mirroring gemini.ts's
-// copyGeminiOauthCredentials, except UNLIKE gemini we TOLERATE a missing source:
-// a missing operator credential is flagged (returned), not a ProvisionError,
-// because seeding is a runtime-auth convenience layered on top of the keyring
-// (which is per-login-user and survives the throwaway HOME), and provisioning
-// must not hard-fail an otherwise-good setup just because creds aren't seeded.
+// operator override) else ~/.gemini.
+//
+// The critical file is antigravity-cli/antigravity-oauth-token — the nested
+// ~500-byte token that agy actually reads for authentication. oauth_creds.json
+// and google_accounts.json are included because they are the shared .gemini
+// Gemini-personal layout (copied by gemini.ts sibling) and harmless to carry,
+// but they do NOT authenticate agy on their own.
+//
+// UNLIKE gemini.ts we TOLERATE a missing source: a missing operator credential
+// is flagged (returned), not a ProvisionError, because seeding is a runtime-auth
+// convenience layered on top of the per-login-user keyring (which survives the
+// throwaway HOME), and provisioning must not hard-fail an otherwise-good setup
+// just because creds aren't seeded.
 // Bun's homedir() snapshots the REAL $HOME at startup and ignores quorum's own
 // per-subprocess HOME pin, so this always reads the operator's real ~/.gemini.
-// Returns the list of credential basenames that were absent at the source.
+// Returns the list of credential paths (relative to AGY_OAUTH_HOME) that were
+// absent at the source.
 export function seedAgyOauthCredentials(configDir: string): string[] {
   const sourceHome = getEnv('AGY_OAUTH_HOME') ?? join(homedir(), '.gemini');
   const destDir = join(configDir, '.gemini');
@@ -90,8 +101,10 @@ export function seedAgyOauthCredentials(configDir: string): string[] {
       missing.push(name);
       continue;
     }
-    mkdirSync(destDir, { recursive: true });
     const dest = join(destDir, name);
+    // For nested paths (e.g. antigravity-cli/antigravity-oauth-token) the dest
+    // parent is <destDir>/antigravity-cli/, not destDir itself.
+    mkdirSync(dirname(dest), { recursive: true });
     // writeFileSync's `mode` only applies on create; chmod after to enforce
     // 0600 even when the file already existed.
     writeFileSync(dest, readFileSync(source, 'utf8'), { mode: 0o600 });

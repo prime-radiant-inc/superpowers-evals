@@ -45,6 +45,12 @@ let prevAgyOauthHome: string | undefined;
 beforeEach(() => {
   setAgyWhichForTesting(() => true);
   agyOauthHomeFixture = mkdtempSync(join(tmpdir(), 'agy-oauth-home-'));
+  // Seed the nested agy OAuth token first — this is the file agy actually reads.
+  mkdirSync(join(agyOauthHomeFixture, 'antigravity-cli'), { recursive: true });
+  writeFileSync(
+    join(agyOauthHomeFixture, 'antigravity-cli', 'antigravity-oauth-token'),
+    'agy-test-token',
+  );
   writeFileSync(
     join(agyOauthHomeFixture, 'oauth_creds.json'),
     '{"access_token":"test"}',
@@ -830,10 +836,11 @@ test('stageAntigravityPluginSource copies the plugin without the evals subtree',
 });
 
 // C1 OAuth-creds seed (per-run-home-isolation spec §5C). agy reads its live
-// OAuth token from $HOME/.gemini/oauth_creds.json at runtime; once the agent
-// runs under the throwaway $HOME (home_config_subdir "."), provisioning must
-// copy the operator's creds from the REAL ~/.gemini (via AGY_OAUTH_HOME) into
-// configDir/.gemini (== $HOME/.gemini) or agy can't authenticate.
+// OAuth token from $HOME/.gemini/antigravity-cli/antigravity-oauth-token at
+// runtime (NOT oauth_creds.json — that is the Gemini-personal layout that agy
+// ignores). Once the agent runs under the throwaway $HOME (home_config_subdir
+// "."), provisioning must copy the real token from the REAL ~/.gemini (via
+// AGY_OAUTH_HOME) into configDir/.gemini or agy can't authenticate.
 
 // Set AGY_OAUTH_HOME around `body`, restoring the prior value even on throw.
 function withAgyOauthHome(
@@ -857,11 +864,16 @@ function withAgyOauthHome(
   }
 }
 
-test('seedAgyOauthCredentials copies both creds into configDir/.gemini at 0600', () => {
+test('seedAgyOauthCredentials copies all three creds (incl. nested token) into configDir/.gemini at 0600', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
   const oauthSource = srcHome.configDir;
-  mkdirSync(oauthSource, { recursive: true });
+  mkdirSync(join(oauthSource, 'antigravity-cli'), { recursive: true });
+  // The critical nested token agy actually reads for authentication.
+  writeFileSync(
+    join(oauthSource, 'antigravity-cli', 'antigravity-oauth-token'),
+    'real-oauth-token-contents',
+  );
   writeFileSync(
     join(oauthSource, 'oauth_creds.json'),
     '{"access_token":"tok"}',
@@ -874,8 +886,19 @@ test('seedAgyOauthCredentials copies both creds into configDir/.gemini at 0600',
   try {
     withAgyOauthHome(oauthSource, () => {
       const missing = seedAgyOauthCredentials(home.configDir);
-      // Both creds present at source -> nothing flagged missing.
+      // All three creds present at source -> nothing flagged missing.
       expect(missing).toEqual([]);
+      // The nested agy OAuth token must land under antigravity-cli/ at 0600.
+      const tokenDst = join(
+        home.configDir,
+        '.gemini',
+        'antigravity-cli',
+        'antigravity-oauth-token',
+      );
+      expect(existsSync(tokenDst)).toBe(true);
+      expect(readFileSync(tokenDst, 'utf8')).toBe('real-oauth-token-contents');
+      expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
+      // The flat Gemini-shared creds also land at 0600.
       for (const name of ['oauth_creds.json', 'google_accounts.json']) {
         const dst = join(home.configDir, '.gemini', name);
         expect(existsSync(dst)).toBe(true);
@@ -891,12 +914,13 @@ test('seedAgyOauthCredentials copies both creds into configDir/.gemini at 0600',
   }
 });
 
-test('seedAgyOauthCredentials tolerates a missing source (returns the absent names, no throw)', () => {
+test('seedAgyOauthCredentials tolerates missing sources (returns the absent names, no throw)', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
-  // Source dir exists but only carries oauth_creds.json (google_accounts.json
-  // absent) — agy may still authenticate via the per-login-user keyring, so a
-  // missing cred is flagged, not fatal.
+  // Source dir exists but only carries oauth_creds.json (the nested token and
+  // google_accounts.json are absent). The token is the critical auth file; agy
+  // may still fall through to the per-login-user keyring, so missing creds are
+  // flagged, not fatal.
   const oauthSource = srcHome.configDir;
   mkdirSync(oauthSource, { recursive: true });
   writeFileSync(
@@ -910,14 +934,29 @@ test('seedAgyOauthCredentials tolerates a missing source (returns the absent nam
       expect(() => {
         missing = seedAgyOauthCredentials(home.configDir);
       }).not.toThrow();
-      expect(missing).toEqual(['google_accounts.json']);
+      // The token (first in list) and google_accounts.json are absent; only
+      // oauth_creds.json was present and gets copied.
+      expect(missing).toEqual([
+        join('antigravity-cli', 'antigravity-oauth-token'),
+        'google_accounts.json',
+      ]);
       // The present cred was still copied at 0600.
       const copied = join(home.configDir, '.gemini', 'oauth_creds.json');
       expect(existsSync(copied)).toBe(true);
       expect(statSync(copied).mode & 0o777).toBe(0o600);
-      // The absent cred was not fabricated.
+      // The absent creds were not fabricated.
       expect(
         existsSync(join(home.configDir, '.gemini', 'google_accounts.json')),
+      ).toBe(false);
+      expect(
+        existsSync(
+          join(
+            home.configDir,
+            '.gemini',
+            'antigravity-cli',
+            'antigravity-oauth-token',
+          ),
+        ),
       ).toBe(false);
     });
   } finally {
@@ -935,8 +974,12 @@ test('seedAgyOauthCredentials tolerates an entirely-missing source dir', () => {
       expect(() => {
         missing = seedAgyOauthCredentials(home.configDir);
       }).not.toThrow();
-      // Both creds flagged; nothing written.
-      expect(missing).toEqual(['oauth_creds.json', 'google_accounts.json']);
+      // All three creds flagged (nested token first, then the flat files); nothing written.
+      expect(missing).toEqual([
+        join('antigravity-cli', 'antigravity-oauth-token'),
+        'oauth_creds.json',
+        'google_accounts.json',
+      ]);
       expect(existsSync(join(home.configDir, '.gemini'))).toBe(false);
     });
   } finally {
@@ -944,12 +987,16 @@ test('seedAgyOauthCredentials tolerates an entirely-missing source dir', () => {
   }
 });
 
-test('provision seeds the C1 OAuth creds into configDir/.gemini', () => {
+test('provision seeds the C1 OAuth creds (incl. agy token) into configDir/.gemini', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
   const spRoot = makeSpRoot(home);
   const oauthSource = srcHome.configDir;
-  mkdirSync(oauthSource, { recursive: true });
+  mkdirSync(join(oauthSource, 'antigravity-cli'), { recursive: true });
+  writeFileSync(
+    join(oauthSource, 'antigravity-cli', 'antigravity-oauth-token'),
+    'provisioned-oauth-token',
+  );
   writeFileSync(
     join(oauthSource, 'oauth_creds.json'),
     '{"access_token":"tok"}',
@@ -965,9 +1012,20 @@ test('provision seeds the C1 OAuth creds into configDir/.gemini', () => {
       withAgyOauthHome(oauthSource, () => {
         const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
         agent.provision(home, runner);
-        // The creds land under the SAME .gemini the plugin/settings seed used —
-        // which, with home_config_subdir ".", is the throwaway $HOME/.gemini agy
-        // reads at runtime.
+        // The nested agy OAuth token lands under the SAME .gemini the
+        // plugin/settings seed used — with home_config_subdir ".", configDir IS
+        // the throwaway $HOME, so configDir/.gemini IS $HOME/.gemini, which is
+        // exactly where agy reads its live OAuth token at runtime.
+        const tokenDst = join(
+          home.configDir,
+          '.gemini',
+          'antigravity-cli',
+          'antigravity-oauth-token',
+        );
+        expect(existsSync(tokenDst)).toBe(true);
+        expect(readFileSync(tokenDst, 'utf8')).toBe('provisioned-oauth-token');
+        expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
+        // The flat Gemini-shared creds also land at 0600.
         for (const name of ['oauth_creds.json', 'google_accounts.json']) {
           const dst = join(home.configDir, '.gemini', name);
           expect(existsSync(dst)).toBe(true);
