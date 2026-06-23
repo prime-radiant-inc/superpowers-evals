@@ -154,17 +154,13 @@ function scanRunDir(resultsDir: string, name: string): ScannedRun | null {
   }
   const runDir = join(resultsDir, name);
   const verdict = readDashboardVerdict(runDir);
-  if (
-    verdict?.scenario !== undefined &&
-    verdict.coding_agent !== undefined &&
-    verdict.os !== undefined
-  ) {
+  if (verdict?.scenario !== undefined && verdict.coding_agent !== undefined) {
     return {
       name,
       scenario: verdict.scenario,
       agent: verdict.coding_agent,
       credential: verdict.credential ?? '',
-      os: verdict.os,
+      os: verdict.os ?? 'linux',
       startedAt,
     };
   }

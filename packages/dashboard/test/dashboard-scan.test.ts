@@ -469,3 +469,33 @@ test('different-credential runs of the same scenario/agent/os are distinct cells
   expect(opusCell?.window[0]?.final).toBe('pass');
   expect(sonnetCell?.window[0]?.final).toBe('fail');
 });
+
+// --- legacy verdict.json compat (pre-C3, no os/credential) -------------------
+
+test('LEGACY COMPAT: verdict with scenario+coding_agent but no os/credential is placed with os=linux, credential=""', () => {
+  const root = mkdtempSync(join(tmpdir(), 'res-legacy-'));
+  const name = runId(
+    's',
+    'claude',
+    'none',
+    'linux',
+    '20260612T000000Z',
+    'aaaa',
+  );
+  writeRun(root, name, {
+    verdict: {
+      final: 'pass',
+      economics: { total_est_cost_usd: 1 },
+      scenario: 's',
+      coding_agent: 'claude',
+      // no os, no credential
+    },
+  });
+  const grid = scan(root);
+  expect(grid.cells.size).toBe(1);
+  const cell = grid.cells.get(cellKey('s', 'claude', '', 'linux'));
+  expect(cell).toBeDefined();
+  expect(cell?.os).toBe('linux');
+  expect(cell?.credential).toBe('');
+  expect(cell?.window[0]?.final).toBe('pass');
+});
