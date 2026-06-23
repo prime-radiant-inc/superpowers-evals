@@ -340,9 +340,7 @@ test('preflight throwaway home also receives the opencode.json provider block', 
       expect(options?.['baseURL']).toBe(
         'https://open.bigmodel.cn/api/paas/v4/',
       );
-      expect(options?.['apiKey']).toBe(
-        'test-api-key-value',
-      );
+      expect(options?.['apiKey']).toBe('test-api-key-value');
 
       // Top-level model ref.
       expect(preflightConfigModel).toBe(`quorum/${cred.model}`);

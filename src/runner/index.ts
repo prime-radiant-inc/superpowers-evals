@@ -1277,6 +1277,11 @@ async function runInnerBody(
   if (cfg.name === 'pi') {
     substitutions['$PI_ENV_FILE'] = join(configDir, 'pi.env');
   }
+  if (cfg.name === 'codex') {
+    const codexEnvFile = join(configDir, 'codex-api.env');
+    substitutions['$CODEX_ENV_FILE'] = codexEnvFile;
+    substitutions['$CODEX_ENV_FILE_SH'] = shellSingleQuote(codexEnvFile);
+  }
   if (family === 'serf') {
     // serf's launcher bakes `--model "$SERF_MODEL"`; resolve it from the YAML
     // model pin, mirroring the $CLAUDE_MODEL pattern. The model-agnostic adapter

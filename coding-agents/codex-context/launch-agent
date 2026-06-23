@@ -10,7 +10,10 @@
 # sessions).
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#   subscription path:
+#     cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#   api-key path (CODEX_ENV_FILE written by provision):
+#     . "$CODEX_ENV_FILE" && cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY CODEX_PROVIDER_API_KEY="$CODEX_PROVIDER_API_KEY" codex --dangerously-bypass-approvals-and-sandbox
 #
 # CODEX_HOME collapse: this launcher sets HOME (via $QUORUM_HOME_ENV) but NOT
 # CODEX_HOME. Codex defaults CODEX_HOME to $HOME/.codex, which is exactly where
@@ -28,8 +31,16 @@
 # $HOME/.codex/auth.json (seeded by the runner), so isolating HOME does not
 # affect login; the scenario repo carries local git identity, so commits are
 # unaffected.
+#
+# Api-key path: when provision writes codex-api.env (api-key credential), the
+# runner substitutes $CODEX_ENV_FILE with the absolute path. Source it
+# conditionally so the subscription path (no file) is unaffected. The sourced
+# file exports CODEX_PROVIDER_API_KEY (deliberately NOT OPENAI_* so the -u scrub
+# below does not strip it), which codex reads as the custom provider's env_key.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+
+[ -f "$CODEX_ENV_FILE" ] && . "$CODEX_ENV_FILE"
 
 exec env \
   -u OPENAI_API_KEY \
