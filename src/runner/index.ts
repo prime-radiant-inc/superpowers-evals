@@ -60,6 +60,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
+import { parseCredentialsFile } from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
   CheckRecord,
@@ -69,6 +70,7 @@ import type {
   RunError,
   RunErrorStage,
 } from '../contracts/verdict.ts';
+import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
@@ -93,16 +95,17 @@ const CAPTURE_RETRY_ATTEMPTS = 3;
 const CAPTURE_RETRY_DELAY_MS = 2000;
 
 // Create and return the per-run output dir
-// <outRoot>/<scenario>-<agent>-<os>-<stamp>-<nonce>/.
+// <outRoot>/<scenario>-<agent>-<credential>-<os>-<stamp>-<nonce>/.
 export function allocateRunDir(
   outRoot: string,
   scenario: string,
   agent: string,
+  credential: string,
   os = 'linux',
 ): string {
   const dir = join(
     outRoot,
-    `${scenario}-${agent}-${os}-${nowStampUtc()}-${hexNonce()}`,
+    `${scenario}-${agent}-${credential}-${os}-${nowStampUtc()}-${hexNonce()}`,
   );
   mkdirSync(dir, { recursive: true });
   return dir;
@@ -336,6 +339,12 @@ export interface RunScenarioArgs {
   readonly outRoot: string;
   readonly skeletonRoot?: string | undefined;
   readonly os?: string | undefined;
+  // Credential name to use for this run. When undefined, the agent yaml's
+  // default_credential is used. When neither is set, the run proceeds without
+  // a credential (provision receives undefined).
+  readonly credential?: string | undefined;
+  // Path to the credentials.yaml file. Defaults to 'credentials.yaml'.
+  readonly credentialsPath?: string | undefined;
   // Caller-supplied run-start stamp (ISO8601). When set, the verdict's
   // started_at uses it so a CLI SIGINT handler and the happy path agree.
   readonly startedAt?: string | undefined;
@@ -796,10 +805,17 @@ export async function runScenario(
   a: RunScenarioArgs,
 ): Promise<RunScenarioResult> {
   const scenario = scenarioName(a.scenarioDir);
+  // Resolve the credential name: explicit arg wins; else agent yaml default_credential.
+  const credentialName = resolveCredentialNameForAgent(
+    a.codingAgentsDir,
+    a.codingAgent,
+    a.credential,
+  );
   const runDir = allocateRunDir(
     a.outRoot,
     scenario,
     a.codingAgent,
+    credentialName ?? 'none',
     a.os ?? 'linux',
   );
   // Fire onRunDir right after allocation so a caller (the CLI SIGINT handler)
@@ -811,7 +827,7 @@ export async function runScenario(
   const startedAt = a.startedAt ?? new Date().toISOString();
   let verdict: FinalVerdict;
   try {
-    verdict = await runInner(a, runDir);
+    verdict = await runInner({ ...a, credential: credentialName }, runDir);
   } catch (err: unknown) {
     const stage = errorStage(err);
     const message = err instanceof Error ? err.message : String(err);
@@ -828,6 +844,7 @@ export async function runScenario(
     coding_agent: a.codingAgent,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
+    credential: credentialName ?? 'none',
   };
   writeFileSync(
     join(runDir, 'verdict.json'),
@@ -978,6 +995,35 @@ async function runInnerBody(
     );
   }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+
+  // Credential resolution: if a credential name was resolved, look it up in the
+  // credentials file. Missing credential name means no credential (runs proceed
+  // without one). A named credential that is absent in the file is a hard error.
+  let resolvedCredential:
+    | import('../contracts/credential.ts').Credential
+    | undefined;
+  if (a.credential !== undefined && a.credential !== '') {
+    const credentialsPath = a.credentialsPath ?? 'credentials.yaml';
+    let rawCreds: unknown;
+    try {
+      rawCreds = (await import('yaml')).parse(
+        readFileSync(credentialsPath, 'utf8'),
+      );
+    } catch (e: unknown) {
+      throw new CodingAgentConfigError(
+        `cannot read credentials file ${credentialsPath}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const creds = parseCredentialsFile(rawCreds);
+    const cred = creds[a.credential];
+    if (cred === undefined) {
+      throw new CodingAgentConfigError(
+        `credential '${a.credential}' not found in ${credentialsPath}`,
+      );
+    }
+    resolvedCredential = cred;
+  }
+
   const osTarget = loadOsTarget(join(repoRoot(), 'os-targets'), os);
   // loadOsTarget guarantees remote is defined for any non-linux os target;
   // extract it to a typed const so downstream hooks can use it without `!`.
@@ -1077,7 +1123,7 @@ async function runInnerBody(
     );
     extraEnv = copilotProvisioning.env;
   } else {
-    extraEnv = agent.provision(home, defaultCommandRunner);
+    extraEnv = agent.provision(home, defaultCommandRunner, resolvedCredential);
   }
   // Track any secret temp dir provisioning created outside the run root (kimi's
   // runtime-env mkdtemp) so the runInner finally reaps it. Pushed AFTER provision

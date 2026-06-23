@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
+import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
 import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
@@ -106,6 +107,7 @@ interface RunOptions {
   readonly codingAgentsDir: string;
   readonly outRoot: string;
   readonly scenariosRoot: string;
+  readonly credential?: string;
 }
 
 interface ShowOptions {
@@ -145,6 +147,10 @@ program
     'root for a bare scenario name',
     'scenarios',
   )
+  .option(
+    '--credential <name>',
+    'credential name (default: agent default_credential)',
+  )
   .action(async (scenario: string, opts: RunOptions) => {
     const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
     if (scn === undefined) {
@@ -153,6 +159,14 @@ program
       );
       process.exit(2);
     }
+    // Resolve the credential name once for the SIGINT path so both the happy
+    // path (via runScenario) and the interrupted path (writeStoppedVerdict)
+    // stamp the same value.
+    const credentialName = resolveCredentialNameForAgent(
+      resolve(opts.codingAgentsDir),
+      opts.codingAgent,
+      opts.credential,
+    );
     // Graceful SIGINT handler. The handler must know the run dir + identity
     // before the await resolves, so the run dir is captured via onRunDir and
     // startedAt is stamped here (shared with the happy path). On SIGINT:
@@ -169,6 +183,9 @@ program
           scenario: scenarioId,
           codingAgent: opts.codingAgent,
           startedAt,
+          ...(credentialName !== undefined
+            ? { credential: credentialName }
+            : {}),
         });
       }
       process.exit(2);
@@ -181,6 +198,7 @@ program
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
       startedAt,
+      credential: opts.credential,
       onRunDir: (dir) => {
         runDirForStop = dir;
       },

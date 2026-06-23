@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
 import type { OsTarget } from '../contracts/os-target.ts';
 import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
@@ -37,7 +38,13 @@ export interface CodingAgent {
   // (codex/gemini/opencode/kimi/antigravity). Declarative adapters
   // (DefaultAgent, ClaudeAgent) ignore it — a 1-arg method satisfies this
   // 2-arg signature via TS method bivariance, so they need no change.
-  provision(home: RunHome, runner: CommandRunner): Record<string, string>;
+  // `credential` is the resolved Credential (B2-B5 adapters consume it;
+  // declarative adapters ignore it via method bivariance).
+  provision(
+    home: RunHome,
+    runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string>;
 }
 
 // Thrown by an agent's provision() when setup fails (missing required input, a

@@ -561,16 +561,11 @@ export class CopilotAgent implements CodingAgent {
     };
   }
 
-  // CodingAgent contract. When the runner does not thread a per-run session id,
-  // provision() mints its own so the binary check, auth resolution, and plugin
-  // staging still run. A caller that needs the full CopilotProvisioning record
-  // calls provisionCopilot() directly with its own session id.
-  provision(
-    home: RunHome,
-    runner: CommandRunner,
-    sessionId?: string,
-  ): Record<string, string> {
-    const id = sessionId ?? crypto.randomUUID();
-    return this.provisionCopilot(home, runner, id).env;
+  // CodingAgent contract. The runner calls provisionCopilot() directly (with
+  // its own minted session id) for copilot; provision() is here only to satisfy
+  // the interface — it mints its own id so the binary check, auth, and plugin
+  // staging still run when a caller invokes it without the session id.
+  provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+    return this.provisionCopilot(home, runner, crypto.randomUUID()).env;
   }
 }
