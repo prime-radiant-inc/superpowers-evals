@@ -12,5 +12,5 @@ post() {
     file-exists 'package.json'
     file-exists 'src/**/*.svelte'
     command-succeeds 'npm test'
-    command-succeeds 'npx --no-install playwright test'
+    command-succeeds 'npx playwright install chromium && npx --no-install playwright test'
 }
