@@ -5,9 +5,7 @@ export function resolveCredentialName(opts: {
   explicit?: string;
   agentDefault: string;
 }): string {
-  return opts.explicit && opts.explicit !== ''
-    ? opts.explicit
-    : opts.agentDefault;
+  return opts.explicit || opts.agentDefault;
 }
 
 export type ApiKeyResolution =

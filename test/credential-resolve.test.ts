@@ -21,6 +21,9 @@ describe('credential resolution', () => {
       'glm',
     );
     expect(resolveCredentialName({ agentDefault: 'x' })).toBe('x');
+    expect(resolveCredentialName({ explicit: '', agentDefault: 'x' })).toBe(
+      'x',
+    );
   });
   test('api_key_env wins; falls back to conventional', () => {
     setProcessEnv('A2_TEST_GLM_KEY', 'k1');
@@ -40,6 +43,9 @@ describe('credential resolution', () => {
     expect(resolveApiKey({ ...base, auth: 'subscription' }, undefined)).toEqual(
       { kind: 'native' },
     );
+    expect(resolveApiKey({ ...base, auth: 'oauth' }, undefined)).toEqual({
+      kind: 'native',
+    });
   });
   test('missing api-key throws', () => {
     // Use a name we never set so getEnv returns undefined
