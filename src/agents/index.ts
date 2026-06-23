@@ -14,7 +14,6 @@ import {
   type ApiKeyResolution,
   resolveApiKey,
 } from '../credentials/resolve.ts';
-import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
 import { WindowsClaudeAgent } from './claude-windows.ts';
 import { CodexAgent } from './codex.ts';
@@ -139,14 +138,7 @@ class ClaudeAgent implements CodingAgent {
     // writes the mode-0600 .claude-env the launcher sources and records the
     // API-key approval fingerprint so claude doesn't prompt "Detected a custom
     // API key…" headless.
-    // Falls back to the legacy required_env gate for backward compatibility with
-    // callers that have not yet been migrated to credentials.
-    const useCredential =
-      credential !== undefined && credential.auth === 'api-key';
-    const useLegacy =
-      !useCredential && this.config.required_env.includes('ANTHROPIC_API_KEY');
-
-    if (useCredential) {
+    if (credential !== undefined && credential.auth === 'api-key') {
       let resolution: ApiKeyResolution;
       try {
         resolution = resolveApiKey(credential, 'ANTHROPIC_API_KEY');
@@ -159,17 +151,6 @@ class ClaudeAgent implements CodingAgent {
         );
       }
       seedClaudeAuth(configDir, claudeJsonPath, resolution.value);
-    } else if (useLegacy) {
-      // Legacy path: read the key through the one sanctioned env module (§6.5),
-      // never process.env. Empty means unset; fail at the setup stage rather
-      // than silently writing a blank key.
-      const apiKey = getEnv('ANTHROPIC_API_KEY') ?? '';
-      if (apiKey === '') {
-        throw new ProvisionError(
-          'ANTHROPIC_API_KEY not set; cannot seed Claude auth',
-        );
-      }
-      seedClaudeAuth(configDir, claudeJsonPath, apiKey);
     }
     return {};
   }

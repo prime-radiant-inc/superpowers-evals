@@ -103,11 +103,11 @@ function validateAgentConfigStatic(
     );
   }
 
-  // A claude family requires a model; any declared model must not be blank
-  // (avoids launching `claude --model ''`).
-  if (family === 'claude' && cfg.model === undefined) {
+  // A claude family requires a default_credential (the credential supplies the
+  // model); any declared model must not be blank (avoids `claude --model ''`).
+  if (family === 'claude' && cfg.default_credential === undefined) {
     throw new CodingAgentConfigError(
-      `${path}: claude runtime_family requires model`,
+      `${path}: claude runtime_family requires default_credential`,
     );
   }
   if (cfg.model !== undefined && cfg.model.trim() === '') {
