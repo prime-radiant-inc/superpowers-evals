@@ -147,7 +147,10 @@ export function cellHtml(view: CellView): string {
   const id = esc(view.cell_id);
   // Column-highlight (app.js) keys on data-agent + data-os — attribute-matched,
   // not positional — so the highlight survives the multi-OS two-tier header.
-  const col = `data-agent="${esc(view.agent)}" data-os="${esc(view.os)}"`;
+  // data-credential rides along so the credential sub-column is addressable too.
+  const col =
+    `data-agent="${esc(view.agent)}" ` +
+    `data-credential="${esc(view.credential)}" data-os="${esc(view.os)}"`;
   const open = `<td class="c" id="${id}" sse-swap="${id}" hx-swap="outerHTML" ${col}>`;
 
   if (view.state === 'empty') {
@@ -240,25 +243,32 @@ export function tallyHtml(tally: HeaderTally): string {
 
 export interface GridArgs {
   readonly scenarios: readonly string[];
-  // Per-agent column groups, in display order. Each group spans its sorted OS
-  // sub-columns (one body cell per OS).
+  // Per-agent column groups, in display order. Each group spans its sorted
+  // (credential, os) sub-columns (one body cell per sub-column).
   readonly agentColumns: readonly AgentColumns[];
-  // Keyed by 3-part cellKey(scenario, agent, os). Every (scenario, agent, os)
-  // sub-column in the cartesian product should be present.
+  // Keyed by 4-part cellKey(scenario, agent, credential, os). Every
+  // (scenario, agent, credential, os) sub-column in the cartesian product
+  // should be present.
   readonly views: ReadonlyMap<string, CellView>;
   // True when the displayed OS set is exactly {linux}: the OS-label row stays in
   // the DOM (for stable column indices) but is CSS-collapsed.
   readonly collapseOsRow: boolean;
 }
 
-// A defensive empty cell for an (scenario, agent, os) sub-column the views map
-// doesn't carry. The server populates every sub-column, so this is defensive
-// only — but it keeps a partial views map rendering a full grid.
-function fallbackCell(scenario: string, agent: string, os: string): CellView {
+// A defensive empty cell for a (scenario, agent, credential, os) sub-column the
+// views map doesn't carry. The server populates every sub-column, so this is
+// defensive only — but it keeps a partial views map rendering a full grid.
+function fallbackCell(
+  scenario: string,
+  agent: string,
+  credential: string,
+  os: string,
+): CellView {
   return {
-    cell_id: cellId(scenario, agent, os),
+    cell_id: cellId(scenario, agent, credential, os),
     scenario,
     agent,
+    credential,
     os,
     state: 'empty',
     status: 'not_run',
@@ -288,23 +298,25 @@ export function gridHtml(args: GridArgs): string {
     );
   }
 
-  // Row 1: agent groups, each spanning its OS sub-columns.
+  // Row 1: agent groups, each spanning its (credential, os) sub-columns.
   const agentHeader = agentColumns
     .map(
       (ac) =>
         `<th class="agent-col" data-agent="${esc(ac.agent)}" ` +
-        `colspan="${ac.oses.length}" scope="colgroup">${esc(ac.agent)}</th>`,
+        `colspan="${ac.subcols.length}" scope="colgroup">${esc(ac.agent)}</th>`,
     )
     .join('');
 
-  // Row 2: one OS-label sub-column per (agent, os). Always in the DOM; CSS
+  // Row 2: one OS-label sub-column per (agent, credential, os). The label shows
+  // the OS; the credential rides in data-credential. Always in the DOM; CSS
   // collapses it when collapseOsRow is set.
   const osHeader = agentColumns
     .flatMap((ac) =>
-      ac.oses.map(
-        (os) =>
+      ac.subcols.map(
+        (sc) =>
           `<th class="os-col" data-agent="${esc(ac.agent)}" ` +
-          `data-os="${esc(os)}" scope="col">${esc(os)}</th>`,
+          `data-credential="${esc(sc.credential)}" ` +
+          `data-os="${esc(sc.os)}" scope="col">${esc(sc.os)}</th>`,
       ),
     )
     .join('');
@@ -314,10 +326,10 @@ export function gridHtml(args: GridArgs): string {
     .map((scenario) => {
       const cells = agentColumns
         .flatMap((ac) =>
-          ac.oses.map((os) => {
+          ac.subcols.map((sc) => {
             const view =
-              views.get(cellKey(scenario, ac.agent, os)) ??
-              fallbackCell(scenario, ac.agent, os);
+              views.get(cellKey(scenario, ac.agent, sc.credential, sc.os)) ??
+              fallbackCell(scenario, ac.agent, sc.credential, sc.os);
             return cellHtml(view);
           }),
         )

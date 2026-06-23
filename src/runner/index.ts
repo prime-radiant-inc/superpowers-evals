@@ -82,7 +82,7 @@ import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
-import { writePhase } from './phase.ts';
+import { type RunIdentity, writePhase } from './phase.ts';
 
 // RunnerError lives in ./errors.ts so context.ts can throw it without a
 // runner<->context import cycle. Re-exported here so it is part of this module's
@@ -828,9 +828,19 @@ export async function runScenario(
   // startedAt: caller-supplied stamp wins so the handler and the happy path
   // agree on the same value; else stamp it here.
   const startedAt = a.startedAt ?? new Date().toISOString();
+  const identity: RunIdentity = {
+    scenario,
+    agent: a.codingAgent,
+    credential: credentialName ?? 'none',
+    os: a.os ?? 'linux',
+  };
   let verdict: FinalVerdict;
   try {
-    verdict = await runInner({ ...a, credential: credentialName }, runDir);
+    verdict = await runInner(
+      { ...a, credential: credentialName },
+      runDir,
+      identity,
+    );
   } catch (err: unknown) {
     const stage = errorStage(err);
     const message = err instanceof Error ? err.message : String(err);
@@ -848,6 +858,7 @@ export async function runScenario(
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     credential: credentialName ?? 'none',
+    os: a.os ?? 'linux',
   };
   writeFileSync(
     join(runDir, 'verdict.json'),
@@ -954,11 +965,12 @@ function resolveLaunchCwd(workdir: string): string {
 async function runInner(
   a: RunScenarioArgs,
   runDir: string,
+  identity: RunIdentity,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
   try {
-    return await runInnerBody(a, runDir, cleanupDirs);
+    return await runInnerBody(a, runDir, cleanupDirs, identity);
   } finally {
     cleanupAgentRuntime(cleanupDirs);
     // Windows runtime: best-effort removal of the per-run guest directory.
@@ -982,8 +994,9 @@ async function runInnerBody(
   a: RunScenarioArgs,
   runDir: string,
   cleanupDirs: string[],
+  identity: RunIdentity,
 ): Promise<FinalVerdict> {
-  writePhase(runDir, 'setup');
+  writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
   // Early guards run BEFORE any side effect (workdir creation, provisioning,
   // setup.sh, gauntlet).
@@ -1332,7 +1345,7 @@ async function runInnerBody(
   const gauntletEnvBase =
     cfg.name === 'copilot' ? copilotGauntletEnv(envSnapshot()) : undefined;
 
-  writePhase(runDir, 'agent');
+  writePhase(runDir, 'agent', identity);
 
   // antigravity: agy reads auth from the live, token-rotating ~/.gemini/
   // oauth_creds.json. A SIGKILL/tmux-kill during a refresh can corrupt it and
@@ -1554,7 +1567,7 @@ async function runInnerBody(
   }
 
   // post-checks: again a crash is an error stage, a failure flows to compose.
-  writePhase(runDir, 'checks');
+  writePhase(runDir, 'checks', identity);
   const post = await runPhase({
     checksSh,
     phase: 'post',

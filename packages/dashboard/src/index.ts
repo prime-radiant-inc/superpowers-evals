@@ -57,14 +57,13 @@ export function parseArgs(
 }
 
 export function startDashboard(args: StartDashboardArgs): DashboardHandle {
-  // The grid manifest is the scenario × agent × os eligibility matrix; null when
-  // absent/malformed (a results-only board). Its `agents` are the read-side
-  // longest-suffix list a run dir's agent segment resolves against.
+  // The grid manifest is the scenario × agent × credential × os eligibility
+  // matrix; null when absent/malformed (a results-only board). Identity comes
+  // from each run's verdict.json / phase.json, so the dashboard needs no
+  // known-agent vocabulary.
   const manifest = loadGridManifest(args.manifestPath);
-  const knownAgents = manifest?.agents ?? [];
   const dash = createDashboard({
     resultsRoot: args.resultsRoot,
-    knownAgents,
     manifest,
   });
   // idleTimeout: 0 disables Bun.serve's per-request idle timeout (default 10s).

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { FinalVerdictSchema } from '../src/contracts/verdict.ts';
 
-// The schema accepts the four additive identity fields, all optional.
+// The schema accepts the additive identity fields, all optional.
 test('FinalVerdictSchema accepts identity fields', () => {
   const v = {
     schema: 1,
@@ -15,8 +15,13 @@ test('FinalVerdictSchema accepts identity fields', () => {
     coding_agent: 'claude',
     started_at: '2026-06-12T00:00:00.000Z',
     finished_at: '2026-06-12T00:01:00.000Z',
+    credential: 'opus',
+    os: 'linux',
   };
-  expect(FinalVerdictSchema.parse(v).scenario).toBe('demo');
+  const parsed = FinalVerdictSchema.parse(v);
+  expect(parsed.scenario).toBe('demo');
+  expect(parsed.credential).toBe('opus');
+  expect(parsed.os).toBe('linux');
 });
 
 // A verdict with no identity fields still parses (old runs).

@@ -22,4 +22,9 @@ test('grid manifest fans agents across os_support and carries skip reasons', () 
   expect(claudeS2?.eligible).toBe(false);
   expect(claudeS2?.skipped_reason).toBe('directive');
   expect(m.scenarios).toContain('s1');
+  // Every cell carries the credential dimension (''/the agent default here,
+  // since no credentials map was supplied).
+  for (const cell of m.cells) {
+    expect(typeof cell.credential).toBe('string');
+  }
 });

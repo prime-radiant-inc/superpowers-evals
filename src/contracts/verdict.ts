@@ -57,12 +57,14 @@ export const FinalVerdictSchema = z.object({
   checks: z.array(CheckRecordSchema),
   error: RunErrorSchema.nullable(),
   economics: z.record(z.unknown()).nullable(),
-  // Self-identity (dashboard read-side). Optional so a verdict lacking these
-  // fields falls back to run-dir-name parsing. The runner writes all five.
+  // Self-identity (dashboard read-side). Optional so an old verdict lacking
+  // these fields still parses. The runner writes all six; the dashboard and
+  // cost report read identity from here (run-dir-name parsing was retired).
   scenario: z.string().optional(),
   coding_agent: z.string().optional(),
   started_at: z.string().optional(),
   finished_at: z.string().optional(),
   credential: z.string().optional(),
+  os: z.string().optional(),
 });
 export type FinalVerdict = z.infer<typeof FinalVerdictSchema>;

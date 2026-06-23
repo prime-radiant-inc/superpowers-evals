@@ -26,7 +26,8 @@ interface Fixture {
 }
 
 // A dir name parts → dir path. Stamps are lexicographically ordered by index so
-// "newest" is the highest stamp.
+// "newest" is the highest stamp. The credential segment is always 'none' in this
+// fixture (the dashboard reads identity from verdict/phase, not the name).
 function runDir(
   resultsRoot: string,
   scenario: string,
@@ -35,15 +36,38 @@ function runDir(
   nonce: string,
 ): string {
   const stamp = `2026061${idx}T000000Z`;
-  return join(resultsRoot, `${scenario}-${agent}-linux-${stamp}-${nonce}`);
+  return join(resultsRoot, `${scenario}-${agent}-none-linux-${stamp}-${nonce}`);
+}
+
+// Identity written into every verdict/phase so the scanner can place the run.
+// The fixture derives scenario/agent from the run-dir basename's leading
+// segments (scenario then agent), since those are single-token here.
+function identityFor(dir: string): {
+  scenario: string;
+  agent: string;
+  credential: string;
+  os: string;
+} {
+  const base = dir.split('/').at(-1) ?? '';
+  const [scenario = '', agent = ''] = base.split('-');
+  return { scenario, agent, credential: 'none', os: 'linux' };
 }
 
 function writeVerdict(dir: string, final: string, cost: number | null): void {
   mkdirSync(dir, { recursive: true });
   const economics = cost !== null ? { total_est_cost_usd: cost } : null;
+  const id = identityFor(dir);
   writeFileSync(
     join(dir, 'verdict.json'),
-    JSON.stringify({ final, economics, finished_at: '2026-06-12T00:00:00Z' }),
+    JSON.stringify({
+      final,
+      economics,
+      finished_at: '2026-06-12T00:00:00Z',
+      scenario: id.scenario,
+      coding_agent: id.agent,
+      credential: id.credential,
+      os: id.os,
+    }),
   );
 }
 
@@ -51,7 +75,12 @@ function writePhaseOnly(dir: string, phase: string, pid: number): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'phase.json'),
-    JSON.stringify({ phase, updated_at: '2026-06-12T00:00:00Z', pid }),
+    JSON.stringify({
+      phase,
+      updated_at: '2026-06-12T00:00:00Z',
+      pid,
+      identity: identityFor(dir),
+    }),
   );
 }
 
@@ -63,6 +92,7 @@ function writeManifest(root: string): string {
     KNOWN_AGENTS.map((agent) => ({
       scenario,
       agent,
+      credential: 'none',
       os: 'linux',
       eligible: true,
       skipped_reason: null,
@@ -183,7 +213,7 @@ test('GET / renders the grid with the tally header and every cell id', async () 
   // Every (scenario, agent, os) cell id is present (cartesian product).
   for (const s of SCENARIOS) {
     for (const a of KNOWN_AGENTS) {
-      expect(html).toContain(`id="cell-${s}-${a}-linux"`);
+      expect(html).toContain(`id="cell-${s}-${a}-none-linux"`);
     }
   }
 });
@@ -193,13 +223,13 @@ test('GET / reflects pass/fail/indeterminate and the live in-flight cell', async
   const html = await fetch(`${base}/`).then((r) => r.text());
 
   // good x claude pass -> b-pass band, cost bottom.
-  expect(sliceCell(html, 'cell-good-claude-linux')).toContain('b-pass');
+  expect(sliceCell(html, 'cell-good-claude-none-linux')).toContain('b-pass');
   // good x codex fail -> b-fail band.
-  expect(sliceCell(html, 'cell-good-codex-linux')).toContain('b-fail');
+  expect(sliceCell(html, 'cell-good-codex-none-linux')).toContain('b-fail');
   // flaky x claude indeterminate -> b-indet band.
-  expect(sliceCell(html, 'cell-flaky-claude-linux')).toContain('b-indet');
+  expect(sliceCell(html, 'cell-flaky-claude-none-linux')).toContain('b-indet');
   // flaky x codex live -> running class + the phase word.
-  const liveTd = sliceCell(html, 'cell-flaky-codex-linux');
+  const liveTd = sliceCell(html, 'cell-flaky-codex-none-linux');
   expect(liveTd).toContain('running');
   expect(liveTd).toContain('agent');
 });
@@ -209,12 +239,12 @@ test('GET / shows the drift marker and omits the abandoned cell', async () => {
   const html = await fetch(`${base}/`).then((r) => r.text());
 
   // drift x claude carries the ▲ marker.
-  expect(sliceCell(html, 'cell-drift-claude-linux')).toContain('▲');
+  expect(sliceCell(html, 'cell-drift-claude-none-linux')).toContain('▲');
 
   // drift x codex is abandoned (dead pid, no verdict) -> renders as not_run (the
   // middle-dot placeholder), NOT a running/done cell. Slice out just that cell's
   // <td>…</td> so the assertion can't bleed into a later cell's bands.
-  const codexTd = sliceCell(html, 'cell-drift-codex-linux');
+  const codexTd = sliceCell(html, 'cell-drift-codex-none-linux');
   expect(codexTd).toContain('status-not_run');
   expect(codexTd).not.toContain('b-pass');
   expect(codexTd).not.toContain('running');
@@ -282,7 +312,7 @@ test('an SSE cell frame is delivered after a scanner tick mutates a dir', async 
 
   // Land a verdict.json into the previously-live (flaky x codex) dir so the next
   // scanner tick sees its signature change (running -> verdict-appeared) and
-  // publishes a cell-flaky-codex-linux frame.
+  // publishes a cell-flaky-codex-none-linux frame.
   writeVerdict(
     runDir(fixture.resultsRoot, 'flaky', 'codex', 0, 'dddd'),
     'pass',
@@ -305,12 +335,12 @@ test('an SSE cell frame is delivered after a scanner tick mutates a dir', async 
     if (chunk.value !== undefined) {
       buf += decoder.decode(chunk.value, { stream: true });
     }
-    if (buf.includes('event: cell-flaky-codex-linux')) {
+    if (buf.includes('event: cell-flaky-codex-none-linux')) {
       sawCellFrame = true;
     }
   }
   await reader.cancel();
   expect(sawCellFrame).toBe(true);
   // The frame's data line is single-line HTML carrying the cell id.
-  expect(buf).toContain('cell-flaky-codex-linux');
+  expect(buf).toContain('cell-flaky-codex-none-linux');
 });

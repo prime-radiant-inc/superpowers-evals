@@ -11,9 +11,14 @@ import { z } from 'zod';
 const GridManifestCellSchema = z.object({
   scenario: z.string(),
   agent: z.string(),
+  // The credential name this cell runs under. Defaulted so a pre-credential
+  // manifest still parses ('' = the agent's default / credential-less).
+  credential: z.string().default(''),
   os: z.string(),
   eligible: z.boolean(),
-  skipped_reason: z.enum(['directive', 'draft', 'tier']).nullable(),
+  skipped_reason: z
+    .enum(['directive', 'draft', 'tier', 'harness', 'os'])
+    .nullable(),
 });
 
 const GridManifestSchema = z.object({

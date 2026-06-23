@@ -52,6 +52,7 @@ const VerdictViewSchema = z
   .object({
     scenario: z.unknown(),
     coding_agent: z.unknown(),
+    credential: z.unknown(),
     started_at: z.unknown(),
     finished_at: z.unknown(),
     economics: EconViewSchema.nullish(),
@@ -84,6 +85,10 @@ export interface SideCost {
 export interface CostRow {
   readonly scenario: string;
   readonly agent: string;
+  // The credential name this run used ('' when credential-less / unknown). The
+  // cost dimension so a pi × {A..E} credential sweep is not one indistinguishable
+  // row per (scenario, agent).
+  readonly credential: string;
   readonly coding: SideCost;
   readonly gauntlet: SideCost;
   // The run's wall-clock span (finished_at − started_at) in ms, or null when
@@ -141,18 +146,20 @@ function wallClockMs(started: unknown, finished: unknown): number | null {
   return span >= 0 ? span : null;
 }
 
-// Build a CostRow from a parsed verdict view. scenario/agent prefer the
-// verdict's own identity fields; the caller supplies fallbacks (the batch
-// record's scenario/agent, or a run-dir-name parse) for older verdicts.
+// Build a CostRow from a parsed verdict view. scenario/agent/credential prefer
+// the verdict's own identity fields; the caller supplies fallbacks (the batch
+// record's scenario/agent/credential) for older verdicts.
 function rowFromVerdict(
   verdict: VerdictView,
   fallbackScenario: string,
   fallbackAgent: string,
+  fallbackCredential: string,
 ): CostRow {
   const econ = verdict.economics ?? undefined;
   return {
     scenario: strOrNull(verdict.scenario) ?? fallbackScenario,
     agent: strOrNull(verdict.coding_agent) ?? fallbackAgent,
+    credential: strOrNull(verdict.credential) ?? fallbackCredential,
     coding: sideCost(econ?.coding_agent),
     gauntlet: sideCost(econ?.gauntlet),
     wallClockMs: wallClockMs(verdict.started_at, verdict.finished_at),
@@ -161,9 +168,20 @@ function rowFromVerdict(
 
 // A run dir with no readable/parseable verdict.json -> a fully-unpriced row
 // (the eval ran but its economics are unavailable; never a crash).
-function unreadableRow(scenario: string, agent: string): CostRow {
+function unreadableRow(
+  scenario: string,
+  agent: string,
+  credential: string,
+): CostRow {
   const blank = sideCost(null);
-  return { scenario, agent, coding: blank, gauntlet: blank, wallClockMs: null };
+  return {
+    scenario,
+    agent,
+    credential,
+    coding: blank,
+    gauntlet: blank,
+    wallClockMs: null,
+  };
 }
 
 function readVerdictView(runDir: string): VerdictView | null {
@@ -187,6 +205,7 @@ const BatchResultSchema = z
   .object({
     scenario: z.string(),
     coding_agent: z.string(),
+    credential: z.string().optional(),
     run_id: z.string().nullable().optional(),
     skipped: z.unknown().optional(),
   })
@@ -228,42 +247,22 @@ function batchRows(batchDir: string): CostRow[] {
     if (runId === null) {
       continue;
     }
+    const credential = rec.credential ?? '';
     const view = readVerdictView(join(outRoot, runId));
     rows.push(
       view === null
-        ? unreadableRow(rec.scenario, rec.coding_agent)
-        : rowFromVerdict(view, rec.scenario, rec.coding_agent),
+        ? unreadableRow(rec.scenario, rec.coding_agent, credential)
+        : rowFromVerdict(view, rec.scenario, rec.coding_agent, credential),
     );
   }
   return rows;
 }
 
-// Parse scenario/agent from a run-dir name (`<scenario>-<agent>-<os>-<stamp>-<nonce>`,
-// allocateRunDir): the last two dash-segments are the stamp + nonce, the third
-// from last is the os, the fourth from last is the agent, the rest is the
-// scenario. A name that doesn't match falls back to ('?', '?') — only used
-// when the verdict lacks identity fields.
-function identityFromRunDirName(name: string): {
-  scenario: string;
-  agent: string;
-} {
-  const parts = name.split('-');
-  if (parts.length < 5) {
-    return { scenario: '?', agent: '?' };
-  }
-  const agent = parts[parts.length - 4] ?? '?';
-  const scenario = parts.slice(0, parts.length - 4).join('-');
-  return { scenario: scenario === '' ? '?' : scenario, agent };
-}
-
-function runDirName(dir: string): string {
-  const last = dir.split('/').at(-1);
-  return last !== undefined && last !== '' ? last : dir;
-}
-
 // Resolve a target (single run dir, batch dir, batch id, scenario prefix, or
 // undefined for newest) to its cost rows. A batch -> one row per produced run;
-// any other target -> a single row.
+// any other target -> a single row. Identity comes from the verdict's own
+// fields; a run whose verdict.json is missing/unparseable has no recoverable
+// identity (the run-dir-name parser was retired) -> '?' placeholders.
 export function loadCostRows(
   target: string | undefined,
   resultsRoot: string,
@@ -273,11 +272,10 @@ export function loadCostRows(
     return batchRows(dir);
   }
   const view = readVerdictView(dir);
-  const fallback = identityFromRunDirName(runDirName(dir));
   if (view === null) {
-    return [unreadableRow(fallback.scenario, fallback.agent)];
+    return [unreadableRow('?', '?', '')];
   }
-  return [rowFromVerdict(view, fallback.scenario, fallback.agent)];
+  return [rowFromVerdict(view, '?', '?', '')];
 }
 
 // ── formatting helpers (mirror src/cli/render.ts _fmt_*) ─────────────────
@@ -366,6 +364,11 @@ function codingColumns(withGauntlet: boolean): Column[] {
   const cols: Column[] = [
     { header: 'scenario', cell: (r) => r.scenario, alignRight: false },
     { header: 'agent', cell: (r) => r.agent, alignRight: false },
+    {
+      header: 'credential',
+      cell: (r) => (r.credential === '' ? '—' : r.credential),
+      alignRight: false,
+    },
     {
       header: 'cost',
       cell: (r) => fmtSideCost(r.coding),
@@ -508,6 +511,7 @@ interface SideJson {
 interface RowJson {
   readonly scenario: string;
   readonly agent: string;
+  readonly credential: string;
   readonly coding: SideJson;
   readonly gauntlet: SideJson;
   readonly wall_clock_ms: number | null;
@@ -543,6 +547,7 @@ export function costsJson(rows: readonly CostRow[]): CostsJson {
     rows: rows.map((r) => ({
       scenario: r.scenario,
       agent: r.agent,
+      credential: r.credential,
       coding: sideJson(r.coding),
       gauntlet: sideJson(r.gauntlet),
       wall_clock_ms: r.wallClockMs,

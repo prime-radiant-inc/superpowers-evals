@@ -40,6 +40,7 @@ function cell(over: Partial<Cell> = {}): Cell {
   return {
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     window: [],
     running: null,
@@ -50,17 +51,18 @@ function cell(over: Partial<Cell> = {}): Cell {
 function grid(cells: Cell[]): Grid {
   const map = new Map<string, Cell>();
   for (const c of cells) {
-    map.set(cellKey(c.scenario, c.agent, c.os), c);
+    map.set(cellKey(c.scenario, c.agent, c.credential, c.os), c);
   }
   return { cells: map };
 }
 
-// Build the (scenario, agent, os) identities for a list of cells — what
-// headerTally now iterates.
+// Build the (scenario, agent, credential, os) identities for a list of cells —
+// what headerTally now iterates.
 function identitiesOf(cells: Cell[]) {
   return cells.map((c) => ({
     scenario: c.scenario,
     agent: c.agent,
+    credential: c.credential,
     os: c.os,
   }));
 }
@@ -178,11 +180,11 @@ test('headerTally counts the latest verdict per identity and not_run for absence
     window: [rec({ final: 'fail' })],
   });
   const g = grid([passCell, failCell]);
-  // 3 identities (a/b/c x claude/linux); a=pass, b=fail, c=absent(not_run).
+  // 3 identities (a/b/c x claude/none/linux); a=pass, b=fail, c=absent(not_run).
   const identities = [
-    { scenario: 'a', agent: 'claude', os: 'linux' },
-    { scenario: 'b', agent: 'claude', os: 'linux' },
-    { scenario: 'c', agent: 'claude', os: 'linux' },
+    { scenario: 'a', agent: 'claude', credential: 'none', os: 'linux' },
+    { scenario: 'b', agent: 'claude', credential: 'none', os: 'linux' },
+    { scenario: 'c', agent: 'claude', credential: 'none', os: 'linux' },
   ];
   const t = headerTally(g, identities, 3, 1, 3, noManifest);
   expect(t.scenarios).toBe(3);
@@ -235,10 +237,10 @@ test('headerTally counts ineligible identities separately from not_run', () => {
   // One empty-window cell that the manifest marks ineligible, one that is
   // eligible-but-unrun. They must NOT collapse into one not_run figure.
   const identities = [
-    { scenario: 'a', agent: 'claude', os: 'linux' },
-    { scenario: 'b', agent: 'claude', os: 'linux' },
+    { scenario: 'a', agent: 'claude', credential: 'none', os: 'linux' },
+    { scenario: 'b', agent: 'claude', credential: 'none', os: 'linux' },
   ];
-  const manifestCellFor = (_s: string, _a: string, _os: string) =>
+  const manifestCellFor = (_s: string, _a: string, _c: string, _os: string) =>
     _s === 'a'
       ? { eligible: false, skipped_reason: 'directive' as const }
       : { eligible: true, skipped_reason: null };
@@ -250,13 +252,20 @@ test('headerTally counts ineligible identities separately from not_run', () => {
 // --- cellView ----------------------------------------------------------------
 
 test('cellView: empty cell renders state empty with em-dash bottom', () => {
-  const v = cellView(cell({ window: [] }), 's', 'claude', 'linux', null);
+  const v = cellView(
+    cell({ window: [] }),
+    's',
+    'claude',
+    'none',
+    'linux',
+    null,
+  );
   expect(v.state).toBe('empty');
   expect(v.bottom).toBe('—');
   expect(v.slots).toEqual([]);
   expect(v.opacity).toBe(1);
   expect(v.card).toBeNull();
-  expect(v.cell_id).toBe('cell-s-claude-linux');
+  expect(v.cell_id).toBe('cell-s-claude-none-linux');
 });
 
 test('cellView: pure running cell shimmers the newest slot, phase bottom', () => {
@@ -264,7 +273,7 @@ test('cellView: pure running cell shimmers the newest slot, phase bottom', () =>
     window: [],
     running: { run_id: 'r', phase: 'agent' },
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('agent');
   expect(v.opacity).toBe(1);
@@ -283,7 +292,7 @@ test('cellView: done cell shows face_cost + stale opacity (bottom is "—")', ()
       rec({ cost_usd: 2, final: 'fail', finished_at: '2026-06-12T00:00:00Z' }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null, now);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null, now);
   expect(v.state).toBe('done');
   // bottom is '—' for done cells; the face is driven by face_time + face_cost
   expect(v.bottom).toBe('—');
@@ -303,7 +312,7 @@ test('cellView: done cell shows face_cost + stale opacity (bottom is "—")', ()
 
 test('cellView: done cell with unknown cost shows face_cost "$—" (never "$0.00")', () => {
   const c = cell({ window: [rec({ cost_usd: null, final: 'pass' })] });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   // face_cost carries the agent-scoped cost; "$—" means cost unknown, not $0.
   expect(v.face_cost).toBe('$—');
   expect(v.bottom).toBe('—');
@@ -314,7 +323,7 @@ test('cellView: running on top of history shimmers newest, phase bottom', () => 
     window: [rec({ cost_usd: 1, final: 'pass' })],
     running: { run_id: 'r', phase: 'checks' },
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.state).toBe('running');
   expect(v.bottom).toBe('checks');
   expect(v.opacity).toBe(1);
@@ -338,7 +347,7 @@ test('cellView: drift flag set and drift_line populated when latest spikes', () 
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null, now);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null, now);
   expect(v.drift).toBe(true);
   expect(v.card?.drift_line).toBe(
     '▲ latest $3.00 vs median $1.00 of prior runs',
@@ -349,7 +358,7 @@ test('cellView: no drift_line when there is no drift', () => {
   const c = cell({
     window: [rec({ cost_usd: 1 }), rec({ cost_usd: 1 }), rec({ cost_usd: 1 })],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.drift).toBe(false);
   expect(v.card?.drift_line).toBeNull();
 });
@@ -365,7 +374,7 @@ test('cellView: card rows carry compact timestamp + run id', () => {
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   const row = v.card?.rows[0];
   expect(row?.verdict).toBe('fail');
   expect(row?.cost).toBe('$1.50');
@@ -465,8 +474,12 @@ function writeRun(root: string, runId: string, verdict: unknown): void {
 
 test('scanResults: cost_usd is agent-scoped when coding_agent.est_cost_usd is present', () => {
   const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
-  writeRun(root, 's-claude-linux-20260618T000000Z-aaaa', {
+  writeRun(root, 's-claude-none-linux-20260618T000000Z-aaaa', {
     final: 'pass',
+    scenario: 's',
+    coding_agent: 'claude',
+    credential: 'none',
+    os: 'linux',
     economics: {
       total_est_cost_usd: 5.0,
       coding_agent: {
@@ -479,10 +492,9 @@ test('scanResults: cost_usd is agent-scoped when coding_agent.est_cost_usd is pr
   });
   const grid = scanResults({
     resultsDir: root,
-    knownAgents: ['claude'],
     manifest: null,
   });
-  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  const r = grid.cells.get(cellKey('s', 'claude', 'none', 'linux'))?.window[0];
   // cost_usd is the AGENT cost, not the run total
   expect(r?.cost_usd).toBe(3.0);
   expect(r?.run_total_cost_usd).toBe(5.0);
@@ -492,17 +504,20 @@ test('scanResults: cost_usd is agent-scoped when coding_agent.est_cost_usd is pr
 
 test('scanResults: cost_usd falls back to run total when agent cost is absent', () => {
   const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
-  writeRun(root, 's-claude-linux-20260618T000000Z-bbbb', {
+  writeRun(root, 's-claude-none-linux-20260618T000000Z-bbbb', {
     final: 'pass',
+    scenario: 's',
+    coding_agent: 'claude',
+    credential: 'none',
+    os: 'linux',
     economics: { total_est_cost_usd: 4.5 },
     finished_at: '2026-06-18T00:01:00Z',
   });
   const grid = scanResults({
     resultsDir: root,
-    knownAgents: ['claude'],
     manifest: null,
   });
-  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  const r = grid.cells.get(cellKey('s', 'claude', 'none', 'linux'))?.window[0];
   // no agent block -> falls back to run total
   expect(r?.cost_usd).toBe(4.5);
   expect(r?.run_total_cost_usd).toBe(4.5);
@@ -512,16 +527,19 @@ test('scanResults: cost_usd falls back to run total when agent cost is absent', 
 
 test('scanResults: duration_ms null when coding_agent block is absent', () => {
   const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
-  writeRun(root, 's-claude-linux-20260618T000000Z-cccc', {
+  writeRun(root, 's-claude-none-linux-20260618T000000Z-cccc', {
     final: 'pass',
+    scenario: 's',
+    coding_agent: 'claude',
+    credential: 'none',
+    os: 'linux',
     economics: { total_est_cost_usd: 1.0 },
   });
   const grid = scanResults({
     resultsDir: root,
-    knownAgents: ['claude'],
     manifest: null,
   });
-  const r = grid.cells.get(cellKey('s', 'claude', 'linux'))?.window[0];
+  const r = grid.cells.get(cellKey('s', 'claude', 'none', 'linux'))?.window[0];
   expect(r?.duration_ms).toBeNull();
   expect(r?.total_tokens).toBeNull();
 });
@@ -532,7 +550,7 @@ test('cellView done: face_time comes from duration_ms', () => {
   const c = cell({
     window: [rec({ duration_ms: 161000, cost_usd: 2.5, final: 'pass' })],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.face_time).toBe('2m41s');
   expect(v.face_cost).toBe('$2.50');
 });
@@ -550,7 +568,7 @@ test('cellView done: face_time falls back to wall-clock when duration_ms is null
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null, now);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null, now);
   // wall-clock: finished_at - started_at = 2 min = 120000ms -> "2m0s"
   expect(v.face_time).toBe('2m0s');
 });
@@ -566,26 +584,26 @@ test('cellView done: face_time is "—" when no timing info', () => {
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.face_time).toBe('—');
 });
 
 test('cellView done: face_cost "$—" when cost_usd is null', () => {
   const c = cell({ window: [rec({ cost_usd: null })] });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.face_cost).toBe('$—');
 });
 
 test('cellView running: face_time and face_cost are "—"', () => {
   const c = cell({ window: [], running: { run_id: 'r', phase: 'agent' } });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.face_time).toBe('—');
   expect(v.face_cost).toBe('—');
 });
 
 test('cellView empty: face_time and face_cost are "—"', () => {
   const c = cell({ window: [] });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.face_time).toBe('—');
   expect(v.face_cost).toBe('—');
 });
@@ -605,7 +623,7 @@ test('cellView card rows carry time and tokens', () => {
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   const row = v.card?.rows[0];
   expect(row?.time).toBe('9s');
   expect(row?.tokens).toBe('48.2k');
@@ -625,7 +643,7 @@ test('cellView card rows: time "—" when no duration, tokens "—" when none', 
       }),
     ],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   const row = v.card?.rows[0];
   expect(row?.time).toBe('—');
   expect(row?.tokens).toBe('—');
@@ -637,7 +655,7 @@ test('cellView card has run_total from newest run_total_cost_usd', () => {
   const c = cell({
     window: [rec({ cost_usd: 3.0, run_total_cost_usd: 5.0, final: 'pass' })],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.card?.run_total).toBe('$5.00');
 });
 
@@ -645,6 +663,6 @@ test('cellView card run_total is "$—" when run_total_cost_usd is null', () => 
   const c = cell({
     window: [rec({ cost_usd: 3.0, run_total_cost_usd: null, final: 'pass' })],
   });
-  const v = cellView(c, 's', 'claude', 'linux', null);
+  const v = cellView(c, 's', 'claude', 'none', 'linux', null);
   expect(v.card?.run_total).toBe('$—');
 });

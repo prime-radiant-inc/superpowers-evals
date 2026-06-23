@@ -30,6 +30,7 @@ function doneView(over: Partial<CellView> = {}): CellView {
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'done',
     status: 'pass',
@@ -96,6 +97,7 @@ test('empty cell renders the not_run glyph (middle dot) and no inner ribbon', ()
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'empty',
     status: 'not_run',
@@ -119,6 +121,7 @@ test('ineligible cell (title set) renders dimmed ineligible glyph + tooltip', ()
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'empty',
     status: 'ineligible',
@@ -167,6 +170,7 @@ test('running cell carries the running class, a shimmer runslot, and the phase b
     cell_id: 'cell-s-claude',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'running',
     status: 'not_run',
@@ -199,6 +203,7 @@ test('running cell renders the queued-phase word verbatim for each phase', () =>
       cell_id: 'cell-s-claude',
       scenario: 's',
       agent: 'claude',
+      credential: 'none',
       os: 'linux',
       state: 'running',
       status: 'not_run',
@@ -332,6 +337,7 @@ test('incomplete cell with error_stage shows stage as tooltip on status glyph', 
     cell_id: 'cell-s-claude-linux',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'done',
     status: 'incomplete',
@@ -402,8 +408,8 @@ test('tallyHtml reports the OS sub-column count and a distinct ineligible segmen
 
 // --- gridHtml test helpers -----------------------------------------------------
 
-// Build a 3-part views map (cellKey) for the cartesian product of scenarios ×
-// agentColumns(agent, os).
+// Build a 4-part views map (cellKey) for the cartesian product of scenarios ×
+// agentColumns(agent, credential, os).
 function viewsFor(
   scenarios: readonly string[],
   agentColumns: readonly AgentColumns[],
@@ -411,14 +417,15 @@ function viewsFor(
   const views = new Map<string, CellView>();
   for (const s of scenarios) {
     for (const ac of agentColumns) {
-      for (const os of ac.oses) {
+      for (const sc of ac.subcols) {
         views.set(
-          cellKey(s, ac.agent, os),
+          cellKey(s, ac.agent, sc.credential, sc.os),
           doneView({
-            cell_id: `cell-${s}-${ac.agent}-${os}`,
+            cell_id: `cell-${s}-${ac.agent}-${sc.credential}-${sc.os}`,
             scenario: s,
             agent: ac.agent,
-            os,
+            credential: sc.credential,
+            os: sc.os,
           }),
         );
       }
@@ -430,8 +437,8 @@ function viewsFor(
 test('gridHtml renders the matrix table, headers, and row labels', () => {
   const scenarios = ['scn-a', 'scn-b'];
   const agentColumns: AgentColumns[] = [
-    { agent: 'claude', oses: ['linux'] },
-    { agent: 'codex', oses: ['linux'] },
+    { agent: 'claude', subcols: [{ credential: 'none', os: 'linux' }] },
+    { agent: 'codex', subcols: [{ credential: 'none', os: 'linux' }] },
   ];
   const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
@@ -450,13 +457,15 @@ test('gridHtml renders the matrix table, headers, and row labels', () => {
   expect(html).toContain('data-scenario="scn-a"');
   expect(html).toContain('data-scenario="scn-b"');
   // cells are inlined (3-part cell ids present).
-  expect(html).toContain('id="cell-scn-a-claude-linux"');
-  expect(html).toContain('id="cell-scn-b-codex-linux"');
+  expect(html).toContain('id="cell-scn-a-claude-none-linux"');
+  expect(html).toContain('id="cell-scn-b-codex-none-linux"');
 });
 
 test('gridHtml escapes scenario and agent names in data attributes and labels', () => {
   const scenarios = ['s&x'];
-  const agentColumns: AgentColumns[] = [{ agent: 'a"b', oses: ['linux'] }];
+  const agentColumns: AgentColumns[] = [
+    { agent: 'a"b', subcols: [{ credential: 'none', os: 'linux' }] },
+  ];
   const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
     scenarios,
@@ -472,7 +481,13 @@ test('gridHtml escapes scenario and agent names in data attributes and labels', 
 test('gridHtml renders one OS sub-column per agent OS with data-os', () => {
   const scenarios = ['scn-a'];
   const agentColumns: AgentColumns[] = [
-    { agent: 'claude', oses: ['linux', 'windows'] },
+    {
+      agent: 'claude',
+      subcols: [
+        { credential: 'none', os: 'linux' },
+        { credential: 'none', os: 'windows' },
+      ],
+    },
   ];
   const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
@@ -484,23 +499,25 @@ test('gridHtml renders one OS sub-column per agent OS with data-os', () => {
   // The agent header spans both OS sub-columns.
   expect(html).toContain('class="agent-col" data-agent="claude" colspan="2"');
   // Two OS sub-column headers, each with data-agent + data-os.
-  expect(html).toContain('class="os-col" data-agent="claude" data-os="linux"');
   expect(html).toContain(
-    'class="os-col" data-agent="claude" data-os="windows"',
+    'class="os-col" data-agent="claude" data-credential="none" data-os="linux"',
+  );
+  expect(html).toContain(
+    'class="os-col" data-agent="claude" data-credential="none" data-os="windows"',
   );
   // The OS-header row is NOT collapsed when multiple OSes are displayed.
   expect(html).toContain('class="os-header"');
   expect(html).not.toContain('class="os-header collapsed"');
   // Both per-OS cells render.
-  expect(html).toContain('id="cell-scn-a-claude-linux"');
-  expect(html).toContain('id="cell-scn-a-claude-windows"');
+  expect(html).toContain('id="cell-scn-a-claude-none-linux"');
+  expect(html).toContain('id="cell-scn-a-claude-none-windows"');
 });
 
 test('gridHtml keeps the OS-header row in the DOM (collapsed) for an all-linux grid', () => {
   const scenarios = ['scn-a'];
   const agentColumns: AgentColumns[] = [
-    { agent: 'claude', oses: ['linux'] },
-    { agent: 'codex', oses: ['linux'] },
+    { agent: 'claude', subcols: [{ credential: 'none', os: 'linux' }] },
+    { agent: 'codex', subcols: [{ credential: 'none', os: 'linux' }] },
   ];
   const views = viewsFor(scenarios, agentColumns);
   const html = gridHtml({
@@ -512,13 +529,17 @@ test('gridHtml keeps the OS-header row in the DOM (collapsed) for an all-linux g
   // The OS-header row is present in the DOM, marked collapsed (not removed).
   expect(html).toContain('class="os-header collapsed"');
   // The OS sub-column th is still rendered (DOM-stable column indices).
-  expect(html).toContain('class="os-col" data-agent="claude" data-os="linux"');
+  expect(html).toContain(
+    'class="os-col" data-agent="claude" data-credential="none" data-os="linux"',
+  );
 });
 
 test('gridHtml renders the empty-state message when there are no scenarios or agents', () => {
   const noScenarios = gridHtml({
     scenarios: [],
-    agentColumns: [{ agent: 'claude', oses: ['linux'] }],
+    agentColumns: [
+      { agent: 'claude', subcols: [{ credential: 'none', os: 'linux' }] },
+    ],
     views: new Map(),
     collapseOsRow: true,
   });
@@ -541,6 +562,7 @@ test('cellHtml carries data-agent and data-os on the cell <td>', () => {
       cell_id: 'cell-s-claude-windows',
       scenario: 's',
       agent: 'claude',
+      credential: 'none',
       os: 'windows',
     }),
   );
@@ -553,6 +575,7 @@ test('cellHtml carries data-agent and data-os on an ineligible (c-na) cell', () 
     cell_id: 'cell-s-claude-linux',
     scenario: 's',
     agent: 'claude',
+    credential: 'none',
     os: 'linux',
     state: 'empty',
     status: 'ineligible',

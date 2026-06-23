@@ -169,12 +169,13 @@ function cellCosts(cell: Cell): number[] {
   return out;
 }
 
-// A (scenario, agent, os) cell identity — the unit the tally iterates. The grid
-// renders one cell per identity; the identity set is the manifest's cells when a
-// manifest is present, else the observed grid cells.
+// A (scenario, agent, credential, os) cell identity — the unit the tally
+// iterates. The grid renders one cell per identity; the identity set is the
+// manifest's cells when a manifest is present, else the observed grid cells.
 export interface CellIdentity {
   readonly scenario: string;
   readonly agent: string;
+  readonly credential: string;
   readonly os: string;
 }
 
@@ -183,7 +184,13 @@ export interface CellIdentity {
 // or a test stub.
 export interface ManifestCellLike {
   readonly eligible: boolean;
-  readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+  readonly skipped_reason:
+    | 'directive'
+    | 'draft'
+    | 'tier'
+    | 'harness'
+    | 'os'
+    | null;
 }
 
 // Grid-wide rollup over the 5-state taxonomy (cellStatus) of each identity.
@@ -200,6 +207,7 @@ export function headerTally(
   manifestCellFor: (
     scenario: string,
     agent: string,
+    credential: string,
     os: string,
   ) => ManifestCellLike | null,
 ): HeaderTally {
@@ -210,15 +218,16 @@ export function headerTally(
   let ineligible = 0;
   for (const id of identities) {
     const cell =
-      grid.cells.get(cellKey(id.scenario, id.agent, id.os)) ??
+      grid.cells.get(cellKey(id.scenario, id.agent, id.credential, id.os)) ??
       ({
         scenario: id.scenario,
         agent: id.agent,
+        credential: id.credential,
         os: id.os,
         window: [],
         running: null,
       } as Cell);
-    const mc = manifestCellFor(id.scenario, id.agent, id.os);
+    const mc = manifestCellFor(id.scenario, id.agent, id.credential, id.os);
     switch (cellStatus(cell, mc)) {
       case 'pass':
         passed += 1;
@@ -306,10 +315,7 @@ function cardView(
 // direct unit testing — the type is kept loose so test objects satisfy it.
 export function cellStatus(
   cell: { readonly window: readonly { readonly final: RunFinal }[] },
-  manifestCell: {
-    readonly eligible: boolean;
-    readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
-  } | null,
+  manifestCell: ManifestCellLike | null,
 ): CellStatus {
   const newest = cell.window[cell.window.length - 1];
   if (newest !== undefined) {
@@ -339,14 +345,12 @@ export function cellView(
   cell: Cell,
   scenario: string,
   agent: string,
+  credential: string,
   os: string,
-  manifestCell: {
-    readonly eligible: boolean;
-    readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
-  } | null,
+  manifestCell: ManifestCellLike | null,
   now?: Date,
 ): CellView {
-  const id = cellId(scenario, agent, os);
+  const id = cellId(scenario, agent, credential, os);
 
   if (cell.running !== null && cell.window.length === 0) {
     // Pure running cell (no resolved history yet): shimmer the newest slot.
@@ -356,6 +360,7 @@ export function cellView(
       cell_id: id,
       scenario,
       agent,
+      credential,
       os,
       state: 'running',
       status: cellStatus(cell, manifestCell),
@@ -375,6 +380,7 @@ export function cellView(
       cell_id: id,
       scenario,
       agent,
+      credential,
       os,
       state: 'empty',
       status: cellStatus(cell, manifestCell),
@@ -415,6 +421,7 @@ export function cellView(
     cell_id: id,
     scenario,
     agent,
+    credential,
     os,
     state,
     status: cellStatus(cell, manifestCell),
@@ -507,7 +514,12 @@ export function diffGrids(oldGrid: Grid, newGrid: Grid): GridChange[] {
   const newCells = newGrid.cells;
 
   for (const [key, newCell] of newCells) {
-    const id = cellId(newCell.scenario, newCell.agent, newCell.os);
+    const id = cellId(
+      newCell.scenario,
+      newCell.agent,
+      newCell.credential,
+      newCell.os,
+    );
     const oldCell = oldCells.get(key);
     if (oldCell === undefined) {
       changes.push({ cell_id: id, reason: 'appeared' });
@@ -536,7 +548,12 @@ export function diffGrids(oldGrid: Grid, newGrid: Grid): GridChange[] {
   for (const [key, oldCell] of oldCells) {
     if (!newCells.has(key)) {
       changes.push({
-        cell_id: cellId(oldCell.scenario, oldCell.agent, oldCell.os),
+        cell_id: cellId(
+          oldCell.scenario,
+          oldCell.agent,
+          oldCell.credential,
+          oldCell.os,
+        ),
         reason: 'vanished',
       });
     }

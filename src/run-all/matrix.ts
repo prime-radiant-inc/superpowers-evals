@@ -296,6 +296,7 @@ export function buildGridManifest(
       cells.push({
         scenario: entry.scenario,
         agent: entry.codingAgent,
+        credential: entry.credential,
         os,
         eligible: entry.skippedReason === null,
         skipped_reason: entry.skippedReason,

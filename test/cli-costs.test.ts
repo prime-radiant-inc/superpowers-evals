@@ -624,34 +624,120 @@ test('costs renders a batch matrix as one row per produced run', () => {
   expect(proc.stdout).toMatch(/1 priced/);
 });
 
-// ── identityFromRunDirName: 5-segment run-id (Task 7 format) ─────────────
-// The new run-id format is <scenario>-<agent>-<os>-<stamp>-<nonce>.
-// identityFromRunDirName is tested indirectly via loadCostRows fallback: the
-// fallback fires when verdict.json exists but cannot be schema-parsed, so
-// identity is extracted from the dir name alone.
+// ── identity comes from the verdict, not the run-dir name ────────────────
+// The positional run-dir-name parser (identityFromRunDirName) was retired: a
+// run whose verdict.json is missing/unparseable has no recoverable identity, so
+// it renders as a '?' placeholder row (never a crash, never a name parse).
 
-test('identityFromRunDirName extracts agent from a 5-segment run-id (via fallback)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'costs-5seg-'));
-  // A run dir whose verdict.json is corrupt triggers the fallback parser.
-  const runId = 'myscenario-claude-windows-20260101T000000Z-abcd';
+test('a single run with an unparseable verdict yields a "?" identity row', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-noident-'));
+  const runId = 'myscenario-claude-none-windows-20260101T000000Z-abcd';
   mkdirSync(join(root, runId), { recursive: true });
   writeFileSync(join(root, runId, 'verdict.json'), 'not-json{{{');
   const rows = loadCostRows(join(root, runId), root);
   expect(rows).toHaveLength(1);
   const row = rows[0] as CostRow;
-  expect(row.scenario).toBe('myscenario');
-  expect(row.agent).toBe('claude');
+  // No name parsing: identity is unrecoverable -> '?'.
+  expect(row.scenario).toBe('?');
+  expect(row.agent).toBe('?');
+  expect(row.credential).toBe('');
+  expect(row.coding.unpriced).toBe(true);
 });
 
-test('identityFromRunDirName extracts agent from a 5-segment run-id with hyphenated scenario', () => {
-  const root = mkdtempSync(join(tmpdir(), 'costs-5seg-hyph-'));
-  // Scenario name itself contains hyphens: my-cool-scenario
-  const runId = 'my-cool-scenario-codex-linux-20260101T000000Z-abcd';
-  mkdirSync(join(root, runId), { recursive: true });
-  writeFileSync(join(root, runId, 'verdict.json'), 'not-json{{{');
-  const rows = loadCostRows(join(root, runId), root);
-  expect(rows).toHaveLength(1);
-  const row = rows[0] as CostRow;
-  expect(row.scenario).toBe('my-cool-scenario');
-  expect(row.agent).toBe('codex');
+test('a single run reads scenario/agent/credential from the verdict identity', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-ident-'));
+  const v = pricedVerdict({
+    scenario: 'alpha',
+    agent: 'pi',
+    costUsd: 1,
+    total: 100,
+  });
+  v['credential'] = 'ollama_local';
+  const dir = writeRunDir(
+    root,
+    'alpha-pi-ollama_local-linux-20260101T000000Z-abcd',
+    v,
+  );
+  const row = loadCostRows(dir, root)[0] as CostRow;
+  expect(row.scenario).toBe('alpha');
+  expect(row.agent).toBe('pi');
+  expect(row.credential).toBe('ollama_local');
+});
+
+// ── credential distinguishes cost rows of one (scenario, agent) ──────────
+
+test('loadCostRows keeps distinct cost rows per credential in a batch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-credbatch-'));
+  const resultsRoot = join(root, 'results');
+  const batchDir = join(resultsRoot, 'batches', 'b-cred');
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'b-cred',
+      started_at: '2026-06-12T00:00:00Z',
+      finished_at: '2026-06-12T00:30:00Z',
+      coding_agents: ['pi'],
+    }),
+  );
+  const records = [
+    {
+      scenario: 'alpha',
+      coding_agent: 'pi',
+      credential: 'credA',
+      run_id: 'run-pi-a',
+    },
+    {
+      scenario: 'alpha',
+      coding_agent: 'pi',
+      credential: 'credB',
+      run_id: 'run-pi-b',
+    },
+  ];
+  writeFileSync(
+    join(batchDir, 'results.jsonl'),
+    `${records.map((r) => JSON.stringify(r)).join('\n')}\n`,
+  );
+  const va = pricedVerdict({
+    scenario: 'alpha',
+    agent: 'pi',
+    costUsd: 1,
+    total: 100,
+  });
+  va['credential'] = 'credA';
+  const vb = pricedVerdict({
+    scenario: 'alpha',
+    agent: 'pi',
+    costUsd: 2,
+    total: 200,
+  });
+  vb['credential'] = 'credB';
+  writeRunDir(resultsRoot, 'run-pi-a', va);
+  writeRunDir(resultsRoot, 'run-pi-b', vb);
+
+  const rows = loadCostRows(batchDir, resultsRoot);
+  // Same (scenario, agent), distinct credentials -> two distinct rows.
+  const credA = rows.find((r) => r.credential === 'credA');
+  const credB = rows.find((r) => r.credential === 'credB');
+  expect(credA?.coding.estCostUsd).toBe(1);
+  expect(credB?.coding.estCostUsd).toBe(2);
+});
+
+test('renderCosts shows a credential column', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-credcol-'));
+  const v = pricedVerdict({
+    scenario: 'alpha',
+    agent: 'pi',
+    costUsd: 1,
+    total: 100,
+  });
+  v['credential'] = 'ollama_local';
+  const dir = writeRunDir(
+    root,
+    'alpha-pi-ollama_local-linux-20260101T000000Z-abcd',
+    v,
+  );
+  const out = renderCosts(loadCostRows(dir, root), { color: false });
+  expect(out).toContain('credential');
+  expect(out).toContain('ollama_local');
 });
