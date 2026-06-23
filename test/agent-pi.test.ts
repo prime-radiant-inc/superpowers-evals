@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { ProvisionError } from '../src/agents/index.ts';
 import { PiAgent } from '../src/agents/pi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
 // The Pi support files the oracle (_require_pi_superpowers_source) requires under
@@ -95,44 +96,27 @@ function piConfig(): AgentConfig {
     session_log_dir: '${QUORUM_AGENT_HOME}/.pi/agent/sessions',
     session_log_glob: '**/*.jsonl',
     normalizer: 'pi',
-    required_env: ['SUPERPOWERS_ROOT', 'PI_PROVIDER', 'PI_MODEL', 'PI_API_KEY'],
+    required_env: ['SUPERPOWERS_ROOT'],
     os_support: ['linux'],
     max_time: '10m',
   };
 }
 
-// The env keys provision() reads. The placeholder SUPERPOWERS_ROOT here only
-// satisfies the require-non-empty check; success-path tests override it with a
-// makeSuperpowersRoot() fixture so the source-file validation passes, and
-// negative-path tests that throw before that validation keep the placeholder.
-// Typed as a plain record so it (and its spreads) flow into withEnv's
-// Record<string, string | undefined> parameter — an interface would lack the
-// implicit index signature.
-const BASE_ENV: Readonly<Record<string, string>> = {
-  SUPERPOWERS_ROOT: '/tmp/superpowers',
-  PI_PROVIDER: 'anthropic',
-  PI_MODEL: 'claude-sonnet-4-6',
-  PI_API_KEY: 'sk-pi-secret',
+// A minimal stub CommandRunner — pi provision() doesn't shell out, but the
+// interface requires the arg.
+const stubRunner = {
+  run: () => ({ status: 0, stdout: '', stderr: '' }),
 };
 
+// The env keys provision() reads (after B2 rewrite only SUPERPOWERS_ROOT and
+// PI_OAUTH_HOME remain; keep PI_API_KEY_FIXTURE for api-key credential tests).
 const PI_ENV_KEYS = [
   'SUPERPOWERS_ROOT',
-  'PI_PROVIDER',
-  'PI_MODEL',
-  'PI_API_KEY',
   'PI_OAUTH_HOME',
-  'AZURE_OPENAI_BASE_URL',
-  'AZURE_OPENAI_RESOURCE_NAME',
-  'AZURE_OPENAI_API_VERSION',
-  'AZURE_OPENAI_DEPLOYMENT_NAME_MAP',
+  'PI_API_KEY_FIXTURE',
 ] as const;
 
-// Set the given env (and clear any azure vars not provided), run body, then
-// restore every touched key. Mirrors the set/restore discipline in
-// runner-e2e.test.ts, but reaches the live environment through Bun.env: it is
-// the same object as process.env (so the env.ts getEnv() read sees the writes),
-// yet it is not flagged by Biome's noProcessEnv rule, which this test file is
-// not exempted from. Bun.env is an index signature, so bracket access.
+// Set the given env, run body, then restore every touched key.
 function withEnv(
   vars: Readonly<Record<string, string | undefined>>,
   body: () => void,
@@ -165,116 +149,255 @@ function mode600(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
-test('provision seeds the config dir, sessions subdir, and all config files', () => {
+// Build a synthetic api-key credential for the custom-endpoint (GLM/ollama) path.
+function makeApiKeyCredential(overrides?: Partial<Credential>): Credential {
+  return {
+    model: 'glm-5.2-fp8',
+    harnesses: ['pi'],
+    api: 'openai-chat',
+    base_url: 'https://example.com/v1',
+    auth: 'api-key',
+    api_key_env: 'PI_API_KEY_FIXTURE',
+    compat: { thinking_format: 'zai' },
+    ...overrides,
+  };
+}
+
+// Build a synthetic oauth credential.
+function makeOauthCredential(overrides?: Partial<Credential>): Credential {
+  return {
+    model: 'gpt-5.5',
+    harnesses: ['pi'],
+    api: 'openai-chat',
+    auth: 'oauth',
+    compat: {},
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// B2: credential-driven api-key path (custom endpoint, e.g. GLM/ollama)
+// ---------------------------------------------------------------------------
+
+test('api-key credential: provision writes models.json with quorum provider', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
-  try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      const returned = agent.provision(home);
-
-      // configDir + sessions/ exist.
-      expect(existsSync(home.configDir)).toBe(true);
-      expect(statSync(home.configDir).isDirectory()).toBe(true);
-      const sessions = join(home.configDir, 'sessions');
-      expect(existsSync(sessions)).toBe(true);
-      expect(statSync(sessions).isDirectory()).toBe(true);
-
-      // auth.json: the key field is the literal "$PI_API_KEY" placeholder, not
-      // the real key (matches the oracle). Mode 0600.
-      const authPath = join(home.configDir, 'auth.json');
-      expect(existsSync(authPath)).toBe(true);
-      const auth: unknown = JSON.parse(readFileSync(authPath, 'utf8'));
-      expect(auth).toEqual({
-        anthropic: { type: 'api_key', key: '$PI_API_KEY' },
-      });
-      expect(mode600(authPath)).toBe(0o600);
-
-      // settings.json: provider/model + fixed thinking level.
-      const settingsPath = join(home.configDir, 'settings.json');
-      expect(existsSync(settingsPath)).toBe(true);
-      const settings: unknown = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      expect(settings).toEqual({
-        defaultProvider: 'anthropic',
-        defaultModel: 'claude-sonnet-4-6',
-        defaultThinkingLevel: 'medium',
-      });
-
-      // pi.env: shlex-quoted export lines, secret-mode 0600. The real API key
-      // lives here (not in the returned env). Bare values stay unquoted.
-      const envPath = join(home.configDir, 'pi.env');
-      expect(existsSync(envPath)).toBe(true);
-      expect(readFileSync(envPath, 'utf8')).toBe(
-        [
-          'export PI_PROVIDER=anthropic',
-          'export PI_MODEL=claude-sonnet-4-6',
-          'export PI_API_KEY=sk-pi-secret',
-          '',
-        ].join('\n'),
-      );
-      expect(mode600(envPath)).toBe(0o600);
-
-      // Returned env is empty: pi finds its config via the throwaway $HOME
-      // (.pi/agent), and no secrets leak into the returned env.
-      expect(returned).toEqual({});
-    });
-  } finally {
-    sp.cleanup();
-    cleanup();
-  }
-});
-
-test('files with secrets carry trailing-newline JSON + correct mode', () => {
-  const { home, cleanup } = makeTempHome();
-  const sp = makeSuperpowersRoot();
-  try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      agent.provision(home);
-      // JSON files end with a newline (indent=2 + "\n" in the oracle).
-      const authRaw = readFileSync(join(home.configDir, 'auth.json'), 'utf8');
-      const settingsRaw = readFileSync(
-        join(home.configDir, 'settings.json'),
-        'utf8',
-      );
-      expect(authRaw.endsWith('}\n')).toBe(true);
-      expect(settingsRaw.endsWith('}\n')).toBe(true);
-    });
-  } finally {
-    sp.cleanup();
-    cleanup();
-  }
-});
-
-test('azure-openai-responses provider folds sorted azure extras into pi.env', () => {
-  const { home, cleanup } = makeTempHome();
-  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
   try {
     withEnv(
-      {
-        ...BASE_ENV,
-        SUPERPOWERS_ROOT: sp.root,
-        PI_PROVIDER: 'azure-openai-responses',
-        PI_MODEL: 'gpt-4o',
-        PI_API_KEY: 'azure key with spaces',
-        AZURE_OPENAI_RESOURCE_NAME: 'my-resource',
-        AZURE_OPENAI_API_VERSION: '2026-01-01',
-      },
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'test-api-key-abc123' },
       () => {
         const agent = new PiAgent(piConfig());
-        agent.provision(home);
-        const envPath = join(home.configDir, 'pi.env');
-        // Extras emitted sorted by name; provider/model/key first. The spaced
-        // API key is single-quoted (shlex.quote semantics).
-        expect(readFileSync(envPath, 'utf8')).toBe(
-          [
-            'export PI_PROVIDER=azure-openai-responses',
-            'export PI_MODEL=gpt-4o',
-            "export PI_API_KEY='azure key with spaces'",
-            'export AZURE_OPENAI_API_VERSION=2026-01-01',
-            'export AZURE_OPENAI_RESOURCE_NAME=my-resource',
-            '',
-          ].join('\n'),
+        agent.provision(home, stubRunner, credential);
+
+        const modelsPath = join(home.configDir, 'models.json');
+        expect(existsSync(modelsPath)).toBe(true);
+        const models: unknown = JSON.parse(readFileSync(modelsPath, 'utf8'));
+        expect(models).toMatchObject({
+          providers: {
+            quorum: {
+              baseUrl: 'https://example.com/v1',
+              api: 'openai-completions',
+              apiKey: 'test-api-key-abc123',
+              models: [
+                {
+                  id: 'glm-5.2-fp8',
+                  name: 'glm-5.2-fp8',
+                  reasoning: true,
+                  compat: {
+                    thinkingFormat: 'zai',
+                  },
+                },
+              ],
+            },
+          },
+        });
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential: models.json is mode 0600 and auth.json carries resolved key', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'resolved-secret-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const modelsPath = join(home.configDir, 'models.json');
+        expect(mode600(modelsPath)).toBe(0o600);
+
+        // auth.json must contain the RESOLVED key, not '$PI_API_KEY' placeholder.
+        const authPath = join(home.configDir, 'auth.json');
+        expect(existsSync(authPath)).toBe(true);
+        expect(mode600(authPath)).toBe(0o600);
+        const auth: unknown = JSON.parse(readFileSync(authPath, 'utf8'));
+        expect(auth).toEqual({
+          quorum: { type: 'api_key', key: 'resolved-secret-key' },
+        });
+        // Explicitly confirm the placeholder is NOT written.
+        expect(JSON.stringify(auth)).not.toContain('$PI_API_KEY');
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential: settings.json uses credential.model and quorum provider', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const settings: unknown = JSON.parse(
+          readFileSync(join(home.configDir, 'settings.json'), 'utf8'),
+        );
+        expect(settings).toEqual({
+          defaultProvider: 'quorum',
+          defaultModel: 'glm-5.2-fp8',
+          defaultThinkingLevel: 'medium',
+        });
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential: pi.env carries resolved key, not placeholder', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'actual-secret' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
+        expect(envBody).toContain('export PI_PROVIDER=quorum');
+        expect(envBody).toContain('export PI_MODEL=glm-5.2-fp8');
+        expect(envBody).toContain('export PI_API_KEY=actual-secret');
+        expect(envBody).not.toContain('$PI_API_KEY');
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential without thinking_format: reasoning omitted from models.json', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential({ compat: {} });
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const models: {
+          providers: { quorum: { models: { reasoning?: boolean }[] } };
+        } = JSON.parse(
+          readFileSync(join(home.configDir, 'models.json'), 'utf8'),
+        );
+        const model = models.providers.quorum.models[0];
+        // reasoning should not be set when no thinking_format in compat
+        expect(model).not.toHaveProperty('reasoning');
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential with max_tokens_field: compat.maxTokensField in models.json', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential({
+    compat: { thinking_format: 'zai', max_tokens_field: 'max_tokens' },
+  });
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const models: {
+          providers: {
+            quorum: { models: { compat: Record<string, unknown> }[] };
+          };
+        } = JSON.parse(
+          readFileSync(join(home.configDir, 'models.json'), 'utf8'),
+        );
+        const [firstModel] = models.providers.quorum.models;
+        const modelCompat = firstModel?.compat ?? {};
+        expect(modelCompat['thinkingFormat']).toBe('zai');
+        expect(modelCompat['maxTokensField']).toBe('max_tokens');
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential: provision seeds config dir + sessions subdir', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        const returned = agent.provision(home, stubRunner, credential);
+
+        expect(existsSync(home.configDir)).toBe(true);
+        expect(statSync(home.configDir).isDirectory()).toBe(true);
+        const sessions = join(home.configDir, 'sessions');
+        expect(existsSync(sessions)).toBe(true);
+        expect(statSync(sessions).isDirectory()).toBe(true);
+        expect(returned).toEqual({});
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+test('api-key credential: unsupported api (gemini) throws ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential({ api: 'gemini' });
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          /gemini.*not supported|unsupported api.*gemini/i,
         );
       },
     );
@@ -284,47 +407,75 @@ test('azure-openai-responses provider folds sorted azure extras into pi.env', ()
   }
 });
 
-test('azure-openai-responses without base-url/resource-name throws ProvisionError', () => {
+test('api-key credential: unsupported api (anthropic) throws ProvisionError', () => {
   const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential({ api: 'anthropic' });
   try {
-    withEnv({ ...BASE_ENV, PI_PROVIDER: 'azure-openai-responses' }, () => {
-      const agent = new PiAgent(piConfig());
-      expect(() => agent.provision(home)).toThrow(ProvisionError);
-    });
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          ProvisionError,
+        );
+      },
+    );
   } finally {
+    sp.cleanup();
     cleanup();
   }
 });
 
-test('no PI_API_KEY and no oauth login throws ProvisionError', () => {
+test('api-key credential: missing base_url throws ProvisionError', () => {
   const { home, cleanup } = makeTempHome();
-  // Point PI_OAUTH_HOME at an empty dir so the OAuth fallback finds no host
-  // login. Without this, the outcome depends on whether the machine running the
-  // suite happens to have a real ~/.pi login — which made this test flaky
-  // (it passed in CI but failed on any developer box logged in to Pi).
-  const emptyHome = mkdtempSync(join(tmpdir(), 'quorum-pi-noauth-'));
+  const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential({ base_url: undefined });
   try {
     withEnv(
-      { ...BASE_ENV, PI_API_KEY: undefined, PI_OAUTH_HOME: emptyHome },
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
       () => {
         const agent = new PiAgent(piConfig());
-        expect(() => agent.provision(home)).toThrow(ProvisionError);
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          ProvisionError,
+        );
       },
     );
   } finally {
-    rmSync(emptyHome, { recursive: true, force: true });
+    sp.cleanup();
     cleanup();
   }
 });
+
+test('undefined credential throws ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  try {
+    withEnv({ SUPERPOWERS_ROOT: sp.root }, () => {
+      const agent = new PiAgent(piConfig());
+      expect(() => agent.provision(home, stubRunner, undefined)).toThrow(
+        /pi requires a credential/i,
+      );
+    });
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Structural guards (SUPERPOWERS_ROOT validation, pi on PATH)
+// ---------------------------------------------------------------------------
 
 // B2-pi-superpowers-source-validation-missing: SUPERPOWERS_ROOT must actually
 // contain the Pi support files (package.json, .pi/extensions/superpowers.ts,
 // skills/using-superpowers/SKILL.md + references/pi-tools.md). A checkout
 // missing any of them is a setup failure naming the absent paths, not a silent
-// meaningless run. Mirrors _require_pi_superpowers_source (runner.py:1277-1289).
+// meaningless run.
 test('missing Pi support files under SUPERPOWERS_ROOT throws naming the absent paths', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
   // Remove one required file so validation must fail.
   const removed = join(
     sp.root,
@@ -332,14 +483,17 @@ test('missing Pi support files under SUPERPOWERS_ROOT throws naming the absent p
   );
   rmSync(removed);
   try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      expect(() => agent.provision(home)).toThrow(
-        new RegExp(
-          `SUPERPOWERS_ROOT is missing Pi support files:.*${removed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
-        ),
-      );
-    });
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          new RegExp(
+            `SUPERPOWERS_ROOT is missing Pi support files:.*${removed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+          ),
+        );
+      },
+    );
   } finally {
     sp.cleanup();
     cleanup();
@@ -350,11 +504,17 @@ test('missing Pi support files under SUPERPOWERS_ROOT throws naming the absent p
 test('a complete SUPERPOWERS_ROOT passes source validation', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
   try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      expect(() => agent.provision(home)).not.toThrow();
-    });
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() =>
+          agent.provision(home, stubRunner, credential),
+        ).not.toThrow();
+      },
+    );
   } finally {
     sp.cleanup();
     cleanup();
@@ -362,24 +522,24 @@ test('a complete SUPERPOWERS_ROOT passes source validation', () => {
 });
 
 // H3: a `pi` binary absent from PATH is a setup-stage failure with a precise
-// message, not an opaque downstream launch failure. The probe must use Bun.which
-// (not `command -v` through a shell-less spawnSync, which ENOENTs on Linux and
-// falsely reports "not found"). This test points PATH at an empty dir (pi
-// genuinely absent) and does NOT fake any probe. Mirrors runner.py:1345-1346
-// (shutil.which("pi") is None).
+// message, not an opaque downstream launch failure.
 test('pi genuinely absent from PATH throws a precise setup error (Bun.which)', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
   const path = makePathDir(false);
   const prevPath = process.env['PATH'];
   process.env['PATH'] = path.dir;
   try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      expect(() => agent.provision(home)).toThrow(
-        /pi not found on PATH; cannot run Pi evals/,
-      );
-    });
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          /pi not found on PATH; cannot run Pi evals/,
+        );
+      },
+    );
   } finally {
     if (prevPath === undefined) {
       delete process.env['PATH'];
@@ -397,15 +557,19 @@ test('pi genuinely absent from PATH throws a precise setup error (Bun.which)', (
 test('pi present on PATH resolves via Bun.which and provisions', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
+  const credential = makeApiKeyCredential();
   const path = makePathDir(true);
   const prevPath = process.env['PATH'];
   process.env['PATH'] = path.dir;
   try {
-    withEnv({ ...BASE_ENV, SUPERPOWERS_ROOT: sp.root }, () => {
-      const agent = new PiAgent(piConfig());
-      const returned = agent.provision(home);
-      expect(returned).toEqual({});
-    });
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'any-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        const returned = agent.provision(home, stubRunner, credential);
+        expect(returned).toEqual({});
+      },
+    );
   } finally {
     if (prevPath === undefined) {
       delete process.env['PATH'];
@@ -419,17 +583,11 @@ test('pi present on PATH resolves via Bun.which and provisions', () => {
 });
 
 // ---------------------------------------------------------------------------
-// OAuth-or-env auth. Pi (and Kimi) host installs log in via OAuth, not env-var
-// keys. When PI_API_KEY is absent but a host OAuth login exists under
-// PI_OAUTH_HOME (default ~/.pi), provision() seeds that credential into the
-// isolated PI_CODING_AGENT_DIR (mirroring codex's auth-copy seam) so the run
-// authenticates via OAuth rather than failing at setup.
+// OAuth credential path
 // ---------------------------------------------------------------------------
 
 // Build a fake host PI_OAUTH_HOME laying down the OAuth credential files the
-// way `pi` writes them: <home>/agent/{auth.json,settings.json}. auth.json keys
-// the provider name to an OAuth token object; settings.json carries the default
-// provider/model. Returns the home plus a cleanup().
+// way `pi` writes them: <home>/agent/{auth.json,settings.json}.
 function makePiOauthHome(opts?: {
   provider?: string;
   model?: string;
@@ -478,26 +636,24 @@ function makePiOauthHome(opts?: {
   };
 }
 
-// OAuth path: no PI_API_KEY, but a host OAuth login under PI_OAUTH_HOME. The
-// adapter copies the host auth.json verbatim into the isolated config dir at
-// mode 0600, writes settings.json + pi.env carrying provider/model (derived
-// from the host settings) and NO PI_API_KEY, and returns the config-dir map.
-test('oauth path seeds the host auth.json into the isolated config dir', () => {
+// OAuth credential path: adapter copies the host auth.json verbatim into the
+// isolated config dir at mode 0600, writes settings.json + pi.env carrying
+// provider/model (from host settings) and NO PI_API_KEY.
+// credential.model overrides the host defaultModel.
+test('oauth credential: seeds host auth.json and uses credential.model', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
-  const oauth = makePiOauthHome();
+  const oauth = makePiOauthHome({ provider: 'openai-codex', model: 'gpt-5.5' });
+  const credential = makeOauthCredential({ model: 'gpt-5.5-override' });
   try {
     withEnv(
       {
         SUPERPOWERS_ROOT: sp.root,
         PI_OAUTH_HOME: oauth.home,
-        PI_PROVIDER: undefined,
-        PI_MODEL: undefined,
-        PI_API_KEY: undefined,
       },
       () => {
         const agent = new PiAgent(piConfig());
-        const returned = agent.provision(home);
+        const returned = agent.provision(home, stubRunner, credential);
 
         // auth.json is the host OAuth credential, copied verbatim, mode 0600.
         const authPath = join(home.configDir, 'auth.json');
@@ -514,23 +670,22 @@ test('oauth path seeds the host auth.json into the isolated config dir', () => {
           },
         });
 
-        // settings.json carries the host default provider/model.
+        // settings.json: provider from host settings, model from credential.
         const settings: unknown = JSON.parse(
           readFileSync(join(home.configDir, 'settings.json'), 'utf8'),
         );
         expect(settings).toEqual({
           defaultProvider: 'openai-codex',
-          defaultModel: 'gpt-5.5',
+          defaultModel: 'gpt-5.5-override',
           defaultThinkingLevel: 'medium',
         });
 
-        // pi.env carries provider/model for the launcher's --provider/--model,
-        // and NO PI_API_KEY (OAuth needs none).
+        // pi.env carries provider/model, NO PI_API_KEY.
         const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
         expect(envBody).toBe(
           [
             'export PI_PROVIDER=openai-codex',
-            'export PI_MODEL=gpt-5.5',
+            'export PI_MODEL=gpt-5.5-override',
             '',
           ].join('\n'),
         );
@@ -546,60 +701,22 @@ test('oauth path seeds the host auth.json into the isolated config dir', () => {
   }
 });
 
-// OAuth path honors PI_PROVIDER/PI_MODEL as overrides when set (without an API
-// key), instead of the host settings defaults.
-test('oauth path honors PI_PROVIDER/PI_MODEL overrides over host settings', () => {
+// OAuth path: no host auth.json exists → clear setup error.
+test('oauth credential: no host auth.json throws ProvisionError', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
-  const oauth = makePiOauthHome();
-  try {
-    withEnv(
-      {
-        SUPERPOWERS_ROOT: sp.root,
-        PI_OAUTH_HOME: oauth.home,
-        PI_PROVIDER: 'anthropic',
-        PI_MODEL: 'claude-sonnet-4-6',
-        PI_API_KEY: undefined,
-      },
-      () => {
-        const agent = new PiAgent(piConfig());
-        agent.provision(home);
-        const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
-        expect(envBody).toBe(
-          [
-            'export PI_PROVIDER=anthropic',
-            'export PI_MODEL=claude-sonnet-4-6',
-            '',
-          ].join('\n'),
-        );
-      },
-    );
-  } finally {
-    oauth.cleanup();
-    sp.cleanup();
-    cleanup();
-  }
-});
-
-// Neither PI_API_KEY nor a host OAuth login: a clear setup error.
-test('neither PI_API_KEY nor oauth login throws a clear ProvisionError', () => {
-  const { home, cleanup } = makeTempHome();
-  const sp = makeSuperpowersRoot();
-  // Point PI_OAUTH_HOME at an empty dir so no host auth.json exists.
   const emptyHome = mkdtempSync(join(tmpdir(), 'quorum-pi-noauth-'));
+  const credential = makeOauthCredential();
   try {
     withEnv(
       {
         SUPERPOWERS_ROOT: sp.root,
         PI_OAUTH_HOME: emptyHome,
-        PI_PROVIDER: undefined,
-        PI_MODEL: undefined,
-        PI_API_KEY: undefined,
       },
       () => {
         const agent = new PiAgent(piConfig());
-        expect(() => agent.provision(home)).toThrow(
-          /no PI_API_KEY and no .* oauth login/i,
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          /no .* oauth login|no PI_API_KEY/i,
         );
       },
     );
@@ -610,28 +727,51 @@ test('neither PI_API_KEY nor oauth login throws a clear ProvisionError', () => {
   }
 });
 
-// OAuth path with a host login that has no settings.json and no env override
-// cannot determine provider/model: a clear setup error (don't guess).
-test('oauth path without provider/model (no settings, no env) throws', () => {
+// OAuth path without settings.json and no host defaultProvider: clear error.
+test('oauth credential: no host settings.json and no defaultProvider throws', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
   const oauth = makePiOauthHome({ omitSettings: true });
+  const credential = makeOauthCredential();
   try {
     withEnv(
       {
         SUPERPOWERS_ROOT: sp.root,
         PI_OAUTH_HOME: oauth.home,
-        PI_PROVIDER: undefined,
-        PI_MODEL: undefined,
-        PI_API_KEY: undefined,
       },
       () => {
         const agent = new PiAgent(piConfig());
-        expect(() => agent.provision(home)).toThrow(/provider|model/i);
+        expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+          /provider/i,
+        );
       },
     );
   } finally {
     oauth.cleanup();
+    sp.cleanup();
+    cleanup();
+  }
+});
+
+// subscription credential throws (pi has no subscription path).
+test('subscription credential throws ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  const credential: Credential = {
+    model: 'some-model',
+    harnesses: ['pi'],
+    api: 'openai-chat',
+    auth: 'subscription',
+    compat: {},
+  };
+  try {
+    withEnv({ SUPERPOWERS_ROOT: sp.root }, () => {
+      const agent = new PiAgent(piConfig());
+      expect(() => agent.provision(home, stubRunner, credential)).toThrow(
+        ProvisionError,
+      );
+    });
+  } finally {
     sp.cleanup();
     cleanup();
   }
