@@ -278,16 +278,43 @@ test('preflight throwaway home also receives the opencode.json provider block', 
   const runner = new FakeCommandRunner(happyResponder);
   const cred = makeCredential();
 
-  // Capture the preflight HOME so we can inspect the file written there.
+  // Capture preflight config assertions in outer scope so we can verify them
+  // after provision returns. Read the file INSIDE the spawn callback while the
+  // preflight tmpdir still exists (before rmSync).
   let preflightHome: string | undefined;
+  let preflightConfigExists = false;
+  let preflightConfigProvider: unknown;
+  let preflightConfigModel: unknown;
+  let preflightConfigMode: number | undefined;
+  let preflightModelRefFlag: unknown;
+
   const spawn: SpawnFn = (opts) => {
-    if (opts.args[1] === 'run') {
-      preflightHome = opts.env['HOME'];
-    }
     if (opts.args[1] === '--version') {
       return { stdout: 'opencode 1.2.3\n', stderr: '', exitCode: 0 };
     }
     if (opts.args[1] === 'run') {
+      const preflight = opts.env['HOME'];
+      if (preflight !== undefined) {
+        preflightHome = preflight;
+        preflightModelRefFlag = opts.args[3];
+
+        // Read and assert the preflight opencode.json before it's deleted.
+        const opencodeJsonPath = join(
+          preflight,
+          '.config',
+          'opencode',
+          'opencode.json',
+        );
+        preflightConfigExists = existsSync(opencodeJsonPath);
+        if (preflightConfigExists) {
+          const config = JSON.parse(readFileSync(opencodeJsonPath, 'utf8'));
+          preflightConfigProvider = config.provider?.quorum;
+          preflightConfigModel = config.model;
+          const st = statSync(opencodeJsonPath);
+          preflightConfigMode = st.mode & 0o777;
+        }
+      }
+
       return { stdout: 'OK\n', stderr: '', exitCode: 0 };
     }
     return { stdout: 'OK\n', stderr: '', exitCode: 0 };
@@ -303,8 +330,28 @@ test('preflight throwaway home also receives the opencode.json provider block', 
       expect(preflightHome).not.toBe(home.configDir);
 
       // The preflight home's opencode.json must have the provider block.
-      // Note: by the time we read it, the preflight tmp dir has been rmSync'd.
-      // We verify the -m flag instead (the preflight received the right model).
+      expect(preflightConfigExists).toBe(true);
+      expect(preflightConfigProvider).toBeDefined();
+
+      // Provider block uses fixed name 'quorum', npm for openai-chat.
+      const provider = preflightConfigProvider as Record<string, unknown>;
+      expect(provider['npm']).toBe('@ai-sdk/openai-compatible');
+      const options = provider['options'] as Record<string, unknown>;
+      expect(options?.['baseURL']).toBe(
+        'https://open.bigmodel.cn/api/paas/v4/',
+      );
+      expect(options?.['apiKey']).toBe(
+        'test-api-key-value',
+      );
+
+      // Top-level model ref.
+      expect(preflightConfigModel).toBe(`quorum/${cred.model}`);
+
+      // File mode 0600 (secret — carries the API key).
+      expect(preflightConfigMode).toBe(0o600);
+
+      // The preflight -m flag must be quorum/<model>.
+      expect(preflightModelRefFlag).toBe('quorum/glm-4.5-air');
     });
   } finally {
     cleanup();
