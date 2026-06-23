@@ -357,8 +357,20 @@ function stageCodexConfigWithToml(cfg: string, toml: string): void {
   writeUnder(cfg, join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'), ':\n');
 }
 
-function stageCodexSessionStartHook(cfg: string, command: string): void {
+function stageCodexSessionStartHook(
+  cfg: string,
+  command: string,
+  commandWindows?: string,
+): void {
   stageCodexConfig(cfg);
+  const hook: Record<string, unknown> = {
+    type: 'command',
+    command,
+    async: false,
+  };
+  if (commandWindows !== undefined) {
+    hook['commandWindows'] = commandWindows;
+  }
   writeUnder(
     cfg,
     join(CODEX_PLUGIN_SUBPATH, 'hooks/hooks-codex.json'),
@@ -367,7 +379,7 @@ function stageCodexSessionStartHook(cfg: string, command: string): void {
         SessionStart: [
           {
             matcher: 'startup|resume|clear',
-            hooks: [{ type: 'command', command, async: false }],
+            hooks: [hook],
           },
         ],
       },
@@ -454,10 +466,34 @@ test('codex-native-hook-configured fails when the trusted hook hash is absent', 
   expect(out.detail).toContain('trusted hook hash missing');
 });
 
-test('codex-session-start-hook-executes fails when the command omits the PowerShell call operator', () => {
+test('codex-session-start-hook-executes fails when commandWindows is missing', () => {
   const cfg = configDir();
   stageCodexSessionStartHook(
     cfg,
+    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
+  );
+  const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('commandWindows');
+});
+
+test('codex-session-start-hook-executes fails when the default command is PowerShell-only', () => {
+  const cfg = configDir();
+  stageCodexSessionStartHook(
+    cfg,
+    '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
+    '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
+  );
+  const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('default');
+});
+
+test('codex-session-start-hook-executes fails when commandWindows omits the PowerShell call operator', () => {
+  const cfg = configDir();
+  stageCodexSessionStartHook(
+    cfg,
+    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
     '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
   );
   const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
@@ -475,11 +511,12 @@ test('codex-session-start-hook-executes fails when QUORUM_AGENT_CONFIG_DIR is un
 });
 
 windowsPowerShellTest(
-  'codex-session-start-hook-executes passes for the PowerShell call-operator command',
+  'codex-session-start-hook-executes passes for default command plus Windows override',
   () => {
     const cfg = configDir();
     stageCodexSessionStartHook(
       cfg,
+      '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
       '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
     );
     const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));

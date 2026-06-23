@@ -753,7 +753,14 @@ export function verbCodexNativeHookConfigured(
   return pass('Codex native Superpowers hook configured');
 }
 
-function findCodexSessionStartCommand(manifestPath: string): string | null {
+interface CodexSessionStartCommands {
+  command: string;
+  commandWindows: string;
+}
+
+function findCodexSessionStartCommands(
+  manifestPath: string,
+): CodexSessionStartCommands | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -771,7 +778,7 @@ function findCodexSessionStartCommand(manifestPath: string): string | null {
   if (!Array.isArray(sessionStart)) {
     return null;
   }
-  const commands: string[] = [];
+  const commands: CodexSessionStartCommands[] = [];
   for (const group of sessionStart) {
     if (group === null || typeof group !== 'object') continue;
     const hooks = (group as { hooks?: unknown }).hooks;
@@ -779,11 +786,17 @@ function findCodexSessionStartCommand(manifestPath: string): string | null {
     for (const hook of hooks) {
       if (hook === null || typeof hook !== 'object') continue;
       const command = (hook as { command?: unknown }).command;
+      const commandWindows = (hook as { commandWindows?: unknown })
+        .commandWindows;
       if (
         typeof command === 'string' &&
         command.includes('session-start-codex')
       ) {
-        commands.push(command);
+        commands.push({
+          command,
+          commandWindows:
+            typeof commandWindows === 'string' ? commandWindows : '',
+        });
       }
     }
   }
@@ -885,10 +898,10 @@ function parseSessionStartJson(stdout: string): CheckOutcome {
   return pass('Codex SessionStart hook executes through PowerShell');
 }
 
-// codex-session-start-hook-executes â€” prove the staged Codex hook command is
-// PowerShell-callable and emits the expected SessionStart JSON. This catches the
-// Windows-only failure mode where a quoted executable path needs the `&` call
-// operator before arguments.
+// codex-session-start-hook-executes â€” prove the staged Codex hook keeps its
+// default command POSIX-shell-safe while using Codex's Windows-only command
+// override for the PowerShell form. The override must emit the expected
+// SessionStart JSON.
 export function verbCodexSessionStartHookExecutes(
   _args: string[],
   ctx: CheckContext,
@@ -917,17 +930,30 @@ export function verbCodexSessionStartHookExecutes(
     return fail(`missing staged using-superpowers skill at ${usingSkill}`);
   }
 
-  const command = findCodexSessionStartCommand(manifest);
-  if (command === null) {
+  const commands = findCodexSessionStartCommands(manifest);
+  if (commands === null) {
     return fail('expected exactly one Codex session-start-codex hook command');
   }
-  if (!command.trimStart().startsWith('&')) {
+  if (commands.command.trimStart().startsWith('&')) {
     return fail(
-      'Codex SessionStart hook command is missing PowerShell call operator (&)',
+      'Codex default SessionStart hook command must not use PowerShell-only call operator (&)',
+    );
+  }
+  if (!commands.commandWindows) {
+    return fail('Codex SessionStart hook missing commandWindows override');
+  }
+  if (!commands.commandWindows.includes('session-start-codex')) {
+    return fail(
+      'Codex commandWindows override does not run session-start-codex',
+    );
+  }
+  if (!commands.commandWindows.trimStart().startsWith('&')) {
+    return fail(
+      'Codex commandWindows override is missing PowerShell call operator (&)',
     );
   }
 
-  const powerShellCommand = command.replaceAll(
+  const powerShellCommand = commands.commandWindows.replaceAll(
     PLUGIN_ROOT_PLACEHOLDER,
     powershellPath(plugin),
   );
