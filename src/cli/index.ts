@@ -10,6 +10,8 @@ import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
+import { checkCredentials } from '../credentials/check.ts';
+import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
 import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
@@ -105,6 +107,7 @@ interface RunOptions {
   readonly codingAgentsDir: string;
   readonly outRoot: string;
   readonly scenariosRoot: string;
+  readonly credential?: string;
 }
 
 interface ShowOptions {
@@ -117,6 +120,7 @@ interface ShowOptions {
 interface RunAllOptions {
   readonly codingAgents?: string;
   readonly scenarios?: string;
+  readonly credentials?: string;
   readonly jobs: string;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
@@ -144,6 +148,10 @@ program
     'root for a bare scenario name',
     'scenarios',
   )
+  .option(
+    '--credential <name>',
+    'credential name (default: agent default_credential)',
+  )
   .action(async (scenario: string, opts: RunOptions) => {
     const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
     if (scn === undefined) {
@@ -152,6 +160,14 @@ program
       );
       process.exit(2);
     }
+    // Resolve the credential name once for the SIGINT path so both the happy
+    // path (via runScenario) and the interrupted path (writeStoppedVerdict)
+    // stamp the same value.
+    const credentialName = resolveCredentialNameForAgent(
+      resolve(opts.codingAgentsDir),
+      opts.codingAgent,
+      opts.credential,
+    );
     // Graceful SIGINT handler. The handler must know the run dir + identity
     // before the await resolves, so the run dir is captured via onRunDir and
     // startedAt is stamped here (shared with the happy path). On SIGINT:
@@ -168,6 +184,9 @@ program
           scenario: scenarioId,
           codingAgent: opts.codingAgent,
           startedAt,
+          ...(credentialName !== undefined
+            ? { credential: credentialName }
+            : {}),
         });
       }
       process.exit(2);
@@ -180,6 +199,7 @@ program
       codingAgentsDir: resolve(opts.codingAgentsDir),
       outRoot: resolve(opts.outRoot),
       startedAt,
+      credential: opts.credential,
       onRunDir: (dir) => {
         runDirForStop = dir;
       },
@@ -233,59 +253,97 @@ program
   .argument('[names...]', 'scenario names (default: all)')
   .option('--fix', 'chmod +x scripts missing the bit', false)
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
-  .action((names: string[], opts: { fix: boolean; scenariosRoot: string }) => {
-    const root = opts.scenariosRoot;
-    // A missing --scenarios-root is a hard error before any scenario work, not a
-    // silent empty run.
-    requireScenariosRoot(resolve(root));
-    let targets: string[];
-    if (names.length > 0) {
-      // Each name resolves via the shared rule — a bare name or a path/prefixed
-      // form (`foo` or `scenarios/foo`) both work, symmetric with `run`.
-      targets = [];
-      for (const name of names) {
-        const dir = resolveScenarioDir(name, root);
-        if (dir === undefined) {
-          process.stderr.write(
-            `error: no scenario '${name}' (looked at the path and under ${root}/)\n`,
-          );
-          process.exit(1);
-        }
-        targets.push(dir);
-      }
-    } else {
-      targets = scenarioNames(resolve(root)).map((n) => join(resolve(root), n));
-    }
-
-    let failed = 0;
-    for (const dir of targets) {
-      if (opts.fix) {
-        for (const fixed of fixExecutableBits(dir)) {
-          process.stdout.write(`fixed +x ${basename(dir)}/${fixed}\n`);
-        }
-      }
-      const problems = checkScenario(dir);
-      if (problems.length > 0) {
-        failed += 1;
-        process.stdout.write(`FAIL ${basename(dir)}\n`);
-        for (const problem of problems) {
-          process.stdout.write(`  - ${problem}\n`);
+  .option(
+    '--credentials <path>',
+    'credentials file to validate',
+    'credentials.yaml',
+  )
+  .option('--coding-agents-dir <dir>', 'coding-agents dir', 'coding-agents')
+  .action(
+    (
+      names: string[],
+      opts: {
+        fix: boolean;
+        scenariosRoot: string;
+        credentials: string;
+        codingAgentsDir: string;
+      },
+    ) => {
+      const root = opts.scenariosRoot;
+      // A missing --scenarios-root is a hard error before any scenario work, not a
+      // silent empty run.
+      requireScenariosRoot(resolve(root));
+      let targets: string[];
+      if (names.length > 0) {
+        // Each name resolves via the shared rule — a bare name or a path/prefixed
+        // form (`foo` or `scenarios/foo`) both work, symmetric with `run`.
+        targets = [];
+        for (const name of names) {
+          const dir = resolveScenarioDir(name, root);
+          if (dir === undefined) {
+            process.stderr.write(
+              `error: no scenario '${name}' (looked at the path and under ${root}/)\n`,
+            );
+            process.exit(1);
+          }
+          targets.push(dir);
         }
       } else {
-        process.stdout.write(`ok   ${basename(dir)}\n`);
+        targets = scenarioNames(resolve(root)).map((n) =>
+          join(resolve(root), n),
+        );
       }
-    }
-    if (failed > 0) {
-      process.stderr.write(`\n${failed} scenario(s) failed validation\n`);
-      process.exit(1);
-    }
-    process.exit(0);
-  });
+
+      let failed = 0;
+      for (const dir of targets) {
+        if (opts.fix) {
+          for (const fixed of fixExecutableBits(dir)) {
+            process.stdout.write(`fixed +x ${basename(dir)}/${fixed}\n`);
+          }
+        }
+        const problems = checkScenario(dir);
+        if (problems.length > 0) {
+          failed += 1;
+          process.stdout.write(`FAIL ${basename(dir)}\n`);
+          for (const problem of problems) {
+            process.stdout.write(`  - ${problem}\n`);
+          }
+        } else {
+          process.stdout.write(`ok   ${basename(dir)}\n`);
+        }
+      }
+
+      // Validate credentials.yaml against coding-agent default_credential fields.
+      const credResult = checkCredentials(
+        resolve(opts.credentials),
+        resolve(opts.codingAgentsDir),
+      );
+      if (!credResult.ok) {
+        failed += 1;
+        process.stdout.write('FAIL credentials\n');
+        for (const err of credResult.errors) {
+          process.stdout.write(`  - ${err}\n`);
+        }
+      } else {
+        process.stdout.write('ok   credentials\n');
+      }
+
+      if (failed > 0) {
+        process.stderr.write(`\n${failed} check(s) failed validation\n`);
+        process.exit(1);
+      }
+      process.exit(0);
+    },
+  );
 
 program
   .command('run-all')
   .option('--coding-agents <csv>', 'CSV agent filter (default: all)')
   .option('--scenarios <csv>', 'CSV scenario filter (default: all)')
+  .option(
+    '--credentials <csv>',
+    'CSV credential filter (default: agent default_credential)',
+  )
   .option('--jobs <n>', 'global slot pool size (>=1)', String(DEFAULT_JOBS))
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
@@ -302,6 +360,7 @@ program
     // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
     // -> foo), symmetric with run/check.
     const scenarioFilter = csvList(opts.scenarios)?.map(scenarioName);
+    const credentialFilter = csvList(opts.credentials);
     const jobs = parseIntegerOption(opts.jobs);
     if (jobs === undefined || jobs < 1) {
       process.stderr.write('error: --jobs must be an integer >= 1\n');
@@ -344,6 +403,7 @@ program
         jobs,
         ...(agentFilter !== undefined ? { agentFilter } : {}),
         ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
+        ...(credentialFilter !== undefined ? { credentialFilter } : {}),
         tier: tier ?? null,
         includeDrafts: opts.includeDrafts,
         heartbeatSeconds,

@@ -70,10 +70,13 @@ const BatchHeaderSchema = z.object({
 // One results.jsonl record. run_id may be null (no run produced); skipped is a
 // truthy directive marker, read with pure truthiness and never type-checked, so
 // it is accepted as unknown here — a non-string skipped degrades one cell rather
-// than aborting the whole matrix with a schema error.
+// than aborting the whole matrix with a schema error. credential is the cost/
+// identity dimension: distinct credentials of one (scenario, agent) are distinct
+// matrix columns.
 const BatchResultSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
+  credential: z.string().optional(),
   run_id: z.string().nullable().optional(),
   skipped: z.unknown().optional(),
 });
@@ -130,10 +133,27 @@ function readResults(batchDir: string): z.infer<typeof BatchResultSchema>[] {
   return rows;
 }
 
-function cellKey(scenario: string, agent: string): string {
-  // Tab is absent from scenario/agent names, so it is a safe composite-key
-  // separator for the per-cell lookup map.
-  return `${scenario}\t${agent}`;
+function cellKey(scenario: string, agent: string, credential: string): string {
+  // Tab is absent from scenario/agent/credential names, so it is a safe
+  // composite-key separator for the per-cell lookup map.
+  return `${scenario}\t${agent}\t${credential}`;
+}
+
+// One matrix column: an agent and the credential it ran under (''/the default
+// when none). Distinct credentials of one agent are distinct columns. The column
+// label shows the agent, with the credential appended (`agent · credential`)
+// only when a non-empty credential is present.
+interface Column {
+  readonly agent: string;
+  readonly credential: string;
+}
+
+function columnKey(col: Column): string {
+  return `${col.agent}\t${col.credential}`;
+}
+
+function columnLabel(col: Column): string {
+  return col.credential === '' ? col.agent : `${col.agent} · ${col.credential}`;
 }
 
 export interface RenderBatchArgs {
@@ -150,8 +170,32 @@ export function renderBatch(args: RenderBatchArgs): string {
   );
   const rows = readResults(args.batchDir);
 
-  const agents = header.coding_agents;
   const scenarios = [...new Set(rows.map((r) => r.scenario))].sort();
+
+  // Columns are the distinct (agent, credential) pairs observed, ordered by the
+  // batch.json agent order, then by credential within each agent. An agent with
+  // no recorded credential collapses to a single bare-agent column (preserving
+  // the pre-credential single-column-per-agent layout).
+  const colByKey = new Map<string, Column>();
+  for (const r of rows) {
+    const col: Column = {
+      agent: r.coding_agent,
+      credential: r.credential ?? '',
+    };
+    colByKey.set(columnKey(col), col);
+  }
+  const agentOrder = new Map<string, number>(
+    header.coding_agents.map((a, i) => [a, i]),
+  );
+  const columns = [...colByKey.values()].sort((a, b) => {
+    const ai = agentOrder.get(a.agent) ?? header.coding_agents.length;
+    const bi = agentOrder.get(b.agent) ?? header.coding_agents.length;
+    if (ai !== bi) return ai - bi;
+    if (a.agent !== b.agent) return a.agent < b.agent ? -1 : 1;
+    if (a.credential !== b.credential)
+      return a.credential < b.credential ? -1 : 1;
+    return 0;
+  });
 
   const cellVerdicts = new Map<string, BatchVerdict>();
   const counts: Record<BatchVerdict, number> = {
@@ -163,7 +207,7 @@ export function renderBatch(args: RenderBatchArgs): string {
   };
 
   for (const r of rows) {
-    const key = cellKey(r.scenario, r.coding_agent);
+    const key = cellKey(r.scenario, r.coding_agent, r.credential ?? '');
     // Truthiness gate: any truthy value (a directive string, true, ...) marks
     // the cell skipped; falsy or absent does not.
     if (r.skipped) {
@@ -179,7 +223,10 @@ export function renderBatch(args: RenderBatchArgs): string {
   // Column widths grow to fit content.
   let scenW = Math.max(...scenarios.map((s) => s.length), 0);
   scenW = Math.max(scenW, 'scenario'.length);
-  const cellW = Math.max(...agents.map((a) => a.length), '⊘ indet'.length);
+  const cellW = Math.max(
+    ...columns.map((c) => columnLabel(c).length),
+    '⊘ indet'.length,
+  );
 
   const lines: string[] = [];
 
@@ -191,19 +238,20 @@ export function renderBatch(args: RenderBatchArgs): string {
   lines.push(banner);
   lines.push('');
 
-  const headerRow = `| ${'scenario'.padEnd(scenW)} | ${agents
-    .map((a) => a.padEnd(cellW))
+  const headerRow = `| ${'scenario'.padEnd(scenW)} | ${columns
+    .map((c) => columnLabel(c).padEnd(cellW))
     .join(' | ')} |`;
   lines.push(headerRow);
 
-  const sep = `|${'-'.repeat(scenW + 2)}|${agents
+  const sep = `|${'-'.repeat(scenW + 2)}|${columns
     .map(() => '-'.repeat(cellW + 2))
     .join('|')}|`;
   lines.push(sep);
 
   for (const s of scenarios) {
-    const rowCells = agents.map((a) => {
-      const verdict = cellVerdicts.get(cellKey(s, a)) ?? 'unknown';
+    const rowCells = columns.map((c) => {
+      const verdict =
+        cellVerdicts.get(cellKey(s, c.agent, c.credential)) ?? 'unknown';
       const { glyph, label } = BATCH_GLYPHS[verdict];
       const text = `${glyph} ${label}`.padEnd(cellW);
       return paint(text, BATCH_GLYPH_COLORS[verdict], args.color);

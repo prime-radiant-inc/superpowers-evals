@@ -20,6 +20,7 @@ import {
   type SpawnResult,
 } from '../src/agents/opencode-capture.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -36,10 +37,23 @@ const OPENCODE_CONFIG: AgentConfig = {
   required_env: ['SUPERPOWERS_ROOT'],
   os_support: ['linux'],
   max_time: '10m',
-  max_concurrency: 1,
 };
 
-const OPENCODE_MODEL = 'openai/gpt-5.5';
+// A synthetic api-key custom-endpoint credential for opencode tests. Uses
+// openai-chat (→ @ai-sdk/openai-compatible), a base_url, and a resolvable
+// api_key_env. compat.thinking_format: 'zai' triggers reasoning: true.
+function makeCredential(overrides?: Partial<Credential>): Credential {
+  return {
+    model: 'glm-4.5-air',
+    harnesses: ['opencode'],
+    api: 'openai-chat',
+    base_url: 'https://open.bigmodel.cn/api/paas/v4/',
+    auth: 'api-key',
+    api_key_env: 'TEST_OPENCODE_API_KEY',
+    compat: { thinking_format: 'zai' },
+    ...overrides,
+  };
+}
 
 // Stage a SUPERPOWERS_ROOT with the exact files _seed_opencode_config requires:
 // the .opencode plugin and the two probed SKILL.md files, plus extra skills so
@@ -57,14 +71,34 @@ function stageSuperpowers(root: string): void {
   }
 }
 
-// Set SUPERPOWERS_ROOT (and clear the node-bin override) around `body`,
-// restoring prior values even on throw. noProcessEnv is OFF for test/agent-*.
-function withEnv(superpowersRoot: string | undefined, body: () => void): void {
+// Set SUPERPOWERS_ROOT and an API key env (and clear the node-bin override)
+// around `body`, restoring prior values even on throw.
+function withEnv(
+  superpowersRoot: string | undefined,
+  apiKey: string | undefined,
+  body: () => void,
+): void;
+function withEnv(superpowersRoot: string | undefined, body: () => void): void;
+function withEnv(
+  superpowersRoot: string | undefined,
+  apiKeyOrBody: string | undefined | (() => void),
+  bodyArg?: () => void,
+): void {
+  const apiKey = typeof apiKeyOrBody === 'function' ? undefined : apiKeyOrBody;
+  const body =
+    typeof apiKeyOrBody === 'function' ? apiKeyOrBody : (bodyArg as () => void);
+
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
+  const prevKey = process.env['TEST_OPENCODE_API_KEY'];
   if (superpowersRoot === undefined) {
     delete process.env['SUPERPOWERS_ROOT'];
   } else {
     process.env['SUPERPOWERS_ROOT'] = superpowersRoot;
+  }
+  if (apiKey === undefined) {
+    delete process.env['TEST_OPENCODE_API_KEY'];
+  } else {
+    process.env['TEST_OPENCODE_API_KEY'] = apiKey;
   }
   try {
     body();
@@ -73,6 +107,11 @@ function withEnv(superpowersRoot: string | undefined, body: () => void): void {
       delete process.env['SUPERPOWERS_ROOT'];
     } else {
       process.env['SUPERPOWERS_ROOT'] = prevRoot;
+    }
+    if (prevKey === undefined) {
+      delete process.env['TEST_OPENCODE_API_KEY'];
+    } else {
+      process.env['TEST_OPENCODE_API_KEY'] = prevKey;
     }
   }
 }
@@ -128,7 +167,232 @@ function expectedXdg(home: string): Record<string, string> {
   };
 }
 
-test('provision stages Superpowers into the XDG-isolated home and pins the model', () => {
+// ── Credential-path tests (B3) ──────────────────────────────────────────────
+
+test('provision builds opencode.json provider block from api-key credential', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential();
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const opencodeJsonPath = join(
+        home.configDir,
+        '.config',
+        'opencode',
+        'opencode.json',
+      );
+      const config = JSON.parse(readFileSync(opencodeJsonPath, 'utf8'));
+
+      // Provider block uses fixed name 'quorum', npm for openai-chat.
+      expect(config.provider?.quorum?.npm).toBe('@ai-sdk/openai-compatible');
+      expect(config.provider?.quorum?.options?.baseURL).toBe(
+        'https://open.bigmodel.cn/api/paas/v4/',
+      );
+      expect(config.provider?.quorum?.options?.apiKey).toBe(
+        'test-api-key-value',
+      );
+
+      // Model entry: tool_call always true; reasoning true when thinking_format is set.
+      const modelEntry = config.provider?.quorum?.models?.[cred.model];
+      expect(modelEntry?.tool_call).toBe(true);
+      expect(modelEntry?.reasoning).toBe(true);
+
+      // Top-level model ref.
+      expect(config.model).toBe(`quorum/${cred.model}`);
+
+      // File mode 0600 (secret — carries the API key).
+      const st = statSync(opencodeJsonPath);
+      expect(st.mode & 0o777).toBe(0o600);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision opencode.json omits reasoning when compat has no thinking_format', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential({ compat: {} });
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const config = JSON.parse(
+        readFileSync(
+          join(home.configDir, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ),
+      );
+      const modelEntry = config.provider?.quorum?.models?.[cred.model];
+      // tool_call present, reasoning absent.
+      expect(modelEntry?.tool_call).toBe(true);
+      expect(modelEntry?.reasoning).toBeUndefined();
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision uses quorum/<model> for the preflight -m flag', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const run = calls.find((c) => c.args[1] === 'run');
+      expect(run?.args).toContain('quorum/glm-4.5-air');
+      expect(run?.args[3]).toBe('quorum/glm-4.5-air');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('preflight throwaway home also receives the opencode.json provider block', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const cred = makeCredential();
+
+  // Capture preflight config assertions in outer scope so we can verify them
+  // after provision returns. Read the file INSIDE the spawn callback while the
+  // preflight tmpdir still exists (before rmSync).
+  let preflightHome: string | undefined;
+  let preflightConfigExists = false;
+  let preflightConfigProvider: unknown;
+  let preflightConfigModel: unknown;
+  let preflightConfigMode: number | undefined;
+  let preflightModelRefFlag: unknown;
+
+  const spawn: SpawnFn = (opts) => {
+    if (opts.args[1] === '--version') {
+      return { stdout: 'opencode 1.2.3\n', stderr: '', exitCode: 0 };
+    }
+    if (opts.args[1] === 'run') {
+      const preflight = opts.env['HOME'];
+      if (preflight !== undefined) {
+        preflightHome = preflight;
+        preflightModelRefFlag = opts.args[3];
+
+        // Read and assert the preflight opencode.json before it's deleted.
+        const opencodeJsonPath = join(
+          preflight,
+          '.config',
+          'opencode',
+          'opencode.json',
+        );
+        preflightConfigExists = existsSync(opencodeJsonPath);
+        if (preflightConfigExists) {
+          const config = JSON.parse(readFileSync(opencodeJsonPath, 'utf8'));
+          preflightConfigProvider = config.provider?.quorum;
+          preflightConfigModel = config.model;
+          const st = statSync(opencodeJsonPath);
+          preflightConfigMode = st.mode & 0o777;
+        }
+      }
+
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 };
+    }
+    return { stdout: 'OK\n', stderr: '', exitCode: 0 };
+  };
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      // The preflight HOME was recorded and the opencode.json was written there.
+      expect(preflightHome).toBeDefined();
+      expect(preflightHome).not.toBe(home.configDir);
+
+      // The preflight home's opencode.json must have the provider block.
+      expect(preflightConfigExists).toBe(true);
+      expect(preflightConfigProvider).toBeDefined();
+
+      // Provider block uses fixed name 'quorum', npm for openai-chat.
+      const provider = preflightConfigProvider as Record<string, unknown>;
+      expect(provider['npm']).toBe('@ai-sdk/openai-compatible');
+      const options = provider['options'] as Record<string, unknown>;
+      expect(options?.['baseURL']).toBe(
+        'https://open.bigmodel.cn/api/paas/v4/',
+      );
+      expect(options?.['apiKey']).toBe('test-api-key-value');
+
+      // Top-level model ref.
+      expect(preflightConfigModel).toBe(`quorum/${cred.model}`);
+
+      // File mode 0600 (secret — carries the API key).
+      expect(preflightConfigMode).toBe(0o600);
+
+      // The preflight -m flag must be quorum/<model>.
+      expect(preflightModelRefFlag).toBe('quorum/glm-4.5-air');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision with anthropic api uses @ai-sdk/anthropic npm and includes apiKey', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential({
+    api: 'anthropic',
+    base_url: undefined,
+    compat: {},
+  });
+
+  try {
+    withEnv(spRoot, 'test-anthropic-key', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const config = JSON.parse(
+        readFileSync(
+          join(home.configDir, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ),
+      );
+      expect(config.provider?.quorum?.npm).toBe('@ai-sdk/anthropic');
+      expect(config.provider?.quorum?.options?.apiKey).toBe(
+        'test-anthropic-key',
+      );
+      // No baseURL when credential has no base_url.
+      expect(config.provider?.quorum?.options?.baseURL).toBeUndefined();
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws ProvisionError when credential is undefined', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
@@ -137,9 +401,97 @@ test('provision stages Superpowers into the XDG-isolated home and pins the model
   const { spawn } = makeHappySpawn();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, undefined, () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      const env = agent.provision(home, runner);
+      expect(() => agent.provision(home, runner, undefined)).toThrow(
+        ProvisionError,
+      );
+      expect(() => agent.provision(home, runner, undefined)).toThrow(
+        /credential/,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws ProvisionError for unsupported api (gemini)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential({ api: 'gemini' });
+
+  try {
+    withEnv(spRoot, 'test-key', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(/gemini/);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws ProvisionError for non-api-key auth (subscription)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential({ auth: 'subscription' });
+
+  try {
+    withEnv(spRoot, undefined, () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(
+        /subscription|api-key/,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision throws ProvisionError when the api_key_env is unset', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential();
+
+  try {
+    // No API key in env.
+    withEnv(spRoot, undefined, () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// ── Existing tests migrated to credential path ───────────────────────────────
+
+test('provision stages Superpowers into the XDG-isolated home and pins the model', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential();
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      const env = agent.provision(home, runner, cred);
 
       const opencodeHome = home.configDir;
       const configDir = join(opencodeHome, '.config', 'opencode');
@@ -158,14 +510,15 @@ test('provision stages Superpowers into the XDG-isolated home and pins the model
         true,
       );
 
-      // opencode.json carries the schema + the pinned model.
+      // opencode.json has the credential-derived provider block.
       const opencodeJson = JSON.parse(
         readFileSync(join(configDir, 'opencode.json'), 'utf8'),
       );
-      expect(opencodeJson).toEqual({
-        $schema: 'https://opencode.ai/config.json',
-        model: OPENCODE_MODEL,
-      });
+      expect(opencodeJson.$schema).toBe('https://opencode.ai/config.json');
+      expect(opencodeJson.model).toBe(`quorum/${cred.model}`);
+      expect(opencodeJson.provider?.quorum?.npm).toBe(
+        '@ai-sdk/openai-compatible',
+      );
 
       // Staged plugin file + copied skills tree.
       const stagedPlugin = join(
@@ -216,11 +569,12 @@ test('provision runs node --check then the model-pinned preflight', () => {
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      agent.provision(home, runner);
+      agent.provision(home, runner, cred);
 
       const stagedPlugin = join(
         home.configDir,
@@ -247,7 +601,7 @@ test('provision runs node --check then the model-pinned preflight', () => {
         'opencode',
         'run',
         '-m',
-        OPENCODE_MODEL,
+        `quorum/${cred.model}`,
         '--dangerously-skip-permissions',
         'Reply with EXACTLY OK.',
       ]);
@@ -276,15 +630,16 @@ test('preflight env is the strict allowlist, not the full host env', () => {
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   const prevLeak = process.env['OPENCODE_CONFIG_DIR'];
   const prevProxy = process.env['HTTP_PROXY'];
   process.env['OPENCODE_CONFIG_DIR'] = '/ambient/opencode';
   process.env['HTTP_PROXY'] = 'http://leak';
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      agent.provision(home, runner);
+      agent.provision(home, runner, cred);
       const run = calls.find((c) => c.args[1] === 'run');
       // Non-allowlisted ambient vars must NOT leak into the preflight.
       expect('HTTP_PROXY' in (run?.env ?? {})).toBe(false);
@@ -310,6 +665,7 @@ test('provision retries the preflight and accepts a tolerant "OK." reply', () =>
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
+  const cred = makeCredential();
 
   // First `run` returns a non-OK reply; the second returns "OK." (trailing
   // punctuation, accepted by the tolerant normalizer).
@@ -329,9 +685,9 @@ test('provision retries the preflight and accepts a tolerant "OK." reply', () =>
   };
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      agent.provision(home, runner);
+      agent.provision(home, runner, cred);
       expect(runAttempts).toBe(2);
     });
   } finally {
@@ -345,6 +701,7 @@ test('provision throws ProvisionError when the preflight never returns OK', () =
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
+  const cred = makeCredential();
 
   // `run` always exits non-zero -> the "exit" branch of the error.
   const spawn: SpawnFn = (opts): SpawnResult => {
@@ -355,9 +712,9 @@ test('provision throws ProvisionError when the preflight never returns OK', () =
   };
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
     });
   } finally {
     cleanup();
@@ -370,6 +727,7 @@ test('provision throws ProvisionError when a non-OK reply persists across 3 trie
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
+  const cred = makeCredential();
 
   // Exit 0 but a verbose (non-OK) reply on every attempt -> the "did not return
   // OK after 3 attempts" branch.
@@ -383,9 +741,9 @@ test('provision throws ProvisionError when a non-OK reply persists across 3 trie
   };
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
       // The retry loop ran the full three attempts.
       expect(runAttempts).toBe(3);
     });
@@ -403,6 +761,7 @@ test('provision aborts the preflight on the first timeout (no retry)', () => {
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
+  const cred = makeCredential();
 
   // `run` always times out (the live defaultSpawn throws OpenCodeTimeoutError when
   // Bun.spawnSync kills the child). The loop must NOT swallow + retry.
@@ -419,10 +778,10 @@ test('provision aborts the preflight on the first timeout (no retry)', () => {
   };
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
-      expect(() => agent.provision(home, runner)).toThrow(
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(
         /timed out after 90s/,
       );
       // Aborted on the FIRST timeout — Python raises immediately, no 3x retry.
@@ -439,6 +798,7 @@ test('provision throws ProvisionError when node --check fails', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
+  const cred = makeCredential();
 
   const runner = new FakeCommandRunner((command, args) => {
     if (command === 'command' && args[0] === '-v') {
@@ -452,9 +812,9 @@ test('provision throws ProvisionError when node --check fails', () => {
   const { spawn, calls } = makeHappySpawn();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
       // Aborted at node --check, before any opencode preflight invocation.
       expect(calls.length).toBe(0);
     });
@@ -472,6 +832,7 @@ test('provision skips node --check when node is absent on PATH', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
+  const cred = makeCredential();
 
   const binDir = join(home.workdir, '..', 'opencode-only-bin');
   mkdirSync(binDir, { recursive: true });
@@ -491,10 +852,10 @@ test('provision skips node --check when node is absent on PATH', () => {
   const prevPath = process.env['PATH'];
   process.env['PATH'] = binDir;
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
       // Provisioning proceeds (no node --check, preflight still runs OK).
-      expect(() => agent.provision(home, runner)).not.toThrow();
+      expect(() => agent.provision(home, runner, cred)).not.toThrow();
       expect(runner.calls.some((c) => c.command === 'node')).toBe(false);
     });
   } finally {
@@ -515,6 +876,7 @@ test('provision throws ProvisionError when opencode is not on PATH', () => {
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
+  const cred = makeCredential();
 
   // An empty bin dir as the ONLY PATH entry => Bun.which('opencode') is null.
   const emptyBin = join(home.workdir, '..', 'empty-bin');
@@ -526,10 +888,10 @@ test('provision throws ProvisionError when opencode is not on PATH', () => {
   const prevPath = process.env['PATH'];
   process.env['PATH'] = emptyBin;
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(/opencode/);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(/opencode/);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
       // No preflight invocation when the binary is missing.
       expect(calls.length).toBe(0);
     });
@@ -544,11 +906,12 @@ test('provision throws ProvisionError when SUPERPOWERS_ROOT is unset', () => {
   const { home, cleanup } = makeTempHome();
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(undefined, () => {
+    withEnv(undefined, undefined, () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
       // No preflight attempted when a required input is missing.
       expect(calls.length).toBe(0);
     });
@@ -567,11 +930,12 @@ test('provision throws ProvisionError when a required plugin file is missing', (
   }
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      expect(() => agent.provision(home, runner, cred)).toThrow(ProvisionError);
       expect(calls.length).toBe(0);
     });
   } finally {
@@ -594,11 +958,12 @@ test('provision throws ProvisionError on a pre-existing stale session export', (
 
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(
+      expect(() => agent.provision(home, runner, cred)).toThrow(
         /pre-existing OpenCode session exports/,
       );
       // No preflight when staging aborts on a dirty home.
@@ -624,11 +989,12 @@ test('provision rejects a symlink under SUPERPOWERS_ROOT/skills', () => {
 
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn, calls } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'test-api-key-value', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      expect(() => agent.provision(home, runner)).toThrow(
+      expect(() => agent.provision(home, runner, cred)).toThrow(
         /unsupported symlink/,
       );
       expect(calls.length).toBe(0);
@@ -638,34 +1004,32 @@ test('provision rejects a symlink under SUPERPOWERS_ROOT/skills', () => {
   }
 });
 
-test('opencode.json is a regular file and leaks no provider key', () => {
+test('opencode.json is mode 0600 and carries the api key', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
   const { spawn } = makeHappySpawn();
+  const cred = makeCredential();
 
   try {
-    withEnv(spRoot, () => {
+    withEnv(spRoot, 'sk-test-secret-key', () => {
       const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
-      agent.provision(home, runner);
-      const opencodeJson = join(
+      agent.provision(home, runner, cred);
+      const opencodeJsonPath = join(
         home.configDir,
         '.config',
         'opencode',
         'opencode.json',
       );
-      const st = statSync(opencodeJson);
+      const st = statSync(opencodeJsonPath);
       expect(st.isFile()).toBe(true);
-      // Parity with codex: OpenCode writes NO quorum-authored mode-0600 secret
-      // file; provider keys reach opencode only via subprocess env. opencode.json
-      // is non-secret config and must not contain a key.
-      const body = readFileSync(opencodeJson, 'utf8');
-      expect(body).not.toContain('sk-');
-      // statSync(path).mode & 0o777 is the mode-check idiom the spec asks for;
-      // assert opencode.json is owner-readable/writable (non-secret default).
-      expect(st.mode & 0o600).toBe(0o600);
+      // opencode.json now carries the API key (credential-derived) and must be
+      // mode 0600.
+      expect(st.mode & 0o777).toBe(0o600);
+      const body = readFileSync(opencodeJsonPath, 'utf8');
+      expect(body).toContain('sk-test-secret-key');
     });
   } finally {
     cleanup();

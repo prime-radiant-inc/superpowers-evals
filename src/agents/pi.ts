@@ -9,19 +9,20 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
+import type { ApiKeyResolution } from '../credentials/resolve.ts';
+import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
 
-// Pi azure-openai-responses provider passes through these env vars into pi.env.
-// Order is preserved for the membership scan; the pi.env writer re-sorts before
-// emitting.
-const PI_AZURE_ENV_NAMES = [
-  'AZURE_OPENAI_BASE_URL',
-  'AZURE_OPENAI_RESOURCE_NAME',
-  'AZURE_OPENAI_API_VERSION',
-  'AZURE_OPENAI_DEPLOYMENT_NAME_MAP',
-] as const;
+// Map credential.api values to pi's internal api name. Only openai-chat is
+// supported on the api-key custom-endpoint path. All other CREDENTIAL_APIS are
+// unsupported by pi's custom-endpoint provisioner.
+const CREDENTIAL_API_TO_PI_API: Readonly<Record<string, string>> = {
+  'openai-chat': 'openai-completions',
+};
 
 // Characters shlex.quote treats as safe (its unsafe-char regex is
 // [^\w@%+=:,./-]). A value built only from these is emitted bare; anything else
@@ -45,33 +46,6 @@ function requirePiEnv(name: string, purpose: string): string {
     throw new ProvisionError(`${name} not set; cannot ${purpose}`);
   }
   return value;
-}
-
-// Provider-specific pass-through env. Only the azure-openai-responses provider
-// contributes extras, and it requires at least one of base-url / resource-name.
-// Other providers contribute nothing.
-function piProviderExtraEnv(provider: string): Record<string, string> {
-  if (provider !== 'azure-openai-responses') {
-    return {};
-  }
-  const baseUrl = getEnv('AZURE_OPENAI_BASE_URL');
-  const resourceName = getEnv('AZURE_OPENAI_RESOURCE_NAME');
-  if (
-    (baseUrl === undefined || baseUrl === '') &&
-    (resourceName === undefined || resourceName === '')
-  ) {
-    throw new ProvisionError(
-      'PI_PROVIDER=azure-openai-responses requires AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME',
-    );
-  }
-  const extra: Record<string, string> = {};
-  for (const name of PI_AZURE_ENV_NAMES) {
-    const value = getEnv(name);
-    if (value !== undefined && value !== '') {
-      extra[name] = value;
-    }
-  }
-  return extra;
 }
 
 // Write pi.env (mode 0600). Shlex-quoted export lines for PI_PROVIDER / PI_MODEL
@@ -171,7 +145,7 @@ function piOauthAgentDir(): string {
 }
 
 // The host pi settings.json fields the OAuth path reads to default the
-// provider/model when PI_PROVIDER/PI_MODEL are not set as overrides. Permissive:
+// provider/model when they are not set as overrides. Permissive:
 // any other field passes through; missing defaults surface as a clear error.
 const PiSettingsSchema = z
   .object({
@@ -185,42 +159,26 @@ const PiSettingsSchema = z
 // authenticates via OAuth instead of an env-var key. Like codex's auth seeding,
 // copy the host auth.json verbatim (mode 0600, O_NOFOLLOW so a pre-placed
 // symlink can't redirect the credential), then write settings.json + pi.env
-// carrying the resolved provider/model (env override else host settings) and NO
-// PI_API_KEY. Throws a clear setup error when no host login exists or the
-// provider/model can't be determined.
-function seedPiOauth(configDir: string): void {
+// carrying the resolved provider/model and NO PI_API_KEY. Throws a clear setup
+// error when no host login exists or the provider can't be determined.
+// The model is sourced from credential.model; the provider comes from the host
+// settings.json defaultProvider (the fixed 'quorum' name is NOT used for OAuth).
+function seedPiOauth(configDir: string, credentialModel: string): void {
   const agentDir = piOauthAgentDir();
   const source = join(agentDir, 'auth.json');
   if (!existsSync(source)) {
     throw new ProvisionError(
-      `no PI_API_KEY and no pi oauth login found at ${source}; run \`pi\` to log in or set PI_PROVIDER/PI_MODEL/PI_API_KEY`,
+      `no PI_API_KEY and no pi oauth login found at ${source}; run \`pi\` to log in`,
     );
   }
 
-  // Resolve provider/model: an explicit env override wins; otherwise read the
-  // host settings.json defaults. Without either, we cannot launch (the pi
-  // launcher needs --provider/--model), so fail loudly rather than guess.
-  let provider = getEnv('PI_PROVIDER');
-  let model = getEnv('PI_MODEL');
-  if (
-    provider === undefined ||
-    provider === '' ||
-    model === undefined ||
-    model === ''
-  ) {
-    const settings = readPiOauthSettings(join(agentDir, 'settings.json'));
-    provider =
-      provider !== undefined && provider !== '' ? provider : settings.provider;
-    model = model !== undefined && model !== '' ? model : settings.model;
-  }
+  // Resolve provider from the host settings.json. Without it, we cannot launch
+  // (the pi launcher needs --provider), so fail loudly rather than guess.
+  const settings = readPiOauthSettings(join(agentDir, 'settings.json'));
+  const provider = settings.provider;
   if (provider === undefined || provider === '') {
     throw new ProvisionError(
-      'pi oauth login: cannot determine provider; set PI_PROVIDER or add defaultProvider to the host pi settings.json',
-    );
-  }
-  if (model === undefined || model === '') {
-    throw new ProvisionError(
-      'pi oauth login: cannot determine model; set PI_MODEL or add defaultModel to the host pi settings.json',
+      'pi oauth login: cannot determine provider; add defaultProvider to the host pi settings.json',
     );
   }
 
@@ -230,11 +188,10 @@ function seedPiOauth(configDir: string): void {
   // Copy the OAuth credential verbatim through the O_NOFOLLOW-protected writer.
   writePrivateFileNoFollow(join(configDir, 'auth.json'), readFileSync(source));
 
-  // settings.json mirrors the api-key path's shape (provider/model + fixed
-  // thinking level), so pi's defaults match the launcher's flags.
+  // settings.json: provider from host settings, model from the credential.
   const settingsBody = {
     defaultProvider: provider,
-    defaultModel: model,
+    defaultModel: credentialModel,
     defaultThinkingLevel: 'medium',
   };
   writeFileSync(
@@ -243,7 +200,7 @@ function seedPiOauth(configDir: string): void {
   );
 
   // pi.env carries provider/model for the launcher; no PI_API_KEY in OAuth mode.
-  writePiEnvFile(configDir, provider, model, undefined, {});
+  writePiEnvFile(configDir, provider, credentialModel, undefined, {});
 }
 
 // Read provider/model defaults from the host pi settings.json. A missing file is
@@ -268,14 +225,67 @@ function readPiOauthSettings(settingsPath: string): {
   return { provider: settings.defaultProvider, model: settings.defaultModel };
 }
 
-// Pi-family provisioning. Setup only — it shells out to nothing (the PATH probe
-// is a Bun.which lookup, not a subprocess), so no CommandRunner is needed. It
-// creates the isolated config dir and a sessions/ subdir, then writes auth.json,
-// settings.json, and pi.env. Auth is OAuth-or-env: when PI_API_KEY is set it
-// uses the api-key path (auth.json's key field is the literal "$PI_API_KEY"
-// placeholder, expanded later by the launcher from pi.env); otherwise it seeds
-// the host OAuth login into the isolated config dir. The returned env map is
-// empty; every secret lives in the written files, never in the returned env.
+// Write the pi models.json that registers the custom provider + model. Uses the
+// fixed provider name 'quorum' (not the credential name) so pi's internal routing
+// always points at the same slot regardless of which credential is active.
+// Mode 0600 because it carries the API key.
+function writePiModelsJson(
+  configDir: string,
+  baseUrl: string,
+  piApi: string,
+  apiKey: string,
+  model: string,
+  compat: { thinkingFormat?: string; maxTokensField?: string },
+  reasoning: boolean,
+): void {
+  const modelEntry: Record<string, unknown> = {
+    id: model,
+    name: model,
+  };
+  const compatObj: Record<string, string> = {};
+  if (compat.thinkingFormat !== undefined) {
+    compatObj['thinkingFormat'] = compat.thinkingFormat;
+  }
+  if (compat.maxTokensField !== undefined) {
+    compatObj['maxTokensField'] = compat.maxTokensField;
+  }
+  if (Object.keys(compatObj).length > 0) {
+    modelEntry['compat'] = compatObj;
+  }
+  if (reasoning) {
+    modelEntry['reasoning'] = true;
+  }
+
+  const body = {
+    providers: {
+      quorum: {
+        baseUrl,
+        api: piApi,
+        apiKey,
+        models: [modelEntry],
+      },
+    },
+  };
+  writeFileSync(
+    join(configDir, 'models.json'),
+    `${JSON.stringify(body, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+// Pi-family provisioning. Requires a Credential — throws ProvisionError when
+// none is supplied. Branches on credential.auth:
+//
+//   api-key: custom-endpoint (e.g. GLM/ollama). Requires credential.base_url.
+//     Resolves the API key via resolveApiKey. Maps credential.api to pi's api
+//     name (only openai-chat → openai-completions is supported). Writes
+//     models.json, settings.json, auth.json (with the RESOLVED key), and pi.env
+//     under a fixed provider name 'quorum'.
+//
+//   oauth: native pi host login. Seeds the host auth.json + writes settings.json
+//     (provider from host settings, model from credential.model) and pi.env.
+//
+//   other (subscription): throws — pi has no subscription path.
 //
 // PI_CODING_AGENT_DIR collapse: home.configDir is rooted under the throwaway
 // $HOME at <runHome>/.pi/agent (pi.yaml: home_config_subdir ".pi/agent"), which
@@ -291,8 +301,16 @@ export class PiAgent implements CodingAgent {
     this.config = config;
   }
 
-  provision(home: RunHome): Record<string, string> {
+  provision(
+    home: RunHome,
+    _runner: CommandRunner,
+    credential: Credential | undefined,
+  ): Record<string, string> {
     const { configDir } = home;
+
+    if (credential === undefined) {
+      throw new ProvisionError('pi requires a credential');
+    }
 
     // SUPERPOWERS_ROOT is required in both auth paths; verify it first.
     const superpowersRaw = requirePiEnv(
@@ -305,43 +323,95 @@ export class PiAgent implements CodingAgent {
     requirePiSuperpowersSource(expanduser(superpowersRaw));
     requirePiOnPath();
 
-    // Auth is OAuth-or-env. When PI_API_KEY is set, use the api-key path
-    // (PI_PROVIDER/PI_MODEL required, auth.json keyed to the "$PI_API_KEY"
-    // placeholder). Otherwise seed the host OAuth login into the isolated config
-    // dir so the run authenticates via OAuth.
-    const apiKey = getEnv('PI_API_KEY');
-    if (apiKey === undefined || apiKey === '') {
-      seedPiOauth(configDir);
+    if (credential.auth === 'oauth') {
+      seedPiOauth(configDir, credential.model);
       return {};
     }
 
-    const provider = requirePiEnv('PI_PROVIDER', 'configure Pi provider');
-    const model = requirePiEnv('PI_MODEL', 'configure Pi model');
-    const extraEnv = piProviderExtraEnv(provider);
+    if (credential.auth !== 'api-key') {
+      throw new ProvisionError(
+        `pi: auth '${credential.auth}' is not supported; use 'api-key' or 'oauth'`,
+      );
+    }
+
+    // api-key path: custom endpoint (e.g. GLM, ollama).
+    const { base_url: baseUrl } = credential;
+    if (baseUrl === undefined || baseUrl === '') {
+      throw new ProvisionError(
+        'pi: api-key credential requires base_url for the custom endpoint',
+      );
+    }
+
+    const piApi = CREDENTIAL_API_TO_PI_API[credential.api];
+    if (piApi === undefined) {
+      throw new ProvisionError(
+        `pi: api '${credential.api}' is not supported; pi custom-endpoint supports openai-chat (maps to openai-completions)`,
+      );
+    }
+
+    let resolution: ApiKeyResolution;
+    try {
+      resolution = resolveApiKey(credential, 'PI_API_KEY');
+    } catch (e) {
+      throw new ProvisionError(e instanceof Error ? e.message : String(e));
+    }
+    if (resolution.kind !== 'env') {
+      // resolveApiKey returns 'native' only when auth !== 'api-key', which cannot
+      // happen here, but guard explicitly.
+      throw new ProvisionError('pi: could not resolve api key from credential');
+    }
+    const resolvedKey = resolution.value;
 
     mkdirSync(configDir, { recursive: true });
     mkdirSync(join(configDir, 'sessions'), { recursive: true });
 
-    // auth.json (mode 0600). The key field is the literal "$PI_API_KEY"
-    // placeholder — the real key is supplied via pi.env.
-    const authPath = join(configDir, 'auth.json');
-    const authBody: Record<string, { type: string; key: string }> = {
-      [provider]: { type: 'api_key', key: '$PI_API_KEY' },
-    };
-    writeFileSync(authPath, `${JSON.stringify(authBody, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    const credCompat = credential.compat;
+    const piCompat: { thinkingFormat?: string; maxTokensField?: string } = {};
+    if (credCompat.thinking_format !== undefined) {
+      piCompat.thinkingFormat = credCompat.thinking_format;
+    }
+    if (credCompat.max_tokens_field !== undefined) {
+      piCompat.maxTokensField = credCompat.max_tokens_field;
+    }
 
-    // settings.json (no special mode).
-    const settingsPath = join(configDir, 'settings.json');
+    // reasoning: true only when thinking_format is set.
+    const reasoning = credCompat.thinking_format !== undefined;
+
+    // models.json (mode 0600): registers the quorum provider with the custom
+    // endpoint, api, key, and model entry with compat/reasoning.
+    writePiModelsJson(
+      configDir,
+      baseUrl,
+      piApi,
+      resolvedKey,
+      credential.model,
+      piCompat,
+      reasoning,
+    );
+
+    // settings.json: fixed provider name 'quorum', model from credential.
     const settingsBody = {
-      defaultProvider: provider,
-      defaultModel: model,
+      defaultProvider: 'quorum',
+      defaultModel: credential.model,
       defaultThinkingLevel: 'medium',
     };
-    writeFileSync(settingsPath, `${JSON.stringify(settingsBody, null, 2)}\n`);
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      `${JSON.stringify(settingsBody, null, 2)}\n`,
+    );
 
-    writePiEnvFile(configDir, provider, model, apiKey, extraEnv);
+    // auth.json (mode 0600): keyed to the RESOLVED key, not the "$PI_API_KEY"
+    // placeholder. This is the spec §9.2 fix — the real key goes here.
+    const authBody: Record<string, { type: string; key: string }> = {
+      quorum: { type: 'api_key', key: resolvedKey },
+    };
+    writePrivateFileNoFollow(
+      join(configDir, 'auth.json'),
+      `${JSON.stringify(authBody, null, 2)}\n`,
+    );
+
+    // pi.env (mode 0600): PI_PROVIDER=quorum, PI_MODEL, PI_API_KEY (resolved).
+    writePiEnvFile(configDir, 'quorum', credential.model, resolvedKey, {});
 
     return {};
   }

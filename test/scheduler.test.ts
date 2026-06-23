@@ -20,7 +20,12 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 // Build a minimal runnable MatrixEntry for a (scenario, agent) pair. The
 // scheduler only reads scenario / codingAgent / scenarioDir off the entry.
-function cell(scenario: string, agent: string): MatrixEntry {
+// limiterKey defaults to agent (credential-less fallback) for scheduler tests.
+function cell(
+  scenario: string,
+  agent: string,
+  limiterKey?: string,
+): MatrixEntry {
   const skippedReason: SkippedReason = null;
   return {
     scenario,
@@ -29,6 +34,8 @@ function cell(scenario: string, agent: string): MatrixEntry {
     skippedReason,
     tier: 'full',
     status: 'active',
+    credential: '',
+    limiterKey: limiterKey ?? agent,
   };
 }
 
@@ -494,4 +501,123 @@ test('8: no fairness — greedy unfair interleaving is permitted (order unconstr
   expect(startedEntries(events)).toHaveLength(4);
   const finished = events.filter((e) => e.kind === 'cell_finished');
   expect(finished).toHaveLength(4);
+});
+
+// ---------------------------------------------------------------------------
+// Test 9: Cross-agent limiterKey sharing — two cells with the same limiterKey
+// but different codingAgent values share the cap (cap=1 => they serialize).
+// ---------------------------------------------------------------------------
+test('9: two cells with the same limiterKey but different agents share the cap', async () => {
+  const clock = new FakeClock();
+  // Both cells share limiterKey "shared-endpoint|anthropic" but have different
+  // codingAgents. Cap=1 on that limiterKey => they must serialize.
+  const sharedKey = 'shared-endpoint|anthropic';
+  const cells = [
+    cell('s1', 'claude', sharedKey),
+    cell('s1', 'claude-haiku', sharedKey),
+  ];
+  let maxInFlight = 0;
+  let inFlight = 0;
+  // Resolvers queued in invoke order; test releases them one by one.
+  const releases: Array<() => void> = [];
+
+  const { done } = runSchedule({
+    cells,
+    jobs: 8,
+    capFor: (lk) => (lk === sharedKey ? 1 : null),
+    spacingFor: () => 0,
+    clock,
+    invoke: () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const d = deferred<ChildResult>();
+      releases.push(() => {
+        inFlight -= 1;
+        d.resolve(okResult('x'));
+      });
+      return d.promise;
+    },
+    isRateLimited: () => false,
+    onEvent: () => {},
+  });
+
+  // Release each child as it becomes available. With cap=1 on the shared key
+  // we must release one before the second can start. Settle between releases so
+  // the scheduler can dispatch the next cell.
+  await settle();
+  // First cell should have started.
+  expect(releases).toHaveLength(1);
+  releases[0]?.();
+  await settle();
+  // Second cell should now have started.
+  expect(releases).toHaveLength(2);
+  releases[1]?.();
+  await done;
+
+  // The shared cap of 1 must have prevented concurrent runs.
+  expect(maxInFlight).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// Test 10: Rate-limit latch blast-radius — a latch on one cell skips ALL queued
+// cells sharing that limiterKey (across different agents), and does NOT skip
+// cells with a different limiterKey.
+// ---------------------------------------------------------------------------
+test('10: rate-limit latch skips queued cells of the same limiterKey across agents, not different limiterKey', async () => {
+  const clock = new FakeClock();
+  const sharedKey = 'shared-endpoint|anthropic';
+  const otherKey = 'other-endpoint|anthropic';
+
+  // s1/claude + s2/claude-haiku share limiterKey (cap=1, serial). s1/codex has
+  // a different limiterKey. The first shared-key cell completes rate-limited =>
+  // s2/claude-haiku (same limiterKey, queued) must be skipped; s1/codex (different
+  // limiterKey) must still run.
+  const cells = [
+    cell('s1', 'claude', sharedKey), // runs first, rate-limited
+    cell('s2', 'claude-haiku', sharedKey), // same limiterKey -> latched out
+    cell('s1', 'codex', otherKey), // different limiterKey -> proceeds
+  ];
+  const events: SchedulerEvent[] = [];
+  let invocations = 0;
+
+  const { done } = runSchedule({
+    cells,
+    jobs: 8,
+    capFor: (lk) => (lk === sharedKey ? 1 : null),
+    spacingFor: () => 0,
+    clock,
+    invoke: (c) => {
+      invocations += 1;
+      // The first invoke (claude, sharedKey) is rate-limited
+      if (c.codingAgent === 'claude') {
+        return Promise.resolve(okResult('rl-run'));
+      }
+      return Promise.resolve(okResult('ok-run'));
+    },
+    isRateLimited: (r) => r.run_id === 'rl-run',
+    onEvent: (e) => {
+      events.push(e);
+    },
+  });
+
+  await drainClock(clock);
+  await done;
+
+  // claude-haiku must NOT have been invoked (latched out by blast-radius).
+  // codex MUST have been invoked (different limiterKey).
+  expect(invocations).toBe(2); // claude + codex only
+
+  const rateLimitedSkips = events.filter(
+    (e): e is Extract<SchedulerEvent, { kind: 'cell_skipped' }> =>
+      e.kind === 'cell_skipped' && e.skipped_reason === 'rate-limited',
+  );
+  // Only claude-haiku (same limiterKey) was skipped rate-limited.
+  expect(rateLimitedSkips).toHaveLength(1);
+  expect(rateLimitedSkips[0]?.entry.codingAgent).toBe('claude-haiku');
+
+  // codex finished normally (not skipped).
+  const codexFinished = events.some(
+    (e) => e.kind === 'cell_finished' && e.entry.codingAgent === 'codex',
+  );
+  expect(codexFinished).toBe(true);
 });

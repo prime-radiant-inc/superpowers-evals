@@ -39,6 +39,7 @@ function writeClaudeYaml(dir: string, projectPrompt: string | undefined): void {
     'session_log_glob: "**/*.jsonl"',
     'normalizer: claude',
     'model: opus',
+    'default_credential: opus',
     'required_env:',
     '  - ANTHROPIC_API_KEY',
   ];
@@ -78,6 +79,7 @@ test('loads claude.yaml into a typed AgentConfig', () => {
       '  - ANTHROPIC_API_KEY',
       'max_time: 10m',
       'model: opus',
+      'default_credential: opus',
     ].join('\n'),
   );
   const cfg = loadAgentConfig(dir, 'claude');
@@ -85,7 +87,6 @@ test('loads claude.yaml into a typed AgentConfig', () => {
   expect(cfg.home_config_subdir).toBe('.claude');
   expect(cfg.required_env).toEqual(['ANTHROPIC_API_KEY']);
   expect(cfg.session_log_glob).toBe('**/*.jsonl');
-  expect(cfg.max_concurrency).toBeUndefined();
 });
 
 test('substituteEnv replaces ${VAR} from a provided map', () => {
@@ -160,6 +161,7 @@ test('loadAgentConfig defaults runtime_family to name (known) when omitted', () 
   writeYaml(dir, 'claude', [
     'name: claude',
     'model: opus',
+    'default_credential: opus',
     ...CLAUDE_BASE,
     'required_env: []',
   ]);
@@ -167,16 +169,32 @@ test('loadAgentConfig defaults runtime_family to name (known) when omitted', () 
   expect(() => loadAgentConfig(dir, 'claude')).not.toThrow();
 });
 
-// RX-2 — a claude family requires a non-blank model.
-test('loadAgentConfig rejects a claude family with no model', () => {
+// RX-2 — a claude family requires default_credential; model is now optional.
+test('loadAgentConfig rejects a claude family with no default_credential', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agents-'));
   writeYaml(dir, 'claude', [
     'name: claude',
     'runtime_family: claude',
+    'model: opus',
     ...CLAUDE_BASE,
     'required_env: []',
   ]);
-  expect(() => loadAgentConfig(dir, 'claude')).toThrow(/requires model/);
+  expect(() => loadAgentConfig(dir, 'claude')).toThrow(
+    /requires default_credential/,
+  );
+});
+
+test('loadAgentConfig accepts a claude family with default_credential and no model', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agents-'));
+  writeYaml(dir, 'claude', [
+    'name: claude',
+    'runtime_family: claude',
+    'default_credential: opus',
+    ...CLAUDE_BASE,
+    'required_env: []',
+  ]);
+  // model is optional; default_credential is sufficient for claude family.
+  expect(() => loadAgentConfig(dir, 'claude')).not.toThrow();
 });
 
 test('loadAgentConfig rejects a blank model', () => {
@@ -184,6 +202,7 @@ test('loadAgentConfig rejects a blank model', () => {
   writeYaml(dir, 'claude', [
     'name: claude',
     'runtime_family: claude',
+    'default_credential: opus',
     'model: "   "',
     ...CLAUDE_BASE,
     'required_env: []',
@@ -200,6 +219,7 @@ test('loadAgentConfig rejects an unset required_env var', () => {
     'name: claude',
     'runtime_family: claude',
     'model: opus',
+    'default_credential: opus',
     ...CLAUDE_BASE,
     'required_env:',
     '  - QUORUM_DEFINITELY_UNSET_RX4',
@@ -213,6 +233,7 @@ test('loadAgentConfigForValidation does not require credential env', () => {
     'name: claude',
     'runtime_family: claude',
     'model: opus',
+    'default_credential: opus',
     ...CLAUDE_BASE,
     'required_env:',
     '  - QUORUM_DEFINITELY_UNSET_VALIDATION',
@@ -282,4 +303,17 @@ test('agentConfigDir: a config-dir-like subdir roots under the throwaway home', 
 test('agentConfigDir: "." means the throwaway home itself (a HOME-like var)', () => {
   const cfg = { ...CONFIG_DIR_BASE, home_config_subdir: '.' };
   expect(agentConfigDir(cfg, '/run/home')).toBe('/run/home');
+});
+
+test('agent config accepts default_credential', () => {
+  const cfg = AgentConfigSchema.parse({
+    name: 'pi',
+    binary: 'pi',
+    session_log_dir: 'x',
+    session_log_glob: '*',
+    normalizer: 'pi',
+    home_config_subdir: '.pi/agent',
+    default_credential: 'pi_default',
+  });
+  expect(cfg.default_credential).toBe('pi_default');
 });

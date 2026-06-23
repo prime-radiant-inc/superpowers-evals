@@ -192,6 +192,57 @@ test('renderBatch omits the unknown tally suffix when no cell is unknown', () =>
   expect(tallyLine).toBe('1 ✓ · 0 ✗ · 0 ⊘ · 0 —');
 });
 
+test('renderBatch renders distinct columns per (agent, credential)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'batch-cred-'));
+  const batchDir = join(root, 'batch');
+  const resultsRoot = join(root, 'results');
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'b-cred',
+      started_at: '2026-06-12T00:00:00Z',
+      coding_agents: ['pi'],
+    }),
+  );
+  const records = [
+    {
+      scenario: 'alpha',
+      coding_agent: 'pi',
+      credential: 'credA',
+      run_id: 'r-a',
+    },
+    {
+      scenario: 'alpha',
+      coding_agent: 'pi',
+      credential: 'credB',
+      run_id: 'r-b',
+    },
+  ];
+  writeFileSync(
+    join(batchDir, 'results.jsonl'),
+    `${records.map((r) => JSON.stringify(r)).join('\n')}\n`,
+  );
+  for (const [runId, final] of [
+    ['r-a', 'pass'],
+    ['r-b', 'fail'],
+  ] as const) {
+    mkdirSync(join(resultsRoot, runId), { recursive: true });
+    writeFileSync(
+      join(resultsRoot, runId, 'verdict.json'),
+      JSON.stringify({ final }),
+    );
+  }
+  const out = renderBatch({ batchDir, resultsRoot, color: false });
+  // Two distinct (agent · credential) columns, each labeled with its credential.
+  expect(out).toContain('pi · credA');
+  expect(out).toContain('pi · credB');
+  // The alpha row carries both a pass (credA) and a fail (credB) cell.
+  const alphaRow = out.split('\n').find((l) => l.startsWith('| alpha'));
+  expect(alphaRow).toContain('✓ pass');
+  expect(alphaRow).toContain('✗ fail');
+});
+
 test('batchJson returns the header spread with a results array', () => {
   const { batchDir } = makeFixture();
   const payload = PayloadSchema.parse(batchJson(batchDir));

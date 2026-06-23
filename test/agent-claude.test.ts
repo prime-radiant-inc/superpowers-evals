@@ -9,6 +9,7 @@ import {
 import { join } from 'node:path';
 import { resolveAgent } from '../src/agents/index.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
 // The claude.yaml surface the adapter depends on. required_env carries
@@ -29,6 +30,18 @@ function claudeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
 }
 
 const API_KEY = 'sk-ant-0123456789abcdefghijklmnopqrstuvwxyz';
+
+// Credential that delivers API_KEY via a custom env var, so tests are
+// independent of the ANTHROPIC_API_KEY env state.
+const API_KEY_ENV = 'QUORUM_TEST_ANTHROPIC_KEY';
+const apiKeyCredential: Credential = {
+  model: 'claude-opus-4-5',
+  harnesses: ['claude'],
+  api: 'anthropic',
+  auth: 'api-key',
+  api_key_env: API_KEY_ENV,
+  compat: {},
+};
 
 // Set (or delete, for undefined) env vars the adapter reads via env.ts ->
 // process.env, run body, then restore. env.ts has no setter; test/agent-*.ts
@@ -119,8 +132,8 @@ test('provision writes the trust block even with no prior .claude.json', () => {
   }
 });
 
-// B1-claude-api-key-approval: when ANTHROPIC_API_KEY is in required_env, write
-// the per-run approval fingerprint (api_key[-20:]) into
+// B1-claude-api-key-approval: when a credential with api-key auth is passed,
+// write the per-run approval fingerprint (api_key[-20:]) into
 // customApiKeyResponses.approved and scrub it from rejected (Python
 // _approve_claude_api_key 466-483).
 test('provision seeds the customApiKeyResponses approval fingerprint and scrubs rejected', () => {
@@ -131,9 +144,11 @@ test('provision seeds the customApiKeyResponses approval fingerprint and scrubs 
     customApiKeyResponses: { approved: [], rejected: [fingerprint, 'other'] },
   });
   try {
-    withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
-      const agent = resolveAgent(claudeConfig());
-      agent.provision(home, undefined as never);
+    withEnv({ ANTHROPIC_API_KEY: undefined, [API_KEY_ENV]: API_KEY }, () => {
+      const agent = resolveAgent(
+        claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+      );
+      agent.provision(home, undefined as never, apiKeyCredential);
 
       const claudeJson: {
         customApiKeyResponses: { approved: string[]; rejected: string[] };
@@ -180,15 +195,17 @@ test('provision does not duplicate an already-approved fingerprint', () => {
 test('provision re-enforces 0600 on a pre-existing looser-perm .claude-env', () => {
   const { home, cleanup } = makeTempHome();
   try {
-    withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
+    withEnv({ ANTHROPIC_API_KEY: undefined, [API_KEY_ENV]: API_KEY }, () => {
       // Pre-create configDir and a world-readable .claude-env.
       mkdirSync(home.configDir, { recursive: true });
       const envFile = join(home.configDir, '.claude-env');
       writeFileSync(envFile, 'STALE\n', { mode: 0o644 });
       expect(statSync(envFile).mode & 0o777).toBe(0o644);
 
-      const agent = resolveAgent(claudeConfig());
-      agent.provision(home, undefined as never);
+      const agent = resolveAgent(
+        claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+      );
+      agent.provision(home, undefined as never, apiKeyCredential);
 
       expect(readFileSync(envFile, 'utf8')).toBe(
         `ANTHROPIC_API_KEY='${API_KEY}'\n`,
@@ -219,6 +236,139 @@ test('provision skips env-file and approval when ANTHROPIC_API_KEY is not requir
         );
         expect(claudeJson.customApiKeyResponses).toBeUndefined();
       }
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// B5: credential with custom api_key_env — the key must be read from the
+// custom env var, not ANTHROPIC_API_KEY. ANTHROPIC_API_KEY is deliberately
+// unset to prove the credential path does NOT require it.
+test('provision resolves api key from credential api_key_env (ANTHROPIC_API_KEY unset)', () => {
+  const { home, cleanup } = makeTempHome();
+  const customKey = 'sk-custom-env-key-0123456789abcdef';
+  const credential: Credential = {
+    model: 'claude-sonnet-4-6',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: 'MY_CUSTOM_ANTHROPIC_KEY',
+    compat: {},
+  };
+  try {
+    withEnv(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        MY_CUSTOM_ANTHROPIC_KEY: customKey,
+      },
+      () => {
+        const agent = resolveAgent(
+          // required_env no longer includes ANTHROPIC_API_KEY after B5 YAML edits;
+          // pass the post-edit shape to prove the credential path handles it.
+          claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+        );
+        agent.provision(home, undefined as never, credential);
+
+        const envFile = join(home.configDir, '.claude-env');
+        expect(existsSync(envFile)).toBe(true);
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `ANTHROPIC_API_KEY='${customKey}'\n`,
+        );
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// B5: when no credential is passed, the adapter falls back to the pre-B5
+// behavior (no .claude-env written if ANTHROPIC_API_KEY is not in required_env).
+test('provision with no credential and no ANTHROPIC_API_KEY in required_env writes no env-file', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
+      const agent = resolveAgent(
+        claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+      );
+      agent.provision(home, undefined as never, undefined);
+      expect(existsSync(join(home.configDir, '.claude-env'))).toBe(false);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// Fix pass 1 — apiKeyHelper seeding (credential path): the credential branch
+// must also write all three auth artifacts, not just .claude-env + approval.
+test('provision (credential) writes api-key-helper.sh at mode 0700 and settings.json apiKeyHelper', () => {
+  const { home, cleanup } = makeTempHome();
+  const customKey = 'sk-custom-env-key-0123456789abcdef';
+  const credential: Credential = {
+    model: 'claude-sonnet-4-6',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: 'MY_CUSTOM_ANTHROPIC_KEY',
+    compat: {},
+  };
+  try {
+    withEnv(
+      { ANTHROPIC_API_KEY: undefined, MY_CUSTOM_ANTHROPIC_KEY: customKey },
+      () => {
+        const agent = resolveAgent(
+          claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+        );
+        agent.provision(home, undefined as never, credential);
+
+        const helperPath = join(home.configDir, 'api-key-helper.sh');
+        expect(existsSync(helperPath)).toBe(true);
+        expect(statSync(helperPath).mode & 0o777).toBe(0o700);
+        expect(readFileSync(helperPath, 'utf8')).toBe(
+          `#!/bin/sh\nprintf '%s' '${customKey}'\n`,
+        );
+
+        const settingsPath = join(home.configDir, 'settings.json');
+        expect(existsSync(settingsPath)).toBe(true);
+        const settings: { apiKeyHelper?: string } = JSON.parse(
+          readFileSync(settingsPath, 'utf8'),
+        );
+        expect(settings.apiKeyHelper).toBe(helperPath);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// Fix pass 1 — apiKeyHelper seeding merges into existing settings.json without
+// clobbering other keys (e.g. a pre-seeded permissions block).
+test('provision merges apiKeyHelper into pre-existing settings.json', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv({ ANTHROPIC_API_KEY: undefined, [API_KEY_ENV]: API_KEY }, () => {
+      // Pre-seed a settings.json with an unrelated key.
+      mkdirSync(home.configDir, { recursive: true });
+      const settingsPath = join(home.configDir, 'settings.json');
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({ permissions: { allow: [] } }),
+      );
+
+      const agent = resolveAgent(
+        claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+      );
+      agent.provision(home, undefined as never, apiKeyCredential);
+
+      const settings: { apiKeyHelper?: string; permissions?: unknown } =
+        JSON.parse(readFileSync(settingsPath, 'utf8'));
+      // apiKeyHelper must be added.
+      expect(settings.apiKeyHelper).toBe(
+        join(home.configDir, 'api-key-helper.sh'),
+      );
+      // The pre-existing permissions key must survive.
+      expect(settings.permissions).toEqual({ allow: [] });
     });
   } finally {
     cleanup();

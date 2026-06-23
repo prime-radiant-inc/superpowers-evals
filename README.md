@@ -1,10 +1,9 @@
 # Superpowers Evals
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
-**Quorum** drives real coding-agent CLIs (Claude, Claude Haiku, Claude
-Sonnet, Codex, Antigravity, Gemini, Kimi, OpenCode, Pi, and Copilot) through a
-Gauntlet QA agent and grades them against scenario acceptance criteria plus
-deterministic post-checks.
+**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini,
+Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA agent and grades them
+against scenario acceptance criteria plus deterministic post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
 form `Quorum` appears in headings and the actor table.
@@ -32,8 +31,7 @@ CI.
 
 Live evals run the Coding-Agent under test with broad execution power:
 
-- Claude, Claude Haiku, and Claude Sonnet use
-  `--dangerously-skip-permissions`.
+- Claude uses `--dangerously-skip-permissions`.
 - Codex uses `--dangerously-bypass-approvals-and-sandbox`.
 - Antigravity uses `--dangerously-skip-permissions` and relies on local
   browser/keyring auth for `agy`.
@@ -90,9 +88,18 @@ bun run quorum run scenarios/triggering-writing-plans --coding-agent claude
 bun run quorum show <run-dir>
 ```
 
-Agent names are `claude`, `claude-haiku`, `claude-sonnet`, `codex`,
-`antigravity`, `gemini`, `kimi`, `opencode`, `pi`, and `copilot`. Not every
-scenario is valid for every agent.
+Agent names are `claude`, `codex`, `antigravity`, `gemini`, `kimi`,
+`opencode`, `pi`, and `copilot`. Not every scenario is valid for every agent.
+
+**BREAKING (credential axis)**: `claude-haiku` and `claude-sonnet` are no
+longer separate agent names. To run the Claude harness against Sonnet or Haiku:
+
+```bash
+bun run quorum run scenarios/<name> --coding-agent claude --credential sonnet
+bun run quorum run scenarios/<name> --coding-agent claude --credential haiku
+```
+
+The `claude` agent's default credential is `opus`.
 
 ## Shared Eval Appliance
 
@@ -107,7 +114,7 @@ evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
 evals-appliance run-all --json --detach \
   --superpowers-ref <branch-tag-or-sha> \
   -- --tier sentinel \
-     --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+     --coding-agents claude,codex,kimi \
      --jobs 4
 evals-appliance status --json <job-id>
 evals-appliance show --json <job-id>
@@ -184,7 +191,7 @@ Start with the sentinel suite:
 ```bash
 scripts/evals-container exec quorum run-all \
   --tier sentinel \
-  --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+  --coding-agents claude,codex,kimi \
   --jobs 4
 
 for agent in gemini opencode pi copilot; do
@@ -242,7 +249,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `github.com/prime-radiant-inc/gauntlet`; on `PATH` as `gauntlet` (via `bun link` or `GAUNTLET_ROOT`) |
 | **Gauntlet-Agent** | The LLM *inside* Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream → `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict → `result.{json,md}` |
-| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Claude Haiku**, **Claude Sonnet**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | config + session log under its throwaway `$HOME` at `<run>/home/…`; the files it writes → `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test — the SUT. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, **Copilot**. | config + session log under its throwaway `$HOME` at `<run>/home/…`; the files it writes → `<run>/coding-agent-workdir/` |
 | **Quorum** | The TypeScript/Bun wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and the final verdict. | repo `superpowers-evals/src/`; `<run>/verdict.json` |
 
 A run involves **two** LLMs — the **Gauntlet-Agent** (QA tester) and the
@@ -263,6 +270,41 @@ costs.
   - attribution atlas for non-passing runs.
 - [docs/baselines/](docs/baselines/) - current known-good baselines by backend.
 
+## Credential Axis
+
+The eval dimension is **(scenario, coding-agent, credential, os)**. `credentials.yaml`
+at the repo root defines named credentials; each entry declares the model, wire
+protocol (`api`: `openai-chat`, `openai-responses`, `anthropic`, or `gemini`),
+optional `base_url` for non-default endpoints, auth type (`api-key`,
+`subscription`, or `oauth`), optional `api_key_env`, the runtime families it
+serves (`harnesses`), and optional scheduler overrides (`max_concurrency`,
+`launch_spacing_seconds`) and a `compat` block (`thinking_format`,
+`max_tokens_field`).
+
+Each agent YAML declares a `default_credential`. Override at runtime:
+
+```bash
+# run against a named credential
+bun run quorum run scenarios/<name> --coding-agent claude --credential sonnet
+
+# run-all against multiple credentials (incompatible cells are skipped)
+bun run quorum run-all --coding-agents claude,opencode --credentials sonnet,haiku,opencode_gpt5 --jobs 4
+```
+
+`quorum check` validates `credentials.yaml` and each agent's `default_credential`.
+
+The scheduler keys its concurrency cap and rate-limit latch on the credential's
+**limiterKey** — the credential's `base_url` if set, else the credential name,
+joined with its `api` (e.g. `https://…/v1|openai-chat`, or `opus|anthropic` for
+a native credential with no `base_url`). Cells sharing a limiterKey share one
+cap and one rate-limit latch: a rate-limit response on any cell immediately
+skips all remaining queued cells for that endpoint.
+
+Standard named credentials (see `credentials.yaml`): `opus`, `sonnet`, `haiku`
+(Claude harness), `codex_sub` (Codex subscription), `kimi_default`,
+`pi_default`, `opencode_gpt5`, `gemini_default`, `serf_default`, `glm_5_2_chat`,
+`glm_5_2_responses`, `ollama_local`.
+
 ## Core Commands
 
 ```bash
@@ -270,14 +312,16 @@ bun run quorum list
 bun run quorum new my-new-scenario
 bun run quorum check my-new-scenario
 bun run quorum run scenarios/<name> --coding-agent <agent>
+bun run quorum run scenarios/<name> --coding-agent claude --credential sonnet
 bun run quorum run-all --coding-agents claude,codex --jobs 2
+bun run quorum run-all --coding-agents claude --credentials sonnet,haiku --jobs 2
 bun run quorum show <run-or-batch-id>
 bun run quorum costs <run-or-batch-id>
 ```
 
-`quorum check` with no arguments validates every scenario. `run-all` runs every
-included scenario against every selected Coding-Agent, filtered by each
-scenario's `# coding-agents:` directive.
+`quorum check` with no arguments validates every scenario and `credentials.yaml`.
+`run-all` runs every included scenario against every selected Coding-Agent,
+filtered by each scenario's `# coding-agents:` directive.
 
 ## Verdicts And Artifacts
 

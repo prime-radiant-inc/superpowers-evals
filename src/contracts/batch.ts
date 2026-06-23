@@ -20,14 +20,21 @@ export type BatchHeader = z.infer<typeof BatchHeaderSchema>;
 export const ResultRecordSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
+  credential: z.string().optional(),
   run_id: z.string().nullable(),
   skipped: z.string().optional(),
 });
 export type ResultRecord = z.infer<typeof ResultRecordSchema>;
 
 // Why a cell is not runnable. null == runnable. Precedence (highest first):
-// directive > draft > tier (see buildMatrix).
-export type SkippedReason = 'directive' | 'draft' | 'tier' | null;
+// directive > draft > tier > harness > os (see buildMatrix).
+export type SkippedReason =
+  | 'directive'
+  | 'draft'
+  | 'tier'
+  | 'harness'
+  | 'os'
+  | null;
 
 // One (scenario, agent) cell of the batch matrix. `runnable` is the helper below
 // rather than a property to keep the type plain.
@@ -38,6 +45,11 @@ export interface MatrixEntry {
   readonly skippedReason: SkippedReason;
   readonly tier: 'sentinel' | 'full' | 'adhoc';
   readonly status: string;
+  // The credential name used by this cell's agent ('' for credential-less agents).
+  readonly credential: string;
+  // The scheduler limiterKey: shared across all cells hitting the same endpoint.
+  // Credential-less agents fall back to the agent name (preserving prior behavior).
+  readonly limiterKey: string;
 }
 
 // A cell runs iff it carries no skip reason.

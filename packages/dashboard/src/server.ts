@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type AgentColumns,
+  type AgentSubColumn,
   type Cell,
   cellId,
   cellKey,
@@ -35,8 +36,8 @@ import { type CellIdentity, cellView, diffGrids, headerTally } from './view.ts';
 
 export interface CreateDashboardArgs {
   readonly resultsRoot: string;
-  readonly knownAgents: readonly string[];
-  // The scenario × agent × os eligibility matrix, or null (results-only board).
+  // The scenario × agent × credential × os eligibility matrix, or null
+  // (results-only board).
   readonly manifest: GridManifest | null;
 }
 
@@ -81,7 +82,9 @@ function contentTypeFor(path: string): string {
 // The hover "why" for a not-applicable cell (an empty cell that can never run
 // here), by the manifest's skip reason. directive is the common case (a
 // scenario's `# coding-agents:` line excludes this agent).
-function naTitle(reason: 'directive' | 'draft' | 'tier' | null): string {
+function naTitle(
+  reason: 'directive' | 'draft' | 'tier' | 'harness' | 'os' | null,
+): string {
   switch (reason) {
     case 'directive':
       return "not eligible — this scenario's coding-agents directive excludes this agent";
@@ -89,6 +92,10 @@ function naTitle(reason: 'directive' | 'draft' | 'tier' | null): string {
       return 'draft scenario — not run by default';
     case 'tier':
       return 'filtered out by tier';
+    case 'harness':
+      return "not eligible — this credential's harnesses exclude this agent";
+    case 'os':
+      return 'not eligible — credential/agent OS support excludes this OS';
     default:
       return 'not run-eligible';
   }
@@ -125,58 +132,75 @@ function gridIdentities(
     return manifest.cells.map((c) => ({
       scenario: c.scenario,
       agent: c.agent,
+      credential: c.credential,
       os: c.os,
     }));
   }
   return [...grid.cells.values()].map((c) => ({
     scenario: c.scenario,
     agent: c.agent,
+    credential: c.credential,
     os: c.os,
   }));
 }
 
-// The per-agent OS sub-columns, in `agents` order. Each agent's OS list is its
-// distinct OSes, sorted ascending (so linux precedes windows). With a manifest,
-// the OSes come from its cells (the authoritative eligibility matrix); without
-// one, from the observed grid identities (results-only).
+// The per-agent (credential, os) sub-columns, in `agents` order. Each agent's
+// sub-column list is its distinct (credential, os) pairs, sorted ascending by
+// credential then os. With a manifest, the pairs come from its cells (the
+// authoritative eligibility matrix); without one, from the observed grid
+// identities (results-only).
 function buildAgentColumns(
   agents: readonly string[],
   identities: readonly CellIdentity[],
   manifest: GridManifest | null,
 ): AgentColumns[] {
-  const source: readonly { agent: string; os: string }[] =
-    manifest !== null ? manifest.cells : identities;
-  const byAgent = new Map<string, Set<string>>();
+  const source: readonly {
+    agent: string;
+    credential: string;
+    os: string;
+  }[] = manifest !== null ? manifest.cells : identities;
+  const byAgent = new Map<string, Map<string, AgentSubColumn>>();
   for (const c of source) {
-    let set = byAgent.get(c.agent);
-    if (set === undefined) {
-      set = new Set<string>();
-      byAgent.set(c.agent, set);
+    let subcols = byAgent.get(c.agent);
+    if (subcols === undefined) {
+      subcols = new Map<string, AgentSubColumn>();
+      byAgent.set(c.agent, subcols);
     }
-    set.add(c.os);
+    subcols.set(`${c.credential}\t${c.os}`, {
+      credential: c.credential,
+      os: c.os,
+    });
   }
   return agents.map((agent) => ({
     agent,
-    oses: [...(byAgent.get(agent) ?? new Set<string>())].sort(),
+    subcols: [...(byAgent.get(agent) ?? new Map()).values()].sort((a, b) => {
+      if (a.credential !== b.credential) {
+        return a.credential < b.credential ? -1 : 1;
+      }
+      if (a.os !== b.os) {
+        return a.os < b.os ? -1 : 1;
+      }
+      return 0;
+    }),
   }));
 }
 
 export function createDashboard(args: CreateDashboardArgs): Dashboard {
-  const { resultsRoot, knownAgents, manifest } = args;
+  const { resultsRoot, manifest } = args;
   const bus = new EventBus();
 
   // Scan results/ overlaid with the manifest's eligibility matrix.
-  const scan = (): Grid =>
-    scanResults({ resultsDir: resultsRoot, knownAgents, manifest });
+  const scan = (): Grid => scanResults({ resultsDir: resultsRoot, manifest });
 
   // The last scan snapshot the scanner diffs against; warmed on the first GET /.
   let lastGrid: Grid = scan();
 
-  // Look up the manifest cell for a (scenario, agent, os), or null when no
-  // manifest is loaded. Used to pass eligibility context into cellView.
+  // Look up the manifest cell for a (scenario, agent, credential, os), or null
+  // when no manifest is loaded. Used to pass eligibility context into cellView.
   const manifestCellFor = (
     scenario: string,
     agent: string,
+    credential: string,
     os: string,
   ): GridManifestCell | null => {
     if (manifest === null) {
@@ -184,12 +208,17 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     }
     return (
       manifest.cells.find(
-        (c) => c.scenario === scenario && c.agent === agent && c.os === os,
+        (c) =>
+          c.scenario === scenario &&
+          c.agent === agent &&
+          c.credential === credential &&
+          c.os === os,
       ) ?? null
     );
   };
 
-  // Render + publish a cell partial for (scenario, agent, os) from a Cell.
+  // Render + publish a cell partial for (scenario, agent, credential, os) from a
+  // Cell.
   //
   // NOTE: the ineligible dim+tooltip overlay (opacity: 0.3, title) is applied at
   // first paint only (in renderRoot's views map). SSE re-renders of an ineligible
@@ -198,10 +227,22 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   // they're present from the very first scan. If that invariant ever changed (e.g.
   // a manifest hot-reload), publishCell would need the same overlay logic.
   const publishCell = (cell: Cell): void => {
-    const mc = manifestCellFor(cell.scenario, cell.agent, cell.os);
-    const view = cellView(cell, cell.scenario, cell.agent, cell.os, mc);
+    const mc = manifestCellFor(
+      cell.scenario,
+      cell.agent,
+      cell.credential,
+      cell.os,
+    );
+    const view = cellView(
+      cell,
+      cell.scenario,
+      cell.agent,
+      cell.credential,
+      cell.os,
+      mc,
+    );
     bus.publish({
-      event: cellId(cell.scenario, cell.agent, cell.os),
+      event: cellId(cell.scenario, cell.agent, cell.credential, cell.os),
       data: oneLine(cellHtml(view)),
     });
   };
@@ -250,7 +291,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   // --- routes ----------------------------------------------------------------
 
   // The cells that can NEVER run here (ineligible: directive/draft/tier), keyed
-  // by 3-part cellKey -> a human "why" string. Drives the dimmed "n/a" tooltip.
+  // by 4-part cellKey -> a human "why" string. Drives the dimmed "n/a" tooltip.
   // Sourced from the manifest (the eligibility matrix); empty when manifest-null.
   const skipReasons = (): Map<string, string> => {
     const skipped = new Map<string, string>();
@@ -260,7 +301,7 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     for (const c of manifest.cells) {
       if (!c.eligible) {
         skipped.set(
-          cellKey(c.scenario, c.agent, c.os),
+          cellKey(c.scenario, c.agent, c.credential, c.os),
           naTitle(c.skipped_reason),
         );
       }
@@ -278,15 +319,24 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     const agentColumns = buildAgentColumns(agents, identities, manifest);
     const skipped = skipReasons();
 
-    // The views map is keyed by the 3-part cellKey(scenario, agent, os) — the
-    // grid renders one body cell per (scenario, agent, os) sub-column.
+    // The views map is keyed by the 4-part cellKey(scenario, agent, credential,
+    // os) — the grid renders one body cell per (scenario, agent, credential, os)
+    // sub-column.
     const views = new Map<string, ReturnType<typeof cellView>>();
     for (const id of identities) {
-      const key = cellKey(id.scenario, id.agent, id.os);
+      const key = cellKey(id.scenario, id.agent, id.credential, id.os);
       const cell =
-        grid.cells.get(key) ?? emptyCell(id.scenario, id.agent, id.os);
-      const mc = manifestCellFor(id.scenario, id.agent, id.os);
-      const view = cellView(cell, id.scenario, id.agent, id.os, mc);
+        grid.cells.get(key) ??
+        emptyCell(id.scenario, id.agent, id.credential, id.os);
+      const mc = manifestCellFor(id.scenario, id.agent, id.credential, id.os);
+      const view = cellView(
+        cell,
+        id.scenario,
+        id.agent,
+        id.credential,
+        id.os,
+        mc,
+      );
       // Ineligible cells: the status field already carries 'ineligible' (set by
       // cellView via cellStatus). The opacity/title overlay is kept for the
       // existing "n/a" rendering in cellHtml (state=empty + title => c-na class).
@@ -305,13 +355,13 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
     // when it is exactly {linux} (or empty) — single-OS grids don't need the row.
     const displayedOses = new Set<string>();
     for (const ac of agentColumns) {
-      for (const os of ac.oses) {
-        displayedOses.add(os);
+      for (const sc of ac.subcols) {
+        displayedOses.add(sc.os);
       }
     }
     const collapseOsRow = displayedOses.size <= 1;
     const columnCount = agentColumns.reduce(
-      (sum, ac) => sum + ac.oses.length,
+      (sum, ac) => sum + ac.subcols.length,
       0,
     );
 
@@ -436,16 +486,22 @@ export function createDashboard(args: CreateDashboardArgs): Dashboard {
   };
 }
 
-// An empty placeholder cell for a (scenario, agent, os) with no scan entry.
-function emptyCell(scenario: string, agent: string, os: string): Cell {
-  return { scenario, agent, os, window: [], running: null };
+// An empty placeholder cell for a (scenario, agent, credential, os) with no scan
+// entry.
+function emptyCell(
+  scenario: string,
+  agent: string,
+  credential: string,
+  os: string,
+): Cell {
+  return { scenario, agent, credential, os, window: [], running: null };
 }
 
 // The cell in `grid` whose cell id equals `cellId`, or null. The scanner's diff
 // returns ids; this maps an id back to a Cell to re-render.
 function cellForId(grid: Grid, id: string): Cell | null {
   for (const cell of grid.cells.values()) {
-    if (cellId(cell.scenario, cell.agent, cell.os) === id) {
+    if (cellId(cell.scenario, cell.agent, cell.credential, cell.os) === id) {
       return cell;
     }
   }

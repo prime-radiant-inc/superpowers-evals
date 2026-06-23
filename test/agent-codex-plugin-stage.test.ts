@@ -15,6 +15,7 @@ import type {
   ReadHookArgs,
 } from '../src/agents/codex-app-server.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -50,6 +51,16 @@ const SUBSCRIPTION_AUTH = {
   OPENAI_API_KEY: null,
   tokens: { refresh_token: 'r' },
 } as const;
+
+// Subscription credential for all tests in this file — provision() requires a
+// credential since B4; these tests exercise the subscription path.
+const SUBSCRIPTION_CRED: Credential = {
+  model: 'codex-sub',
+  harnesses: ['codex'],
+  api: 'openai-responses',
+  auth: 'subscription',
+  compat: {},
+};
 
 // Stage <authParent>/.codex/auth.json, point CODEX_AUTH_HOME + SUPERPOWERS_ROOT
 // at the staged dirs, run body, and restore env on throw.
@@ -106,7 +117,7 @@ test('provision stages skills and hooks and drops the whole evals subtree', () =
   try {
     withHostAuth(authParent, root, () => {
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
-      agent.provision(home, new FakeCommandRunner());
+      agent.provision(home, new FakeCommandRunner(), SUBSCRIPTION_CRED);
       const pluginRoot = join(home.configDir, ...PLUGIN_ROOT_SEGMENTS);
       expect(existsSync(join(pluginRoot, 'skills', 'a-skill.md'))).toBe(true);
       expect(existsSync(join(pluginRoot, 'hooks', 'session-start'))).toBe(true);
@@ -138,7 +149,7 @@ test('provision succeeds when the out-root resolves UNDER SUPERPOWERS_ROOT', () 
     withHostAuth(authParent, root, () => {
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
       expect(() =>
-        agent.provision(home, new FakeCommandRunner()),
+        agent.provision(home, new FakeCommandRunner(), SUBSCRIPTION_CRED),
       ).not.toThrow();
       const pluginRoot = join(configDir, ...PLUGIN_ROOT_SEGMENTS);
       expect(existsSync(join(pluginRoot, 'skills', 'a-skill.md'))).toBe(true);
@@ -166,7 +177,7 @@ test('provision succeeds when out-root is disjoint from SUPERPOWERS_ROOT', () =>
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
       // home from makeTempHome lives under tmpdir(), disjoint from `root`.
       expect(() =>
-        agent.provision(home, new FakeCommandRunner()),
+        agent.provision(home, new FakeCommandRunner(), SUBSCRIPTION_CRED),
       ).not.toThrow();
       expect(appServer.calls.length).toBe(1);
     });

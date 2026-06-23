@@ -4,9 +4,17 @@
 export interface GridManifestCell {
   readonly scenario: string;
   readonly agent: string;
+  // The credential name this cell runs under ('' for credential-less agents).
+  readonly credential: string;
   readonly os: string;
   readonly eligible: boolean;
-  readonly skipped_reason: 'directive' | 'draft' | 'tier' | null;
+  readonly skipped_reason:
+    | 'directive'
+    | 'draft'
+    | 'tier'
+    | 'harness'
+    | 'os'
+    | null;
 }
 
 export interface GridManifest {

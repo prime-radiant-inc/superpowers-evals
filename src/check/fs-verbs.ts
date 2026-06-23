@@ -997,14 +997,7 @@ const BOOTSTRAP_DELEGATES: Record<string, BootstrapVerb> = {
   opencode: verbOpencodePluginInstalled,
 };
 
-const BOOTSTRAP_NO_CHECK = new Set([
-  'claude',
-  'claude-haiku',
-  'claude-sonnet',
-  'claude-windows',
-  'pi',
-  'serf',
-]);
+const BOOTSTRAP_NO_CHECK = new Set(['claude', 'claude-windows', 'pi', 'serf']);
 
 export function verbBootstrapInstalled(
   args: string[],

@@ -77,7 +77,7 @@ Start with the sentinel tier and a narrow target set:
 evals-appliance run-all --json --detach \
   --superpowers-ref <branch-tag-or-sha> \
   -- --tier sentinel \
-     --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+     --coding-agents claude,codex,kimi \
      --jobs 4
 ```
 

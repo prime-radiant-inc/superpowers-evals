@@ -50,10 +50,11 @@
     const agent = el.getAttribute("data-agent");
     if (agent === null) return;
     const os = el.getAttribute("data-os");
+    const cred = el.getAttribute("data-credential");
     const a = CSS.escape(agent);
     const selector =
       os !== null
-        ? `[data-agent="${a}"][data-os="${CSS.escape(os)}"]`
+        ? `[data-agent="${a}"][data-credential="${CSS.escape(cred ?? "")}"][data-os="${CSS.escape(os)}"]`
         : `[data-agent="${a}"]`;
     for (const node of document.querySelectorAll(selector)) {
       node.classList.add("col-hi");

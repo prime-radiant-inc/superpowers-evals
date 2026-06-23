@@ -87,6 +87,59 @@ test('appendResultRecord writes one compact line per record, skipped omitted whe
   expect(r1.skipped).toBe('directive');
 });
 
+test('appendResultRecord includes credential when non-empty, omits it when empty or absent', () => {
+  const outRoot = tmpOutRoot();
+  const batchDir = allocateBatchDir({ outRoot });
+  // With a non-empty credential.
+  appendResultRecord({
+    batchDir,
+    scenario: 'alpha',
+    codingAgent: 'pi',
+    runId: 'alpha-pi-20260622T000000Z-ab12',
+    skipped: null,
+    credential: 'pi-prod',
+  });
+  // With an empty credential (should be omitted).
+  appendResultRecord({
+    batchDir,
+    scenario: 'beta',
+    codingAgent: 'claude',
+    runId: null,
+    skipped: 'draft',
+    credential: '',
+  });
+  // With credential absent (should be omitted).
+  appendResultRecord({
+    batchDir,
+    scenario: 'gamma',
+    codingAgent: 'codex',
+    runId: null,
+    skipped: 'directive',
+  });
+  const lines = readFileSync(join(batchDir, 'results.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean);
+  expect(lines).toHaveLength(3);
+  // Non-empty credential appears in the record.
+  expect(lines[0]).toBe(
+    '{"scenario": "alpha", "coding_agent": "pi", "run_id": "alpha-pi-20260622T000000Z-ab12", "credential": "pi-prod"}',
+  );
+  const r0 = ResultRecordSchema.parse(JSON.parse(lines[0] ?? ''));
+  expect(r0.credential).toBe('pi-prod');
+  // Empty credential is omitted.
+  expect(lines[1]).toBe(
+    '{"scenario": "beta", "coding_agent": "claude", "run_id": null, "skipped": "draft"}',
+  );
+  const r1 = ResultRecordSchema.parse(JSON.parse(lines[1] ?? ''));
+  expect(r1.credential).toBeUndefined();
+  // Absent credential is omitted.
+  expect(lines[2]).toBe(
+    '{"scenario": "gamma", "coding_agent": "codex", "run_id": null, "skipped": "directive"}',
+  );
+  const r2 = ResultRecordSchema.parse(JSON.parse(lines[2] ?? ''));
+  expect(r2.credential).toBeUndefined();
+});
+
 test('writeBatchFooter sets finished_at, preserving the rest', () => {
   const outRoot = tmpOutRoot();
   const batchDir = allocateBatchDir({ outRoot });

@@ -9,6 +9,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
+import { resolveApiKey } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import { stageSuperpowersPlugin } from '../setup-helpers/plugin-stage.ts';
 import {
@@ -24,27 +26,42 @@ import { writePrivateFileNoFollow } from './private-file.ts';
 // CODEX_HOME so the agent boots past the sign-in picker with Superpowers staged
 // as a trusted SessionStart plugin hook.
 //
-// The per-run CODEX_HOME is `home.configDir`, which the runner roots at
-// <runHome>/.codex (codex.yaml: home_config_subdir ".codex"). Codex defaults
-// CODEX_HOME to $HOME/.codex, so the launcher sets only the isolated $HOME and
-// codex discovers this seeded config via that default — no CODEX_HOME var.
+// B4: provision() now requires a Credential and branches on credential.auth:
 //
-// Auth is a validated file write, not a login subprocess: it copies the host's
-// ChatGPT subscription auth.json from ~/.codex/auth.json into the per-run
-// CODEX_HOME (mode 0600, O_NOFOLLOW so a pre-placed symlink can't redirect the
-// secret), after asserting it is subscription auth (not API-key auth) and
-// carries a refresh token. The launch-agent scrubs OpenAI env so Codex uses the
-// copied subscription auth rather than an OPENAI_API_KEY.
+//   subscription (codex_sub, the default): copies the host ChatGPT subscription
+//     auth.json from ~/.codex/auth.json into the per-run CODEX_HOME (mode 0600,
+//     O_NOFOLLOW) and writes a bare features/plugins config.toml (no
+//     model/model_provider/[model_providers] — subscription is model-driven by
+//     the account). No codex-api.env is written.
 //
-// That leaves exactly ONE subprocess interaction:
+//   api-key (glm_5_2_responses and similar): writes a config.toml with
+//     top-level model/model_provider and a [model_providers."quorum"] block
+//     (base_url, wire_api, env_key = CODEX_PROVIDER_API_KEY), then the same
+//     features/plugins + trusted_hash blocks. Writes a mode-0600 codex-api.env
+//     the launcher sources so CODEX_PROVIDER_API_KEY reaches codex for the
+//     custom provider. No auth.json is written.
+//
+// The per-run CODEX_HOME is `home.configDir`, rooted at <runHome>/.codex by
+// codex.yaml: home_config_subdir ".codex". Codex defaults CODEX_HOME to
+// $HOME/.codex so the launcher sets only the isolated $HOME — no CODEX_HOME var.
+//
+// That leaves exactly ONE subprocess interaction on both paths:
 //   - `codex app-server --listen stdio://` JSON-RPC (initialize + hooks/list)
-//     to read the staged Superpowers hook's key + currentHash, which we then
-//     record as a trusted_hash in config.toml.
-// It is driven through the injected AppServerClient — a BOUNDED spawn seam
-// (per-handshake deadline) so a hung/non-flushing app-server can't block
-// provisioning forever, and so the hermetic gate stubs it. Everything else
-// (skeleton copy, auth copy, plugin copytree, config.toml) is deterministic file
-// generation the gate asserts directly.
+//     to read the staged Superpowers hook's key + currentHash, written as
+//     trusted_hash in config.toml. Driven through the injected AppServerClient —
+//     a BOUNDED spawn seam so tests stub it and live runs have a per-handshake
+//     deadline.
+
+// Basename of the per-run env file the api-key path writes under configDir. The
+// runner derives the launcher's $CODEX_ENV_FILE substitution from this
+// deterministic path, so the constant is the single source of truth for both
+// sides.
+export const CODEX_API_ENV_FILE_NAME = 'codex-api.env';
+
+// The provider env_key: the env var name codex reads the API key from for the
+// custom provider. Deliberately NOT an OPENAI_* name so the launcher's
+// `env -u OPENAI_API_KEY …` scrub does not strip it.
+export const CODEX_API_PROVIDER_ENV_KEY = 'CODEX_PROVIDER_API_KEY';
 
 // Narrowing schema for the host ~/.codex/auth.json (standard §4.1). Permissive:
 // auth.json carries many other fields, and a non-object `tokens` must surface as
@@ -77,7 +94,15 @@ export class CodexAgent implements CodingAgent {
     this.appServer = appServer ?? new SpawnAppServerClient();
   }
 
-  provision(home: RunHome, _runner: CommandRunner): Record<string, string> {
+  provision(
+    home: RunHome,
+    _runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string> {
+    if (credential === undefined) {
+      throw new ProvisionError('codex requires a credential');
+    }
+
     const { configDir, workdir, skeletonRoot } = home;
     const family = this.config.runtime_family ?? 'codex';
 
@@ -88,8 +113,7 @@ export class CodexAgent implements CodingAgent {
       );
     }
 
-    // Seed the config dir from the skeleton when one is staged, else an empty
-    // dir.
+    // Seed the config dir from the skeleton when one is staged, else an empty dir.
     const skel =
       skeletonRoot !== undefined
         ? join(skeletonRoot, `${family}-home-skeleton`)
@@ -100,13 +124,55 @@ export class CodexAgent implements CodingAgent {
       mkdirSync(configDir, { recursive: true });
     }
 
-    // 1. Copy the host's ChatGPT subscription auth into the fresh CODEX_HOME so
-    //    the agent boots past the sign-in picker. Validates and writes a file
-    //    (O_NOFOLLOW) — no login subprocess.
-    this.seedCodexAuth(configDir);
+    if (credential.auth === 'subscription') {
+      // 1. Copy the host's ChatGPT subscription auth into the fresh CODEX_HOME.
+      this.seedCodexAuth(configDir);
+      // 2. Stage Superpowers with bare features/plugins config (no model block).
+      this.installPluginHooksSubscription(configDir, workdir, superpowersRoot);
+    } else if (credential.auth === 'api-key') {
+      // Resolve the API key from the credential's api_key_env. There is no
+      // codex-conventional key env, so pass undefined as the harness env arg.
+      let apiKey: string;
+      try {
+        const resolution = resolveApiKey(credential, undefined);
+        if (resolution.kind !== 'env') {
+          throw new ProvisionError(
+            'codex api-key credential did not resolve to an env var',
+          );
+        }
+        apiKey = resolution.value;
+      } catch (e) {
+        if (e instanceof ProvisionError) throw e;
+        throw new ProvisionError(
+          `codex api-key credential: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
 
-    // 2. Stage Superpowers as a trusted Codex plugin hook.
-    this.installPluginHooks(configDir, workdir, superpowersRoot);
+      const baseUrl = credential.base_url;
+      if (baseUrl === undefined || baseUrl === '') {
+        throw new ProvisionError('codex api-key credential requires base_url');
+      }
+
+      const wireApi = mapWireApi(credential.api);
+
+      // Stage Superpowers with a full model_providers config.toml.
+      this.installPluginHooksApiKey(
+        configDir,
+        workdir,
+        superpowersRoot,
+        credential.model,
+        baseUrl,
+        wireApi,
+      );
+
+      // Write the mode-0600 env file the launcher sources so the provider's
+      // env_key carries the API key to codex. Secrets live in files, never env.
+      writeProviderEnvFile(configDir, apiKey);
+    } else {
+      throw new ProvisionError(
+        `codex has no ${credential.auth} provisioner (only subscription and api-key are supported)`,
+      );
+    }
 
     // No extra env: Codex finds CODEX_HOME via its $HOME/.codex default.
     return {};
@@ -171,22 +237,53 @@ export class CodexAgent implements CodingAgent {
     writePrivateFileNoFollow(dest, readFileSync(source));
   }
 
-  // Install Superpowers into the quorum-owned CODEX_HOME (already created +
-  // logged in): copy Superpowers into the plugin cache, write the plugin-hooks
-  // config, read the staged hook via app-server, and append its trusted_hash. No
-  // isolated-home build / login / DRILL export (that is the drill-owned path,
-  // which quorum never takes).
-  private installPluginHooks(
+  // Subscription path: stage Superpowers with bare features/plugins config.toml
+  // (no model/model_provider/[model_providers] — subscription is account-driven).
+  private installPluginHooksSubscription(
     configDir: string,
     workdir: string,
     superpowersRoot: string,
   ): void {
+    this.stagePlugin(configDir, superpowersRoot);
+    const configPath = join(configDir, 'config.toml');
+    writePluginHooksConfig(configPath);
+    const hook = this.appServer.readHook({
+      configDir,
+      workdir,
+      timeoutMs: APP_SERVER_TIMEOUT_MS,
+    });
+    appendTrustedHook(configPath, hook.key, hook.currentHash);
+  }
+
+  // Api-key path: stage Superpowers with a full config.toml (model + provider
+  // block + features/plugins + trusted_hash).
+  private installPluginHooksApiKey(
+    configDir: string,
+    workdir: string,
+    superpowersRoot: string,
+    model: string,
+    baseUrl: string,
+    wireApi: string,
+  ): void {
+    this.stagePlugin(configDir, superpowersRoot);
+    const configPath = join(configDir, 'config.toml');
+    writeApiKeyConfig(configPath, model, baseUrl, wireApi);
+    const hook = this.appServer.readHook({
+      configDir,
+      workdir,
+      timeoutMs: APP_SERVER_TIMEOUT_MS,
+    });
+    appendTrustedHook(configPath, hook.key, hook.currentHash);
+  }
+
+  // Copy the Superpowers plugin tree into the quorum-owned CODEX_HOME plugin
+  // cache. Common to both subscription and api-key paths.
+  private stagePlugin(configDir: string, superpowersRoot: string): void {
     if (!existsSync(superpowersRoot)) {
       throw new ProvisionError(
         `SUPERPOWERS_ROOT does not exist: ${superpowersRoot}`,
       );
     }
-
     const pluginRoot = join(
       configDir,
       'plugins',
@@ -195,31 +292,62 @@ export class CodexAgent implements CodingAgent {
       'superpowers',
       'local',
     );
-
     stageSuperpowersPlugin(superpowersRoot, pluginRoot);
-
-    const configPath = join(configDir, 'config.toml');
-    writePluginHooksConfig(configPath);
-
-    // Read the staged Superpowers SessionStart hook through the BOUNDED
-    // app-server seam (per-handshake deadline), so a hung app-server cannot
-    // block provisioning forever.
-    const hook = this.appServer.readHook({
-      configDir,
-      workdir,
-      timeoutMs: APP_SERVER_TIMEOUT_MS,
-    });
-    appendTrustedHook(configPath, hook.key, hook.currentHash);
   }
 }
 
-// Enable plugins/hooks and the superpowers@debug plugin. The trailing
-// trusted-hash block is appended later by appendTrustedHook.
+// Map Credential.api → codex wire_api string. Codex 0.141 only accepts
+// "responses" at config load; "chat" is mapped honestly and will fail at
+// runtime on current codex. Any other api value is a ProvisionError.
+function mapWireApi(api: string): string {
+  if (api === 'openai-responses') return 'responses';
+  if (api === 'openai-chat') return 'chat';
+  throw new ProvisionError(
+    `codex does not support api "${api}"; only openai-responses and openai-chat are mappable`,
+  );
+}
+
+// Subscription path: enable plugins/hooks and the superpowers@debug plugin.
+// The trailing trusted-hash block is appended later by appendTrustedHook.
 function writePluginHooksConfig(configPath: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(
     configPath,
     [
+      '[features]',
+      'plugins = true',
+      'hooks = true',
+      'plugin_hooks = true',
+      '',
+      '[plugins."superpowers@debug"]',
+      'enabled = true',
+      '',
+    ].join('\n'),
+  );
+}
+
+// Api-key path: write config.toml with top-level model/model_provider BEFORE
+// any table (TOML requires root keys to lead), then the [model_providers."quorum"]
+// block, then features/plugins. The trailing trusted-hash block is appended later.
+function writeApiKeyConfig(
+  configPath: string,
+  model: string,
+  baseUrl: string,
+  wireApi: string,
+): void {
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    [
+      `model = "${tomlBasicString(model)}"`,
+      `model_provider = "quorum"`,
+      '',
+      `[model_providers."quorum"]`,
+      `name = "quorum"`,
+      `base_url = "${tomlBasicString(baseUrl)}"`,
+      `env_key = "${CODEX_API_PROVIDER_ENV_KEY}"`,
+      `wire_api = "${tomlBasicString(wireApi)}"`,
+      '',
       '[features]',
       'plugins = true',
       'hooks = true',
@@ -251,6 +379,22 @@ function appendTrustedHook(
 
 function tomlBasicString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+// Single-quote a value for a POSIX shell, escaping embedded single quotes, so
+// the launcher's `. "$CODEX_ENV_FILE"` sources the key verbatim.
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+// Write codex-api.env (mode 0600, O_NOFOLLOW) carrying the provider API key as
+// the env_key the launcher sources, so codex reads it for the custom provider.
+function writeProviderEnvFile(configDir: string, apiKey: string): void {
+  const path = join(configDir, CODEX_API_ENV_FILE_NAME);
+  writePrivateFileNoFollow(
+    path,
+    `export ${CODEX_API_PROVIDER_ENV_KEY}=${shellSingleQuote(apiKey)}\n`,
+  );
 }
 
 // The O_NOFOLLOW private-file writer lives in ./private-file.ts so every per-run

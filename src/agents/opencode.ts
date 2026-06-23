@@ -12,6 +12,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
+import type { ApiKeyResolution } from '../credentials/resolve.ts';
+import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { stageSuperpowersPlugin } from '../setup-helpers/plugin-stage.ts';
 import type { CommandRunner } from './command-runner.ts';
@@ -25,9 +28,9 @@ import {
 } from './opencode-capture.ts';
 
 // OpenCode-family provisioning. provision() is SETUP ONLY: it stages Superpowers
-// into an XDG-isolated OpenCode home, pins the model, and runs a throwaway-home
-// provider preflight so the eval fails fast if the configured provider cannot
-// answer.
+// into an XDG-isolated OpenCode home, builds the provider config from the
+// credential, and runs a throwaway-home provider preflight so the eval fails
+// fast if the configured provider cannot answer.
 //
 // The opencode_home root IS home.configDir: every XDG root and the plugin
 // staging live under it. With opencode.yaml's `home_config_subdir: "."`,
@@ -36,9 +39,13 @@ import {
 // DB off XDG_DATA_HOME (= <home>/.local/share), so this home is also the session
 // store the capture subprocess (opencodeEnv, same home) reads.
 
-// The pinned model the preflight and the run share, also written into
-// opencode.json.
-const OPENCODE_MODEL = 'openai/gpt-5.5';
+// Map credential.api to the opencode npm package name. Only openai-* and
+// anthropic are supported — do NOT invent package names for other APIs.
+const CREDENTIAL_API_TO_OPENCODE_NPM: Readonly<Record<string, string>> = {
+  'openai-chat': '@ai-sdk/openai-compatible',
+  'openai-responses': '@ai-sdk/openai-compatible',
+  anthropic: '@ai-sdk/anthropic',
+};
 
 const OPENCODE_EXPORT_SUBDIR = '.quorum/session-exports';
 
@@ -116,6 +123,73 @@ function binaryOnPath(binary: string): boolean {
   return Bun.which(binary, { PATH: envSnapshot()['PATH'] ?? '' }) !== null;
 }
 
+// Build the opencode.json config object from a credential and resolved api key.
+// Uses a FIXED provider name 'quorum'. Maps credential.api to the npm package:
+//   openai-chat / openai-responses → @ai-sdk/openai-compatible
+//   anthropic → @ai-sdk/anthropic
+// For @ai-sdk/openai-compatible, options.baseURL is always included (required for
+// custom endpoints). For @ai-sdk/anthropic, options.baseURL is only included when
+// credential.base_url is set. reasoning: true is set only when
+// credential.compat.thinking_format is set. tool_call is always true.
+// Throws ProvisionError for any api that cannot be mapped.
+function buildOpencodeConfig(
+  credential: Credential,
+  apiKey: string,
+): Record<string, unknown> {
+  const npm = CREDENTIAL_API_TO_OPENCODE_NPM[credential.api];
+  if (npm === undefined) {
+    throw new ProvisionError(
+      `opencode: api '${credential.api}' is not supported; supported: openai-chat, openai-responses, anthropic`,
+    );
+  }
+
+  const options: Record<string, string> = { apiKey };
+  if (npm === '@ai-sdk/openai-compatible') {
+    // openai-compatible always needs baseURL for a custom endpoint.
+    if (credential.base_url === undefined || credential.base_url === '') {
+      throw new ProvisionError(
+        'opencode: openai-compatible api requires base_url for the custom endpoint',
+      );
+    }
+    options['baseURL'] = credential.base_url;
+  } else if (credential.base_url !== undefined && credential.base_url !== '') {
+    // anthropic: include baseURL only when set.
+    options['baseURL'] = credential.base_url;
+  }
+
+  const modelEntry: Record<string, unknown> = { tool_call: true };
+  if (credential.compat.thinking_format !== undefined) {
+    modelEntry['reasoning'] = true;
+  }
+
+  return {
+    $schema: 'https://opencode.ai/config.json',
+    provider: {
+      quorum: {
+        npm,
+        options,
+        models: {
+          [credential.model]: modelEntry,
+        },
+      },
+    },
+    model: `quorum/${credential.model}`,
+  };
+}
+
+// Write the opencode.json to `configDir/.config/opencode/opencode.json` with
+// mode 0600 (it carries the API key).
+function writeOpencodeJson(
+  opencodeConfigDir: string,
+  config: Record<string, unknown>,
+): void {
+  writeFileSync(
+    join(opencodeConfigDir, 'opencode.json'),
+    `${JSON.stringify(config, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
 export class OpenCodeAgent implements CodingAgent {
   readonly config: AgentConfig;
   // Injectable opencode subprocess seam (the file-stdout / allowlist-env path).
@@ -129,7 +203,21 @@ export class OpenCodeAgent implements CodingAgent {
     this.spawn = spawn;
   }
 
-  provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+  provision(
+    home: RunHome,
+    runner: CommandRunner,
+    credential: Credential | undefined,
+  ): Record<string, string> {
+    if (credential === undefined) {
+      throw new ProvisionError('opencode requires a credential');
+    }
+
+    if (credential.auth !== 'api-key') {
+      throw new ProvisionError(
+        `opencode: auth '${credential.auth}' is not supported; use 'api-key'`,
+      );
+    }
+
     const opencodeHome = home.configDir;
 
     // SUPERPOWERS_ROOT is required. Read env ONLY via the sanctioned env module.
@@ -190,6 +278,25 @@ export class OpenCodeAgent implements CodingAgent {
     // isolated home.
     rejectSymlinks(join(superpowersRoot, 'skills'), 'SUPERPOWERS_ROOT skills');
 
+    // Resolve the API key before writing any files so a missing key is caught early.
+    let resolution: ApiKeyResolution;
+    try {
+      resolution = resolveApiKey(credential, 'OPENAI_API_KEY');
+    } catch (e) {
+      throw new ProvisionError(e instanceof Error ? e.message : String(e));
+    }
+    if (resolution.kind !== 'env') {
+      throw new ProvisionError(
+        'opencode: could not resolve api key from credential',
+      );
+    }
+    const apiKey = resolution.value;
+
+    // Build the opencode.json config once; write it into both the run home and
+    // the preflight throwaway home.
+    const opencodeJsonConfig = buildOpencodeConfig(credential, apiKey);
+    const modelRef = `quorum/${credential.model}`;
+
     // Create the XDG-isolated dirs and the session-export dir.
     const opencodeConfigDir = join(opencodeHome, '.config', 'opencode');
     for (const dir of [
@@ -203,20 +310,9 @@ export class OpenCodeAgent implements CodingAgent {
       mkdirSync(dir, { recursive: true });
     }
 
-    // opencode.json: pin the model so the provider matches the preflight. Not a
-    // secret file — written with default mode; provider keys reach opencode only
-    // via the subprocess env, never a quorum-authored file.
-    writeFileSync(
-      join(opencodeConfigDir, 'opencode.json'),
-      `${JSON.stringify(
-        {
-          $schema: 'https://opencode.ai/config.json',
-          model: OPENCODE_MODEL,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    // opencode.json: credential-derived provider config. Secret file (carries the
+    // API key) — written with mode 0600.
+    writeOpencodeJson(opencodeConfigDir, opencodeJsonConfig);
 
     // Stage the whole plugin into package_root via the shared helper, then
     // symlink config/plugins/superpowers.js -> the staged plugin entry. The helper
@@ -265,8 +361,9 @@ export class OpenCodeAgent implements CodingAgent {
       requireUnderHome(path, opencodeHome);
     }
 
-    // Provider preflight: throwaway isolated home, retry up to 3x, expect "OK".
-    this.runProviderPreflight();
+    // Provider preflight: throwaway isolated home with the same provider config,
+    // retry up to 3x, expect "OK".
+    this.runProviderPreflight(opencodeJsonConfig, modelRef);
 
     // Return the extra-env the runner threads into the run: the XDG isolation
     // vars (opencode_env). opencodeHome IS the per-run throwaway $HOME
@@ -278,19 +375,24 @@ export class OpenCodeAgent implements CodingAgent {
     };
   }
 
-  // Build a throwaway isolated home, probe `opencode --version`, then up to 3x
-  // run `opencode run -m <model> --dangerously-skip-permissions "Reply with
-  // EXACTLY OK."` and accept the first exit-0 "OK" reply. Drives opencode through
-  // runOpencodeCommand (regular-file stdout + allowlisted env) so the bare
-  // process.exit() cannot truncate the reply and no host vars leak in.
-  private runProviderPreflight(): void {
+  // Build a throwaway isolated home with the same provider config, probe
+  // `opencode --version`, then up to 3x run `opencode run -m <model>
+  // --dangerously-skip-permissions "Reply with EXACTLY OK."` and accept the
+  // first exit-0 "OK" reply. Drives opencode through runOpencodeCommand
+  // (regular-file stdout + allowlisted env) so the bare process.exit() cannot
+  // truncate the reply and no host vars leak in.
+  private runProviderPreflight(
+    opencodeJsonConfig: Record<string, unknown>,
+    modelRef: string,
+  ): void {
     const tmp = mkdtempSync(join(tmpdir(), 'quorum-opencode-preflight-'));
     try {
       const cwd = join(tmp, 'cwd');
       const home = join(tmp, 'home');
+      const preflightConfigDir = join(home, '.config', 'opencode');
       mkdirSync(cwd, { recursive: true });
       for (const dir of [
-        join(home, '.config', 'opencode'),
+        preflightConfigDir,
         join(home, '.local', 'share', 'opencode'),
         join(home, '.local', 'state', 'opencode'),
         join(home, '.cache'),
@@ -298,6 +400,10 @@ export class OpenCodeAgent implements CodingAgent {
       ]) {
         mkdirSync(dir, { recursive: true });
       }
+
+      // Write the same provider config into the preflight throwaway home so the
+      // custom provider/model resolves during the preflight run.
+      writeOpencodeJson(preflightConfigDir, opencodeJsonConfig);
 
       // Version probe (best-effort). A failed probe only weakens the diagnostic
       // hint, never aborts.
@@ -324,7 +430,7 @@ export class OpenCodeAgent implements CodingAgent {
             [
               'run',
               '-m',
-              OPENCODE_MODEL,
+              modelRef,
               '--dangerously-skip-permissions',
               'Reply with EXACTLY OK.',
             ],

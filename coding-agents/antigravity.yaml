@@ -1,5 +1,6 @@
 name: antigravity
 binary: agy
+default_credential: antigravity_default
 # Collapse the antigravity config dir into the throwaway $HOME. agy defaults its
 # gemini state dir to $HOME/.gemini when --gemini_dir is omitted (verified
 # empirically: `HOME=<tmp> agy plugin list` creates <tmp>/.gemini/config), and it
@@ -16,11 +17,3 @@ normalizer: antigravity
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
-# agy's Gemini Code Assist backend 429s (RESOURCE_EXHAUSTED) on concurrent
-# calls and a burst trips a multi-hour rate window. Run agy strictly serial
-# regardless of run-all --jobs.
-max_concurrency: 1
-# Even serial back-to-back starts read as a burst from the Code Assist backend's
-# view, so space agy launches at least this many seconds apart, start-to-start.
-# 30s is the PRI-2203 starting value; tune from experience.
-launch_spacing_seconds: 30

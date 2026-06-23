@@ -13,9 +13,7 @@ artifacts without checking them first.
 
 | Coding-Agent | CLI | Required credentials |
 | --- | --- | --- |
-| `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
-| `claude-haiku` | Claude Code, Haiku target | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
-| `claude-sonnet` | Claude Code, Sonnet target | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT` |
+| `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT`; default credential: `opus` |
 | `codex` | Codex CLI | `SUPERPOWERS_ROOT`; local ChatGPT subscription login via `codex login` |
 | `antigravity` | Google Antigravity CLI, `agy` | `SUPERPOWERS_ROOT`; local browser/keyring auth |
 | `gemini` | Gemini CLI, `gemini` | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
@@ -24,8 +22,15 @@ artifacts without checking them first.
 | `pi` | Pi CLI, `pi` | `PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`, or Pi OAuth login; `SUPERPOWERS_ROOT` |
 | `copilot` | GitHub Copilot CLI, `copilot` | `SUPERPOWERS_ROOT`, plus `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, GitHub CLI auth, or `COPILOT_PROVIDER_BASE_URL` |
 
-`claude-haiku` and `claude-sonnet` are Claude Code target variants. They use the
-same Claude runtime, context, and `ANTHROPIC_API_KEY` path as `claude`.
+To run the Claude harness against Sonnet or Haiku, use `--credential` (the
+`claude-haiku` and `claude-sonnet` agent names were removed in favor of the
+credential axis):
+
+```bash
+bun run quorum run scenarios/<name> --coding-agent claude --credential sonnet
+bun run quorum run scenarios/<name> --coding-agent claude --credential haiku
+bun run quorum run-all --coding-agents claude --credentials sonnet,haiku --jobs 2
+```
 
 Raw quorum runs require `SUPERPOWERS_ROOT` in the launching environment. The
 container and appliance shims export `SUPERPOWERS_ROOT=/workspace/superpowers`
@@ -67,7 +72,7 @@ Run the first sentinel batch detached:
 evals-appliance run-all --json --detach \
   --superpowers-ref <branch-tag-or-sha> \
   -- --tier sentinel \
-     --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+     --coding-agents claude,codex,kimi \
      --jobs 4
 ```
 
@@ -134,7 +139,7 @@ Start with the sentinel suite:
 ```bash
 scripts/evals-container exec quorum run-all \
   --tier sentinel \
-  --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+  --coding-agents claude,codex,kimi \
   --jobs 4
 
 for agent in gemini opencode pi copilot; do
@@ -174,7 +179,7 @@ export SCENARIOS="scenario-a,scenario-b"
 
 # Uncapped targets share the --jobs pool.
 bun run quorum run-all \
-  --coding-agents claude,claude-haiku,claude-sonnet,codex,kimi \
+  --coding-agents claude,codex,kimi \
   --scenarios "$SCENARIOS" \
   --jobs 4
 

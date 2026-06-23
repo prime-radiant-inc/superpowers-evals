@@ -541,12 +541,7 @@ test('bootstrap-installed routes to the per-harness delegate (gemini)', () => {
 });
 
 test('bootstrap-installed passes for claude variants (no dedicated check)', () => {
-  for (const agent of [
-    'claude',
-    'claude-haiku',
-    'claude-sonnet',
-    'claude-windows',
-  ]) {
+  for (const agent of ['claude', 'claude-windows']) {
     const out = verbBootstrapInstalled(
       [],
       ctxFor(configDir(), { QUORUM_CODING_AGENT: agent }),

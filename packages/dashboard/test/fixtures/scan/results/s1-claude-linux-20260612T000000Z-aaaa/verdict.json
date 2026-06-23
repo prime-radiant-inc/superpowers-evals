@@ -2,6 +2,8 @@
   "final": "pass",
   "coding_agent": "claude",
   "scenario": "s1",
+  "credential": "none",
+  "os": "linux",
   "economics": { "total_est_cost_usd": 1.0 },
   "finished_at": "2026-06-12T00:01:00Z"
 }

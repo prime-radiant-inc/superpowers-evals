@@ -9,8 +9,9 @@ import { z } from 'zod';
 export const CELL_STATES = ['empty', 'done', 'running'] as const;
 export type CellState = (typeof CELL_STATES)[number];
 
-// The five outcome statuses for a (scenario, agent, os) cell. Orthogonal to
-// `state` (empty/done/running), which drives slot/shimmer rendering.
+// The five outcome statuses for a (scenario, agent, credential, os) cell.
+// Orthogonal to `state` (empty/done/running), which drives slot/shimmer
+// rendering.
 export const CELL_STATUSES = [
   'pass',
   'failed',
@@ -36,13 +37,26 @@ export type SlotKind = (typeof SLOT_KINDS)[number];
 // outside pass/fail/indeterminate (or missing) collapses to 'unknown'.
 export type RunFinal = 'pass' | 'fail' | 'indeterminate' | 'unknown';
 
-// phase.json, written by the runner at each boundary it owns (Task 2). `pid` is
-// the `quorum run` process id — required, since liveness comes from it (phase
-// mtime is NOT a liveness signal: a phase can last tens of minutes).
+// phase.json, written by the runner at each boundary it owns. `pid` is the
+// `quorum run` process id — required, since liveness comes from it (phase mtime
+// is NOT a liveness signal: a phase can last tens of minutes). `identity` is the
+// run's self-identity, so the dashboard can place an in-flight run in its cell
+// without parsing the run-dir name. It is optional (a pre-identity phase.json
+// still parses); an in-flight run with no identity cannot be placed and is
+// skipped by the scanner.
+export const PhaseIdentitySchema = z.object({
+  scenario: z.string(),
+  agent: z.string(),
+  credential: z.string(),
+  os: z.string(),
+});
+export type PhaseIdentity = z.infer<typeof PhaseIdentitySchema>;
+
 export const PhaseJsonSchema = z.object({
   phase: z.string(),
   updated_at: z.string(),
   pid: z.number(),
+  identity: PhaseIdentitySchema.optional(),
 });
 export type PhaseJson = z.infer<typeof PhaseJsonSchema>;
 
@@ -79,6 +93,8 @@ export const DashboardVerdictSchema = z.object({
   finished_at: z.string().nullable().optional().catch(null),
   scenario: z.string().optional().catch(undefined),
   coding_agent: z.string().optional().catch(undefined),
+  credential: z.string().optional().catch(undefined),
+  os: z.string().optional().catch(undefined),
   started_at: z.string().optional().catch(undefined),
   error: z
     .object({ stage: z.string().optional().catch(undefined) })
@@ -115,30 +131,43 @@ export interface RunningRun {
   readonly phase: string;
 }
 
-// One (scenario, agent, os) cell. `window` is oldest..newest, length <= 5.
+// One (scenario, agent, credential, os) cell. `window` is oldest..newest,
+// length <= 5.
 export interface Cell {
   readonly scenario: string;
   readonly agent: string;
+  readonly credential: string;
   readonly os: string;
   readonly window: readonly RunRecord[];
   readonly running: RunningRun | null;
 }
 
-// A scan snapshot. Key = `${scenario}\t${agent}\t${os}` (tab is absent from
-// names). Never-run cells are absent from the map (not null entries).
+// A scan snapshot. Key = `${scenario}\t${agent}\t${credential}\t${os}` (tab is
+// absent from names). Never-run cells are absent from the map (not null entries).
 export interface Grid {
   readonly cells: Map<string, Cell>;
 }
 
-// The cell map key helper — the one place the composite key is formed.
-export function cellKey(scenario: string, agent: string, os: string): string {
-  return `${scenario}\t${agent}\t${os}`;
+// The cell map key helper — the one place the composite key is formed. Tab is
+// absent from every identity segment, so it is a safe composite separator.
+export function cellKey(
+  scenario: string,
+  agent: string,
+  credential: string,
+  os: string,
+): string {
+  return `${scenario}\t${agent}\t${credential}\t${os}`;
 }
 
 // The DOM id / SSE event name for a cell. Both the `id` and `sse-swap`
 // attributes equal this; cell events are addressed to it.
-export function cellId(scenario: string, agent: string, os: string): string {
-  return `cell-${scenario}-${agent}-${os}`;
+export function cellId(
+  scenario: string,
+  agent: string,
+  credential: string,
+  os: string,
+): string {
+  return `cell-${scenario}-${agent}-${credential}-${os}`;
 }
 
 // One verdict ribbon slot: a kind plus a normalized cost-bar height (0..1).
@@ -181,6 +210,7 @@ export interface CellView {
   readonly cell_id: string;
   readonly scenario: string;
   readonly agent: string;
+  readonly credential: string;
   readonly os: string;
   readonly state: CellState;
   readonly slots: readonly SlotView[];
@@ -206,11 +236,18 @@ export interface CellView {
   readonly title?: string;
 }
 
+// One (credential, os) sub-column under an agent group. One body cell renders
+// per sub-column.
+export interface AgentSubColumn {
+  readonly credential: string;
+  readonly os: string;
+}
+
 // One agent column group in the two-tier header: an agent and the sorted list
-// of OS sub-columns it occupies (one body cell per OS).
+// of (credential, os) sub-columns it occupies (one body cell per sub-column).
 export interface AgentColumns {
   readonly agent: string;
-  readonly oses: readonly string[];
+  readonly subcols: readonly AgentSubColumn[];
 }
 
 // The grid-wide rollup for the header tally line. `columns` is the flattened

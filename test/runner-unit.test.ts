@@ -8,25 +8,32 @@ import {
   contextDirName,
 } from '../src/runner/index.ts';
 
-test('allocateRunDir names <scenario>-<agent>-<os>-<stamp>-<nonce> and creates it', () => {
+test('allocateRunDir names <scenario>-<agent>-<credential>-<os>-<stamp>-<nonce> and creates it', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
-  const dir = allocateRunDir(out, '00-quorum-smoke-hello-world', 'claude');
+  const dir = allocateRunDir(
+    out,
+    '00-quorum-smoke-hello-world',
+    'claude',
+    'sonnet',
+  );
   expect(basename(dir)).toMatch(
-    /^00-quorum-smoke-hello-world-claude-linux-\d{8}T\d{6}Z-[0-9a-f]{4}$/,
+    /^00-quorum-smoke-hello-world-claude-sonnet-linux-\d{8}T\d{6}Z-[0-9a-f]{4}$/,
   );
   expect(existsSync(dir)).toBe(true);
 });
 
-test('allocateRunDir with os=windows id contains -claude-windows-', () => {
+test('allocateRunDir with os=windows id contains -claude-sonnet-windows-', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
-  const dir = allocateRunDir(out, 'sc', 'claude', 'windows');
-  expect(basename(dir)).toMatch(/^sc-claude-windows-\d{8}T\d{6}Z-[0-9a-f]{4}$/);
+  const dir = allocateRunDir(out, 'sc', 'claude', 'sonnet', 'windows');
+  expect(basename(dir)).toMatch(
+    /^sc-claude-sonnet-windows-\d{8}T\d{6}Z-[0-9a-f]{4}$/,
+  );
 });
 
 test('allocateRunDir is unique across calls (distinct nonces)', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
-  const a = allocateRunDir(out, 'scn', 'codex');
-  const b = allocateRunDir(out, 'scn', 'codex');
+  const a = allocateRunDir(out, 'scn', 'codex', 'none');
+  const b = allocateRunDir(out, 'scn', 'codex', 'none');
   expect(a).not.toBe(b);
 });
 

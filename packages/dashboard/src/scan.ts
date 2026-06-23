@@ -6,6 +6,7 @@ import {
   type DashboardVerdict,
   DashboardVerdictSchema,
   type Grid,
+  type PhaseIdentity,
   PhaseJsonSchema,
   type RunFinal,
   type RunningRun,
@@ -16,61 +17,12 @@ import type { GridManifest } from './manifest.ts';
 // Read side of the dashboard: scan results/, bucket runs into cells, and resolve
 // each cell's window, liveness, and verdicts. The filesystem is the single
 // source of truth; the only in-memory state here is the immutable verdict cache.
-
-// <scenario>-<agent>-<os>-<timestamp>-<nonce>, e.g. ...-linux-20260527T202301Z-f7fc
-const RUN_DIR_RE = /-(\d{8}T\d{6}Z)-([0-9a-f]{4})$/;
-
-// The parsed identity of a run dir: which cell it belongs to plus its sort keys.
-export interface ParsedRunDir {
-  readonly scenario: string;
-  readonly agent: string;
-  readonly os: string;
-  readonly started_at: string;
-  readonly nonce: string;
-}
-
-// Parse <scenario>-<agent>-<os>-<timestamp>-<nonce>. Agent is a longest-suffix
-// match against knownAgents (so `claude-haiku` beats `haiku`/`claude`). The os
-// segment is a single hyphen-free token (e.g. `linux`, `windows`) that is
-// stripped before the agent match runs. Returns null for dirs that don't match
-// the timestamp/nonce tail, whose agent segment is not a known agent, or whose
-// scenario half is empty — callers log + skip those.
-export function parseRunDirName(
-  name: string,
-  knownAgents: readonly string[],
-): ParsedRunDir | null {
-  const m = RUN_DIR_RE.exec(name);
-  if (m === null) {
-    return null;
-  }
-  const timestamp = m[1];
-  const nonce = m[2];
-  if (timestamp === undefined || nonce === undefined) {
-    return null;
-  }
-  // head = "<scenario>-<agent>-<os>" (new format) or "<scenario>-<agent>" (legacy)
-  const head = name.slice(0, m.index);
-  // Strip the trailing os segment (a single hyphen-free token) before the
-  // agent match, so the match always runs on "<scenario>-<agent>".
-  const lastHyphen = head.lastIndexOf('-');
-  if (lastHyphen === -1) {
-    return null;
-  }
-  const os = head.slice(lastHyphen + 1);
-  const agentHead = head.slice(0, lastHyphen); // "<scenario>-<agent>"
-  // Longest known agent that is a hyphen-delimited suffix of agentHead wins.
-  const candidates = [...knownAgents].sort((a, b) => b.length - a.length);
-  for (const agent of candidates) {
-    const suffix = `-${agent}`;
-    if (agentHead.endsWith(suffix)) {
-      const scenario = agentHead.slice(0, agentHead.length - suffix.length);
-      if (scenario.length > 0) {
-        return { scenario, agent, os, started_at: timestamp, nonce };
-      }
-    }
-  }
-  return null;
-}
+//
+// Identity (scenario, agent, credential, os) is read from the AUTHORITATIVE
+// fields a run writes — verdict.json once a run completes, else the in-flight
+// phase.json — never parsed out of the run-dir name. A dir whose started_at
+// dir-stamp tail is unreadable, or that carries neither a verdict identity nor a
+// live-phase identity, is skipped.
 
 // pid liveness via the null-signal probe. process.kill(pid, 0) throws ESRCH when
 // the process is gone and EPERM when it exists but is owned by another user
@@ -120,8 +72,11 @@ function parseDashboardVerdict(path: string): DashboardVerdict | null {
 
 // A run dir's live phase.json, narrowed, or null when missing/unparseable. A
 // phase with no valid pid does not survive the schema, so the caller treats it
-// as no-live-phase (abandoned).
-function readPhase(runDir: string): { phase: string; pid: number } | null {
+// as no-live-phase (abandoned). `identity` is optional on disk; a pre-identity
+// phase.json parses but cannot place the run in a cell.
+function readPhase(
+  runDir: string,
+): { phase: string; pid: number; identity?: PhaseIdentity } | null {
   const path = join(runDir, 'phase.json');
   if (!existsSync(path)) {
     return null;
@@ -133,9 +88,11 @@ function readPhase(runDir: string): { phase: string; pid: number } | null {
     return null;
   }
   const parsed = PhaseJsonSchema.safeParse(raw);
-  return parsed.success
-    ? { phase: parsed.data.phase, pid: parsed.data.pid }
-    : null;
+  if (!parsed.success) {
+    return null;
+  }
+  const { phase, pid, identity } = parsed.data;
+  return identity === undefined ? { phase, pid } : { phase, pid, identity };
 }
 
 function finalOf(verdict: DashboardVerdict): RunFinal {
@@ -165,29 +122,70 @@ function listRunDirNames(resultsDir: string): string[] {
   return names;
 }
 
-// Collect the distinct `coding_agent` values across every completed verdict.json
-// under results/. The results-only bootstrap: with no known-agent list (no
-// manifest), the run-dir parser can't tell where the agent segment ends, so we
-// seed the agent set from the verdicts the runs already wrote.
-function bootstrapKnownAgents(
-  resultsDir: string,
-  runDirNames: readonly string[],
-): string[] {
-  const agents = new Set<string>();
-  for (const name of runDirNames) {
-    const verdict = readDashboardVerdict(join(resultsDir, name));
-    if (verdict?.coding_agent !== undefined) {
-      agents.add(verdict.coding_agent);
-    }
-  }
-  return [...agents];
+// The run-dir-name started_at stamp: the `YYYYMMDDTHHMMSSZ` segment that
+// precedes the trailing hex nonce. This is the ONLY thing read positionally from
+// a run-dir name — and only for display/sort (age, card timestamp), never for
+// identity. Returns null when the tail does not match.
+const RUN_DIR_TAIL_RE = /-(\d{8}T\d{6}Z)-[0-9a-f]{4}$/;
+function startedAtStamp(name: string): string | null {
+  const m = RUN_DIR_TAIL_RE.exec(name);
+  return m?.[1] ?? null;
 }
 
-// Enumerate results/, skip batches/, bucket by (scenario, agent, os), window to
-// the 5 newest by (started_at, nonce) (newest rightmost). For each windowed dir:
-// verdict.json present ⇒ a RunRecord (the authority rule — phase.json is then
-// ignored); absent + live pid ⇒ the cell's `running` (only the newest live dir
-// wins); absent + dead/no pid ⇒ abandoned (excluded).
+// One bucketed run dir: its cell identity plus its display started_at stamp and
+// dir name (the sort tiebreaker).
+interface ScannedRun {
+  readonly name: string;
+  readonly scenario: string;
+  readonly agent: string;
+  readonly credential: string;
+  readonly os: string;
+  readonly startedAt: string;
+}
+
+// Place a run dir into its cell from its authoritative identity. verdict.json
+// identity wins; else the in-flight phase.json identity; else null (not
+// placeable — skipped). The started_at stamp comes from the dir-name tail (the
+// only positional read), so a dir without that tail is also skipped.
+function scanRunDir(resultsDir: string, name: string): ScannedRun | null {
+  const startedAt = startedAtStamp(name);
+  if (startedAt === null) {
+    return null;
+  }
+  const runDir = join(resultsDir, name);
+  const verdict = readDashboardVerdict(runDir);
+  if (verdict?.scenario !== undefined && verdict.coding_agent !== undefined) {
+    return {
+      name,
+      scenario: verdict.scenario,
+      agent: verdict.coding_agent,
+      credential: verdict.credential ?? '',
+      os: verdict.os ?? 'linux',
+      startedAt,
+    };
+  }
+  const phase = readPhase(runDir);
+  if (phase?.identity !== undefined) {
+    const id = phase.identity;
+    return {
+      name,
+      scenario: id.scenario,
+      agent: id.agent,
+      credential: id.credential,
+      os: id.os,
+      startedAt,
+    };
+  }
+  return null;
+}
+
+// Enumerate results/, skip batches/, read each run's authoritative identity
+// (verdict.json, else in-flight phase.json), bucket by (scenario, agent,
+// credential, os), window to the 5 newest by (started_at, dir-name) (newest
+// rightmost). For each windowed dir: verdict.json present ⇒ a RunRecord (the
+// authority rule — phase.json is then ignored); absent + live pid ⇒ the cell's
+// `running` (only the newest live dir wins); absent + dead/no pid ⇒ abandoned
+// (excluded).
 //
 // When `manifest` is null the cell set is exactly the observed runs (a
 // results-only board). When a manifest is present, EVERY manifest cell exists in
@@ -195,53 +193,45 @@ function bootstrapKnownAgents(
 // with no displayable run, so not_run/ineligible cells render.
 export function scanResults(args: {
   resultsDir: string;
-  knownAgents: readonly string[];
   manifest: GridManifest | null;
 }): Grid {
   const { resultsDir, manifest } = args;
   const cells = new Map<string, Cell>();
 
-  const runDirNames = listRunDirNames(resultsDir);
-
-  // With an empty known-agent list (manifest-null, results-only), seed it from
-  // the verdicts so parseRunDirName can split off the agent segment. When a
-  // manifest is present its agents are passed in as knownAgents, so this is a
-  // no-op for the manifest case.
-  const knownAgents =
-    args.knownAgents.length > 0
-      ? args.knownAgents
-      : bootstrapKnownAgents(resultsDir, runDirNames);
-
-  const buckets = new Map<string, ParsedRunDir[]>();
-  for (const name of runDirNames) {
-    const parsed = parseRunDirName(name, knownAgents);
-    if (parsed === null) {
+  const buckets = new Map<string, ScannedRun[]>();
+  for (const name of listRunDirNames(resultsDir)) {
+    const scanned = scanRunDir(resultsDir, name);
+    if (scanned === null) {
       continue;
     }
-    const key = cellKey(parsed.scenario, parsed.agent, parsed.os);
+    const key = cellKey(
+      scanned.scenario,
+      scanned.agent,
+      scanned.credential,
+      scanned.os,
+    );
     const bucket = buckets.get(key);
     if (bucket === undefined) {
-      buckets.set(key, [parsed]);
+      buckets.set(key, [scanned]);
     } else {
-      bucket.push(parsed);
+      bucket.push(scanned);
     }
   }
 
-  for (const [key, parsedList] of buckets) {
-    parsedList.sort(comparePerStartedAtNonce);
-    const windowDirs = parsedList.slice(-5);
+  for (const [key, runs] of buckets) {
+    runs.sort(compareByStartedAtThenName);
+    const windowDirs = runs.slice(-5);
     const records: RunRecord[] = [];
     let running: RunningRun | null = null;
-    for (const p of windowDirs) {
-      const runId = `${p.scenario}-${p.agent}-${p.os}-${p.started_at}-${p.nonce}`;
-      const runDir = join(resultsDir, runId);
+    for (const run of windowDirs) {
+      const runDir = join(resultsDir, run.name);
       const verdict = readDashboardVerdict(runDir);
       if (verdict !== null) {
         const economics = verdict.economics ?? null;
         const ca = economics?.coding_agent ?? null;
         records.push({
-          run_id: runId,
-          started_at: p.started_at,
+          run_id: run.name,
+          started_at: run.startedAt,
           final: finalOf(verdict),
           cost_usd: ca?.est_cost_usd ?? economics?.total_est_cost_usd ?? null,
           run_total_cost_usd: economics?.total_est_cost_usd ?? null,
@@ -256,20 +246,21 @@ export function scanResults(args: {
       if (phase !== null && pidAlive(phase.pid)) {
         // Only the newest in-flight dir matters for the cell's running state.
         // The schema guarantees a string phase, so the value is used as-is.
-        running = { run_id: runId, phase: phase.phase };
+        running = { run_id: run.name, phase: phase.phase };
       }
       // else: abandoned (dead/no pid) -> excluded from display.
     }
     if (records.length === 0 && running === null) {
       continue;
     }
-    const first = parsedList[0];
+    const first = runs[0];
     if (first === undefined) {
       continue;
     }
     cells.set(key, {
       scenario: first.scenario,
       agent: first.agent,
+      credential: first.credential,
       os: first.os,
       window: records,
       running,
@@ -280,11 +271,12 @@ export function scanResults(args: {
   // run was observed), so ineligible / not-yet-run cells still render.
   if (manifest !== null) {
     for (const mc of manifest.cells) {
-      const key = cellKey(mc.scenario, mc.agent, mc.os);
+      const key = cellKey(mc.scenario, mc.agent, mc.credential, mc.os);
       if (!cells.has(key)) {
         cells.set(key, {
           scenario: mc.scenario,
           agent: mc.agent,
+          credential: mc.credential,
           os: mc.os,
           window: [],
           running: null,
@@ -296,12 +288,15 @@ export function scanResults(args: {
   return { cells };
 }
 
-function comparePerStartedAtNonce(a: ParsedRunDir, b: ParsedRunDir): number {
-  if (a.started_at !== b.started_at) {
-    return a.started_at < b.started_at ? -1 : 1;
+// Sort by the dir-name started_at stamp, then the full dir name as a stable
+// tiebreaker (the trailing nonce makes it total). Both are ascending, so the
+// newest run is last.
+function compareByStartedAtThenName(a: ScannedRun, b: ScannedRun): number {
+  if (a.startedAt !== b.startedAt) {
+    return a.startedAt < b.startedAt ? -1 : 1;
   }
-  if (a.nonce !== b.nonce) {
-    return a.nonce < b.nonce ? -1 : 1;
+  if (a.name !== b.name) {
+    return a.name < b.name ? -1 : 1;
   }
   return 0;
 }

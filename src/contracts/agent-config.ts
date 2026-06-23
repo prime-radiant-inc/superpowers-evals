@@ -39,9 +39,7 @@ export const AgentConfigSchema = z.object({
   max_time: z.string().optional(),
   project_prompt: z.string().optional(),
   model: z.string().optional(),
-  // Scheduler keys: per-agent concurrency cap and launch spacing.
-  max_concurrency: z.number().int().min(1).optional(),
-  launch_spacing_seconds: z.number().min(0).optional(),
+  default_credential: z.string().optional(),
   os_support: z.array(z.string()).default(['linux']),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
@@ -105,11 +103,11 @@ function validateAgentConfigStatic(
     );
   }
 
-  // A claude family requires a model; any declared model must not be blank
-  // (avoids launching `claude --model ''`).
-  if (family === 'claude' && cfg.model === undefined) {
+  // A claude family requires a default_credential (the credential supplies the
+  // model); any declared model must not be blank (avoids `claude --model ''`).
+  if (family === 'claude' && cfg.default_credential === undefined) {
     throw new CodingAgentConfigError(
-      `${path}: claude runtime_family requires model`,
+      `${path}: claude runtime_family requires default_credential`,
     );
   }
   if (cfg.model !== undefined && cfg.model.trim() === '') {

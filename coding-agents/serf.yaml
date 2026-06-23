@@ -18,5 +18,5 @@ max_time: 10m
 # provider/model variants are just sibling YAMLs (serf-gpt5.yaml, …) reusing
 # SerfAgent with a different model pin.
 model: anthropic/claude-sonnet-4-6
-max_concurrency: 1
+default_credential: serf_default
 os_support: [linux]

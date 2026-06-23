@@ -15,6 +15,7 @@ import type { CommandResult } from '../src/agents/command-runner.ts';
 import { GeminiAgent } from '../src/agents/gemini.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -873,6 +874,53 @@ test('provision resolves a real gemini on PATH via Bun.which', () => {
     cleanup();
     spCleanup();
     path.cleanup();
+  }
+});
+
+// B5: credential with custom api_key_env — the GEMINI_API_KEY is read from the
+// custom env var, not the conventional GEMINI_API_KEY. The conventional var is
+// deliberately unset to prove the credential path does NOT require it.
+test('provision with credential resolves api key from credential api_key_env', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  const customKey = 'gem-custom-env-key';
+  const credential: Credential = {
+    model: 'gemini-2.5-pro',
+    harnesses: ['gemini'],
+    api: 'gemini',
+    auth: 'api-key',
+    api_key_env: 'MY_CUSTOM_GEMINI_KEY',
+    compat: {},
+  };
+
+  try {
+    withEnv(
+      {
+        GEMINI_API_KEY: undefined,
+        MY_CUSTOM_GEMINI_KEY: customKey,
+        SUPERPOWERS_ROOT: superpowersRoot,
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        const agent = new GeminiAgent(CONFIG);
+        agent.provision(home, runner, credential);
+
+        // .gemini-env must carry the custom key (not blank, not throwing).
+        const envFile = join(home.configDir, '.gemini-env');
+        expect(existsSync(envFile)).toBe(true);
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `GEMINI_API_KEY='${customKey}'\n`,
+        );
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
   }
 });
 

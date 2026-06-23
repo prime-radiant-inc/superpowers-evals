@@ -6,6 +6,7 @@ export interface StoppedIdentity {
   readonly scenario: string;
   readonly codingAgent: string;
   readonly startedAt: string;
+  readonly credential?: string;
 }
 
 // The verdict written when a run is interrupted by SIGINT (dashboard Stop).
@@ -24,6 +25,7 @@ export function buildStoppedVerdict(id: StoppedIdentity): FinalVerdict {
     coding_agent: id.codingAgent,
     started_at: id.startedAt,
     finished_at: new Date().toISOString(),
+    credential: id.credential,
   };
 }
 

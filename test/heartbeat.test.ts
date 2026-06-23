@@ -10,6 +10,8 @@ function entry(scenario: string, agent: string): MatrixEntry {
     skippedReason: null,
     tier: 'sentinel',
     status: 'ready',
+    credential: '',
+    limiterKey: agent,
   };
 }
 
