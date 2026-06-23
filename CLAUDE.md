@@ -16,7 +16,7 @@ messages.
 |---|---|---|
 | **Gauntlet** | General-purpose QA framework; the `gauntlet` CLI. A black-box tester. | repo `github.com/prime-radiant-inc/gauntlet`; on `PATH` as `gauntlet` (via `bun link` or `GAUNTLET_ROOT`) |
 | **Gauntlet-Agent** | The LLM inside Gauntlet that drives the Coding-Agent and self-grades against the story's ACs. | model e.g. `claude-sonnet-4-6`; event stream -> `<run>/gauntlet-agent/results/<runId>/run.jsonl`; verdict -> `result.{json,md}` |
-| **Coding-Agent** | The agent under test. Instances: **Claude**, **Claude Haiku**, **Claude Sonnet**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, and **Copilot**. | session log -> under the per-run throwaway `$HOME` (`<run>/home/<agent-config-subdir>/...`, e.g. `.claude`/`.codex`); files it writes -> `<run>/coding-agent-workdir/` |
+| **Coding-Agent** | The agent under test. Instances: **Claude**, **Codex**, **Antigravity**, **Gemini**, **Kimi**, **OpenCode**, **Pi**, and **Copilot**. | session log -> under the per-run throwaway `$HOME` (`<run>/home/<agent-config-subdir>/...`, e.g. `.claude`/`.codex`); files it writes -> `<run>/coding-agent-workdir/` |
 | **Quorum** | The TypeScript wrapper. Owns setup, Coding-Agent adaptation, deterministic checks, and final verdict composition. | repo `superpowers-evals/src/`; `<run>/verdict.json` |
 
 A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
@@ -33,11 +33,13 @@ A run involves two LLMs: the **Gauntlet-Agent** (QA tester) and the
 - **check (lint+typecheck+test)**: `bun run check`
 - **validate scenarios**: `bun run quorum check`
 - **run scenario**: `bun run quorum run scenarios/<name> --coding-agent <agent>`
+- **run scenario with credential**: `bun run quorum run scenarios/<name> --coding-agent <agent> --credential <name>`
 - **list scenarios**: `bun run quorum list`
 - **scaffold scenario**: `bun run quorum new <name>`
 - **show verdict**: `bun run quorum show [<target>]`
 - **show costs**: `bun run quorum costs [<target>] [--with-gauntlet]`
 - **run all**: `bun run quorum run-all [--coding-agents X,Y] [--jobs N]`
+- **run all with credentials**: `bun run quorum run-all [--coding-agents X,Y] [--credentials cred1,cred2] [--jobs N]`
 - **show batch**: `bun run quorum show <batch-id>` (matrix view)
 - **grid-manifest**: `bun run quorum grid-manifest [--out <path>]` (emit the scenario × agent × os eligibility matrix the dashboard reads)
 - **dashboard**: `bun run dashboard [--results <dir>] [--port N] [--manifest <path>]` (read-only web matrix over results/ + grid-manifest.json)
@@ -54,7 +56,9 @@ Spec: `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 - `src/runner/` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict (`index.ts`); `context.ts`, `phase.ts`, `errors.ts` (staged `RunError`), `stopped.ts`.
 - `src/checks/` — sources `prelude.sh` (the bare-verb DSL: one shell function per FS check verb, plus `not`/`check-transcript`/`setup-helpers`, each delegating to the TS CLIs) then `checks.sh`, runs `pre()`/`post()`, collects structured check records (the verb functions emit them to `QUORUM_RECORD_SINK`).
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
-- `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`.
+- `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`, `credential.ts` (CredentialSchema — `model`, `api`, `base_url`, `auth`, `api_key_env`, `harnesses`, `max_concurrency`, `launch_spacing_seconds`, `os_support`, `compat`).
+- `src/credentials/` — credential loading (`index.ts`), resolution (`resolve.ts`: `resolveCredentialNameForAgent`, `resolveApiKey`, `limiterKey`), and `quorum check` validation (`check.ts`).
+- `credentials.yaml` — top-level credential registry (names `^[a-z0-9_]+$`). Each entry defines one model + endpoint combination. Agents declare a `default_credential` in their YAML; `--credential <name>` overrides it at runtime. `--credentials <csv>` in `run-all` runs each agent against each named credential; cells where the credential's `harnesses` list does not include the agent's runtime family are skipped. The scheduler keys its concurrency cap and rate-limit latch on the credential's **limiterKey** (`base_url|api`), so all cells sharing an endpoint share one cap and one rate-limit latch.
 - `src/capture/` — session-log snapshot/diff + ATIF capture (`index.ts`): normalizes each new log to an ATIF `Trajectory`, merges them by step timestamp, writes `trajectory.json`, then `captureTokenUsage` prices that trajectory via obol's `"atif"` dialect into the frozen `coding-agent-token-usage.json` (kimi byte-count + wall-clock duration are the only raw-log reads — never tokens); per-backend cwd filtering (`cwd-filter.ts`).
 - `src/obol/` — obol cost estimation: `estimateTrajectory` prices the coding-agent ATIF `trajectory.json` (obol `"atif"` dialect, honoring embedded `cost_usd` else its rate tables), `estimateUsageSidecar` prices the gauntlet usage sidecar (obol `"obol"` dialect); `mergeEstimates` folds obol `CostEstimate`s into the `TokenUsage` shape.
 - `src/economics.ts` — assembles the economics block carried in the verdict.

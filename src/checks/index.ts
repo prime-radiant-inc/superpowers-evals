@@ -38,7 +38,7 @@ export interface RunPhaseArgs {
    */
   readonly configDir?: string;
   /**
-   * Optional: the coding-agent config name (e.g. `codex`, `claude-sonnet`),
+   * Optional: the coding-agent config name (e.g. `codex`, `claude`),
    * exposed to checks as QUORUM_CODING_AGENT so a verb can dispatch per-agent.
    */
   readonly codingAgent?: string;
