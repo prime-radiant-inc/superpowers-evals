@@ -371,6 +371,30 @@ test('sessionDurationMs spans epoch-ms numeric time values (kimi)', () => {
   expect(sessionDurationMs([f])).toBe(3500);
 });
 
+test('sessionDurationMs spans timestamps in a single ATIF JSON object (serf)', () => {
+  // serf's captured "log" is its ATIF export: one pretty-printed JSON object
+  // (not one-object-per-line) whose `steps[]` carry second-granular ISO
+  // timestamps. The span is last-minus-first across the step timestamps.
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const f = join(logDir, 'trajectory.json');
+  writeFileSync(
+    f,
+    JSON.stringify(
+      {
+        schema_version: 'ATIF-v1.7',
+        steps: [
+          { step_id: 1, timestamp: '2026-06-23T01:11:35Z' },
+          { step_id: 2, timestamp: '2026-06-23T01:11:38Z' },
+          { step_id: 3, timestamp: '2026-06-23T01:12:05Z' },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  expect(sessionDurationMs([f])).toBe(30000);
+});
+
 test('sessionDurationMs returns null when no timestamps are found', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
   const f = join(logDir, 'empty.jsonl');

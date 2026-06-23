@@ -621,11 +621,56 @@ function isoToMs(ts: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** Collect epoch-ms time points from one parsed value into `points`: an ISO-8601
+ *  `timestamp` string (Claude/Codex, parsed via isoToMs) and a numeric epoch-ms
+ *  `time` value (Kimi; booleans excluded). Non-objects are ignored. */
+function collectTimePoints(value: unknown, points: number[]): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return;
+  }
+  const row = value as Record<string, unknown>;
+  const ts = row['timestamp'];
+  if (typeof ts === 'string') {
+    const ms = isoToMs(ts);
+    if (ms !== null) {
+      points.push(ms);
+    }
+  }
+  const t = row['time'];
+  if (typeof t === 'number') {
+    points.push(t);
+  }
+}
+
+/** Recursively collect time points from an arbitrarily nested parsed JSON
+ *  document. Used for the single-object (ATIF export) fallback where timestamps
+ *  live on `steps[]` elements rather than on top-level rows. */
+function collectTimePointsDeep(value: unknown, points: number[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectTimePointsDeep(item, points);
+    }
+    return;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return;
+  }
+  collectTimePoints(value, points);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    if (typeof nested === 'object' && nested !== null) {
+      collectTimePointsDeep(nested, points);
+    }
+  }
+}
+
 /** First-to-last timestamp span (ms) across the given session logs, or null when
  *  no timestamps are found. Scans every JSONL row for an ISO-8601 `timestamp`
  *  string (Claude/Codex, parsed via isoToMs) AND a numeric epoch-ms `time` value
- *  (Kimi; booleans excluded), then returns max(max - min, 0). Unreadable files,
- *  blank/non-JSON lines, and non-object rows are skipped. */
+ *  (Kimi; booleans excluded), then returns max(max - min, 0). When a file yields
+ *  no points line-by-line, it is re-parsed as a single JSON document and walked
+ *  recursively (serf's ATIF export is one pretty-printed object whose `steps[]`
+ *  carry ISO timestamps). Unreadable files, blank/non-JSON lines, and non-object
+ *  rows are skipped. */
 export function sessionDurationMs(files: readonly string[]): number | null {
   const points: number[] = [];
   for (const filePath of files) {
@@ -635,6 +680,7 @@ export function sessionDurationMs(files: readonly string[]): number | null {
     } catch {
       continue;
     }
+    const before = points.length;
     for (const line of text.split('\n')) {
       if (line.trim() === '') {
         continue;
@@ -645,20 +691,13 @@ export function sessionDurationMs(files: readonly string[]): number | null {
       } catch {
         continue;
       }
-      if (typeof rec !== 'object' || rec === null || Array.isArray(rec)) {
-        continue;
-      }
-      const row = rec as Record<string, unknown>;
-      const ts = row['timestamp'];
-      if (typeof ts === 'string') {
-        const ms = isoToMs(ts);
-        if (ms !== null) {
-          points.push(ms);
-        }
-      }
-      const t = row['time'];
-      if (typeof t === 'number') {
-        points.push(t);
+      collectTimePoints(rec, points);
+    }
+    if (points.length === before) {
+      try {
+        collectTimePointsDeep(JSON.parse(text), points);
+      } catch {
+        // Not a single JSON document either; leave this file contributing nothing.
       }
     }
   }
