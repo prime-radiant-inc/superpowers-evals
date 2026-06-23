@@ -4,10 +4,12 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { MatrixEntry, SkippedReason } from '../contracts/batch.ts';
+import type { Credential } from '../contracts/credential.ts';
 import type {
   GridManifest,
   GridManifestCell,
 } from '../contracts/grid-manifest.ts';
+import { limiterKey as makeLimiterKey } from '../credentials/resolve.ts';
 import { readQuorumTier, readStoryStatus } from '../story-meta.ts';
 
 // quorum run-all matrix construction. Reuses parseCodingAgentsDirective +
@@ -20,6 +22,9 @@ export interface BuildMatrixArgs {
   readonly scenarioFilter?: readonly string[];
   readonly tierFilter?: 'sentinel' | 'full' | 'adhoc' | null;
   readonly includeDrafts?: boolean;
+  // Loaded credentials map for resolving per-cell limiterKey + caps. Empty map
+  // is valid (all agents fall back to per-agent limiterKey).
+  readonly credentials?: Record<string, Credential>;
 }
 
 // Validate that an option's path exists and is a directory, for --scenarios-root
@@ -36,6 +41,31 @@ function requireDirectory(option: string, path: string): void {
   if (!stat.isDirectory()) {
     throw new Error(`${option}: not a directory: ${path}`);
   }
+}
+
+// Narrow view for the one field buildMatrix needs from an agent YAML. Using a
+// strict parse of AgentConfig would throw on minimal YAMLs (missing binary etc.);
+// this schema reads only what is needed and is permissive of unknown keys.
+const AgentDefaultCredentialViewSchema = z.object({
+  default_credential: z.string().optional(),
+});
+
+// Read an agent's default_credential from its YAML, or undefined when the file
+// is missing/malformed or the field is absent.
+function readAgentDefaultCredential(
+  codingAgentsDir: string,
+  agent: string,
+): string | undefined {
+  let raw: unknown;
+  try {
+    raw = parseYaml(
+      readFileSync(join(codingAgentsDir, `${agent}.yaml`), 'utf8'),
+    );
+  } catch {
+    return undefined;
+  }
+  const view = AgentDefaultCredentialViewSchema.safeParse(raw ?? {});
+  return view.success ? view.data.default_credential : undefined;
 }
 
 // Sorted *.yaml stems under coding_agents_dir (_discover_agents).
@@ -89,6 +119,7 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     scenarioFilter,
     tierFilter = null,
     includeDrafts = false,
+    credentials = {},
   } = args;
 
   // Validate both roots upfront so a missing/non-dir root fails with a clear
@@ -125,6 +156,21 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     );
   }
 
+  // Pre-compute per-agent credential + limiterKey so the inner loop is O(1).
+  const agentCredentialName = new Map<string, string>();
+  const agentLimiterKey = new Map<string, string>();
+  for (const agent of agents) {
+    const credName = readAgentDefaultCredential(codingAgentsDir, agent);
+    const cred = credName !== undefined ? credentials[credName] : undefined;
+    if (credName !== undefined && cred !== undefined) {
+      agentCredentialName.set(agent, credName);
+      agentLimiterKey.set(agent, makeLimiterKey(cred, credName));
+    } else {
+      agentCredentialName.set(agent, '');
+      agentLimiterKey.set(agent, agent);
+    }
+  }
+
   const entries: MatrixEntry[] = [];
   for (const scenarioDir of scenarioDirs) {
     const directive = parseCodingAgentsDirective(
@@ -151,6 +197,8 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
         skippedReason: skipped,
         tier,
         status,
+        credential: agentCredentialName.get(agent) ?? '',
+        limiterKey: agentLimiterKey.get(agent) ?? agent,
       });
     }
   }
@@ -161,51 +209,6 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
     return 0;
   });
   return entries;
-}
-
-// Just the scheduler keys, kept narrow so a malformed YAML (or absent key) is a
-// null rather than a throw (_agent_max_concurrency, plus the new spacing key).
-const SchedulerKeysViewSchema = z.object({
-  max_concurrency: z.number().int().nullable().optional(),
-  launch_spacing_seconds: z.number().nullable().optional(),
-});
-
-// Read + zod-narrow an agent's YAML for the scheduler keys, or null when the
-// file is missing/unreadable/malformed.
-function readSchedulerKeys(
-  codingAgentsDir: string,
-  agent: string,
-): z.infer<typeof SchedulerKeysViewSchema> | null {
-  let raw: unknown;
-  try {
-    raw = parseYaml(
-      readFileSync(join(codingAgentsDir, `${agent}.yaml`), 'utf8'),
-    );
-  } catch {
-    return null;
-  }
-  const view = SchedulerKeysViewSchema.safeParse(raw ?? {});
-  return view.success ? view.data : null;
-}
-
-// An agent's optional max_concurrency cap from its YAML, or null when unset /
-// unreadable. Agents whose backend rate-limits concurrent calls set this to 1 so
-// the scheduler serializes them.
-export function agentMaxConcurrency(
-  codingAgentsDir: string,
-  agent: string,
-): number | null {
-  return readSchedulerKeys(codingAgentsDir, agent)?.max_concurrency ?? null;
-}
-
-// An agent's optional launch_spacing_seconds (minimum start-to-start gap), or 0
-// when unset / unreadable. The scheduler reads this as spacingFor(h); absent =
-// no spacing (the harness runs at full slot speed). Mirrors agentMaxConcurrency.
-export function agentLaunchSpacingSeconds(
-  codingAgentsDir: string,
-  agent: string,
-): number {
-  return readSchedulerKeys(codingAgentsDir, agent)?.launch_spacing_seconds ?? 0;
 }
 
 // Narrow view just for os_support — never throws (returns ['linux'] on any error).

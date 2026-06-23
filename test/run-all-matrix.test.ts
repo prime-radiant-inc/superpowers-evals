@@ -3,11 +3,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MatrixEntry } from '../src/contracts/batch.ts';
-import {
-  agentLaunchSpacingSeconds,
-  agentMaxConcurrency,
-  buildMatrix,
-} from '../src/run-all/matrix.ts';
+import type { Credential } from '../src/contracts/credential.ts';
+import { limiterKey } from '../src/credentials/resolve.ts';
+import { buildMatrix } from '../src/run-all/matrix.ts';
 
 interface ScenarioSpec {
   readonly name: string;
@@ -16,10 +14,15 @@ interface ScenarioSpec {
   readonly directive?: string;
 }
 
+interface AgentSpec {
+  readonly name: string;
+  readonly defaultCredential?: string;
+}
+
 // Build a temp scenarios-root + coding-agents dir for a matrix test.
 function fixture(
   scenarios: readonly ScenarioSpec[],
-  agents: readonly string[],
+  agents: readonly (string | AgentSpec)[],
 ): {
   scenariosRoot: string;
   codingAgentsDir: string;
@@ -47,13 +50,15 @@ function fixture(
     );
   }
 
-  for (const agent of agents) {
-    const body =
-      agent === 'antigravity' ? 'max_concurrency: 1\n' : `name: ${agent}\n`;
-    writeFileSync(
-      join(codingAgentsDir, `${agent}.yaml`),
-      `name: ${agent}\n${body}`,
-    );
+  for (const agentArg of agents) {
+    const agent = typeof agentArg === 'string' ? agentArg : agentArg.name;
+    const defaultCred =
+      typeof agentArg === 'object' ? agentArg.defaultCredential : undefined;
+    let body = `name: ${agent}\n`;
+    if (defaultCred !== undefined) {
+      body += `default_credential: ${defaultCred}\n`;
+    }
+    writeFileSync(join(codingAgentsDir, `${agent}.yaml`), body);
   }
 
   return { scenariosRoot, codingAgentsDir };
@@ -183,28 +188,53 @@ test('scenarioFilter narrows scenarios and rejects unknown names', () => {
   ).toThrow(/unknown scenario/);
 });
 
-test('agentMaxConcurrency reads the YAML cap, null when unset', () => {
-  const { codingAgentsDir } = fixture(
+test('buildMatrix sets credential and limiterKey for a credentialed agent', () => {
+  // Agent claude has default_credential: "my_cred" which maps to a credential
+  // with base_url and api. The entry's limiterKey must use limiterKey(cred, name).
+  const { scenariosRoot, codingAgentsDir } = fixture(
     [{ name: 's' }],
-    ['claude', 'antigravity'],
+    [{ name: 'claude', defaultCredential: 'my_cred' }],
   );
-  expect(agentMaxConcurrency(codingAgentsDir, 'antigravity')).toBe(1);
-  expect(agentMaxConcurrency(codingAgentsDir, 'claude')).toBeNull();
-  expect(agentMaxConcurrency(codingAgentsDir, 'missing')).toBeNull();
+
+  const cred: Credential = {
+    model: 'claude-3-5-sonnet',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    base_url: 'https://api.example.com',
+    auth: 'api-key',
+    compat: {},
+  };
+  const credentials: Record<string, Credential> = { my_cred: cred };
+
+  const m = buildMatrix({ scenariosRoot, codingAgentsDir, credentials });
+  expect(m).toHaveLength(1);
+  expect(m[0]?.credential).toBe('my_cred');
+  expect(m[0]?.limiterKey).toBe(limiterKey(cred, 'my_cred'));
+  // limiterKey = base_url|api = "https://api.example.com|anthropic"
+  expect(m[0]?.limiterKey).toBe('https://api.example.com|anthropic');
 });
 
-test('agentLaunchSpacingSeconds reads the YAML spacing, 0 when unset', () => {
-  const root = mkdtempSync(join(tmpdir(), 'runall-spacing-'));
-  const codingAgentsDir = join(root, 'coding-agents');
-  mkdirSync(codingAgentsDir, { recursive: true });
-  writeFileSync(
-    join(codingAgentsDir, 'antigravity.yaml'),
-    'name: antigravity\nmax_concurrency: 1\nlaunch_spacing_seconds: 30\n',
+test('buildMatrix sets limiterKey to agent name for credential-less agent', () => {
+  // Agent codex has no default_credential. limiterKey must fall back to agent name.
+  const { scenariosRoot, codingAgentsDir } = fixture(
+    [{ name: 's' }],
+    ['codex'],
   );
-  writeFileSync(join(codingAgentsDir, 'claude.yaml'), 'name: claude\n');
+  const m = buildMatrix({ scenariosRoot, codingAgentsDir, credentials: {} });
+  expect(m).toHaveLength(1);
+  expect(m[0]?.credential).toBe('');
+  expect(m[0]?.limiterKey).toBe('codex');
+});
 
-  // Present -> the configured number; absent -> 0; missing file -> 0.
-  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'antigravity')).toBe(30);
-  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'claude')).toBe(0);
-  expect(agentLaunchSpacingSeconds(codingAgentsDir, 'missing')).toBe(0);
+test('buildMatrix: credentialed agent with missing credential falls back to agent name', () => {
+  // Agent has default_credential but it is not in the credentials map.
+  // Should fall back gracefully (credential missing -> treat as credential-less).
+  const { scenariosRoot, codingAgentsDir } = fixture(
+    [{ name: 's' }],
+    [{ name: 'claude', defaultCredential: 'nonexistent_cred' }],
+  );
+  const m = buildMatrix({ scenariosRoot, codingAgentsDir, credentials: {} });
+  expect(m).toHaveLength(1);
+  expect(m[0]?.credential).toBe('');
+  expect(m[0]?.limiterKey).toBe('claude');
 });

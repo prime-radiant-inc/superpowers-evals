@@ -2,12 +2,16 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import { runnable } from '../contracts/batch.ts';
+import type { Credential } from '../contracts/credential.ts';
+import { parseCredentialsFile } from '../contracts/credential.ts';
 import { envSnapshot } from '../env.ts';
+import { repoRoot } from '../paths.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import type { SchedulerEvent } from '../scheduler/index.ts';
@@ -24,11 +28,7 @@ import {
   stopBatch,
 } from './child-stop.ts';
 import { HeartbeatTracker, heartbeatLine } from './heartbeat.ts';
-import {
-  agentLaunchSpacingSeconds,
-  agentMaxConcurrency,
-  buildMatrix,
-} from './matrix.ts';
+import { buildMatrix } from './matrix.ts';
 import { writeGridManifest } from './write-grid-manifest.ts';
 
 // quorum run-all orchestrator: invokeChild + runBatch.
@@ -199,6 +199,9 @@ export interface RunBatchArgs {
   readonly includeDrafts?: boolean;
   readonly invoke?: InvokeFn;
   readonly stream?: { write(s: string): void };
+  // Path to credentials.yaml; defaults to join(repoRoot(), 'credentials.yaml').
+  // Missing file is silently ignored (all agents fall back to per-agent limiterKey).
+  readonly credentialsPath?: string;
   // The scheduler clock; defaults to RealClock. Tests inject a FakeClock to
   // drive spacing deterministically — but run-all's own behavior tests use the
   // real clock with instant fake invokes (no spacing configured).
@@ -255,6 +258,51 @@ function hardExitProcess(): void {
   process.exit(130);
 }
 
+// Load and parse credentials.yaml, returning an empty map on any error (missing
+// file, malformed YAML, schema violation). This keeps run-all usable without a
+// credentials file; agents that have a default_credential will fall back to
+// per-agent limiterKey instead.
+function loadCredentials(credentialsPath: string): Record<string, Credential> {
+  try {
+    const raw = parseYaml(readFileSync(credentialsPath, 'utf8'));
+    return parseCredentialsFile(raw);
+  } catch {
+    return {};
+  }
+}
+
+interface LimiterCaps {
+  readonly maxConcurrency: number | null;
+  readonly spacingSeconds: number;
+}
+
+// Build a Map<limiterKey, caps> for all distinct limiterKeys referenced by the
+// runnable entries. For entries with a credential, caps come from the credential.
+// For credential-less entries (limiterKey = agent name), caps default to
+// null/0 (unbounded, no spacing) — same as today's behavior for those agents.
+function buildCapMap(
+  entries: readonly MatrixEntry[],
+  credentials: Record<string, Credential>,
+): Map<string, LimiterCaps> {
+  const capMap = new Map<string, LimiterCaps>();
+  for (const entry of entries) {
+    const lk = entry.limiterKey;
+    if (capMap.has(lk)) continue;
+    const cred =
+      entry.credential !== '' ? credentials[entry.credential] : undefined;
+    if (cred !== undefined) {
+      capMap.set(lk, {
+        maxConcurrency: cred.max_concurrency ?? null,
+        spacingSeconds: cred.launch_spacing_seconds ?? 0,
+      });
+    } else {
+      // Credential-less: unbounded, no spacing.
+      capMap.set(lk, { maxConcurrency: null, spacingSeconds: 0 });
+    }
+  }
+  return capMap;
+}
+
 type Final = 'pass' | 'fail' | 'indeterminate' | 'unknown';
 
 const GLYPH_FOR_FINAL: Readonly<Record<Final, string>> = {
@@ -292,10 +340,16 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     hardExit = hardExitProcess,
     heartbeatSeconds = 30,
     startHeartbeat = startHeartbeatTimer,
+    credentialsPath = join(repoRoot(), 'credentials.yaml'),
   } = args;
   if (jobs < 1) {
     throw new Error(`jobs must be >= 1, got ${jobs}`);
   }
+
+  // Load credentials for per-endpoint limiterKey resolution. Missing or
+  // malformed file is silently ignored: agents without credentials fall back to
+  // per-agent limiterKey (preserving behavior for credential-less agents).
+  const credentials = loadCredentials(credentialsPath);
 
   const entries = buildMatrix({
     scenariosRoot,
@@ -304,6 +358,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
     tierFilter: tier,
     includeDrafts,
+    credentials,
   });
 
   const batchDir = allocateBatchDir({ outRoot });
@@ -446,11 +501,16 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     }
   };
 
+  // Build a limiterKey -> cap/spacing map from the credentials referenced by
+  // the runnable entries. Credential-less entries (limiterKey = agent name)
+  // carry no credential, so they get cap=null / spacing=0 (unbounded, no gap).
+  const capMap = buildCapMap(runnableEntries, credentials);
+
   const handle = runSchedule({
     cells: runnableEntries,
     jobs,
-    capFor: (h) => agentMaxConcurrency(codingAgentsDir, h),
-    spacingFor: (h) => agentLaunchSpacingSeconds(codingAgentsDir, h),
+    capFor: (lk) => capMap.get(lk)?.maxConcurrency ?? null,
+    spacingFor: (lk) => capMap.get(lk)?.spacingSeconds ?? 0,
     clock,
     invoke: invokeCell,
     isRateLimited,

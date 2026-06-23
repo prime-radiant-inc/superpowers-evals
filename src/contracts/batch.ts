@@ -38,6 +38,11 @@ export interface MatrixEntry {
   readonly skippedReason: SkippedReason;
   readonly tier: 'sentinel' | 'full' | 'adhoc';
   readonly status: string;
+  // The credential name used by this cell's agent ('' for credential-less agents).
+  readonly credential: string;
+  // The scheduler limiterKey: shared across all cells hitting the same endpoint.
+  // Credential-less agents fall back to the agent name (preserving prior behavior).
+  readonly limiterKey: string;
 }
 
 // A cell runs iff it carries no skip reason.

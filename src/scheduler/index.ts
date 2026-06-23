@@ -70,10 +70,10 @@ export interface RunScheduleArgs {
   readonly cells: readonly MatrixEntry[];
   // The global slot pool size ("up to this many of anything"). Validated >= 1.
   readonly jobs: number;
-  // Per-harness in-flight cap. null = unbounded.
-  readonly capFor: (harness: string) => number | null;
-  // Per-harness minimum start-to-start gap in seconds. 0 = no spacing.
-  readonly spacingFor: (harness: string) => number;
+  // Per-limiter-key in-flight cap. null = unbounded.
+  readonly capFor: (limiterKey: string) => number | null;
+  // Per-limiter-key minimum start-to-start gap in seconds. 0 = no spacing.
+  readonly spacingFor: (limiterKey: string) => number;
   // The single injectable clock governing BOTH eligibility (now >= next_start)
   // AND the dispatcher's sleep target.
   readonly clock: Clock;
@@ -113,7 +113,7 @@ type CellStatus = 'queued' | 'started' | 'terminal';
 interface Cell {
   readonly idx: number;
   readonly entry: MatrixEntry;
-  readonly harness: string;
+  readonly limiterKey: string;
   status: CellStatus;
 }
 
@@ -145,7 +145,7 @@ class Scheduler {
     this.cells = args.cells.map((entry, i) => ({
       idx: i + 1,
       entry,
-      harness: entry.codingAgent,
+      limiterKey: entry.limiterKey,
       status: 'queued' as CellStatus,
     }));
     this.freeSlots = args.jobs;
@@ -232,17 +232,17 @@ class Scheduler {
 
   // The spec's eligibility predicate, all clauses ANDed.
   private eligible(cell: Cell): boolean {
-    const h = cell.harness;
+    const lk = cell.limiterKey;
     if (this.freeSlots <= 0) {
       return false;
     }
-    if (this.inflightOf(h) >= this.capOf(h)) {
+    if (this.inflightOf(lk) >= this.capOf(lk)) {
       return false;
     }
-    if (this.args.clock.now() < this.nextStartOf(h)) {
+    if (this.args.clock.now() < this.nextStartOf(lk)) {
       return false;
     }
-    if (this.latched.has(h)) {
+    if (this.latched.has(lk)) {
       return false;
     }
     if (this.stopRequested) {
@@ -251,15 +251,15 @@ class Scheduler {
     return true;
   }
 
-  // Consume a slot, mark the cell started, set the harness's next permitted
+  // Consume a slot, mark the cell started, set the limiterKey's next permitted
   // start (start-to-start spacing), emit cell_started, and launch the child.
   private startCell(cell: Cell): void {
-    const h = cell.harness;
+    const lk = cell.limiterKey;
     const now = this.args.clock.now();
     this.freeSlots -= 1;
-    this.inflight.set(h, this.inflightOf(h) + 1);
+    this.inflight.set(lk, this.inflightOf(lk) + 1);
     this.inflightCount += 1;
-    this.nextStart.set(h, now + this.args.spacingFor(h));
+    this.nextStart.set(lk, now + this.args.spacingFor(lk));
     cell.status = 'started';
 
     this.args.onSpawn?.(cell.entry);
@@ -281,13 +281,13 @@ class Scheduler {
     );
   }
 
-  // A child finished: release its slot + harness counter, apply the rate-limit
-  // latch (eager-skip the harness's undispatched cells), emit cell_finished, and
-  // wake the dispatcher to re-fill the freed slot.
+  // A child finished: release its slot + limiterKey counter, apply the rate-limit
+  // latch (eager-skip all undispatched cells sharing this limiterKey), emit
+  // cell_finished, and wake the dispatcher to re-fill the freed slot.
   private onComplete(cell: Cell, result: ChildResult, startedAt: number): void {
-    const h = cell.harness;
+    const lk = cell.limiterKey;
     this.freeSlots += 1;
-    this.inflight.set(h, this.inflightOf(h) - 1);
+    this.inflight.set(lk, this.inflightOf(lk) - 1);
     this.inflightCount -= 1;
     cell.status = 'terminal';
 
@@ -301,22 +301,28 @@ class Scheduler {
       elapsed_s: elapsed,
     });
 
-    // Rate-limit latch: this harness joins `latched` and ALL its undispatched
-    // cells immediately skip 'rate-limited'. In-flight runs of the harness are
-    // left to finish; the latch dominates spacing (next_start never consulted
-    // again for a latched harness).
+    // Rate-limit latch: this limiterKey joins `latched` and ALL undispatched
+    // cells with the same limiterKey immediately skip 'rate-limited'. This
+    // blast-radius covers all agents sharing the same endpoint. In-flight runs
+    // are left to finish; the latch dominates spacing (next_start never
+    // consulted again for a latched limiterKey).
     if (this.args.isRateLimited(result)) {
-      this.latched.add(h);
-      this.skipQueuedForHarness(h, 'rate-limited');
+      this.latched.add(lk);
+      this.skipQueuedForLimiterKey(lk, 'rate-limited');
     }
 
     this.signalWake();
   }
 
-  // Skip every still-queued cell of harness `h` (eager latch-and-skip).
-  private skipQueuedForHarness(harness: string, reason: SkippedReason): void {
+  // Skip every still-queued cell sharing `limiterKey` (eager latch-and-skip).
+  // Blast-radius: covers all agents on the same endpoint, not just the one that
+  // triggered the latch.
+  private skipQueuedForLimiterKey(
+    limiterKey: string,
+    reason: SkippedReason,
+  ): void {
     for (const cell of this.cells) {
-      if (cell.status === 'queued' && cell.harness === harness) {
+      if (cell.status === 'queued' && cell.limiterKey === limiterKey) {
         cell.status = 'terminal';
         this.emit({
           kind: 'cell_skipped',
@@ -358,17 +364,17 @@ class Scheduler {
       if (cell.status !== 'queued') {
         continue;
       }
-      const h = cell.harness;
-      if (this.latched.has(h)) {
+      const lk = cell.limiterKey;
+      if (this.latched.has(lk)) {
         continue;
       }
       if (this.freeSlots <= 0) {
         continue;
       }
-      if (this.inflightOf(h) >= this.capOf(h)) {
+      if (this.inflightOf(lk) >= this.capOf(lk)) {
         continue;
       }
-      const ns = this.nextStartOf(h);
+      const ns = this.nextStartOf(lk);
       if (now >= ns) {
         // Eligible NOW (not spacing-blocked) — dispatchGreedy handles it; this
         // shouldn't occur post-dispatch, but skip it as a non-wake.
@@ -407,16 +413,16 @@ class Scheduler {
     return this.cells.every((c) => c.status === 'terminal');
   }
 
-  private inflightOf(harness: string): number {
-    return this.inflight.get(harness) ?? 0;
+  private inflightOf(limiterKey: string): number {
+    return this.inflight.get(limiterKey) ?? 0;
   }
 
-  private nextStartOf(harness: string): number {
-    return this.nextStart.get(harness) ?? Number.NEGATIVE_INFINITY;
+  private nextStartOf(limiterKey: string): number {
+    return this.nextStart.get(limiterKey) ?? Number.NEGATIVE_INFINITY;
   }
 
-  private capOf(harness: string): number {
-    const cap = this.args.capFor(harness);
+  private capOf(limiterKey: string): number {
+    const cap = this.args.capFor(limiterKey);
     return cap === null ? Number.POSITIVE_INFINITY : cap;
   }
 
