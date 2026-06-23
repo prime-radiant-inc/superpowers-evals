@@ -27,6 +27,8 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'user-pref-react-no-tdd-unmet',
   'user-pref-corp-no-brainstorm-met',
   'user-pref-corp-no-brainstorm-unmet',
+  'user-pref-spec-location',
+  'user-pref-sdd-no-strategy-prompt',
 ]);
 
 test('harness pins are exactly the explicitly intentional scenarios', () => {

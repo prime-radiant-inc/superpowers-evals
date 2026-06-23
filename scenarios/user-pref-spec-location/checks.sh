@@ -1,9 +1,9 @@
-# SPIKE (Phase 3, unpinned — run targeted). A spec-location preference must
-# redirect where brainstorming writes the design doc (guards real issue #939: the
-# skill hardcodes docs/superpowers/specs/ and ignores a CLAUDE.md path override).
-# Multi-turn: the agent must reach the spec-write (brainstorm → design approval →
-# write doc). This spike tests whether that gate is reachable under the gauntlet
-# driver and whether the override is honored.
+# coding-agents: claude,codex,gemini,kimi
+# OUT-path override (#939). A spec-location preference must redirect where
+# brainstorming writes the design doc (the skill hardcodes docs/superpowers/specs/
+# and ignored a CLAUDE.md path override). Multi-turn: the agent must reach the
+# spec-write (brainstorm → design approval → write doc); verified reachable +
+# honored in the Phase-3 spike.
 
 pre() {
     git-repo

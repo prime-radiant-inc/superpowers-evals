@@ -1,9 +1,9 @@
-# SPIKE (Phase 3, unpinned — run targeted). An "always subagent-driven, don't
-# ask" preference: the agent should dispatch a subagent without prompting for a
-# strategy. SOFT/MULTI-TURN: tool-not-called AskUserQuestion is weak (a plain
-# text question would not trip it), and reaching the strategy decision is deep
-# multi-turn. This spike tests reachability + measurability before authoring more
-# execution-mode scenarios.
+# coding-agents: claude,codex,gemini,kimi
+# Execution-mode override (#846). An "always subagent-driven, don't ask"
+# preference: the agent should dispatch a subagent without prompting for a
+# strategy. SOFT: tool-not-called AskUserQuestion is weak (a plain text question
+# would not trip it); the strong signal is the subagent dispatch (tool-called
+# Agent). Verified reachable + honored in the Phase-3 spike.
 
 pre() {
     git-repo
