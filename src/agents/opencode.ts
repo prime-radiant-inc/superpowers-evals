@@ -47,6 +47,29 @@ const CREDENTIAL_API_TO_OPENCODE_NPM: Readonly<Record<string, string>> = {
   anthropic: '@ai-sdk/anthropic',
 };
 
+// OpenAI's first-party API needs the real @ai-sdk/openai provider, not the
+// generic @ai-sdk/openai-compatible shim. The shim only speaks classic
+// /v1/chat/completions and always emits `max_tokens`, which OpenAI's reasoning
+// models (gpt-5.x) reject in favor of `max_completion_tokens`; @ai-sdk/openai
+// detects reasoning models and sends the right field. We key on host because
+// nothing else in the credential distinguishes OpenAI's own endpoint from a
+// third-party OpenAI-compatible one (GLM, ollama, openrouter). Add the second
+// first-party OpenAI host here (e.g. Azure OpenAI) the day one is configured.
+const OPENAI_FIRST_PARTY_HOSTS: ReadonlySet<string> = new Set([
+  'api.openai.com',
+]);
+
+function isOpenAiFirstPartyEndpoint(baseUrl: string | undefined): boolean {
+  if (baseUrl === undefined || baseUrl === '') {
+    return false;
+  }
+  try {
+    return OPENAI_FIRST_PARTY_HOSTS.has(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 const OPENCODE_EXPORT_SUBDIR = '.quorum/session-exports';
 
 // The stale-export glob (coding-agents/opencode.yaml session_log_glob): files
@@ -136,11 +159,21 @@ function buildOpencodeConfig(
   credential: Credential,
   apiKey: string,
 ): Record<string, unknown> {
-  const npm = CREDENTIAL_API_TO_OPENCODE_NPM[credential.api];
+  let npm = CREDENTIAL_API_TO_OPENCODE_NPM[credential.api];
   if (npm === undefined) {
     throw new ProvisionError(
       `opencode: api '${credential.api}' is not supported; supported: openai-chat, openai-responses, anthropic`,
     );
+  }
+
+  // OpenAI's own endpoint needs the first-party provider (see
+  // isOpenAiFirstPartyEndpoint): the generic compatible shim can't talk to its
+  // reasoning models. baseURL stays pinned to the credential's base_url below.
+  if (
+    npm === '@ai-sdk/openai-compatible' &&
+    isOpenAiFirstPartyEndpoint(credential.base_url)
+  ) {
+    npm = '@ai-sdk/openai';
   }
 
   const options: Record<string, string> = { apiKey };

@@ -217,6 +217,77 @@ test('provision builds opencode.json provider block from api-key credential', ()
   }
 });
 
+test('provision routes an OpenAI first-party endpoint (api.openai.com) to @ai-sdk/openai', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  // openai-chat normally maps to the generic @ai-sdk/openai-compatible shim,
+  // which only speaks classic /v1/chat/completions (always sends max_tokens) —
+  // rejected by OpenAI's reasoning models (gpt-5.x want max_completion_tokens).
+  // An api.openai.com base_url must select the real first-party @ai-sdk/openai.
+  const cred = makeCredential({
+    model: 'gpt-5.5',
+    base_url: 'https://api.openai.com/v1',
+    compat: {},
+  });
+
+  try {
+    withEnv(spRoot, 'test-openai-key', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const config = JSON.parse(
+        readFileSync(
+          join(home.configDir, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ),
+      );
+      expect(config.provider?.quorum?.npm).toBe('@ai-sdk/openai');
+      // baseURL stays pinned to OpenAI's endpoint, apiKey still resolved.
+      expect(config.provider?.quorum?.options?.baseURL).toBe(
+        'https://api.openai.com/v1',
+      );
+      expect(config.provider?.quorum?.options?.apiKey).toBe('test-openai-key');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision keeps a non-OpenAI openai-chat endpoint (ollama) on @ai-sdk/openai-compatible', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  // A local OpenAI-compatible endpoint must NOT be switched to @ai-sdk/openai.
+  const cred = makeCredential({
+    base_url: 'http://localhost:11434/v1',
+    compat: {},
+  });
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(home, runner, cred);
+
+      const config = JSON.parse(
+        readFileSync(
+          join(home.configDir, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ),
+      );
+      expect(config.provider?.quorum?.npm).toBe('@ai-sdk/openai-compatible');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 test('provision opencode.json omits reasoning when compat has no thinking_format', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
