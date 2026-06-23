@@ -468,6 +468,30 @@ test('runWorker throws and leaves a quarantined record when postflight finds a d
   expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
 });
 
+test('liveCommandArgs exports detached signal mode for appliance run-all', () => {
+  const cfg = loaded();
+  const runAllArgs = liveCommandArgs(cfg, 'job-run-all', [
+    'quorum',
+    'run-all',
+    '--tier',
+    'sentinel',
+  ]);
+  const singleRunArgs = liveCommandArgs(cfg, 'job-run', [
+    'quorum',
+    'run',
+    'scenario-a',
+    '--coding-agent',
+    'claude',
+  ]);
+
+  expect(runAllArgs.join('\n')).toContain(
+    'export QUORUM_RUN_ALL_SIGNAL_MODE=detached',
+  );
+  expect(singleRunArgs.join('\n')).not.toContain(
+    'QUORUM_RUN_ALL_SIGNAL_MODE=detached',
+  );
+});
+
 test('runWorker fails when a nonzero live command only created a batch shell', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();

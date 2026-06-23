@@ -663,10 +663,15 @@ export function liveCommandArgs(
   jobId: string,
   argv: readonly string[],
 ): string[] {
+  const runAllEnv =
+    argv[0] === 'quorum' && argv[1] === 'run-all'
+      ? ['export QUORUM_RUN_ALL_SIGNAL_MODE=detached']
+      : [];
   const script = [
     'set -euo pipefail',
     'pid_path=$1',
     'shift',
+    ...runAllEnv,
     'mkdir -p "$(dirname "$pid_path")"',
     'setsid bash -lc \'echo "$$" > "$1"; shift; exec "$@"\' appliance-live "$pid_path" "$@"',
   ].join('\n');

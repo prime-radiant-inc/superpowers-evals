@@ -206,12 +206,18 @@ export interface RunBatchArgs {
   // Process-signal seam. The default installs SIGINT/SIGTERM/SIGHUP handlers that
   // run the graceful stop; it returns an uninstaller. Tests inject a fake to
   // capture and drive the handler synchronously without real signals.
-  readonly installSignals?: (handler: () => void) => () => void;
+  readonly installSignals?: (
+    handler: (signal?: NodeJS.Signals) => void,
+    signals: readonly NodeJS.Signals[],
+  ) => () => void;
   // The kill used to SIGINT in-flight children on stop; defaults to process.kill.
   readonly kill?: KillFn;
   // Invoked when a SECOND signal arrives during shutdown; defaults to a hard
   // process exit so the operator is never stuck behind a wedged child.
   readonly hardExit?: () => void;
+  // Signals that request a graceful batch stop. Appliance-detached runs omit
+  // SIGHUP so a hangup at the transport boundary cannot truncate the batch.
+  readonly stopSignals?: readonly NodeJS.Signals[];
   // Seconds between liveness heartbeats; 0 disables. Defaults to 30.
   readonly heartbeatSeconds?: number;
   // Heartbeat-timer seam. The default schedules `tick` every `seconds` on an
@@ -237,14 +243,40 @@ function startHeartbeatTimer(tick: () => void, seconds: number): () => void {
 // foreground exec session or terminal going away — the most likely cause of a
 // silently truncated batch). Returns an uninstaller run in runBatch's finally so
 // handlers never leak past the drive.
-function installStopSignals(handler: () => void): () => void {
-  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const DEFAULT_RUN_ALL_STOP_SIGNALS = [
+  'SIGINT',
+  'SIGTERM',
+  'SIGHUP',
+] as const satisfies readonly NodeJS.Signals[];
+
+const DETACHED_RUN_ALL_STOP_SIGNALS = [
+  'SIGINT',
+  'SIGTERM',
+] as const satisfies readonly NodeJS.Signals[];
+
+export function runAllStopSignalsForEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): readonly NodeJS.Signals[] {
+  return env['QUORUM_RUN_ALL_SIGNAL_MODE'] === 'detached'
+    ? DETACHED_RUN_ALL_STOP_SIGNALS
+    : DEFAULT_RUN_ALL_STOP_SIGNALS;
+}
+
+type StopSignalHandler = (signal?: NodeJS.Signals) => void;
+
+function installStopSignals(
+  handler: StopSignalHandler,
+  signals: readonly NodeJS.Signals[],
+): () => void {
+  const listeners: { signal: NodeJS.Signals; listener: () => void }[] = [];
   for (const signal of signals) {
-    process.on(signal, handler);
+    const listener = (): void => handler(signal);
+    process.on(signal, listener);
+    listeners.push({ signal, listener });
   }
   return () => {
-    for (const signal of signals) {
-      process.off(signal, handler);
+    for (const { signal, listener } of listeners) {
+      process.off(signal, listener);
     }
   };
 }
@@ -290,6 +322,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     installSignals = installStopSignals,
     kill,
     hardExit = hardExitProcess,
+    stopSignals = runAllStopSignalsForEnv(envSnapshot()),
     heartbeatSeconds = 30,
     startHeartbeat = startHeartbeatTimer,
   } = args;
@@ -463,15 +496,16 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   // second signal hard-exits past any wedged child. Handlers are uninstalled in
   // the finally so they never leak past the drive.
   let stopping = false;
-  const onSignal = (): void => {
+  const onSignal = (signal: NodeJS.Signals = 'SIGINT'): void => {
     if (stopping) {
       hardExit();
       return;
     }
     stopping = true;
+    println(`batch stopping · received ${signal}`);
     stopBatch(handle, pidRegistry.pids, kill);
   };
-  const uninstallSignals = installSignals(onSignal);
+  const uninstallSignals = installSignals(onSignal, stopSignals);
   const stopHeartbeat = startHeartbeat(() => {
     println(heartbeatLine(heartbeat.snapshot(new Date(), jobs)));
   }, heartbeatSeconds);

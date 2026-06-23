@@ -9,7 +9,7 @@ import {
 } from '../src/contracts/batch.ts';
 import type { KillFn } from '../src/run-all/child-stop.ts';
 import type { InvokeFn } from '../src/run-all/index.ts';
-import { runBatch } from '../src/run-all/index.ts';
+import { runAllStopSignalsForEnv, runBatch } from '../src/run-all/index.ts';
 
 // A scenarios-root + coding-agents dir + empty out-root, one agent.
 function fixture(names: readonly string[]): {
@@ -40,6 +40,13 @@ class StringStream {
     this.text += s;
   }
 }
+
+test('detached run-all mode ignores SIGHUP but keeps explicit stop signals', () => {
+  expect(runAllStopSignalsForEnv({})).toEqual(['SIGINT', 'SIGTERM', 'SIGHUP']);
+  expect(
+    runAllStopSignalsForEnv({ QUORUM_RUN_ALL_SIGNAL_MODE: 'detached' }),
+  ).toEqual(['SIGINT', 'SIGTERM']);
+});
 
 function readResults(
   batchDir: string,
