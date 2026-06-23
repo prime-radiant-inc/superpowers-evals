@@ -13,4 +13,4 @@ required_env:
   - GEMINI_API_KEY
   - SUPERPOWERS_ROOT
 max_time: 10m
-max_concurrency: 1
+default_credential: gemini_default

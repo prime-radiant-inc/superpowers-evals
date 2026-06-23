@@ -14,4 +14,3 @@ normalizer: copilot
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
-max_concurrency: 1

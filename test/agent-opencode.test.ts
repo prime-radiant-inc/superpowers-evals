@@ -36,7 +36,6 @@ const OPENCODE_CONFIG: AgentConfig = {
   required_env: ['SUPERPOWERS_ROOT'],
   os_support: ['linux'],
   max_time: '10m',
-  max_concurrency: 1,
 };
 
 const OPENCODE_MODEL = 'openai/gpt-5.5';

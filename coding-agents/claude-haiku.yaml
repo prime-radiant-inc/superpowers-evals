@@ -11,3 +11,4 @@ required_env:
 max_time: 10m
 project_prompt: claude.project-prompt.md
 model: claude-haiku-4-5-20251001
+default_credential: haiku

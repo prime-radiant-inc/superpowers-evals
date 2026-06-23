@@ -85,7 +85,6 @@ test('loads claude.yaml into a typed AgentConfig', () => {
   expect(cfg.home_config_subdir).toBe('.claude');
   expect(cfg.required_env).toEqual(['ANTHROPIC_API_KEY']);
   expect(cfg.session_log_glob).toBe('**/*.jsonl');
-  expect(cfg.max_concurrency).toBeUndefined();
 });
 
 test('substituteEnv replaces ${VAR} from a provided map', () => {
@@ -282,4 +281,17 @@ test('agentConfigDir: a config-dir-like subdir roots under the throwaway home', 
 test('agentConfigDir: "." means the throwaway home itself (a HOME-like var)', () => {
   const cfg = { ...CONFIG_DIR_BASE, home_config_subdir: '.' };
   expect(agentConfigDir(cfg, '/run/home')).toBe('/run/home');
+});
+
+test('agent config accepts default_credential', () => {
+  const cfg = AgentConfigSchema.parse({
+    name: 'pi',
+    binary: 'pi',
+    session_log_dir: 'x',
+    session_log_glob: '*',
+    normalizer: 'pi',
+    home_config_subdir: '.pi/agent',
+    default_credential: 'pi_default',
+  });
+  expect(cfg.default_credential).toBe('pi_default');
 });

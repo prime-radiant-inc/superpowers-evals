@@ -21,4 +21,4 @@ normalizer: pi
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
-max_concurrency: 1
+default_credential: pi_default

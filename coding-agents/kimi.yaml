@@ -20,3 +20,4 @@ normalizer: kimi
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
+default_credential: kimi_default

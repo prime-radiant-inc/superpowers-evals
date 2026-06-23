@@ -81,7 +81,6 @@ const ANTIGRAVITY_CONFIG: AgentConfig = {
   required_env: ['SUPERPOWERS_ROOT'],
   os_support: ['linux'],
   max_time: '10m',
-  max_concurrency: 1,
 };
 
 // Pull the throwaway --gemini_dir=<path> out of a preflight argv. The real agy

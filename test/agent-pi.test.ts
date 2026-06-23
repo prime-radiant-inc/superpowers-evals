@@ -98,7 +98,6 @@ function piConfig(): AgentConfig {
     required_env: ['SUPERPOWERS_ROOT', 'PI_PROVIDER', 'PI_MODEL', 'PI_API_KEY'],
     os_support: ['linux'],
     max_time: '10m',
-    max_concurrency: 1,
   };
 }
 

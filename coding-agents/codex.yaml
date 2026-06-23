@@ -11,3 +11,4 @@ normalizer: codex
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
+default_credential: codex_sub

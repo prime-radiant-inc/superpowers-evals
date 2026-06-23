@@ -39,9 +39,7 @@ export const AgentConfigSchema = z.object({
   max_time: z.string().optional(),
   project_prompt: z.string().optional(),
   model: z.string().optional(),
-  // Scheduler keys: per-agent concurrency cap and launch spacing.
-  max_concurrency: z.number().int().min(1).optional(),
-  launch_spacing_seconds: z.number().min(0).optional(),
+  default_credential: z.string().optional(),
   os_support: z.array(z.string()).default(['linux']),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

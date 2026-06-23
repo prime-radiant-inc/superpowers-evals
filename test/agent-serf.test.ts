@@ -22,7 +22,6 @@ function serfConfig(overrides?: Partial<AgentConfig>): AgentConfig {
     os_support: ['linux'],
     max_time: '10m',
     model: 'anthropic/claude-sonnet-4-6',
-    max_concurrency: 1,
     ...overrides,
   };
 }
