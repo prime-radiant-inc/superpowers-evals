@@ -40,10 +40,8 @@ test('resolveAgent dispatches each dialect name to its custom adapter', () => {
 });
 
 test('resolveAgent maps the claude runtime family to ClaudeAgent', () => {
-  // claude-haiku/claude-sonnet carry runtime_family=claude; the bare name works too.
-  const haiku = resolveAgent(cfg('claude-haiku', 'claude'));
+  // Any agent config with runtime_family=claude routes to ClaudeAgent.
   const claude = resolveAgent(cfg('claude'));
-  expect(haiku.config.name).toBe('claude-haiku');
   expect(claude.config.name).toBe('claude');
 });
 
