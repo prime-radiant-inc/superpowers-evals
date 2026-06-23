@@ -47,26 +47,29 @@ const CREDENTIAL_API_TO_OPENCODE_NPM: Readonly<Record<string, string>> = {
   anthropic: '@ai-sdk/anthropic',
 };
 
-// OpenAI's first-party API needs the real @ai-sdk/openai provider, not the
-// generic @ai-sdk/openai-compatible shim. The shim only speaks classic
-// /v1/chat/completions and always emits `max_tokens`, which OpenAI's reasoning
-// models (gpt-5.x) reject in favor of `max_completion_tokens`; @ai-sdk/openai
-// detects reasoning models and sends the right field. We key on host because
-// nothing else in the credential distinguishes OpenAI's own endpoint from a
-// third-party OpenAI-compatible one (GLM, ollama, openrouter). Add the second
-// first-party OpenAI host here (e.g. Azure OpenAI) the day one is configured.
-const OPENAI_FIRST_PARTY_HOSTS: ReadonlySet<string> = new Set([
-  'api.openai.com',
-]);
+// opencode ships built-in providers (from models.dev) that know each model's
+// real rates and request quirks — e.g. the built-in `openai` provider uses
+// @ai-sdk/openai, which sends `max_completion_tokens` for reasoning models
+// (gpt-5.x) and self-reports cost. When a credential's endpoint IS one of those
+// first-party hosts, we use the built-in provider BY NAME (no `npm`: opencode
+// supplies it) so we inherit correct request shaping and the real model catalog.
+// Any other endpoint (GLM, ollama, openrouter, …) has no built-in provider and
+// uses the custom 'quorum' provider with an explicit npm package. Add the next
+// first-party host here (e.g. Azure OpenAI, api.anthropic.com) when configured.
+const FIRST_PARTY_HOST_TO_BUILTIN_PROVIDER: Readonly<Record<string, string>> = {
+  'api.openai.com': 'openai',
+};
 
-function isOpenAiFirstPartyEndpoint(baseUrl: string | undefined): boolean {
+function builtinProviderForEndpoint(
+  baseUrl: string | undefined,
+): string | undefined {
   if (baseUrl === undefined || baseUrl === '') {
-    return false;
+    return undefined;
   }
   try {
-    return OPENAI_FIRST_PARTY_HOSTS.has(new URL(baseUrl).hostname);
+    return FIRST_PARTY_HOST_TO_BUILTIN_PROVIDER[new URL(baseUrl).hostname];
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -147,33 +150,54 @@ function binaryOnPath(binary: string): boolean {
 }
 
 // Build the opencode.json config object from a credential and resolved api key.
-// Uses a FIXED provider name 'quorum'. Maps credential.api to the npm package:
+// A first-party endpoint (see builtinProviderForEndpoint, e.g. api.openai.com →
+// 'openai') uses opencode's BUILT-IN provider by name with no `npm` field, so
+// opencode supplies the right SDK (@ai-sdk/openai, which sends
+// max_completion_tokens for reasoning models) and the real model catalog. Every
+// other endpoint uses the FIXED custom provider 'quorum' with an explicit npm,
+// mapping credential.api:
 //   openai-chat / openai-responses → @ai-sdk/openai-compatible
 //   anthropic → @ai-sdk/anthropic
-// For @ai-sdk/openai-compatible, options.baseURL is always included (required for
-// custom endpoints). For @ai-sdk/anthropic, options.baseURL is only included when
-// credential.base_url is set. reasoning: true is set only when
-// credential.compat.thinking_format is set. tool_call is always true.
-// Throws ProvisionError for any api that cannot be mapped.
+// For @ai-sdk/openai-compatible, options.baseURL is required (custom endpoint);
+// otherwise baseURL is included only when credential.base_url is set. reasoning:
+// true is set only when credential.compat.thinking_format is set; tool_call is
+// always true. The top-level `model` is the provider-qualified ref the launcher
+// and preflight pass to opencode. Throws ProvisionError for an unmappable api.
 function buildOpencodeConfig(
   credential: Credential,
   apiKey: string,
 ): Record<string, unknown> {
-  let npm = CREDENTIAL_API_TO_OPENCODE_NPM[credential.api];
+  const modelEntry: Record<string, unknown> = { tool_call: true };
+  if (credential.compat.thinking_format !== undefined) {
+    modelEntry['reasoning'] = true;
+  }
+
+  // First-party endpoint → opencode's built-in provider, by name, no npm.
+  const builtin = builtinProviderForEndpoint(credential.base_url);
+  if (builtin !== undefined) {
+    const options: Record<string, string> = { apiKey };
+    // base_url is the recognized first-party host; pin it explicitly.
+    if (credential.base_url !== undefined && credential.base_url !== '') {
+      options['baseURL'] = credential.base_url;
+    }
+    return {
+      $schema: 'https://opencode.ai/config.json',
+      provider: {
+        [builtin]: {
+          options,
+          models: { [credential.model]: modelEntry },
+        },
+      },
+      model: `${builtin}/${credential.model}`,
+    };
+  }
+
+  // Custom endpoint → the fixed 'quorum' provider with an explicit npm package.
+  const npm = CREDENTIAL_API_TO_OPENCODE_NPM[credential.api];
   if (npm === undefined) {
     throw new ProvisionError(
       `opencode: api '${credential.api}' is not supported; supported: openai-chat, openai-responses, anthropic`,
     );
-  }
-
-  // OpenAI's own endpoint needs the first-party provider (see
-  // isOpenAiFirstPartyEndpoint): the generic compatible shim can't talk to its
-  // reasoning models. baseURL stays pinned to the credential's base_url below.
-  if (
-    npm === '@ai-sdk/openai-compatible' &&
-    isOpenAiFirstPartyEndpoint(credential.base_url)
-  ) {
-    npm = '@ai-sdk/openai';
   }
 
   const options: Record<string, string> = { apiKey };
@@ -188,11 +212,6 @@ function buildOpencodeConfig(
   } else if (credential.base_url !== undefined && credential.base_url !== '') {
     // anthropic: include baseURL only when set.
     options['baseURL'] = credential.base_url;
-  }
-
-  const modelEntry: Record<string, unknown> = { tool_call: true };
-  if (credential.compat.thinking_format !== undefined) {
-    modelEntry['reasoning'] = true;
   }
 
   return {
@@ -328,7 +347,9 @@ export class OpenCodeAgent implements CodingAgent {
     // Build the opencode.json config once; write it into both the run home and
     // the preflight throwaway home.
     const opencodeJsonConfig = buildOpencodeConfig(credential, apiKey);
-    const modelRef = `quorum/${credential.model}`;
+    // The provider-qualified model ref (e.g. quorum/<m> or openai/<m>) the
+    // preflight + launcher pass to opencode — buildOpencodeConfig set it.
+    const modelRef = opencodeJsonConfig['model'] as string;
 
     // Create the XDG-isolated dirs and the session-export dir.
     const opencodeConfigDir = join(opencodeHome, '.config', 'opencode');

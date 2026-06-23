@@ -217,17 +217,17 @@ test('provision builds opencode.json provider block from api-key credential', ()
   }
 });
 
-test('provision routes an OpenAI first-party endpoint (api.openai.com) to @ai-sdk/openai', () => {
+test('provision routes an OpenAI first-party endpoint (api.openai.com) to the built-in openai provider', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = new FakeCommandRunner(happyResponder);
-  const { spawn } = makeHappySpawn();
-  // openai-chat normally maps to the generic @ai-sdk/openai-compatible shim,
-  // which only speaks classic /v1/chat/completions (always sends max_tokens) —
-  // rejected by OpenAI's reasoning models (gpt-5.x want max_completion_tokens).
-  // An api.openai.com base_url must select the real first-party @ai-sdk/openai.
+  const { spawn, calls } = makeHappySpawn();
+  // api.openai.com is an opencode built-in provider. Use it by NAME (opencode
+  // supplies @ai-sdk/openai, which sends max_completion_tokens for reasoning
+  // models like gpt-5.x and self-prices from models.dev) instead of a custom
+  // 'quorum' block. No custom provider, no npm field, model ref is openai/<m>.
   const cred = makeCredential({
     model: 'gpt-5.5',
     base_url: 'https://api.openai.com/v1',
@@ -245,12 +245,21 @@ test('provision routes an OpenAI first-party endpoint (api.openai.com) to @ai-sd
           'utf8',
         ),
       );
-      expect(config.provider?.quorum?.npm).toBe('@ai-sdk/openai');
-      // baseURL stays pinned to OpenAI's endpoint, apiKey still resolved.
-      expect(config.provider?.quorum?.options?.baseURL).toBe(
+      // Built-in provider 'openai' by name; NO custom 'quorum' block, NO npm.
+      expect(config.provider?.openai).toBeDefined();
+      expect(config.provider?.openai?.npm).toBeUndefined();
+      expect(config.provider?.quorum).toBeUndefined();
+      expect(config.provider?.openai?.options?.baseURL).toBe(
         'https://api.openai.com/v1',
       );
-      expect(config.provider?.quorum?.options?.apiKey).toBe('test-openai-key');
+      expect(config.provider?.openai?.options?.apiKey).toBe('test-openai-key');
+      expect(config.provider?.openai?.models?.['gpt-5.5']?.tool_call).toBe(
+        true,
+      );
+      // Top-level model ref + preflight -m flag use the built-in provider name.
+      expect(config.model).toBe('openai/gpt-5.5');
+      const run = calls.find((c) => c.args[1] === 'run');
+      expect(run?.args[3]).toBe('openai/gpt-5.5');
     });
   } finally {
     cleanup();

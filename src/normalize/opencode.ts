@@ -83,9 +83,11 @@ interface MessageUsage {
  * Extract per-message usage from an OpenCode assistant message `info` block.
  *
  * Field mapping (spec 2026-06-15-atif-usage-unification.md): input→prompt_tokens,
- * output + reasoning folded→completion_tokens, cache.read→cached_tokens, the
- * per-message `cost`→cost_usd (OpenCode logs cost, so we do NOT re-price).
+ * output + reasoning folded→completion_tokens, cache.read→cached_tokens,
  * modelID→model_name, providerID→extra.provider, cache.write→extra.cache_write.
+ * The per-message `cost` is intentionally NOT mapped: OpenCode computes it from
+ * its own provider rates (0/meaningless for the custom 'quorum' endpoints the
+ * credential axis routes through), so obol prices from the token buckets instead.
  * Returns undefined when the message carries no `tokens` block.
  */
 function extractOpencodeUsage(
@@ -104,9 +106,10 @@ function extractOpencodeUsage(
     completion_tokens: num(t['output']) + num(t['reasoning']),
     cached_tokens: num(cache['read']),
   };
-  if (typeof info['cost'] === 'number' && Number.isFinite(info['cost'])) {
-    metrics.cost_usd = info['cost'];
-  }
+  // OpenCode's per-message `cost` is intentionally NOT mapped to cost_usd. It is
+  // computed from OpenCode's own provider rates, which are 0/meaningless for the
+  // custom 'quorum' endpoints the credential axis routes through — so obol prices
+  // from the token buckets instead (one pricing authority across all agents).
 
   return {
     metrics,

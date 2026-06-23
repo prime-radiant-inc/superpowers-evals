@@ -209,8 +209,12 @@ test('step_ids are sequential from 1', () => {
 // OpenCode stamps per-assistant-message usage on `messages[].info`:
 // tokens{input,output,reasoning,cache{read,write}} + modelID + providerID + a
 // per-message `cost`. Field mapping: input→prompt_tokens, output+reasoning
-// folded→completion_tokens, cache.read→cached_tokens, cost→cost_usd. providerID
-// →extra.provider; cache.write→extra.cache_write. model→step.model_name.
+// folded→completion_tokens, cache.read→cached_tokens; providerID→extra.provider;
+// cache.write→extra.cache_write; model→step.model_name. OpenCode's per-message
+// `cost` is intentionally NOT mapped to cost_usd: it is computed from OpenCode's
+// own provider rates (0/meaningless for the custom 'quorum' endpoints the
+// credential axis routes through), so obol prices from tokens instead — one
+// pricing authority across all agents.
 // ---------------------------------------------------------------------------
 
 // Real-shaped fixture from a live opencode run (gpt-5.5 / openai):
@@ -299,7 +303,7 @@ const usageExport = {
   ],
 };
 
-test('usage: maps opencode tokens + cost onto the tool-call step metrics', () => {
+test('usage: maps opencode tokens onto the tool-call step metrics (no cost_usd)', () => {
   const traj = normalizeOpencode(JSON.stringify(usageExport), '0.5.0');
   expect(validateTrajectory(traj).ok).toBe(true);
 
@@ -307,11 +311,11 @@ test('usage: maps opencode tokens + cost onto the tool-call step metrics', () =>
     (s) => s.tool_calls?.[0]?.function_name === 'Glob',
   );
   expect(globStep).toBeDefined();
+  // Tokens mapped; OpenCode's per-message cost is NOT stamped (obol prices).
   expect(globStep!.metrics).toEqual({
     prompt_tokens: 9504,
     completion_tokens: 57 + 106,
     cached_tokens: 0,
-    cost_usd: 0.05241,
   });
   expect(globStep!.model_name).toBe('gpt-5.5');
   expect(globStep!.extra?.['provider']).toBe('openai');
@@ -326,7 +330,6 @@ test('usage: opencode folds reasoning into completion and cache.read into cached
     prompt_tokens: 464,
     completion_tokens: 35 + 0,
     cached_tokens: 9216,
-    cost_usd: 0.007978,
   });
 });
 
@@ -343,11 +346,11 @@ test('usage: opencode cache.write is carried in extra.cache_write', () => {
   expect(globStep!.extra?.['cache_write']).toBe(0);
 });
 
-test('usage: opencode text-only final message surfaces its tokens + cost', () => {
-  // The last assistant message has tokens/cost but no tool part; its usage must
+test('usage: opencode text-only final message surfaces its tokens', () => {
+  // The last assistant message has tokens but no tool part; its usage must
   // not be dropped — it gets a dedicated metrics-only agent step.
   const traj = normalizeOpencode(JSON.stringify(usageExport), '0.5.0');
-  const finalStep = traj.steps.find((s) => s.metrics?.cost_usd === 0.007598);
+  const finalStep = traj.steps.find((s) => s.metrics?.prompt_tokens === 520);
   expect(finalStep).toBeDefined();
   expect(finalStep!.source).toBe('agent');
   expect(finalStep!.tool_calls).toBeUndefined();
@@ -355,11 +358,10 @@ test('usage: opencode text-only final message surfaces its tokens + cost', () =>
     prompt_tokens: 520,
     completion_tokens: 13,
     cached_tokens: 9216,
-    cost_usd: 0.007598,
   });
 });
 
-test('usage: opencode totals across step metrics match per-message sums', () => {
+test('usage: opencode token totals across step metrics match per-message sums', () => {
   const traj = normalizeOpencode(JSON.stringify(usageExport), '0.5.0');
   const totals = traj.steps.reduce(
     (acc, s) => {
@@ -367,15 +369,25 @@ test('usage: opencode totals across step metrics match per-message sums', () => 
       acc.prompt += s.metrics.prompt_tokens ?? 0;
       acc.completion += s.metrics.completion_tokens ?? 0;
       acc.cached += s.metrics.cached_tokens ?? 0;
-      acc.cost += s.metrics.cost_usd ?? 0;
       return acc;
     },
-    { prompt: 0, completion: 0, cached: 0, cost: 0 },
+    { prompt: 0, completion: 0, cached: 0 },
   );
   expect(totals.prompt).toBe(9504 + 464 + 520);
   expect(totals.completion).toBe(57 + 106 + 35 + 13);
   expect(totals.cached).toBe(0 + 9216 + 9216);
-  expect(totals.cost).toBeCloseTo(0.05241 + 0.007978 + 0.007598, 6);
+});
+
+test('usage: opencode per-message cost is never stamped as cost_usd (obol prices)', () => {
+  // Every fixture assistant message carries a per-message `cost`, but OpenCode
+  // computes it from its own provider rates (0/meaningless for our custom
+  // endpoints). The normalizer must NOT propagate it; obol prices from tokens.
+  const traj = normalizeOpencode(JSON.stringify(usageExport), '0.5.0');
+  const withMetrics = traj.steps.filter((s) => s.metrics !== undefined);
+  expect(withMetrics.length).toBeGreaterThan(0);
+  expect(withMetrics.every((s) => s.metrics?.cost_usd === undefined)).toBe(
+    true,
+  );
 });
 
 test('usage: user messages contribute no metrics', () => {
@@ -592,7 +604,7 @@ test('full-fidelity: multiple text parts joined on first tool step', () => {
 
 test('full-fidelity: text-only message gets step.message on its metrics-only step', () => {
   const traj = normalizeOpencode(JSON.stringify(fullFidelityExport), '0.5.0');
-  const finalStep = traj.steps.find((s) => s.metrics?.cost_usd === 0.003);
+  const finalStep = traj.steps.find((s) => s.metrics?.prompt_tokens === 80);
   expect(finalStep).toBeDefined();
   expect(finalStep!.message).toBe('Done with the todo list.');
 });
