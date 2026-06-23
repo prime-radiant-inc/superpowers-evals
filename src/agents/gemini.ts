@@ -10,6 +10,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
+import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
@@ -96,14 +98,13 @@ function shellSingleQuote(s: string): string {
 }
 
 // Build the stderr excerpt baked into a gemini link/list failure error. Strip,
-// replace any occurrence of GEMINI_API_KEY with '[redacted]' so a CLI that
-// echoes the key into stderr cannot leak it into the error text (and thence
-// verdict.json / logs), then truncate to 300 chars.
-function geminiStderrExcerpt(stderr: string): string {
-  const apiKey = getEnv('GEMINI_API_KEY') ?? '';
+// replace any occurrence of the resolved api key with '[redacted]' so a CLI
+// that echoes the key into stderr cannot leak it into the error text (and
+// thence verdict.json / logs), then truncate to 300 chars.
+function geminiStderrExcerpt(stderr: string, resolvedApiKey: string): string {
   let excerpt = stderr.trim();
-  if (apiKey) {
-    excerpt = excerpt.replaceAll(apiKey, '[redacted]');
+  if (resolvedApiKey) {
+    excerpt = excerpt.replaceAll(resolvedApiKey, '[redacted]');
   }
   return excerpt.slice(0, 300);
 }
@@ -202,7 +203,11 @@ export class GeminiAgent implements CodingAgent {
     this.config = config;
   }
 
-  provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+  provision(
+    home: RunHome,
+    runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string> {
     const { configDir } = home;
 
     // SUPERPOWERS_ROOT must be set and carry the required extension files. The
@@ -233,12 +238,33 @@ export class GeminiAgent implements CodingAgent {
     const authType = geminiAuthType();
 
     // GEMINI_API_KEY seeds the secret env file, but only in api-key mode. In
-    // oauth mode the key is absent by design.
-    const apiKey = getEnv('GEMINI_API_KEY') ?? '';
-    if (authType === GEMINI_AUTH_TYPE_API_KEY && !apiKey) {
-      throw new ProvisionError(
-        'GEMINI_API_KEY not set; cannot seed Gemini auth',
-      );
+    // oauth mode the key is absent by design. When a credential is present,
+    // resolve the key via the credential (honoring api_key_env override);
+    // otherwise fall back to the conventional GEMINI_API_KEY env var.
+    let apiKey = '';
+    if (authType === GEMINI_AUTH_TYPE_API_KEY) {
+      if (credential !== undefined && credential.auth === 'api-key') {
+        try {
+          const resolution = resolveApiKey(credential, 'GEMINI_API_KEY');
+          if (resolution.kind !== 'env') {
+            throw new ProvisionError(
+              'gemini: could not resolve api key from credential',
+            );
+          }
+          apiKey = resolution.value;
+        } catch (e) {
+          throw e instanceof ProvisionError
+            ? e
+            : new ProvisionError(e instanceof Error ? e.message : String(e));
+        }
+      } else {
+        apiKey = getEnv('GEMINI_API_KEY') ?? '';
+        if (!apiKey) {
+          throw new ProvisionError(
+            'GEMINI_API_KEY not set; cannot seed Gemini auth',
+          );
+        }
+      }
     }
 
     mkdirSync(configDir, { recursive: true });
@@ -299,7 +325,7 @@ export class GeminiAgent implements CodingAgent {
     );
     if (link.status !== 0) {
       throw new ProvisionError(
-        `gemini extensions link failed (exit ${String(link.status)}); stderr: ${geminiStderrExcerpt(link.stderr)}`,
+        `gemini extensions link failed (exit ${String(link.status)}); stderr: ${geminiStderrExcerpt(link.stderr, apiKey)}`,
       );
     }
 
@@ -310,7 +336,7 @@ export class GeminiAgent implements CodingAgent {
     });
     if (listing.status !== 0) {
       throw new ProvisionError(
-        `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${geminiStderrExcerpt(listing.stderr)}`,
+        `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${geminiStderrExcerpt(listing.stderr, apiKey)}`,
       );
     }
     if (

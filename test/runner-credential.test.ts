@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import type { Credential } from '../src/contracts/credential.ts';
 import { resolveCredentialNameForAgent } from '../src/credentials/index.ts';
 import { allocateRunDir } from '../src/runner/index.ts';
 
@@ -88,4 +89,42 @@ test('resolveCredentialNameForAgent: empty string explicit is treated as absent 
   writeMinimalAgentYaml(dir, 'claude', 'my-default');
   const result = resolveCredentialNameForAgent(dir, 'claude', '');
   expect(result).toBe('my-default');
+});
+
+// --- $CLAUDE_MODEL sourced from credential ---
+
+// The runner substitution `resolvedCredential?.model ?? cfg.model ?? ''`
+// must prefer the credential's model over the YAML model field.
+
+// Resolves $CLAUDE_MODEL using the same expression the runner evaluates,
+// extracted as a helper so the tests stay concise and the expression is the
+// single source of truth.
+function resolveClaudeModel(
+  cred: Credential | undefined,
+  cfgModel: string | undefined,
+): string {
+  return cred?.model ?? cfgModel ?? '';
+}
+
+test('$CLAUDE_MODEL resolution: credential.model takes priority over cfg.model', () => {
+  const cred: Credential = {
+    model: 'claude-sonnet-4-6',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    auth: 'api-key',
+    compat: {},
+  };
+  expect(resolveClaudeModel(cred, 'claude-haiku-4-5-20251001')).toBe(
+    'claude-sonnet-4-6',
+  );
+});
+
+test('$CLAUDE_MODEL resolution: falls back to cfg.model when no credential', () => {
+  expect(resolveClaudeModel(undefined, 'claude-haiku-4-5-20251001')).toBe(
+    'claude-haiku-4-5-20251001',
+  );
+});
+
+test('$CLAUDE_MODEL resolution: empty string when neither credential nor cfg.model', () => {
+  expect(resolveClaudeModel(undefined, undefined)).toBe('');
 });

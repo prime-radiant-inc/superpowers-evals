@@ -9,6 +9,7 @@ import {
 import { join } from 'node:path';
 import { resolveAgent } from '../src/agents/index.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
 // The claude.yaml surface the adapter depends on. required_env carries
@@ -219,6 +220,64 @@ test('provision skips env-file and approval when ANTHROPIC_API_KEY is not requir
         );
         expect(claudeJson.customApiKeyResponses).toBeUndefined();
       }
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// B5: credential with custom api_key_env — the key must be read from the
+// custom env var, not ANTHROPIC_API_KEY. ANTHROPIC_API_KEY is deliberately
+// unset to prove the credential path does NOT require it.
+test('provision resolves api key from credential api_key_env (ANTHROPIC_API_KEY unset)', () => {
+  const { home, cleanup } = makeTempHome();
+  const customKey = 'sk-custom-env-key-0123456789abcdef';
+  const credential: Credential = {
+    model: 'claude-sonnet-4-6',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: 'MY_CUSTOM_ANTHROPIC_KEY',
+    compat: {},
+  };
+  try {
+    withEnv(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        MY_CUSTOM_ANTHROPIC_KEY: customKey,
+      },
+      () => {
+        const agent = resolveAgent(
+          // required_env no longer includes ANTHROPIC_API_KEY after B5 YAML edits;
+          // pass the post-edit shape to prove the credential path handles it.
+          claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+        );
+        agent.provision(home, undefined as never, credential);
+
+        const envFile = join(home.configDir, '.claude-env');
+        expect(existsSync(envFile)).toBe(true);
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `ANTHROPIC_API_KEY='${customKey}'\n`,
+        );
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// B5: when no credential is passed, the adapter falls back to the pre-B5
+// behavior (no .claude-env written if ANTHROPIC_API_KEY is not in required_env).
+test('provision with no credential and no ANTHROPIC_API_KEY in required_env writes no env-file', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv({ ANTHROPIC_API_KEY: API_KEY }, () => {
+      const agent = resolveAgent(
+        claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+      );
+      agent.provision(home, undefined as never, undefined);
+      expect(existsSync(join(home.configDir, '.claude-env'))).toBe(false);
     });
   } finally {
     cleanup();

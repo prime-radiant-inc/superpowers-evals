@@ -4,6 +4,10 @@ import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
 import type { OsTarget } from '../contracts/os-target.ts';
+import {
+  type ApiKeyResolution,
+  resolveApiKey,
+} from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
 import { WindowsClaudeAgent } from './claude-windows.ts';
@@ -93,7 +97,11 @@ class ClaudeAgent implements CodingAgent {
   constructor(config: AgentConfig) {
     this.config = config;
   }
-  provision(home: RunHome): Record<string, string> {
+  provision(
+    home: RunHome,
+    _runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string> {
     const { configDir, workdir } = home;
     mkdirSync(configDir, { recursive: true });
 
@@ -120,14 +128,41 @@ class ClaudeAgent implements CodingAgent {
       `${JSON.stringify({ ...claudeJson, projects }, null, 2)}\n`,
     );
 
-    // When ANTHROPIC_API_KEY is a required env, seed the per-run auth: write the
-    // mode-0600 .claude-env the launcher sources, and record the API-key
-    // approval fingerprint so claude doesn't prompt "Detected a custom API
-    // key…" headless. Both are gated on ANTHROPIC_API_KEY being a required env.
-    if (this.config.required_env.includes('ANTHROPIC_API_KEY')) {
-      // Read the key through the one sanctioned env module (§6.5), never
-      // process.env. Empty means unset; fail at the setup stage rather than
-      // silently writing a blank key.
+    // Seed the per-run auth when a credential with api-key auth is present.
+    // Resolves the key via the credential (honoring api_key_env override), then
+    // writes the mode-0600 .claude-env the launcher sources and records the
+    // API-key approval fingerprint so claude doesn't prompt "Detected a custom
+    // API key…" headless.
+    // Falls back to the legacy required_env gate for backward compatibility with
+    // callers that have not yet been migrated to credentials.
+    const useCredential =
+      credential !== undefined && credential.auth === 'api-key';
+    const useLegacy =
+      !useCredential && this.config.required_env.includes('ANTHROPIC_API_KEY');
+
+    if (useCredential) {
+      let resolution: ApiKeyResolution;
+      try {
+        resolution = resolveApiKey(credential, 'ANTHROPIC_API_KEY');
+      } catch (e) {
+        throw new ProvisionError(e instanceof Error ? e.message : String(e));
+      }
+      if (resolution.kind !== 'env') {
+        throw new ProvisionError(
+          'claude: could not resolve api key from credential',
+        );
+      }
+      const apiKey = resolution.value;
+      const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+      writePrivateFileNoFollow(
+        envFile,
+        `ANTHROPIC_API_KEY=${shellSingleQuote(apiKey)}\n`,
+      );
+      approveClaudeApiKey(claudeJsonPath, apiKey);
+    } else if (useLegacy) {
+      // Legacy path: read the key through the one sanctioned env module (§6.5),
+      // never process.env. Empty means unset; fail at the setup stage rather
+      // than silently writing a blank key.
       const apiKey = getEnv('ANTHROPIC_API_KEY') ?? '';
       if (apiKey === '') {
         throw new ProvisionError(

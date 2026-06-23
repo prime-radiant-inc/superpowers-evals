@@ -10,7 +10,6 @@ session_log_dir: "${QUORUM_AGENT_HOME}/.gemini/tmp"
 session_log_glob: "**/chats/**/*.json*"
 normalizer: gemini
 required_env:
-  - GEMINI_API_KEY
   - SUPERPOWERS_ROOT
 max_time: 10m
 default_credential: gemini_default

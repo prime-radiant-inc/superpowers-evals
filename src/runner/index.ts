@@ -1259,7 +1259,8 @@ async function runInnerBody(
     const claudeEnvFile = join(configDir, CLAUDE_ENV_FILE_NAME);
     substitutions['$CLAUDE_ENV_FILE'] = claudeEnvFile;
     substitutions['$CLAUDE_ENV_FILE_SH'] = shellSingleQuote(claudeEnvFile);
-    substitutions['$CLAUDE_MODEL'] = cfg.model ?? '';
+    substitutions['$CLAUDE_MODEL'] =
+      resolvedCredential?.model ?? cfg.model ?? '';
   }
   // Per-agent env-file substitutions the runner derives from configDir as
   // deterministic config-dir-relative paths.
