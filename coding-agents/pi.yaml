@@ -21,4 +21,6 @@ normalizer: pi
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
-default_credential: openrouter_glm_5_2
+# Default to OpenAI gpt-5.5 via openai-codex (ChatGPT subscription). openrouter_glm_5_2
+# remains an opt-in alternative (--credential openrouter_glm_5_2).
+default_credential: pi_default
