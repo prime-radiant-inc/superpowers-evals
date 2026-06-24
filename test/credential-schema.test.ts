@@ -14,6 +14,17 @@ describe('CredentialSchema', () => {
     expect(c.auth).toBe('api-key');
     expect(c.compat).toEqual({});
   });
+  test('optional provider is parsed (pi OAuth provider pin)', () => {
+    const c = CredentialSchema.parse({
+      model: 'gpt-5.5',
+      harnesses: ['pi'],
+      auth: 'oauth',
+      provider: 'openai-codex',
+    });
+    expect(c.provider).toBe('openai-codex');
+    const d = CredentialSchema.parse({ model: 'm', harnesses: ['pi'] });
+    expect(d.provider).toBeUndefined();
+  });
   test('rejects empty harnesses', () => {
     expect(() =>
       CredentialSchema.parse({ model: 'm', harnesses: [] }),

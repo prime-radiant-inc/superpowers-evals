@@ -24,6 +24,10 @@ export const CredentialSchema = z.object({
   base_url: z.string().url().optional(),
   auth: z.enum(CREDENTIAL_AUTHS).default('api-key'),
   api_key_env: z.string().min(1).optional(),
+  // Explicit pi provider name for the OAuth path (e.g. 'openai-codex'). When set,
+  // it overrides the host pi settings.json defaultProvider so eval runs use a
+  // reproducible provider instead of inheriting a mutable host setting.
+  provider: z.string().min(1).optional(),
   compat: CompatSchema,
   max_concurrency: z.number().int().min(1).optional(),
   launch_spacing_seconds: z.number().min(0).optional(),

@@ -161,9 +161,14 @@ const PiSettingsSchema = z
 // symlink can't redirect the credential), then write settings.json + pi.env
 // carrying the resolved provider/model and NO PI_API_KEY. Throws a clear setup
 // error when no host login exists or the provider can't be determined.
-// The model is sourced from credential.model; the provider comes from the host
-// settings.json defaultProvider (the fixed 'quorum' name is NOT used for OAuth).
-function seedPiOauth(configDir: string, credentialModel: string): void {
+// The model is sourced from credential.model; the provider comes from
+// credential.provider when set (an explicit, reproducible provider that overrides
+// the host settings.json defaultProvider), else the host default.
+function seedPiOauth(
+  configDir: string,
+  credentialModel: string,
+  credentialProvider: string | undefined,
+): void {
   const agentDir = piOauthAgentDir();
   const source = join(agentDir, 'auth.json');
   if (!existsSync(source)) {
@@ -172,13 +177,14 @@ function seedPiOauth(configDir: string, credentialModel: string): void {
     );
   }
 
-  // Resolve provider from the host settings.json. Without it, we cannot launch
-  // (the pi launcher needs --provider), so fail loudly rather than guess.
+  // Provider precedence: credential.provider (explicit, reproducible) over the
+  // host settings.json defaultProvider. Without either we cannot launch (the pi
+  // launcher needs --provider), so fail loudly rather than guess.
   const settings = readPiOauthSettings(join(agentDir, 'settings.json'));
-  const provider = settings.provider;
+  const provider = credentialProvider ?? settings.provider;
   if (provider === undefined || provider === '') {
     throw new ProvisionError(
-      'pi oauth login: cannot determine provider; add defaultProvider to the host pi settings.json',
+      'pi oauth login: cannot determine provider; set the credential provider or add defaultProvider to the host pi settings.json',
     );
   }
 
@@ -324,7 +330,7 @@ export class PiAgent implements CodingAgent {
     requirePiOnPath();
 
     if (credential.auth === 'oauth') {
-      seedPiOauth(configDir, credential.model);
+      seedPiOauth(configDir, credential.model, credential.provider);
       return {};
     }
 
