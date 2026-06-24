@@ -42,10 +42,11 @@ agent_tools=(
   trae-cli
   hermes
   mimo
+  serf
 )
 
 print_version() {
-  local tool output first_line status
+  local tool output first_line status source_rev
   local args=(--version)
   tool=$1
 
@@ -64,6 +65,11 @@ print_version() {
     first_line=${output%%$'\n'*}
     if [[ -z "$first_line" ]]; then
       first_line='present (no version output)'
+    fi
+    if [[ "$tool" == 'serf' && -r /usr/local/share/serf-source-rev ]]; then
+      source_rev=$(cat /usr/local/share/serf-source-rev)
+      printf '%s: %s (source %s)\n' "$tool" "$first_line" "$source_rev"
+      return 0
     fi
     printf '%s: %s\n' "$tool" "$first_line"
     return 0

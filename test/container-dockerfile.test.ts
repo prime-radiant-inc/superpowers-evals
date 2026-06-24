@@ -88,6 +88,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'NousResearch/hermes-agent',
     'mimo.xiaomi.com/install',
     'antigravity.google/cli/install.sh',
+    'prime-radiant-inc/serf',
   ]) {
     expectInstallIntent(source, externalInstall);
   }
@@ -101,6 +102,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '/usr/local/bin/hermes',
     '/usr/local/bin/mimo',
     '/usr/local/bin/agy',
+    '/usr/local/bin/serf',
   ]) {
     expectInstallIntent(source, commandIntent);
   }
@@ -124,6 +126,13 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain('hermes version');
   expect(source).toContain('mimo --version');
   expect(source).toContain('agy --version');
+  expect(source).toContain('ARG SERF_REF=main');
+  expect(source).toContain('git checkout "$SERF_REF"');
+  expect(source).toContain(
+    'git rev-parse HEAD > /usr/local/share/serf-source-rev',
+  );
+  expect(source).toContain('test -x /usr/local/bin/serf');
+  expect(source).toContain('serf --version');
   expect(source).not.toContain('[[');
   expect(source).not.toContain('uv tool install --tool-dir');
   expect(source).toContain('ARG TARGETARCH');

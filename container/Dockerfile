@@ -2,6 +2,7 @@
 FROM ubuntu:26.04
 
 ARG GOOSE_VERSION=1.31.1
+ARG SERF_REF=main
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -155,6 +156,14 @@ RUN curl -fsSL https://mimo.xiaomi.com/install | bash \
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
   && ln -sf /root/.local/bin/agy /usr/local/bin/agy \
   && agy --version
+
+RUN git clone https://github.com/prime-radiant-inc/serf.git /opt/serf-repo \
+  && cd /opt/serf-repo \
+  && git checkout "$SERF_REF" \
+  && git rev-parse HEAD > /usr/local/share/serf-source-rev \
+  && GOBIN=/usr/local/bin go install ./cmd/serf \
+  && test -x /usr/local/bin/serf \
+  && serf --version
 
 COPY --from=gauntlet /package.json /opt/gauntlet/
 COPY --from=gauntlet /bun.lock /opt/gauntlet/
