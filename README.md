@@ -151,11 +151,12 @@ Create `.env.container` or pass an explicit env file to `up`:
 ```dotenv
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
+OPENROUTER_API_KEY=...      # Pi default: OpenRouter GLM 5.2
 GEMINI_API_KEY=...          # or GEMINI_AUTH_TYPE=oauth-personal
 KIMI_MODEL_API_KEY=...      # unless using mounted Kimi OAuth
-PI_PROVIDER=...
+PI_PROVIDER=...             # only for raw/custom Pi env auth outside the default credential
 PI_MODEL=...
-PI_API_KEY=...              # unless using mounted Pi OAuth
+PI_API_KEY=...
 COPILOT_GITHUB_TOKEN=...
 ```
 
@@ -309,7 +310,8 @@ skips all remaining queued cells for that endpoint.
 
 Standard named credentials (see `credentials.yaml`): `opus`, `sonnet`, `haiku`
 (Claude harness), `codex_sub` (Codex subscription), `kimi_default`,
-`pi_default`, `opencode_gpt5`, `gemini_default`, `serf_default`, `glm_5_2_chat`,
+`openrouter_glm_5_2` (Pi default), `pi_default` (native Pi OAuth opt-in),
+`opencode_gpt5`, `gemini_default`, `serf_default`, `glm_5_2_chat`,
 `glm_5_2_responses`, `ollama_local`.
 
 ## Core Commands

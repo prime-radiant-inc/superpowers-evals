@@ -19,7 +19,7 @@ artifacts without checking them first.
 | `gemini` | Gemini CLI, `gemini` | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY` or Kimi OAuth login; `SUPERPOWERS_ROOT` |
 | `opencode` | OpenCode CLI | `SUPERPOWERS_ROOT`; provider credentials for the selected OpenCode model |
-| `pi` | Pi CLI, `pi` | `PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`, or Pi OAuth login; `SUPERPOWERS_ROOT` |
+| `pi` | Pi CLI, `pi` | default credential `openrouter_glm_5_2` uses `OPENROUTER_API_KEY`; custom API-key auth uses `PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`; Pi OAuth login remains opt-in; `SUPERPOWERS_ROOT` |
 | `copilot` | GitHub Copilot CLI, `copilot` | `SUPERPOWERS_ROOT`, plus `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, GitHub CLI auth, or `COPILOT_PROVIDER_BASE_URL` |
 
 To run the Claude harness against Sonnet or Haiku, use `--credential` (the
@@ -331,10 +331,15 @@ Pi seeds run-local auth, settings, and env files under
 <run>/home/.pi/agent/sessions/**/*.jsonl
 ```
 
-For API-key auth, set `PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`. For
-`PI_PROVIDER=azure-openai-responses`, set either `AZURE_OPENAI_BASE_URL` or
-`AZURE_OPENAI_RESOURCE_NAME`; quorum also forwards optional
-`AZURE_OPENAI_API_VERSION` and `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`.
+By default, Pi runs through the `openrouter_glm_5_2` credential in
+`credentials.yaml`, so local and appliance runs need `OPENROUTER_API_KEY` in the
+credential env. The adapter writes run-local `PI_PROVIDER`, `PI_MODEL`, and
+`PI_API_KEY` from that credential; do not set those for the default path. For
+raw/custom Pi env auth outside the credential axis, set `PI_PROVIDER`,
+`PI_MODEL`, and `PI_API_KEY`. For `PI_PROVIDER=azure-openai-responses`, set
+either `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME`; quorum also
+forwards optional `AZURE_OPENAI_API_VERSION` and
+`AZURE_OPENAI_DEPLOYMENT_NAME_MAP`.
 
 The launcher loads Superpowers from `SUPERPOWERS_ROOT` and the global
 `pi-subagents` package. If `pi-subagents` is missing, install it with:

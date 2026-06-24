@@ -21,4 +21,4 @@ normalizer: pi
 required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
-default_credential: pi_default
+default_credential: openrouter_glm_5_2
