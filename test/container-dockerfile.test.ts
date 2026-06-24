@@ -70,7 +70,8 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     'openclaw',
     '@sourcegraph/amp',
     'cline',
-    '@mariozechner/pi-coding-agent',
+    '@earendil-works/pi-coding-agent',
+    'pi-subagents',
     '@xai-official/grok',
   ]) {
     expectInstallIntent(source, npmPackage);
