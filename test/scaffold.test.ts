@@ -346,3 +346,15 @@ test('checkScenario passes init_repo_from_fixtures when fixtures/ is present', (
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
+
+test('checkScenario does not demand fixtures/ when init_repo_from_fixtures only appears in a comment', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 'mention-only');
+  writeFileSync(
+    join(dir, 'setup.sh'),
+    '#!/usr/bin/env bash\nset -euo pipefail\n# not using init_repo_from_fixtures here\nsetup-helpers run create_base_repo\n',
+  );
+  chmodSync(join(dir, 'setup.sh'), 0o755);
+  expect(checkScenario(dir)).toEqual([]);
+  rmSync(root, { recursive: true, force: true });
+});

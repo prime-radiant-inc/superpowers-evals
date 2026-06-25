@@ -286,18 +286,20 @@ export function checkScenario(scenarioDir: string): string[] {
 
   if (existsSync(setup)) {
     const setupText = readFileSync(setup, 'utf8');
-    // For each `setup-helpers run <args>` occurrence, the captured args are split
-    // on whitespace and every token must be a known helper.
-    const re = /setup-helpers\s+run\s+(.+)/g;
-    for (const match of setupText.matchAll(re)) {
-      const group = match[1] ?? '';
-      for (const helper of group.split(/\s+/).filter((h) => h !== '')) {
-        if (!KNOWN_HELPER_NAMES.has(helper)) {
-          problems.push(`setup.sh references unknown helper '${helper}'`);
-        }
+    // Every helper actually dispatched by a `setup-helpers run <args>` line, with
+    // the captured args split on whitespace. Both the unknown-helper check and the
+    // fixtures guard key off real dispatches, not an incidental mention in a comment.
+    const dispatched = new Set(
+      [...setupText.matchAll(/setup-helpers\s+run\s+(.+)/g)].flatMap((m) =>
+        (m[1] ?? '').split(/\s+/).filter((h) => h !== ''),
+      ),
+    );
+    for (const helper of dispatched) {
+      if (!KNOWN_HELPER_NAMES.has(helper)) {
+        problems.push(`setup.sh references unknown helper '${helper}'`);
       }
     }
-    if (setupText.includes('init_repo_from_fixtures')) {
+    if (dispatched.has('init_repo_from_fixtures')) {
       const fixturesDir = join(scenarioDir, 'fixtures');
       const present =
         existsSync(fixturesDir) && readdirSync(fixturesDir).length > 0;
