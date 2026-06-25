@@ -115,3 +115,17 @@ test('runSetup plumbs QUORUM_REPO_ROOT into setup.sh', () => {
     repoRoot(),
   );
 });
+
+test('runSetup plumbs QUORUM_SCENARIO_DIR (the scenario dir) into setup.sh', () => {
+  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const wd = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    '#!/usr/bin/env bash\necho "$QUORUM_SCENARIO_DIR" > scenario-dir.txt\n',
+  );
+  chmodSync(join(scn, 'setup.sh'), 0o755);
+  // QUORUM_SCENARIO_DIR comes from the scenarioDir argument, not envExtra; it is
+  // what init_repo_from_fixtures reads to locate scenarios/<name>/fixtures/.
+  runSetup(scn, wd);
+  expect(readFileSync(join(wd, 'scenario-dir.txt'), 'utf8').trim()).toBe(scn);
+});
