@@ -236,16 +236,30 @@ test('launchLiveCommand streams stdout and stderr before process close', async (
   const resultPromise = launchLiveCommand({
     command: 'bash',
     args: [
-      '-lc',
+      '-c',
       'printf "ready\\n"; printf "err-ready\\n" >&2; sleep 0.2; printf "done\\n"',
     ],
     onStdout: (chunk) => stdout.push(chunk),
     onStderr: (chunk) => stderr.push(chunk),
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  expect(stdout.join('')).toContain('ready');
-  expect(stderr.join('')).toContain('err-ready');
+  // Poll until the first chunks land rather than guessing a fixed delay: shell
+  // startup latency varies by machine (a login shell sourcing a heavy profile
+  // can take hundreds of ms). "ready"/"err-ready" are emitted during the 0.2s
+  // sleep that precedes "done", so observing them while "done" is still absent
+  // proves chunks stream incrementally instead of buffering until close.
+  const deadline = Date.now() + 5000;
+  while (
+    !(
+      stdout.join('').includes('ready') && stderr.join('').includes('err-ready')
+    )
+  ) {
+    if (Date.now() > deadline) {
+      throw new Error('timed out waiting for streamed chunks');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(stdout.join('')).not.toContain('done');
 
   const result = await resultPromise;
   expect(result.status).toBe(0);
