@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -315,5 +316,33 @@ test('fixExecutableBits flips a cleared setup.sh bit and returns ["setup.sh"]', 
 
   // Idempotent: a second pass fixes nothing.
   expect(fixExecutableBits(dir)).toEqual([]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('checkScenario flags init_repo_from_fixtures with no fixtures dir', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 'needs-fixtures');
+  writeFileSync(
+    join(dir, 'setup.sh'),
+    '#!/usr/bin/env bash\nset -euo pipefail\nsetup-helpers run init_repo_from_fixtures\n',
+  );
+  chmodSync(join(dir, 'setup.sh'), 0o755);
+  expect(checkScenario(dir)).toContain(
+    'setup.sh calls init_repo_from_fixtures but fixtures/ is missing or empty',
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('checkScenario passes init_repo_from_fixtures when fixtures/ is present', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 'has-fixtures');
+  writeFileSync(
+    join(dir, 'setup.sh'),
+    '#!/usr/bin/env bash\nset -euo pipefail\nsetup-helpers run init_repo_from_fixtures\n',
+  );
+  chmodSync(join(dir, 'setup.sh'), 0o755);
+  mkdirSync(join(dir, 'fixtures'), { recursive: true });
+  writeFileSync(join(dir, 'fixtures', 'plan.md'), 'PLAN\n');
+  expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });

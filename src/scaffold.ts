@@ -12,6 +12,7 @@ import {
   constants,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -294,6 +295,16 @@ export function checkScenario(scenarioDir: string): string[] {
         if (!KNOWN_HELPER_NAMES.has(helper)) {
           problems.push(`setup.sh references unknown helper '${helper}'`);
         }
+      }
+    }
+    if (setupText.includes('init_repo_from_fixtures')) {
+      const fixturesDir = join(scenarioDir, 'fixtures');
+      const present =
+        existsSync(fixturesDir) && readdirSync(fixturesDir).length > 0;
+      if (!present) {
+        problems.push(
+          'setup.sh calls init_repo_from_fixtures but fixtures/ is missing or empty',
+        );
       }
     }
   }
