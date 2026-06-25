@@ -233,7 +233,7 @@ export function scanResults(args: {
           run_id: run.name,
           started_at: run.startedAt,
           final: finalOf(verdict),
-          cost_usd: ca?.est_cost_usd ?? economics?.total_est_cost_usd ?? null,
+          cost_usd: ca?.est_cost_usd ?? null,
           run_total_cost_usd: economics?.total_est_cost_usd ?? null,
           duration_ms: ca?.duration_ms ?? null,
           total_tokens: ca?.tokens?.total ?? null,

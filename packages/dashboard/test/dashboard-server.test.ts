@@ -55,7 +55,12 @@ function identityFor(dir: string): {
 
 function writeVerdict(dir: string, final: string, cost: number | null): void {
   mkdirSync(dir, { recursive: true });
-  const economics = cost !== null ? { total_est_cost_usd: cost } : null;
+  // cost is the coding-agent (subject) cost — the cell's displayed cost reads
+  // economics.coding_agent.est_cost_usd, never the combined total.
+  const economics =
+    cost !== null
+      ? { coding_agent: { est_cost_usd: cost }, total_est_cost_usd: cost }
+      : null;
   const id = identityFor(dir);
   writeFileSync(
     join(dir, 'verdict.json'),

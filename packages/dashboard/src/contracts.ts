@@ -106,14 +106,15 @@ export type DashboardVerdict = z.infer<typeof DashboardVerdictSchema>;
 
 // One resolved run in a cell's window. started_at is the dir-name stamp
 // (YYYYMMDDTHHMMSSZ); finished_at is the verdict's ISO-8601 value or null.
-// cost_usd is agent-scoped (economics.coding_agent.est_cost_usd), falling back
-// to economics.total_est_cost_usd when the agent block is absent. Use
-// run_total_cost_usd for the run-total (gauntlet + agent combined).
+// cost_usd is strictly agent-scoped (economics.coding_agent.est_cost_usd), null
+// when the agent block is absent — it NEVER falls back to the combined total, so
+// the gauntlet QA-driver spend can't masquerade as the cost of the task under
+// test. Use run_total_cost_usd for the run-total (gauntlet + agent combined).
 export interface RunRecord {
   readonly run_id: string;
   readonly started_at: string;
   readonly final: RunFinal;
-  /** Agent-scoped cost (falls back to run total when agent cost absent). */
+  /** Agent-scoped cost; null when absent (no fallback to the run total). */
   readonly cost_usd: number | null;
   /** Run-total cost (gauntlet QA + coding agent). For labeled display only. */
   readonly run_total_cost_usd: number | null;

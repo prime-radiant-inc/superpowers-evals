@@ -502,7 +502,7 @@ test('scanResults: cost_usd is agent-scoped when coding_agent.est_cost_usd is pr
   expect(r?.total_tokens).toBe(48200);
 });
 
-test('scanResults: cost_usd falls back to run total when agent cost is absent', () => {
+test('scanResults: cost_usd is null when agent cost is absent (no fallback to run total)', () => {
   const root = mkdtempSync(join(tmpdir(), 'scan-task6-'));
   writeRun(root, 's-claude-none-linux-20260618T000000Z-bbbb', {
     final: 'pass',
@@ -518,8 +518,10 @@ test('scanResults: cost_usd falls back to run total when agent cost is absent', 
     manifest: null,
   });
   const r = grid.cells.get(cellKey('s', 'claude', 'none', 'linux'))?.window[0];
-  // no agent block -> falls back to run total
-  expect(r?.cost_usd).toBe(4.5);
+  // No agent block -> agent-scoped cost is unknown, NOT the combined run total.
+  // The gauntlet QA spend folded into total_est_cost_usd must never surface as
+  // the cell's cost; the combined total lives only in run_total_cost_usd.
+  expect(r?.cost_usd).toBeNull();
   expect(r?.run_total_cost_usd).toBe(4.5);
   expect(r?.duration_ms).toBeNull();
   expect(r?.total_tokens).toBeNull();

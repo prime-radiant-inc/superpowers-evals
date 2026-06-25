@@ -685,12 +685,20 @@ function relativeToCwd(path: string): string {
   return rel.startsWith('..') ? path : rel;
 }
 
-// Only the one field the renderer reads; the rest of economics is opaque here.
+// Only the fields the renderer reads; the rest of economics is opaque here.
+// The cost report reads the coding-agent (subject) side, never the combined
+// total_est_cost_usd — the gauntlet QA-driver spend is measurement overhead and
+// must not be conflated with the cost of the task under evaluation.
 const VerdictViewSchema = z.object({
   final: z.string().optional(),
   error: z.object({ message: z.string().optional() }).nullable().optional(),
   economics: z
-    .object({ total_est_cost_usd: z.number().nullable().optional() })
+    .object({
+      coding_agent: z
+        .object({ est_cost_usd: z.number().nullable().optional() })
+        .nullable()
+        .optional(),
+    })
     .nullable()
     .optional(),
 });
@@ -717,12 +725,14 @@ function isRateLimitedVerdict(verdict: VerdictView | null): boolean {
   return message.includes(ANTIGRAVITY_RATE_LIMIT_MARKER);
 }
 
-// Frozen total est cost for a run from its verdict.json economics block, or
-// null when absent.
+// Frozen coding-agent (subject) est cost for a run from its verdict.json
+// economics block, or null when absent. The batch report tallies the cost of
+// the task under evaluation; the gauntlet QA-driver spend is deliberately
+// excluded so the two are never conflated.
 function runCost(runDir: string): number | null {
   const verdict = readVerdict(runDir);
   if (verdict === null) return null;
-  return verdict.economics?.total_est_cost_usd ?? null;
+  return verdict.economics?.coding_agent?.est_cost_usd ?? null;
 }
 
 // Map a child outcome to one of pass / fail / indeterminate / unknown.

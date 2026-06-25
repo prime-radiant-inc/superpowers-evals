@@ -65,8 +65,30 @@ class StringStream {
 
 interface VerdictPlan {
   readonly final?: 'pass' | 'fail' | 'indeterminate';
+  // The coding-agent (subject) cost — what the eval cost report must reflect.
   readonly cost?: number | null;
+  // The gauntlet (QA-driver) cost — measurement overhead that must NEVER be
+  // folded into the reported eval cost.
+  readonly gauntletCost?: number;
   readonly rateLimited?: boolean;
+}
+
+// Economics block for a plan: a coding_agent block carrying the subject cost, an
+// optional gauntlet block carrying the QA-driver cost, and the combined
+// total_est_cost_usd. Mirrors the real verdict shape so the reader's
+// coding-agent-vs-total choice is exercised. Null when the plan has no cost.
+function economicsFor(plan: VerdictPlan): Record<string, unknown> | null {
+  if (plan.cost === undefined) {
+    return null;
+  }
+  const coding = plan.cost === null ? null : { est_cost_usd: plan.cost };
+  const gauntlet =
+    plan.gauntletCost === undefined
+      ? null
+      : { est_cost_usd: plan.gauntletCost };
+  const total =
+    plan.cost === null ? null : plan.cost + (plan.gauntletCost ?? 0);
+  return { gauntlet, coding_agent: coding, total_est_cost_usd: total };
 }
 
 // A fake invoke that, per (scenario, agent), allocates a deterministic run-id,
@@ -99,8 +121,7 @@ function fakeInvoke(plans: Readonly<Record<string, VerdictPlan>>): {
             message: `${ANTIGRAVITY_RATE_LIMIT_MARKER}: exhausted`,
           }
         : null,
-      economics:
-        plan.cost === undefined ? null : { total_est_cost_usd: plan.cost },
+      economics: economicsFor(plan),
     };
     writeFileSync(join(runDir, 'verdict.json'), JSON.stringify(verdict));
     return Promise.resolve({ run_id: runId, exit_code: 0, error: null });
@@ -122,11 +143,12 @@ test('runBatch writes header+footer, records, and tallies cost', async () => {
     [{ name: 'alpha' }, { name: 'beta', directive: 'claude' }],
     ['claude', 'codex'],
   );
-  // beta excludes codex via directive -> a directive skip.
+  // beta excludes codex via directive -> a directive skip. Each run also carries
+  // a (large) gauntlet QA cost that must be excluded from the reported tally.
   const { invoke, calls } = fakeInvoke({
-    'alpha/claude': { final: 'pass', cost: 1.25 },
-    'alpha/codex': { final: 'fail', cost: 0.5 },
-    'beta/claude': { final: 'indeterminate', cost: 2.0 },
+    'alpha/claude': { final: 'pass', cost: 1.25, gauntletCost: 10 },
+    'alpha/codex': { final: 'fail', cost: 0.5, gauntletCost: 20 },
+    'beta/claude': { final: 'indeterminate', cost: 2.0, gauntletCost: 30 },
   });
   const stream = new StringStream();
   const batchDir = await runBatch({
@@ -158,8 +180,11 @@ test('runBatch writes header+footer, records, and tallies cost', async () => {
   expect(ran).toHaveLength(3);
   for (const r of ran) expect(r.run_id).not.toBeNull();
 
-  // Summary cost tally: 1.25 + 0.5 + 2.0 = 3.75.
+  // Summary cost tally is the coding-agent (subject) cost ONLY:
+  // 1.25 + 0.5 + 2.0 = 3.75. The gauntlet QA cost (10+20+30=60) must never be
+  // folded in, so the combined total ($63.75) must not appear.
   expect(stream.text).toContain('cost $3.75');
+  expect(stream.text).not.toContain('63.75');
   // Recorded finals (glyphs) appear in the plain output.
   expect(stream.text).toContain('alpha  claude  ✓');
   expect(stream.text).toContain('alpha  codex  ✗');

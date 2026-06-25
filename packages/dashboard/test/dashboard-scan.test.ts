@@ -121,7 +121,7 @@ test('scanResults buckets runs into cells and windows to 5 newest', () => {
       {
         verdict: {
           final: 'pass',
-          economics: { total_est_cost_usd: i },
+          economics: { coding_agent: { est_cost_usd: i } },
           ...identity(),
         },
       },
@@ -172,7 +172,7 @@ test('scanResults reads final/cost/finished_at off the verdict', () => {
   writeRun(root, name, {
     verdict: {
       final: 'fail',
-      economics: { total_est_cost_usd: 3.14 },
+      economics: { coding_agent: { est_cost_usd: 3.14 } },
       finished_at: '2026-06-12T00:01:00Z',
       ...identity(),
     },
@@ -387,7 +387,7 @@ test('scanResults: window ordering is (started_at, dir-name) ascending', () => {
     {
       verdict: {
         final: 'pass',
-        economics: { total_est_cost_usd: 2 },
+        economics: { coding_agent: { est_cost_usd: 2 } },
         ...identity(),
       },
     },
@@ -398,7 +398,7 @@ test('scanResults: window ordering is (started_at, dir-name) ascending', () => {
     {
       verdict: {
         final: 'fail',
-        economics: { total_est_cost_usd: 1 },
+        economics: { coding_agent: { est_cost_usd: 1 } },
         ...identity(),
       },
     },
