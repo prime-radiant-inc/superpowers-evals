@@ -2,13 +2,14 @@
 import type { CommandRunner } from '../agents/command-runner.ts';
 
 // The uniform argument every dispatchable helper receives. Replaces Python's
-// signature-introspection: templateDir/superpowersRoot are filled by the CLI
-// ONLY for helpers whose registry entry declares the need, and are undefined
-// otherwise. `run` is the subprocess seam for Tier-2 helpers (uv/codex/gemini).
+// signature-introspection: templateDir/superpowersRoot/scenarioDir are filled by
+// the CLI ONLY for helpers whose registry entry declares the need, and are
+// undefined otherwise. `run` is the subprocess seam for Tier-2 helpers.
 export interface HelperContext {
   readonly workdir: string;
   readonly templateDir: string | undefined;
   readonly superpowersRoot: string | undefined;
+  readonly scenarioDir: string | undefined;
   readonly run: CommandRunner;
 }
 

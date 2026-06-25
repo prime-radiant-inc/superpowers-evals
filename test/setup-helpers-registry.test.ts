@@ -29,5 +29,6 @@ describe('registry', () => {
     expect(
       REGISTRY['create_cost_clean_repo']?.needsTemplateDir,
     ).toBeUndefined();
+    expect(REGISTRY['init_repo_from_fixtures']?.needsScenarioDir).toBe(true);
   });
 });

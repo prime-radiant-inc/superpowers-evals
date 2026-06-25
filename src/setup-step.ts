@@ -40,6 +40,7 @@ export function runSetup(
       BASH_ENV: prelude,
       QUORUM_REPO_ROOT: root,
       QUORUM_WORKDIR: workdir,
+      QUORUM_SCENARIO_DIR: scenarioDir,
       ...envExtra,
     },
     encoding: 'utf8',

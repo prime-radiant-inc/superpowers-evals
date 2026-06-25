@@ -29,6 +29,7 @@ function ctx(dir: string, run: CommandRunner) {
     workdir: dir,
     templateDir: undefined,
     superpowersRoot: undefined,
+    scenarioDir: undefined,
     run,
   };
 }

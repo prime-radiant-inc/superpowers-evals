@@ -4,7 +4,8 @@
 // KNOWN_HELPER_NAMES re-adds those two so `quorum check` validates against the
 // full 39-name set.
 
-import { createBaseRepo, recordHead } from './base.ts';
+import { join } from 'node:path';
+import { createBaseRepo, initRepoFromFixtures, recordHead } from './base.ts';
 import {
   createClaimWithoutVerification,
   createCodeReviewPlantedBugs,
@@ -52,6 +53,7 @@ export interface RegistryEntry {
   readonly fn: Helper;
   readonly needsTemplateDir?: boolean;
   readonly needsSuperpowersRoot?: boolean;
+  readonly needsScenarioDir?: boolean;
 }
 
 // createBaseRepo/recordHead have non-HelperContext signatures; wrap them as thin
@@ -69,8 +71,21 @@ const recordHeadHelper: Helper = (c: HelperContext): void => {
   recordHead(c.workdir);
 };
 
+// scenarioDir is filled by runHelpers for needsScenarioDir helpers; the guard is
+// parity with createBaseRepoHelper's templateDir check.
+const initRepoFromFixturesHelper: Helper = (c: HelperContext): void => {
+  if (c.scenarioDir === undefined) {
+    throw new Error('scenarioDir is required for init_repo_from_fixtures');
+  }
+  initRepoFromFixtures(c.workdir, join(c.scenarioDir, 'fixtures'));
+};
+
 export const REGISTRY: Record<string, RegistryEntry> = {
   create_base_repo: { fn: createBaseRepoHelper, needsTemplateDir: true },
+  init_repo_from_fixtures: {
+    fn: initRepoFromFixturesHelper,
+    needsScenarioDir: true,
+  },
   symlink_superpowers: { fn: symlinkSuperpowers, needsSuperpowersRoot: true },
   install_codex_superpowers_plugin_hooks: {
     fn: installCodexSuperpowersPluginHooks,

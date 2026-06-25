@@ -1,7 +1,8 @@
 // `setup-helpers run <helper> [<helper>...]`. Scenario setup.sh scripts dispatch
 // named helpers here. Each name is looked up in REGISTRY and invoked against
 // QUORUM_WORKDIR. Helpers whose registry entry declares needsTemplateDir /
-// needsSuperpowersRoot are filled from QUORUM_REPO_ROOT / SUPERPOWERS_ROOT.
+// needsSuperpowersRoot / needsScenarioDir are filled from QUORUM_REPO_ROOT /
+// SUPERPOWERS_ROOT / QUORUM_SCENARIO_DIR.
 
 import { join } from 'node:path';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
@@ -14,6 +15,7 @@ export interface HelperEnv {
   readonly workdir: string;
   readonly repoRoot: string | undefined;
   readonly superpowersRoot: string | undefined;
+  readonly scenarioDir: string | undefined;
 }
 
 // Dispatch each named helper in order against the resolved environment. Throws
@@ -53,10 +55,19 @@ export async function runHelpers(
       superpowersRoot = helperEnv.superpowersRoot;
     }
 
+    let scenarioDir: string | undefined;
+    if (entry.needsScenarioDir === true) {
+      if (helperEnv.scenarioDir === undefined || helperEnv.scenarioDir === '') {
+        throw new Error('setup-helpers: QUORUM_SCENARIO_DIR is not set');
+      }
+      scenarioDir = helperEnv.scenarioDir;
+    }
+
     await entry.fn({
       workdir: helperEnv.workdir,
       templateDir,
       superpowersRoot,
+      scenarioDir,
       run: defaultCommandRunner,
     });
   }
@@ -81,6 +92,7 @@ async function main(argv: readonly string[]): Promise<number> {
       workdir,
       repoRoot: getEnv('QUORUM_REPO_ROOT'),
       superpowersRoot: getEnv('SUPERPOWERS_ROOT'),
+      scenarioDir: getEnv('QUORUM_SCENARIO_DIR'),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

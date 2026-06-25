@@ -1,6 +1,6 @@
 // test/setup-helpers-cli.test.ts
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { repoRoot } from '../src/paths.ts';
@@ -19,6 +19,7 @@ describe('runHelpers', () => {
         workdir: dir,
         repoRoot: repoRoot(),
         superpowersRoot: undefined,
+        scenarioDir: undefined,
       });
       expect(runGit(['log', '-1', '--format=%s'], dir).trim()).toBe(
         'add caller consent gate plan',
@@ -36,6 +37,7 @@ describe('runHelpers', () => {
           workdir: dir,
           repoRoot: repoRoot(),
           superpowersRoot: undefined,
+          scenarioDir: undefined,
         }),
       ).rejects.toThrow(/unknown helper/);
     } finally {
@@ -51,10 +53,49 @@ describe('runHelpers', () => {
           workdir: dir,
           repoRoot: repoRoot(),
           superpowersRoot: undefined,
+          scenarioDir: undefined,
         }),
       ).rejects.toThrow(/SUPERPOWERS_ROOT/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('init_repo_from_fixtures throws when QUORUM_SCENARIO_DIR is missing', async () => {
+    const dir = tmp();
+    try {
+      await expect(
+        runHelpers(['init_repo_from_fixtures'], {
+          workdir: dir,
+          repoRoot: repoRoot(),
+          superpowersRoot: undefined,
+          scenarioDir: undefined,
+        }),
+      ).rejects.toThrow(/QUORUM_SCENARIO_DIR/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('init_repo_from_fixtures seeds the workdir from the scenario fixtures dir', async () => {
+    const scenario = tmp();
+    const work = tmp();
+    try {
+      const fixtures = join(scenario, 'fixtures');
+      mkdirSync(fixtures, { recursive: true });
+      writeFileSync(join(fixtures, 'plan.md'), 'PLAN\n');
+
+      await runHelpers(['init_repo_from_fixtures'], {
+        workdir: work,
+        repoRoot: repoRoot(),
+        superpowersRoot: undefined,
+        scenarioDir: scenario,
+      });
+
+      expect(runGit(['show', 'HEAD:plan.md'], work)).toContain('PLAN');
+    } finally {
+      rmSync(scenario, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
     }
   });
 });
