@@ -1,6 +1,12 @@
 // src/setup-helpers/base.ts (createBaseRepo + recordHead; provisionVenv added in Task 4)
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { CommandRunner } from '../agents/command-runner.ts';
 import { runGit } from './git.ts';
@@ -49,6 +55,29 @@ export function createBaseRepo(workdir: string, templateDir: string): void {
   );
   runGit(['add', 'src/index.js'], workdir);
   runGit(['commit', '-m', 'add entry point'], workdir);
+}
+
+// Seeds a fresh repo from a per-scenario fixtures directory: git init on `main`
+// under the Drill identity, mirror the entire fixtures tree into the workdir,
+// and make a single commit. The per-scenario counterpart to createBaseRepo,
+// which seeds from the shared template-repo. Throws when fixturesDir is absent
+// so a mis-wired scenario fails loudly instead of committing an empty repo.
+export function initRepoFromFixtures(
+  workdir: string,
+  fixturesDir: string,
+): void {
+  if (!existsSync(fixturesDir)) {
+    throw new Error(
+      `init_repo_from_fixtures: fixtures dir not found: ${fixturesDir}`,
+    );
+  }
+  mkdirSync(workdir, { recursive: true });
+  runGit(['init', '-b', 'main'], workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], workdir);
+  runGit(['config', 'user.name', 'Drill Test'], workdir);
+  cpSync(fixturesDir, workdir, { recursive: true });
+  runGit(['add', '-A'], workdir);
+  runGit(['commit', '-m', 'seed scenario fixtures'], workdir);
 }
 
 export function recordHead(workdir: string): void {
