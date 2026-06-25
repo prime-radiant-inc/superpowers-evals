@@ -1,6 +1,7 @@
 import {
   ATIF_SCHEMA_VERSION,
   type AtifFinalMetrics,
+  type AtifMetrics,
   type AtifObservation,
   type AtifStep,
   type AtifToolCall,
@@ -13,8 +14,12 @@ import { canonicalizeAgentPrompt } from './agent-prompt.ts';
 // "token_count". `info.total_token_usage` is the running session cumulative
 // (the last one is the session total); `info.last_token_usage` is a per-turn
 // delta. Codex rollout steps are individual tool calls with no turn/message
-// structure to hang per-turn usage on, so the session total maps to
-// AtifTrajectory.final_metrics, not per-step metrics.
+// structure to hang per-turn usage on, so the session total is recorded two
+// ways: as AtifTrajectory.final_metrics AND on the session's last agent step as
+// per-step metrics tagged with the session model. The per-step copy is what
+// survives a multi-session merge (codex spawns each subagent as its own rollout
+// file) so obol attributes tokens to each subagent's actual model instead of
+// collapsing them onto the orchestrator's envelope — see normalizeCodex.
 interface CodexTokenUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -50,6 +55,24 @@ function finalMetricsFromUsage(usage: CodexTokenUsage): AtifFinalMetrics {
   if (typeof usage.cached_input_tokens === 'number')
     fm.extra = { total_cached_tokens: usage.cached_input_tokens };
   return fm;
+}
+
+// Per-step view of the same cumulative usage, for attaching to the session's last
+// agent step. Same disjoint-bucket mapping as finalMetricsFromUsage: prompt =
+// UNCACHED input, completion = output (reasoning already folded in), cached
+// rides in cached_tokens.
+function stepMetricsFromUsage(usage: CodexTokenUsage): AtifMetrics {
+  const m: AtifMetrics = {};
+  if (typeof usage.input_tokens === 'number')
+    m.prompt_tokens = Math.max(
+      0,
+      usage.input_tokens - (usage.cached_input_tokens ?? 0),
+    );
+  if (typeof usage.output_tokens === 'number')
+    m.completion_tokens = usage.output_tokens;
+  if (typeof usage.cached_input_tokens === 'number')
+    m.cached_tokens = usage.cached_input_tokens;
+  return m;
 }
 
 // Reverse mapping: Codex tool names → canonical names.
@@ -582,6 +605,23 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   if (modelName) traj.agent.model_name = modelName;
   if (agentExtra) traj.agent.extra = agentExtra;
   if (sessionUsage) traj.final_metrics = finalMetricsFromUsage(sessionUsage);
+
+  // Also hang the session total on its last agent step, tagged with the session
+  // model. obol prices per-step metrics in preference to final_metrics, so this
+  // is what makes a MERGED multi-session run (each codex subagent is its own
+  // rollout) attribute tokens to each subagent's real model rather than
+  // collapsing onto the orchestrator's single envelope model. Single-session
+  // runs price identically (same numbers via either path).
+  if (sessionUsage && modelName) {
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const step = steps[i];
+      if (step && step.source === 'agent') {
+        step.model_name = modelName;
+        step.metrics = stepMetricsFromUsage(sessionUsage);
+        break;
+      }
+    }
+  }
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

@@ -236,8 +236,9 @@ test('each tool call gets its own step', () => {
 // Codex rollout token usage lives in event_msg rows with payload.type
 // "token_count". info.total_token_usage is the running session cumulative;
 // the LAST one is the session total. info.last_token_usage is the per-turn
-// delta. Codex rollout steps are tool-call steps with no turn/message
-// structure, so the session total maps to final_metrics, not per-step metrics.
+// delta. The session total is recorded both as final_metrics AND on the last
+// agent step (per-step metrics tagged with the session model) so a merged
+// multi-session run prices per-model — see the per-step test below.
 const tokenCountEarly = JSON.stringify({
   timestamp: '2026-06-13T17:31:26.732Z',
   type: 'event_msg',
@@ -341,6 +342,26 @@ test('no token_count events => no final_metrics, no model_name', () => {
   const traj = normalizeCodex(functionCallLine, '1.0.0');
   expect(traj.final_metrics).toBeUndefined();
   expect(traj.agent.model_name).toBeUndefined();
+});
+
+// Codex spawns each subagent as its OWN rollout file, and capture merges every
+// session's steps into one trajectory. obol's atif dialect prices per-step
+// metrics when present (and only falls back to final_metrics when no step
+// carries usage), so the session total must ALSO ride on a step tagged with the
+// session model — otherwise a merged multi-session run collapses every
+// subagent's tokens onto the orchestrator's single envelope model.
+test('session usage rides on the last agent step tagged with the session model', () => {
+  const raw = [turnContextLine, functionCallLine, tokenCountFinal].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const metricSteps = traj.steps.filter((s) => s.metrics !== undefined);
+  expect(metricSteps).toHaveLength(1);
+  const s = metricSteps[0]!;
+  expect(s.source).toBe('agent');
+  expect(s.model_name).toBe('gpt-5.5');
+  // Same disjoint buckets as final_metrics: prompt = uncached input.
+  expect(s.metrics!.prompt_tokens).toBe(378285 - 330752);
+  expect(s.metrics!.completion_tokens).toBe(9437);
+  expect(s.metrics!.cached_tokens).toBe(330752);
 });
 
 // ---------------------------------------------------------------------------
