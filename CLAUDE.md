@@ -93,6 +93,9 @@ and the fail-vs-indeterminate triage tree).
 - `story.md` briefs the Gauntlet-Agent and includes evidence-demanding ACs.
 - `setup.sh` builds the fixture using `$QUORUM_WORKDIR`; prefer
   `setup-helpers run <helper>` (a prelude function, sourced via `BASH_ENV`).
+- Per-scenario file fixtures live in `scenarios/<name>/fixtures/`; seed them with
+  `setup-helpers run init_repo_from_fixtures` (reads `$QUORUM_SCENARIO_DIR/fixtures/`).
+  The shared base template stays at `fixtures/template-repo/`.
 - `checks.sh` contains only `pre()` and `post()` function definitions.
 - `checks.sh` should not have the executable bit set.
 - Check verbs run from the fixture workdir as shell functions defined by the

@@ -285,10 +285,10 @@ but is not the source of truth.
 
 | Family / file | Representative helpers | Notes |
 |---|---|---|
-| base (`base.ts`) | `create_base_repo` (`needsTemplateDir`), `record_head` | `create_base_repo` does `git init` and seeds from `fixtures/template-repo`. `record_head` writes the `assert-checkout-clean` sentinel. |
+| base (`base.ts`) | `create_base_repo` (`needsTemplateDir`), `init_repo_from_fixtures` (`needsScenarioDir`), `record_head` | `create_base_repo` does `git init` and seeds from `fixtures/template-repo`. `init_repo_from_fixtures` git-inits and mirrors `scenarios/<name>/fixtures/` into the workdir. `record_head` writes the `assert-checkout-clean` sentinel. |
 | spec (`spec-fixtures.ts`) | `create_spec_writing_blind_spot`, `create_spec_targets_wrong_component`, `add_flawed_spec_for_review` | `add_*` helpers layer onto an existing repo (no `git init`). |
 | triggering (`triggering-fixtures.ts`) | `add_auth_execution_plan`, `create_writing_plans_skeleton` | |
-| sdd (`sdd-fixtures.ts`) | `scaffold_sdd_go_fractals*`, `scaffold_sdd_svelte_todo(_elicited)`, `add_sdd_auth_plan`, `scaffold_sdd_*_plan` | `scaffold_*` read fixture content; the elicited variants carry skill-generated plans. |
+| sdd (`sdd-fixtures.ts`) | `add_sdd_auth_plan`, `scaffold_sdd_broken_plan`, `scaffold_sdd_quality_defect_plan`, `scaffold_sdd_yagni_plan`, `scaffold_sdd_spec_constraint_plan` | Embedded-body helpers that write their plan inline. SDD file fixtures (`design.md`/`plan.md`) now live in `scenarios/<name>/fixtures/` and are seeded by `init_repo_from_fixtures`. |
 | cost (`cost-fixtures.ts`) | `create_cost_checkbox_page`, `create_cost_clean_repo`, `create_cost_trivial_plan`, `create_cost_large_files` | |
 | behavior (`behavior-fixtures.ts`) | `create_claim_without_verification`, `create_phantom_completion`, `create_review_pushback`, `create_code_review_planted_bugs` | |
 | worktree / provisioning (`worktree.ts`) | `add_existing_worktree`, `detach_worktree_head`, `setup_pressure_worktree_conditions`, `create_caller_consent_plan`, `symlink_superpowers` (`needsSuperpowersRoot`), `link_gemini_extension` (`needsSuperpowersRoot`), `install_codex_superpowers_plugin_hooks` (`needsSuperpowersRoot`) | The provisioning helpers seed per-harness plugin installs. |
@@ -299,17 +299,21 @@ and must follow a repo-creating helper in the chain. Put them in the wrong order
 and the layering helper has nothing to write into.
 
 **Declared needs.** `needsTemplateDir` resolves `fixtures/template-repo` (requires
-`QUORUM_REPO_ROOT`, which the runner sets). `needsSuperpowersRoot` resolves
+`QUORUM_REPO_ROOT`, which the runner sets). `needsScenarioDir` resolves `scenarios/<name>/fixtures` (requires
+`QUORUM_SCENARIO_DIR`, which the runner sets to the scenario directory). `needsSuperpowersRoot` resolves
 `SUPERPOWERS_ROOT`. The git fixtures commit under the "Drill Test" identity
 (`src/setup-helpers/git.ts`).
 
 ### `fixtures/` vs inline constants
 
-Large static or skill-generated content (elicited `plan.md` / `design.md`, planted
-source trees, the template repo) lives under `fixtures/` and is read by a
-`scaffold_*` helper. Small fixed strings live as inline constants in the helper.
-Hand-authoring a big plan inline reintroduces the elicited-vs-handwritten cost
-trap (§2).
+Per-scenario static or skill-generated content (elicited `plan.md` / `design.md`,
+planted source trees) lives in the scenario's own `scenarios/<name>/fixtures/`
+directory and is seeded by `init_repo_from_fixtures`, which mirrors the whole
+tree into the workdir and makes one commit. **Shared** content used across many
+scenarios — the base template repo — stays under top-level
+`fixtures/template-repo/` and is read by `create_base_repo`. Small fixed strings
+live as inline constants in the helper. Hand-authoring a big plan inline
+reintroduces the elicited-vs-handwritten cost trap (§2).
 
 ### The `.quorum-launch-cwd` sentinel
 
