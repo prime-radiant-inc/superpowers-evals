@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-setup-helpers run scaffold_sdd_go_fractals_gpt55
+setup-helpers run init_repo_from_fixtures

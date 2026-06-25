@@ -1,56 +1,11 @@
-// SDD-fixture helpers. The four scaffoldSdd* fixture-reading helpers copy
-// design.md + plan.md out of fixtures/ and commit a clean-slate repo; the five
-// embedded-body helpers (auth/broken/quality/yagni/spec-constraint) write their
-// plan bodies inline. The PLAN_BODY constants carry literal backslash-n
-// sequences and literal ${...} interpolations that must reach the file
-// unchanged.
-import { copyFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { repoRoot } from '../paths.ts';
+// SDD-fixture helpers. Five embedded-body helpers (auth/broken/quality/yagni/
+// spec-constraint) write their plan bodies inline. The PLAN_BODY constants carry
+// literal backslash-n sequences and literal ${...} interpolations that must reach
+// the file unchanged. (Per-scenario file fixtures now live under
+// scenarios/<name>/fixtures/ and are read by init_repo_from_fixtures.)
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
-
-const FIXTURES_DIR = join(repoRoot(), 'fixtures');
-
-// Shared scaffold for the nine sdd-* fixture-reading helpers. Inits a clean
-// repo, copies design.md + plan.md from fixtures/<fixtureName>, then `git add -A`
-// and a single "initial: design + plan" commit.
-function scaffoldFromFixture(workdir: string, fixtureName: string): void {
-  ensureWorkdir(workdir);
-  runGit(['init', '-b', 'main'], workdir);
-  runGit(['config', 'user.email', 'drill@test.local'], workdir);
-  runGit(['config', 'user.name', 'Drill Test'], workdir);
-
-  const src = join(FIXTURES_DIR, fixtureName);
-  for (const name of ['design.md', 'plan.md']) {
-    copyFileSync(join(src, name), join(workdir, name));
-  }
-
-  runGit(['add', '-A'], workdir);
-  runGit(['commit', '-m', 'initial: design + plan'], workdir);
-}
-
-// Two go-fractals fixtures over the SAME design.md, each plan genuinely elicited
-// by following this repo's writing-plans skill — they differ only in the frontier
-// model that authored plan.md (cross-model SDD execution coverage: the plan author
-// differs from the Claude executor under test). gpt55 = gpt-5.5 (codex CLI,
-// 2026-06-16); opus48 = Opus 4.8.
-export function scaffoldSddGoFractalsGpt55(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-gpt55');
-}
-
-export function scaffoldSddGoFractalsOpus48(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-go-fractals-opus48');
-}
-
-export function scaffoldSddSvelteTodo(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo');
-}
-
-export function scaffoldSddSvelteTodoOpus48(ctx: HelperContext): void {
-  scaffoldFromFixture(ctx.workdir, 'sdd-svelte-todo-opus48');
-}
 
 // The compact auth-system plan.
 const AUTH_PLAN_BODY = `# Auth System Implementation Plan

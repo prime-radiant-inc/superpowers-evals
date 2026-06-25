@@ -7,7 +7,6 @@ import { runGit } from '../src/setup-helpers/git.ts';
 import {
   addSddAuthPlan,
   scaffoldSddBrokenPlan,
-  scaffoldSddGoFractalsGpt55,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddYagniPlan,
@@ -18,20 +17,6 @@ function tmp(): string {
 }
 
 describe('sdd fixtures', () => {
-  test('scaffoldSddGoFractalsGpt55 reads fixtures/ and commits design+plan', () => {
-    const dir = tmp();
-    try {
-      scaffoldSddGoFractalsGpt55({ workdir: dir } as never);
-      expect(runGit(['log', '--format=%s'], dir).trim()).toBe(
-        'initial: design + plan',
-      );
-      expect(runGit(['show', 'HEAD:design.md'], dir).length).toBeGreaterThan(0);
-      expect(runGit(['show', 'HEAD:plan.md'], dir).length).toBeGreaterThan(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   test('scaffoldSddBrokenPlan keeps the literal backslash-n in the plan', () => {
     const dir = tmp();
     try {
@@ -119,7 +104,6 @@ describe('sdd fixtures', () => {
     const base = tmp();
     try {
       const cases: Array<[string, (ctx: never) => void]> = [
-        ['go-fractals', scaffoldSddGoFractalsGpt55],
         ['broken', scaffoldSddBrokenPlan],
         ['quality', scaffoldSddQualityDefectPlan],
         ['yagni', scaffoldSddYagniPlan],

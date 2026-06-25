@@ -1,8 +1,8 @@
-// The dispatch table for `setup-helpers run <helper>`. Holds only the 37
+// The dispatch table for `setup-helpers run <helper>`. Holds only the
 // dispatchable (workdir-style) helpers; the two library-only entries
 // addWorktree/detachHead are intentionally absent (no scenario dispatches them).
 // KNOWN_HELPER_NAMES re-adds those two so `quorum check` validates against the
-// full 39-name set.
+// full set.
 
 import { join } from 'node:path';
 import { createBaseRepo, initRepoFromFixtures, recordHead } from './base.ts';
@@ -22,12 +22,8 @@ import {
 import {
   addSddAuthPlan,
   scaffoldSddBrokenPlan,
-  scaffoldSddGoFractalsGpt55,
-  scaffoldSddGoFractalsOpus48,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSpecConstraintPlan,
-  scaffoldSddSvelteTodo,
-  scaffoldSddSvelteTodoOpus48,
   scaffoldSddYagniPlan,
 } from './sdd-fixtures.ts';
 import {
@@ -111,10 +107,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   add_flawed_spec_for_review: { fn: addFlawedSpecForReview },
   add_sdd_auth_plan: { fn: addSddAuthPlan },
   scaffold_sdd_broken_plan: { fn: scaffoldSddBrokenPlan },
-  scaffold_sdd_go_fractals_gpt55: { fn: scaffoldSddGoFractalsGpt55 },
-  scaffold_sdd_go_fractals_opus48: { fn: scaffoldSddGoFractalsOpus48 },
-  scaffold_sdd_svelte_todo: { fn: scaffoldSddSvelteTodo },
-  scaffold_sdd_svelte_todo_opus48: { fn: scaffoldSddSvelteTodoOpus48 },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
   scaffold_sdd_yagni_plan: { fn: scaffoldSddYagniPlan },
@@ -128,9 +120,8 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   record_head: { fn: recordHeadHelper },
 };
 
-// The full Python HELPER_REGISTRY key set (39) — the 37 dispatchable plus the
-// two library-only names. This is the validation set `quorum check` uses, so it
-// must match Python's keys exactly (which include add_worktree/detach_head).
+// The full helper-name set. This is the validation set `quorum check` uses;
+// includes the two library-only names (add_worktree/detach_head) absent from REGISTRY.
 export const KNOWN_HELPER_NAMES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(REGISTRY),
   'add_worktree',
