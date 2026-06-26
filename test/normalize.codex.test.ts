@@ -348,22 +348,56 @@ test('no token_count events => no final_metrics, no model_name', () => {
 
 // Codex spawns each subagent as its OWN rollout file, and capture merges every
 // session's steps into one trajectory. obol's atif dialect prices per-step
-// metrics when present (and only falls back to final_metrics when no step
-// carries usage), so the session total must ALSO ride on a step tagged with the
-// session model — otherwise a merged multi-session run collapses every
+// metrics when present (else final_metrics), so usage must ride on steps tagged
+// with the session model — otherwise a merged multi-session run collapses every
 // subagent's tokens onto the orchestrator's single envelope model.
-test('session usage rides on the last agent step tagged with the session model', () => {
-  const raw = [turnContextLine, functionCallLine, tokenCountFinal].join('\n');
+//
+// Critically the usage must be PER-TURN (each token_count's last_token_usage
+// delta on its own step), NOT the session cumulative lumped onto one step: obol
+// decides large-context pricing tiers per step (request = prompt + cache_read),
+// so a lumped multi-million-token step would trip a tier that no real per-turn
+// request (tens of thousands of tokens) ever hit. The per-turn deltas sum to the
+// cumulative, so totals are preserved.
+test('each turn’s usage rides on its own step (per-turn deltas, not the lumped cumulative)', () => {
+  const raw = [
+    turnContextLine,
+    functionCallLine,
+    tokenCountEarly,
+    applyPatchLine,
+    tokenCountFinal,
+  ].join('\n');
+  const traj = normalizeCodex(raw, '1.0.0');
+  const metricSteps = traj.steps.filter((s) => s.metrics !== undefined);
+  expect(metricSteps).toHaveLength(2);
+  for (const s of metricSteps) {
+    expect(s.source).toBe('agent');
+    expect(s.model_name).toBe('gpt-5.5');
+  }
+  const sortNum = (xs: (number | undefined)[]) =>
+    xs.map((x) => x ?? 0).sort((a, b) => a - b);
+  // Per-turn cached: 3456 and 39808 — NOT the 330752 cumulative.
+  expect(sortNum(metricSteps.map((s) => s.metrics!.cached_tokens))).toEqual([
+    3456, 39808,
+  ]);
+  // Per-turn uncached prompt: 15175−3456 and 44017−39808.
+  expect(sortNum(metricSteps.map((s) => s.metrics!.prompt_tokens))).toEqual([
+    4209, 11719,
+  ]);
+  // Per-turn completion: 188 and 1530.
+  expect(sortNum(metricSteps.map((s) => s.metrics!.completion_tokens))).toEqual(
+    [188, 1530],
+  );
+});
+
+test('a turn with no preceding tool-call step still gets a usage-bearing step', () => {
+  // One token_count, no tool-call step before it -> a synthetic usage step holds
+  // that turn's per-turn delta (last_token_usage), not the cumulative.
+  const raw = [turnContextLine, tokenCountFinal].join('\n');
   const traj = normalizeCodex(raw, '1.0.0');
   const metricSteps = traj.steps.filter((s) => s.metrics !== undefined);
   expect(metricSteps).toHaveLength(1);
-  const s = metricSteps[0]!;
-  expect(s.source).toBe('agent');
-  expect(s.model_name).toBe('gpt-5.5');
-  // Same disjoint buckets as final_metrics: prompt = uncached input.
-  expect(s.metrics!.prompt_tokens).toBe(378285 - 330752);
-  expect(s.metrics!.completion_tokens).toBe(9437);
-  expect(s.metrics!.cached_tokens).toBe(330752);
+  expect(metricSteps[0]!.model_name).toBe('gpt-5.5');
+  expect(metricSteps[0]!.metrics!.cached_tokens).toBe(39808); // per-turn, not 330752
 });
 
 // ---------------------------------------------------------------------------

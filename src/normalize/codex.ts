@@ -12,14 +12,14 @@ import { canonicalizeAgentPrompt } from './agent-prompt.ts';
 
 // Codex token usage lives in `event_msg` rows whose payload.type is
 // "token_count". `info.total_token_usage` is the running session cumulative
-// (the last one is the session total); `info.last_token_usage` is a per-turn
-// delta. Codex rollout steps are individual tool calls with no turn/message
-// structure to hang per-turn usage on, so the session total is recorded two
-// ways: as AtifTrajectory.final_metrics AND on the session's last agent step as
-// per-step metrics tagged with the session model. The per-step copy is what
-// survives a multi-session merge (codex spawns each subagent as its own rollout
-// file) so obol attributes tokens to each subagent's actual model instead of
-// collapsing them onto the orchestrator's envelope — see normalizeCodex.
+// (the last one is the session total); `info.last_token_usage` is the per-turn
+// delta, and the deltas sum to the cumulative. The session total is recorded as
+// AtifTrajectory.final_metrics, and each per-turn delta rides on its own agent
+// step as per-step metrics tagged with the session model. The per-step copies
+// are what survive a multi-session merge (codex spawns each subagent as its own
+// rollout file) so obol attributes tokens to each subagent's actual model, and
+// keeping them PER-TURN (real request sizes) — not one lumped cumulative step —
+// keeps obol's per-step large-context tier from misfiring. See normalizeCodex.
 interface CodexTokenUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -543,6 +543,10 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   // Last cumulative session usage and model, harvested from the non-tool rows.
   let sessionUsage: CodexTokenUsage | undefined;
   let modelName: string | undefined;
+  // Per-turn usage deltas (each token_count's last_token_usage), in order. These
+  // sum to the cumulative but carry real per-request sizes, so obol tiers each
+  // turn correctly (see the attachment step below).
+  const turnUsages: CodexTokenUsage[] = [];
 
   // Session metadata fields.
   let sessionId: string | undefined;
@@ -601,13 +605,16 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
         (payload as { type?: unknown }).type === 'token_count'
       ) {
         const info = (payload as { info?: unknown }).info;
-        const total =
-          info && typeof info === 'object'
-            ? asTokenUsage(
-                (info as { total_token_usage?: unknown }).total_token_usage,
-              )
-            : undefined;
-        if (total) sessionUsage = total;
+        if (info && typeof info === 'object') {
+          const total = asTokenUsage(
+            (info as { total_token_usage?: unknown }).total_token_usage,
+          );
+          if (total) sessionUsage = total;
+          const last = asTokenUsage(
+            (info as { last_token_usage?: unknown }).last_token_usage,
+          );
+          if (last) turnUsages.push(last);
+        }
       }
       continue;
     }
@@ -760,6 +767,35 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     steps.push({ step_id: 1, source: 'user', message: '' });
   }
 
+  // Hang each turn's usage delta on its own agent step, tagged with the session
+  // model. PER-TURN (not the session cumulative) so obol prices each request at
+  // its real size: obol decides large-context pricing tiers per step, and a
+  // single lumped multi-million-token step would trip a tier that no real
+  // per-turn request ever hit. After the multi-session merge this also
+  // attributes tokens to each subagent's actual model rather than the
+  // orchestrator's single envelope. The deltas sum to the cumulative, so totals
+  // are preserved; final_metrics keeps that cumulative (obol ignores it when
+  // per-step metrics are present). Extra deltas (turns with no tool-call step)
+  // become synthetic usage-only steps so no turn's tokens are dropped.
+  if (modelName && turnUsages.length > 0) {
+    const agentSteps = steps.filter((s) => s.source === 'agent');
+    for (let i = 0; i < turnUsages.length; i++) {
+      const usage = turnUsages[i] as CodexTokenUsage;
+      const target = agentSteps[i];
+      if (target) {
+        target.model_name = modelName;
+        target.metrics = stepMetricsFromUsage(usage);
+      } else {
+        steps.push({
+          step_id: 0,
+          source: 'agent',
+          model_name: modelName,
+          metrics: stepMetricsFromUsage(usage),
+        });
+      }
+    }
+  }
+
   // Reassign sequential step_ids (step numbering must be 1-based sequential
   // even if steps were added out of order or skipped in processing).
   for (let i = 0; i < steps.length; i++) {
@@ -776,23 +812,6 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   if (modelName) traj.agent.model_name = modelName;
   if (agentExtra) traj.agent.extra = agentExtra;
   if (sessionUsage) traj.final_metrics = finalMetricsFromUsage(sessionUsage);
-
-  // Also hang the session total on its last agent step, tagged with the session
-  // model. obol prices per-step metrics in preference to final_metrics, so this
-  // is what makes a MERGED multi-session run (each codex subagent is its own
-  // rollout) attribute tokens to each subagent's real model rather than
-  // collapsing onto the orchestrator's single envelope model. Single-session
-  // runs price identically (same numbers via either path).
-  if (sessionUsage && modelName) {
-    for (let i = steps.length - 1; i >= 0; i--) {
-      const step = steps[i];
-      if (step && step.source === 'agent') {
-        step.model_name = modelName;
-        step.metrics = stepMetricsFromUsage(sessionUsage);
-        break;
-      }
-    }
-  }
 
   const result = validateTrajectory(traj);
   if (!result.ok) {
