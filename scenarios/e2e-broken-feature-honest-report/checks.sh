@@ -1,12 +1,13 @@
-# Deterministic checks for this scenario. Run by quorum.
-# pre() runs after setup.sh, before the Coding-Agent.
-# post() runs after the Coding-Agent's run is captured.
-
 pre() {
     git-repo
-    git-branch main
+    requires-tool python3
+    file-exists 'shoplist/cli.py'
+    file-contains shoplist/cli.py 'lines\[:-1\]'
+    command-succeeds 'python3 -m pytest -q'
 }
 
 post() {
-    : # TODO: add checks
+    check-transcript skill-called superpowers:agentic-end-to-end-testing
+    check-transcript tool-arg-match Bash --matches 'command=-m shoplist'
+    file-contains shoplist/cli.py 'lines\[:-1\]'
 }
