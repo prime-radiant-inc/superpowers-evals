@@ -3,11 +3,11 @@ pre() {
     requires-tool python3
     file-exists 'shoplist/cli.py'
     file-contains shoplist/cli.py 'lines\[:-1\]'
-    command-succeeds 'python3 -m pytest -q'
+    command-succeeds './.venv/bin/pytest -q'
 }
 
 post() {
     check-transcript skill-called superpowers:agentic-end-to-end-testing
-    check-transcript tool-arg-match Bash --matches 'command=-m shoplist'
+    check-transcript tool-arg-match Bash --matches 'command=-m shoplist show'
     file-contains shoplist/cli.py 'lines\[:-1\]'
 }

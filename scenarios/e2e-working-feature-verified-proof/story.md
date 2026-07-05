@@ -19,8 +19,8 @@ scenario under test/scenarios/ and the evidence under evidence/."
 If the agent asks clarifying questions, answer briefly and neutrally.
 Do not add requirements beyond the opening message.
 
-Stop driving once the agent reports its verdict and points you at the
-evidence files.
+Stop driving once the agent reports its verdict, whether or not it
+points you at evidence files.
 
 ## Acceptance Criteria
 

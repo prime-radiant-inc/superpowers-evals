@@ -5,7 +5,12 @@
 // full set.
 
 import { join } from 'node:path';
-import { createBaseRepo, initRepoFromFixtures, recordHead } from './base.ts';
+import {
+  createBaseRepo,
+  initRepoFromFixtures,
+  provisionVenv,
+  recordHead,
+} from './base.ts';
 import {
   createClaimWithoutVerification,
   createCodeReviewPlantedBugs,
@@ -76,6 +81,14 @@ const recordHeadHelper: Helper = (c: HelperContext): void => {
   recordHead(c.workdir);
 };
 
+// Chainable second step for file-based fixtures (init_repo_from_fixtures):
+// provisions .venv with pytest + the workdir package installed editable, after
+// the fixtures commit lands, matching the pattern the TS-authored behavior
+// fixtures use internally (createClaimWithoutVerification, createReviewPushback).
+const provisionVenvHelper: Helper = (c: HelperContext): void => {
+  provisionVenv(c.workdir, c.run);
+};
+
 // scenarioDir is filled by runHelpers for needsScenarioDir helpers; the guard is
 // parity with createBaseRepoHelper's templateDir check.
 const initRepoFromFixturesHelper: Helper = (c: HelperContext): void => {
@@ -140,6 +153,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   create_cost_trivial_plan: { fn: createCostTrivialPlan },
   create_cost_large_files: { fn: createCostLargeFiles },
   record_head: { fn: recordHeadHelper },
+  provision_venv: { fn: provisionVenvHelper },
 };
 
 // The full helper-name set. This is the validation set `quorum check` uses;
