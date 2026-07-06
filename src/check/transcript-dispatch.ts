@@ -46,6 +46,14 @@ const REQUIRED_ARGS: Record<string, number> = {
   'tool-match-before-tool-match': 4,
 };
 
+// The full transcript-verb vocabulary, for static validation (quorum check).
+// Derived from REQUIRED_ARGS (every verb with an arity entry) plus
+// tool-arg-match, whose arity is option-shaped and validated separately above.
+export const TRANSCRIPT_VERBS: ReadonlySet<string> = new Set([
+  ...Object.keys(REQUIRED_ARGS),
+  'tool-arg-match',
+]);
+
 function ok(passed: boolean, detail: string): CheckOutcome {
   return { passed, detail };
 }

@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -357,4 +358,79 @@ test('checkScenario does not demand fixtures/ when init_repo_from_fixtures only 
   chmodSync(join(dir, 'setup.sh'), 0o755);
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
+});
+
+// PRI-2494: quorum check validates check-verb names statically, so a typo'd
+// verb is caught at authoring time instead of vanishing at run time.
+function scenarioWithChecks(checksBody: string): string {
+  const dir = newScenario(join(scenariosRoot(), 'v-scn'));
+  writeFileSync(join(dir, 'checks.sh'), checksBody);
+  return dir;
+}
+
+test("checkScenario flags a typo'd verb inside pre()", () => {
+  const dir = scenarioWithChecks(
+    'pre() {\n    file-exsts foo.txt\n}\n\npost() {\n    file-exists foo.txt\n}\n',
+  );
+  const problems = checkScenario(dir);
+  expect(
+    problems.some((p) => p.includes("unknown check verb 'file-exsts'")),
+  ).toBe(true);
+});
+
+test('checkScenario flags an unknown check-transcript subverb and not-inner', () => {
+  const dir = scenarioWithChecks(
+    'pre() {\n    git-repo\n}\n\npost() {\n    check-transcript skil-called superpowers:tdd\n    not file-exsts foo\n}\n',
+  );
+  const problems = checkScenario(dir);
+  expect(
+    problems.some((p) =>
+      p.includes("unknown check-transcript verb 'skil-called'"),
+    ),
+  ).toBe(true);
+  expect(
+    problems.some((p) => p.includes("unknown check verb 'file-exsts'")),
+  ).toBe(true);
+});
+
+test('checkScenario accepts real verbs, not/check-transcript, helpers, and shell control flow', () => {
+  const dir = scenarioWithChecks(
+    [
+      'pre() {',
+      '    git-repo',
+      '    git-branch main',
+      '    requires-tool jq',
+      '    if [ -f maybe.txt ]; then',
+      '        file-contains maybe.txt hello',
+      '    fi',
+      '}',
+      '',
+      'post() {',
+      '    check-transcript skill-called superpowers:test-driven-development',
+      '    not check-transcript tool-called NotebookEdit',
+      '    local n=1',
+      '    :',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const problems = checkScenario(dir);
+  expect(problems.filter((p) => p.includes('unknown check'))).toEqual([]);
+});
+
+// The whole active corpus must stay valid: the lint is additive, zero
+// false positives on shipped scenarios.
+test('every active scenario passes the verb lint', () => {
+  const scenarios = join(import.meta.dir, '..', 'scenarios');
+  for (const name of readdirSync(scenarios)) {
+    const dir = join(scenarios, name);
+    if (!statSync(dir).isDirectory()) continue;
+    const problems = checkScenario(dir).filter((p) =>
+      p.includes('unknown check'),
+    );
+    expect({ scenario: name, problems }).toEqual({
+      scenario: name,
+      problems: [],
+    });
+  }
 });

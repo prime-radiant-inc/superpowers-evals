@@ -19,6 +19,8 @@ import {
 } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { FS_VERBS } from './check/dispatch.ts';
+import { TRANSCRIPT_VERBS } from './check/transcript-dispatch.ts';
 import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
 
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
@@ -201,6 +203,7 @@ function validateChecksSh(scenarioDir: string): string[] {
       );
     }
   }
+  problems.push(...validateCheckVerbs(text));
   return problems;
 }
 
@@ -314,6 +317,103 @@ export function checkScenario(scenarioDir: string): string[] {
   problems.push(...validateChecksSh(scenarioDir));
 
   return problems;
+}
+
+// Leading tokens that are legitimate in a checks.sh body but are not check
+// verbs: the prelude's non-verb functions, bash keywords/builtins seen in
+// scenario bodies, and test/grouping syntax. A token starting with a quote,
+// $, (, or containing = (assignment) is skipped as not-a-command.
+const CHECKS_SH_ALLOWED_TOKENS: ReadonlySet<string> = new Set([
+  'not',
+  'check-transcript',
+  'setup-helpers',
+  'inject-user-preference',
+  ':',
+  'true',
+  'false',
+  'local',
+  'return',
+  'echo',
+  'cd',
+  'export',
+  'if',
+  'then',
+  'elif',
+  'else',
+  'fi',
+  'for',
+  'while',
+  'until',
+  'do',
+  'done',
+  'case',
+  'esac',
+  '[',
+  '[[',
+  '{',
+  '}',
+  '!',
+]);
+
+// Conservative static verb lint over pre()/post() bodies (PRI-2494): the
+// FIRST token of each body line must be a known check verb, an allowed
+// shell token, or obviously not a command (assignment, expansion, quote).
+// `not <inner>` recurses one level; `check-transcript <sub>` validates the
+// subverb. This is a typo catcher, not a bash parser: unknown tokens are
+// reported, everything structurally ambiguous is let through.
+function validateCheckVerbs(text: string): string[] {
+  const problems: string[] = [];
+  const lines = pySplitlines(text);
+  let inFn = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    const isFnDecl = /^(pre|post)\s*\(\)/.test(s);
+    const opens = countChar(s, '{');
+    const closes = countChar(s, '}');
+    if (isFnDecl) {
+      inFn = Math.max(0, inFn + opens - closes);
+      continue;
+    }
+    if (s === '{') {
+      inFn += 1;
+      continue;
+    }
+    if (s === '}') {
+      inFn = Math.max(0, inFn - 1);
+      continue;
+    }
+    if (inFn === 0) continue; // top-level lines are validateChecksSh's problem
+    problems.push(...lintCommandLine(s, i + 1));
+    if (inFn > 0) inFn = Math.max(0, inFn + opens - closes);
+  }
+  return problems;
+}
+
+// Lint one in-function line's leading command token (recursing through `not`).
+function lintCommandLine(s: string, lineNo: number): string[] {
+  const tokens = s.split(/\s+/);
+  const tok = tokens[0] ?? '';
+  // Not command-shaped: assignments, expansions, quotes, subshells, redirects.
+  if (tok === '' || tok.includes('=') || /^["'$(<>&|;]/.test(tok)) {
+    return [];
+  }
+  if (tok === 'not') {
+    // Validate the inner verb the same way (one level; `not not x` is not used).
+    return lintCommandLine(tokens.slice(1).join(' '), lineNo);
+  }
+  if (tok === 'check-transcript') {
+    const sub = tokens[1] ?? '';
+    if (sub !== '' && !sub.startsWith('$') && !TRANSCRIPT_VERBS.has(sub)) {
+      return [`checks.sh:${lineNo}: unknown check-transcript verb '${sub}'`];
+    }
+    return [];
+  }
+  if (tok in FS_VERBS || CHECKS_SH_ALLOWED_TOKENS.has(tok)) {
+    return [];
+  }
+  return [`checks.sh:${lineNo}: unknown check verb '${tok}'`];
 }
 
 function isValidTier(tier: unknown): boolean {
