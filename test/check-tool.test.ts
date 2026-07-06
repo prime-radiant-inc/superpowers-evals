@@ -542,3 +542,46 @@ test('E2E: setup-helpers prelude function resolves to the TS CLI', () => {
   // Missing `run` subcommand → usage error exit 2 (the CLI's distinction).
   expect(proc.status).toBe(2);
 });
+
+// PRI-2494 arity gates: a missing/empty required arg is a BROKEN check (127
+// band), never a vacuous pass. Mirrors transcript-dispatch's REQUIRED_ARGS.
+test('file-exists with no args is broken, not a pass', () => {
+  const ctx = { cwd: mkdtempSync(join(tmpdir(), 'wd-')), env: () => undefined };
+  for (const args of [[], ['']]) {
+    const r = verbFileExists(args, ctx);
+    expect(r.broken).toBe(true);
+    expect(r.passed).toBe(false);
+  }
+});
+
+test('file-contains with a missing path or pattern is broken', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(cwd, 'f.txt'), 'hello\n');
+  const ctx = { cwd, env: () => undefined };
+  for (const args of [[], ['f.txt'], ['f.txt', ''], ['', 'hello']]) {
+    const r = verbFileContains(args, ctx);
+    expect(r.broken).toBe(true);
+  }
+  // Two real args still work.
+  expect(verbFileContains(['f.txt', 'hello'], ctx).passed).toBe(true);
+});
+
+test('command-succeeds with a missing/empty command is broken (bash -c "" would pass)', () => {
+  const ctx = { cwd: mkdtempSync(join(tmpdir(), 'wd-')), env: () => undefined };
+  for (const args of [[], ['']]) {
+    const r = verbCommandSucceeds(args, ctx);
+    expect(r.broken).toBe(true);
+  }
+});
+
+// PRI-2494 glob fix: a trailing-`**` matches any descendant of the prefix dir.
+test('file-exists with a trailing-** glob matches directory descendants', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'wd-'));
+  mkdirSync(join(cwd, 'docs', 'sub'), { recursive: true });
+  writeFileSync(join(cwd, 'docs', 'sub', 'a.md'), 'x');
+  const ctx = { cwd, env: () => undefined };
+  expect(verbFileExists(['docs/**'], ctx).passed).toBe(true);
+  // An empty dir has no descendants: no match.
+  mkdirSync(join(cwd, 'empty'));
+  expect(verbFileExists(['empty/**'], ctx).passed).toBe(false);
+});

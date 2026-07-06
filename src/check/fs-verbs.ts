@@ -69,6 +69,11 @@ export function verbFileExists(
   ctx: CheckContext,
 ): CheckOutcome {
   const pattern = args[0] ?? '';
+  if (pattern === '') {
+    // A missing/empty pattern must not vacuously resolve; mirrors the
+    // transcript verbs' REQUIRED_ARGS discipline (PRI-2494).
+    return broken('file-exists: needs a <glob> argument');
+  }
   const matches = globMatch(pattern, ctx.cwd);
   if (matches.length > 0) {
     return pass();
@@ -142,6 +147,15 @@ function expandSegments(
 // A `**` recursive glob: split into the literal prefix (dirs before the first
 // `**/`) and the suffix (after the last `**/`).
 function globStar(pattern: string, cwd: string): string[] {
+  // `dir/**` (trailing recursive glob, no `**/`): every descendant of dir/.
+  if (/(^|\/)\*\*$/.test(pattern)) {
+    let prefix = pattern.slice(0, -2).replace(/\/$/, '');
+    if (prefix === '') prefix = '.';
+    const baseAbs = resolve(cwd, prefix);
+    if (!existsSync(baseAbs)) return [];
+    return walk(baseAbs, prefix);
+  }
+  // … (existing `**/` logic unchanged)
   const lastIdx = pattern.lastIndexOf('**/');
   const suffix =
     lastIdx >= 0 ? pattern.slice(lastIdx + 3) : pattern.replace(/\*\*/g, '');
@@ -252,6 +266,9 @@ export function verbFileContains(
 ): CheckOutcome {
   const path = args[0] ?? '';
   const pattern = args[1] ?? '';
+  if (path === '' || pattern === '') {
+    return broken('file-contains: needs <path> and <ere>');
+  }
   const abs = resolve(ctx.cwd, path);
   if (!existsSync(abs) || !statSync(abs).isFile()) {
     return fail(`file not found: ${path}`);
@@ -276,6 +293,10 @@ export function verbCommandSucceeds(
   ctx: CheckContext,
 ): CheckOutcome {
   const command = args[0] ?? '';
+  if (command === '') {
+    // `bash -c ''` exits 0: an empty command would vacuously pass.
+    return broken('command-succeeds: needs a <command> argument');
+  }
   const proc = spawnSync('bash', ['-c', command], {
     cwd: ctx.cwd,
     encoding: 'utf8',
