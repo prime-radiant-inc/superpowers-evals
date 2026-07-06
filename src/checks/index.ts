@@ -52,6 +52,11 @@ export interface RunPhaseResult {
    * records) propagates as nonzero.
    */
   readonly exitCode: number;
+  /**
+   * The phase's captured stderr. On a crash this carries bash's diagnosis
+   * (e.g. "file-exsts: command not found") for the composer's final_reason.
+   */
+  readonly stderr: string;
 }
 
 /**
@@ -91,21 +96,26 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   };
 
   try {
-    const proc = spawnSync(
-      'bash',
-      ['-c', `source '${prelude}'; source '${args.checksSh}'; ${args.phase}`],
-      {
-        cwd: args.workdir,
-        env,
-        encoding: 'utf8',
-        // spawnSync defaults maxBuffer to 1 MB of stdout+stderr; a verbose
-        // pre()/post() body would otherwise return {status:null,
-        // error:{code:'ENOBUFS'}}, tripping the spawn-error guard below and
-        // discarding records the check tools already wrote to the sink. Uncap so
-        // those records survive a chatty phase.
-        maxBuffer: Number.POSITIVE_INFINITY,
-      },
-    );
+    // Crash-band discipline (PRI-2494): a check verb that CRASHES (126/127/
+    // signal — e.g. a typo'd verb name) anywhere in the phase must abort the
+    // phase with that rc, not be masked by a later command's rc 0. An HONEST
+    // check failure (rc 1) must flow on so later checks still run and emit
+    // records. `set -E` propagates the ERR trap into the pre()/post() function
+    // bodies; the trap re-raises only crash-band statuses.
+    const phaseScript =
+      `set -E; trap 'rc=$?; if [ "$rc" -ge 126 ]; then exit "$rc"; fi' ERR; ` +
+      `source '${prelude}'; source '${args.checksSh}'; ${args.phase}`;
+    const proc = spawnSync('bash', ['-c', phaseScript], {
+      cwd: args.workdir,
+      env,
+      encoding: 'utf8',
+      // spawnSync defaults maxBuffer to 1 MB of stdout+stderr; a verbose
+      // pre()/post() body would otherwise return {status:null,
+      // error:{code:'ENOBUFS'}}, tripping the spawn-error guard below and
+      // discarding records the check tools already wrote to the sink. Uncap so
+      // those records survive a chatty phase.
+      maxBuffer: Number.POSITIVE_INFINITY,
+    });
     // Node's spawnSync does NOT throw when bash cannot be spawned — it returns
     // {status:null, error:<Error>}. Surface that as a thrown error rather than
     // swallowing it into a clean, empty phase.
@@ -113,6 +123,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
       throw proc.error;
     }
     const records = readRecords(sink, args.phase);
+    const stderr = proc.stderr ?? '';
 
     // A signal-killed bash child (OOM-killer, timeout SIGKILL) returns
     // status:null with proc.signal set. Such a phase DIED MID-RUN, so its result
@@ -122,7 +133,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     // reports a checks crash; the records above are still surfaced for the
     // verdict's check list.
     if (proc.signal) {
-      return { records, exitCode: 128 + signalNumber(proc.signal) };
+      return { records, exitCode: 128 + signalNumber(proc.signal), stderr };
     }
     const rc = proc.status ?? 0;
 
@@ -138,7 +149,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     } else {
       exitCode = records.length > 0 ? 0 : rc;
     }
-    return { records, exitCode };
+    return { records, exitCode, stderr };
   } finally {
     rmSync(sinkDir, { recursive: true, force: true });
   }

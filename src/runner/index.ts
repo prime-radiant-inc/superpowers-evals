@@ -878,6 +878,17 @@ function scenarioName(scenarioDir: string): string {
   return last;
 }
 
+// First non-empty stderr line of a crashed check phase, as a ": …" suffix for
+// the final_reason (e.g. bash's "file-exsts: command not found"). Empty stderr
+// contributes nothing.
+function crashHint(stderr: string): string {
+  const line = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  return line ? `: ${line.slice(0, 200)}` : '';
+}
+
 // Map a caught value to its error stage without assertions or non-null: a staged
 // RunnerError carries its own, a SetupError is setup, anything else is unknown.
 function errorStage(err: unknown): RunErrorStage {
@@ -1183,7 +1194,7 @@ async function runInnerBody(
       captureEmpty: false,
       error: {
         stage: 'checks',
-        message: `pre-checks crashed (exit ${pre.exitCode})`,
+        message: `pre-checks crashed (exit ${pre.exitCode})${crashHint(pre.stderr)}`,
       },
     });
   }
@@ -1590,7 +1601,7 @@ async function runInnerBody(
       captureEmpty,
       error: {
         stage: 'checks',
-        message: `post-checks crashed (exit ${post.exitCode})`,
+        message: `post-checks crashed (exit ${post.exitCode})${crashHint(post.stderr)}`,
       },
     });
   }

@@ -497,3 +497,75 @@ test('skill-not-called PASSes on a non-empty trace that lacks the skill (positiv
     passed: true,
   });
 });
+
+// PRI-2494: a crashed verb MID-phase must abort the phase (previously the last
+// command's rc masked it — the false-pass hole).
+test("a typo'd verb mid-phase crashes the phase even when later checks pass", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'present.txt'), 'x');
+  const checksSh = checksShWith(
+    'pre() {\n  file-exsts present.txt\n  file-exists present.txt\n}\npost() { :; }\n',
+  );
+  const { records, exitCode, stderr } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    repoRoot: REPO,
+  });
+  expect(exitCode).toBe(127);
+  // The passing check after the typo never ran: the phase aborted at the crash.
+  expect(records).toHaveLength(0);
+  // Triage evidence: bash's diagnosis is surfaced, not discarded.
+  expect(stderr).toContain('file-exsts');
+});
+
+// An HONEST failure (verb ran, assertion false, rc 1) must NOT abort the phase:
+// later checks still run and the phase is clean (rc 0, both records present).
+test('an honest check failure mid-phase does not abort the phase', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'present.txt'), 'x');
+  const checksSh = checksShWith(
+    'pre() {\n  file-exists nope.txt\n  file-exists present.txt\n}\npost() { :; }\n',
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    repoRoot: REPO,
+  });
+  expect(exitCode).toBe(0);
+  expect(records).toHaveLength(2);
+  expect(records[0]?.passed).toBe(false);
+  expect(records[1]?.passed).toBe(true);
+});
+
+// `not` of an honest fail passes and continues (not's exit-1-never-127 contract
+// must survive the trap).
+test('not-inverted checks still flow through a trapped phase', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'present.txt'), 'x');
+  const checksSh = checksShWith(
+    'pre() {\n  not file-exists nope.txt\n  file-exists present.txt\n}\npost() { :; }\n',
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    repoRoot: REPO,
+  });
+  expect(exitCode).toBe(0);
+  expect(records).toHaveLength(2);
+});
+
+test('crash stderr is captured for the final_reason hint', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const checksSh = checksShWith('pre() {\n  no-such-verb-xyz\n}\npost() { :; }\n');
+  const { exitCode, stderr } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    repoRoot: REPO,
+  });
+  expect(exitCode).toBe(127);
+  expect(stderr).toContain('no-such-verb-xyz');
+});
