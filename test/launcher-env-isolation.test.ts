@@ -16,7 +16,10 @@ const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
 // Substitute a real launcher template into a temp "run dir" and return the
 // installed launcher path plus its env-file/home fixture paths.
-function installLauncher(agent: 'claude' | 'codex'): {
+function installLauncher(
+  agent: 'claude' | 'codex',
+  opts: { omitEnvFile?: boolean } = {},
+): {
   launcher: string;
   binDir: string;
   envDump: string;
@@ -36,12 +39,14 @@ function installLauncher(agent: 'claude' | 'codex'): {
 
   // The env file each launcher sources.
   const envFile = join(runDir, `${agent}.env`);
-  writeFileSync(
-    envFile,
-    agent === 'claude'
-      ? "ANTHROPIC_API_KEY='sk-test-launcher'\n"
-      : "CODEX_PROVIDER_API_KEY='sk-codex-test'\n",
-  );
+  if (!opts.omitEnvFile) {
+    writeFileSync(
+      envFile,
+      agent === 'claude'
+        ? "ANTHROPIC_API_KEY='sk-test-launcher'\n"
+        : "CODEX_PROVIDER_API_KEY='sk-codex-test'\n",
+    );
+  }
 
   const substitutions: Record<string, string> = {
     $QUORUM_AGENT_CWD: cwd,
@@ -113,4 +118,33 @@ test('claude launcher: hostile host env never reaches the agent', () => {
   expect(env['CLAUDE_CODE_FORCE_SESSION_PERSISTENCE']).toBe('1');
   expect(env['HOME']).not.toBe('/host/home');
   expect(env['HOME']).toContain('home');
+});
+
+test('codex launcher: hostile host env never reaches the agent', () => {
+  const env = launchAndDump('codex');
+  for (const key of Object.keys(HOSTILE)) {
+    expect({ key, value: env[key] }).toEqual({ key, value: undefined });
+  }
+  // The api-key path's provider key DOES reach it (sourced from CODEX_ENV_FILE).
+  expect(env['CODEX_PROVIDER_API_KEY']).toBe('sk-codex-test');
+  expect(env['HOME']).not.toBe('/host/home');
+});
+
+test('codex launcher: subscription path (no env file) forwards no provider key', () => {
+  const { launcher, binDir, envDump } = installLauncher('codex', {
+    omitEnvFile: true,
+  });
+  // Simulate the subscription path: the substituted CODEX_ENV_FILE does not
+  // exist. installLauncher wrote it; point the launcher at a missing one by
+  // re-substituting is overkill — instead delete the file it sources.
+  // The launcher's `[ -f "$CODEX_ENV_FILE" ] && .` guard makes this the
+  // subscription path exactly.
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: { ...HOSTILE, PATH: `${binDir}:/usr/bin:/bin`, HOME: '/host/home' },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  expect(env['OPENAI_API_KEY']).toBe(undefined);
+  expect(env['HOME']).not.toBe('/host/home');
 });

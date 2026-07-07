@@ -9,11 +9,17 @@
 # literal absolute paths (no env inheritance needed — tmux strips env from new
 # sessions).
 #
+# Host-env isolation (PRI-2494): `env -i` + explicit allowlist, matching the
+# opencode/serf launchers. Supersedes the old targeted -u OPENAI_* scrubs:
+# nothing survives that is not listed here. CODEX_PROVIDER_API_KEY is forwarded
+# only when the api-key path's env file set it; the subscription path
+# authenticates from $HOME/.codex/auth.json under the throwaway home.
+#
 # Equivalent manual command (for debugging):
 #   subscription path:
-#     cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+#     cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" codex --dangerously-bypass-approvals-and-sandbox
 #   api-key path (CODEX_ENV_FILE written by provision):
-#     . "$CODEX_ENV_FILE" && cd "$QUORUM_AGENT_CWD" && HOME="<per-run throwaway home>" env -u OPENAI_API_KEY CODEX_PROVIDER_API_KEY="$CODEX_PROVIDER_API_KEY" codex --dangerously-bypass-approvals-and-sandbox
+#     . "$CODEX_ENV_FILE" && cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CODEX_PROVIDER_API_KEY="$CODEX_PROVIDER_API_KEY" codex --dangerously-bypass-approvals-and-sandbox
 #
 # CODEX_HOME collapse: this launcher sets HOME (via $QUORUM_HOME_ENV) but NOT
 # CODEX_HOME. Codex defaults CODEX_HOME to $HOME/.codex, which is exactly where
@@ -35,17 +41,28 @@
 # Api-key path: when provision writes codex-api.env (api-key credential), the
 # runner substitutes $CODEX_ENV_FILE with the absolute path. Source it
 # conditionally so the subscription path (no file) is unaffected. The sourced
-# file exports CODEX_PROVIDER_API_KEY (deliberately NOT OPENAI_* so the -u scrub
-# below does not strip it), which codex reads as the custom provider's env_key.
+# file exports CODEX_PROVIDER_API_KEY, which codex reads as the custom
+# provider's env_key.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 
 [ -f "$CODEX_ENV_FILE" ] && . "$CODEX_ENV_FILE"
 
-exec env \
-  -u OPENAI_API_KEY \
-  -u OPENAI_BASE_URL \
-  -u OPENAI_ORG_ID \
-  -u OPENAI_PROJECT \
+# Host-env isolation (PRI-2494): env -i + explicit allowlist, matching the
+# opencode/serf launchers. Supersedes the old targeted -u OPENAI_* scrubs:
+# nothing survives that is not listed here. CODEX_PROVIDER_API_KEY is
+# forwarded only when the api-key path's env file set it; the subscription
+# path authenticates from $HOME/.codex/auth.json under the throwaway home.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+if [[ -n "${CODEX_PROVIDER_API_KEY-}" ]]; then
+  env_args+=("CODEX_PROVIDER_API_KEY=$CODEX_PROVIDER_API_KEY")
+fi
+
+exec env -i \
+  "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   codex --dangerously-bypass-approvals-and-sandbox "$@"

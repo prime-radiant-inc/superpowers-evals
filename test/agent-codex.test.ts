@@ -635,9 +635,10 @@ test('codex launch-agent isolates HOME, scrubs OPENAI_API_KEY, and omits CODEX_H
     'utf8',
   );
   // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token (the
-  // standard every agent uses); codex keeps its OPENAI_API_KEY strip.
+  // standard every agent uses); codex now uses env -i + allowlist (PRI-2494).
   expect(launcher).toContain('$QUORUM_HOME_ENV');
-  expect(launcher).toContain('-u OPENAI_API_KEY');
+  expect(launcher).toContain('env -i');
+  expect(launcher).toContain('env_args=(');
   // CODEX_HOME is collapsed into $HOME — the launcher must NOT set it as an env
   // assignment on the exec line (the comment block may still mention the name).
   expect(launcher).not.toContain('CODEX_HOME="$CODEX_HOME"');
