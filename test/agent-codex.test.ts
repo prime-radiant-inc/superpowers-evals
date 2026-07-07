@@ -107,6 +107,9 @@ function spawnBackedClient(stdout: string): SpawnAppServerClient {
 
 // Stage a SUPERPOWERS_ROOT the adapter can copytree (one staged file proves the
 // plugin copy ran) plus the dirs the copy filter must drop.
+// Stage a minimal SUPERPOWERS_ROOT the adapter can copytree. PRI-2506: must
+// include a .codex-plugin/plugin.json with a `skills` field (codex needs it
+// for native discovery); the `hooks` value will be injected at provision time.
 function stageSuperpowers(root: string): void {
   mkdirSync(join(root, 'skills'), { recursive: true });
   writeFileSync(join(root, 'skills', 'a-skill.md'), '# skill\n');
@@ -114,6 +117,18 @@ function stageSuperpowers(root: string): void {
   writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   mkdirSync(join(root, 'node_modules'), { recursive: true });
   writeFileSync(join(root, 'node_modules', 'pkg.txt'), 'x\n');
+  // PRI-2506: a minimal manifest with skills field (hooks will be injected).
+  mkdirSync(join(root, '.codex-plugin'), { recursive: true });
+  const manifest = {
+    name: 'superpowers',
+    version: '1.0.0',
+    skills: './skills/',
+    hooks: null,
+  };
+  writeFileSync(
+    join(root, '.codex-plugin', 'plugin.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
 }
 
 // Default ChatGPT subscription auth.json contents the adapter accepts.
@@ -181,16 +196,16 @@ function unusedRunner(): FakeCommandRunner {
   return new FakeCommandRunner();
 }
 
-test('provision copies subscription auth and stages the trusted plugin hook', () => {
+// PRI-2506 UPDATED: hook-less provisioning — no app-server, no trusted_hash.
+test('provision copies subscription auth and stages hook-less plugin', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = unusedRunner();
-  // Drive the REAL SpawnAppServerClient via a fake spawn so the genuine
-  // parse/select + trusted_hash config-write integration runs.
-  const appServer = spawnBackedClient(appServerStdout());
+  // PRI-2506: app-server is no longer reached (trust dance is dead).
+  const appServer = new FakeAppServerClient();
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
@@ -228,22 +243,21 @@ test('provision copies subscription auth and stages the trusted plugin hook', ()
       expect(existsSync(join(pluginRoot, '.git'))).toBe(false);
       expect(existsSync(join(pluginRoot, 'node_modules'))).toBe(false);
 
-      // config.toml: features + plugin enable, then the appended trusted_hash
-      // block keyed on the hook the app-server reported.
+      // PRI-2506: config.toml is plugins-only (no hooks/plugin_hooks/trusted_hash).
       const configToml = readFileSync(
         join(home.configDir, 'config.toml'),
         'utf8',
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
-      expect(configToml).toContain('hooks = true');
-      expect(configToml).toContain('plugin_hooks = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).toContain('enabled = true');
-      expect(configToml).toContain(
-        '[hooks.state."superpowers@debug:sessionStart"]',
-      );
-      expect(configToml).toContain('trusted_hash = "abc123def456"');
+      expect(configToml).not.toContain('hooks = true');
+      expect(configToml).not.toContain('plugin_hooks');
+      expect(configToml).not.toContain('trusted_hash');
+
+      // PRI-2506: Zero app-server calls (trust dance is dead).
+      expect(appServer.calls.length).toBe(0);
 
       // Codex provisioning never touches the shared CommandRunner: auth is a
       // file copy and the app-server has its own bounded seam.
@@ -254,7 +268,8 @@ test('provision copies subscription auth and stages the trusted plugin hook', ()
   }
 });
 
-test('provision drives the app-server with the run cwd, CODEX_HOME, and a bounded deadline', () => {
+// PRI-2506 UPDATED: app-server no longer reached (trust dance is dead).
+test('provision does not invoke app-server (hook-less by design)', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
@@ -267,13 +282,8 @@ test('provision drives the app-server with the run cwd, CODEX_HOME, and a bounde
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
       agent.provision(home, runner, SUBSCRIPTION_CRED);
-      // Exactly one bounded app-server read, scoped to the run's CODEX_HOME and
-      // workdir, with a non-zero per-handshake deadline (no infinite block).
-      expect(appServer.calls.length).toBe(1);
-      const call = appServer.calls[0];
-      expect(call?.configDir).toBe(home.configDir);
-      expect(call?.workdir).toBe(home.workdir);
-      expect(call?.timeoutMs).toBeGreaterThan(0);
+      // PRI-2506: Zero app-server calls (trust dance is dead).
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     cleanup();
@@ -470,24 +480,24 @@ test('provision throws when subscription auth is missing a refresh token', () =>
   }
 });
 
-test('provision throws ProvisionError when app-server reports no superpowers hook', () => {
+// PRI-2506 UPDATED: app-server no longer reached, so this test is obsolete.
+// Kept to document that provisioning no longer depends on app-server output.
+test('provision succeeds without app-server (hook-less path)', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth');
   const spRoot = join(home.workdir, '..', 'superpowers-src');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = unusedRunner();
-  // auth OK, but hooks/list returns an empty hook set — drive the REAL
-  // SpawnAppServerClient so the genuine selector raises.
-  const emptyReply = { jsonrpc: '2.0', id: 2, result: { data: [] } };
-  const appServer = spawnBackedClient(`${JSON.stringify(emptyReply)}\n`);
+  // PRI-2506: app-server is not reached, so the canned output is irrelevant.
+  const appServer = new FakeAppServerClient();
 
   try {
     withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
-      expect(() => agent.provision(home, runner, SUBSCRIPTION_CRED)).toThrow(
-        ProvisionError,
-      );
+      // No throw: provisioning is hook-less and does not depend on app-server.
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     cleanup();
@@ -703,9 +713,9 @@ function withEnv(
   }
 }
 
-// B4-subscription: subscription credential copies auth.json, writes
-// [features]/[plugins] + trusted_hash config.toml, and does NOT write
-// codex-api.env or [model_providers].
+// PRI-2506 UPDATED: subscription credential copies auth.json, writes
+// plugins-only config (no hooks/plugin_hooks/trusted_hash), and does NOT write
+// codex-api.env or [model_providers]. Zero app-server calls.
 test('subscription credential: auth.json seeded, no model_providers, no codex-api.env', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth-sub');
@@ -713,7 +723,7 @@ test('subscription credential: auth.json seeded, no model_providers, no codex-ap
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = unusedRunner();
-  const appServer = spawnBackedClient(appServerStdout());
+  const appServer = new FakeAppServerClient();
   const credential = makeSubscriptionCredential();
 
   try {
@@ -731,7 +741,7 @@ test('subscription credential: auth.json seeded, no model_providers, no codex-ap
       });
       expect(statSync(seeded).mode & 0o777).toBe(0o600);
 
-      // config.toml has features/plugins but NO [model_providers] block.
+      // PRI-2506: config.toml is plugins-only (no hooks/trusted_hash) and NO [model_providers].
       const configToml = readFileSync(
         join(home.configDir, 'config.toml'),
         'utf8',
@@ -739,27 +749,32 @@ test('subscription credential: auth.json seeded, no model_providers, no codex-ap
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
-      expect(configToml).toContain('trusted_hash = "abc123def456"');
+      expect(configToml).not.toContain('trusted_hash');
+      expect(configToml).not.toContain('hooks = true');
+      expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('[model_providers');
 
       // No codex-api.env on the subscription path.
       expect(existsSync(join(home.configDir, 'codex-api.env'))).toBe(false);
+
+      // PRI-2506: Zero app-server calls.
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     cleanup();
   }
 });
 
-// B4-api-key: api-key credential writes config.toml with [model_providers."quorum"],
+// PRI-2506 UPDATED: api-key credential writes config.toml with [model_providers."quorum"],
 // wire_api = "responses" for openai-responses, env_key = CODEX_PROVIDER_API_KEY.
-// No auth.json. codex-api.env exists at mode 0600 carrying the resolved key.
+// Plugins-only (no hooks/trusted_hash). No auth.json. codex-api.env at 0600. Zero app-server calls.
 test('api-key credential: config.toml has model_providers quorum, no auth.json, codex-api.env at 0600', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src-api');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   const runner = unusedRunner();
-  const appServer = spawnBackedClient(appServerStdout());
+  const appServer = new FakeAppServerClient();
   const credential = makeApiKeyCredential();
 
   try {
@@ -784,10 +799,12 @@ test('api-key credential: config.toml has model_providers quorum, no auth.json, 
         expect(configToml).toContain('base_url = "https://example.com/v1"');
         expect(configToml).toContain('wire_api = "responses"');
         expect(configToml).toContain('env_key = "CODEX_PROVIDER_API_KEY"');
-        // Features + plugin + trusted_hash are present (shared with subscription).
+        // PRI-2506: Features + plugin present, but NO hooks/trusted_hash.
         expect(configToml).toContain('[features]');
         expect(configToml).toContain('[plugins."superpowers@debug"]');
-        expect(configToml).toContain('trusted_hash = "abc123def456"');
+        expect(configToml).not.toContain('trusted_hash');
+        expect(configToml).not.toContain('hooks = true');
+        expect(configToml).not.toContain('plugin_hooks');
 
         // codex-api.env exists at mode 0600 and carries the resolved key.
         const envFile = join(home.configDir, 'codex-api.env');
@@ -798,6 +815,9 @@ test('api-key credential: config.toml has model_providers quorum, no auth.json, 
         expect(envContents).toContain('secret-key-xyz');
         // The OPENAI_* name must NOT appear in the env file (would get scrubbed).
         expect(envContents).not.toContain('OPENAI_');
+
+        // PRI-2506: Zero app-server calls.
+        expect(appServer.calls.length).toBe(0);
       },
     );
   } finally {
@@ -900,4 +920,250 @@ test('codex launch-agent sources $CODEX_ENV_FILE conditionally', () => {
   expect(launcher).toContain('$CODEX_ENV_FILE');
   // It must be conditional ([ -f … ] && . syntax) so subscription path (no file) is safe.
   expect(launcher).toMatch(/\[\s*-f\s+"\$CODEX_ENV_FILE"\s*\]/);
+});
+
+// ---------------------------------------------------------------------------
+// PRI-2506: Uniform hook-less provisioning
+// ---------------------------------------------------------------------------
+
+// Stage a fixture manifest with varying hooks fields, then mutate it. Three
+// helpers for the ref-invariance test.
+function writeSuperpowersManifest(
+  root: string,
+  hooksValue: null | object | string,
+): void {
+  const manifest = {
+    name: 'superpowers',
+    version: '1.0.0',
+    skills: './skills/',
+    hooks: hooksValue,
+  };
+  mkdirSync(join(root, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(root, '.codex-plugin', 'plugin.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+// Read the STAGED manifest in the per-run plugin cache (not SUPERPOWERS_ROOT).
+function readStagedManifest(configDir: string): unknown {
+  const pluginRoot = join(
+    configDir,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  return JSON.parse(
+    readFileSync(join(pluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'),
+  );
+}
+
+// Helper: assert the staged manifest has `hooks == {}` AND `skills == "./skills/"`.
+function expectStagedManifestHookless(manifest: unknown): void {
+  expect(manifest).toMatchObject({ skills: './skills/', hooks: {} });
+  const hooks = (manifest as { hooks?: unknown }).hooks;
+  expect(hooks).toEqual({});
+  expect(Object.keys(hooks as object).length).toBe(0);
+}
+
+// Test group 1: provisioning ref-invariance (subscription path).
+// Three fixture manifests (hooks: null, hooks: {}, hooks: "./hooks/x.json") must
+// ALL produce the SAME staged manifest (`hooks == {}`), the SAME plugins-only
+// config.toml (no trusted_hash/plugin_hooks), and zero app-server calls.
+test('subscription: manifest with hooks:null gets injected hooks:{}, plugins-only config, zero app-server calls', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth-hookless');
+  const spRoot = join(home.workdir, '..', 'sp-null-hooks');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  writeSuperpowersManifest(spRoot, null);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+
+      // The STAGED manifest must have hooks:{} (injected, not null).
+      const staged = readStagedManifest(home.configDir);
+      expectStagedManifestHookless(staged);
+
+      // config.toml: plugins-only, no plugin_hooks/hooks/trusted_hash.
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toContain('[features]');
+      expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('[plugins."superpowers@debug"]');
+      expect(configToml).not.toContain('plugin_hooks');
+      expect(configToml).not.toContain('hooks = true');
+      expect(configToml).not.toContain('trusted_hash');
+
+      // Zero app-server calls: the trust dance is dead.
+      expect(appServer.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('subscription: manifest with hooks:{} gets identical injected hooks:{}, plugins-only config, zero app-server calls', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth-hookless2');
+  const spRoot = join(home.workdir, '..', 'sp-empty-hooks');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  writeSuperpowersManifest(spRoot, {});
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+
+      const staged = readStagedManifest(home.configDir);
+      expectStagedManifestHookless(staged);
+
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toContain('[features]');
+      expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('[plugins."superpowers@debug"]');
+      expect(configToml).not.toContain('plugin_hooks');
+      expect(configToml).not.toContain('hooks = true');
+      expect(configToml).not.toContain('trusted_hash');
+
+      expect(appServer.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('subscription: manifest with hooks:"./hooks/x.json" gets injected hooks:{}, plugins-only config, zero app-server calls', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth-hookless3');
+  const spRoot = join(home.workdir, '..', 'sp-string-hooks');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  writeSuperpowersManifest(spRoot, './hooks/hooks-codex.json');
+  // Stage the actual hook file so the ref is a realistic control.
+  mkdirSync(join(spRoot, 'hooks'), { recursive: true });
+  writeFileSync(
+    join(spRoot, 'hooks', 'hooks-codex.json'),
+    '{"SessionStart":[]}',
+  );
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+
+      const staged = readStagedManifest(home.configDir);
+      expectStagedManifestHookless(staged);
+
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toContain('[features]');
+      expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('[plugins."superpowers@debug"]');
+      expect(configToml).not.toContain('plugin_hooks');
+      expect(configToml).not.toContain('hooks = true');
+      expect(configToml).not.toContain('trusted_hash');
+
+      expect(appServer.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// Test group 2: api-key path gets the same treatment.
+test('api-key: injected hooks:{}, model_providers block present, plugins-only features, zero app-server calls', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'sp-api-hookless');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  writeSuperpowersManifest(spRoot, null);
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+  const credential = makeApiKeyCredential();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: spRoot, CODEX_B4_TEST_API_KEY: 'api-hookless' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, appServer);
+        agent.provision(home, runner, credential);
+
+        const staged = readStagedManifest(home.configDir);
+        expectStagedManifestHookless(staged);
+
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        expect(configToml).toContain('[features]');
+        expect(configToml).toContain('plugins = true');
+        expect(configToml).toContain('[model_providers."quorum"]');
+        expect(configToml).toContain('[plugins."superpowers@debug"]');
+        expect(configToml).not.toContain('plugin_hooks');
+        expect(configToml).not.toContain('hooks = true');
+        expect(configToml).not.toContain('trusted_hash');
+
+        expect(appServer.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// Test group 3: manifest missing `skills` field is a provision error.
+test('provision throws when manifest is missing skills field', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth-no-skills');
+  const spRoot = join(home.workdir, '..', 'sp-no-skills');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const badManifest = {
+    name: 'superpowers',
+    version: '1.0.0',
+    // NO skills field
+  };
+  mkdirSync(join(spRoot, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(spRoot, '.codex-plugin', 'plugin.json'),
+    `${JSON.stringify(badManifest, null, 2)}\n`,
+  );
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient(() => {
+    throw new Error('app-server must not be reached');
+  });
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      expect(() => agent.provision(home, runner, SUBSCRIPTION_CRED)).toThrow(
+        ProvisionError,
+      );
+      expect(() => agent.provision(home, runner, SUBSCRIPTION_CRED)).toThrow(
+        /skills/i,
+      );
+      expect(appServer.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
 });

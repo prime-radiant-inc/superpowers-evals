@@ -13,11 +13,7 @@ import type { Credential } from '../contracts/credential.ts';
 import { resolveApiKey } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import { stageSuperpowersPlugin } from '../setup-helpers/plugin-stage.ts';
-import {
-  APP_SERVER_TIMEOUT_MS,
-  type AppServerClient,
-  SpawnAppServerClient,
-} from './codex-app-server.ts';
+import type { AppServerClient } from './codex-app-server.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
@@ -82,16 +78,13 @@ const CodexAuthSchema = z
 
 export class CodexAgent implements CodingAgent {
   readonly config: AgentConfig;
-  private readonly appServer: AppServerClient;
 
-  // `appServer` is the bounded app-server read seam; live runs use the
-  // spawnSync-backed default, tests inject a fake. The shared CommandRunner is
-  // unused by codex (auth is a file copy; the only subprocess is the app-server,
-  // which has its own timed seam), but provision() keeps it for the CodingAgent
-  // contract that other agents fulfill.
-  constructor(config: AgentConfig, appServer?: AppServerClient) {
+  // PRI-2506: The app-server seam is no longer used (hook-less provisioning).
+  // The constructor signature still accepts appServer for test compatibility, but
+  // it's unused. The shared CommandRunner is unused by codex (auth is a file copy),
+  // but provision() keeps it for the CodingAgent contract that other agents fulfill.
+  constructor(config: AgentConfig, _appServer?: AppServerClient) {
     this.config = config;
-    this.appServer = appServer ?? new SpawnAppServerClient();
   }
 
   provision(
@@ -239,41 +232,33 @@ export class CodexAgent implements CodingAgent {
 
   // Subscription path: stage Superpowers with bare features/plugins config.toml
   // (no model/model_provider/[model_providers] — subscription is account-driven).
+  // PRI-2506: uniform hook-less provisioning — inject hooks:{}, no trust dance.
   private installPluginHooksSubscription(
     configDir: string,
-    workdir: string,
+    _workdir: string,
     superpowersRoot: string,
   ): void {
     this.stagePlugin(configDir, superpowersRoot);
+    this.injectEmptyHooks(configDir);
     const configPath = join(configDir, 'config.toml');
-    writePluginHooksConfig(configPath);
-    const hook = this.appServer.readHook({
-      configDir,
-      workdir,
-      timeoutMs: APP_SERVER_TIMEOUT_MS,
-    });
-    appendTrustedHook(configPath, hook.key, hook.currentHash);
+    writePluginsOnlyConfig(configPath);
   }
 
   // Api-key path: stage Superpowers with a full config.toml (model + provider
-  // block + features/plugins + trusted_hash).
+  // block + features/plugins).
+  // PRI-2506: uniform hook-less provisioning — inject hooks:{}, no trust dance.
   private installPluginHooksApiKey(
     configDir: string,
-    workdir: string,
+    _workdir: string,
     superpowersRoot: string,
     model: string,
     baseUrl: string,
     wireApi: string,
   ): void {
     this.stagePlugin(configDir, superpowersRoot);
+    this.injectEmptyHooks(configDir);
     const configPath = join(configDir, 'config.toml');
     writeApiKeyConfig(configPath, model, baseUrl, wireApi);
-    const hook = this.appServer.readHook({
-      configDir,
-      workdir,
-      timeoutMs: APP_SERVER_TIMEOUT_MS,
-    });
-    appendTrustedHook(configPath, hook.key, hook.currentHash);
   }
 
   // Copy the Superpowers plugin tree into the quorum-owned CODEX_HOME plugin
@@ -294,6 +279,48 @@ export class CodexAgent implements CodingAgent {
     );
     stageSuperpowersPlugin(superpowersRoot, pluginRoot);
   }
+
+  // PRI-2506: inject `hooks: {}` into the STAGED plugin manifest so codex's
+  // hooks.json auto-discovery is suppressed on every superpowers ref. Validates
+  // that the manifest has a `skills` field (codex needs it for native discovery).
+  private injectEmptyHooks(configDir: string): void {
+    const pluginRoot = join(
+      configDir,
+      'plugins',
+      'cache',
+      'debug',
+      'superpowers',
+      'local',
+    );
+    const manifestPath = join(pluginRoot, '.codex-plugin', 'plugin.json');
+
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch {
+      throw new ProvisionError(
+        `Could not read staged plugin manifest at ${manifestPath}`,
+      );
+    }
+
+    if (manifest === null || typeof manifest !== 'object') {
+      throw new ProvisionError('Staged plugin manifest is not a valid object');
+    }
+
+    const obj = manifest as Record<string, unknown>;
+
+    // Require `skills` field: codex needs it to discover skills natively.
+    if (typeof obj['skills'] !== 'string' || obj['skills'] === '') {
+      throw new ProvisionError(
+        'Staged plugin manifest missing skills field; codex requires it for native skill discovery',
+      );
+    }
+
+    // Force hooks to empty object, preserving all other fields.
+    obj['hooks'] = {};
+
+    writeFileSync(manifestPath, `${JSON.stringify(obj, null, 2)}\n`);
+  }
 }
 
 // Map Credential.api → codex wire_api string. Codex 0.141 only accepts
@@ -307,17 +334,15 @@ function mapWireApi(api: string): string {
   );
 }
 
-// Subscription path: enable plugins/hooks and the superpowers@debug plugin.
-// The trailing trusted-hash block is appended later by appendTrustedHook.
-function writePluginHooksConfig(configPath: string): void {
+// Subscription path: enable plugins and the superpowers@debug plugin.
+// PRI-2506: plugins-only, no hooks/plugin_hooks/trusted_hash.
+function writePluginsOnlyConfig(configPath: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(
     configPath,
     [
       '[features]',
       'plugins = true',
-      'hooks = true',
-      'plugin_hooks = true',
       '',
       '[plugins."superpowers@debug"]',
       'enabled = true',
@@ -328,7 +353,8 @@ function writePluginHooksConfig(configPath: string): void {
 
 // Api-key path: write config.toml with top-level model/model_provider BEFORE
 // any table (TOML requires root keys to lead), then the [model_providers."quorum"]
-// block, then features/plugins. The trailing trusted-hash block is appended later.
+// block, then features/plugins.
+// PRI-2506: plugins-only, no hooks/plugin_hooks/trusted_hash.
 function writeApiKeyConfig(
   configPath: string,
   model: string,
@@ -350,31 +376,12 @@ function writeApiKeyConfig(
       '',
       '[features]',
       'plugins = true',
-      'hooks = true',
-      'plugin_hooks = true',
       '',
       '[plugins."superpowers@debug"]',
       'enabled = true',
       '',
     ].join('\n'),
   );
-}
-
-// Append `[hooks.state."<key>"]\ntrusted_hash = "<hash>"` to config.toml,
-// TOML-escaping both values.
-function appendTrustedHook(
-  configPath: string,
-  key: string,
-  currentHash: string,
-): void {
-  const existing = readFileSync(configPath, 'utf8');
-  const block = [
-    '',
-    `[hooks.state."${tomlBasicString(key)}"]`,
-    `trusted_hash = "${tomlBasicString(currentHash)}"`,
-    '',
-  ].join('\n');
-  writeFileSync(configPath, existing + block);
 }
 
 function tomlBasicString(value: string): string {

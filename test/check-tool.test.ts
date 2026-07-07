@@ -14,6 +14,8 @@ import { negate, runVerb } from '../src/check/dispatch.ts';
 import type { CheckContext } from '../src/check/fs-verbs.ts';
 import {
   verbAssertCheckoutClean,
+  verbCodexNativeHookConfigured,
+  verbCodexSessionStartHookExecutes,
   verbCommandSucceeds,
   verbFileContains,
   verbFileExists,
@@ -614,4 +616,158 @@ test('E2E: prototype name via check-tool exits non-zero', () => {
     encoding: 'utf8',
   });
   expect(proc.status).not.toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// PRI-2506: codex hook-less check verbs
+// ---------------------------------------------------------------------------
+
+test('codex-native-hook-configured: pass when staged manifest has hooks:{}, skills, and plugin enabled', () => {
+  const wd = workdir();
+  const configDir = join(wd, '.codex');
+  const pluginRoot = join(
+    configDir,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  mkdirSync(join(pluginRoot, '.codex-plugin'), { recursive: true });
+  mkdirSync(join(pluginRoot, 'skills'), { recursive: true });
+  writeFileSync(
+    join(pluginRoot, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ skills: './skills/', hooks: {} }),
+  );
+  const configToml = [
+    '[features]',
+    'plugins = true',
+    '',
+    '[plugins."superpowers@debug"]',
+    'enabled = true',
+    '',
+  ].join('\n');
+  writeFileSync(join(configDir, 'config.toml'), configToml);
+  const ctx = {
+    cwd: wd,
+    env: (k: string) =>
+      k === 'QUORUM_AGENT_CONFIG_DIR' ? configDir : undefined,
+  };
+  const outcome = verbCodexNativeHookConfigured([], ctx);
+  expect(outcome.passed).toBe(true);
+  expect(outcome.detail).toContain('hook-less');
+  expect(outcome.detail).toContain('native skill discovery');
+});
+
+test('codex-native-hook-configured: fail when plugin not enabled', () => {
+  const wd = workdir();
+  const configDir = join(wd, '.codex');
+  const pluginRoot = join(
+    configDir,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  mkdirSync(join(pluginRoot, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(pluginRoot, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ skills: './skills/', hooks: {} }),
+  );
+  const configToml = '[features]\nplugins = true\n';
+  writeFileSync(join(configDir, 'config.toml'), configToml);
+  const ctx = {
+    cwd: wd,
+    env: (k: string) =>
+      k === 'QUORUM_AGENT_CONFIG_DIR' ? configDir : undefined,
+  };
+  const outcome = verbCodexNativeHookConfigured([], ctx);
+  expect(outcome.passed).toBe(false);
+  expect(outcome.detail).toContain('plugin not enabled');
+});
+
+test('codex-native-hook-configured: fail when manifest hooks is non-empty', () => {
+  const wd = workdir();
+  const configDir = join(wd, '.codex');
+  const pluginRoot = join(
+    configDir,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  mkdirSync(join(pluginRoot, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(pluginRoot, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ skills: './skills/', hooks: { SessionStart: [] } }),
+  );
+  const configToml = [
+    '[features]',
+    'plugins = true',
+    '',
+    '[plugins."superpowers@debug"]',
+    'enabled = true',
+    '',
+  ].join('\n');
+  writeFileSync(join(configDir, 'config.toml'), configToml);
+  const ctx = {
+    cwd: wd,
+    env: (k: string) =>
+      k === 'QUORUM_AGENT_CONFIG_DIR' ? configDir : undefined,
+  };
+  const outcome = verbCodexNativeHookConfigured([], ctx);
+  expect(outcome.passed).toBe(false);
+  expect(outcome.detail).toContain('hooks');
+});
+
+test('codex-native-hook-configured: fail when manifest missing skills', () => {
+  const wd = workdir();
+  const configDir = join(wd, '.codex');
+  const pluginRoot = join(
+    configDir,
+    'plugins',
+    'cache',
+    'debug',
+    'superpowers',
+    'local',
+  );
+  mkdirSync(join(pluginRoot, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(pluginRoot, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ hooks: {} }),
+  );
+  const configToml = [
+    '[features]',
+    'plugins = true',
+    '',
+    '[plugins."superpowers@debug"]',
+    'enabled = true',
+    '',
+  ].join('\n');
+  writeFileSync(join(configDir, 'config.toml'), configToml);
+  const ctx = {
+    cwd: wd,
+    env: (k: string) =>
+      k === 'QUORUM_AGENT_CONFIG_DIR' ? configDir : undefined,
+  };
+  const outcome = verbCodexNativeHookConfigured([], ctx);
+  expect(outcome.passed).toBe(false);
+  expect(outcome.detail).toContain('skills');
+});
+
+test('codex-session-start-hook-executes: always pass with note (no bootstrap by design)', () => {
+  const wd = workdir();
+  const configDir = join(wd, '.codex');
+  mkdirSync(configDir, { recursive: true });
+  const ctx = {
+    cwd: wd,
+    env: (k: string) =>
+      k === 'QUORUM_AGENT_CONFIG_DIR' ? configDir : undefined,
+  };
+  const outcome = verbCodexSessionStartHookExecutes([], ctx);
+  expect(outcome.passed).toBe(true);
+  expect(outcome.detail).toContain('hook-less');
+  expect(outcome.detail).toContain('no SessionStart bootstrap');
 });

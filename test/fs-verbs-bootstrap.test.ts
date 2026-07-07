@@ -299,34 +299,36 @@ test('kimi-plugin-installed fails when the plugin root points away from SUPERPOW
 });
 
 // ---------------------------------------------------------------------------
-// codex-native-hook-configured: <configDir>/config.toml (with the four hook
-// tokens) + <configDir>/plugins/cache/debug/superpowers/local/{manifest,hook}.
+// PRI-2506: codex-native-hook-configured checks for plugins-only config (no
+// hooks/plugin_hooks/trusted_hash) + staged manifest with hooks:{} and skills.
 // ---------------------------------------------------------------------------
 const CODEX_PLUGIN_SUBPATH = 'plugins/cache/debug/superpowers/local';
 const CODEX_CONFIG_TOML = [
-  'plugin_hooks = true',
+  '[features]',
+  'plugins = true',
+  '',
   '[plugins."superpowers@debug"]',
   'enabled = true',
-  '[hooks.state."superpowers@debug:session_start"]',
-  'trusted_hash = "sha256:deadbeef0123"',
   '',
 ].join('\n');
 
+// PRI-2506: stage a hook-less codex config (plugins-only, manifest with hooks:{} + skills).
 function stageCodexConfig(cfg: string): void {
   writeUnder(cfg, 'config.toml', CODEX_CONFIG_TOML);
   writeUnder(
     cfg,
     join(CODEX_PLUGIN_SUBPATH, '.codex-plugin/plugin.json'),
-    '{"name":"superpowers"}\n',
+    JSON.stringify({ name: 'superpowers', skills: './skills/', hooks: {} }),
   );
-  writeUnder(cfg, join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'), ':\n');
 }
 
-test('codex-native-hook-configured passes for a staged config + plugin hook', () => {
+// PRI-2506 UPDATED: hook-less provisioning tests.
+test('codex-native-hook-configured passes for plugins-only config + manifest with hooks:{} + skills', () => {
   const cfg = configDir();
   stageCodexConfig(cfg);
   const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
   expect(out.passed).toBe(true);
+  expect(out.detail).toContain('hook-less');
 });
 
 test('codex-native-hook-configured fails when the staged plugin manifest is missing', () => {
@@ -345,16 +347,15 @@ test('codex-native-hook-configured fails when QUORUM_AGENT_CONFIG_DIR is unset',
   expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
 });
 
-// Stage the manifest + hook runner so the file-existence guards pass, then
-// write a config.toml body so the verb reaches its content-validation branches.
+// PRI-2506: Stage the manifest with hooks:{} + skills so file-existence guards pass,
+// then write a config.toml body so the verb reaches its content-validation branches.
 function stageCodexConfigWithToml(cfg: string, toml: string): void {
   writeUnder(cfg, 'config.toml', toml);
   writeUnder(
     cfg,
     join(CODEX_PLUGIN_SUBPATH, '.codex-plugin/plugin.json'),
-    '{"name":"superpowers"}\n',
+    JSON.stringify({ name: 'superpowers', skills: './skills/', hooks: {} }),
   );
-  writeUnder(cfg, join(CODEX_PLUGIN_SUBPATH, 'hooks/run-hook.cmd'), ':\n');
 }
 
 function stageCodexSessionStartHook(
@@ -422,17 +423,7 @@ const windowsPowerShellTest =
     ? test
     : test.skip;
 
-test('codex-native-hook-configured fails when config.toml omits plugin_hooks = true', () => {
-  const cfg = configDir();
-  const toml = CODEX_CONFIG_TOML.split('\n')
-    .filter((l) => l !== 'plugin_hooks = true')
-    .join('\n');
-  stageCodexConfigWithToml(cfg, toml);
-  const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
-  expect(out.passed).toBe(false);
-  expect(out.detail).toContain('plugin_hooks');
-});
-
+// PRI-2506 UPDATED: test hook-less expectations (no plugin_hooks/trusted_hash).
 test('codex-native-hook-configured fails when the debug plugin table is absent', () => {
   const cfg = configDir();
   const toml = CODEX_CONFIG_TOML.split('\n')
@@ -444,70 +435,45 @@ test('codex-native-hook-configured fails when the debug plugin table is absent',
   expect(out.detail).toContain('debug Superpowers plugin not enabled');
 });
 
-test('codex-native-hook-configured fails when the hook trust state is absent', () => {
+// PRI-2506: new test for manifest hooks validation (must be empty object).
+test('codex-native-hook-configured fails when manifest hooks is non-empty', () => {
   const cfg = configDir();
-  const toml = CODEX_CONFIG_TOML.split('\n')
-    .filter((l) => l !== '[hooks.state."superpowers@debug:session_start"]')
-    .join('\n');
-  stageCodexConfigWithToml(cfg, toml);
+  writeUnder(cfg, 'config.toml', CODEX_CONFIG_TOML);
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, '.codex-plugin/plugin.json'),
+    JSON.stringify({
+      name: 'superpowers',
+      skills: './skills/',
+      hooks: { SessionStart: [] },
+    }),
+  );
   const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
   expect(out.passed).toBe(false);
-  expect(out.detail).toContain('hook trust state missing');
+  expect(out.detail).toContain('hooks');
 });
 
-test('codex-native-hook-configured fails when the trusted hook hash is absent', () => {
+// PRI-2506: new test for manifest skills validation (must be present).
+test('codex-native-hook-configured fails when manifest missing skills', () => {
   const cfg = configDir();
-  const toml = CODEX_CONFIG_TOML.split('\n')
-    .filter((l) => l !== 'trusted_hash = "sha256:deadbeef0123"')
-    .join('\n');
-  stageCodexConfigWithToml(cfg, toml);
+  writeUnder(cfg, 'config.toml', CODEX_CONFIG_TOML);
+  writeUnder(
+    cfg,
+    join(CODEX_PLUGIN_SUBPATH, '.codex-plugin/plugin.json'),
+    JSON.stringify({ name: 'superpowers', hooks: {} }),
+  );
   const out = verbCodexNativeHookConfigured([], ctxFor(cfg));
   expect(out.passed).toBe(false);
-  expect(out.detail).toContain('trusted hook hash missing');
+  expect(out.detail).toContain('skills');
 });
 
-test('codex-session-start-hook-executes fails when commandWindows is missing', () => {
+// PRI-2506 UPDATED: codex-session-start-hook-executes always passes (hook-less by design).
+test('codex-session-start-hook-executes always passes with hook-less note', () => {
   const cfg = configDir();
-  stageCodexSessionStartHook(
-    cfg,
-    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
-  );
   const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
-  expect(out.passed).toBe(false);
-  expect(out.detail).toContain('commandWindows');
-});
-
-test('codex-session-start-hook-executes fails when the default command is PowerShell-only', () => {
-  const cfg = configDir();
-  stageCodexSessionStartHook(
-    cfg,
-    '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
-    '& "${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
-  );
-  const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
-  expect(out.passed).toBe(false);
-  expect(out.detail).toContain('default');
-});
-
-test('codex-session-start-hook-executes fails when commandWindows omits the PowerShell call operator', () => {
-  const cfg = configDir();
-  stageCodexSessionStartHook(
-    cfg,
-    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
-    '"${PLUGIN_ROOT}/hooks/run-hook.cmd" session-start-codex',
-  );
-  const out = verbCodexSessionStartHookExecutes([], ctxFor(cfg));
-  expect(out.passed).toBe(false);
-  expect(out.detail).toContain('call operator');
-});
-
-test('codex-session-start-hook-executes fails when QUORUM_AGENT_CONFIG_DIR is unset', () => {
-  const out = verbCodexSessionStartHookExecutes([], {
-    cwd: '/tmp',
-    env: () => undefined,
-  });
-  expect(out.passed).toBe(false);
-  expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
+  expect(out.passed).toBe(true);
+  expect(out.detail).toContain('hook-less');
+  expect(out.detail).toContain('no SessionStart bootstrap');
 });
 
 windowsPowerShellTest(

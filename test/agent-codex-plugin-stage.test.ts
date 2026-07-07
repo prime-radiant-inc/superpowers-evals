@@ -97,6 +97,7 @@ const PLUGIN_ROOT_SEGMENTS = [
   'local',
 ] as const;
 
+// PRI-2506 UPDATED: stages skills (hooks dir is still copied but manifest hooks:{}).
 test('provision stages skills and hooks and drops the whole evals subtree', () => {
   const { home, cleanup } = makeTempHome();
   const root = mkdtempSync(join(tmpdir(), 'codex-sproot-'));
@@ -104,6 +105,12 @@ test('provision stages skills and hooks and drops the whole evals subtree', () =
   writeFileSync(join(root, 'skills', 'a-skill.md'), '# skill\n');
   mkdirSync(join(root, 'hooks'), { recursive: true });
   writeFileSync(join(root, 'hooks', 'session-start'), '#!/bin/sh\n');
+  // PRI-2506: manifest with skills field is required.
+  mkdirSync(join(root, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(root, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'superpowers', skills: './skills/', hooks: null }),
+  );
   // A realistic evals/ submodule with the artifacts that must never be staged.
   mkdirSync(join(root, 'evals', 'results', 'deep'), { recursive: true });
   writeFileSync(
@@ -123,6 +130,8 @@ test('provision stages skills and hooks and drops the whole evals subtree', () =
       expect(existsSync(join(pluginRoot, 'hooks', 'session-start'))).toBe(true);
       // The entire evals/ subtree is excluded.
       expect(existsSync(join(pluginRoot, 'evals'))).toBe(false);
+      // PRI-2506: Zero app-server calls (hook-less).
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -131,10 +140,17 @@ test('provision stages skills and hooks and drops the whole evals subtree', () =
   }
 });
 
+// PRI-2506 UPDATED: add manifest, expect zero app-server calls.
 test('provision succeeds when the out-root resolves UNDER SUPERPOWERS_ROOT', () => {
   const root = mkdtempSync(join(tmpdir(), 'codex-selfcopy-'));
   mkdirSync(join(root, 'skills'), { recursive: true });
   writeFileSync(join(root, 'skills', 'a-skill.md'), '# skill\n');
+  // PRI-2506: manifest with skills field.
+  mkdirSync(join(root, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(root, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'superpowers', skills: './skills/', hooks: null }),
+  );
   // The run home (and thus pluginRoot) lives UNDER the superpowers root — the
   // default results/ out-root. The shared plugin-stage helper skips the evals
   // subtree that holds the dest, so the copy never recurses into itself.
@@ -155,8 +171,8 @@ test('provision succeeds when the out-root resolves UNDER SUPERPOWERS_ROOT', () 
       expect(existsSync(join(pluginRoot, 'skills', 'a-skill.md'))).toBe(true);
       // The evals subtree that contains pluginRoot is never staged.
       expect(existsSync(join(pluginRoot, 'evals'))).toBe(false);
-      // Provisioning ran to completion, reaching the app-server hook read.
-      expect(appServer.calls.length).toBe(1);
+      // PRI-2506: Zero app-server calls (hook-less).
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -164,11 +180,18 @@ test('provision succeeds when the out-root resolves UNDER SUPERPOWERS_ROOT', () 
   }
 });
 
+// PRI-2506 UPDATED: add manifest, expect zero app-server calls.
 test('provision succeeds when out-root is disjoint from SUPERPOWERS_ROOT', () => {
   const { home, cleanup } = makeTempHome();
   const root = mkdtempSync(join(tmpdir(), 'codex-disjoint-'));
   mkdirSync(join(root, 'skills'), { recursive: true });
   writeFileSync(join(root, 'skills', 'a-skill.md'), '# skill\n');
+  // PRI-2506: manifest with skills field.
+  mkdirSync(join(root, '.codex-plugin'), { recursive: true });
+  writeFileSync(
+    join(root, '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'superpowers', skills: './skills/', hooks: null }),
+  );
   const authParent = mkdtempSync(join(tmpdir(), 'codex-auth-'));
   const appServer = new FakeAppServerClient();
 
@@ -179,7 +202,8 @@ test('provision succeeds when out-root is disjoint from SUPERPOWERS_ROOT', () =>
       expect(() =>
         agent.provision(home, new FakeCommandRunner(), SUBSCRIPTION_CRED),
       ).not.toThrow();
-      expect(appServer.calls.length).toBe(1);
+      // PRI-2506: Zero app-server calls (hook-less).
+      expect(appServer.calls.length).toBe(0);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

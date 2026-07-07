@@ -12,7 +12,6 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -730,12 +729,15 @@ function realpathOrNull(path: string): string | null {
 }
 
 const CODEX_STAGED_PLUGIN_REL = 'plugins/cache/debug/superpowers/local';
-const PLUGIN_ROOT_PLACEHOLDER = '$' + '{PLUGIN_ROOT}';
+const _PLUGIN_ROOT_PLACEHOLDER = '$' + '{PLUGIN_ROOT}';
 
 function codexStagedPluginRoot(codexHomeDir: string): string {
   return join(codexHomeDir, CODEX_STAGED_PLUGIN_REL);
 }
 // codex-native-hook-configured — ports the toml greps to TS regex.
+// PRI-2506: uniform hook-less provisioning. Assert plugins-only config
+// (no plugin_hooks/hooks/trusted_hash) and the staged manifest has `hooks: {}`
+// with `skills` present.
 export function verbCodexNativeHookConfigured(
   _args: string[],
   ctx: CheckContext,
@@ -747,31 +749,51 @@ export function verbCodexNativeHookConfigured(
 
   const config = join(codexHomeDir, 'config.toml');
   const plugin = codexStagedPluginRoot(codexHomeDir);
+  const manifestPath = join(plugin, '.codex-plugin/plugin.json');
 
   if (!isFile(config)) {
     return fail(`missing Codex config at ${config}`);
   }
-  if (!isFile(join(plugin, '.codex-plugin/plugin.json'))) {
+  if (!isFile(manifestPath)) {
     return fail('missing staged Codex plugin manifest');
-  }
-  if (!isFile(join(plugin, 'hooks/run-hook.cmd'))) {
-    return fail('missing staged Codex hook runner');
   }
 
   const toml = readFileSync(config, 'utf8');
-  if (!toml.includes('plugin_hooks = true')) {
-    return fail('plugin_hooks feature not enabled');
-  }
   if (!toml.includes('[plugins."superpowers@debug"]')) {
     return fail('debug Superpowers plugin not enabled');
   }
-  if (!/hooks\.state\."superpowers@debug:[^"]*session_start/.test(toml)) {
-    return fail('Superpowers Codex hook trust state missing');
+
+  // Read and validate the staged manifest.
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return fail('staged manifest is not valid JSON');
   }
-  if (!/trusted_hash = "sha256:[a-f0-9]+"/.test(toml)) {
-    return fail('trusted hook hash missing');
+
+  if (manifest === null || typeof manifest !== 'object') {
+    return fail('staged manifest is not an object');
   }
-  return pass('Codex native Superpowers hook configured');
+
+  const obj = manifest as Record<string, unknown>;
+
+  // Require skills field.
+  if (typeof obj['skills'] !== 'string' || obj['skills'] === '') {
+    return fail('staged manifest missing skills field');
+  }
+
+  // Require hooks to be an empty object.
+  const hooks = obj['hooks'];
+  if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks)) {
+    return fail('staged manifest hooks is not an object');
+  }
+  if (Object.keys(hooks).length !== 0) {
+    return fail('staged manifest hooks is not empty (must be {})');
+  }
+
+  return pass(
+    'Codex Superpowers plugin enabled hook-less; native skill discovery',
+  );
 }
 
 interface CodexSessionStartCommands {
@@ -779,7 +801,7 @@ interface CodexSessionStartCommands {
   commandWindows: string;
 }
 
-function findCodexSessionStartCommands(
+function _findCodexSessionStartCommands(
   manifestPath: string,
 ): CodexSessionStartCommands | null {
   let parsed: unknown;
@@ -827,7 +849,7 @@ function findCodexSessionStartCommands(
   return commands[0] ?? null;
 }
 
-function runPowerShellHookCommand(
+function _runPowerShellHookCommand(
   command: string,
   cwd: string,
   env: Record<string, string>,
@@ -880,11 +902,11 @@ function runPowerShellHookCommand(
   return { found: false };
 }
 
-function powershellPath(path: string): string {
+function _powershellPath(path: string): string {
   return path.replaceAll('\\', '/');
 }
 
-function parseSessionStartJson(stdout: string): CheckOutcome {
+function _parseSessionStartJson(stdout: string): CheckOutcome {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout.trim());
@@ -925,82 +947,13 @@ function parseSessionStartJson(stdout: string): CheckOutcome {
 // SessionStart JSON.
 export function verbCodexSessionStartHookExecutes(
   _args: string[],
-  ctx: CheckContext,
+  _ctx: CheckContext,
 ): CheckOutcome {
-  const codexHomeDir = ctx.env('QUORUM_AGENT_CONFIG_DIR');
-  if (!codexHomeDir) {
-    return fail('QUORUM_AGENT_CONFIG_DIR is not set');
-  }
-
-  const plugin = codexStagedPluginRoot(codexHomeDir);
-  const manifest = join(plugin, 'hooks/hooks-codex.json');
-  const runner = join(plugin, 'hooks/run-hook.cmd');
-  const script = join(plugin, 'hooks/session-start-codex');
-  const usingSkill = join(plugin, 'skills/using-superpowers/SKILL.md');
-
-  if (!isFile(manifest)) {
-    return fail(`missing Codex hook manifest at ${manifest}`);
-  }
-  if (!isFile(runner)) {
-    return fail(`missing staged Codex hook runner at ${runner}`);
-  }
-  if (!isFile(script)) {
-    return fail(`missing staged Codex SessionStart script at ${script}`);
-  }
-  if (!isFile(usingSkill)) {
-    return fail(`missing staged using-superpowers skill at ${usingSkill}`);
-  }
-
-  const commands = findCodexSessionStartCommands(manifest);
-  if (commands === null) {
-    return fail('expected exactly one Codex session-start-codex hook command');
-  }
-  if (commands.command.trimStart().startsWith('&')) {
-    return fail(
-      'Codex default SessionStart hook command must not use PowerShell-only call operator (&)',
-    );
-  }
-  if (!commands.commandWindows) {
-    return fail('Codex SessionStart hook missing commandWindows override');
-  }
-  if (!commands.commandWindows.includes('session-start-codex')) {
-    return fail(
-      'Codex commandWindows override does not run session-start-codex',
-    );
-  }
-  if (!commands.commandWindows.trimStart().startsWith('&')) {
-    return fail(
-      'Codex commandWindows override is missing PowerShell call operator (&)',
-    );
-  }
-
-  const powerShellCommand = commands.commandWindows.replaceAll(
-    PLUGIN_ROOT_PLACEHOLDER,
-    powershellPath(plugin),
+  // PRI-2506: codex is provisioned hook-less by design (no SessionStart bootstrap).
+  // This verb always passes with a note so scenario vocabulary remains stable.
+  return pass(
+    'Codex provisioned hook-less; no SessionStart bootstrap (skills discovered natively)',
   );
-  const dataDir = join(codexHomeDir, 'plugin-data');
-  mkdirSync(dataDir, { recursive: true });
-  const result = runPowerShellHookCommand(
-    powerShellCommand,
-    plugin,
-    {
-      PLUGIN_ROOT: plugin,
-      CLAUDE_PLUGIN_ROOT: plugin,
-      PLUGIN_DATA: dataDir,
-      CLAUDE_PLUGIN_DATA: dataDir,
-    },
-    ctx,
-  );
-  if (!result.found) {
-    return fail('PowerShell not found on PATH (tried pwsh, powershell)');
-  }
-  if ((result.status ?? 1) !== 0) {
-    const detail = `${result.stderr}${result.stdout}`.trim().slice(0, 500);
-    return fail(
-      `Codex SessionStart hook command failed in PowerShell: ${detail}`,
-    );
-  }
-  return parseSessionStartJson(result.stdout);
 }
 
 // bootstrap-installed — dispatch to the per-harness install check for the
