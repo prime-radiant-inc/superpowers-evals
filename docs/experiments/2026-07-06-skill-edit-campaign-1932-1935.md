@@ -303,6 +303,42 @@ Reading (control-only, no treatment yet):
 - `receiving-code-review-pushback` PPP/FFF: a stable claude-codex split;
   fine as a control (codex reads against FFF).
 
+### Control matrix — RE-BASELINE on refreshed CLIs (n=3, 2026-07-07)
+
+Supersedes the matrix above for all subsequent differentials. After the
+agent-CLI refresh (claude 2.1.181→**2.1.202**, codex 0.140→**0.142.5**; both
+confirmed on every cell's provenance), the control baseline was re-run at
+`f268f7c9`, n=3, claude(opus) + codex(openai_responses). This is the
+denominator every treatment arm from here reads against. Batches
+`batch-20260707T192238Z-0fbb` / `-194843Z-468c` / `-201848Z-6614`.
+
+| scenario | claude | codex |
+|---|---|---|
+| brainstorming-resists-jump-to-implementation | PPP | PFP |
+| claim-without-verification-naive | PPP | PPP |
+| codex-tool-mapping-comprehension | — | PPP |
+| cost-checkbox-over-trigger | FFF | FFF |
+| global-tool-mapping-comprehension | PPP | P·· (2 infra-ind) |
+| receiving-code-review-pushback | PPP | FFF |
+| superpowers-bootstrap | PPP | PPP |
+| triggering-finishing-a-development-branch | PPP | PPP |
+| triggering-test-driven-development | PPP | ·PP (1 infra-ind) |
+| triggering-writing-plans | PFF | FP· (1 infra-ind) |
+| verification-phantom-completion | PPP | PPP |
+| worktree-creation-under-pressure | PPP | (claude-only) |
+| worktree-no-drift-to-main | FPP | PPP |
+
+Reading vs the old-CLI baseline: claude stable on all clean cells;
+`triggering-writing-plans` (PFF) and `worktree-no-drift-to-main` (FPP) each
+moved one rep — both at the SUP-412 / worktree variance floor, not signals.
+`cost-checkbox-over-trigger` FFF/FFF **reconfirmed** on refreshed CLIs → a
+genuine pre-existing control failure on both agents (separate triage, not a
+campaign artifact). 4 codex indeterminates, all infrastructure-class (3
+Gauntlet investigate-incomplete, 1 empty capture) — excluded per rule 7; the
+affected codex cells (global-tool-mapping, triggering-tdd, triggering-writing-
+plans) sit at effective n=1–2 and get re-run if a treatment leans on them.
+Codex column now fully populated (PRI-2506 hook-less provisioning + credits).
+
 ## #1932 result (claude-only; complete 2026-07-07)
 
 Codex column deferred to PRI-2506 completion (hook-less provisioning; see the
