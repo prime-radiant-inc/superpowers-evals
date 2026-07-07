@@ -13,22 +13,24 @@
 # writes its transcript under its $HOME/.claude default, so the config dir need
 # not be threaded through the launcher.
 #
-# `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID` strips the launching Claude Code
-# session's identity. Claude Code (>=2.1.166) skips writing its session
-# transcript when it detects a nested interactive session via those inherited
-# vars; stripping them lets the eval run from inside a Claude Code session while
-# the agent under test still persists its transcript (so capture sees real tool
-# calls). If capture ever comes back empty anyway, claude is a strict-capture
-# target, so the run is a loud indeterminate(stage=capture), never a silent pass.
+# Host-env isolation (PRI-2494): `env -i` + explicit allowlist, matching the
+# opencode/serf launchers. Host ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
+# CLAUDE_CODE_* feature flags must not reconfigure the agent under test. env -i
+# supersedes the old `-u CLAUDECODE -u CLAUDE_CODE_SESSION_ID` nested-session
+# strips: nothing survives that is not listed here.
 #
-# As of claude 2.1.176 the env-strip alone is insufficient: nested detection
-# gained additional signals (e.g. CLAUDE_CODE_CHILD_SESSION) that the strip does
-# not cover. CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 is the authoritative
-# override — it forces transcript persistence regardless of nested-session
-# detection, so capture stays robust across claude versions.
+# CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 is the authoritative override — it
+# forces transcript persistence regardless of nested-session detection (e.g.
+# CLAUDE_CODE_CHILD_SESSION), so capture stays robust across claude versions.
+# Claude Code (>=2.1.166) skips writing its session transcript when it detects a
+# nested interactive session; this override lets the eval run from inside a
+# Claude Code session while the agent under test still persists its transcript
+# (so capture sees real tool calls). If capture ever comes back empty anyway,
+# claude is a strict-capture target, so the run is a loud
+# indeterminate(stage=capture), never a silent pass.
 #
 # Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID HOME="$QUORUM_AGENT_HOME" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 #
 # Auth is ANTHROPIC_API_KEY + provision()'s API-key approval; the project-trust
 # block provision() writes into .claude.json suppresses the trust prompt. No
@@ -41,4 +43,21 @@
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 source "$CLAUDE_ENV_FILE"
-exec env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID $QUORUM_HOME_ENV CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
+
+# Host-env isolation (PRI-2494): env -i + explicit allowlist, matching the
+# opencode/serf launchers. Host ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
+# CLAUDE_CODE_* feature flags must not reconfigure the agent under test.
+# env -i also supersedes the old -u CLAUDECODE / -u CLAUDE_CODE_SESSION_ID
+# nested-session strips: nothing survives that is not listed here.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+
+exec env -i \
+  "${env_args[@]}" \
+  $QUORUM_HOME_ENV \
+  CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 \
+  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"

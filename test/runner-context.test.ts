@@ -100,9 +100,9 @@ test('populateContextDir substitutes every placeholder in the claude context', (
   expect(howto).toContain(join(ctxDir, 'launch-agent'));
 
   // Nested-session capture defenses survive substitution (oracle da4846d/ea6a231).
-  // The launcher both strips the nested-detection env (env -u …) AND forces
-  // transcript persistence; losing either empties capture -> indeterminate(capture).
-  expect(launcher).toContain('env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID');
+  // The launcher uses env -i (superseding the old -u strips) and forces transcript
+  // persistence; losing either empties capture -> indeterminate(capture).
+  expect(launcher).toContain('env -i');
   expect(launcher).toContain('CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1');
 
   // Throwaway-$HOME isolation: HOME + the XDG dirs are pinned under <runDir>/home
