@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 FROM ubuntu:26.04
 
-ARG GOOSE_VERSION=1.31.1
-ARG SERF_REF=main
+ARG GOOSE_VERSION=1.41.0
+ARG SERF_REF=018e30d583f47ee52264476b48de63f4970e04c4
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -85,21 +85,21 @@ RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
   && mise --version
 
 RUN npm install -g \
-    @anthropic-ai/claude-code@2.1.181 \
-    @openai/codex@0.142.0 \
-    @google/gemini-cli@0.47.0 \
-    opencode-ai \
-    @github/copilot \
-    @factory/cli \
-    @qwen-code/qwen-code \
-    @moonshot-ai/kimi-code@0.15.0 \
-    @kilocode/cli \
-    openclaw \
-    @sourcegraph/amp \
-    cline \
-    @earendil-works/pi-coding-agent@0.80.1 \
-    pi-subagents@0.28.0 \
-    @xai-official/grok \
+    @anthropic-ai/claude-code@2.1.202 \
+    @openai/codex@0.142.5 \
+    @google/gemini-cli@0.49.0 \
+    opencode-ai@1.17.15 \
+    @github/copilot@1.0.68 \
+    @factory/cli@0.164.1 \
+    @qwen-code/qwen-code@0.19.7 \
+    @moonshot-ai/kimi-code@0.23.1 \
+    @kilocode/cli@7.4.1 \
+    openclaw@2026.6.11 \
+    @sourcegraph/amp@0.0.1783442717-g42dbc6 \
+    cline@3.0.38 \
+    @earendil-works/pi-coding-agent@0.80.3 \
+    pi-subagents@0.34.0 \
+    @xai-official/grok@0.2.87 \
   && if command -v kilocode >/dev/null 2>&1 && ! command -v kilo >/dev/null 2>&1; then ln -s "$(command -v kilocode)" /usr/local/bin/kilo; fi \
   && if command -v factory >/dev/null 2>&1 && ! command -v droid >/dev/null 2>&1; then ln -s "$(command -v factory)" /usr/local/bin/droid; fi \
   && if command -v kimi >/dev/null 2>&1 && [ "$(command -v kimi)" != /usr/local/bin/kimi ]; then ln -s "$(command -v kimi)" /usr/local/bin/kimi; fi

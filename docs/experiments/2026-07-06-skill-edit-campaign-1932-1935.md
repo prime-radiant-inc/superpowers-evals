@@ -39,6 +39,25 @@ claude 2.1.181, codex-cli 0.140.0. Gauntlet-Agent model: claude-sonnet-4-6.
 Codex credential on the appliance: `openai_responses` (subscription auth not
 seeded); claude: `opus`.
 
+**Agent-CLI refresh (2026-07-07, before the full proving run).** All appliance
+agent CLIs bumped to latest and the previously-floating npm pins frozen
+(container/Dockerfile): claude 2.1.181→2.1.202, codex 0.140→0.142.5, gemini
+0.47→0.49, kimi 0.15→0.23.1, pi 0.80.1→0.80.3, pi-subagents 0.28→0.34, goose
+1.31.1→1.41.0, serf `main`→pinned SHA, plus opencode/copilot/qwen/kilo/
+openclaw/amp/cline/grok pinned to their current latest (PRI-2493
+unpinned-instrument finding). **This resets CLI-constancy**: the frozen control
+baseline + #1932 claude arm ran on claude 2.1.181 and MUST be re-baselined on
+2.1.202 before their differentials are read against later arms. Installer-based
+CLIs (cursor-agent, hermes, mimo, sweagent, trae, mini-swe-agent) still float to
+latest at build time — pinning them is a follow-up.
+
+**Standing practice (Drew, 2026-07-07): before any big proving run, bump all
+harness CLIs to their latest versions and rebuild the appliance image**, then
+re-establish the control baseline on the refreshed image. A proving run is only
+as current as its instruments; stale CLIs make the verdict about an old agent.
+Record the exact resolved versions (provenance stamps them per run) so the
+proving run is reproducible.
+
 **Control-ref correction (2026-07-06, during baseline shakedown).** The control
 was originally pinned to `d884ae04` (v6.1.1, `origin/main` at campaign start).
 Two findings forced the move to `f268f7c9` (v6.1.0):

@@ -65,7 +65,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '@github/copilot',
     '@factory/cli',
     '@qwen-code/qwen-code',
-    '@moonshot-ai/kimi-code@0.15.0',
+    '@moonshot-ai/kimi-code@0.23.1',
     '@kilocode/cli',
     'openclaw',
     '@sourcegraph/amp',
@@ -126,7 +126,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain('hermes version');
   expect(source).toContain('mimo --version');
   expect(source).toContain('agy --version');
-  expect(source).toContain('ARG SERF_REF=main');
+  expect(source).toMatch(/ARG SERF_REF=\S+/);
   expect(source).toContain('git checkout "$SERF_REF"');
   expect(source).toContain(
     'git rev-parse HEAD > /usr/local/share/serf-source-rev',
