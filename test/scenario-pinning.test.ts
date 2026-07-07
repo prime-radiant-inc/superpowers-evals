@@ -31,6 +31,14 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'user-pref-sdd-no-strategy-prompt',
   'user-pref-no-visual-companion',
   'user-pref-no-visual-companion-control',
+  // Campaign #1934/#1935 probes: pinned to claude,codex (the campaign's two
+  // gate columns; other agents' fixture/runner behavior is unverified for these).
+  'tdd-holds-under-tests-later-pressure',
+  'verification-holds-under-just-confirm-pressure',
+  'writing-good-tests-rejects-mock-existence-assertion',
+  'writing-good-tests-no-coverage-over-correction',
+  'writing-good-tests-rejects-test-only-teardown',
+  'writing-good-tests-mock-at-right-level',
 ]);
 
 test('harness pins are exactly the explicitly intentional scenarios', () => {
