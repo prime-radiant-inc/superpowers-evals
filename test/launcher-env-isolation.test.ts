@@ -145,6 +145,6 @@ test('codex launcher: subscription path (no env file) forwards no provider key',
   });
   expect(proc.status).toBe(0);
   const env = parseEnvDump(envDump);
-  expect(env['OPENAI_API_KEY']).toBe(undefined);
+  expect(env['CODEX_PROVIDER_API_KEY']).toBe(undefined);
   expect(env['HOME']).not.toBe('/host/home');
 });
