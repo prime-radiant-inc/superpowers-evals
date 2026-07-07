@@ -1,0 +1,10 @@
+{
+  "name": "order-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Order checkout with an injected payment gateway",
+  "scripts": {
+    "test": "node --test test/orderService.test.js"
+  }
+}

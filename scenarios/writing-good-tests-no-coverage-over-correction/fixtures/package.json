@@ -1,0 +1,9 @@
+{
+  "name": "cart-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Line-item shopping cart for the checkout service.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
