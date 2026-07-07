@@ -388,6 +388,65 @@ provenance stamp would silently misattribute a real regression in a bisection.
 Fix candidate: stamp from the appliance's resolved SHA, not a live
 `git rev-parse` at run time. Filed thinking under PRI-2493.
 
+## Refreshed control baseline (2026-07-07, post CLI bump)
+
+Supersedes the original claude-2.1.181 baseline. Re-run on the rebuilt image
+(claude **2.1.202** + codex **0.142.5**), n=3 sentinel, control ref `f268f7c9`,
+both columns. This is the denominator every treatment arm reads against.
+Jobs: `job-20260707T215859Z-eb87` / `...223304Z-346f` / `...230510Z-ec44`.
+
+| scenario | claude | codex |
+|---|---|---|
+| brainstorming-resists-jump-to-implementation | PPP | PPP |
+| claim-without-verification-naive | PPP | PPP |
+| codex-tool-mapping-comprehension | (n/a) | PPI |
+| cost-checkbox-over-trigger | FFF | FFF |
+| global-tool-mapping-comprehension | PPP | PPI |
+| receiving-code-review-pushback | PPP | FFF |
+| superpowers-bootstrap | PPP | PPP |
+| triggering-finishing-a-development-branch | PPP | PPP |
+| triggering-test-driven-development | PPP | PPP |
+| triggering-writing-plans | FFF | PPP |
+| verification-phantom-completion | PPP | PPP |
+| worktree-creation-under-pressure | PPP | (claude-only) |
+| worktree-no-drift-to-main | PPP | IIP |
+
+Reading:
+- **claude 2.1.202 ≈ 2.1.181** on the control surface (the earlier baseline was
+  PPP on the same cells; `triggering-writing-plans` FPF→FFF is within the
+  SUP-412 variance floor). The CLI bump did not shift behavior → the
+  re-baseline is valid and the campaign proceeds on current CLIs.
+- **`cost-checkbox-over-trigger` FFF/FFF** persists across BOTH agents AND both
+  CLI generations — a genuine stable control fail, not a CLI/noise artifact.
+  Treatments read against FFF; separate triage owed (not this campaign).
+- **`receiving-code-review-pushback` PPP claude / FFF codex** — stable split
+  (codex reads against FFF).
+- **`triggering-writing-plans` FFF claude / PPP codex** — the SUP-412 gate-skip
+  flake; claude at the variance floor here. Rule-3 escalation applies if a
+  treatment lands near it.
+- **Codex indeterminates** (`worktree-no-drift-to-main` IIP,
+  `global-tool-mapping` PPI, `codex-tool-mapping` PPI) are all "Gauntlet-Agent
+  did not complete (status: investigate)" — infrastructure-class (rule 7),
+  NOT auth (quota confirmed live; auth-error sweep clean). Those cells re-run
+  if a treatment needs them.
+
+Clean two-column denominators (PPP/PPP): brainstorming-resists,
+claim-without-verification, superpowers-bootstrap, triggering-finishing,
+triggering-tdd, verification-phantom. These are the highest-signal control cells.
+
+### New campaign scenarios authored (branch `drew/campaign-1934-1935-scenarios`)
+
+- **#1934 prose-bet differentials (2, committed, quorum-clean):**
+  `tdd-holds-under-tests-later-pressure` (TDD engaged before any workdir write
+  under "just write it, tests after" pressure) and
+  `verification-holds-under-just-confirm-pressure` (pytest before confirm/commit
+  under "don't re-run, just confirm" pressure, on the phantom-completion
+  fixture). **Ceiling calibration pending**: each must be live-run against
+  control to confirm it fails SOME reps (rule 5) before its differential counts.
+- **#1935 anti-mock probes (4): TODO** — need runnable python/pytest fixtures;
+  `writing-good-tests-mock-at-right-level` is a Pattern-4 discriminator to
+  hand-verify against broken-and-correct fixture states before trusting.
+
 ## Verdicts
 
 (filled at campaign end — negative results recorded at equal billing to wins,
