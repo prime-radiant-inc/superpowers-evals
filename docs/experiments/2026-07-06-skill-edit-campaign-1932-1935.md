@@ -127,6 +127,28 @@ baseline gives them NO control denominator. Any non-sentinel witness used in a
 treatment arm MUST first get a paired control run at matching n on the same
 image. No treatment cell is interpreted without its control cell.
 
+**Codex column limitation (discovered at first treatment launch).** All four
+PR heads fork from `dev` (merge-base `c809093a`, whose `skills/` is identical
+to the control `f268f7c9`) — and `dev`, like `main` post-v6.1.1, has already
+**deleted `hooks/session-start-codex`** (the Codex portal-packaging rework).
+The harness at `818b975` still provisions codex via the old hook
+(`src/agents/codex-app-server.ts:255` expects exactly one SessionStart hook),
+so **codex cannot run at any of the four PR heads** — every codex cell fails
+setup ("Expected one Superpowers Codex SessionStart hook, found 0"). Verified:
+the hook exists at control, absent at all four heads; the PRs themselves touch
+zero non-skills files (the deletion is inherited from their base, not their
+edit). The hook removal is INTENTIONAL (Drew): codex CLI/app now discover
+skills natively via progressive disclosure (`"skills": "./skills/"` in the
+plugin manifest; `"hooks": {}` suppresses codex's hooks.json auto-discovery) —
+the harness is what's stale. Fix: **PRI-2506** (layout-adaptive codex
+provisioning — branch on the staged plugin manifest's `hooks` field; hook-less
+layout skips the app-server trust dance and asserts plugin-enabled +
+skills-declared instead). Until PRI-2506 lands and a codex smoke passes at a
+new-layout ref: treatment arms run **claude-only**; the codex control column
+stands as reference. Codex treatment columns are re-run after the fix (same
+image — CLI-constancy rule applies; note codex-cli 0.140.0 native-discovery
+support is unconfirmed and is an explicit PRI-2506 acceptance gate).
+
 **Known blind spots (measured nowhere; risk accepted, not hidden).**
 - #1933 push-and-create-PR: no hermetic forge; Gauntlet-graded only.
 - #1935 Mutation Check doctrine: harness cannot mutate production code post
