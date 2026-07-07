@@ -418,6 +418,19 @@ test('checkScenario accepts real verbs, not/check-transcript, helpers, and shell
   expect(problems.filter((p) => p.includes('unknown check'))).toEqual([]);
 });
 
+// PRI-2494 prototype-chain false-pass: JS prototype names must NOT lint as valid verbs.
+test('checkScenario flags JS prototype method names as unknown verbs', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  writeFileSync(
+    join(dir, 'checks.sh'),
+    'pre() {\n  git-repo\n}\npost() {\n  not toString foo\n}\n',
+  );
+  const problems = checkScenario(dir);
+  expect(problems).toContain("checks.sh:5: unknown check verb 'toString'");
+  rmSync(root, { recursive: true, force: true });
+});
+
 // The whole active corpus must stay valid: the lint is additive, zero
 // false positives on shipped scenarios.
 test('every active scenario passes the verb lint', () => {

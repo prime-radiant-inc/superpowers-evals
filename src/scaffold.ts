@@ -410,7 +410,7 @@ function lintCommandLine(s: string, lineNo: number): string[] {
     }
     return [];
   }
-  if (tok in FS_VERBS || CHECKS_SH_ALLOWED_TOKENS.has(tok)) {
+  if (Object.hasOwn(FS_VERBS, tok) || CHECKS_SH_ALLOWED_TOKENS.has(tok)) {
     return [];
   }
   return [`checks.sh:${lineNo}: unknown check verb '${tok}'`];

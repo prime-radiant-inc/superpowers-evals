@@ -585,3 +585,33 @@ test('file-exists with a trailing-** glob matches directory descendants', () => 
   mkdirSync(join(cwd, 'empty'));
   expect(verbFileExists(['empty/**'], ctx).passed).toBe(false);
 });
+
+// PRI-2494 prototype-chain false-pass: JS prototype names must NOT resolve as verbs.
+test('runVerb: prototype method names return null (toString, valueOf, constructor, etc.)', () => {
+  const ctx = ctxFor(workdir());
+  expect(runVerb('toString', [], ctx)).toBeNull();
+  expect(runVerb('valueOf', [], ctx)).toBeNull();
+  expect(runVerb('constructor', [], ctx)).toBeNull();
+  expect(runVerb('hasOwnProperty', [], ctx)).toBeNull();
+  expect(runVerb('__proto__', [], ctx)).toBeNull();
+});
+
+test('negate: prototype name as inner tool is refused, not inverted', () => {
+  const wd = workdir();
+  const r = negate(['toString', 'foo'], ctxFor(wd));
+  expect(r.refused).toBe(true);
+  expect(r.passed).toBe(false);
+  expect(r.check).toBe('not');
+  expect(r.detail).toContain('unknown inner tool: toString');
+});
+
+test('E2E: prototype name via check-tool exits non-zero', () => {
+  const wd = workdir();
+  const cli = resolve(import.meta.dir, '..', 'src', 'cli', 'check-tool.ts');
+  const proc = spawnSync('bun', ['run', cli, 'not', 'toString', 'foo'], {
+    cwd: wd,
+    env: { ...process.env, QUORUM_REPO_ROOT: REPO },
+    encoding: 'utf8',
+  });
+  expect(proc.status).not.toBe(0);
+});

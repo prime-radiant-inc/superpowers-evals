@@ -84,7 +84,7 @@ export function runVerb(
     const { calls, empty } = loadCalls();
     return transcriptOutcome(sub, subArgs, calls, empty);
   }
-  const fn = FS_VERBS[verb];
+  const fn = Object.hasOwn(FS_VERBS, verb) ? FS_VERBS[verb] : undefined;
   if (!fn) {
     return null;
   }
@@ -132,7 +132,7 @@ export function negate(args: string[], ctx: CheckContext): NegateResult {
 
   // Rule 2: a missing inner tool must not be invertible. Record under
   // `not`'s own name with a fail, and exit 1.
-  const known = inner === 'check-transcript' || inner in FS_VERBS;
+  const known = inner === 'check-transcript' || Object.hasOwn(FS_VERBS, inner);
   if (!known) {
     return {
       check: 'not',
