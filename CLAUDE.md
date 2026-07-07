@@ -54,7 +54,7 @@ Spec: `docs/superpowers/specs/2026-05-22-harness-model-design.md`.
 ## Architecture
 
 - `src/runner/` — per-run orchestration: setup, pre-checks, Gauntlet drive, capture, post-checks, verdict (`index.ts`); `context.ts`, `phase.ts`, `errors.ts` (staged `RunError`), `stopped.ts`.
-- `src/checks/` — sources `prelude.sh` (the bare-verb DSL: one shell function per FS check verb, plus `not`/`check-transcript`/`setup-helpers`, each delegating to the TS CLIs) then `checks.sh`, runs `pre()`/`post()`, collects structured check records (the verb functions emit them to `QUORUM_RECORD_SINK`).
+- `src/checks/` — sources `prelude.sh` (the bare-verb DSL: one shell function per FS check verb, plus `not`/`check-transcript`/`setup-helpers`, each delegating to the TS CLIs) then `checks.sh`, runs `pre()`/`post()`, collects structured check records (the verb functions emit them to `QUORUM_RECORD_SINK`). A crash-band verb exit (126/127/signal) anywhere in a phase aborts the phase (`set -E` ERR trap), so a broken check can never vanish from the verdict.
 - `src/composer.ts` — composes Gauntlet-Agent verdict + deterministic checks into `pass | fail | indeterminate`.
 - `src/contracts/` — zod schemas + types: `verdict.ts` (the `verdict.json` shape), `agent-config.ts`, `batch.ts`, `economics.ts`, `gauntlet.ts`, `credential.ts` (CredentialSchema — `model`, `api`, `base_url`, `auth`, `api_key_env`, `harnesses`, `max_concurrency`, `launch_spacing_seconds`, `os_support`, `compat`).
 - `src/credentials/` — credential loading (`index.ts`), resolution (`resolve.ts`: `resolveCredentialNameForAgent`, `resolveApiKey`, `limiterKey`), and `quorum check` validation (`check.ts`).
