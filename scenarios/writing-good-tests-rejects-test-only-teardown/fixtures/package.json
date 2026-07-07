@@ -1,0 +1,6 @@
+{
+  "name": "ledger-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tiny ledger used by the writing-good-tests test-only-teardown probe."
+}

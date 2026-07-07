@@ -1,0 +1,6 @@
+{
+  "name": "tool-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tool catalog used by the writing-good-tests mock-at-right-level probe."
+}
