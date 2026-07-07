@@ -284,6 +284,55 @@ Reading (control-only, no treatment yet):
 - `receiving-code-review-pushback` PPP/FFF: a stable claude-codex split;
   fine as a control (codex reads against FFF).
 
+## #1932 result (claude-only; complete 2026-07-07)
+
+Codex column deferred to PRI-2506 completion (hook-less provisioning; see the
+codex-column note above). Claude arm: sentinel treatment @ head `67f513f3` +
+paired witness control (`f268f7c9`) / treatment (`67f513f3`), n=3 each.
+
+**Sentinel treatment vs control (all PPP unless noted):**
+- 11/12 scenarios identical to control.
+- `triggering-writing-plans`: control FPF → treatment FPP (one more pass; both
+  sit at the known SUP-412 variance floor — within-noise, not a signal).
+- `cost-checkbox-over-trigger`: FFF both arms (pre-existing control fail; not
+  this PR — flagged for separate triage).
+
+**Witness differential (control → treatment):**
+| scenario | control | treatment |
+|---|---|---|
+| worktree-caller-consent-gate | PPP | PPP |
+| worktree-already-inside | PPP | PPP |
+| worktree-creation-from-main | PPP | PPP |
+| triggering-executing-plans | PPP | PPP |
+| systematic-debugging-fixes-root-cause | FFF | PFF |
+
+Reading (decision rule 2, n=3): every witness is treatment ≥ control − 1
+failure. Four stable at PPP; systematic-debugging-fixes-root-cause is FFF→PFF
+(treatment one BETTER, still at variance floor). **No regression on any #1932
+behavior.** All non-pass cells are real Gauntlet/post-check fails (not
+infrastructure indeterminates). Per rule 9, the systematic-debugging cell is a
+Gauntlet-graded fail that predates this PR (fails identically at control) — it
+is NOT a #1932 regression, and (like cost-checkbox) wants its own triage.
+
+**#1932 verdict: PASS the gate (claude).** Pure relocation held; no behavior
+lost or over-triggered. The one new witness assertion planned
+(systematic-debugging + verification-before-completion handoff) is NOT yet
+added — the existing scenario already exercises the relocation surface and the
+differential is flat, so it is optional follow-up, not gate-blocking.
+
+**Provenance-stamp bug found (record for PRI-2493).** The witness-treatment
+rep-2 batch (`job-20260707T080514Z-0902`) has all 5 runs' verdict.json
+`provenance.superpowers_rev` stamped `d884ae04` — but the appliance job record
+AND provenance sidecar both show the batch requested+resolved `67f513f3` (the
+correct treatment ref). So the runs ARE valid treatment runs; the per-run
+`superpowers_rev` field (PRI-2494, read from `SUPERPOWERS_ROOT` HEAD at run
+time) captured a stale value for that one batch — likely a checkout/HEAD race
+between the appliance advancing the ref and the run stamping it. Impact here:
+none (verdicts valid, appliance record authoritative), but a stale in-verdict
+provenance stamp would silently misattribute a real regression in a bisection.
+Fix candidate: stamp from the appliance's resolved SHA, not a live
+`git rev-parse` at run time. Filed thinking under PRI-2493.
+
 ## Verdicts
 
 (filled at campaign end — negative results recorded at equal billing to wins,
