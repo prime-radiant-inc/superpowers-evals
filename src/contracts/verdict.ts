@@ -66,5 +66,16 @@ export const FinalVerdictSchema = z.object({
   finished_at: z.string().optional(),
   credential: z.string().optional(),
   os: z.string().optional(),
+  // Best-effort provenance (PRI-2494): what was under test. Optional so old
+  // verdicts parse; every inner field is nullable (probe failures).
+  provenance: z
+    .object({
+      superpowers_rev: z.string().nullable(),
+      superpowers_dirty: z.boolean().nullable(),
+      harness_rev: z.string().nullable(),
+      agent_cli_version: z.string().nullable(),
+      gauntlet_version: z.string().nullable(),
+    })
+    .optional(),
 });
 export type FinalVerdict = z.infer<typeof FinalVerdictSchema>;

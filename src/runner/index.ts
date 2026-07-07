@@ -83,6 +83,7 @@ import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
+import { collectProvenance } from './provenance.ts';
 
 // RunnerError lives in ./errors.ts so context.ts can throw it without a
 // runner<->context import cycle. Re-exported here so it is part of this module's
@@ -851,6 +852,18 @@ export async function runScenario(
       error: { stage, message },
     });
   }
+  // Best-effort provenance stamp (PRI-2494). The binary name comes from the
+  // agent yaml when it loads; a broken yaml just means a null CLI version.
+  let agentBinary: string | null = null;
+  try {
+    agentBinary = loadAgentConfig(a.codingAgentsDir, a.codingAgent).binary;
+  } catch {
+    agentBinary = null;
+  }
+  const provenance = collectProvenance({
+    repoRoot: repoRoot(),
+    agentBinary,
+  });
   const identified: FinalVerdict = {
     ...verdict,
     scenario,
@@ -859,6 +872,7 @@ export async function runScenario(
     finished_at: new Date().toISOString(),
     credential: credentialName ?? 'none',
     os: a.os ?? 'linux',
+    provenance,
   };
   writeFileSync(
     join(runDir, 'verdict.json'),

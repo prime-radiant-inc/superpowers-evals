@@ -559,7 +559,9 @@ test('not-inverted checks still flow through a trapped phase', async () => {
 
 test('crash stderr is captured for the final_reason hint', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
-  const checksSh = checksShWith('pre() {\n  no-such-verb-xyz\n}\npost() { :; }\n');
+  const checksSh = checksShWith(
+    'pre() {\n  no-such-verb-xyz\n}\npost() { :; }\n',
+  );
   const { exitCode, stderr } = await runPhase({
     checksSh,
     phase: 'pre',

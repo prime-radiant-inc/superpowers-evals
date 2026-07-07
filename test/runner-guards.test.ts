@@ -197,3 +197,16 @@ test('A-launch-cwd-sentinel: bogus .quorum-launch-cwd path -> runner error', asy
     else process.env['PATH'] = prevPath;
   }
 });
+
+// PRI-2494: even a guard-tripped (setup-indeterminate) verdict carries the
+// provenance block — the stamp lives at the single identity site.
+test('verdict.json carries a provenance block with the harness rev', async () => {
+  const scenarioDir = makeScenarioDir({ omitChecks: true });
+  const { runDir } = await runGuard({ scenarioDir });
+  const persisted = JSON.parse(
+    readFileSync(join(runDir, 'verdict.json'), 'utf8'),
+  );
+  expect(persisted.provenance).toBeDefined();
+  expect(typeof persisted.provenance.harness_rev).toBe('string');
+  expect(persisted.provenance.harness_rev.length).toBeGreaterThan(7);
+});
