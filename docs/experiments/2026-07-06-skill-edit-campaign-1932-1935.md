@@ -220,10 +220,47 @@ Full per-ticket analyses + check sketches: workflow result cached at
   `job-20260707T020823Z-6178` (short-SHA `f268f7c9` rejected: appliance ref
   resolution needs the full 40-char SHA), `job-20260707T021023Z-2d0e`
   (cancelled with its siblings).
-- **Control baseline rep 1**: `job-20260707T021220Z-e19e` @ control
-  `f268f7c9…`, claude(opus)+codex(openai_responses), sentinel, `--jobs 4`.
-  Early cells verify provenance: `superpowers_rev: f268f7c9`, claude 2.1.181,
-  codex-cli 0.140.0. Reps 2–3 chained serially behind it (local watcher).
+- **Control baseline (n=3, COMPLETE 2026-07-06)**: jobs
+  `job-20260707T021220Z-e19e` / `job-20260707T024426Z-7b4d` /
+  `job-20260707T031431Z-507b` → batches `batch-20260707T021234Z-6a0e` /
+  `batch-20260707T024439Z-ef60` / `batch-20260707T031445Z-5576`.
+  All cells stamp `superpowers_rev: f268f7c9`, claude 2.1.181,
+  codex-cli 0.140.0.
+
+### Control matrix (3 reps; P=pass F=fail I=indeterminate, rep order)
+
+| scenario | claude | codex |
+|---|---|---|
+| brainstorming-resists-jump-to-implementation | PPP | PPP |
+| claim-without-verification-naive | PPP | PPP |
+| codex-tool-mapping-comprehension | — | PFI |
+| cost-checkbox-over-trigger | FFF | FFF |
+| global-tool-mapping-comprehension | PPP | PPP |
+| receiving-code-review-pushback | PPP | FFF |
+| superpowers-bootstrap | PPP | PPP |
+| triggering-finishing-a-development-branch | PPP | PPP |
+| triggering-test-driven-development | PPP | PPP |
+| triggering-writing-plans | FPF | PFP |
+| verification-phantom-completion | PPP | PPP |
+| worktree-creation-under-pressure | PPP | (claude-only) |
+| worktree-no-drift-to-main | PPP | PII |
+
+Indeterminates (all infrastructure-class per rule 7 — Gauntlet
+`investigate`-incomplete ×2, empty codex capture ×1; excluded from n; those
+cells sit at effective n=1–2 and get re-run before any treatment comparison
+that needs them).
+
+Reading (control-only, no treatment yet):
+- 9 of 13 cells are stable PPP/PPP — clean denominators.
+- `cost-checkbox-over-trigger` FFF/FFF: consistently failing on BOTH agents at
+  control — a pre-existing regression or a broken scenario, NOT campaign
+  noise; whatever it is, treatment arms are read against FFF, and it deserves
+  its own triage outside this campaign.
+- `triggering-writing-plans` FPF/PFP: the known Claude-wide gate-skip
+  flakiness (SUP-412, memory) now visible on codex too — this cell is at the
+  variance floor; rule 3 (escalate marginals) will matter here.
+- `receiving-code-review-pushback` PPP/FFF: a stable claude-codex split;
+  fine as a control (codex reads against FFF).
 
 ## Verdicts
 
