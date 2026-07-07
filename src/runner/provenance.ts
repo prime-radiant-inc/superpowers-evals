@@ -6,7 +6,7 @@
 // longitudinal baselines, commit-per-skill bisection).
 
 import { spawnSync } from 'node:child_process';
-import { getEnv } from '../env.ts';
+import { envSnapshot, getEnv } from '../env.ts';
 
 export interface RunProvenance {
   superpowers_rev: string | null;
@@ -56,8 +56,7 @@ function run(cmd: string, args: string[]): string | null {
     const p = spawnSync(cmd, args, {
       encoding: 'utf8',
       timeout: 10_000,
-      // biome-ignore lint/style/noProcessEnv: provenance probes must inherit the runtime's environment (PATH, test-set keys)
-      env: process.env,
+      env: envSnapshot(),
     });
     if (p.error || (p.status ?? 1) !== 0) return null;
     return p.stdout ?? '';
