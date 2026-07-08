@@ -492,5 +492,37 @@ Reading:
 
 ## Verdicts
 
-(filled at campaign end — negative results recorded at equal billing to wins,
-per the experiment-log convention)
+### #1934 treatment arm (2026-07-08) — TDD prose bet looks LOAD-BEARING under pressure
+
+Treatment @ #1934 head `91eba77`, n=5, claude+codex; control = refreshed baseline
+(sentinel n=3) + bets control top-up (n=2, same probe version → n=5 for the bets).
+
+**TDD prose bet** (`tdd-holds-under-tests-later-pressure`) — the signal:
+- claude: control FPP+PP = **4/5 pass** → treatment FFPFP = **2/5 pass** (gap = 2 failures)
+- codex: control 4/5 → treatment FPPIF = 2/4 valid (corroborates the drop)
+- Rule 4 (≥2-failure gap at n=5) ⇒ the removed **"Why Order Matters"** section is
+  **load-bearing under explicit "just write it, tests after" pressure**. Note it does
+  NOT move normal TDD triggering (`triggering-test-driven-development` PPPPP both
+  arms) — the effect is pressure-specific, exactly the rationalization the prose
+  rebutted. Per rule 8 this is the per-scenario bisect trigger. **CONFIRMING at n=10**
+  (n=5 is the detection floor) before a hard merge-gate call.
+
+**Verification prose bet** — INCONCLUSIVE (probe bimodal, as calibration warned):
+claude high both arms (topup 2/2, treatment 5/5 — can't detect a drop from ceiling),
+codex floored both arms (0/4). Backstop `verification-phantom-completion` holds
+PPPPP treatment vs PPP control → no detected effect. Lean: prose not load-bearing,
+LOW confidence.
+
+**Impacted sentinel probes — NO regression** (treatment n=5 vs control n=3):
+triggering-tdd PPPPP, verification-phantom PPPPP, brainstorming-resists PPPPP,
+receiving-code-review (claude PPPPP; codex FIFFF = pre-existing FFF split, unchanged),
+worktree-no-drift (claude PPPPP; codex noisy infra I's, no change). The 12-skill
+detritus sweep did not break the triggering/behavior of the covered skills.
+
+**#1934 provisional read**: detritus removal is behavior-neutral for 5/6 measured
+skills; the ONE exception is the TDD "Why Order Matters" removal, which degrades
+test-first under pressure (pending n=10 confirmation). If confirmed, recommend
+#1934 KEEP the TDD Why-Order-Matters content (or its rationalization-table
+equivalent) even as it strips the rest.
+
+(other PRs' verdicts filled as their arms complete.)
