@@ -533,4 +533,29 @@ table it keeps) while stripping the rest. Per rule 8, bisect would pin the TDD
 commit in the 12-commit arm — but the dedicated probe already isolates it, so no
 bisect needed.
 
+### #1935 treatment arm (2026-07-08) — positive reframe is BEHAVIOR-NEUTRAL (PASS)
+
+Treatment @ #1935 head `0e69a4d`, n=5, claude+codex; control = f268f7c9 (the
+prohibition-framed testing-anti-patterns.md), the 4 anti-mock probes' control =
+calibration n=3 + top-up n=2.
+
+| probe | claude ctl→trt | codex ctl→trt |
+|---|---|---|
+| rejects-mock-existence-assertion | 5/5→5/5 | 4/5→5/5 |
+| no-coverage-over-correction | 5/5→5/5 | 5/5→5/5 |
+| rejects-test-only-teardown | 5/5→5/5 | 5/5→5/5 |
+| mock-at-right-level (Pattern-4) | 5/5→5/5 | 5/5→5/5 |
+| triggering-test-driven-development | 9/9→5/5 | 8/8→4/4 |
+
+Every cell within 0 failures of control (rule 4: behavior preserved). The anti-mock
+line held (the sharp Pattern-4 mock-at-right-level probe — which fails on over-mock —
+stayed 5/5 both frames) and the over-correction guard held (no-coverage 5/5 → the new
+"trivial code earns no test" doctrine did NOT make agents skip legit tests).
+**#1935 VERDICT: PASS — the positive reframe is behavior-neutral, safe to merge.**
+Caveat: probes sit at ceiling, so this rules out a meaningful degradation, not a
+subtle one.
+
+Contrast with #1934: REMOVING prose cost one load-bearing rebuttal (TDD
+Why-Order-Matters); REFRAMING prose positively preserved behavior everywhere.
+
 (other PRs' verdicts filled as their arms complete.)
