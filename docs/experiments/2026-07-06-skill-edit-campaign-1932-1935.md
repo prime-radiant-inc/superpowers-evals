@@ -382,6 +382,40 @@ lost or over-triggered. The one new witness assertion planned
 added — the existing scenario already exercises the relocation surface and the
 differential is flat, so it is optional follow-up, not gate-blocking.
 
+### #1932 codex column (complete 2026-07-08, on the refreshed image)
+
+Deferred to PRI-2506 (hook-less codex provisioning), now merged. Witness
+differential re-run codex-only, n=3, control `f268f7c9` vs treatment `67f513f3`,
+BOTH refs on the same refreshed CLI (codex 0.142.5) for a valid same-CLI read.
+
+| scenario | codex control | codex treatment |
+|---|---|---|
+| worktree-caller-consent-gate | PFP | PFP |
+| worktree-already-inside | PPP | PPP |
+| worktree-creation-from-main | PPP | PPP |
+| triggering-executing-plans | PPP | PPP |
+| systematic-debugging-fixes-root-cause | PPP | PPP |
+
+Every cell is **treatment = control exactly** — a perfectly flat differential (rule
+2: treatment ≥ control − 1 on all). The single non-clean cell,
+`worktree-caller-consent-gate` (2/3 both refs), is a **pre-existing codex
+signature, not a #1932 effect**: the failing reps show codex reading the
+git-worktrees skill, recognizing it shouldn't work on `main`, then *silently
+deciding on its own* to create a branch instead of asking for execution-environment
+consent (matches the codex "loads the gate then disobeys it" signature; the 1/3
+fail is the run-to-run variance floor). It fails *identically* at control, so #1932
+neither caused nor fixed it. Notable corroboration: relocating the consent-gate
+requirement to point-of-use did **not** change codex's gate-obedience — placement
+is not the lever for codex's consent miss (and #1932 wasn't aiming to be).
+
+Jobs — control: `job-20260708T083159Z-bb06` / `-083800Z-7260` / `-084402Z-0414`;
+treatment: `job-20260708T085204Z-8c42` / `-085805Z-283a` / `-090407Z-a73d`.
+
+**#1932 VERDICT (both agents): PASS the gate.** Pure relocation is behavior-neutral
+on claude (flat witness + sentinel) and codex (flat witness differential). No
+behavior lost, no over-trigger; the lone codex consent-gate miss is pre-existing
+and ref-invariant. Safe to merge.
+
 **Provenance-stamp bug found (record for PRI-2493).** The witness-treatment
 rep-2 batch (`job-20260707T080514Z-0902`) has all 5 runs' verdict.json
 `provenance.superpowers_rev` stamped `d884ae04` — but the appliance job record
@@ -625,4 +659,49 @@ lukewarm framing even post-#1933; the menu change alone doesn't suppress the
 conversational offer. Worth a rationalization-table line upstream, out of #1933's
 scope.
 
-(other PRs' verdicts filled as their arms complete.)
+## Campaign summary — final recommendations (2026-07-08, all four arms complete)
+
+Every arm read against its own frozen control (`f268f7c9`) per the pre-registered
+rules, claude+codex, on the refreshed image (claude 2.1.202 / codex 0.142.5).
+
+| PR | change | verdict | recommendation |
+|---|---|---|---|
+| **#1932** | relocate sole-carrier requirements to point-of-use | behavior-neutral, flat both agents | **MERGE as-is** |
+| **#1933** | finishing-a-development-branch (worktree cleanup + menu shape) | net-positive; one change strongly load-bearing | **MERGE as-is** |
+| **#1934** | strip motivational prose from 12 skills | 5/6 skills neutral; **1 removal load-bearing** | **MERGE with one change** |
+| **#1935** | writing-good-tests positive reframe | behavior-neutral (ceiling) | **MERGE as-is** |
+
+**#1932 — MERGE as-is.** Pure relocation, no behavior lost or over-triggered on
+either agent. Flat witness differential both columns.
+
+**#1933 — MERGE as-is.** The detached-HEAD 2-option menu is strongly load-bearing
+(0/5→5/5 both agents) and the deterministic worktree-cleanup gate passes at
+treatment. The WORKTREE_PATH-before-cd fix is correct-but-not-decisive (agents
+already recover), so keep it as defensive determinism. Two non-blocking follow-ups
+filed: (a) harness — recalibrate `no-unprompted-discard` crit-1 for the claude
+column (Claude Code interactive menu chrome inflates the option count); (b) upstream
+note — claude verbally volunteers discard on lukewarm framing even post-fix.
+
+**#1934 — MERGE, but KEEP the TDD "Why Order Matters" content** (or fold its
+rebuttals into the rationalization table the PR keeps). That is the single
+load-bearing removal: it degrades test-first under explicit "tests after" pressure
+(claude 8/10→5/10 @ n=10, corroborated on codex). The other 11 skills' prose was
+detritus — strip freely. This is the only across-the-campaign change to the PRs as
+written.
+
+**#1935 — MERGE as-is.** The positive reframe holds the anti-mock line and the
+over-correction guard everywhere measured. Caveat: probes sit at ceiling, so this
+rules out a meaningful degradation, not a subtle one.
+
+**Cross-cutting observation.** REMOVING prose can cost a load-bearing rebuttal
+(#1934 TDD Why-Order-Matters); REFRAMING prose positively preserved behavior
+everywhere (#1935); RELOCATING prose to point-of-use preserved behavior (#1932).
+The risk lives specifically in *deletion of rationalization-rebuttal content*, not
+in prose edits generally.
+
+**Pre-existing control fails surfaced (own triage, NOT campaign artifacts, NOT
+blockers):** `cost-checkbox-over-trigger` FFF/FFF both agents both CLI generations;
+`receiving-code-review-pushback` codex FFF; `worktree-caller-consent-gate` codex
+2/3 (loads gate then disobeys); `triggering-writing-plans` claude at the SUP-412
+variance floor. Each reads against a stable control, so no treatment verdict is
+distorted, but they are standing codex/gate-obedience items worth their own tickets.
