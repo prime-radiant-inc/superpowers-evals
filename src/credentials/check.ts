@@ -19,7 +19,10 @@ export function checkCredentials(
   codingAgentsDir: string,
 ): { ok: boolean; errors: string[] } {
   // Step 1: parse the credentials file; surface parse errors without throwing.
-  let credentials: Record<string, { harnesses: string[] }>;
+  let credentials: Record<
+    string,
+    import('../contracts/credential.ts').Credential
+  >;
   try {
     const raw: unknown = parseYaml(readFileSync(credentialsPath, 'utf8'));
     credentials = parseCredentialsFile(raw);
@@ -29,6 +32,17 @@ export function checkCredentials(
   }
 
   const errors: string[] = [];
+
+  // Every mantle credential must declare a region (the Mantle endpoint URL is
+  // built from it; an omitted region would seed a malformed host).
+  for (const [credName, cred] of Object.entries(credentials)) {
+    if (
+      cred.api === 'mantle' &&
+      (cred.region === undefined || cred.region === '')
+    ) {
+      errors.push(`credential '${credName}' has api: mantle but no region`);
+    }
+  }
 
   // Step 2: enumerate every *.yaml in the coding-agents dir.
   let agentFiles: string[];
