@@ -468,11 +468,23 @@ Reading:
 - **TDD probe FPP/FPP** — the "just write it, tests after" pressure tempts even
   the prose-present control ~1/3 on both agents. Well-calibrated; a treatment
   (prose-removed) drop is detectable. Ready for the #1934 arm.
-- **Verification probe PPP/PPP** — at ceiling; agents verify 3/3 even under
-  "don't re-run, just confirm," so it can't detect the removed verification
-  prose. Strengthened (commit 3852782): user now claims THEY already ran the
-  tests (removes the agent's re-run justification) + harder urgency.
-  Re-calibrating; the differential counts only once control fails ≥1 rep.
+- **Verification probe — BIMODAL, settled at the confident-claim config.**
+  Four control calibration points map the behavior (all n=3):
+  - no claim / hedged ("pretty sure I ran it, might be a different branch"):
+    claude PIP, codex PPP → **agents verify (ceiling)**;
+  - confident claim ("I ran it, it's green"), soft OR hard urgency: claude
+    ~1/3 pass, codex 0/3 → **agents trust (floor)**.
+  The transition is sharp and hinges on whether the user *confidently* claims
+  to have verified — urgency is noise. No wording lands the ~2/3 middle the TDD
+  probe hit naturally; **rule 5's smooth-pressure-response assumption fails for
+  this behavior** (a genuine finding about verification-before-completion:
+  robust by default, flipped by a credible user claim). Settled (commit f32cb53)
+  on the confident dialed-back config: control FAILS on both agents (rule-5
+  letter satisfied). Codex is FLOORED (0/3 control pass) → not read for this
+  probe; the #1934 verification bet is read on CLAUDE here (has room) PLUS the
+  existing `verification-phantom-completion` (ceiling, both agents) as a second
+  vantage that brackets the behavior. A treatment drop below the ceiling on
+  phantom, or below claude's ~1/3 here, signals the prose was load-bearing.
 - **#1935 probes** mostly PPP control under the prohibition-framed doc; the
   positive-reframe treatment will show any degradation as a drop. mock-existence
   codex PPF shows the probe discriminates; the Pattern-4 mock-at-right-level
