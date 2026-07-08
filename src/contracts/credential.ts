@@ -5,8 +5,14 @@ export const CREDENTIAL_APIS = [
   'openai-responses',
   'anthropic',
   'gemini',
+  'mantle',
 ] as const;
-export const CREDENTIAL_AUTHS = ['api-key', 'subscription', 'oauth'] as const;
+export const CREDENTIAL_AUTHS = [
+  'api-key',
+  'subscription',
+  'oauth',
+  'bedrock-bearer',
+] as const;
 const _COMPAT_KEYS = ['thinking_format', 'max_tokens_field'] as const;
 
 const CompatSchema = z
@@ -32,6 +38,10 @@ export const CredentialSchema = z.object({
   max_concurrency: z.number().int().min(1).optional(),
   launch_spacing_seconds: z.number().min(0).optional(),
   os_support: z.array(z.string()).optional(),
+  // AWS region for a Bedrock/Mantle credential (api: 'mantle'). Required for
+  // mantle by quorum check; the schema is non-strict, so it must be declared
+  // here to survive parsing.
+  region: z.string().min(1).optional(),
 });
 export type Credential = z.infer<typeof CredentialSchema>;
 
