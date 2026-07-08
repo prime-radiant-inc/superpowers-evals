@@ -17,7 +17,10 @@
 # opencode/serf launchers. Host ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
 # CLAUDE_CODE_* feature flags must not reconfigure the agent under test. env -i
 # supersedes the old `-u CLAUDECODE -u CLAUDE_CODE_SESSION_ID` nested-session
-# strips: nothing survives that is not listed here.
+# strips: nothing survives that is not listed here. Any host-inherited
+# Bedrock/AWS/gate vars are unset before $CLAUDE_ENV_FILE is sourced, so the
+# gate and the values below come only from the run-scoped env file, never host
+# inheritance — see the Mantle note below.
 #
 # CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 is the authoritative override — it
 # forces transcript persistence regardless of nested-session detection (e.g.
@@ -32,7 +35,9 @@
 # Equivalent manual command (for debugging):
 #   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 #
-# Auth is ANTHROPIC_API_KEY + provision()'s API-key approval; the project-trust
+# Auth is either ANTHROPIC_API_KEY (direct API) or CLAUDE_CODE_USE_MANTLE +
+# AWS_REGION + AWS_BEARER_TOKEN_BEDROCK (Bedrock/Mantle), whichever
+# $CLAUDE_ENV_FILE set, plus provision()'s API-key approval; the project-trust
 # block provision() writes into .claude.json suppresses the trust prompt. No
 # onboarding skeleton, IS_DEMO, or marketplace-disable is needed — claude boots
 # headless and runs/auto-completes onboarding each run (that is what activates
@@ -42,22 +47,40 @@
 # bites.)
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
+# Scrub any host-inherited Bedrock/AWS/gate vars BEFORE sourcing, so the gate and
+# values below come ONLY from the run-scoped .claude-env, never host inheritance
+# (PRI-2494). The forward list further down MUST stay a subset of this unset list.
+unset CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK \
+  AWS_REGION AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE
 source "$CLAUDE_ENV_FILE"
 
 # Host-env isolation (PRI-2494): env -i + explicit allowlist, matching the
 # opencode/serf launchers. Host ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
 # CLAUDE_CODE_* feature flags must not reconfigure the agent under test.
-# env -i also supersedes the old -u CLAUDECODE / -u CLAUDE_CODE_SESSION_ID
-# nested-session strips: nothing survives that is not listed here.
 env_args=(
   "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
   "TERM=${TERM:-xterm-256color}"
   "LANG=${LANG:-C.UTF-8}"
 )
 
+# Bedrock/Mantle: forwarded ONLY when the sourced .claude-env set them (the
+# Bedrock credential path). provision writes all three together, so referencing
+# them here under set -u is safe. Subset of the unset list above.
+if [[ -n "${CLAUDE_CODE_USE_MANTLE:-}" ]]; then
+  env_args+=("CLAUDE_CODE_USE_MANTLE=$CLAUDE_CODE_USE_MANTLE")
+  env_args+=("AWS_REGION=$AWS_REGION")
+  env_args+=("AWS_BEARER_TOKEN_BEDROCK=$AWS_BEARER_TOKEN_BEDROCK")
+fi
+
+# Direct-API key: forwarded ONLY on the api-key path (the Mantle path omits it, so
+# the unconditional line would abort under set -u).
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  env_args+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+fi
+
 exec env -i \
   "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 \
-  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
