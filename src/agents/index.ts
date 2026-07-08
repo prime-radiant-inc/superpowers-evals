@@ -13,6 +13,7 @@ import type { OsTarget } from '../contracts/os-target.ts';
 import {
   type ApiKeyResolution,
   resolveApiKey,
+  resolveBedrockBearer,
 } from '../credentials/resolve.ts';
 import { AntigravityAgent } from './antigravity.ts';
 import { WindowsClaudeAgent } from './claude-windows.ts';
@@ -151,6 +152,12 @@ class ClaudeAgent implements CodingAgent {
         );
       }
       seedClaudeAuth(configDir, claudeJsonPath, resolution.value);
+    } else if (credential !== undefined && credential.api === 'mantle') {
+      try {
+        seedClaudeMantle(configDir, credential);
+      } catch (e) {
+        throw new ProvisionError(e instanceof Error ? e.message : String(e));
+      }
     }
     return {};
   }
@@ -203,6 +210,27 @@ function seedClaudeAuth(
     : {};
   settings['apiKeyHelper'] = helperPath;
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+/** Seed the run-scoped .claude-env for the Bedrock/Mantle path: enable Mantle +
+ *  region + the bearer. Deliberately does NOT seed ANTHROPIC_API_KEY, the
+ *  apiKeyHelper, or the approval fingerprint — none apply on Bedrock. The vars
+ *  live ONLY in this file (behind the launcher's env -i wall); provision returns
+ *  {} so they never overlay the gauntlet subprocess. */
+export function seedClaudeMantle(
+  configDir: string,
+  credential: Credential,
+): void {
+  const region = credential.region;
+  if (region === undefined || region === '') {
+    throw new Error('claude mantle credential requires a region');
+  }
+  const bearer = resolveBedrockBearer(credential);
+  const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+  writePrivateFileNoFollow(
+    envFile,
+    `CLAUDE_CODE_USE_MANTLE=1\nAWS_REGION=${shellSingleQuote(region)}\nAWS_BEARER_TOKEN_BEDROCK=${shellSingleQuote(bearer)}\n`,
+  );
 }
 
 /** Record a per-config approval for the run's API key so Claude Code does not
