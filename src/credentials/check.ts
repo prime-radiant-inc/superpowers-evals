@@ -4,7 +4,10 @@ import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
-import { parseCredentialsFile } from '../contracts/credential.ts';
+import {
+  type Credential,
+  parseCredentialsFile,
+} from '../contracts/credential.ts';
 
 /**
  * Validate that every agent with a `default_credential` has that credential
@@ -19,10 +22,7 @@ export function checkCredentials(
   codingAgentsDir: string,
 ): { ok: boolean; errors: string[] } {
   // Step 1: parse the credentials file; surface parse errors without throwing.
-  let credentials: Record<
-    string,
-    import('../contracts/credential.ts').Credential
-  >;
+  let credentials: Record<string, Credential>;
   try {
     const raw: unknown = parseYaml(readFileSync(credentialsPath, 'utf8'));
     credentials = parseCredentialsFile(raw);
@@ -54,7 +54,7 @@ export function checkCredentials(
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
-      errors: [`cannot read coding-agents dir: ${message}`],
+      errors: [...errors, `cannot read coding-agents dir: ${message}`],
     };
   }
 
