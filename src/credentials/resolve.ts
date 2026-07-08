@@ -53,3 +53,15 @@ export function resolveApiKey(
 export function limiterKey(cred: Credential, name: string): string {
   return `${cred.base_url ?? name}|${cred.api}`;
 }
+
+// Resolve the Amazon Bedrock API key (bearer) for a mantle credential from its
+// api_key_env. Fail fast (never seed an empty bearer, which fails Mantle auth
+// cryptically at runtime).
+export function resolveBedrockBearer(cred: Credential): string {
+  const envName = cred.api_key_env ?? 'AWS_BEARER_TOKEN_BEDROCK';
+  const value = getEnv(envName);
+  if (value === undefined || value === '') {
+    throw new Error(`bedrock bearer env var ${envName} is unset/empty`);
+  }
+  return value;
+}
