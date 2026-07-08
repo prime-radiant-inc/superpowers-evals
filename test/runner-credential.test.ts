@@ -75,14 +75,14 @@ test('resolveCredentialNameForAgent: returns undefined when no default_credentia
   // Use pi (non-claude family) since claude now requires default_credential.
   writeFileSync(
     join(dir, 'pi.yaml'),
-    [
+    `${[
       'name: pi',
       'binary: pi',
       'session_log_dir: ~/.pi/sessions',
       'session_log_glob: "*.jsonl"',
       'normalizer: pi',
       'home_config_subdir: .pi',
-    ].join('\n') + '\n',
+    ].join('\n')}\n`,
   );
   const result = resolveCredentialNameForAgent(dir, 'pi', undefined);
   expect(result).toBeUndefined();
