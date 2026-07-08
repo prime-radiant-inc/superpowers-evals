@@ -9,8 +9,11 @@ import type {
 import {
   createClaimWithoutVerification,
   createCodeReviewPlantedBugs,
+  createFinishingBranchWorktree,
   createPhantomCompletion,
   createReviewPushback,
+  FINISHING_BRANCH_MARKER,
+  FINISHING_BRANCH_NAME,
 } from '../src/setup-helpers/behavior-fixtures.ts';
 import { runGit } from '../src/setup-helpers/git.ts';
 
@@ -113,6 +116,67 @@ describe('behavior fixtures', () => {
     }
   });
 
+  test('finishing_branch_worktree: superpowers-owned worktree with committed feature work + launch-cwd sentinel', () => {
+    const dir = tmp();
+    try {
+      createFinishingBranchWorktree(ctx(dir, new FakeRunner()));
+
+      // Main worktree is on `main`, still 2 commits (README, then the
+      // gitignored .worktrees/ commit) — the feature commit lives only on
+      // the feature branch's worktree.
+      expect(runGit(['branch', '--show-current'], dir).trim()).toBe('main');
+      expect(subjects(dir)).toEqual([
+        'initial project scaffolding',
+        'ignore .worktrees/',
+      ]);
+
+      // git worktree list: main + the feature worktree.
+      const worktrees = runGit(['worktree', 'list'], dir)
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0);
+      expect(worktrees.length).toBe(2);
+
+      // The feature branch exists and carries the committed marker.
+      expect(
+        runGit(['rev-parse', '--verify', FINISHING_BRANCH_NAME], dir).trim()
+          .length,
+      ).toBe(40);
+      const worktreePath = join(dir, '.worktrees', 'report-export');
+      expect(
+        runGit(['log', '-1', '--format=%s'], worktreePath).trim(),
+      ).toContain(FINISHING_BRANCH_MARKER);
+      expect(
+        runGit(
+          ['show', `${FINISHING_BRANCH_NAME}:src/reports/csv-export.js`],
+          worktreePath,
+        ),
+      ).toContain('toCsv');
+
+      // The launch-cwd sentinel points at the worktree's absolute path.
+      const sentinel = Bun.file(join(dir, '.quorum-launch-cwd'));
+      expect(sentinel.size).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('finishing_branch_worktree: launch-cwd sentinel resolves to the worktree', async () => {
+    const dir = tmp();
+    try {
+      createFinishingBranchWorktree(ctx(dir, new FakeRunner()));
+      const sentinelPath = (
+        await Bun.file(join(dir, '.quorum-launch-cwd')).text()
+      ).trim();
+      expect(sentinelPath).toBe(join(dir, '.worktrees', 'report-export'));
+      expect(runGit(['branch', '--show-current'], sentinelPath).trim()).toBe(
+        FINISHING_BRANCH_NAME,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Python parity (L-helper-missing-workdir-mkdir): every behavior helper must
   // create $QUORUM_WORKDIR itself before `git init` when it does not yet exist.
   test('each behavior helper creates the workdir when it does not exist', () => {
@@ -123,6 +187,7 @@ describe('behavior fixtures', () => {
         ['planted', createCodeReviewPlantedBugs],
         ['phantom', createPhantomCompletion],
         ['pushback', createReviewPushback],
+        ['finishing', createFinishingBranchWorktree],
       ];
       for (const [name, helper] of cases) {
         const missing = join(base, name, 'nested', 'workdir');

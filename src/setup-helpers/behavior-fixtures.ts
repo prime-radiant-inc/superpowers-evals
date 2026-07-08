@@ -1,11 +1,15 @@
 // Behavior-fixture helpers: claim_without_verification, code_review_planted_bugs,
-// phantom_completion, and review_pushback. Three of these provision a local
-// .venv via the CommandRunner seam (Tier-2); code_review_planted_bugs does not.
+// phantom_completion, review_pushback, and finishing_branch_worktree. Three of
+// the first four provision a local .venv via the CommandRunner seam (Tier-2);
+// code_review_planted_bugs and finishing_branch_worktree do not.
 
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { provisionVenv } from './base.ts';
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
+import { addWorktree, setupPressureWorktreeConditions } from './worktree.ts';
 
 // ─── claim_without_verification ─────────────────────────────────────
 
@@ -469,4 +473,77 @@ export function createReviewPushback(ctx: HelperContext): void {
   runGit(['commit', '-m', 'add sliding-window limiter'], ctx.workdir);
 
   provisionVenv(ctx.workdir, ctx.run);
+}
+
+// ─── finishing_branch_worktree ──────────────────────────────────────
+
+// The feature branch name and its committed-work marker are fixed so
+// checks.sh (which cannot see this file) can address them by literal string.
+export const FINISHING_BRANCH_NAME = 'feature-report-export';
+export const FINISHING_BRANCH_MARKER = 'reportexportfixturemarker';
+const FINISHING_WORKTREE_REL = join('.worktrees', 'report-export');
+
+const FINISHING_README_MD = `# report-service
+
+Internal reporting utilities.
+`;
+
+const FINISHING_PACKAGE_JSON = `{
+  "name": "report-service",
+  "version": "1.0.0",
+  "description": "Internal reporting utilities.",
+  "main": "src/index.js"
+}
+`;
+
+const FINISHING_CSV_EXPORT_JS = `// CSV export helper for the reporting pipeline.
+function toCsv(rows) {
+  return rows.map((row) => row.join(',')).join(';');
+}
+
+module.exports = { toCsv };
+`;
+
+// Builds a main repo (README + package.json, gitignored .worktrees/) plus a
+// superpowers-owned .worktrees/report-export worktree on a feature branch
+// with one committed file, then points the launch-cwd sentinel
+// (.quorum-launch-cwd, LAUNCH_CWD_SENTINEL in src/runner/index.ts) at the
+// worktree. This is the fixture PR #1933's WORKTREE_PATH-before-cd fix
+// targets: Step 6 cleanup must resolve the worktree from the Step-2 (pre-cd)
+// capture, not a post-cd recompute that silently no-ops.
+export function createFinishingBranchWorktree(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
+  runGit(['init', '-b', 'main'], ctx.workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
+  runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'README.md', FINISHING_README_MD);
+  writeFixtureFile(ctx.workdir, 'package.json', FINISHING_PACKAGE_JSON);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(['commit', '-m', 'initial project scaffolding'], ctx.workdir);
+
+  // .worktrees/ gitignored so the fixture matches the superpowers-owned
+  // convention Step 6's cleanup checks for.
+  setupPressureWorktreeConditions(ctx);
+
+  const worktreePath = join(ctx.workdir, FINISHING_WORKTREE_REL);
+  addWorktree(ctx.workdir, FINISHING_BRANCH_NAME, worktreePath);
+
+  writeFixtureFile(
+    worktreePath,
+    'src/reports/csv-export.js',
+    FINISHING_CSV_EXPORT_JS,
+  );
+  runGit(['add', '-A'], worktreePath);
+  runGit(
+    ['commit', '-m', `Add CSV export helper ${FINISHING_BRANCH_MARKER}`],
+    worktreePath,
+  );
+
+  // Launch the agent inside the worktree.
+  writeFileSync(
+    join(ctx.workdir, '.quorum-launch-cwd'),
+    `${worktreePath}\n`,
+    'utf8',
+  );
 }

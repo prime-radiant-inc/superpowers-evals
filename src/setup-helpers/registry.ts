@@ -9,6 +9,7 @@ import { createBaseRepo, initRepoFromFixtures, recordHead } from './base.ts';
 import {
   createClaimWithoutVerification,
   createCodeReviewPlantedBugs,
+  createFinishingBranchWorktree,
   createPhantomCompletion,
   createReviewPushback,
 } from './behavior-fixtures.ts';
@@ -98,6 +99,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   create_claim_without_verification: { fn: createClaimWithoutVerification },
   create_phantom_completion: { fn: createPhantomCompletion },
   create_review_pushback: { fn: createReviewPushback },
+  create_finishing_branch_worktree: { fn: createFinishingBranchWorktree },
   create_spec_targets_wrong_component: {
     fn: createSpecTargetsWrongComponent,
   },
