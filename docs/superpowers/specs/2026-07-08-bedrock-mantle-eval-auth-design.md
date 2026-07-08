@@ -1,20 +1,25 @@
 # Bedrock/Mantle eval auth — design (PRI-2517)
 
-**Status:** design approved 2026-07-08; implementation not started.
-**Supersedes the scope of** [PRI-2517] (originally "opt-in Bedrock credential, coding-agent only").
+**Status:** design approved 2026-07-08; revised the same day after an adversarial
+review (workflow `wf_5993aa3e-239`, verdict *revise-spec*); implementation not
+started.
+**Supersedes the scope of** [PRI-2517] (originally "opt-in Bedrock credential,
+coding-agent only").
 **Related:** PRI-2494 (launcher `env -i` isolation — must not regress).
 
 ## Motivation
 
 We hold abundant AWS Bedrock credits but pay the direct Anthropic API by credit
 card. Moving the eval harness's Anthropic consumers onto Bedrock makes eval
-inference nearly free. Both Anthropic consumers move:
+inference nearly free. The **two Claude-Code Anthropic consumers** move:
 
 - the **Claude coding-agent** under test (Claude Code CLI), and
 - the **Gauntlet-Agent** (the QA driver / grader, a Node service on `@anthropic-ai/sdk`).
 
-The direct-API path still works; this is *add-a-path-and-make-it-default*, not
-*lost-the-key*.
+`serf` and the direct-API control credentials (`sonnet`/`sonnet46`/`haiku`) stay
+on the direct API by design (sonnet-4-6 is not on Mantle; the controls are the
+deliberate comparison baseline). The direct-API path still works; this is
+*add-a-path-and-make-it-default*, not *lost-the-key*.
 
 ## Locked decisions
 
@@ -23,22 +28,29 @@ The direct-API path still works; this is *add-a-path-and-make-it-default*, not
    neither consumer needs request signing. Mantle-only; we build no Invoke/SigV4
    path (see Non-goals).
 2. **Bedrock is the default; direct-API is the opt-out.** An opt-in nobody
-   remembers to pass saves no money. The Claude coding-agent and the grader
-   default to Mantle; `--credential opus` (the existing direct-API credential) is
-   the explicit escape hatch.
+   remembers to pass saves no money. The Claude coding-agent defaults to Mantle;
+   `--credential opus` (the existing direct-API credential) is the explicit escape
+   hatch. **The grader endpoint is controlled globally by the bundle/config,
+   independently of `--credential`** (it is not a resolved credential — see the
+   grader path); `--credential opus` reverts only the coding-agent, not the grader.
 3. **Auth = a long-lived Amazon Bedrock API key** (`AWS_BEARER_TOKEN_BEDROCK`),
    IAM-backed, in the blessed bundle. Matches every other provider's static-secret
    shape; is governed by an IAM principal + scoped policy. (Rejected: IAM access
    keys — the odd provider-out, and they force gauntlet into SigV4; instance-role
    via IMDS — the appliance deliberately blocks container IMDS, and opening it
    would hand the host role to the permissive agent-under-test.)
-4. **Grader = Sonnet 5 on both paths.** Sonnet 4.6 is not served on Mantle, and it
-   is the current grader + sonnet control model. We move the sonnet slot (grader
-   and sonnet control coding-agent) to Sonnet 5, on **both** the direct-API and
-   Bedrock paths, so cost comparisons use one grader. This re-baselines the
-   sentinel corpus; the Bedrock + Sonnet 5 numbers become canonical.
+4. **Grader = Sonnet 5, moved in two governed steps.** Sonnet 4.6 is not on Mantle
+   and is the current grader + sonnet control model. The **grader-model change
+   (Sonnet 4.6 → 5) lands first, on the direct API, as a separately-baselined rung
+   with a recorded verdict-flip rate**, *before* the endpoint move — so grader
+   drift is isolated from the endpoint change and not misattributed to the coding
+   agents. Only then does the grader move to Mantle. The Bedrock + Sonnet 5 numbers
+   become canonical after both rungs.
 5. **Cost visibility via obol.** obol is the shared cost source; teach it the new
-   model rates once (Step 0) so both paths report dollars. No local override.
+   model rates (Step 0) so both paths report dollars. No local `OBOL_PRICING_DIR`
+   override: that overlay *replaces the whole snapshot* (not a delta), so it would
+   have to mirror the entire table — worse to maintain than a hand-add in obol. It
+   remains the emergency fast path for a surprise model string.
 
 ## Models and region
 
@@ -52,191 +64,271 @@ suffix). Sources: the per-model AWS Bedrock model cards + `code.claude.com`.
 | Small-fast slot | `anthropic.claude-haiku-4-5` | yes | **no** (obol has only the dated runtime key) — Step 0 must add the bare id |
 | ~~old sonnet~~ | `anthropic.claude-sonnet-4-6` | **no** | n/a |
 
-- **Region:** the box's region if Mantle serves all three there, else the nearest
-  that does. **us-west-2** or **us-east-1** are both acceptable; pin whichever the
-  region probe confirms. (Note: the `us-east-1` preference in earlier notes came
-  from the Invoke/`us.*` geo-profile path, which we do not use.)
+- **Region — pin `us-east-1` (US).** The review found (model cards) that **Mantle is
+  In-Region-only** — no geo/global cross-region profile (Geo/Global inference ID =
+  N/A) — and in the US **only `us-east-1` currently serves opus-4-8 + sonnet-5**.
+  `us-west-2` is therefore *not* assumed viable for these models on Mantle.
+  Consequence for co-location: if the appliance box is in a west region, hitting
+  Mantle means a cross-region call to `us-east-1` — co-locating on Mantle is not
+  possible unless/until west In-Region coverage exists. **The region probe MUST do
+  a real per-model Mantle round-trip and fail fast if any of the three ids is not
+  In-Region.** Box placement (us-east-1) is a rollout precondition, not just an
+  open item.
 - **Mantle host is `*.api.aws`** (`bedrock-mantle.{region}.api.aws`), not
   `amazonaws.com` — the appliance egress allowlist must include it.
 - Requests must send the HTTP header `anthropic-version: 2023-06-01`.
 
 ## Non-goals
 
-- No Invoke API / `us.*` inference-profile / SigV4 path. If a Claude model that
-  isn't on Mantle is ever needed (e.g. an old sonnet-4-6 scenario), it uses the
-  direct-API `opus` opt-out.
+- No Invoke API / `us.*` inference-profile / SigV4 path. A Claude model not on
+  Mantle uses the direct-API `opus`-style opt-out.
 - No WebSearch/server-side-tool scenarios on Bedrock (unavailable on all of
-  Bedrock). Zero active scenarios use WebSearch today, so this is a doc note in
-  `docs/scenario-authoring.md`, not a gating mechanism (correcting PRI-2517's
-  "small" sizing — the gate is either 0 now or a new feature later).
-- No per-consumer credentials yet; one shared bearer key (below).
+  Bedrock). Zero active scenarios use WebSearch, so this is a doc note in
+  `docs/scenario-authoring.md`, not a gating mechanism.
+- **`os=windows` is out of scope for the Mantle default** (see Windows subsection).
+- No per-consumer credentials yet; one shared bearer key.
 
 ## Architecture
 
-One new credential kind drives both consumers through Mantle. The two consumers
-are switched by **different mechanisms that never cross**:
+One new credential kind drives the coding-agent through Mantle; the grader is
+switched by the global bundle. The two are activated by **different mechanisms
+that never cross**:
 
 - **Coding-agent:** activated per-run by `CLAUDE_CODE_USE_MANTLE=1` seeded into the
   run-scoped `.claude-env` and forwarded through the launcher's `env -i` allowlist.
   Global host vars are stripped from it.
-- **Gauntlet grader:** activated by `ANTHROPIC_BASE_URL` + bearer + model in the
-  gauntlet subprocess env (gauntlet inherits the host env). Global — but the
-  coding-agent's `env -i` wall makes it invisible to the agent under test.
+- **Gauntlet grader:** activated by `ANTHROPIC_BASE_URL` + a bearer mapped to an
+  SDK-readable var + model in the gauntlet subprocess env (gauntlet inherits the
+  host env). Global — but the coding-agent's `env -i` wall makes it invisible to
+  the agent under test.
 
-This split is the core isolation invariant: global env → grader; per-run
-`.claude-env` behind `env -i` → coding-agent.
+Core isolation invariant: global env → grader; per-run `.claude-env` behind
+`env -i` → coding-agent.
 
 ### Credential contract (`src/contracts/credential.ts`)
 
 - Add `api: 'mantle'` to `CREDENTIAL_APIS` and `auth: 'bedrock-bearer'` to
   `CREDENTIAL_AUTHS`.
 - Add optional `region` field (the schema is non-`.strict()`, so an untyped
-  `region:` in YAML is silently dropped — it must be added to the schema to take
-  effect).
+  `region:` is silently dropped — it must be added to the schema). Add a
+  `quorum check` rule: **`api: mantle` requires a non-empty `region`.**
 - `credentials.yaml`: `opus_bedrock` = `{api: mantle, auth: bedrock-bearer,
-  api_key_env: AWS_BEARER_TOKEN_BEDROCK, region: <probe result>, model:
-  anthropic.claude-opus-4-8, harnesses: [claude]}`. Distinct `api` gives it its own
-  `limiterKey` bucket (its own concurrency latch against the Bedrock account quota).
-  The existing `opus` credential (`api: anthropic, auth: api-key`) remains the
-  direct-API opt-out; only `default_credential` changes.
+  api_key_env: AWS_BEARER_TOKEN_BEDROCK, region: us-east-1, model:
+  anthropic.claude-opus-4-8, harnesses: [claude], max_concurrency: 2}`. Distinct
+  `api` gives it its own `limiterKey` bucket. `max_concurrency: 2` until the Bedrock
+  account quota is probed (see Concurrency).
 - `coding-agents/claude.yaml`: `default_credential: opus_bedrock`.
-- `quorum check` (`src/credentials/check.ts`) needs no new rejection logic once the
-  enums include the new values.
+- The existing `opus` credential remains the direct-API opt-out; **pin its `model`
+  to `claude-opus-4-8`** (not the floating `opus` alias) so the direct-vs-Bedrock
+  comparison partner cannot drift, matching the sonnet5/sonnet46 pinning convention.
+- Add a harness-membership guard in `runScenario` (the break-glass direct path):
+  reject a credential whose `harnesses` excludes the agent's runtime family, so
+  `--coding-agent gemini --credential opus_bedrock` fails at setup rather than
+  silently mis-provisioning. (`run-all` already skips on `harnesses`.)
 
 ### Coding-agent path
 
 - **Provision** (`ClaudeAgent.provision`, `src/agents/index.ts`): a new branch for
   the mantle credential seeds the run-scoped `.claude-env` (mode 0600) with
-  `CLAUDE_CODE_USE_MANTLE=1`, `AWS_REGION=<region>`, and `AWS_BEARER_TOKEN_BEDROCK`
-  (read via `getEnv(credential.api_key_env)`). The model rides `--model
-  $CLAUDE_MODEL` from `credential.model`. It **skips `seedClaudeAuth`** entirely (no
-  `ANTHROPIC_API_KEY`, no `apiKeyHelper` in `settings.json`, no
-  `customApiKeyResponses` fingerprint) but **still writes** the `.claude-env` file,
-  because the launcher sources it unconditionally under `set -e`.
+  `CLAUDE_CODE_USE_MANTLE=1`, `AWS_REGION=<credential.region>`, and
+  `AWS_BEARER_TOKEN_BEDROCK`. Resolve the bearer through a helper that **throws
+  `ProvisionError` naming `credential.api_key_env` when unset/empty** (do not write
+  an empty bearer). Model rides `--model $CLAUDE_MODEL` from `credential.model`.
+  **Skip `seedClaudeAuth`** (no `ANTHROPIC_API_KEY` / `apiKeyHelper` / fingerprint)
+  but still write the `.claude-env` file (the launcher sources it unconditionally).
 - **Launcher** (`coding-agents/claude-context/launch-agent`):
   - `unset CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK AWS_REGION
-    AWS_BEARER_TOKEN_BEDROCK AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-    AWS_SESSION_TOKEN AWS_PROFILE` **before** `source "$CLAUDE_ENV_FILE"`, so the
-    gate and values come only from the seeded file, never host inheritance (the
-    PRI-2494-safe fix — a bare `$AWS_x` reinjection would otherwise forward host
-    creds, and `CLAUDE_CODE_USE_*` is host-settable).
-  - Conditionally append `CLAUDE_CODE_USE_MANTLE`, `AWS_REGION`,
-    `AWS_BEARER_TOKEN_BEDROCK` to the `env -i` allowlist (only when the sourced file
-    set them). Mirror the opencode launcher's `${!name-}` guard pattern.
-  - Make the `ANTHROPIC_API_KEY=` line conditional — present on the `opus`
-    path, absent on Mantle (so `set -euo pipefail` does not abort on an unbound var).
-  - Keep `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`.
-- Claude Code version floor: **≥ 2.1.200** (Mantle ≥2.1.94, `/context` ≥2.1.196,
-  `--model`/`ANTHROPIC_MODEL` routing ≥2.1.200; the appliance container is 2.1.202).
-  Leave `CLAUDE_CODE_SKIP_MANTLE_AUTH` unset (that is only for gateways injecting
-  creds server-side).
+    AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK AWS_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE` **before**
+    `source "$CLAUDE_ENV_FILE"`, so the gate and values come only from the seeded
+    file, never host inheritance.
+  - Append **exactly** `CLAUDE_CODE_USE_MANTLE`, `AWS_REGION`,
+    `AWS_BEARER_TOKEN_BEDROCK` to the `env -i` allowlist, conditionally (only when
+    the sourced file set them). **Invariant: the forward list MUST be a subset of
+    the unset list** — assert this in the launcher test so a future widening cannot
+    forward a non-unset (host-inherited) var. Do not copy opencode's forward loop
+    (it forwards host AWS creds with no unset).
+  - Make the `ANTHROPIC_API_KEY=` line conditional (present on `opus`, absent on
+    Mantle, so `set -u` does not abort).
+- Claude Code version floor **≥ 2.1.200**; container is 2.1.202. Leave
+  `CLAUDE_CODE_SKIP_MANTLE_AUTH` unset.
 
-### Gauntlet grader path
+#### Windows / claude-windows (out of scope for the Mantle default)
 
-- **Harness** (`src/runner`): by default set the gauntlet subprocess env to
-  `ANTHROPIC_BASE_URL=https://bedrock-mantle.<region>.api.aws/anthropic`, the bearer
-  in the header Mantle accepts, and `GAUNTLET_AGENT_MODEL=anthropic.claude-sonnet-5`.
-  Direct-API grader is the opt-out.
+`WindowsClaudeAgent` is credential-blind (it bakes `config.model`, ignores the
+resolved credential), so a Mantle default would silently run Windows on the direct
+API while labeling artifacts Mantle, or `ProvisionError`. **Decision: exclude
+`os=windows` from the Mantle default.** Windows Claude stays pinned to the direct
+`opus` credential; the run-all matrix and `grid-manifest` mark the
+`claude × windows × opus_bedrock` cell **ineligible** (a `skipped_reason`), not
+eligible. Bringing Windows onto Bedrock is a later, separate effort.
+
+### Gauntlet grader path (Phase 2)
+
+The grader runs on `@anthropic-ai/sdk` directly (not Claude Code). Route (c): point
+it at Mantle + bearer + Sonnet 5.
+
+- **Bearer → SDK var (critical).** The base `@anthropic-ai/sdk` reads
+  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, **never** `AWS_BEARER_TOKEN_BEDROCK`.
+  So the harness must map the bearer into the SDK-readable var on the grader env
+  (`ANTHROPIC_API_KEY=<bearer>` if Mantle accepts `x-api-key`, else
+  `ANTHROPIC_AUTH_TOKEN=<bearer>`), **replacing** the direct key on the Mantle
+  grader path (not co-present). The accepted-header probe (`x-api-key` vs `Bearer`)
+  is a **hard prerequisite** decided before the grader patch.
+- **Harness** (`src/runner`): the exact code path that builds the gauntlet
+  subprocess env sets, by default, `ANTHROPIC_BASE_URL=https://bedrock-mantle.<region>.api.aws/anthropic`
+  (region **single-sourced** from the mantle credential, not a duplicated literal),
+  the SDK-readable bearer var, and `GAUNTLET_AGENT_MODEL=anthropic.claude-sonnet-5`.
+  **Fail fast** when a Mantle coding-agent run has no grader endpoint configured
+  (so a bundle-less local run refuses rather than silently splitting the two
+  consumers across endpoints). The grader endpoint is bundle-controlled and has no
+  per-run opt-out.
 - **Gauntlet code patch** (cross-repo, `github.com/prime-radiant-inc/gauntlet`):
-  - `resolveProvider` must map `anthropic.claude-*` → the anthropic provider
-    (today it throws unless the id starts with `claude`).
-  - `maxOutputTokensForModel` must match Sonnet 5 (today its regex is
-    `/^claude-(opus|sonnet|haiku)-4/`, so a 5-series or `anthropic.`-prefixed id
-    silently drops to the 4096 cap — a known run-killer).
-  - Send only the header Mantle accepts. The base `@anthropic-ai/sdk` sends
-    `x-api-key` for `apiKey` and `Authorization: Bearer` for `authToken`, and
-    **both** if both are set; gauntlet currently forces `ANTHROPIC_API_KEY`
-    (→ always `x-api-key`). The ops probe decides whether Mantle wants `x-api-key`,
-    `Bearer`, or tolerates both; if it rejects the dual-header, relax the guard.
-- **Isolation invariant:** the coding-agent must switch via `CLAUDE_CODE_USE_MANTLE`
-  in its own `.claude-env`, **never** via `ANTHROPIC_BASE_URL` in provision
-  `extraEnv` — `extraEnv` is overlaid onto the gauntlet subprocess and would
-  silently route the grader too. A test asserts neither path bleeds into the other.
+  - `resolveProvider` maps `anthropic.claude-*` → the anthropic provider.
+  - `maxOutputTokensForModel` matches Sonnet 5 (else the 4096 cap kills runs).
+  - **Relax BOTH `ANTHROPIC_API_KEY`-presence guards** (`config.ts:413` and
+    `anthropic.ts:27`) on the bearer path, and send only the header Mantle accepts.
+- **Isolation invariant:** the coding-agent switches via `CLAUDE_CODE_USE_MANTLE` in
+  its own `.claude-env` (behind `env -i`), **never** via `ANTHROPIC_BASE_URL` in
+  provision `extraEnv` — `extraEnv` overlays onto the gauntlet subprocess and would
+  double-route the grader. A test asserts neither path bleeds into the other.
 
 ### Shared key
 
 One long-lived Bedrock API key serves both consumers (scoped Bedrock-only;
 trusted-operator box). Per-consumer keys are a future option requiring harness
-plumbing to inject different bearers per subprocess; not now (YAGNI).
+plumbing to inject different bearers per subprocess; not now.
+
+## Concurrency and account quota
+
+- `opus_bedrock` gets `max_concurrency: 2` (mirroring the appliance proxied-endpoint
+  cap) until the account quota is probed. New-account Bedrock quotas are often
+  2–3 RPM.
+- The **grader is a distinct per-cell Bedrock consumer** hitting the same account
+  via host env, *not* under the credential limiter. Cap total Bedrock exposure
+  across all cells (a grader ceiling independent of the coding-agent credential),
+  or the coding-agent + grader streams stack unbounded against one quota.
+- Add Bedrock/Mantle throttle detection (`429` / `ThrottlingException` /
+  `RESOURCE_EXHAUSTED`) to `isRateLimited` so the scheduler latch fires and backs
+  off. Without it a throttle never latches and cascades into mass indeterminates
+  that poison the re-baseline.
 
 ## Cost / pricing
 
-- **Step 0 (obol update)** adds current list-price rates for the three bare Mantle
-  ids (`anthropic.claude-opus-4-8` already present; add `anthropic.claude-sonnet-5`
-  and `anthropic.claude-haiku-4-5`), cuts an obol release, and bumps
-  `@primeradianthq/obol` here. obol is not checked out locally; this is cross-repo
-  work and the first thing done. It fixes Sonnet 5 cost visibility on the direct API
-  too (a pre-existing gap — obol's bundled table is `as_of 2026-06-08`, before
-  Sonnet 5).
-- **Smoke gate:** the exact string Claude Code writes to `message.model` on Mantle
-  is undocumented. A single smoke run captures it (the ops `jq` on the session
-  JSONL). If it matches the pinned bare id, obol prices it; if it differs, add that
-  exact string to obol. Cost figures are not trusted until this passes.
-- Result: `est_cost_usd` non-null for all three models on both paths → apples-to-
-  apples direct-vs-Bedrock comparison. obol reports a *list-price estimate* (tokens
-  × rate), which is exactly the "value of what we'd otherwise have paid" metric we
-  want, independent of the near-zero credit spend.
+- **Step 0 (obol update)** adds current list-price rates for the models, and adds
+  **both spellings** per model (bare `claude-sonnet-5` **and** `anthropic.claude-sonnet-5`;
+  likewise haiku) because obol does **exact-key matching with no prefix
+  normalization**. `anthropic.claude-opus-4-8` is already present. Cut an obol
+  release, bump `@primeradianthq/obol`. obol is not checked out locally; this is
+  cross-repo work and the first thing done. It fixes Sonnet 5 cost on the direct API
+  too (pre-existing gap — obol's table is `as_of 2026-06-08`, before Sonnet 5). Add
+  a regression guard asserting **both the direct-API and the Mantle ids price
+  non-null**.
+- **Smoke gate:** the exact string Claude logs to `message.model` on Mantle is
+  undocumented. A single smoke run captures it. If it matches a taught id → priced;
+  if it differs (even an opaque ARN) → add that exact string to obol, or use the
+  `OBOL_PRICING_DIR` overlay as the emergency path. Cost figures are not trusted
+  until this passes.
+- obol reports a **list-price estimate** (tokens × rate), i.e. the value we would
+  otherwise have paid — a *notional* figure, not the near-zero credit spend. Frame
+  it as such; it is the right metric for "what we stopped paying," not for the AWS
+  bill.
 
 ## Tests / DoD
 
-- Extend `test/launcher-env-isolation.test.ts` HOSTILE set with the six `AWS_*`
-  vars + `CLAUDE_CODE_USE_MANTLE`; assert they are scrubbed on the `opus`
-  path (host cannot force Mantle or leak AWS creds into a direct run).
+- Extend `test/launcher-env-isolation.test.ts` HOSTILE set with the `AWS_*`
+  vars (incl. `AWS_DEFAULT_REGION`) + `CLAUDE_CODE_USE_MANTLE`; assert scrubbed on
+  the `opus` (direct) path. Assert the **forward-list ⊆ unset-list** invariant
+  directly, not only by enumerating vars.
 - Positive Mantle case: a mantle `.claude-env` yields `CLAUDE_CODE_USE_MANTLE` +
   bearer + region in the agent env, **no** `ANTHROPIC_API_KEY`, host `AWS_*` still
   scrubbed.
-- Unit: the provision mantle branch writes the expected `.claude-env` and skips
-  `seedClaudeAuth`; existing api-key provisioning is byte-identical.
+- Unit: the provision mantle branch writes the expected `.claude-env`, throws on an
+  empty bearer, and skips `seedClaudeAuth`; existing api-key provisioning is
+  byte-identical.
 - Gauntlet-repo units: `resolveProvider('anthropic.claude-sonnet-5')` → anthropic;
-  `maxOutputTokensForModel` returns the full cap for Sonnet 5.
-- obol regression guard: the three pinned ids price non-null.
-- **Live DoD (gates merge):** a real Mantle round-trip — `--credential opus_bedrock`
-  composes a verdict, the session log shows `anthropic.claude-opus-4-8`, capture is
-  non-empty, `est_cost_usd` is non-null; **and** `opus` still passes
-  unchanged. Recorded in `docs/experiments/`.
+  `maxOutputTokensForModel` returns the full cap for Sonnet 5; the two key-presence
+  guards accept the bearer path.
+- obol regression guard: the three Mantle ids **and** the direct-API `claude-*-5`
+  ids price non-null.
+- **Live DoD (gates merge):**
+  - `--credential opus_bedrock` composes a verdict, session log shows
+    `anthropic.claude-opus-4-8`, capture non-empty; **and** `opus` still passes.
+  - **`unpriced_models` is empty** (not merely `est_cost_usd` non-null) on the
+    priced runs — a background/secondary model obol can't price must fail the gate.
+  - **The grader composes a verdict on Mantle** (proves the bearer reaches the SDK).
+  - **`cache_read_input_tokens > 0` on both the direct and Bedrock smoke runs**
+    before any direct-vs-Bedrock dollar figure is trusted or canonized; if caching
+    differs, compare **token buckets**, not dollars.
+  - Recorded in `docs/experiments/`. (Windows is not exercised — it is excluded.)
 
 ## Appliance / ops
 
 - `credentials.env` (blessed bundle, global `set -a; source`): add
   `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION`, and for the grader `ANTHROPIC_BASE_URL`
-  + `GAUNTLET_AGENT_MODEL`. **Never** put `CLAUDE_CODE_USE_MANTLE` here — it stays
-  per-run in the coding-agent's `.claude-env`. Keep gauntlet's existing key material.
-- **Egress:** allow `*.api.aws` or Mantle is unreachable even with a valid key.
+  + the SDK-readable bearer var + `GAUNTLET_AGENT_MODEL`. **Never** put
+  `CLAUDE_CODE_USE_MANTLE` there — it stays per-run in the coding-agent's
+  `.claude-env`. Keep gauntlet's key material.
+- **Egress:** allow `*.api.aws` or Mantle is unreachable even with a valid key. Add
+  a **preflight Mantle-reachability check** — with Bedrock now the default, a
+  missing allowlist entry silently fails every run.
+- **Fail-fast preflight** when the resolved credential's `api_key_env` is unset
+  (`claude.yaml` `required_env` and/or a `quorum check --live` / appliance
+  preflight), so a bearer-less host fails loudly instead of `quorum check` staying
+  green while the claude column dies.
 - **IAM:** mint the key with `aws iam create-service-specific-credential
-  --service-name bedrock.amazonaws.com`, omitting the age flag so it never expires
-  (max finite 36600 days); attach `AmazonBedrockMantleInferenceAccess` (Mantle needs
-  `bedrock-mantle:CallWithBearerToken` + `bedrock-mantle:CreateInference`, a
-  namespace distinct from `bedrock:*`), then tighten. Confirm no SCP imposes
-  `iam:ServiceSpecificCredentialAgeDays`. The value is shown once; max 2 creds per
+  --service-name bedrock.amazonaws.com`, omitting the age flag (never expires; max
+  finite 36600 days); attach a **custom least-privilege policy** (Mantle needs
+  `bedrock-mantle:CallWithBearerToken` + `bedrock-mantle:CreateInference`; drop the
+  managed policy's marketplace grant) **before** the default flip; confirm no SCP
+  imposes `iam:ServiceSpecificCredentialAgeDays`. Value shown once; max 2 creds per
   user (clean rotation).
 - The full copy-pasteable ops checklist (grant discovery, key minting, region +
-  header + model probes) lives in the research output (task `w3z1mu7u1`).
+  header + model probes) is in the research output (task `w3z1mu7u1`).
 
 ## Rollout sequence
 
-1. **Step 0** — update obol (release + bump); Sonnet 5 / haiku / opus price.
-2. Confirm account grants, mint the key, run the region probe *(needs AWS access)*.
-3. **Smoke run** — capture the logged model id; reconcile obol if it differs.
-4. **Phase 1** — coding-agent Mantle default + `opus` opt-out + schema /
-   provision / launcher changes + isolation tests + live DoD; re-baseline the Claude
-   coding-agent sentinels on Bedrock.
-5. **Phase 2** — gauntlet grader → Mantle (harness subprocess env + gauntlet patch +
-   Sonnet 5); re-baseline the grader. The Sonnet 4.6→5 grader change may land on the
-   direct API first to decouple it from the endpoint move.
+1. **Step 0** — update obol (both spellings + release + bump); Sonnet 5 / haiku /
+   opus price on both paths.
+2. **Grader-model rung (direct API):** move the grader to Sonnet 5 on the *direct*
+   API, separately baseline it, and record the verdict-flip rate (grader drift),
+   before any endpoint change.
+3. **Account prep** *(needs AWS access — the ops checklist):* confirm grants, mint
+   the key with the scoped policy, run the per-model In-Region region probe, probe
+   the RPM/TPM quota, add `*.api.aws` egress.
+4. **Smoke run** — capture the logged model id; reconcile obol if it differs;
+   confirm caching parity.
+5. **Phase 1** — land the `credentials.env` bearer + region as **hard prerequisites**
+   before flipping `default_credential` (or ship the flip behind a toggle that
+   activates only once the bearer is confirmed present). Then: coding-agent Mantle
+   default + `opus` opt-out + schema/provision/launcher + concurrency cap + isolation
+   tests + live DoD; re-baseline the Claude coding-agent sentinels on Bedrock.
+6. **Phase 2** — grader → Mantle (harness subprocess env + gauntlet patch); the
+   Sonnet 5 grader already exists from step 2, so this is only the endpoint move.
+   Canonize the Bedrock + Sonnet 5 numbers.
+
+### Rollback
+
+The design is additive (direct `opus` opt-out preserved), so the coding-agent
+revert is one line (`default_credential: opus`). A rollback still needs: the
+per-phase revert steps (default flip, bundle env removal, launcher unset-list, the
+grader endpoint env), the **disposition of the Bedrock + Sonnet 5 canonical
+baselines on revert** (retain + mark historical, do not silently overwrite), and an
+**abort trigger** (e.g. indeterminate rate > N%, or caching absent in-region).
 
 ## Open items needing live-account confirmation
 
-These cannot be settled from docs or code; they gate implementation and are the
-ops checklist's job (account **<AWS_ACCOUNT_ID>**):
+Account **<AWS_ACCOUNT_ID>**; these gate implementation (the ops checklist's job):
 
-- Which region has opus-4-8 + sonnet-5 + haiku-4-5 granted on Mantle (us-west-2 vs
-  us-east-1), and whether the box's region is among them.
+- Which region serves opus-4-8 + sonnet-5 + haiku-4-5 **In-Region on Mantle**
+  (expected us-east-1); whether the box can be placed there.
 - Whether one long-term key authenticates Mantle (single credential + the
-  `bedrock-mantle:*` actions), and which managed-policy version actually grants them.
-- Which auth header Mantle accepts (`x-api-key`, `Bearer`, or both) — decides
-  zero-code vs a one-line gauntlet auth patch.
-- The literal `message.model` string Claude Code records on Mantle (the obol pricing
-  gate).
+  `bedrock-mantle:*` actions), and which policy actually grants them.
+- Which auth header Mantle accepts (`x-api-key`, `Bearer`, or both) — decides the
+  bearer→SDK var mapping and zero-code vs a one-line gauntlet auth patch.
+- The literal `message.model` string Claude Code records on Mantle (the obol gate).
+- **Mantle RPM/TPM account throughput quota** for `CallWithBearerToken` /
+  `CreateInference` (the concurrency cap depends on it).
 - Whether prompt caching works in the chosen region (cost comparability).
 - No SCP cap on service-specific-credential age (the never-expire assumption).
 
@@ -246,4 +338,6 @@ ops checklist's job (account **<AWS_ACCOUNT_ID>**):
   PRI-2517 plan against the code.
 - Research workflow `wf_3e7d6f08-e8d` (task `w3z1mu7u1`) — all Mantle / API-key /
   model-region / SDK / ops facts, cited.
+- Adversarial spec review `wf_5993aa3e-239` (task `w0vvfpgth`) — 43 flaws raised, 23
+  survived; verdict *revise-spec*; drove this revision.
 - PRI-2494 launcher `env -i` isolation invariant.
