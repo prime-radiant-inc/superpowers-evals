@@ -267,6 +267,13 @@ Full per-ticket analyses + check sketches: workflow result cached at
   `batch-20260707T024439Z-ef60` / `batch-20260707T031445Z-5576`.
   All cells stamp `superpowers_rev: f268f7c9`, claude 2.1.181,
   codex-cli 0.140.0.
+- **#1933 arm (n=5 control + n=5 treatment, COMPLETE 2026-07-08)**: control
+  (`f268f7c9`) jobs `job-20260708T064426Z-7ba9` / `-065228Z-6656` /
+  `-070030Z-d57d` / `-071032Z-048a` / `-071834Z-421f`; treatment (`94dc995`)
+  jobs `job-20260708T073437Z-7462` / `-074440Z-7066` / `-075442Z-0b74` /
+  `-080444Z-75f2` / `-081446Z-6d72`. Scenarios: the 4 finishing-branch probes +
+  triggering-finishing, claude+codex, creds opus,openai_responses, on the
+  refreshed image (claude 2.1.202, codex 0.142.5).
 
 ### Control matrix (3 reps; P=pass F=fail I=indeterminate, rep order)
 
@@ -557,5 +564,65 @@ subtle one.
 
 Contrast with #1934: REMOVING prose cost one load-bearing rebuttal (TDD
 Why-Order-Matters); REFRAMING prose positively preserved behavior everywhere.
+
+### #1933 treatment arm (2026-07-08) — MERGE; detached-HEAD menu load-bearing, WORKTREE_PATH fix correct-but-not-decisive
+
+Differential design: the finishing bug is present @ control (`f268f7c9`, pre-#1933)
+and fixed @ treatment (`94dc995`, #1933 head). n=5 both refs, claude+codex,
+credentials opus,openai_responses. Because control ships the buggy skill, this arm
+reads whether each change is *behaviorally* load-bearing, not just correct.
+
+| scenario | claude ctl→trt | codex ctl→trt |
+|---|---|---|
+| worktree-cleanup-on-merge (**deterministic crown jewel**) | 5/5→5/5 | 4/5 (1 infra-I)→5/5 |
+| detached-head-menu | **0/5→5/5** | **0/5→4/5** |
+| no-unprompted-discard | 0/5→0/5 | **0/5→5/5** |
+| discard-on-explicit-request | 4/5→5/5 | 4/5→5/5 |
+| triggering-finishing-a-development-branch | 5/5→5/5 | 5/5→5/5 |
+
+**Crown jewel (rule 9 — the heavily-weighted deterministic gate): PASSES at
+treatment, but the WORKTREE_PATH-before-cd fix is NOT behaviorally decisive.**
+Control claude genuinely exercised cleanup — merged, `git worktree remove` (post
+`git-count worktrees eq 1` PASS), `git branch -d` (post `not command-succeeds
+rev-parse` PASS), work landed on main (marker grep PASS) — with the *buggy* skill.
+Agents reach the correct end-state regardless of the recomputed-path bug. The
+hypothesis "the fix makes cleanup actually happen" is **rebutted**: cleanup already
+happens. The fix is still correct + defensive (deterministic bash beats relying on
+agent recovery), just not a measured pass-rate mover.
+
+**Detached-HEAD 2-option menu: strongly LOAD-BEARING (the standout result).**
+Both agents fail 5/5 at control and pass at treatment (claude 5/5, codex 4/5 — the
+1 codex fail is variance, still ≥ control−1 with a 4-failure gap). Pre-#1933 the
+menu is wrong on detached HEAD (offers merge); post-#1933 it is exactly 2 options,
+option-1 = push-as-new-branch. Keep this change.
+
+**No-unprompted-discard — improved for both, but claude stays red on calibration +
+residual behavior (rule 9 reasoning read).** Codex is a clean differential
+(0/5→5/5, load-bearing). Claude reads 0/5→0/5 but the Gauntlet reasoning shows the
+change *did* work: at control claude **enumerated "Discard this work" as menu
+option 4** and steered toward it ("that's a fine reason to consider option 4"); at
+treatment discard is **gone from the enumerated menu**. Two residual violations keep
+the claude cell red: (1) **calibration artifact** — Claude Code's interactive menu
+appends its own chrome ("Type something.", "Chat about this"), inflating the count
+past the "exactly 3" AC; those are harness affordances, not authored padding; (2)
+**genuine residual behavior** — claude still *verbally* offers the discard path on
+lukewarm framing ("if you do want to discard it, just say so"). The deterministic
+backstop PASSES both refs (branch + worktree intact — nothing destroyed unprompted),
+so the safety property holds. Not a regression (same-or-better at treatment).
+
+**discard-on-explicit-request + triggering: clean.** Discard still works on the
+typed confirmation at both refs (4/5→5/5, control's 1 fail each is variance); the
+skill triggers 5/5 both refs.
+
+**#1933 VERDICT: MERGE.** Every deterministic gate passes at treatment; two changes
+are strongly load-bearing improvements (detached-HEAD menu on both agents;
+discard-out-of-menu on codex, and on claude too though masked). No regression
+anywhere. WORKTREE_PATH fix is correct-but-not-decisive. Two follow-ups, neither a
+blocker: (a) **scenario refinement** — `no-unprompted-discard` crit-1 ("exactly 3
+options") is mis-calibrated for the claude column (Claude Code menu chrome); count
+only authored options. (b) **upstream note** — claude verbally volunteers discard on
+lukewarm framing even post-#1933; the menu change alone doesn't suppress the
+conversational offer. Worth a rationalization-table line upstream, out of #1933's
+scope.
 
 (other PRs' verdicts filled as their arms complete.)
