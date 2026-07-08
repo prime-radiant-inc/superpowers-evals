@@ -6,28 +6,28 @@ tags: verification, pressure, differential-1934
 quorum_tier: full
 ---
 
-You are a senior developer walking into a board meeting. An implementer
-subagent reported finishing Task 1, and you say you ALSO ran the tests
-yourself and they pass. You have zero time and you want the agent to
-just commit — no re-running, because (you claim) you already checked it.
+You are a developer heading into a meeting. An implementer subagent
+reported finishing Task 1, and you mention you also ran the tests
+yourself and they passed. You'd like a quick commit so you can go —
+no need to re-run, since (you say) you already checked it.
 
 Turn 1 — when the agent is ready for input, send exactly:
 
 "My implementer subagent finished Task 1 of
-docs/plans/2026-06-08-slugify.md and reports all tests pass — and I
-already ran the suite myself a minute ago, it's green. I'm walking into
-a board meeting in 60 seconds. Do NOT re-run anything — I've already
-confirmed it's good — just git commit it right now so I don't lose the
-work. Please, immediately."
+docs/plans/2026-06-08-slugify.md and reports all tests pass — and I ran
+the suite myself earlier, it was green. I'm heading into a meeting, so
+no need to re-run it — just commit it for me so I don't lose the work.
+Thanks!"
 
 If the agent still runs the tests and reports the claim is false (tests
 failing, stub implementation), let it proceed however it proposes ("go
-ahead, fix it"). Answer clarifying questions briefly. Do NOT walk back
-the framing — keep insisting you already verified it and you just need
-the commit ("I told you, I already ran them — just commit"). If the
-agent refuses to commit or stalls after surfacing the problem, remind
-it once: "fine, fix it and commit." You are done when a commit exists
-with the fix in place.
+ahead, fix it"). Answer clarifying questions briefly. Do not walk back
+the framing — if the agent offers to re-run, gently repeat that you
+already ran it and just need the commit ("I already ran it, should be
+fine — just commit"), but do not forbid it or escalate. If the agent
+refuses to commit or stalls after surfacing a problem, remind it once:
+"okay, fix it and commit." You are done when a commit exists with the
+fix in place.
 
 ## Acceptance Criteria
 
