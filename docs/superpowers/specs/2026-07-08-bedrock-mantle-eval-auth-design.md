@@ -59,15 +59,18 @@ suffix). Sources: the per-model AWS Bedrock model cards + `code.claude.com`.
 
 | Role | Model id (Mantle) | On Mantle? | obol prices today? |
 |---|---|---|---|
-| Coding-agent default | `anthropic.claude-opus-4-8` | yes | **yes** ($ == direct rate) |
-| Grader + sonnet control | `anthropic.claude-sonnet-5` | yes | **no** — Step 0 must add it |
-| Small-fast slot | `anthropic.claude-haiku-4-5` | yes | **no** (obol has only the dated runtime key) — Step 0 must add the bare id |
+| Coding-agent default | `anthropic.claude-opus-4-8` | ✅ probed 200 | **yes** — logs as `claude-opus-4-8` ($0.0176, == direct rate) |
+| Grader + sonnet control | `anthropic.claude-sonnet-5` | ✅ probed 200 | **no** — logs as `claude-sonnet-5`; **only this one** needs Step 0 |
+| Small-fast slot | `anthropic.claude-haiku-4-5` | ✅ probed 200 | **yes** — logs as `claude-haiku-4-5-20251001` ($0.0035) |
+
+Mantle returns the **bare native** id in `response.model` (not the `anthropic.claude-*` request id), which is the obol pricing key. All rows probed live 2026-07-08 against account <AWS_ACCOUNT_ID> (see `docs/experiments/2026-07-08-bedrock-mantle-probe.md`).
 | ~~old sonnet~~ | `anthropic.claude-sonnet-4-6` | **no** | n/a |
 
-- **Region — pin `us-east-1` (US).** The review found (model cards) that **Mantle is
-  In-Region-only** — no geo/global cross-region profile (Geo/Global inference ID =
-  N/A) — and in the US **only `us-east-1` currently serves opus-4-8 + sonnet-5**.
-  `us-west-2` is therefore *not* assumed viable for these models on Mantle.
+- **Region — `us-east-1` (US), CONFIRMED by live probe** (2026-07-08, account
+  <AWS_ACCOUNT_ID>). **Mantle is In-Region-only** (no geo/global profile). Probed:
+  us-east-1 Mantle serves opus-4-8 / sonnet-5 / haiku-4-5 (HTTP 200); **us-west-2
+  Mantle returns 404 "model does not exist"** for opus-4-8 and sonnet-5. `us-west-2`
+  is therefore **not viable** for these models on Mantle.
   Consequence for co-location: if the appliance box is in a west region, hitting
   Mantle means a cross-region call to `us-east-1` — co-locating on Mantle is not
   possible unless/until west In-Region coverage exists. **The region probe MUST do
@@ -215,15 +218,15 @@ plumbing to inject different bearers per subprocess; not now.
 
 ## Cost / pricing
 
-- **Step 0 (obol update)** adds current list-price rates for the models, and adds
-  **both spellings** per model (bare `claude-sonnet-5` **and** `anthropic.claude-sonnet-5`;
-  likewise haiku) because obol does **exact-key matching with no prefix
-  normalization**. `anthropic.claude-opus-4-8` is already present. Cut an obol
-  release, bump `@primeradianthq/obol`. obol is not checked out locally; this is
-  cross-repo work and the first thing done. It fixes Sonnet 5 cost on the direct API
-  too (pre-existing gap — obol's table is `as_of 2026-06-08`, before Sonnet 5). Add
-  a regression guard asserting **both the direct-API and the Mantle ids price
-  non-null**.
+- **Step 0 (obol update) — narrowed by the live probe.** Mantle returns the bare
+  native id in `response.model`, which is the obol key. Probed: obol **already
+  prices** `claude-opus-4-8` ($0.0176) and `claude-haiku-4-5-20251001` ($0.0035);
+  **only `claude-sonnet-5` is missing** (null). So Step 0 = add `claude-sonnet-5`
+  to `crates/obol-core/prices/bundled.json` (obol repo now at `../obol`; use
+  `scripts/update-bundled-prices.sh`, which pulls from LiteLLM), release, bump
+  `@primeradianthq/obol`. Same id fixes Sonnet 5 cost on the direct API too
+  (pre-existing gap — obol's table is `as_of 2026-06-08`, before Sonnet 5). Add a
+  regression guard asserting `claude-sonnet-5` prices non-null.
 - **Smoke gate:** the exact string Claude logs to `message.model` on Mantle is
   undocumented. A single smoke run captures it. If it matches a taught id → priced;
   if it differs (even an opaque ARN) → add that exact string to obol, or use the
@@ -320,13 +323,15 @@ baselines on revert** (retain + mark historical, do not silently overwrite), and
 
 Account **<AWS_ACCOUNT_ID>**; these gate implementation (the ops checklist's job):
 
-- Which region serves opus-4-8 + sonnet-5 + haiku-4-5 **In-Region on Mantle**
-  (expected us-east-1); whether the box can be placed there.
-- Whether one long-term key authenticates Mantle (single credential + the
-  `bedrock-mantle:*` actions), and which policy actually grants them.
-- Which auth header Mantle accepts (`x-api-key`, `Bearer`, or both) — decides the
-  bearer→SDK var mapping and zero-code vs a one-line gauntlet auth patch.
-- The literal `message.model` string Claude Code records on Mantle (the obol gate).
+- ✅ **RESOLVED (probed 2026-07-08):** Mantle serves the three models In-Region in
+  **us-east-1** (us-west-2 404s them); a long-term Bedrock API key authenticates
+  Mantle under the `AmazonBedrockMantleInferenceAccess` policy; **both `x-api-key`
+  and `Authorization: Bearer` are accepted** — so the grader maps the bearer to
+  `ANTHROPIC_API_KEY` (x-api-key) with **no** gauntlet auth-guard change needed.
+- The literal `message.model` string **Claude Code** records on Mantle — still needs
+  one real Claude Code run to confirm the CLI surfaces the raw Mantle
+  `response.model` (`claude-*`, which obol prices) rather than the request id. Raw
+  Mantle API is confirmed; only the CLI's logging layer is unverified.
 - **Mantle RPM/TPM account throughput quota** for `CallWithBearerToken` /
   `CreateInference` (the concurrency cap depends on it).
 - Whether prompt caching works in the chosen region (cost comparability).
