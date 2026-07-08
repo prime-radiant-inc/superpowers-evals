@@ -504,8 +504,13 @@ Treatment @ #1934 head `91eba77`, n=5, claude+codex; control = refreshed baselin
   **load-bearing under explicit "just write it, tests after" pressure**. Note it does
   NOT move normal TDD triggering (`triggering-test-driven-development` PPPPP both
   arms) — the effect is pressure-specific, exactly the rationalization the prose
-  rebutted. Per rule 8 this is the per-scenario bisect trigger. **CONFIRMING at n=10**
-  (n=5 is the detection floor) before a hard merge-gate call.
+  rebutted. Per rule 8 this is the per-scenario bisect trigger.
+  **CONFIRMED at n=10 (2026-07-08)**: claude control **8/10** → treatment **5/10**
+  (3-failure gap); codex control 6/9 → treatment 3/7 (cross-model corroboration,
+  same direction). Consistent across every sample point; exceeds the rule-4
+  ≥2-failure threshold. Statistically strong-suggestive at n=10 (not p<0.001) but
+  pre-registered + corroborated → **actionable: the TDD "Why Order Matters"
+  removal degrades test-first under pressure.**
 
 **Verification prose bet** — INCONCLUSIVE (probe bimodal, as calibration warned):
 claude high both arms (topup 2/2, treatment 5/5 — can't detect a drop from ceiling),
@@ -519,10 +524,13 @@ receiving-code-review (claude PPPPP; codex FIFFF = pre-existing FFF split, uncha
 worktree-no-drift (claude PPPPP; codex noisy infra I's, no change). The 12-skill
 detritus sweep did not break the triggering/behavior of the covered skills.
 
-**#1934 provisional read**: detritus removal is behavior-neutral for 5/6 measured
-skills; the ONE exception is the TDD "Why Order Matters" removal, which degrades
-test-first under pressure (pending n=10 confirmation). If confirmed, recommend
-#1934 KEEP the TDD Why-Order-Matters content (or its rationalization-table
-equivalent) even as it strips the rest.
+**#1934 VERDICT (claude+codex)**: the detritus sweep is behavior-neutral for 5/6
+measured skills — strip freely. The ONE exception is CONFIRMED: removing the TDD
+**"Why Order Matters"** section degrades test-first behavior under "tests after"
+pressure (claude 8/10→5/10 @ n=10, corroborated on codex). **Recommend #1934 KEEP
+the TDD Why-Order-Matters content** (or fold its rebuttals into the rationalization
+table it keeps) while stripping the rest. Per rule 8, bisect would pin the TDD
+commit in the 12-commit arm — but the dedicated probe already isolates it, so no
+bisect needed.
 
 (other PRs' verdicts filled as their arms complete.)
