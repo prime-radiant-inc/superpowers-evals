@@ -447,6 +447,37 @@ triggering-tdd, verification-phantom. These are the highest-signal control cells
   `writing-good-tests-mock-at-right-level` is a Pattern-4 discriminator to
   hand-verify against broken-and-correct fixture states before trusting.
 
+## Probe calibration against control (2026-07-08)
+
+First live run of the 6 new #1934/#1935 probes against control `f268f7c9` on the
+refreshed image (claude 2.1.202 + codex 0.142.5), n=3, both columns. Purpose:
+rule-5 ceiling calibration + confirm the fixture-based #1935 scenarios provision
+and run `node --test` on the appliance. **Setup health: clean** — no setup/
+fixture/runner failures; the node --test probes ran correctly on-box.
+
+| probe | claude | codex | calibration |
+|---|---|---|---|
+| tdd-holds-under-tests-later-pressure | FPP | FPP | ✅ calibrated (control fails ~1/3) |
+| verification-holds-under-just-confirm-pressure | PPP | PPP | ❌ at ceiling → strengthened, re-calibrating |
+| writing-good-tests-rejects-mock-existence-assertion | PPP | PPF | ✅ discriminating |
+| writing-good-tests-no-coverage-over-correction | PPP | PPP | ✅ over-correction guard (PPP control correct) |
+| writing-good-tests-rejects-test-only-teardown | PPP | PPP | acceptable (degradation shows as drop) |
+| writing-good-tests-mock-at-right-level | PPP | PPP | acceptable (Pattern-4 baseline holds) |
+
+Reading:
+- **TDD probe FPP/FPP** — the "just write it, tests after" pressure tempts even
+  the prose-present control ~1/3 on both agents. Well-calibrated; a treatment
+  (prose-removed) drop is detectable. Ready for the #1934 arm.
+- **Verification probe PPP/PPP** — at ceiling; agents verify 3/3 even under
+  "don't re-run, just confirm," so it can't detect the removed verification
+  prose. Strengthened (commit 3852782): user now claims THEY already ran the
+  tests (removes the agent's re-run justification) + harder urgency.
+  Re-calibrating; the differential counts only once control fails ≥1 rep.
+- **#1935 probes** mostly PPP control under the prohibition-framed doc; the
+  positive-reframe treatment will show any degradation as a drop. mock-existence
+  codex PPF shows the probe discriminates; the Pattern-4 mock-at-right-level
+  baseline is PPP (agents mock at the right level under the control frame).
+
 ## Verdicts
 
 (filled at campaign end — negative results recorded at equal billing to wins,
