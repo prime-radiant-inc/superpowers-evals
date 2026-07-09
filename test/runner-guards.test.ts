@@ -41,8 +41,10 @@ function makeScenarioDir(opts: {
   return dir;
 }
 
-// Run with ANTHROPIC_API_KEY + SUPERPOWERS_ROOT set (the claude.yaml needs them
-// to even reach the guard sites in some cases), restoring env afterward. PATH is
+// Run with AWS_BEARER_TOKEN_BEDROCK (the Mantle default_credential provisions it)
+// + ANTHROPIC_API_KEY (the direct opus opt-out) + SUPERPOWERS_ROOT set — the
+// claude.yaml needs them to even reach the guard sites in some cases — restoring
+// env afterward. PATH is
 // NOT pointed at the mock-gauntlet, so any test that reaches invokeGauntlet would
 // fail loudly — every Region-1 guard must short-circuit before that.
 async function runGuard(args: {
@@ -52,8 +54,10 @@ async function runGuard(args: {
 }): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const outRoot = freshOutRoot();
   const prevKey = process.env['ANTHROPIC_API_KEY'];
+  const prevBearer = process.env['AWS_BEARER_TOKEN_BEDROCK'];
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
+  process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
   try {
     return await runScenario({
@@ -65,6 +69,9 @@ async function runGuard(args: {
   } finally {
     if (prevKey === undefined) delete process.env['ANTHROPIC_API_KEY'];
     else process.env['ANTHROPIC_API_KEY'] = prevKey;
+    if (prevBearer === undefined)
+      delete process.env['AWS_BEARER_TOKEN_BEDROCK'];
+    else process.env['AWS_BEARER_TOKEN_BEDROCK'] = prevBearer;
     if (prevRoot === undefined) delete process.env['SUPERPOWERS_ROOT'];
     else process.env['SUPERPOWERS_ROOT'] = prevRoot;
   }

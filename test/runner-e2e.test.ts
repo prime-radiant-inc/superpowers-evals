@@ -49,10 +49,12 @@ async function runWithFixture(
   // requires bracket access throughout (the standard's tsconfig is ON).
   const prevPath = process.env['PATH'];
   const prevKey = process.env['ANTHROPIC_API_KEY'];
+  const prevBearer = process.env['AWS_BEARER_TOKEN_BEDROCK'];
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
   const prevFixture = process.env['MOCK_GAUNTLET_FIXTURE'];
   process.env['PATH'] = `${MOCK}:${prevPath ?? ''}`;
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
+  process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
   process.env['MOCK_GAUNTLET_FIXTURE'] = fixture;
   try {
@@ -72,6 +74,11 @@ async function runWithFixture(
       delete process.env['ANTHROPIC_API_KEY'];
     } else {
       process.env['ANTHROPIC_API_KEY'] = prevKey;
+    }
+    if (prevBearer === undefined) {
+      delete process.env['AWS_BEARER_TOKEN_BEDROCK'];
+    } else {
+      process.env['AWS_BEARER_TOKEN_BEDROCK'] = prevBearer;
     }
     if (prevRoot === undefined) {
       delete process.env['SUPERPOWERS_ROOT'];

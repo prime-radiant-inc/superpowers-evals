@@ -110,6 +110,9 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
         ...process.env,
         PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
+        // claude.yaml's default_credential is opus_bedrock (Mantle); its
+        // provision resolves this bearer (mock-gauntlet makes no real call).
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
         MOCK_GAUNTLET_FIXTURE: 'hang',
       },

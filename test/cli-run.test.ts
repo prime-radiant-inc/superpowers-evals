@@ -47,6 +47,10 @@ function runCli(
         ...process.env,
         PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
+        // claude.yaml's default_credential is opus_bedrock (Mantle), whose
+        // provision resolves this bearer; the mock-gauntlet never makes a real
+        // Mantle call, so a fake value suffices.
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         // The real claude.yaml lists SUPERPOWERS_ROOT in required_env and the
         // $SUPERPOWERS_ROOT context substitution reads it.
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),

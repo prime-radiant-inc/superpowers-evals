@@ -9,6 +9,6 @@ required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
 project_prompt: claude.project-prompt.md
-model: opus
-default_credential: opus
+model: claude-opus-4-8
+default_credential: opus_bedrock
 os_support: [linux, windows]
