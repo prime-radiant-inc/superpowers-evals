@@ -18,7 +18,7 @@ const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 // installed launcher path plus its env-file/home fixture paths.
 function installLauncher(
   agent: 'claude' | 'codex',
-  opts: { omitEnvFile?: boolean } = {},
+  opts: { omitEnvFile?: boolean; envFileContent?: string } = {},
 ): {
   launcher: string;
   binDir: string;
@@ -40,12 +40,11 @@ function installLauncher(
   // The env file each launcher sources.
   const envFile = join(runDir, `${agent}.env`);
   if (!opts.omitEnvFile) {
-    writeFileSync(
-      envFile,
+    const dflt =
       agent === 'claude'
         ? "ANTHROPIC_API_KEY='sk-test-launcher'\n"
-        : "CODEX_PROVIDER_API_KEY='sk-codex-test'\n",
-    );
+        : "CODEX_PROVIDER_API_KEY='sk-codex-test'\n";
+    writeFileSync(envFile, opts.envFileContent ?? dflt);
   }
 
   const substitutions: Record<string, string> = {
@@ -86,6 +85,14 @@ const HOSTILE = {
   ANTHROPIC_AUTH_TOKEN: 'evil-token',
   ANTHROPIC_MODEL: 'evil-model',
   CLAUDE_CODE_USE_BEDROCK: '1',
+  CLAUDE_CODE_USE_MANTLE: '1',
+  AWS_ACCESS_KEY_ID: 'AKIA-host',
+  AWS_SECRET_ACCESS_KEY: 'host-secret',
+  AWS_SESSION_TOKEN: 'host-session-token',
+  AWS_PROFILE: 'host-profile',
+  AWS_REGION: 'eu-evil-1',
+  AWS_DEFAULT_REGION: 'eu-evil-1',
+  AWS_BEARER_TOKEN_BEDROCK: 'host-bearer-EVIL',
   CLAUDECODE: '1',
   CLAUDE_CODE_SESSION_ID: 'host-session',
   OPENAI_API_KEY: 'sk-host-openai',
@@ -128,6 +135,37 @@ test('codex launcher: hostile host env never reaches the agent', () => {
   // The api-key path's provider key DOES reach it (sourced from CODEX_ENV_FILE).
   expect(env['CODEX_PROVIDER_API_KEY']).toBe('sk-codex-test');
   expect(env['HOME']).not.toBe('/host/home');
+});
+
+test('claude launcher: Mantle .claude-env forwards seeded vars, drops the key, scrubs host AWS', () => {
+  const { launcher, binDir, envDump } = installLauncher('claude', {
+    envFileContent:
+      "CLAUDE_CODE_USE_MANTLE=1\nAWS_REGION='us-east-1'\nAWS_BEARER_TOKEN_BEDROCK='seeded-bearer-OK'\n",
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      // A host-exported direct-API key must not leak onto the Mantle path
+      // (the regression Task 6 fixed) — HOSTILE itself omits this key so the
+      // all-undefined loop above stays valid; set it only here.
+      ANTHROPIC_API_KEY: 'sk-host-EVIL',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  // Seeded values reach the agent — NOT the hostile host values.
+  expect(env['CLAUDE_CODE_USE_MANTLE']).toBe('1');
+  expect(env['AWS_REGION']).toBe('us-east-1');
+  expect(env['AWS_BEARER_TOKEN_BEDROCK']).toBe('seeded-bearer-OK');
+  // The direct key is absent on the Mantle path, even though the host set one.
+  expect(env['ANTHROPIC_API_KEY']).toBe(undefined);
+  // Host AWS creds the .claude-env did NOT set are still scrubbed.
+  expect(env['AWS_ACCESS_KEY_ID']).toBe(undefined);
+  expect(env['AWS_SESSION_TOKEN']).toBe(undefined);
+  expect(env['AWS_PROFILE']).toBe(undefined);
 });
 
 test('codex launcher: subscription path (no env file) forwards no provider key', () => {
