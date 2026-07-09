@@ -86,3 +86,26 @@ test('resolveAgent(codexCfg, "windows", osTarget) → throws ProvisionError', ()
     /no windows provisioner/,
   );
 });
+
+// --- credentialApi guard (Task 8) ---
+
+test('resolveAgent rejects a mantle credential on windows', () => {
+  expect(() =>
+    resolveAgent(cfg('claude'), 'windows', windowsOsTarget, 'mantle'),
+  ).toThrow(/Mantle/);
+});
+
+test('resolveAgent(claudeCfg, "windows", osTarget) with no credentialApi → WindowsClaudeAgent (regression)', () => {
+  const agent = resolveAgent(cfg('claude'), 'windows', windowsOsTarget);
+  expect(agent).toBeInstanceOf(WindowsClaudeAgent);
+});
+
+test('resolveAgent(claudeCfg, "windows", osTarget) with a non-mantle credentialApi → WindowsClaudeAgent (regression)', () => {
+  const agent = resolveAgent(
+    cfg('claude'),
+    'windows',
+    windowsOsTarget,
+    'anthropic',
+  );
+  expect(agent).toBeInstanceOf(WindowsClaudeAgent);
+});

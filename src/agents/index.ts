@@ -296,17 +296,28 @@ const CUSTOM_AGENTS: Readonly<
  *  - `os === 'windows'` + family `claude` → WindowsClaudeAgent using
  *    `osTarget.remote`.
  *  - `os !== 'linux'` + any other family → throws ProvisionError.
+ *  - `os === 'windows'` + family `claude` + `credentialApi === 'mantle'` →
+ *    throws ProvisionError. WindowsClaudeAgent.provision ignores the resolved
+ *    credential (it reads ANTHROPIC_API_KEY and bakes config.model), so a
+ *    Mantle credential would silently mis-run/mis-bill instead of using
+ *    Bedrock.
  *
- *  The `os` and `osTarget` parameters default so existing `resolveAgent(cfg)`
- *  call sites keep compiling unchanged. */
+ *  The `os`, `osTarget`, and `credentialApi` parameters default so existing
+ *  `resolveAgent(cfg)` call sites keep compiling unchanged. */
 export function resolveAgent(
   config: AgentConfig,
   os: string = 'linux',
   osTarget?: OsTarget,
+  credentialApi?: string,
 ): CodingAgent {
   if (os !== 'linux') {
     const family = config.runtime_family ?? config.name;
     if (family === 'claude') {
+      if (credentialApi === 'mantle') {
+        throw new ProvisionError(
+          `agent ${config.name}: Windows Claude does not support the Mantle credential; use --credential opus`,
+        );
+      }
       if (osTarget === undefined || osTarget.remote === undefined) {
         throw new ProvisionError(
           `agent ${config.name}: windows provisioner requires osTarget.remote`,

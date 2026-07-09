@@ -1122,7 +1122,7 @@ async function runInnerBody(
       );
     }
   }
-  const agent = resolveAgent(cfg, os, osTarget);
+  const agent = resolveAgent(cfg, os, osTarget, resolvedCredential?.api);
 
   // setup: isolated config + workdir, claude provisioning, then setup.sh.
   const workdir = join(runDir, 'coding-agent-workdir');
