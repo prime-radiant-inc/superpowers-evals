@@ -32,8 +32,20 @@
 # claude is a strict-capture target, so the run is a loud
 # indeterminate(stage=capture), never a silent pass.
 #
-# Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && source "$CLAUDE_ENV_FILE" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+# Equivalent manual command (for debugging) — a sketch, not literal bash (the
+# real conditional forwarding is the unset/source/env_args block below):
+#   cd "$QUORUM_AGENT_CWD" \
+#     && unset ANTHROPIC_API_KEY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK \
+#          AWS_REGION AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK \
+#          AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
+#     && source "$CLAUDE_ENV_FILE" \
+#     && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" \
+#          HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" \
+#          XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" \
+#          CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 \
+#          <ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" on the direct path, else
+#           CLAUDE_CODE_USE_MANTLE/AWS_REGION/AWS_BEARER_TOKEN_BEDROCK on Mantle> \
+#     claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
 #
 # Auth is either ANTHROPIC_API_KEY (direct API) or CLAUDE_CODE_USE_MANTLE +
 # AWS_REGION + AWS_BEARER_TOKEN_BEDROCK (Bedrock/Mantle), whichever

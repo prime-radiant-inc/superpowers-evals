@@ -425,12 +425,15 @@ git commit -m "feat(claude): provision Bedrock/Mantle .claude-env, skip seedClau
 Replace the block from `source "$CLAUDE_ENV_FILE"` through the `exec env -i ...` (lines 45–63) with:
 
 ```bash
-# Scrub any host-inherited Bedrock/AWS/gate vars BEFORE sourcing, so the gate and
-# values below come ONLY from the run-scoped .claude-env, never host inheritance
-# (PRI-2494). The forward list further down MUST stay a subset of this unset list.
+# Scrub any host-inherited Bedrock/AWS/gate vars, and ANTHROPIC_API_KEY, BEFORE
+# sourcing, so the gate and values below come ONLY from the run-scoped
+# .claude-env, never host inheritance (PRI-2494). The ANTHROPIC_API_KEY unset in
+# particular stops a host-exported key from being forwarded on the Mantle path.
+# The forward list further down MUST stay a subset of this unset list.
 unset CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK \
   AWS_REGION AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK \
-  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
+  ANTHROPIC_API_KEY
 source "$CLAUDE_ENV_FILE"
 
 # Host-env isolation (PRI-2494): env -i + explicit allowlist, matching the

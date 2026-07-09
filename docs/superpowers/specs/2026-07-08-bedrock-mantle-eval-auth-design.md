@@ -142,9 +142,10 @@ Core isolation invariant: global env → grader; per-run `.claude-env` behind
 - **Launcher** (`coding-agents/claude-context/launch-agent`):
   - `unset CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK AWS_REGION
     AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK AWS_ACCESS_KEY_ID
-    AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE` **before**
-    `source "$CLAUDE_ENV_FILE"`, so the gate and values come only from the seeded
-    file, never host inheritance.
+    AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE ANTHROPIC_API_KEY`
+    **before** `source "$CLAUDE_ENV_FILE"`, so the gate and values come only from
+    the seeded file, never host inheritance — the `ANTHROPIC_API_KEY` unset in
+    particular stops a host-exported key from being forwarded on the Mantle path.
   - Append **exactly** `CLAUDE_CODE_USE_MANTLE`, `AWS_REGION`,
     `AWS_BEARER_TOKEN_BEDROCK` to the `env -i` allowlist, conditionally (only when
     the sourced file set them). **Invariant: the forward list MUST be a subset of
