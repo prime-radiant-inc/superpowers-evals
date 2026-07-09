@@ -194,3 +194,38 @@ test('dedupes approximations by (kind, detail) tuple; undefined detail -> null',
     { kind: 'rounded', detail: null },
   ]);
 });
+
+test('bundled obol prices the Bedrock/Mantle model ids we pin (regression guard)', async () => {
+  // The Claude coding-agent + the Sonnet 5 grader log these bare native ids on
+  // Mantle (docs/experiments/2026-07-08-bedrock-mantle-probe.md). obol must price
+  // all three or the cost-motivated Bedrock work goes dark. claude-sonnet-5 was
+  // added in the 2026-07-09 bundle refresh (obol 0.7.0); this fails on an obol
+  // whose snapshot drops it.
+  for (const model of [
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+    'claude-haiku-4-5-20251001',
+  ]) {
+    const f = writeTrajectory({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'claude', version: 'unknown', model_name: model },
+      steps: [
+        {
+          step_id: 1,
+          source: 'agent',
+          model_name: model,
+          metrics: {
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            cached_tokens: 200,
+          },
+        },
+      ],
+    });
+    const usage = await estimateTrajectory(f);
+    const u = usage as NonNullable<typeof usage>;
+    expect(u.unpriced_models).toEqual([]);
+    expect(u.est_cost_usd).not.toBeNull();
+    expect((u.est_cost_usd as number) > 0).toBe(true);
+  }
+});
