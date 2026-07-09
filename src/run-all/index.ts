@@ -70,6 +70,9 @@ export interface InvokeChildArgs {
   // Credential name to forward to the child as --credential. Empty string or
   // absent means no --credential flag is appended (credential-less agents).
   readonly credential?: string;
+  // Grader model to forward to the child as --grader-model. Absent means no
+  // flag is appended (the child falls back to the GRADER_MODEL default).
+  readonly graderModel?: string;
   readonly timeoutSeconds?: number;
   readonly extraEnv?: Readonly<Record<string, string>>;
   // Called once with the spawned child's OS pid, right after spawn. The
@@ -161,11 +164,10 @@ export function spawnCollectRunId(
 // agents-dir / out-root are forwarded as explicit flags so the child doesn't
 // rely on its own cwd-relative defaults (invoke_child). Spawned ASYNC (so the
 // batch honors --jobs concurrency) via the bun runtime on the TS CLI entry.
-export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
-  const env: Record<string, string | undefined> = {
-    ...envSnapshot(),
-    ...(args.extraEnv ?? {}),
-  };
+// The exact `quorum run` child argv for one cell — a pure function so the
+// forwarded flags (--credential, --grader-model) are unit-testable without
+// spawning. Optional flags append only when present.
+export function buildChildRunArgs(args: InvokeChildArgs): string[] {
   const childArgs: string[] = [
     CLI_ENTRY,
     'run',
@@ -180,9 +182,20 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
   if (args.credential !== undefined && args.credential !== '') {
     childArgs.push('--credential', args.credential);
   }
+  if (args.graderModel !== undefined && args.graderModel !== '') {
+    childArgs.push('--grader-model', args.graderModel);
+  }
+  return childArgs;
+}
+
+export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
+  const env: Record<string, string | undefined> = {
+    ...envSnapshot(),
+    ...(args.extraEnv ?? {}),
+  };
   return spawnCollectRunId({
     command: process.execPath,
-    args: childArgs,
+    args: buildChildRunArgs(args),
     env,
     ...(args.timeoutSeconds !== undefined
       ? { timeoutSeconds: args.timeoutSeconds }
@@ -205,6 +218,9 @@ export interface RunBatchArgs {
   readonly credentialFilter?: readonly string[];
   readonly tier?: 'sentinel' | 'full' | 'adhoc' | null;
   readonly includeDrafts?: boolean;
+  // Gauntlet-Agent (grader) model forwarded to every child as --grader-model.
+  // Absent => the child uses the harness GRADER_MODEL default.
+  readonly graderModel?: string;
   readonly invoke?: InvokeFn;
   readonly stream?: { write(s: string): void };
   // Path to credentials.yaml; defaults to join(repoRoot(), 'credentials.yaml').
@@ -373,6 +389,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     credentialFilter,
     tier = null,
     includeDrafts = false,
+    graderModel,
     invoke = invokeChild,
     stream = process.stdout,
     clock = new RealClock(),
@@ -484,6 +501,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
       codingAgentsDir,
       outRoot,
       ...(entry.credential !== '' ? { credential: entry.credential } : {}),
+      ...(graderModel !== undefined ? { graderModel } : {}),
     });
 
   // The rate-limit latch hook: a finished child whose verdict.json carries the

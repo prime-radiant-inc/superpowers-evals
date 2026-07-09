@@ -121,12 +121,15 @@ export interface GauntletArgvArgs {
   readonly runDir: string;
   readonly maxTime?: string | undefined;
   readonly projectPrompt?: string | undefined;
+  // The Gauntlet-Agent (grader) model. Absent => the GRADER_MODEL default.
+  readonly graderModel?: string | undefined;
 }
 
-// The Gauntlet-Agent (QA grader) model, pinned explicitly rather than left to
-// gauntlet's built-in default. Sonnet 5 is the current grader/control tier;
-// Sonnet 4.6 is not served on Bedrock/Mantle, so pinning the grader here keeps
-// the direct-API and (Phase 2) Mantle grader on the same benchmarked model.
+// The default Gauntlet-Agent (QA grader) model, pinned explicitly rather than
+// left to gauntlet's built-in default. Sonnet 5 is the current grader/control
+// tier; Sonnet 4.6 is not served on Bedrock/Mantle, so pinning the grader here
+// keeps the direct-API and (Phase 2) Mantle grader on the same benchmarked
+// model. `--grader-model` overrides it per run (e.g. a 4.6 drift-study control).
 export const GRADER_MODEL = 'claude-sonnet-5';
 
 // Build the exact, order-stable gauntlet argv. Optional flags append only when
@@ -145,7 +148,7 @@ export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
     'gauntlet-agent',
     '--silent',
     '--model',
-    `agent=${GRADER_MODEL}`,
+    `agent=${a.graderModel ?? GRADER_MODEL}`,
   ];
   if (a.maxTime) {
     argv.push('--max-time', a.maxTime);
@@ -355,6 +358,8 @@ export interface RunScenarioArgs {
   // default_credential is used. When neither is set, the run proceeds without
   // a credential (provision receives undefined).
   readonly credential?: string | undefined;
+  // Gauntlet-Agent (grader) model override. When undefined, GRADER_MODEL.
+  readonly graderModel?: string | undefined;
   // Path to the credentials.yaml file. Defaults to 'credentials.yaml'.
   readonly credentialsPath?: string | undefined;
   // Caller-supplied run-start stamp (ISO8601). When set, the verdict's
@@ -1418,6 +1423,7 @@ async function runInnerBody(
       runDir,
       maxTime,
       projectPrompt: cfg.project_prompt,
+      graderModel: a.graderModel,
       launchCwd,
       runHomeDir,
       extraEnv,

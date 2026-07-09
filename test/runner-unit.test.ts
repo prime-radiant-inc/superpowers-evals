@@ -132,3 +132,28 @@ test('buildGauntletArgv appends only --max-time when projectPrompt is absent', (
     '5m',
   ]);
 });
+
+test('buildGauntletArgv honors an explicit graderModel override', () => {
+  const argv = buildGauntletArgv({
+    storyPath: '/s/story.md',
+    targetBinary: 'claude',
+    runDir: '/r',
+    graderModel: 'claude-sonnet-4-6',
+  });
+  // The grader model is the only thing that changes; everything else is stable.
+  expect(argv).toEqual([
+    'run',
+    '/s/story.md',
+    '--adapter',
+    'tui',
+    '--target',
+    'claude',
+    '--project-dir',
+    '/r',
+    '--state-dir',
+    'gauntlet-agent',
+    '--silent',
+    '--model',
+    'agent=claude-sonnet-4-6',
+  ]);
+});

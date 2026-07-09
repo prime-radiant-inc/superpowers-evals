@@ -108,6 +108,7 @@ interface RunOptions {
   readonly outRoot: string;
   readonly scenariosRoot: string;
   readonly credential?: string;
+  readonly graderModel?: string;
 }
 
 interface ShowOptions {
@@ -128,6 +129,7 @@ interface RunAllOptions {
   readonly tier?: string;
   readonly includeDrafts: boolean;
   readonly heartbeatSeconds: string;
+  readonly graderModel?: string;
 }
 
 const program = new Command();
@@ -151,6 +153,10 @@ program
   .option(
     '--credential <name>',
     'credential name (default: agent default_credential)',
+  )
+  .option(
+    '--grader-model <id>',
+    'Gauntlet-Agent (grader) model (default: claude-sonnet-5)',
   )
   .action(async (scenario: string, opts: RunOptions) => {
     const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
@@ -200,6 +206,7 @@ program
       outRoot: resolve(opts.outRoot),
       startedAt,
       credential: opts.credential,
+      graderModel: opts.graderModel,
       onRunDir: (dir) => {
         runDirForStop = dir;
       },
@@ -355,6 +362,10 @@ program
     'seconds between liveness heartbeats (0 disables)',
     String(30),
   )
+  .option(
+    '--grader-model <id>',
+    'Gauntlet-Agent (grader) model for every cell (default: claude-sonnet-5)',
+  )
   .action(async (opts: RunAllOptions) => {
     const agentFilter = csvList(opts.codingAgents);
     // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
@@ -407,6 +418,9 @@ program
         tier: tier ?? null,
         includeDrafts: opts.includeDrafts,
         heartbeatSeconds,
+        ...(opts.graderModel !== undefined
+          ? { graderModel: opts.graderModel }
+          : {}),
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

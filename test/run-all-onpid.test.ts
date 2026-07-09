@@ -2,7 +2,38 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invokeChild } from '../src/run-all/index.ts';
+import { buildChildRunArgs, invokeChild } from '../src/run-all/index.ts';
+
+// buildChildRunArgs forwards the per-cell flags to the child `quorum run`. The
+// grader model flows run-all -> child -> buildGauntletArgv, so a drift-study
+// control arm (`run-all --grader-model claude-sonnet-4-6`) reaches the grader.
+test('buildChildRunArgs forwards --grader-model and --credential when present', () => {
+  const args = buildChildRunArgs({
+    scenarioDir: '/s',
+    codingAgent: 'claude',
+    codingAgentsDir: '/a',
+    outRoot: '/o',
+    credential: 'opus_bedrock',
+    graderModel: 'claude-sonnet-4-6',
+  });
+  expect(args).toContain('--grader-model');
+  expect(args[args.indexOf('--grader-model') + 1]).toBe('claude-sonnet-4-6');
+  expect(args).toContain('--credential');
+  expect(args[args.indexOf('--credential') + 1]).toBe('opus_bedrock');
+});
+
+test('buildChildRunArgs omits --grader-model when absent or empty', () => {
+  const base = {
+    scenarioDir: '/s',
+    codingAgent: 'claude',
+    codingAgentsDir: '/a',
+    outRoot: '/o',
+  };
+  expect(buildChildRunArgs(base)).not.toContain('--grader-model');
+  expect(buildChildRunArgs({ ...base, graderModel: '' })).not.toContain(
+    '--grader-model',
+  );
+});
 
 // invokeChild must report the spawned child's OS pid through the optional onPid
 // hook so the dashboard can SIGINT in-flight children (Task 11). We don't need a
