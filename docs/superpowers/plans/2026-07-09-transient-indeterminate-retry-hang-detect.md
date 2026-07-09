@@ -26,7 +26,7 @@
 | File | Responsibility | Task |
 |---|---|---|
 | `src/runner/retry.ts` (new) | `isRetryableIndeterminate` predicate | 1 |
-| `src/agents/claude.ts` | `CLAUDE_STARTUP_HANG_MARKER` export | 1 |
+| `src/agents/claude.ts` (new leaf module) | `CLAUDE_STARTUP_HANG_MARKER` export | 1 |
 | `src/contracts/verdict.ts` | `attempts`/`attempt_count`/`flaked_green` optional fields | 2 |
 | `src/runner/index.ts` | `driveOnce` extraction (two-dir split); retry loop; watcher wiring + marker intercept; `RunScenarioArgs.maxRetries` | 3,4,7,8 |
 | `src/agents/startup-watch.ts` (new) | `StartupLivenessWatcher` (two-phase, fake-clock/fs seams) | 5 |
@@ -44,7 +44,7 @@ Test files: colocated `test/*.test.ts` (repo convention — e.g. `test/runner-re
 
 **Files:**
 - Create: `src/runner/retry.ts`
-- Modify: `src/agents/claude.ts` (add the marker export near the top, mirroring `src/agents/antigravity.ts:46`)
+- Create: `src/agents/claude.ts` (a one-constant leaf module — the marker only; do NOT import ClaudeAgent's home `src/agents/index.ts`. `ClaudeAgent`/`CLAUDE_ENV_FILE_NAME` live in `index.ts`, whose heavy provisioning graph must stay out of the predicate's unit test.)
 - Test: `test/runner-retry.test.ts`
 
 **Interfaces:**
@@ -97,9 +97,9 @@ test.each([
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bun test test/runner-retry.test.ts`
-Expected: FAIL — `Cannot find module '../src/runner/retry.ts'` / `CLAUDE_STARTUP_HANG_MARKER` not exported.
+Expected: FAIL — `Cannot find module '../src/runner/retry.ts'` and/or `Cannot find module '../src/agents/claude.ts'`.
 
-- [ ] **Step 3: Add the marker export** to `src/agents/claude.ts` (near the top, mirroring antigravity's marker at `antigravity.ts:46`)
+- [ ] **Step 3: Create `src/agents/claude.ts`** as a one-constant leaf module (mirrors antigravity's marker at `antigravity.ts:46`, but a *new* file — `src/agents/claude.ts` does not exist today; `ClaudeAgent` lives in `src/agents/index.ts`). Contents in full:
 
 ```ts
 // Stamped into a stage:'capture' indeterminate when the StartupLivenessWatcher
@@ -222,6 +222,8 @@ git commit -m "feat(contracts): optional attempts/attempt_count/flaked_green on 
 
 **Files:**
 - Modify: `src/runner/index.ts` — `runInnerBody` signature (`:1031-1036`) + the three `writePhase` calls; `runInner` (`:1003`); `runScenario` (`:851-867`) to allocate `attempts/1/` and pass both dirs.
+- Modify: `src/agents/index.ts` — `RunHome` interface (`:32-39`, add `cellRunDir`) + where `home` is built in `runInnerBody` (~`:1156`).
+- Modify: `src/agents/claude-windows.ts:47` — the provision-side guest runId.
 - Test: `test/runner-attempt-layout.test.ts` (new) + the existing `test/runner-e2e.test.ts` must still pass.
 
 **Interfaces:**
@@ -269,7 +271,11 @@ which take `cellRunDir` / `basename(cellRunDir)`.)
 
 Change the three `writePhase(runDir, …)` calls (lines ~1037, ~1391, ~1614) to `writePhase(cellRunDir, …)`. Leave the evidence references untouched — they correctly become the attempt dir (workdir 1141, home 1148, logDir 1258, snapshot 1284, launchAgent 1292, populateContextDir 1370, invokeGauntlet 1419, capture 1526, token-usage 1540, post-checks 1615, economics 1664).
 
-**CRITICAL — the windows guest-dir NAME must stay unique per cell, not per attempt.** Three windows sites derive a remote guest dir from `basename(runDir)`: the teardown Remove-Item (`:1021`), `pushWorkdir(workdir, basename(runDir))` (`:1200`), and `captureBack(..., basename(runDir))` (`:1510`). If these use `basename(attemptDir)`, the name collapses to the attempt number (`"1"`) and **concurrent windows cells collide on the shared guest** (`win_run_root\1`). Change these three sites to `basename(cellRunDir)` (the run_id — globally unique). A windows retry then reuses the same guest dir, which the Remove-Item teardown in the `finally` already cleans — acceptable, since windows runs on `ANTHROPIC_API_KEY` (not Bedrock) and are excluded from hang-detect, so retries are rare. So the split is: **3 writePhase → `cellRunDir`; 3 windows basename sites → `basename(cellRunDir)`; everything else → `attemptDir`.**
+**CRITICAL — the windows guest-dir NAME must stay unique per cell, not per attempt.** **FOUR** windows sites derive a remote guest dir from the run dir; if any collapses to `basename(attemptDir)` = the attempt number `"1"`, **concurrent windows cells collide on the shared guest** (`win_run_root\1`). All four must key on `basename(cellRunDir)` (the run_id — globally unique):
+- teardown Remove-Item (`index.ts:1021`), `pushWorkdir(workdir, basename(runDir))` (`:1200`), `captureBack(..., basename(runDir))` (`:1510`) — change these to `basename(cellRunDir)`.
+- **the transitive provision site** `src/agents/claude-windows.ts:47`, `const runId = basename(dirname(home.workdir))` — once `workdir` nests under `attempts/1/`, this becomes `"1"`, decoupled from the three runner sites. Thread the cell run_id through `RunHome`: (1) add `readonly cellRunDir: string;` to `RunHome` (`src/agents/index.ts:32-39`); (2) populate it from the new `cellRunDir` param where `home` is built (~`index.ts:1156`) — `provisionCopilot` also receives `home`, so set it there too; only `WindowsClaudeAgent` reads it; (3) in `claude-windows.ts:47` replace with `const runId = basename(home.cellRunDir);`.
+
+A windows retry then reuses one stable per-cell guest dir, which the `finally` Remove-Item already cleans — acceptable (windows runs on `ANTHROPIC_API_KEY`, is excluded from hang-detect, so retries are rare). So the split is: **3 writePhase → `cellRunDir`; 4 windows guest-name sites → `basename(cellRunDir)`; everything else → `attemptDir`.**
 
 - [ ] **Step 4: Thread `cellRunDir` through `runInner` and rename it `driveOnce`.** `runInner` (`:1003`) gains the `cellRunDir` param and passes it to `runInnerBody`:
 
@@ -286,12 +292,12 @@ async function driveOnce(       // was runInner (index.ts:1003)
     return await runInnerBody(a, attemptDir, cellRunDir, cleanupDirs, identity);
   } finally {
     cleanupAgentRuntime(cleanupDirs);
-    if (os !== 'linux') { /* windows guest-dir teardown — uses basename(attemptDir) now */ }
+    if (os !== 'linux') { /* windows guest-dir teardown — uses basename(cellRunDir) (run_id, unique), NOT attemptDir */ }
   }
 }
 ```
 
-(The windows teardown block at `:1016-1027` keeps using its local `runDir` name → now `attemptDir`; `basename(attemptDir)` matches `pushWorkdir(workdir, basename(attemptDir))` at `:1201` since both derive from the same attempt dir.)
+(The windows teardown Remove-Item (`:1021`), `pushWorkdir` (`:1200`), and `captureBack` (`:1510`) all use `basename(cellRunDir)` per Step 3 — the run_id — so concurrent windows cells never collide on `win_run_root\1`. `cellRunDir` is a param of both `driveOnce` and `runInnerBody`, so it is in scope at all sites.)
 
 - [ ] **Step 5: In `runScenario`, allocate `attempts/1/` and call `driveOnce`.** Replace the `runInner(...)` call at `:853`:
 
@@ -413,7 +419,10 @@ function sumBlock(
 
 // Sum coding_agent + gauntlet est cost across attempts and recompute total
 // (mirrors buildRunEconomics' null/round6 rules). Returned as the opaque
-// Record the verdict's `economics` field carries.
+// Record the verdict's `economics` field carries. NOTE: only `est_cost_usd`
+// (coding_agent, gauntlet, total) is summed; `tokens`/`models`/`duration_ms`/
+// obol dialect reflect the LAST attempt — so a reader doesn't treat the row as
+// fully reconciled. Folding tokens too is YAGNI (flaked-green cells are rare).
 export function foldAttemptEconomics(
   list: readonly (RunEconomics | null)[],
 ): Record<string, unknown> | null {
@@ -477,7 +486,12 @@ verdict = driven;
 
 (`safeBuildRunEconomics(attemptDir)` reads that attempt's `coding-agent-token-usage.json`
 + `gauntlet-agent/results/` uniformly — works for both the happy path and a
-hang-torn-down early return, since the sidecars live under `attemptDir` regardless.)
+hang-torn-down early return, since the sidecars live under `attemptDir` regardless.
+**Avoid double-pricing:** on the single-attempt path `runAttempts` already reuses
+`verdict.economics` (which `driveOnce` embedded at `index.ts:1664`) — so the
+`econOf` re-price should be gated to fire only when the cell actually retried
+(`attempt_count > 1`); read `attempts[0].est_cost_usd` from `verdict.economics`
+on the single path rather than calling obol twice per run.)
 
 Keep the surrounding `try/catch` (`:851-867`): a `driveOnce` throw is caught by the existing compose-fallback (setup-stage → non-retryable → the loop is inside the try, so wrap the loop, not each attempt — a thrown setup error composes a terminal indeterminate and the loop is not re-entered). The `identified` spread at `:880` already carries `...verdict`, so `attempts`/`attempt_count`/`flaked_green` flow through to `verdict.json` unchanged.
 
@@ -560,6 +574,25 @@ test('stands down when a first assistant entry appears in time', async () => {
   await w.stop();
   expect(torn).toBe(false);
   expect(w.tripped).toBe(false);
+});
+
+test('tears down when the transcript GROWS but has only non-assistant entries', async () => {
+  // pins liveness = first assistant entry (kills a `files.length > 0` mutant):
+  // the file exists and grows, but never has a type:'assistant' line.
+  const clock = fakeClock();
+  let torn = '';
+  const w = new StartupLivenessWatcher({
+    markerPath: '/m', logDir: '/log', glob: '**/*.jsonl', snapshot: new Set(),
+    teardownTarget: '/scratch', teardown: (t) => { torn = t; }, budgetMs: 100, pollIntervalMs: 10, clock,
+    fs: { existsSync: () => true, newFiles: () => ['/log/a.jsonl'],
+      readText: () => '{"type":"user"}\n{"type":"attachment"}\n{"type":"ai-title"}\n{"type":"file-history-snapshot"}\n' },
+  });
+  w.start(); await tick();
+  clock.advance(10); await tick();     // launched, budget starts at t=10, deadline=110
+  clock.advance(100); await tick();    // non-assistant growth must NOT extend the deadline
+  await w.stop();
+  expect(torn).toBe('/scratch');
+  expect(w.tripped).toBe(true);
 });
 ```
 
@@ -700,14 +733,18 @@ exec env -i \
   ...
 ```
 
-- [ ] **Step 4: Thread the substitution** in `src/runner/index.ts`, inside the existing `if (family === 'claude' && !isRemote) { ... }` block near `:1314` (alongside `$CLAUDE_MODEL`):
+- [ ] **Step 4: Thread the substitution** in `src/runner/index.ts`. The marker path must be visible to BOTH the substitutions map (`:1298`) and the watcher wiring site (`:1400`, Task 7), so declare it at `runInnerBody` **function scope** — NOT inside the `:1314` claude block (a `const` there is out of scope at `:1400`). `runInnerBody`'s per-attempt evidence param is named `runDir` (Task 3 kept the name); `attemptDir` is not a variable here.
 
+(a) at function scope, just before the `substitutions` map (~`:1298`):
 ```ts
-const launchMarkerPath = join(attemptDir, 'launch.marker'); // attemptDir === runDir param of runInnerBody
+const launchMarkerPath = join(runDir, 'launch.marker'); // runDir = this attempt's evidence dir
+```
+(b) inside the existing `if (family === 'claude' && !isRemote) { ... }` block (`:1314`, alongside `$CLAUDE_MODEL`), keep only the assignment:
+```ts
 substitutions['$QUORUM_LAUNCH_MARKER'] = launchMarkerPath;
 ```
 
-Add `'$QUORUM_LAUNCH_MARKER'` to the `forbiddenPlaceholders` array passed to `populateContextDir` (`:1376-1381`) so an unsubstituted token fails the run loudly. Because `driveOnce` re-enters `runInnerBody` per attempt with a fresh `attemptDir`, the marker path is per-attempt and never stale (design §79).
+Add `'$QUORUM_LAUNCH_MARKER'` to the `forbiddenPlaceholders` array passed to `populateContextDir` (`:1376-1381`) so an unsubstituted token fails the run loudly. Because `runInnerBody` re-enters per attempt with a fresh `runDir` (= `attempts/<n>/`), the marker path is per-attempt and never stale (design §79).
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -735,12 +772,17 @@ git commit -m "feat(runner): claude launcher touches $QUORUM_LAUNCH_MARKER befor
 - [ ] **Step 1: Write the failing test.** Simulate a hang: with a fake watcher forced `tripped=true`, the composed verdict must carry the marker in `error.message` with `stage:'capture'` and be retryable. The cleanest seam is to assert the intercept block: extract `hangVerdict(gauntlet, checks)` returning the `writeIndeterminate` and unit-test it.
 
 ```ts
-import { hangVerdict } from '../src/runner/index.ts';   // export the small helper
+import { hangVerdict, shouldWatchStartup } from '../src/runner/index.ts';   // export both helpers
 import { isRetryableIndeterminate } from '../src/runner/retry.ts';
 test('hang intercept produces a retryable capture-stage marked verdict', () => {
   const v = hangVerdict(null, []);
   expect(v.error?.stage).toBe('capture');
   expect(isRetryableIndeterminate(v)).toBe(true);
+});
+test('startup watcher is gated to claude+linux only (os-gate, spec §189)', () => {
+  expect(shouldWatchStartup('claude', 'linux')).toBe(true);
+  expect(shouldWatchStartup('claude', 'windows')).toBe(false); // guest transcript invisible until captureBack
+  expect(shouldWatchStartup('antigravity', 'linux')).toBe(false);
 });
 ```
 
@@ -757,10 +799,16 @@ Expected: FAIL — `hangVerdict` not exported.
 const STARTUP_LIVENESS_BUDGET_MS = 120_000;
 ```
 
-Then the claude gate (mutually exclusive with agy by `cfg.normalizer`):
+Then export the gate predicate (so the os-gate test can reach it) and use it (mutually exclusive with agy by `cfg.normalizer`):
 
 ```ts
-const isClaudeHangWatched = cfg.normalizer === 'claude' && os === 'linux';
+// Startup hang-detect applies only to local Claude — windows guest transcripts
+// are invisible to the host until captureBack, so an armed watcher would false-fire.
+export function shouldWatchStartup(normalizer: string, os: string): boolean {
+  return normalizer === 'claude' && os === 'linux';
+}
+// ... inside runInnerBody:
+const isClaudeHangWatched = shouldWatchStartup(cfg.normalizer, os);
 let startupWatcher: StartupLivenessWatcher | null = null;
 if (isClaudeHangWatched) {
   startupWatcher = new StartupLivenessWatcher({
@@ -810,12 +858,12 @@ git commit -m "feat(runner): wire StartupLivenessWatcher for claude/linux + hang
 **Files:**
 - Modify: `src/cli/index.ts` — `run` `.option('--max-retries <n>')` (`:157`), `RunOptions` (`:104`), pass into `runScenario` (`:201`); run-all `.option` (`:365`), `RunAllOptions` (`:121`), forward into `runBatch` (`:410`).
 - Modify: `src/run-all/index.ts` — `InvokeChildArgs` (`:65`), `buildChildRunArgs` (`:170`), `RunBatchArgs`/destructure/`invokeCell` (`:221`/`:390`/`:497`).
-- Test: `test/run-all-child-args.test.ts` (extend — asserts `buildChildRunArgs`).
+- Test: `test/run-all-onpid.test.ts` (extend — it already imports `buildChildRunArgs` and tests `--grader-model`/`--credential` forwarding).
 
 **Interfaces:**
 - Consumes: `RunScenarioArgs.maxRetries` (Task 4), `parseIntegerOption` (`cli/index.ts:84`).
 
-- [ ] **Step 1: Write the failing test** (extend `test/run-all-child-args.test.ts`)
+- [ ] **Step 1: Write the failing test** (extend `test/run-all-onpid.test.ts`)
 
 ```ts
 test('buildChildRunArgs forwards --max-retries', () => {
@@ -828,24 +876,24 @@ test('buildChildRunArgs forwards --max-retries', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test test/run-all-child-args.test.ts`
+Run: `bun test test/run-all-onpid.test.ts`
 Expected: FAIL — `maxRetries` not in `InvokeChildArgs` / not appended.
 
 - [ ] **Step 3: Thread it** through the `--grader-model` precedent chain (copy each site):
   - `src/run-all/index.ts:65-84` `InvokeChildArgs`: add `readonly maxRetries?: number;`
   - `buildChildRunArgs` (`:170-189`): `if (args.maxRetries !== undefined) childArgs.push('--max-retries', String(args.maxRetries));`
   - `RunBatchArgs` (`:221`): `readonly maxRetries?: number;`; destructure in `runBatch` (`:390`); `invokeCell` (`:497-505`): `...(maxRetries !== undefined ? { maxRetries } : {}),`
-  - `src/cli/index.ts`: `RunOptions` (`:104`) + `RunAllOptions` (`:121`) add `readonly maxRetries?: string;`; both commands add `.option('--max-retries <n>', 'retry transient-infra indeterminates up to <n> times', parseIntegerOption)`; the `run` action (`:201`) passes `maxRetries: opts.maxRetries !== undefined ? Number(opts.maxRetries) : undefined`; the run-all action (`:410`) forwards `...(opts.maxRetries !== undefined ? { maxRetries: Number(opts.maxRetries) } : {})`.
+  - `src/cli/index.ts`: `RunOptions` (`:104`) + `RunAllOptions` (`:121`) add `readonly maxRetries?: string;`. Register the flag **without** a coercer 3rd-arg (mirror `--jobs`/`--heartbeat-seconds`, which validate in the action, not in commander): `.option('--max-retries <n>', 'retry transient-infra indeterminates up to <n> times (default: 2)')` on both commands. In the `run` action (`:201`) and run-all action (`:410`), parse+validate before use — `const maxRetries = parseIntegerOption(opts.maxRetries); if (maxRetries !== undefined && maxRetries < 0) { <stderr 'error: --max-retries must be an integer >= 0'>; process.exit(1); }` — then pass `maxRetries` straight through (no `Number(...)` re-coerce). A negative would leave `runAttempts`' `let verdict!` uninitialized → TypeError, so rejecting it is load-bearing.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bun test test/run-all-child-args.test.ts`
+Run: `bun test test/run-all-onpid.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/index.ts src/run-all/index.ts test/run-all-child-args.test.ts
+git add src/cli/index.ts src/run-all/index.ts test/run-all-onpid.test.ts
 git commit -m "feat(cli): --max-retries on run + run-all (threads RunScenarioArgs.maxRetries)"
 ```
 
@@ -855,26 +903,32 @@ git commit -m "feat(cli): --max-retries on run + run-all (threads RunScenarioArg
 
 **Files:**
 - Modify: `src/cli/render.ts` — `formatHeader` (`:321-336`)
-- Test: `test/render.test.ts` (extend)
+- Test: `test/cli-render-economics.test.ts` (extend — it drives the public `render()` seam)
 
-- [ ] **Step 1: Write the failing test**
+**Note:** `formatHeader` is **private** (`render.ts:321`); only `render` is exported (`:397`). Do NOT invent a `formatHeaderForTest` export — assert through `render()`, mirroring `test/cli-render-economics.test.ts`.
+
+- [ ] **Step 1: Write the failing test** (in `test/cli-render-economics.test.ts`)
 
 ```ts
-test('formatHeader shows an attempts line with flaked-green when retried to pass', () => {
-  const v = { schema: 1, final: 'pass', final_reason: 'ok', gauntlet: null, checks: [],
-    error: null, economics: null, attempt_count: 2, flaked_green: true } as FinalVerdict;
-  expect(formatHeaderForTest(v)).toContain('attempts');
-  expect(formatHeaderForTest(v)).toContain('flaked-green');
+import { render } from '../src/cli/render.ts';
+const retried = { schema: 1, final: 'pass', final_reason: 'ok', gauntlet: null, checks: [],
+  error: null, economics: null, attempt_count: 2, flaked_green: true } as FinalVerdict;
+const single = { schema: 1, final: 'pass', final_reason: 'ok', gauntlet: null, checks: [],
+  error: null, economics: null, attempt_count: 1 } as FinalVerdict;
+
+test('render surfaces an attempts/flaked-green line when retried to pass', () => {
+  const out = render(retried, '/run/x', { color: false, mode: 'full' }); // match render()'s real 3rd-arg options
+  expect(out).toContain('attempts');
+  expect(out).toContain('flaked-green');
 });
-test('formatHeader omits the attempts line for a single-attempt run', () => {
-  const v = { /* attempt_count: 1 */ } as FinalVerdict;
-  expect(formatHeaderForTest(v)).not.toContain('attempts ');
+test('render omits the attempts line for a single-attempt run', () => {
+  expect(render(single, '/run/x', { color: false, mode: 'full' })).not.toContain('attempts ');
 });
 ```
 
-(If `formatHeader` is not exported, export it or a thin `formatHeaderForTest` wrapper — match how `render.test.ts` currently reaches internal helpers.)
+(Verify `render`'s exact 3rd-arg options shape at `render.ts:397` before writing — `{ color, mode }` above is illustrative; use the real one.)
 
-- [ ] **Step 2: Run test to verify it fails** — `bun test test/render.test.ts` → FAIL (no attempts line).
+- [ ] **Step 2: Run test to verify it fails** — `bun test test/cli-render-economics.test.ts` → FAIL (no attempts line).
 
 - [ ] **Step 3: Add the conditional line** to `formatHeader` (before the `return`, append when retried):
 
@@ -890,12 +944,12 @@ test('formatHeader omits the attempts line for a single-attempt run', () => {
   );
 ```
 
-- [ ] **Step 4: Run test to verify it passes** — `bun test test/render.test.ts` → PASS.
+- [ ] **Step 4: Run test to verify it passes** — `bun test test/cli-render-economics.test.ts` → PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/render.ts test/render.test.ts
+git add src/cli/render.ts test/cli-render-economics.test.ts
 git commit -m "feat(cli): show renders an attempts/flaked-green line for retried cells"
 ```
 
@@ -905,9 +959,9 @@ git commit -m "feat(cli): show renders an attempts/flaked-green line for retried
 
 **Files:**
 - Modify: `src/run-all/index.ts` — `VerdictViewSchema` (`:710-723`) add fields; `counts` accumulator (`:448-456`) add `flaked_green: 0`; increment in the `cell_finished` branch (`:522-540`); footer segment (`:615-625`).
-- Test: `test/run-all-summary.test.ts` (extend)
+- Test: `test/run-all.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing test** — assert the run-all summary includes a `flaked-green N` segment when a cell verdict has `flaked_green: true`. Reuse the summary-assembly seam the existing `rate_limited`/`stopped` tallies test.
+- [ ] **Step 1: Write the failing test** — assert the run-all summary includes a `flaked-green N` segment when a cell verdict has `flaked_green: true`. The tally reads `readVerdict(...)?.flaked_green` off disk, so extend the `fakeInvoke` helper (`test/run-all.test.ts:66-126`): add a `flakedGreen` field to `VerdictPlan` and write `flaked_green` into the emitted verdict, so a cell can produce a flaked-green verdict. Assert against the captured `stream.text` where the existing `rate_limited`/`stopped` tallies are checked (~`:264`).
 
 - [ ] **Step 2: Run test to verify it fails** — FAIL (no flaked-green tally).
 
@@ -922,7 +976,7 @@ git commit -m "feat(cli): show renders an attempts/flaked-green line for retried
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/run-all/index.ts test/run-all-summary.test.ts
+git add src/run-all/index.ts test/run-all.test.ts
 git commit -m "feat(run-all): flaked-green tally in the batch summary; VerdictView reads retry fields"
 ```
 
@@ -931,10 +985,10 @@ git commit -m "feat(run-all): flaked-green tally in the batch summary; VerdictVi
 ### Task 11: Surface flaked-green in the dashboard
 
 **Files:**
-- Modify: `packages/dashboard/src/contracts.ts` — `DashboardVerdictSchema` (`:71-105`), `RunRecord` (`:113-127`), `CellView` (`:210-238`), `fallbackCell`
+- Modify: `packages/dashboard/src/contracts.ts` — `DashboardVerdictSchema` (`:71-105`), `RunRecord` (`:113-127`), `CellView` (`:210-238`)
 - Modify: `packages/dashboard/src/scan.ts` — `records.push({...})` (`:226-243`)
-- Modify: `packages/dashboard/src/view.ts` — project `RunRecord.flaked_green` → `CellView.flaked_green`
-- Modify: `packages/dashboard/src/templates.ts` — `cellHtml` done-face (`:199-208`), badge like `drift` (`:179`)
+- Modify: `packages/dashboard/src/view.ts` — 3 `CellView` build sites (`:359` running, `:379` empty-window, `:420` main/done)
+- Modify: `packages/dashboard/src/templates.ts` — `fallbackCell` (`:261`), `cellHtml` done-face (`:199-208`), badge like `drift` (`:179`)
 - Test: `packages/dashboard/test/*.test.ts` (extend the scan + templates tests)
 
 - [ ] **Step 1: Write the failing test** — (a) `scan` maps `verdict.flaked_green` into the `RunRecord`; (b) `cellHtml` renders a flaked-green badge span when `view.flaked_green`.
@@ -944,7 +998,7 @@ git commit -m "feat(run-all): flaked-green tally in the batch summary; VerdictVi
 - [ ] **Step 3: Implement:**
   - `DashboardVerdictSchema` (`:71`): add `flaked_green: z.boolean().optional().catch(undefined)` (every field carries `.catch`, per the schema's contract).
   - `RunRecord` + `scan.ts:226` push: `flaked_green: verdict.flaked_green ?? false,`.
-  - `CellView` + `fallbackCell`: add `flaked_green: boolean`; `view.ts` sets it from the newest `RunRecord`.
+  - Add required `flaked_green: boolean` to `CellView` (`contracts.ts:210`). `tsc` then forces all four build sites: `fallbackCell` (`templates.ts:261`) and the running-only (`view.ts:359`) and empty-window (`view.ts:379`) builders set `flaked_green: false` (no newest RunRecord); the main/done builder (`view.ts:420`) sets it from the newest `RunRecord.flaked_green`.
   - `cellHtml` done-face (`:199`): concat a badge span beside `drift`, e.g. `${view.flaked_green ? '<span class="flaked" title="passed only after a retry">↻</span>' : ''}` (add a `.flaked` CSS rule near `.drift`).
 
 - [ ] **Step 4: Run test to verify it passes** — `bun test packages/dashboard/test/` → PASS.
