@@ -123,6 +123,12 @@ export interface GauntletArgvArgs {
   readonly projectPrompt?: string | undefined;
 }
 
+// The Gauntlet-Agent (QA grader) model, pinned explicitly rather than left to
+// gauntlet's built-in default. Sonnet 5 is the current grader/control tier;
+// Sonnet 4.6 is not served on Bedrock/Mantle, so pinning the grader here keeps
+// the direct-API and (Phase 2) Mantle grader on the same benchmarked model.
+export const GRADER_MODEL = 'claude-sonnet-5';
+
 // Build the exact, order-stable gauntlet argv. Optional flags append only when
 // present, so the argv is a pure function of its inputs.
 export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
@@ -138,6 +144,8 @@ export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
     '--state-dir',
     'gauntlet-agent',
     '--silent',
+    '--model',
+    `agent=${GRADER_MODEL}`,
   ];
   if (a.maxTime) {
     argv.push('--max-time', a.maxTime);

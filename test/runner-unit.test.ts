@@ -75,6 +75,8 @@ test('buildGauntletArgv is exact and order-stable with all optional flags', () =
     '--state-dir',
     'gauntlet-agent',
     '--silent',
+    '--model',
+    'agent=claude-sonnet-5',
     '--max-time',
     '10m',
     '--project-prompt',
@@ -100,6 +102,8 @@ test('buildGauntletArgv omits optional flags when absent', () => {
     '--state-dir',
     'gauntlet-agent',
     '--silent',
+    '--model',
+    'agent=claude-sonnet-5',
   ]);
 });
 
@@ -122,6 +126,8 @@ test('buildGauntletArgv appends only --max-time when projectPrompt is absent', (
     '--state-dir',
     'gauntlet-agent',
     '--silent',
+    '--model',
+    'agent=claude-sonnet-5',
     '--max-time',
     '5m',
   ]);
