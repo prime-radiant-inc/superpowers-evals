@@ -126,7 +126,9 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
   expect(source).toContain('hermes version');
   expect(source).toContain('mimo --version');
   expect(source).toContain('agy --version');
-  expect(source).toMatch(/ARG SERF_REF=\S+/);
+  expect(source).toContain(
+    'ARG SERF_REF=2ae123e1b1301db060efd958bc1c7ff32b14de86',
+  );
   expect(source).toContain('git checkout "$SERF_REF"');
   expect(source).toContain(
     'git rev-parse HEAD > /usr/local/share/serf-source-rev',
