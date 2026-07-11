@@ -11,12 +11,11 @@ session_log_dir: "${QUORUM_AGENT_HOME}/.serf/exports"
 session_log_glob: "*.json"
 normalizer: serf
 required_env:
-  - ANTHROPIC_API_KEY
   - SUPERPOWERS_ROOT
 max_time: 10m
-# Pinned to Claude Sonnet for now; the adapter is model-agnostic, so additional
-# provider/model variants are just sibling YAMLs (serf-gpt5.yaml, …) reusing
-# SerfAgent with a different model pin.
+# The runner renders the selected credential's model and API-key name (falling
+# back to this model when no credential is selected), so SerfAgent stays
+# provider/model-agnostic.
 model: anthropic/claude-sonnet-4-6
 default_credential: serf_default
 os_support: [linux]

@@ -26,6 +26,14 @@ const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 // requires claude-context/ + claude.project-prompt.md, which only live here.
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
+const LABELS = {
+  model: 'example/model-a',
+  provider: 'example-provider',
+  quantization: 'fp16',
+  preset_version_id: '00000000-0000-4000-8000-000000000004',
+  catalog_as_of: '2026-07-10',
+};
+
 function scenario(): string {
   const scn = mkdtempSync(join(tmpdir(), 'scn-sigint-'));
   writeFileSync(
@@ -176,6 +184,7 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
     expect(agent).toBe('claude');
     expect(typeof startedAt).toBe('string');
     expect(startedAt).not.toBe('');
+    expect(verdict.labels).toBeUndefined();
 
     // No orphaned mock gauntlet: the forwarded SIGINT terminated it. Bounded
     // poll — the child's exit is asynchronous after the forward.
@@ -187,6 +196,89 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
   } finally {
     // Belt and suspenders: if anything above threw before the CLI exited, make
     // sure neither the CLI nor a leaked mock survives the test.
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    await exited;
+  }
+}, 60_000);
+
+test('quorum run stopped during agent phase keeps parsed credential labels', async () => {
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-sigint-labeled-'));
+  const credentialsDir = mkdtempSync(join(tmpdir(), 'credentials-sigint-'));
+  const credentialsFile = join(credentialsDir, 'credentials.yaml');
+  writeFileSync(
+    credentialsFile,
+    [
+      'candidate:',
+      `  model: ${LABELS.model}`,
+      '  api: mantle',
+      '  auth: bedrock-bearer',
+      '  api_key_env: AWS_BEARER_TOKEN_BEDROCK',
+      '  region: us-east-1',
+      '  harnesses: [claude]',
+      '  labels:',
+      `    model: ${LABELS.model}`,
+      `    provider: ${LABELS.provider}`,
+      `    quantization: ${LABELS.quantization}`,
+      `    preset_version_id: ${LABELS.preset_version_id}`,
+      `    catalog_as_of: ${LABELS.catalog_as_of}`,
+      '',
+    ].join('\n'),
+  );
+  const child = spawn(
+    'bun',
+    [
+      CLI,
+      'run',
+      scenario(),
+      '--coding-agent',
+      'claude',
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      outRoot,
+      '--credential',
+      'candidate',
+      '--credentials-file',
+      credentialsFile,
+    ],
+    {
+      env: {
+        ...process.env,
+        PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
+        ANTHROPIC_API_KEY: 'sk-test',
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+        MOCK_GAUNTLET_FIXTURE: 'hang',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.on('exit', (code) => resolveExit(code));
+  });
+
+  try {
+    const runDir = await pollFor(() => hangRunDir(outRoot), 30_000);
+    expect(runDir).toBeDefined();
+    if (runDir === undefined) {
+      throw new Error('mock gauntlet never reached hang mode');
+    }
+    expect(
+      JSON.parse(readFileSync(join(runDir, 'phase.json'), 'utf8')).phase,
+    ).toBe('agent');
+
+    child.kill('SIGINT');
+    expect(await exited).toBe(2);
+
+    const verdict = FinalVerdictSchema.parse(
+      JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8')),
+    );
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('stopped');
+    expect(verdict.labels).toEqual(LABELS);
+  } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL');
     }

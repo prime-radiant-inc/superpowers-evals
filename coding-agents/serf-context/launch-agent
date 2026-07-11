@@ -15,13 +15,14 @@
 #     SessionStart bootstrap auto-triggers skills
 #   - --export-atif: serf writes its native ATIF v1.7 trajectory here; capture
 #     normalizes it
-#   - the model pin from serf.yaml ($SERF_MODEL)
+#   - the credential-selected model (falling back to serf.yaml), safely rendered
+#     as one shell argument ($SERF_MODEL_SH)
 #
 # SERF_PROVIDERS_CONFIG points at a fresh (nonexistent) per-run path so serf
-# re-seeds its provider instances from the environment (ANTHROPIC_API_KEY)
+# re-seeds its provider instances from the selected environment variable
 # rather than reading a host ~/.serf/providers.toml that may not declare the
-# provider. serf reads the API key from the environment; only the keys actually
-# present are forwarded into the otherwise-clean env.
+# provider. SERF_API_KEY_ENV names the one API key forwarded into the otherwise
+# clean environment.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 
@@ -30,20 +31,24 @@ env_args=(
   "TERM=${TERM:-xterm-256color}"
   "LANG=${LANG:-C.UTF-8}"
 )
-for name in \
-  ANTHROPIC_API_KEY OPENAI_API_KEY \
-  GEMINI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY; do
-  if [[ -n "${!name-}" ]]; then
-    env_args+=("$name=${!name}")
-  fi
-done
+selected_name="$SERF_API_KEY_ENV"
+if [[ -z "$selected_name" ]]; then
+  echo 'launch-agent: selected Serf API key env name is empty' >&2
+  exit 1
+fi
+selected_value="${!selected_name-}"
+if [[ -z "$selected_value" ]]; then
+  echo "launch-agent: selected Serf API key env $selected_name is unset/empty" >&2
+  exit 1
+fi
+env_args+=("$selected_name=$selected_value")
 
 exec env -i \
   "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   SERF_PROVIDERS_CONFIG="$QUORUM_AGENT_HOME/.serf/providers.toml" \
   serf \
-    --model "$SERF_MODEL" \
+    --model $SERF_MODEL_SH \
     --plugin-dir "$SUPERPOWERS_ROOT" \
     --export-atif "$QUORUM_AGENT_HOME/.serf/exports/trajectory.json" \
     --dir "$QUORUM_AGENT_CWD" \

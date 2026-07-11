@@ -2,8 +2,17 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Glob } from 'bun';
 import type { z } from 'zod';
-import type { PerModelUsageSchema, TokenUsage } from './contracts/economics.ts';
+import {
+  type OpenRouterEconomics,
+  OpenRouterEconomicsSchema,
+  type PerModelUsageSchema,
+  type TokenUsage,
+} from './contracts/economics.ts';
 import { estimateUsageSidecar } from './obol/index.ts';
+import {
+  type OpenRouterAttestation,
+  OpenRouterAttestationSchema,
+} from './openrouter/generations.ts';
 
 /** Token totals exposed in each economics block. */
 interface TokenShell {
@@ -51,6 +60,7 @@ interface CodingAgentBlock {
   readonly tool_result_total_bytes: number;
   readonly has_unpriced_model: boolean;
   readonly obol: ObolProvenance | null;
+  readonly openrouter?: OpenRouterEconomics | undefined;
 }
 
 export interface RunEconomics {
@@ -223,7 +233,37 @@ function buildGauntletBlock(
   };
 }
 
-function buildCodingAgentBlock(usage: JsonObject): CodingAgentBlock {
+function buildOpenRouterEconomics(
+  attestation: OpenRouterAttestation,
+  estimatedCostUsd: number | null,
+): OpenRouterEconomics {
+  const chargedCostUsd = attestation.charged_cost_usd;
+  return OpenRouterEconomicsSchema.parse({
+    charged_cost_usd: chargedCostUsd,
+    estimated_cost_usd: estimatedCostUsd,
+    cost_delta_usd:
+      chargedCostUsd !== null && estimatedCostUsd !== null
+        ? round6(chargedCostUsd - estimatedCostUsd)
+        : null,
+    generation_count: attestation.generations.length,
+    model: attestation.expected.model,
+    provider: attestation.expected.provider,
+  });
+}
+
+function openRouterAttestationEconomics(
+  runDir: string,
+): OpenRouterAttestation | null {
+  const raw = readJsonObject(join(runDir, 'openrouter-generations.json'));
+  if (raw === null) return null;
+  const parsed = OpenRouterAttestationSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+function buildCodingAgentBlock(
+  usage: JsonObject,
+  attestation: OpenRouterAttestation | null,
+): CodingAgentBlock {
   const rawModels = asJsonObject(usage['models']) ?? {};
   const models: PerModelEntry[] = Object.entries(rawModels)
     .map(([model, raw]) => {
@@ -240,15 +280,21 @@ function buildCodingAgentBlock(usage: JsonObject): CodingAgentBlock {
   const hasUnpriced =
     stringList(usage['unpriced_models']).length > 0 ||
     models.some((m) => m.est_cost_usd === null);
+  const estimatedCostUsd = costField(usage, 'est_cost_usd');
+  const openrouter =
+    attestation === null
+      ? null
+      : buildOpenRouterEconomics(attestation, estimatedCostUsd);
   return {
     duration_ms: costField(usage, 'duration_ms'),
     model: strOrNull(usage['model']),
     models,
     tokens: tokensShell(usage),
-    est_cost_usd: costField(usage, 'est_cost_usd'),
+    est_cost_usd: estimatedCostUsd,
     tool_result_total_bytes: numField(usage, 'tool_result_total_bytes'),
     has_unpriced_model: hasUnpriced,
     obol: obolProvenance(usage),
+    ...(openrouter === null ? {} : { openrouter }),
   };
 }
 
@@ -288,7 +334,10 @@ export async function buildRunEconomics(
     join(runDir, 'coding-agent-token-usage.json'),
   );
   if (codingUsage !== null) {
-    coding = buildCodingAgentBlock(codingUsage);
+    coding = buildCodingAgentBlock(
+      codingUsage,
+      openRouterAttestationEconomics(runDir),
+    );
   }
 
   if (gauntlet === null && coding === null) {
@@ -309,7 +358,8 @@ export async function buildRunEconomics(
     coding === null ||
     gCost === null ||
     cCost === null ||
-    anyUnpriced;
+    anyUnpriced ||
+    coding?.openrouter?.charged_cost_usd === null;
   // Take the first truthy pricing_as_of across (coding, gauntlet), so a
   // present-but-null (falsy) value falls through.
   let pricingAsof: string | null = null;

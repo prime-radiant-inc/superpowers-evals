@@ -2,14 +2,17 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import { runnable } from '../contracts/batch.ts';
 import type { Credential } from '../contracts/credential.ts';
-import { parseCredentialsFile } from '../contracts/credential.ts';
+import { assertCampaignCredentials } from '../credentials/check.ts';
+import {
+  loadCredentialsFile,
+  writeCredentialsSnapshot,
+} from '../credentials/index.ts';
 import { envSnapshot } from '../env.ts';
 import { repoRoot } from '../paths.ts';
 import type { Clock } from '../scheduler/clock.ts';
@@ -19,6 +22,7 @@ import { runSchedule } from '../scheduler/index.ts';
 import {
   allocateBatchDir,
   appendResultRecord,
+  batchCredentialsSnapshotPath,
   writeBatchFooter,
   writeBatchHeader,
 } from './batch-index.ts';
@@ -29,7 +33,7 @@ import {
 } from './child-stop.ts';
 import { HeartbeatTracker, heartbeatLine } from './heartbeat.ts';
 import { buildMatrix } from './matrix.ts';
-import { writeGridManifest } from './write-grid-manifest.ts';
+import { writeGridManifest as writeGridManifestFile } from './write-grid-manifest.ts';
 
 // quorum run-all orchestrator: invokeChild + runBatch.
 // The run-all COMMAND is wired by the integrator (src/cli/index.ts); this
@@ -50,8 +54,11 @@ import { writeGridManifest } from './write-grid-manifest.ts';
 
 const RUN_ID_PREFIX = 'run-id: ';
 
-// The CLI entry the child invokes (src/cli/index.ts), resolved from this module.
-const CLI_ENTRY = fileURLToPath(new URL('../cli/index.ts', import.meta.url));
+// The narrow internal run child entrypoint, resolved from this module. Public
+// `quorum run` never enters the canonical-snapshot path.
+const INTERNAL_RUN_ENTRY = fileURLToPath(
+  new URL('../cli/run-child.ts', import.meta.url),
+);
 
 function parseRunId(stdout: string): string | null {
   for (const line of stdout.split('\n')) {
@@ -70,6 +77,9 @@ export interface InvokeChildArgs {
   // Credential name to forward to the child as --credential. Empty string or
   // absent means no --credential flag is appended (credential-less agents).
   readonly credential?: string;
+  // Immutable batch-local credentials snapshot forwarded as the child's
+  // --credentials-file input. A child never reads the mutable campaign source.
+  readonly credentialsPath?: string;
   // Grader model to forward to the child as --grader-model. Absent means no
   // flag is appended (the child falls back to the GRADER_MODEL default).
   readonly graderModel?: string;
@@ -169,8 +179,7 @@ export function spawnCollectRunId(
 // spawning. Optional flags append only when present.
 export function buildChildRunArgs(args: InvokeChildArgs): string[] {
   const childArgs: string[] = [
-    CLI_ENTRY,
-    'run',
+    INTERNAL_RUN_ENTRY,
     args.scenarioDir,
     '--coding-agent',
     args.codingAgent,
@@ -181,6 +190,9 @@ export function buildChildRunArgs(args: InvokeChildArgs): string[] {
   ];
   if (args.credential !== undefined && args.credential !== '') {
     childArgs.push('--credential', args.credential);
+  }
+  if (args.credentialsPath !== undefined) {
+    childArgs.push('--credentials-file', args.credentialsPath);
   }
   if (args.graderModel !== undefined && args.graderModel !== '') {
     childArgs.push('--grader-model', args.graderModel);
@@ -223,9 +235,13 @@ export interface RunBatchArgs {
   readonly graderModel?: string;
   readonly invoke?: InvokeFn;
   readonly stream?: { write(s: string): void };
-  // Path to credentials.yaml; defaults to join(repoRoot(), 'credentials.yaml').
-  // Missing file is silently ignored (all agents fall back to per-agent limiterKey).
+  // Explicit credentials source path. When omitted, use the repository's
+  // canonical credentials.yaml; only a missing canonical default falls back to
+  // an empty registry.
   readonly credentialsPath?: string;
+  // Test seam for a post-allocation failure: batch metadata and the credentials
+  // snapshot must exist before this writer is called.
+  readonly writeGridManifest?: typeof writeGridManifestFile;
   // The scheduler clock; defaults to RealClock. Tests inject a FakeClock to
   // drive spacing deterministically — but run-all's own behavior tests use the
   // real clock with instant fake invokes (no spacing configured).
@@ -314,17 +330,18 @@ function hardExitProcess(): void {
   process.exit(130);
 }
 
-// Load and parse credentials.yaml, returning an empty map on any error (missing
-// file, malformed YAML, schema violation). This keeps run-all usable without a
-// credentials file; agents that have a default_credential will fall back to
-// per-agent limiterKey instead.
-function loadCredentials(credentialsPath: string): Record<string, Credential> {
-  try {
-    const raw = parseYaml(readFileSync(credentialsPath, 'utf8'));
-    return parseCredentialsFile(raw);
-  } catch {
-    return {};
-  }
+// An explicitly selected campaign file is always strict: a missing, malformed,
+// or schema-invalid input fails before a batch is allocated. The repository's
+// canonical default preserves historical empty-registry behavior only when it
+// does not exist; malformed defaults are errors too.
+function loadBatchCredentials(
+  explicitPath: string | undefined,
+): Record<string, Credential> {
+  const defaultPath = join(repoRoot(), 'credentials.yaml');
+  const sourcePath = explicitPath ?? defaultPath;
+  return loadCredentialsFile(sourcePath, {
+    allowMissing: explicitPath === undefined,
+  }).credentials;
 }
 
 interface LimiterCaps {
@@ -399,16 +416,20 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     stopSignals = runAllStopSignalsForEnv(envSnapshot()),
     heartbeatSeconds = 30,
     startHeartbeat = startHeartbeatTimer,
-    credentialsPath = join(repoRoot(), 'credentials.yaml'),
+    credentialsPath,
+    writeGridManifest = writeGridManifestFile,
   } = args;
   if (jobs < 1) {
     throw new Error(`jobs must be >= 1, got ${jobs}`);
   }
 
-  // Load credentials for per-endpoint limiterKey resolution. Missing or
-  // malformed file is silently ignored: agents without credentials fall back to
-  // per-agent limiterKey (preserving behavior for credential-less agents).
-  const credentials = loadCredentials(credentialsPath);
+  // Validate the selected campaign before matrix construction or batch
+  // allocation, so a bad explicit file cannot create a half-batch or launch a
+  // paid child.
+  const credentials = loadBatchCredentials(credentialsPath);
+  if (credentialsPath !== undefined) {
+    assertCampaignCredentials(credentials);
+  }
 
   const entries = buildMatrix({
     scenariosRoot,
@@ -422,12 +443,6 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   });
 
   const batchDir = allocateBatchDir({ outRoot });
-  writeGridManifest({
-    scenariosRoot,
-    codingAgentsDir,
-    outPath: join(resolve(outRoot), 'grid-manifest.json'),
-    now: new Date().toISOString(),
-  });
   const startedAt = new Date();
   const total = entries.length;
   const indexed = entries.map((e, i): readonly [number, MatrixEntry] => [
@@ -443,6 +458,16 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     codingAgents: agentsInBatch,
     jobs,
     startedAt: startedAt.toISOString(),
+  });
+  const snapshotPath = writeCredentialsSnapshot({
+    credentials,
+    destination: batchCredentialsSnapshotPath(batchDir),
+  });
+  writeGridManifest({
+    scenariosRoot,
+    codingAgentsDir,
+    outPath: join(resolve(outRoot), 'grid-manifest.json'),
+    now: new Date().toISOString(),
   });
 
   const counts = {
@@ -472,11 +497,9 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     println(skipLine(idx, total, entry));
     appendResultRecord({
       batchDir,
-      scenario: entry.scenario,
-      codingAgent: entry.codingAgent,
+      entry,
       runId: null,
       skipped: entry.skippedReason,
-      credential: entry.credential,
     });
   }
 
@@ -501,6 +524,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
       codingAgentsDir,
       outRoot,
       ...(entry.credential !== '' ? { credential: entry.credential } : {}),
+      credentialsPath: snapshotPath,
       ...(graderModel !== undefined ? { graderModel } : {}),
     });
 
@@ -531,11 +555,9 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
       println(doneLine(idx, total, event.entry, final, event.elapsed_s, cost));
       appendResultRecord({
         batchDir,
-        scenario: event.entry.scenario,
-        codingAgent: event.entry.codingAgent,
+        entry: event.entry,
         runId: event.run_id,
         skipped: null,
-        credential: event.entry.credential,
       });
       return;
     }
@@ -546,22 +568,18 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
         println(rateLimitLine(idx, total, event.entry));
         appendResultRecord({
           batchDir,
-          scenario: event.entry.scenario,
-          codingAgent: event.entry.codingAgent,
+          entry: event.entry,
           runId: null,
           skipped: 'rate-limited',
-          credential: event.entry.credential,
         });
       } else {
         counts.stopped += 1;
         println(stoppedLine(idx, total, event.entry));
         appendResultRecord({
           batchDir,
-          scenario: event.entry.scenario,
-          codingAgent: event.entry.codingAgent,
+          entry: event.entry,
           runId: null,
           skipped: 'stopped',
-          credential: event.entry.credential,
         });
       }
     }
@@ -710,10 +728,17 @@ function relativeToCwd(path: string): string {
 const VerdictViewSchema = z.object({
   final: z.string().optional(),
   error: z.object({ message: z.string().optional() }).nullable().optional(),
+  labels: z.record(z.string(), z.unknown()).optional(),
   economics: z
     .object({
       coding_agent: z
-        .object({ est_cost_usd: z.number().nullable().optional() })
+        .object({
+          est_cost_usd: z.number().nullable().optional(),
+          openrouter: z
+            .object({ charged_cost_usd: z.number().nullable().optional() })
+            .nullable()
+            .optional(),
+        })
         .nullable()
         .optional(),
     })
@@ -750,7 +775,10 @@ function isRateLimitedVerdict(verdict: VerdictView | null): boolean {
 function runCost(runDir: string): number | null {
   const verdict = readVerdict(runDir);
   if (verdict === null) return null;
-  return verdict.economics?.coding_agent?.est_cost_usd ?? null;
+  const coding = verdict.economics?.coding_agent;
+  return verdict.labels !== undefined
+    ? (coding?.openrouter?.charged_cost_usd ?? null)
+    : (coding?.est_cost_usd ?? null);
 }
 
 // Map a child outcome to one of pass / fail / indeterminate / unknown.

@@ -360,6 +360,31 @@ test('checkScenario does not demand fixtures/ when init_repo_from_fixtures only 
   rmSync(root, { recursive: true, force: true });
 });
 
+test('checkScenario validates a baseline manifest when one is present', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 'manifest');
+  const path = 'docs/superpowers/plans/plan.md';
+  const fixture = join(dir, 'fixtures', path);
+  mkdirSync(join(fixture, '..'), { recursive: true });
+  writeFileSync(fixture, 'PLAN\n');
+  writeFileSync(
+    join(dir, 'baseline-manifest.json'),
+    JSON.stringify({
+      schema_version: 1,
+      roles: { spec: path, plan: path },
+      files: [
+        {
+          path,
+          mode: '100644',
+          sha256: 'a'.repeat(64),
+        },
+      ],
+    }),
+  );
+  expect(checkScenario(dir)).toContain(`sha256 mismatch: ${path}`);
+  rmSync(root, { recursive: true, force: true });
+});
+
 // PRI-2494: quorum check validates check-verb names statically, so a typo'd
 // verb is caught at authoring time instead of vanishing at run time.
 function scenarioWithChecks(checksBody: string): string {

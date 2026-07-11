@@ -9,8 +9,9 @@ regenerate the list instead of pasting a table that will rot.
 
 ## The mental model in 60 seconds
 
-- A scenario is a directory `scenarios/<name>/` with exactly three files:
-  `story.md`, `setup.sh`, `checks.sh`.
+- A scenario is a directory `scenarios/<name>/` with three required files:
+  `story.md`, `setup.sh`, `checks.sh`. It may also carry `fixtures/` and an
+  optional `baseline-manifest.json`.
 - A run involves **two LLMs**: the **Gauntlet-Agent** (the QA tester that reads
   `story.md`, drives the agent, and self-grades against your Acceptance Criteria)
   and the **Coding-Agent** (the subject — Claude, Codex, …).
@@ -314,6 +315,44 @@ scenarios — the base template repo — stays under top-level
 `fixtures/template-repo/` and is read by `create_base_repo`. Small fixed strings
 live as inline constants in the helper. Hand-authoring a big plan inline
 reintroduces the elicited-vs-handwritten cost trap (§2).
+
+### Content-addressed fixture baselines
+
+When a scenario must prove that every paid cell starts from identical, frozen
+input, add `baseline-manifest.json` beside the three required scenario files.
+Schema version `1` names the fixture-relative `spec` and `plan` role paths and
+lists every file under `fixtures/`, sorted by path, with its Git mode
+(`100644` or `100755`) and SHA-256. Role paths must appear in the file list.
+The manifest is an exact inventory: unsafe or duplicate paths, symlinks,
+non-regular files, mode/hash drift, missing files, and undeclared extra files
+all fail validation.
+
+Use the same manifest at both trust boundaries:
+
+- `quorum check` compares it with the checked-in `fixtures/` tree.
+- Put the bare `baseline-manifest` verb in `pre()` to compare it with the
+  worktree seeded by `setup-helpers run init_repo_from_fixtures` before the
+  Coding-Agent launches. Runtime verification ignores only the worktree's
+  root `.git/` directory.
+
+Content addressing proves byte identity, not that content is safe to publish.
+A public fixture must be purpose-built or explicitly release-approved; never
+export a private repository, `.git`, a live run, or raw artifacts into a
+scenario. Before copying or transforming approved source material, verify its
+source hashes. After the narrowly specified transformation, review every
+resulting byte and regenerate the manifest from the final public files. The
+manifest must describe content only: do not record an originating repository,
+commit, workstation path, server address, run identifier, or capture
+environment. Run the repository's confidentiality checks in addition to hash
+validation, and remember that a passing scan does not replace public-release
+review.
+
+Campaign inputs are not fixture data. Keep real external credential YAML,
+preset versions, key material, provider selections, and raw campaign results
+outside Git. After trusted acceptance, follow the existing convention of a
+dated `docs/experiments/YYYY-MM-DD-<topic>.md` note containing only
+release-reviewed, sanitized conclusions. Record failures at equal billing to
+wins so future work does not repurchase disproven candidates.
 
 ### The `.quorum-launch-cwd` sentinel
 

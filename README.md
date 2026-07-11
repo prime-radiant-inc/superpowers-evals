@@ -314,6 +314,80 @@ Standard named credentials (see `credentials.yaml`): `opus`, `sonnet`, `haiku`
 `opencode_gpt5`, `gemini_default`, `serf_default`, `glm_5_2_chat`,
 `glm_5_2_responses`, `ollama_local`.
 
+### External Serf campaigns
+
+Short-lived Serf model/provider campaigns use an external credentials file,
+not the repository's canonical `credentials.yaml`. Pass it explicitly with
+`--credentials-file` to `quorum run`, `quorum run-all`, or `quorum check`.
+Keep the real campaign YAML and all raw run artifacts outside Git: the YAML
+contains routing labels and the selected API-key environment-variable name,
+never a key value.
+
+Each campaign preset must pin exactly one model and one provider, disable
+fallbacks, and contain no prompt, sampling, reasoning, tool, or token-limit
+overrides. Supply its dedicated key through the trusted runtime credential
+bundle. The key must enforce the campaign's intended data policy, have a
+campaign spend cap, and, for a shared-capacity campaign, have no BYOK binding.
+A BYOK comparison is a separate campaign with a separate key and candidate
+file.
+
+Before dispatch, `run-all` parses the external file once and writes its
+canonical snapshot to
+`results/batches/<batch-id>/credentials.snapshot.yaml`; every child receives
+that immutable snapshot. A direct `quorum run` writes the same canonical
+snapshot under its run directory. Editing the source YAML after a batch starts
+cannot change later cells. Snapshots contain schema-known routing metadata and
+environment-variable names, not secret values, but they remain part of the
+sensitive run artifacts.
+
+Run the agent-neutral smoke first, then run the expensive scenario only for
+credentials whose final smoke verdict is `pass`:
+
+```bash
+quorum run-all \
+  --scenarios 00-quorum-smoke-hello-world \
+  --include-drafts \
+  --coding-agents serf \
+  --credentials-file /secure/campaign.yaml \
+  --credentials serf_example_a \
+  --jobs 1
+
+quorum run-all \
+  --scenarios serf-builder-fractals \
+  --coding-agents serf \
+  --credentials-file /secure/campaign.yaml \
+  --credentials serf_example_a \
+  --jobs 1
+```
+
+`--jobs 1` is the sequential latency/cost baseline. One matrix cell is one
+paid attempt; the campaign scheduler does not automatically retry or repeat a
+cell. Render the labeled comparison with `quorum costs <batch-id>`. Only final
+`pass` rows are marked comparable; `fail` and `indeterminate` remain visible
+but unranked, and missing measurements render as missing rather than zero.
+Charged, estimated, and delta columns are Coding-Agent costs. The existing
+`--with-gauntlet` columns are separate Gauntlet-Agent harness overhead.
+
+Live acceptance is manual trusted-maintainer work, never public CI automation:
+
+1. Run one known-good hello-world cell with `--jobs 1`.
+2. Inspect `verdict.json`, `trajectory.json`,
+   `openrouter-generations.json`, `coding-agent-token-usage.json`, and
+   `quorum costs <batch-id>`. Confirm model, provider, preset version, BYOK is
+   false, token/cache buckets, duration, charged cost, estimate, delta, and
+   candidate labels, including quantization and catalog date.
+3. Run one Fractals cell with `--jobs 1`; require final `pass`, every
+   deterministic check, committed main-checkout delivery, and a complete
+   comparison row.
+4. Run two hello-world candidates with `--jobs 2`; confirm distinct
+   attribution with no cross-contaminated keys, generations, labels, or
+   economics.
+5. Only then run one sequential Fractals cell per smoke-passing candidate.
+
+Publish only release-reviewed, sanitized conclusions in a dated
+`docs/experiments/` note, recording failures as well as wins. External campaign
+YAML and raw artifacts stay outside Git.
+
 ## Core Commands
 
 ```bash

@@ -8,15 +8,11 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
-import type { FinalStatus, FinalVerdict } from '../contracts/verdict.ts';
+import type { FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
-import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
-import { assertNever } from '../invariant.ts';
 import { runBatch } from '../run-all/index.ts';
 import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
-import { currentGauntletChild, runScenario } from '../runner/index.ts';
-import { writeStoppedVerdict } from '../runner/stopped.ts';
 import {
   checkScenario,
   fixExecutableBits,
@@ -29,27 +25,12 @@ import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
 import { batchJson, isBatchDir, renderBatch } from './render-batch.ts';
 import { resolveTarget, ShowError } from './resolve-target.ts';
+import { executeRunCommand, type RunCommandOptions } from './run-command.ts';
 import {
   resolveScenarioDir,
   scenarioDirFor,
   scenarioName,
 } from './scenario.ts';
-
-// Process exit code per the verdict's final value. A closed switch over the
-// FinalStatus union (coding standard 5.1) gives a guaranteed number without an
-// index-signature lookup that noUncheckedIndexedAccess would widen.
-function exitCodeFor(final: FinalStatus): number {
-  switch (final) {
-    case 'pass':
-      return 0;
-    case 'fail':
-      return 1;
-    case 'indeterminate':
-      return 2;
-    default:
-      return assertNever(final);
-  }
-}
 
 function basename(path: string): string {
   const last = path.split('/').at(-1);
@@ -101,16 +82,6 @@ function csvList(csv: string | undefined): string[] | undefined {
     .filter((s) => s.length > 0);
 }
 
-interface RunOptions {
-  readonly codingAgent: string;
-  readonly os: string;
-  readonly codingAgentsDir: string;
-  readonly outRoot: string;
-  readonly scenariosRoot: string;
-  readonly credential?: string;
-  readonly graderModel?: string;
-}
-
 interface ShowOptions {
   readonly quiet: boolean;
   readonly json: boolean;
@@ -122,6 +93,7 @@ interface RunAllOptions {
   readonly codingAgents?: string;
   readonly scenarios?: string;
   readonly credentials?: string;
+  readonly credentialsFile?: string;
   readonly jobs: string;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
@@ -154,72 +126,18 @@ program
     '--credential <name>',
     'credential name (default: agent default_credential)',
   )
+  .option('--credentials-file <path>', 'credentials YAML path')
   .option(
     '--grader-model <id>',
     'Gauntlet-Agent (grader) model (default: claude-sonnet-5)',
   )
-  .action(async (scenario: string, opts: RunOptions) => {
-    const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
-    if (scn === undefined) {
-      process.stderr.write(
-        `scenario not found: ${scenario} (looked at the path and under ${opts.scenariosRoot}/)\n`,
-      );
-      process.exit(2);
-    }
-    // Resolve the credential name once for the SIGINT path so both the happy
-    // path (via runScenario) and the interrupted path (writeStoppedVerdict)
-    // stamp the same value.
-    const credentialName = resolveCredentialNameForAgent(
-      resolve(opts.codingAgentsDir),
-      opts.codingAgent,
-      opts.credential,
-    );
-    // Graceful SIGINT handler. The handler must know the run dir + identity
-    // before the await resolves, so the run dir is captured via onRunDir and
-    // startedAt is stamped here (shared with the happy path). On SIGINT:
-    // forward the signal to the gauntlet child, write a stopped (indeterminate)
-    // verdict so the cell resolves instead of vanishing under the dead-pid
-    // rule, then exit 2.
-    const startedAt = new Date().toISOString();
-    const scenarioId = scenarioName(scn);
-    let runDirForStop: string | null = null;
-    const onSigint = (): void => {
-      currentGauntletChild()?.kill('SIGINT');
-      if (runDirForStop !== null) {
-        writeStoppedVerdict(runDirForStop, {
-          scenario: scenarioId,
-          codingAgent: opts.codingAgent,
-          startedAt,
-          ...(credentialName !== undefined
-            ? { credential: credentialName }
-            : {}),
-        });
-      }
-      process.exit(2);
-    };
-    process.once('SIGINT', onSigint);
-    const { runDir, verdict } = await runScenario({
-      scenarioDir: resolve(scn),
-      codingAgent: opts.codingAgent,
-      os: opts.os,
-      codingAgentsDir: resolve(opts.codingAgentsDir),
-      outRoot: resolve(opts.outRoot),
-      startedAt,
-      credential: opts.credential,
-      graderModel: opts.graderModel,
-      onRunDir: (dir) => {
-        runDirForStop = dir;
-      },
-    });
-    process.stdout.write(`run-id: ${basename(runDir)}\n`);
-    process.stdout.write(
-      render(verdict, runDir, {
-        color: process.stdout.isTTY ?? false,
-        mode: 'full',
-      }),
-    );
-    process.exit(exitCodeFor(verdict.final));
-  });
+  .action((scenario: string, opts: RunCommandOptions) =>
+    executeRunCommand(
+      scenario,
+      opts,
+      opts.credentialsFile === undefined ? undefined : 'external-campaign',
+    ),
+  );
 
 program
   .command('list')
@@ -260,11 +178,7 @@ program
   .argument('[names...]', 'scenario names (default: all)')
   .option('--fix', 'chmod +x scripts missing the bit', false)
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
-  .option(
-    '--credentials <path>',
-    'credentials file to validate',
-    'credentials.yaml',
-  )
+  .option('--credentials-file <path>', 'credentials YAML path')
   .option('--coding-agents-dir <dir>', 'coding-agents dir', 'coding-agents')
   .action(
     (
@@ -272,7 +186,7 @@ program
       opts: {
         fix: boolean;
         scenariosRoot: string;
-        credentials: string;
+        credentialsFile?: string;
         codingAgentsDir: string;
       },
     ) => {
@@ -322,8 +236,12 @@ program
 
       // Validate credentials.yaml against coding-agent default_credential fields.
       const credResult = checkCredentials(
-        resolve(opts.credentials),
+        resolve(opts.credentialsFile ?? 'credentials.yaml'),
         resolve(opts.codingAgentsDir),
+        {
+          requireAgentDefaults: opts.credentialsFile === undefined,
+          externalCampaign: opts.credentialsFile !== undefined,
+        },
       );
       if (!credResult.ok) {
         failed += 1;
@@ -351,6 +269,7 @@ program
     '--credentials <csv>',
     'CSV credential filter (default: agent default_credential)',
   )
+  .option('--credentials-file <path>', 'credentials YAML path')
   .option('--jobs <n>', 'global slot pool size (>=1)', String(DEFAULT_JOBS))
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
@@ -415,6 +334,9 @@ program
         ...(agentFilter !== undefined ? { agentFilter } : {}),
         ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
         ...(credentialFilter !== undefined ? { credentialFilter } : {}),
+        ...(opts.credentialsFile !== undefined
+          ? { credentialsPath: resolve(opts.credentialsFile) }
+          : {}),
         tier: tier ?? null,
         includeDrafts: opts.includeDrafts,
         heartbeatSeconds,

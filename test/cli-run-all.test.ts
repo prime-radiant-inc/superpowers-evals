@@ -1,10 +1,16 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { buildChildRunArgs } from '../src/run-all/index.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
+const CAMPAIGN_CREDENTIALS = resolve(
+  import.meta.dir,
+  'fixtures',
+  'serf-campaign-credentials.yaml',
+);
 
 // CLI-boundary validation for `run-all`. These pin the fail-fast behavior that
 // stops a bad invocation before any agent is launched — they never drive a real
@@ -171,4 +177,102 @@ test('run-all errors when --coding-agents-dir does not exist', () => {
   );
   expect(proc.status).not.toBe(0);
   expect(proc.stderr).toContain('--coding-agents-dir does not exist');
+});
+
+test('run-all accepts --credentials-file while --credentials remains a CSV filter', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scn-'));
+  const out = mkdtempSync(join(tmpdir(), 'out-'));
+  const proc = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run-all',
+      '--credentials-file',
+      CAMPAIGN_CREDENTIALS,
+      '--credentials',
+      'serf_example_a',
+      '--scenarios-root',
+      root,
+      '--coding-agents-dir',
+      root,
+      '--out-root',
+      out,
+      '--heartbeat-seconds',
+      '0',
+    ],
+    { encoding: 'utf8' },
+  );
+
+  expect(proc.status).toBe(0);
+  expect(proc.stderr).not.toContain('unknown option');
+});
+
+test('buildChildRunArgs forwards the immutable credentials snapshot path', () => {
+  const snapshotPath = '/tmp/batch/credentials.snapshot.yaml';
+  const args = buildChildRunArgs({
+    scenarioDir: '/tmp/scenarios/alpha',
+    codingAgent: 'serf',
+    codingAgentsDir: '/tmp/coding-agents',
+    outRoot: '/tmp/results',
+    credentialsPath: snapshotPath,
+  });
+
+  expect(args).toContain('--credentials-file');
+  expect(args[args.indexOf('--credentials-file') + 1]).toBe(snapshotPath);
+  expect(args[0]).toEndWith('/src/cli/run-child.ts');
+  expect(args[1]).toBe('/tmp/scenarios/alpha');
+  expect(args).not.toContain('run');
+  expect(args).not.toContain('--credentials-snapshot');
+});
+
+test('internal run-all child consumes an unlabeled canonical snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'internal-run-child-'));
+  const scenario = join(root, 'scenario');
+  const outRoot = join(root, 'results');
+  const credentials = join(root, 'credentials.snapshot.yaml');
+  mkdirSync(scenario);
+  mkdirSync(outRoot);
+  writeFileSync(join(scenario, 'story.md'), 'Internal child test.\n');
+  writeFileSync(join(scenario, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
+  writeFileSync(
+    credentials,
+    [
+      'canonical:',
+      '  model: example/default-model',
+      '  harnesses: [serf]',
+      '  api: anthropic',
+      '  api_key_env: EXAMPLE_PROVIDER_KEY',
+      '',
+    ].join('\n'),
+  );
+  const internalEntry = resolve(
+    import.meta.dir,
+    '..',
+    'src',
+    'cli',
+    'run-child.ts',
+  );
+
+  const proc = spawnSync(
+    'bun',
+    [
+      internalEntry,
+      scenario,
+      '--coding-agent',
+      'missing-serf-alias',
+      '--coding-agents-dir',
+      join(root, 'coding-agents'),
+      '--out-root',
+      outRoot,
+      '--credential',
+      'canonical',
+      '--credentials-file',
+      credentials,
+    ],
+    { encoding: 'utf8' },
+  );
+
+  expect(proc.status).toBe(2);
+  expect(proc.stdout).toContain('run-id:');
+  expect(readdirSync(outRoot)).toHaveLength(1);
 });

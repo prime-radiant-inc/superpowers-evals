@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -243,6 +243,122 @@ test('an unset PATH falls back to /usr/bin:/bin in the child env (not an empty/C
     process.env['PATH'] = savedPath;
   }
   expect(childPath).toBe('/usr/bin:/bin');
+});
+
+test('runPhase does not expose parent-only environment variables to checks', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const out = join(workdir, 'parent-env.txt');
+  const checksSh = checksShWith(
+    `pre() {\n  printf '%s' "\${QUORUM_TDD_PARENT_SECRET-unset}" > '${out}'\n}\npost() { :; }\n`,
+  );
+  // biome-ignore lint/style/noProcessEnv: synthetic parent-only secret for the process-boundary regression
+  const saved = process.env['QUORUM_TDD_PARENT_SECRET'];
+  // biome-ignore lint/style/noProcessEnv: synthetic parent-only secret for the process-boundary regression
+  process.env['QUORUM_TDD_PARENT_SECRET'] = 'synthetic-do-not-forward';
+  try {
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(out, 'utf8')).toBe('unset');
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited test environment
+    process.env['QUORUM_TDD_PARENT_SECRET'] = saved;
+  }
+});
+
+test('runPhase keeps SUPERPOWERS_ROOT for Kimi bootstrap checks but not generated commands', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const configDir = join(workdir, 'home', '.kimi-code');
+  const superpowersRoot = join(workdir, 'superpowers');
+  mkdirSync(join(configDir, 'plugins'), { recursive: true });
+  mkdirSync(join(superpowersRoot, '.kimi-plugin'), { recursive: true });
+  mkdirSync(join(superpowersRoot, 'skills', 'using-superpowers'), {
+    recursive: true,
+  });
+  writeFileSync(join(superpowersRoot, '.kimi-plugin', 'plugin.json'), '{}');
+  writeFileSync(
+    join(superpowersRoot, 'skills', 'using-superpowers', 'SKILL.md'),
+    '# fixture\n',
+  );
+  writeFileSync(
+    join(configDir, 'plugins', 'installed.json'),
+    JSON.stringify({
+      plugins: [
+        {
+          id: 'superpowers',
+          enabled: true,
+          source: 'local-path',
+          root: superpowersRoot,
+        },
+      ],
+    }),
+  );
+  const checksSh = checksShWith(
+    'pre() { bootstrap-installed; }\n' +
+      'post() { command-succeeds \'test -z "${SUPERPOWERS_ROOT-}"\'; }\n',
+  );
+  // biome-ignore lint/style/noProcessEnv: synthetic Quorum-owned path for the check-boundary regression
+  const saved = process.env['SUPERPOWERS_ROOT'];
+  // biome-ignore lint/style/noProcessEnv: synthetic Quorum-owned path for the check-boundary regression
+  process.env['SUPERPOWERS_ROOT'] = superpowersRoot;
+  try {
+    const pre = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+      configDir,
+      codingAgent: 'kimi',
+    });
+    expect(pre.records[0]).toMatchObject({
+      check: 'bootstrap-installed',
+      passed: true,
+    });
+
+    const post = await runPhase({
+      checksSh,
+      phase: 'post',
+      workdir,
+      repoRoot: REPO,
+      configDir,
+      codingAgent: 'kimi',
+    });
+    expect(post.records[0]).toMatchObject({
+      check: 'command-succeeds',
+      passed: true,
+    });
+  } finally {
+    // biome-ignore lint/style/noProcessEnv: restore the inherited test environment
+    process.env['SUPERPOWERS_ROOT'] = saved;
+  }
+});
+
+test('runPhase pins HOME to runDir/home for flat and nested config dirs', async () => {
+  for (const configParts of [[], ['.pi', 'agent']]) {
+    const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+    const expectedHome = join(runDir, 'home');
+    const configDir = join(expectedHome, ...configParts);
+    const out = join(workdir, 'home.txt');
+    const checksSh = checksShWith(
+      `pre() {\n  printf '%s' "$HOME" > '${out}'\n}\npost() { :; }\n`,
+    );
+
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+      runDir,
+      configDir,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(out, 'utf8')).toBe(expectedHome);
+  }
 });
 
 // L3-phase-large-output-enobuf: runPhase's spawnSync has no maxBuffer, so a

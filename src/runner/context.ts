@@ -71,9 +71,10 @@ export function populateContextDir(args: PopulateContextDirArgs): void {
 }
 
 // Read as text and apply substitutions; a binary file (not valid UTF-8) is
-// copied as-is. Placeholders are applied sorted by length DESCENDING so a longer
-// key (e.g. $QUORUM_AGENT_CWD_SH) is replaced before a prefix of it
-// ($QUORUM_AGENT_CWD). A substituted shebang file is re-marked +x.
+// copied as-is. Placeholders are matched in one length-DESCENDING pass so a
+// longer key (e.g. $QUORUM_AGENT_CWD_SH) wins over its prefix
+// ($QUORUM_AGENT_CWD), and replacement values are never treated as template
+// content. A substituted shebang file is re-marked +x.
 function copyWithSubstitutions(
   src: string,
   dst: string,
@@ -88,11 +89,12 @@ function copyWithSubstitutions(
     return;
   }
   const keys = Object.keys(subs).sort((a, b) => b.length - a.length);
-  for (const placeholder of keys) {
-    const value = subs[placeholder];
-    if (value !== undefined) {
-      content = content.split(placeholder).join(value);
-    }
+  if (keys.length > 0) {
+    const placeholders = new RegExp(keys.map(escapeRegExp).join('|'), 'g');
+    content = content.replace(placeholders, (placeholder) => {
+      const value = subs[placeholder];
+      return value === undefined ? placeholder : value;
+    });
   }
   writeFileSync(dst, content);
   if (content.startsWith('#!')) {
@@ -134,7 +136,7 @@ function raiseIfContextContainsPlaceholders(
       continue;
     }
     for (const placeholder of forbidden) {
-      if (content.includes(placeholder)) {
+      if (containsPlaceholder(content, placeholder)) {
         throw new RunnerError(
           `context file contains unresolved placeholder ${placeholder}: ${path}`,
           'setup',
@@ -142,6 +144,19 @@ function raiseIfContextContainsPlaceholders(
       }
     }
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsPlaceholder(content: string, placeholder: string): boolean {
+  // A placeholder name ends before a shell identifier character. This keeps a
+  // literal model such as "$SERF_MODEL_LITERAL" from being mistaken for an
+  // unresolved "$SERF_MODEL" template token.
+  return new RegExp(`${escapeRegExp(placeholder)}(?![A-Za-z0-9_])`).test(
+    content,
+  );
 }
 
 // Recursively yield every regular file under root.

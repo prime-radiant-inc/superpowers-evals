@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "roles": {
+    "spec": "docs/superpowers/specs/2026-07-01-fractals-cli-design.md",
+    "plan": "docs/superpowers/plans/2026-07-01-fractals-cli.md"
+  },
+  "files": [
+    {
+      "path": "docs/superpowers/plans/2026-07-01-fractals-cli.md",
+      "mode": "100644",
+      "sha256": "927f9ed4a0ef20c29c8232899c7ae13af01620a0931c18f2fa46f0f4ed2c5dd6"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-01-fractals-cli-design.md",
+      "mode": "100644",
+      "sha256": "7d7e963333e562103bace8c27281d69a0ada2511b269db180412e75796d0c5be"
+    }
+  ]
+}

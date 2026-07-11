@@ -38,7 +38,7 @@ test('buildChildRunArgs omits --grader-model when absent or empty', () => {
 // invokeChild must report the spawned child's OS pid through the optional onPid
 // hook so the dashboard can SIGINT in-flight children (Task 11). We don't need a
 // successful run: the pid is assigned synchronously after spawn, before the
-// child does any work. Spawning the real CLI `run` against a nonexistent
+// child does any work. Spawning the real internal run child against a nonexistent
 // scenario dir exits fast (the run resolves with an error result) while still
 // proving onPid fired with a numeric pid. Bounded by a short timeout so a
 // regression can't hang the suite.

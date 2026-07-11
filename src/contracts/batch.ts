@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { type CredentialLabels, CredentialLabelsSchema } from './credential.ts';
 
 // Batch index contracts. Every JSON read at these boundaries is zod-narrowed;
 // the writers live in src/run-all/batch-index.ts (batch.json indent 2,
@@ -21,6 +22,7 @@ export const ResultRecordSchema = z.object({
   scenario: z.string(),
   coding_agent: z.string(),
   credential: z.string().optional(),
+  labels: CredentialLabelsSchema.optional(),
   run_id: z.string().nullable(),
   skipped: z.string().optional(),
 });
@@ -47,6 +49,8 @@ export interface MatrixEntry {
   readonly status: string;
   // The credential name used by this cell's agent ('' for credential-less agents).
   readonly credential: string;
+  // Strict model/provider metadata copied from the selected parsed credential.
+  readonly labels?: CredentialLabels;
   // The scheduler limiterKey: shared across all cells hitting the same endpoint.
   // Credential-less agents fall back to the agent name (preserving prior behavior).
   readonly limiterKey: string;

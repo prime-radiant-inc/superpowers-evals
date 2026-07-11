@@ -1,0 +1,2 @@
+# Approved scenario fixtures are content-addressed and must remain byte-exact.
+scenarios/serf-builder-fractals/fixtures/** -whitespace

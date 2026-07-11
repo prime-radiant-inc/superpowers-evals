@@ -5,7 +5,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { BatchHeader, ResultRecord } from '../contracts/batch.ts';
+import type {
+  BatchHeader,
+  MatrixEntry,
+  ResultRecord,
+} from '../contracts/batch.ts';
 import { BatchHeaderSchema } from '../contracts/batch.ts';
 import { hexNonce, nowStampUtc } from '../paths.ts';
 
@@ -23,6 +27,12 @@ export function makeBatchId(stamp: string, nonceHex: string): string {
 
 export interface AllocateBatchDirArgs {
   readonly outRoot: string;
+}
+
+// Every batch freezes its parsed credential configuration at this stable,
+// inspectable location before the scheduler can dispatch a child.
+export function batchCredentialsSnapshotPath(batchDir: string): string {
+  return join(batchDir, 'credentials.snapshot.yaml');
 }
 
 // Create results/batches/<id>/ and return its path; retry on a nonce collision
@@ -88,24 +98,25 @@ export function writeBatchFooter(args: WriteBatchFooterArgs): void {
 
 export interface AppendResultRecordArgs {
   readonly batchDir: string;
-  readonly scenario: string;
-  readonly codingAgent: string;
+  // The selected matrix entry is the only source for credential labels.
+  readonly entry: MatrixEntry;
   readonly runId: string | null;
   readonly skipped: string | null;
-  readonly credential?: string;
 }
 
 // Append one record to results.jsonl. Omits the `skipped` key when null and
-// the `credential` key when absent or empty (backward compat for old batches).
+// the `credential` key when empty and the `labels` key when the selected
+// credential has none (backward compat for old batches).
 // Serialized with the ", " / ": " separators the on-disk format requires.
 export function appendResultRecord(args: AppendResultRecordArgs): void {
   const rec: ResultRecord = {
-    scenario: args.scenario,
-    coding_agent: args.codingAgent,
+    scenario: args.entry.scenario,
+    coding_agent: args.entry.codingAgent,
     run_id: args.runId,
-    ...(args.credential !== undefined && args.credential !== ''
-      ? { credential: args.credential }
+    ...(args.entry.credential !== ''
+      ? { credential: args.entry.credential }
       : {}),
+    ...(args.entry.labels !== undefined ? { labels: args.entry.labels } : {}),
     ...(args.skipped !== null ? { skipped: args.skipped } : {}),
   };
   appendFileSync(
@@ -114,9 +125,9 @@ export function appendResultRecord(args: AppendResultRecordArgs): void {
   );
 }
 
-// Serialize a flat record (string | null values only) with ", " between members
-// and ": " after keys. JS JSON.stringify omits those spaces, so we emit the
-// members by hand. Key order is the object's insertion order.
+// Serialize a record with ", " between members and ": " after keys. JS
+// JSON.stringify omits those spaces, so we emit the members by hand. Key order
+// is the object's insertion order.
 function pyCompactJson(rec: ResultRecord): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(rec)) {

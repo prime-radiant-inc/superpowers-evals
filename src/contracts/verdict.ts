@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CredentialLabelsSchema } from './credential.ts';
 
 export const GAUNTLET_STATUSES = [
   'pass',
@@ -66,6 +67,7 @@ export const FinalVerdictSchema = z.object({
   finished_at: z.string().optional(),
   credential: z.string().optional(),
   os: z.string().optional(),
+  labels: CredentialLabelsSchema.optional(),
   // Best-effort provenance (PRI-2494): what was under test. Optional so old
   // verdicts parse; every inner field is nullable (probe failures).
   provenance: z

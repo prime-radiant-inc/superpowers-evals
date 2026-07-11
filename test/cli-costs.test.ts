@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import * as costs from '../src/cli/costs.ts';
 import {
   type CostRow,
   costsJson,
@@ -64,6 +65,56 @@ function pricedVerdict(opts: {
       },
     },
   };
+}
+
+const CAMPAIGN_LABELS = {
+  model: 'example/model-a',
+  provider: 'example-provider',
+  quantization: 'fp8',
+  preset_version_id: '00000000-0000-4000-8000-000000000001',
+  catalog_as_of: '2026-07-10',
+} as const;
+
+function labeledVerdict(opts: {
+  scenario: string;
+  agent: string;
+  final: 'pass' | 'fail' | 'indeterminate';
+  labels?: typeof CAMPAIGN_LABELS;
+  charged: number | null;
+  estimated: number | null;
+  delta: number | null;
+  input: number;
+  cacheCreate: number;
+  cacheRead: number;
+}): Record<string, unknown> {
+  const verdict = pricedVerdict({
+    scenario: opts.scenario,
+    agent: opts.agent,
+    costUsd: 1.5,
+    total: opts.input + opts.cacheCreate + opts.cacheRead + 2_000,
+  });
+  verdict['final'] = opts.final;
+  if (opts.labels !== undefined) {
+    verdict['labels'] = opts.labels;
+  }
+  const economics = verdict['economics'] as Record<string, unknown>;
+  const coding = economics['coding_agent'] as Record<string, unknown>;
+  coding['tokens'] = {
+    input: opts.input,
+    output: 2_000,
+    cache_create: opts.cacheCreate,
+    cache_read: opts.cacheRead,
+    total: opts.input + opts.cacheCreate + opts.cacheRead + 2_000,
+  };
+  coding['openrouter'] = {
+    charged_cost_usd: opts.charged,
+    estimated_cost_usd: opts.estimated,
+    cost_delta_usd: opts.delta,
+    generation_count: 2,
+    model: CAMPAIGN_LABELS.model,
+    provider: CAMPAIGN_LABELS.provider,
+  };
+  return verdict;
 }
 
 // A partial verdict (gemini-shaped): economics.partial true and
@@ -409,6 +460,296 @@ test('a truncated/corrupt results.jsonl line is skipped, not a crash', () => {
     true,
   );
   expect(rows.some((r) => r.scenario === 'gamma')).toBe(false);
+});
+
+// ── labeled builder comparison rows ─────────────────────────────────────
+
+test('cacheReadPercent uses input plus cache-read and leaves an empty denominator missing', () => {
+  const cacheReadPercent = (
+    costs as typeof costs & {
+      cacheReadPercent?: (args: {
+        readonly input: number | null;
+        readonly cacheRead: number | null;
+      }) => number | null;
+    }
+  ).cacheReadPercent;
+
+  expect(cacheReadPercent?.({ input: 800, cacheRead: 200 })).toBe(20);
+  expect(cacheReadPercent?.({ input: 0, cacheRead: 0 })).toBeNull();
+  expect(cacheReadPercent?.({ input: null, cacheRead: 200 })).toBeNull();
+});
+
+test('renderCosts makes labeled verdicts a stable comparison grid without ranking non-passes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-labeled-'));
+  const pass = writeRunDir(
+    root,
+    'pass',
+    labeledVerdict({
+      scenario: 'pass-scenario',
+      agent: 'serf',
+      final: 'pass',
+      labels: CAMPAIGN_LABELS,
+      charged: 1.2,
+      estimated: 1.5,
+      delta: -0.3,
+      input: 800,
+      cacheCreate: 9_999,
+      cacheRead: 200,
+    }),
+  );
+  const fail = writeRunDir(
+    root,
+    'fail',
+    labeledVerdict({
+      scenario: 'fail-scenario',
+      agent: 'serf',
+      final: 'fail',
+      labels: CAMPAIGN_LABELS,
+      charged: null,
+      estimated: null,
+      delta: null,
+      input: 0,
+      cacheCreate: 200,
+      cacheRead: 0,
+    }),
+  );
+  const indeterminate = writeRunDir(
+    root,
+    'indeterminate',
+    labeledVerdict({
+      scenario: 'indeterminate-scenario',
+      agent: 'serf',
+      final: 'indeterminate',
+      labels: CAMPAIGN_LABELS,
+      charged: 0.8,
+      estimated: 0.75,
+      delta: 0.05,
+      input: 600,
+      cacheCreate: 50,
+      cacheRead: 400,
+    }),
+  );
+
+  const out = renderCosts(
+    [pass, fail, indeterminate].flatMap((dir) => loadCostRows(dir, root)),
+    { color: false },
+  );
+
+  expect(out).toContain('model');
+  expect(out).toContain('provider');
+  expect(out).toContain('quant');
+  expect(out).toContain('final');
+  expect(out).toContain('charged');
+  expect(out).toContain('estimated');
+  expect(out).toContain('delta');
+  expect(out).toContain('cache read%');
+  expect(out).toContain('example/model-a');
+  expect(out).toContain('example-provider');
+  expect(out).toContain('fp8');
+  expect(out).toContain('$1.20');
+  expect(out).toContain('$1.50');
+  expect(out).toContain('$-0.30');
+  expect(out).toContain('20%');
+  expect(out).not.toContain('$0.00');
+  const failRow = out
+    .split('\n')
+    .find((line) => line.includes('fail-scenario'));
+  expect(failRow).toBeDefined();
+  expect(failRow).toContain('—');
+  expect(failRow).not.toContain('0%');
+  expect(out.match(/yes/g)).toHaveLength(1);
+  expect(out.indexOf('pass-scenario')).toBeLessThan(
+    out.indexOf('fail-scenario'),
+  );
+  expect(out.indexOf('fail-scenario')).toBeLessThan(
+    out.indexOf('indeterminate-scenario'),
+  );
+});
+
+test('loadCostRows falls back to batch labels when an old verdict lacks them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-labeled-batch-'));
+  const resultsRoot = join(root, 'results');
+  const batchDir = join(resultsRoot, 'batches', 'b-labeled');
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      id: 'b-labeled',
+      started_at: '2026-07-10T00:00:00Z',
+      coding_agents: ['serf'],
+    }),
+  );
+  writeFileSync(
+    join(batchDir, 'results.jsonl'),
+    `${JSON.stringify({
+      scenario: 'alpha',
+      coding_agent: 'serf',
+      credential: 'serf_example_a',
+      labels: CAMPAIGN_LABELS,
+      run_id: 'legacy-verdict',
+    })}\n`,
+  );
+  writeRunDir(
+    resultsRoot,
+    'legacy-verdict',
+    labeledVerdict({
+      scenario: 'alpha',
+      agent: 'serf',
+      final: 'pass',
+      charged: 1,
+      estimated: 1.1,
+      delta: -0.1,
+      input: 800,
+      cacheCreate: 0,
+      cacheRead: 200,
+    }),
+  );
+
+  const out = renderCosts(loadCostRows(batchDir, resultsRoot), {
+    color: false,
+  });
+  expect(out).toContain('model');
+  expect(out).toContain('example/model-a');
+});
+
+test('renderCosts keeps an unlabeled legacy verdict in the compact view', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-legacy-'));
+  const dir = writeRunDir(
+    root,
+    'legacy',
+    pricedVerdict({
+      scenario: 'legacy-scenario',
+      agent: 'claude',
+      costUsd: 2.5,
+      total: 3_700,
+    }),
+  );
+
+  const out = renderCosts(loadCostRows(dir, root), { color: false });
+  expect(out).toContain('cost');
+  expect(out).not.toContain('quant');
+  expect(out).not.toContain('charged');
+  expect(out).not.toContain('estimated');
+});
+
+test('labeled aggregate uses charged cost when charged and estimated differ', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-authority-'));
+  const dir = writeRunDir(
+    root,
+    'labeled',
+    labeledVerdict({
+      scenario: 'candidate',
+      agent: 'serf',
+      final: 'pass',
+      labels: CAMPAIGN_LABELS,
+      charged: 0.25,
+      estimated: 1.5,
+      delta: -1.25,
+      input: 100,
+      cacheCreate: 0,
+      cacheRead: 0,
+    }),
+  );
+  const rows = loadCostRows(dir, root);
+
+  expect(renderCosts(rows, { color: false })).toContain(
+    'total coding cost $0.25',
+  );
+  expect(costsJson(rows).aggregate).toMatchObject({
+    coding_cost_usd: 0.25,
+    priced: 1,
+    unpriced: 0,
+  });
+  expect(costsJson(rows).rows[0]).toMatchObject({
+    charged_cost_usd: 0.25,
+    estimated_cost_usd: 1.5,
+    cost_delta_usd: -1.25,
+  });
+});
+
+test('labeled aggregate is unpriced when authoritative charged evidence is missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-authority-'));
+  const dir = writeRunDir(
+    root,
+    'labeled-missing-charge',
+    labeledVerdict({
+      scenario: 'candidate',
+      agent: 'serf',
+      final: 'pass',
+      labels: CAMPAIGN_LABELS,
+      charged: null,
+      estimated: 1.5,
+      delta: null,
+      input: 100,
+      cacheCreate: 0,
+      cacheRead: 0,
+    }),
+  );
+  const rows = loadCostRows(dir, root);
+
+  expect(renderCosts(rows, { color: false })).toContain(
+    'total coding cost unpriced',
+  );
+  expect(costsJson(rows).aggregate).toMatchObject({
+    coding_cost_usd: null,
+    priced: 0,
+    unpriced: 1,
+  });
+});
+
+test('mixed labeled-missing and legacy-priced rows keep a numeric authoritative total', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-authority-'));
+  const labeled = writeRunDir(
+    root,
+    'labeled-missing-charge',
+    labeledVerdict({
+      scenario: 'candidate',
+      agent: 'serf',
+      final: 'pass',
+      labels: CAMPAIGN_LABELS,
+      charged: null,
+      estimated: 1.5,
+      delta: null,
+      input: 100,
+      cacheCreate: 0,
+      cacheRead: 0,
+    }),
+  );
+  const legacy = writeRunDir(
+    root,
+    'legacy',
+    pricedVerdict({
+      scenario: 'legacy',
+      agent: 'claude',
+      costUsd: 2.5,
+      total: 100,
+    }),
+  );
+
+  expect(
+    costsJson([labeled, legacy].flatMap((dir) => loadCostRows(dir, root)))
+      .aggregate,
+  ).toMatchObject({ coding_cost_usd: 2.5, priced: 1, unpriced: 1 });
+});
+
+test('unlabeled legacy aggregate retains estimated cost authority', () => {
+  const root = mkdtempSync(join(tmpdir(), 'costs-authority-'));
+  const dir = writeRunDir(
+    root,
+    'legacy',
+    pricedVerdict({
+      scenario: 'legacy',
+      agent: 'claude',
+      costUsd: 2.5,
+      total: 100,
+    }),
+  );
+  const rows = loadCostRows(dir, root);
+
+  expect(renderCosts(rows, { color: false })).toContain(
+    'total coding cost $2.50',
+  );
+  expect(costsJson(rows).aggregate.coding_cost_usd).toBe(2.5);
 });
 
 // ── renderCosts: table + aggregate + unpriced marker ────────────────────

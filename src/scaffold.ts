@@ -21,6 +21,7 @@ import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { FS_VERBS } from './check/dispatch.ts';
 import { TRANSCRIPT_VERBS } from './check/transcript-dispatch.ts';
+import { validateBaselineManifest } from './scenario-manifest.ts';
 import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
 
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
@@ -315,6 +316,9 @@ export function checkScenario(scenarioDir: string): string[] {
   }
 
   problems.push(...validateChecksSh(scenarioDir));
+  if (existsSync(join(scenarioDir, 'baseline-manifest.json'))) {
+    problems.push(...validateBaselineManifest(scenarioDir));
+  }
 
   return problems;
 }

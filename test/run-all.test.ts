@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -67,6 +68,8 @@ interface VerdictPlan {
   readonly final?: 'pass' | 'fail' | 'indeterminate';
   // The coding-agent (subject) cost — what the eval cost report must reflect.
   readonly cost?: number | null;
+  readonly labeled?: boolean;
+  readonly chargedCost?: number | null;
   // The gauntlet (QA-driver) cost — measurement overhead that must NEVER be
   // folded into the reported eval cost.
   readonly gauntletCost?: number;
@@ -123,6 +126,16 @@ function fakeInvoke(plans: Readonly<Record<string, VerdictPlan>>): {
         : null,
       economics: economicsFor(plan),
     };
+    if (plan.labeled === true) {
+      verdict['labels'] = {
+        model: 'example/model-a',
+        provider: 'example-provider',
+        quantization: 'fp8',
+      };
+      const economics = verdict['economics'] as Record<string, unknown>;
+      const coding = economics['coding_agent'] as Record<string, unknown>;
+      coding['openrouter'] = { charged_cost_usd: plan.chargedCost ?? null };
+    }
     writeFileSync(join(runDir, 'verdict.json'), JSON.stringify(verdict));
     return Promise.resolve({ run_id: runId, exit_code: 0, error: null });
   };
@@ -211,6 +224,44 @@ test('runBatch writes grid manifest inside the results root', async () => {
 
   expect(existsSync(join(outRoot, 'grid-manifest.json'))).toBe(true);
   expect(existsSync(join(dirname(outRoot), 'grid-manifest.json'))).toBe(false);
+});
+
+test('runBatch totals labeled rows from charged evidence and leaves missing charges unpriced', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'charged' }, { name: 'missing' }],
+    ['serf'],
+  );
+  const { invoke } = fakeInvoke({
+    'charged/serf': {
+      final: 'pass',
+      cost: 1.5,
+      labeled: true,
+      chargedCost: 0.25,
+    },
+    'missing/serf': {
+      final: 'pass',
+      cost: 2,
+      labeled: true,
+      chargedCost: null,
+    },
+  });
+  const stream = new StringStream();
+
+  await runBatch({
+    scenariosRoot,
+    codingAgentsDir,
+    outRoot,
+    jobs: 1,
+    invoke,
+    stream,
+    heartbeatSeconds: 0,
+  });
+
+  expect(stream.text).toContain('charged  serf  ✓');
+  expect(stream.text).toContain('$0.25');
+  expect(stream.text).toMatch(/missing\s+serf\s+✓\s+0s\s+—/);
+  expect(stream.text).toContain('cost $0.25');
+  expect(stream.text).not.toContain('cost $3.50');
 });
 
 test('unknown agentFilter throws', async () => {
@@ -344,4 +395,179 @@ test('invokeCell passes credential to invoke fn when non-empty', async () => {
 
   expect(capturedArgs).toHaveLength(1);
   expect(capturedArgs[0]?.credential).toBe('my_cred');
+});
+
+test('runBatch freezes one credentials snapshot before dispatching every child', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }, { name: 'beta' }],
+    ['claude'],
+  );
+  const sourcePath = join(dirname(outRoot), 'campaign-credentials.yaml');
+  writeFileSync(
+    sourcePath,
+    [
+      'campaign:',
+      '  model: original-model',
+      '  harnesses: [claude]',
+      '  api: anthropic',
+      '  auth: api-key',
+      '  api_key_env: CAMPAIGN_KEY',
+      '',
+    ].join('\n'),
+  );
+  writeFileSync(
+    join(codingAgentsDir, 'claude.yaml'),
+    'name: claude\ndefault_credential: campaign\n',
+  );
+
+  const observedPaths: string[] = [];
+  let invocations = 0;
+  const invoke: InvokeFn = async (args) => {
+    if (args.credentialsPath === undefined) {
+      throw new Error('child did not receive credentials snapshot path');
+    }
+    observedPaths.push(args.credentialsPath);
+    invocations += 1;
+    if (invocations === 1) {
+      writeFileSync(
+        sourcePath,
+        [
+          'campaign:',
+          '  model: mutated-model',
+          '  harnesses: [claude]',
+          '  api: anthropic',
+          '  auth: api-key',
+          '  api_key_env: CAMPAIGN_KEY',
+          '',
+        ].join('\n'),
+      );
+    }
+    const runId = `run-${invocations}`;
+    const runDir = join(args.outRoot, runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'verdict.json'),
+      JSON.stringify({
+        schema: 1,
+        final: 'pass',
+        final_reason: 'fake',
+        gauntlet: null,
+        checks: [],
+        error: null,
+        economics: null,
+      }),
+    );
+    return { run_id: runId, exit_code: 0, error: null };
+  };
+
+  const batchDir = await runBatch({
+    scenariosRoot,
+    codingAgentsDir,
+    outRoot,
+    jobs: 1,
+    credentialsPath: sourcePath,
+    invoke,
+    heartbeatSeconds: 0,
+  });
+
+  const snapshotPath = join(batchDir, 'credentials.snapshot.yaml');
+  expect(observedPaths).toEqual([snapshotPath, snapshotPath]);
+  expect(readFileSync(snapshotPath, 'utf8')).toContain('model: original-model');
+  expect(readFileSync(snapshotPath, 'utf8')).not.toContain('mutated-model');
+});
+
+test('runBatch rejects a missing explicit credentials file before allocation or invoke', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }],
+    ['claude'],
+  );
+  let invoked = false;
+
+  await expect(
+    runBatch({
+      scenariosRoot,
+      codingAgentsDir,
+      outRoot,
+      jobs: 1,
+      credentialsPath: join(dirname(outRoot), 'missing-credentials.yaml'),
+      invoke: async () => {
+        invoked = true;
+        return { run_id: null, exit_code: 1, error: 'should not run' };
+      },
+      heartbeatSeconds: 0,
+    }),
+  ).rejects.toThrow(/cannot load credentials file/);
+
+  expect(invoked).toBe(false);
+  expect(existsSync(join(outRoot, 'batches'))).toBe(false);
+});
+
+test('runBatch rejects an unlabeled external OpenRouter Serf campaign before allocation', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }],
+    ['builder-alias'],
+  );
+  writeFileSync(
+    join(codingAgentsDir, 'builder-alias.yaml'),
+    'name: builder-alias\nruntime_family: serf\n',
+  );
+  const credentialsPath = join(dirname(outRoot), 'campaign.yaml');
+  writeFileSync(
+    credentialsPath,
+    [
+      'candidate:',
+      '  model: openrouter/@preset/example-a',
+      '  harnesses: [serf]',
+      '  api: openai-chat',
+      '  base_url: https://openrouter.ai/api/v1',
+      '  api_key_env: OPENROUTER_API_KEY',
+      '',
+    ].join('\n'),
+  );
+  let invoked = false;
+
+  await expect(
+    runBatch({
+      scenariosRoot,
+      codingAgentsDir,
+      outRoot,
+      jobs: 1,
+      credentialsPath,
+      credentialFilter: ['candidate'],
+      invoke: async () => {
+        invoked = true;
+        return { run_id: null, exit_code: 1, error: 'should not run' };
+      },
+      heartbeatSeconds: 0,
+    }),
+  ).rejects.toThrow(/route-attestation labels/);
+  expect(invoked).toBe(false);
+  expect(existsSync(join(outRoot, 'batches'))).toBe(false);
+});
+
+test('runBatch leaves an inspectable empty batch when manifest writing fails', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }],
+    ['claude'],
+  );
+
+  await expect(
+    runBatch({
+      scenariosRoot,
+      codingAgentsDir,
+      outRoot,
+      jobs: 1,
+      heartbeatSeconds: 0,
+      writeGridManifest: () => {
+        throw new Error('manifest write failed');
+      },
+    }),
+  ).rejects.toThrow('manifest write failed');
+
+  const batches = readdirSync(join(outRoot, 'batches'));
+  expect(batches).toHaveLength(1);
+  const batchDir = join(outRoot, 'batches', batches[0] ?? 'missing');
+  expect(existsSync(join(batchDir, 'batch.json'))).toBe(true);
+  expect(existsSync(join(batchDir, 'credentials.snapshot.yaml'))).toBe(true);
+  expect(existsSync(join(batchDir, 'results.jsonl'))).toBe(false);
 });

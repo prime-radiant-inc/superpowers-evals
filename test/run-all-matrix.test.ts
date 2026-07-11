@@ -223,12 +223,19 @@ test('buildMatrix sets credential and limiterKey for a credentialed agent', () =
   );
 
   const cred: Credential = {
-    model: 'claude-3-5-sonnet',
+    model: 'example/model-a',
     harnesses: ['claude'],
     api: 'anthropic',
     base_url: 'https://api.example.com',
     auth: 'api-key',
     compat: {},
+    labels: {
+      model: 'example/model-a',
+      provider: 'example-provider',
+      quantization: 'fp16',
+      preset_version_id: '00000000-0000-4000-8000-000000000001',
+      catalog_as_of: '2026-07-10',
+    },
   };
   const credentials: Record<string, Credential> = { my_cred: cred };
 
@@ -236,6 +243,7 @@ test('buildMatrix sets credential and limiterKey for a credentialed agent', () =
   expect(m).toHaveLength(1);
   expect(m[0]?.credential).toBe('my_cred');
   expect(m[0]?.limiterKey).toBe(limiterKey(cred, 'my_cred'));
+  expect(m[0]?.labels).toEqual(cred.labels);
   // limiterKey = base_url|api = "https://api.example.com|anthropic"
   expect(m[0]?.limiterKey).toBe('https://api.example.com|anthropic');
 });

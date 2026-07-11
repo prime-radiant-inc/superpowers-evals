@@ -6,7 +6,7 @@ tags: smoke
 ---
 
 You are testing whether quorum's new-path dispatch works end-to-end.
-Drive the Coding-Agent (Claude) through this trivial task: ask it to
+Drive the Coding-Agent through this trivial task: ask it to
 create a single file called `hello.txt` containing the word `hi` (no other
 content). When it's done, end the session.
 

@@ -32,17 +32,26 @@ export type ApiKeyResolution =
   | { kind: 'env'; value: string }
   | { kind: 'native' };
 
-export function resolveApiKey(
+export function resolveApiKeyEnvName(
   cred: Credential,
   harnessConventionalEnv: string | undefined,
-): ApiKeyResolution {
-  if (cred.auth !== 'api-key') return { kind: 'native' };
+): string | null {
+  if (cred.auth !== 'api-key') return null;
   const envName = cred.api_key_env ?? harnessConventionalEnv;
   if (envName === undefined) {
     throw new Error(
       `credential auth=api-key but no api_key_env and harness has no conventional key env`,
     );
   }
+  return envName;
+}
+
+export function resolveApiKey(
+  cred: Credential,
+  harnessConventionalEnv: string | undefined,
+): ApiKeyResolution {
+  const envName = resolveApiKeyEnvName(cred, harnessConventionalEnv);
+  if (envName === null) return { kind: 'native' };
   const value = getEnv(envName);
   if (value === undefined || value === '') {
     throw new Error(`api key env var ${envName} is unset/empty`);

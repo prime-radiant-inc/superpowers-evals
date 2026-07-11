@@ -1,7 +1,15 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { runPhase } from '../src/checks/index.ts';
 import { writePhase } from '../src/runner/phase.ts';
 
 const IDENTITY = {
@@ -34,4 +42,45 @@ test('writePhase writes the run self-identity into phase.json', () => {
   expect(j.identity.agent).toBe('claude-haiku');
   expect(j.identity.credential).toBe('opus');
   expect(j.identity.os).toBe('windows');
+});
+
+test('runPhase exposes QUORUM_SCENARIO_DIR to the baseline-manifest check verb', async () => {
+  const scenarioDir = mkdtempSync(join(tmpdir(), 'scenario-phase-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'worktree-phase-'));
+  try {
+    const path = 'docs/superpowers/plans/plan.md';
+    const fixture = join(scenarioDir, 'fixtures', path);
+    const seeded = join(workdir, path);
+    mkdirSync(join(fixture, '..'), { recursive: true });
+    mkdirSync(join(seeded, '..'), { recursive: true });
+    writeFileSync(fixture, 'PLAN\n');
+    writeFileSync(seeded, 'PLAN\n');
+    const digest = createHash('sha256').update('PLAN\n').digest('hex');
+    writeFileSync(
+      join(scenarioDir, 'baseline-manifest.json'),
+      JSON.stringify({
+        schema_version: 1,
+        roles: { spec: path, plan: path },
+        files: [{ path, mode: '100644', sha256: digest }],
+      }),
+    );
+    const checksSh = join(scenarioDir, 'checks.sh');
+    writeFileSync(checksSh, 'pre() { baseline-manifest; }\npost() { :; }\n');
+
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: resolve(import.meta.dir, '..'),
+      scenarioDir,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.records).toMatchObject([
+      { check: 'baseline-manifest', passed: true, phase: 'pre' },
+    ]);
+  } finally {
+    rmSync(scenarioDir, { recursive: true, force: true });
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });

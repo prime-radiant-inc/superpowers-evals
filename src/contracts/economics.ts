@@ -29,3 +29,16 @@ export const TokenUsageSchema = z.object({
   tool_result_total_bytes: z.number().optional(),
 });
 export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+
+/** Charged route evidence for a labeled OpenRouter campaign. This is optional
+ *  on the coding-agent economics block so frozen artifacts from before route
+ *  attestation retain their original shape. */
+export const OpenRouterEconomicsSchema = z.object({
+  charged_cost_usd: z.number().nullable(),
+  estimated_cost_usd: z.number().nullable(),
+  cost_delta_usd: z.number().nullable(),
+  generation_count: z.number().int().nonnegative(),
+  model: z.string().min(1),
+  provider: z.string().min(1),
+});
+export type OpenRouterEconomics = z.infer<typeof OpenRouterEconomicsSchema>;

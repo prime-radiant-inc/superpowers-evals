@@ -1,17 +1,19 @@
 import { mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
+import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 
 // Serf provisioning adapter. Like the Claude adapter, serf loads Superpowers by
 // pointing `--plugin-dir` straight at SUPERPOWERS_ROOT (no staging into the
 // isolated home), so provision() is deliberately light: create the isolated
 // config dir, fail fast when the binary is missing or SUPERPOWERS_ROOT is
-// misconfigured, and let the launcher wire auth + the model. serf reads its API
-// key from the environment (ANTHROPIC_API_KEY for the default Sonnet pin) and
-// re-seeds its provider instances from that env because the launcher points
-// SERF_PROVIDERS_CONFIG at a fresh per-run path.
+// misconfigured, and let the launcher wire the credential-selected model and
+// API-key name. serf re-seeds its provider instances from that selected key
+// because the launcher points SERF_PROVIDERS_CONFIG at a fresh per-run path.
 
 // Plugin files SUPERPOWERS_ROOT must contain for serf to load Superpowers and
 // auto-trigger skills (the SessionStart bootstrap + the two skills the
@@ -48,7 +50,11 @@ export class SerfAgent implements CodingAgent {
     this.config = config;
   }
 
-  provision(home: RunHome): Record<string, string> {
+  provision(
+    home: RunHome,
+    _runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string> {
     mkdirSync(home.configDir, { recursive: true });
     // Pre-create the ATIF export dir so the pre-run capture snapshot sees a
     // clean, empty dir (serf's --export-atif also MkdirAll's it, but the
@@ -77,8 +83,21 @@ export class SerfAgent implements CodingAgent {
       );
     }
 
-    // No extra env: the launcher forwards ANTHROPIC_API_KEY, sets a fresh
-    // SERF_PROVIDERS_CONFIG, and bakes the model/plugin-dir/export-atif flags.
+    if (credential !== undefined) {
+      if (credential.auth !== 'api-key') {
+        throw new ProvisionError(
+          `serf: auth '${credential.auth}' is not supported; use 'api-key'`,
+        );
+      }
+      try {
+        resolveApiKey(credential, 'ANTHROPIC_API_KEY');
+      } catch (e) {
+        throw new ProvisionError(e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    // No extra env: the launcher forwards only the credential-selected key,
+    // sets a fresh SERF_PROVIDERS_CONFIG, and bakes the model/plugin-dir/export-atif flags.
     return {};
   }
 }

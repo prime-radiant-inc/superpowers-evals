@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -7,7 +13,7 @@ import {
   type CheckRecord,
   CheckRecordSchema,
 } from '../contracts/verdict.ts';
-import { envSnapshot, getEnv } from '../env.ts';
+import { getEnv } from '../env.ts';
 
 // A check verb emits one of these per line into QUORUM_RECORD_SINK. The verbs
 // are bash functions (defined by the sourced prelude, src/checks/prelude.sh)
@@ -16,6 +22,20 @@ import { envSnapshot, getEnv } from '../env.ts';
 // injected by quorum, not the verb, so the sink-line schema is the full
 // CheckRecord minus its phase field.
 const SinkRecordSchema = CheckRecordSchema.omit({ phase: true });
+
+const CHECK_ENV_ALLOWLIST = [
+  'CI',
+  'COMSPEC',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'NO_COLOR',
+  'PATHEXT',
+  'SUPERPOWERS_ROOT',
+  'SYSTEMROOT',
+  'TERM',
+  'TZ',
+] as const;
 
 export interface RunPhaseArgs {
   readonly checksSh: string;
@@ -32,6 +52,8 @@ export interface RunPhaseArgs {
   readonly transcriptPath?: string;
   /** Optional: the run dir, exposed to post-checks that read sibling artifacts. */
   readonly runDir?: string;
+  /** Optional: scenario directory, exposed to baseline-manifest checks. */
+  readonly scenarioDir?: string;
   /**
    * Optional: the coding-agent's isolated config dir, exposed to the bootstrap
    * verbs as QUORUM_AGENT_CONFIG_DIR (= <runHome>/<home_config_subdir>).
@@ -68,25 +90,39 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   const sinkDir = mkdtempSync(join(tmpdir(), 'sink-'));
   const sink = join(sinkDir, 'records.jsonl');
 
-  // Build the subprocess env from the sanctioned snapshot, never process.env
-  // directly. undefined values are simply absent in the child's environment.
-  // Assembled as one literal (conditional spreads for the optional keys) so the
-  // names are object properties, not index-signature reads/writes.
+  // Checks may execute source produced by the evaluated agent, so this process
+  // tree is an untrusted-code boundary. Project the host environment onto a
+  // small non-secret allowlist and add only Quorum-owned paths; never copy the
+  // full environment into post-checks. undefined values are simply absent.
   // An unset PATH falls back to the system default so bash, git, and the other
   // utilities the verbs shell out to still resolve. The check verbs themselves
   // are prelude functions (no PATH entry), so PATH carries no quorum-specific
   // component.
   const path = getEnv('PATH') ?? '/usr/bin:/bin';
+  const home = args.runDir !== undefined ? join(args.runDir, 'home') : sinkDir;
+  const checkTmp = join(sinkDir, 'tmp');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(checkTmp, { recursive: true });
   const prelude = join(args.repoRoot, 'src', 'checks', 'prelude.sh');
   const env: Record<string, string | undefined> = {
-    ...envSnapshot(),
+    ...Object.fromEntries(
+      CHECK_ENV_ALLOWLIST.map((name) => [name, getEnv(name)]),
+    ),
     PATH: path,
+    HOME: home,
+    TMPDIR: checkTmp,
+    TMP: checkTmp,
+    TEMP: checkTmp,
+    XDG_CACHE_HOME: join(home, '.cache'),
     QUORUM_REPO_ROOT: args.repoRoot,
     QUORUM_RECORD_SINK: sink,
     ...(args.transcriptPath !== undefined
       ? { QUORUM_TRANSCRIPT_PATH: args.transcriptPath }
       : {}),
     ...(args.runDir !== undefined ? { QUORUM_RUN_DIR: args.runDir } : {}),
+    ...(args.scenarioDir !== undefined
+      ? { QUORUM_SCENARIO_DIR: args.scenarioDir }
+      : {}),
     ...(args.configDir !== undefined
       ? { QUORUM_AGENT_CONFIG_DIR: args.configDir }
       : {}),

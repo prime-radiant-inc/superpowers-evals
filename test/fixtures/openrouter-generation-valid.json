@@ -1,0 +1,21 @@
+{
+  "data": {
+    "id": "gen-valid-1",
+    "model": "example/model-a",
+    "provider_name": "Example Provider",
+    "preset_id": "00000000-0000-4000-8000-000000000005",
+    "is_byok": false,
+    "latency": 125.5,
+    "generation_time": 2.75,
+    "native_tokens_prompt": 1200,
+    "native_tokens_completion": 340,
+    "native_tokens_reasoning": 56,
+    "native_tokens_cached": 800,
+    "total_cost": 0.0125,
+    "upstream_inference_cost": 0.01,
+    "prompt": "must never persist",
+    "completion": "must never persist",
+    "messages": [{ "content": "must never persist" }],
+    "content": "must never persist"
+  }
+}

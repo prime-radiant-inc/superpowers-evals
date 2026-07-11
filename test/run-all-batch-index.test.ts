@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import type { MatrixEntry } from '../src/contracts/batch.ts';
 import {
   BatchHeaderSchema,
   ResultRecordSchema,
@@ -9,6 +10,7 @@ import {
 import {
   allocateBatchDir,
   appendResultRecord,
+  batchCredentialsSnapshotPath,
   makeBatchId,
   writeBatchFooter,
   writeBatchHeader,
@@ -16,6 +18,25 @@ import {
 
 function tmpOutRoot(): string {
   return mkdtempSync(join(tmpdir(), 'runall-index-'));
+}
+
+function resultEntry(args: {
+  readonly scenario: string;
+  readonly codingAgent: string;
+  readonly credential?: string;
+  readonly labels?: MatrixEntry['labels'];
+}): MatrixEntry {
+  return {
+    scenario: args.scenario,
+    codingAgent: args.codingAgent,
+    scenarioDir: `/tmp/${args.scenario}`,
+    skippedReason: null,
+    tier: 'full',
+    status: 'ready',
+    credential: args.credential ?? '',
+    limiterKey: args.codingAgent,
+    ...(args.labels !== undefined ? { labels: args.labels } : {}),
+  };
 }
 
 test('makeBatchId composes the stamp and nonce', () => {
@@ -30,6 +51,14 @@ test('allocateBatchDir creates results/batches/<batch-...>', () => {
   expect(existsSync(batchDir)).toBe(true);
   expect(basename(batchDir)).toMatch(/^batch-\d{8}T\d{6}Z-[0-9a-f]{4}$/);
   expect(batchDir.startsWith(join(outRoot, 'batches'))).toBe(true);
+});
+
+test('batchCredentialsSnapshotPath is inside the batch directory', () => {
+  const outRoot = tmpOutRoot();
+  const batchDir = allocateBatchDir({ outRoot });
+  expect(batchCredentialsSnapshotPath(batchDir)).toBe(
+    join(batchDir, 'credentials.snapshot.yaml'),
+  );
 });
 
 test('writeBatchHeader writes batch.json with finished_at null + indent 2', () => {
@@ -57,15 +86,13 @@ test('appendResultRecord writes one compact line per record, skipped omitted whe
   const batchDir = allocateBatchDir({ outRoot });
   appendResultRecord({
     batchDir,
-    scenario: 'alpha',
-    codingAgent: 'claude',
+    entry: resultEntry({ scenario: 'alpha', codingAgent: 'claude' }),
     runId: 'alpha-claude-20260612T015301Z-ab12',
     skipped: null,
   });
   appendResultRecord({
     batchDir,
-    scenario: 'beta',
-    codingAgent: 'codex',
+    entry: resultEntry({ scenario: 'beta', codingAgent: 'codex' }),
     runId: null,
     skipped: 'directive',
   });
@@ -93,26 +120,29 @@ test('appendResultRecord includes credential when non-empty, omits it when empty
   // With a non-empty credential.
   appendResultRecord({
     batchDir,
-    scenario: 'alpha',
-    codingAgent: 'pi',
+    entry: resultEntry({
+      scenario: 'alpha',
+      codingAgent: 'pi',
+      credential: 'pi-prod',
+    }),
     runId: 'alpha-pi-20260622T000000Z-ab12',
     skipped: null,
-    credential: 'pi-prod',
   });
   // With an empty credential (should be omitted).
   appendResultRecord({
     batchDir,
-    scenario: 'beta',
-    codingAgent: 'claude',
+    entry: resultEntry({
+      scenario: 'beta',
+      codingAgent: 'claude',
+      credential: '',
+    }),
     runId: null,
     skipped: 'draft',
-    credential: '',
   });
   // With credential absent (should be omitted).
   appendResultRecord({
     batchDir,
-    scenario: 'gamma',
-    codingAgent: 'codex',
+    entry: resultEntry({ scenario: 'gamma', codingAgent: 'codex' }),
     runId: null,
     skipped: 'directive',
   });
@@ -138,6 +168,40 @@ test('appendResultRecord includes credential when non-empty, omits it when empty
   );
   const r2 = ResultRecordSchema.parse(JSON.parse(lines[2] ?? ''));
   expect(r2.credential).toBeUndefined();
+});
+
+test('appendResultRecord preserves labels from its selected matrix entry', () => {
+  const outRoot = tmpOutRoot();
+  const batchDir = allocateBatchDir({ outRoot });
+  const labels = {
+    model: 'example/model-a',
+    provider: 'example-provider',
+    quantization: 'fp16',
+    preset_version_id: '00000000-0000-4000-8000-000000000002',
+    catalog_as_of: '2026-07-10',
+  };
+  const entry: MatrixEntry = {
+    scenario: 'alpha',
+    codingAgent: 'claude',
+    scenarioDir: '/tmp/alpha',
+    skippedReason: null,
+    tier: 'full',
+    status: 'ready',
+    credential: 'candidate',
+    limiterKey: 'candidate',
+    labels,
+  };
+
+  appendResultRecord({
+    batchDir,
+    entry,
+    runId: 'alpha-claude-candidate-linux-20260710T000000Z-ab12',
+    skipped: null,
+  });
+
+  const line = readFileSync(join(batchDir, 'results.jsonl'), 'utf8').trim();
+  const record = ResultRecordSchema.parse(JSON.parse(line));
+  expect(record.labels).toEqual(labels);
 });
 
 test('writeBatchFooter sets finished_at, preserving the rest', () => {

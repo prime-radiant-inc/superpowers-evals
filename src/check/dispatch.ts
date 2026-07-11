@@ -10,6 +10,10 @@
 // vacuously pass or be inverted by `not`.
 
 import {
+  parseBaselineManifest,
+  verifyBaselineTree,
+} from '../scenario-manifest.ts';
+import {
   type CheckContext,
   type CheckOutcome,
   verbAntigravityPluginInstalled,
@@ -42,6 +46,7 @@ export type VerbFn = (args: string[], ctx: CheckContext) => CheckOutcome;
 // The non-transcript check vocabulary. The record's `check` field is the verb
 // name.
 export const FS_VERBS: Record<string, VerbFn> = {
+  'baseline-manifest': verbBaselineManifest,
   'file-exists': verbFileExists,
   'file-contains': verbFileContains,
   'command-succeeds': verbCommandSucceeds,
@@ -61,6 +66,43 @@ export const FS_VERBS: Record<string, VerbFn> = {
   'codex-session-start-hook-executes': verbCodexSessionStartHookExecutes,
   'bootstrap-installed': verbBootstrapInstalled,
 };
+
+function verbBaselineManifest(args: string[], ctx: CheckContext): CheckOutcome {
+  if (args.length !== 0) {
+    return {
+      passed: false,
+      detail: 'baseline-manifest: takes no arguments',
+      broken: true,
+    };
+  }
+  const scenarioDir = ctx.env('QUORUM_SCENARIO_DIR');
+  if (scenarioDir === undefined || scenarioDir === '') {
+    return {
+      passed: false,
+      detail: 'baseline-manifest: QUORUM_SCENARIO_DIR is not set',
+      broken: true,
+    };
+  }
+  try {
+    const manifest = parseBaselineManifest(
+      `${scenarioDir}/baseline-manifest.json`,
+    );
+    const problems = verifyBaselineTree({
+      manifest,
+      rootDir: ctx.cwd,
+      ignoreGitDir: true,
+    });
+    return {
+      passed: problems.length === 0,
+      detail: problems.join('; '),
+    };
+  } catch (error) {
+    return {
+      passed: false,
+      detail: `baseline-manifest invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
 
 /**
  * Run a check verb by name, in-process, returning its CheckOutcome.

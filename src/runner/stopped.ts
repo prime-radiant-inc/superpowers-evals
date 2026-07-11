@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalVerdict } from '../contracts/verdict.ts';
 
 export interface StoppedIdentity {
@@ -7,6 +8,7 @@ export interface StoppedIdentity {
   readonly codingAgent: string;
   readonly startedAt: string;
   readonly credential?: string;
+  readonly labels?: CredentialLabels;
 }
 
 // The verdict written when a run is interrupted by SIGINT (dashboard Stop).
@@ -26,6 +28,7 @@ export function buildStoppedVerdict(id: StoppedIdentity): FinalVerdict {
     started_at: id.startedAt,
     finished_at: new Date().toISOString(),
     credential: id.credential,
+    ...(id.labels !== undefined ? { labels: id.labels } : {}),
   };
 }
 

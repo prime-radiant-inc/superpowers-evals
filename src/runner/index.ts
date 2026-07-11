@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -43,6 +44,8 @@ import {
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
 import { WindowsHost } from '../agents/windows-host.ts';
+import type { AtifTrajectory } from '../atif/types.ts';
+import { validateTrajectory } from '../atif/validate.ts';
 import {
   captureTokenUsage,
   captureToolCallsWithRetry,
@@ -60,10 +63,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
-import {
-  type Credential,
-  parseCredentialsFile,
-} from '../contracts/credential.ts';
+import type { Credential } from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
   CheckRecord,
@@ -73,10 +73,26 @@ import type {
   RunError,
   RunErrorStage,
 } from '../contracts/verdict.ts';
-import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
+import { assertCampaignCredentials } from '../credentials/check.ts';
+import {
+  loadCredentialsFile,
+  writeCredentialsSnapshot,
+} from '../credentials/index.ts';
+import {
+  resolveApiKey,
+  resolveApiKeyEnvName,
+  resolveCredentialNameForAgent,
+} from '../credentials/resolve.ts';
+import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
+import {
+  captureOpenRouterGenerations,
+  type OpenRouterAttestation,
+  OpenRouterAttestationError,
+  openRouterGenerationIds,
+} from '../openrouter/generations.ts';
 import { hexNonce, nowStampUtc, repoRoot } from '../paths.ts';
 import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
@@ -360,19 +376,52 @@ export interface RunScenarioArgs {
   readonly credential?: string | undefined;
   // Gauntlet-Agent (grader) model override. When undefined, GRADER_MODEL.
   readonly graderModel?: string | undefined;
-  // Path to the credentials.yaml file. Defaults to 'credentials.yaml'.
+  // Explicit credentials source path. When omitted, runScenario snapshots the
+  // repository's canonical credentials.yaml (or an empty registry only when
+  // that canonical default is absent).
   readonly credentialsPath?: string | undefined;
+  // Only a user-supplied campaign source is subject to campaign label policy.
+  // Canonical registries and immutable snapshots retain legacy unlabeled
+  // credential support.
+  readonly credentialsOrigin?:
+    | 'external-campaign'
+    | 'canonical-snapshot'
+    | undefined;
   // Caller-supplied run-start stamp (ISO8601). When set, the verdict's
   // started_at uses it so a CLI SIGINT handler and the happy path agree.
   readonly startedAt?: string | undefined;
   // Fired once, right after the run dir is allocated, so a caller can learn the
   // dir before the long await (the SIGINT handler writes a stopped verdict here).
   readonly onRunDir?: ((runDir: string) => void) | undefined;
+  // Fired after the selected credential is parsed from the registry that is
+  // frozen into this run's snapshot. A CLI SIGINT handler can retain these
+  // runner-derived labels without re-reading mutable source credentials.
+  readonly onCredentialLabels?:
+    | ((labels: Credential['labels']) => void)
+    | undefined;
+  // Test seam for the post-capture OpenRouter metadata request. Normal runs use
+  // the platform fetch implementation; unit tests inject a hermetic response.
+  readonly openRouterFetch?: typeof fetch | undefined;
+  // Test seam for the atomic metadata sidecar write. Production uses the local
+  // atomic writer; failures must remain capture-stage indeterminates.
+  readonly openRouterAttestationWriter?:
+    | ((runDir: string, attestation: OpenRouterAttestation) => void)
+    | undefined;
 }
 
 export interface RunScenarioResult {
   readonly runDir: string;
   readonly verdict: FinalVerdict;
+}
+
+function loadRunCredentials(
+  explicitPath: string | undefined,
+): Record<string, Credential> {
+  const defaultPath = join(repoRoot(), 'credentials.yaml');
+  const sourcePath = explicitPath ?? defaultPath;
+  return loadCredentialsFile(sourcePath, {
+    allowMissing: explicitPath === undefined,
+  }).credentials;
 }
 
 // The economics block is opaque at the verdict layer (a record of unknowns);
@@ -383,6 +432,7 @@ const OpaqueEconomicsSchema = z.record(z.unknown());
 // setup.sh may override the agent's launch cwd by writing this sentinel into the
 // workdir.
 const LAUNCH_CWD_SENTINEL = '.quorum-launch-cwd';
+const OPENROUTER_GENERATIONS_FILENAME = 'openrouter-generations.json';
 
 // Build an indeterminate verdict directly (NOT via compose, whose error path
 // prefixes "quorum error (stage): …") so every early/cascade short-circuit
@@ -403,6 +453,54 @@ function writeIndeterminate(a: {
     error: a.error ?? null,
     economics: null,
   };
+}
+
+function writeOpenRouterAttestationAtomically(
+  runDir: string,
+  attestation: OpenRouterAttestation,
+): void {
+  const path = join(runDir, OPENROUTER_GENERATIONS_FILENAME);
+  const temporary = join(
+    runDir,
+    `.${OPENROUTER_GENERATIONS_FILENAME}.${process.pid}.tmp`,
+  );
+  try {
+    writeFileSync(temporary, `${JSON.stringify(attestation, null, 2)}\n`);
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+function capturedTrajectory(path: string): AtifTrajectory | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      return null;
+    }
+    const trajectory = parsed as AtifTrajectory;
+    return validateTrajectory(trajectory).ok ? trajectory : null;
+  } catch {
+    return null;
+  }
+}
+
+function openRouterCaptureIndeterminate(
+  gauntlet: GauntletLayer,
+  preRecords: readonly CheckRecord[],
+  message: string,
+): FinalVerdict {
+  return writeIndeterminate({
+    finalReason: message,
+    gauntlet,
+    checks: preRecords,
+    error: { stage: 'capture', message },
+  });
 }
 
 // Render paths relative to the session-log dir for human-facing reasons.
@@ -815,12 +913,19 @@ export function cleanupAgentRuntime(cleanupDirs: readonly string[]): void {
   }
 }
 
-// Run one scenario end to end. Always allocates a run dir and always writes
-// verdict.json; a thrown invariant maps to an indeterminate verdict via the
-// composer rather than escaping.
+// Run one scenario end to end. A user-supplied external campaign is validated
+// before allocation; after that preflight, the runner always allocates a run
+// dir and writes verdict.json, mapping thrown invariants to indeterminate.
 export async function runScenario(
   a: RunScenarioArgs,
 ): Promise<RunScenarioResult> {
+  const campaignCredentials =
+    a.credentialsOrigin === 'external-campaign'
+      ? loadRunCredentials(a.credentialsPath)
+      : undefined;
+  if (campaignCredentials !== undefined) {
+    assertCampaignCredentials(campaignCredentials);
+  }
   const scenario = scenarioName(a.scenarioDir);
   // Resolve the credential name: explicit arg wins; else agent yaml default_credential.
   const credentialName = resolveCredentialNameForAgent(
@@ -849,11 +954,27 @@ export async function runScenario(
     os: a.os ?? 'linux',
   };
   let verdict: FinalVerdict;
+  let selectedCredentialLabels: Credential['labels'];
   try {
+    // Freeze the parsed credentials before selecting the named credential. This
+    // makes direct runs reproducible and ensures later runner code never
+    // re-reads a campaign source that an operator could edit mid-run.
+    const credentials =
+      campaignCredentials ?? loadRunCredentials(a.credentialsPath);
+    selectedCredentialLabels =
+      credentialName === undefined
+        ? undefined
+        : credentials[credentialName]?.labels;
+    a.onCredentialLabels?.(selectedCredentialLabels);
+    const snapshotPath = writeCredentialsSnapshot({
+      credentials,
+      destination: join(runDir, 'credentials.snapshot.yaml'),
+    });
     verdict = await runInner(
-      { ...a, credential: credentialName },
+      { ...a, credential: credentialName, credentialsPath: snapshotPath },
       runDir,
       identity,
+      credentials,
     );
   } catch (err: unknown) {
     const stage = errorStage(err);
@@ -885,6 +1006,9 @@ export async function runScenario(
     finished_at: new Date().toISOString(),
     credential: credentialName ?? 'none',
     os: a.os ?? 'linux',
+    ...(selectedCredentialLabels !== undefined
+      ? { labels: selectedCredentialLabels }
+      : {}),
     provenance,
   };
   writeFileSync(
@@ -1004,11 +1128,12 @@ async function runInner(
   a: RunScenarioArgs,
   runDir: string,
   identity: RunIdentity,
+  credentials: Record<string, Credential>,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
   try {
-    return await runInnerBody(a, runDir, cleanupDirs, identity);
+    return await runInnerBody(a, runDir, cleanupDirs, identity, credentials);
   } finally {
     cleanupAgentRuntime(cleanupDirs);
     // Windows runtime: best-effort removal of the per-run guest directory.
@@ -1033,6 +1158,7 @@ async function runInnerBody(
   runDir: string,
   cleanupDirs: string[],
   identity: RunIdentity,
+  credentials: Record<string, Credential>,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -1050,28 +1176,15 @@ async function runInnerBody(
   }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
 
-  // Credential resolution: if a credential name was resolved, look it up in the
-  // credentials file. Missing credential name means no credential (runs proceed
-  // without one). A named credential that is absent in the file is a hard error.
+  // Credential resolution uses the parsed object that was frozen into this run
+  // directory before any setup. Missing credential name means no credential;
+  // a named credential absent from that immutable snapshot is a hard error.
   let resolvedCredential: Credential | undefined;
   if (a.credential !== undefined && a.credential !== '') {
-    const credentialsPath =
-      a.credentialsPath ?? join(repoRoot(), 'credentials.yaml');
-    let rawCreds: unknown;
-    try {
-      rawCreds = (await import('yaml')).parse(
-        readFileSync(credentialsPath, 'utf8'),
-      );
-    } catch (e: unknown) {
-      throw new CodingAgentConfigError(
-        `cannot read credentials file ${credentialsPath}: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    const creds = parseCredentialsFile(rawCreds);
-    const cred = creds[a.credential];
+    const cred = credentials[a.credential];
     if (cred === undefined) {
       throw new CodingAgentConfigError(
-        `credential '${a.credential}' not found in ${credentialsPath}`,
+        `credential '${a.credential}' not found in ${a.credentialsPath}`,
       );
     }
     resolvedCredential = cred;
@@ -1211,6 +1324,7 @@ async function runInnerBody(
     workdir,
     repoRoot: checksRepoRoot,
     runDir,
+    scenarioDir: a.scenarioDir,
     configDir,
     codingAgent: a.codingAgent,
   });
@@ -1340,11 +1454,14 @@ async function runInnerBody(
     substitutions['$CODEX_ENV_FILE_SH'] = shellSingleQuote(codexEnvFile);
   }
   if (family === 'serf') {
-    // serf's launcher bakes `--model "$SERF_MODEL"`; resolve it from the YAML
-    // model pin, mirroring the $CLAUDE_MODEL pattern. The model-agnostic adapter
-    // keeps the provider/model entirely in serf.yaml.
-    substitutions['$SERF_MODEL'] = cfg.model ?? '';
-    substitutions['$SERF_MODEL_SH'] = shellSingleQuote(cfg.model ?? '');
+    const serfModel = resolvedCredential?.model ?? cfg.model ?? '';
+    const serfKeyEnv = resolvedCredential
+      ? resolveApiKeyEnvName(resolvedCredential, 'ANTHROPIC_API_KEY')
+      : 'ANTHROPIC_API_KEY';
+    substitutions['$SERF_MODEL'] = serfModel;
+    substitutions['$SERF_MODEL_SH'] = shellSingleQuote(serfModel);
+    substitutions['$SERF_API_KEY_ENV'] = serfKeyEnv ?? '';
+    substitutions['$SERF_API_KEY_ENV_SH'] = shellSingleQuote(serfKeyEnv ?? '');
   }
   if (cfg.name === 'copilot' && copilotProvisioning !== undefined) {
     // Use the provisioning record's env file + minted session id so the
@@ -1377,7 +1494,7 @@ async function runInnerBody(
       family === 'claude' && !isRemote
         ? ['$CLAUDE_MODEL']
         : family === 'serf'
-          ? ['$SERF_MODEL']
+          ? ['$SERF_MODEL', '$SERF_API_KEY_ENV']
           : [],
   });
 
@@ -1537,7 +1654,7 @@ async function runInnerBody(
   // captureTokenUsage writes coding-agent-token-usage.json as a side effect
   // (null when obol cannot price); economics reads that file, so the returned
   // path is not needed here, but the promise still has an owner.
-  await captureTokenUsage({
+  const tokenUsagePath = await captureTokenUsage({
     logDir,
     logGlob: cfg.session_log_glob,
     snapshot,
@@ -1545,6 +1662,94 @@ async function runInnerBody(
     runDir,
     launchCwd,
   });
+
+  // Labeled Serf/OpenRouter campaigns require two independent capture proofs:
+  // ATIF/obol token evidence plus metadata attesting every returned generation
+  // id to the selected model/provider/preset. This deliberately happens before
+  // the normal post-check phase, so a route or charge gap cannot look like a
+  // comparable file/check success.
+  if (
+    family === 'serf' &&
+    resolvedCredential !== undefined &&
+    isSerfOpenRouterCampaignCredentialV1(resolvedCredential)
+  ) {
+    const { labels } = resolvedCredential;
+    if (tokenUsagePath === null) {
+      return openRouterCaptureIndeterminate(
+        gauntlet,
+        pre.records,
+        'OpenRouter token usage evidence was not captured',
+      );
+    }
+
+    const trajectory = capturedTrajectory(capture.path);
+    if (trajectory === null) {
+      return openRouterCaptureIndeterminate(
+        gauntlet,
+        pre.records,
+        'OpenRouter trajectory evidence was not captured',
+      );
+    }
+
+    let apiKey: string;
+    try {
+      const resolvedApiKey = resolveApiKey(
+        resolvedCredential,
+        'ANTHROPIC_API_KEY',
+      );
+      if (resolvedApiKey.kind !== 'env') {
+        return openRouterCaptureIndeterminate(
+          gauntlet,
+          pre.records,
+          'OpenRouter route attestation requires an API key',
+        );
+      }
+      apiKey = resolvedApiKey.value;
+    } catch {
+      return openRouterCaptureIndeterminate(
+        gauntlet,
+        pre.records,
+        'OpenRouter route attestation could not resolve the selected API key',
+      );
+    }
+
+    try {
+      const attestation = await captureOpenRouterGenerations({
+        generationIds: openRouterGenerationIds(trajectory),
+        apiKey,
+        labels,
+        fetchFn: a.openRouterFetch ?? fetch,
+      });
+      try {
+        (a.openRouterAttestationWriter ?? writeOpenRouterAttestationAtomically)(
+          runDir,
+          attestation,
+        );
+      } catch {
+        return openRouterCaptureIndeterminate(
+          gauntlet,
+          pre.records,
+          'OpenRouter generation metadata could not be written',
+        );
+      }
+      if (attestation.charged_cost_usd === null) {
+        return openRouterCaptureIndeterminate(
+          gauntlet,
+          pre.records,
+          'OpenRouter generation metadata had no charged cost',
+        );
+      }
+    } catch (error: unknown) {
+      if (error instanceof OpenRouterAttestationError) {
+        return openRouterCaptureIndeterminate(
+          gauntlet,
+          pre.records,
+          'OpenRouter generation route attestation failed',
+        );
+      }
+      throw error;
+    }
+  }
   const captureEmpty = capture.rowCount === 0;
 
   // opencode export/capture snapshot mismatch, checked before the strict
@@ -1619,6 +1824,7 @@ async function runInnerBody(
     repoRoot: checksRepoRoot,
     transcriptPath: capture.path,
     runDir,
+    scenarioDir: a.scenarioDir,
     configDir,
     codingAgent: a.codingAgent,
   });

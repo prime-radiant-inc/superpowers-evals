@@ -1,11 +1,22 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
+const CAMPAIGN_CREDENTIALS = resolve(
+  import.meta.dir,
+  'fixtures',
+  'serf-campaign-credentials.yaml',
+);
 // The REAL coding-agents/ dir: the runner now requires claude-context/ +
 // claude.project-prompt.md for a claude run, and both live here (a synthetic
 // fixture would lack them). Its session_log_dir is the same
@@ -90,4 +101,120 @@ test('quorum run embeds linux in run-id when --os linux is explicit', () => {
   const runIdLine = stdout.split('\n').find((l) => l.startsWith('run-id:'));
   expect(runIdLine).toMatch(/-linux-/);
   expect(status).toBe(0);
+});
+
+test('quorum run accepts an explicit --credentials-file path', () => {
+  // A missing scenario makes the action fail before any paid invocation. The
+  // assertion distinguishes a parsed credentials-file option from Commander
+  // rejecting it as an unknown option.
+  const proc = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run',
+      'missing-scenario',
+      '--coding-agent',
+      'claude',
+      '--credentials-file',
+      CAMPAIGN_CREDENTIALS,
+    ],
+    { encoding: 'utf8' },
+  );
+
+  expect(proc.status).toBe(2);
+  expect(proc.stderr).toContain('scenario not found');
+  expect(proc.stderr).not.toContain('unknown option');
+});
+
+test('direct run cannot classify an arbitrary external credentials file as a snapshot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'direct-campaign-'));
+  const outRoot = join(root, 'results');
+  const credentials = join(root, 'campaign.yaml');
+  mkdirSync(outRoot);
+  writeFileSync(
+    credentials,
+    [
+      'candidate:',
+      '  model: openrouter/@preset/example-a',
+      '  harnesses: [serf]',
+      '  api: openai-chat',
+      '  base_url: https://openrouter.ai/api/v1',
+      '  api_key_env: OPENROUTER_API_KEY',
+      '',
+    ].join('\n'),
+  );
+
+  const proc = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run',
+      scenario(),
+      '--coding-agent',
+      'serf-alias',
+      '--coding-agents-dir',
+      join(root, 'coding-agents'),
+      '--out-root',
+      outRoot,
+      '--credential',
+      'candidate',
+      '--credentials-file',
+      credentials,
+      '--credentials-snapshot',
+    ],
+    { encoding: 'utf8' },
+  );
+
+  expect(proc.status).not.toBe(0);
+  expect(proc.stderr).toContain('unknown option');
+  expect(readdirSync(outRoot)).toEqual([]);
+});
+
+test('direct run validates an arbitrary external credentials file before allocation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'direct-campaign-'));
+  const outRoot = join(root, 'results');
+  const credentials = join(root, 'campaign.yaml');
+  mkdirSync(outRoot);
+  writeFileSync(
+    credentials,
+    [
+      'candidate:',
+      '  model: openrouter/@preset/example-a',
+      '  harnesses: [serf]',
+      '  api: openai-chat',
+      '  base_url: https://openrouter.ai/api/v1',
+      '  api_key_env: OPENROUTER_API_KEY',
+      '',
+    ].join('\n'),
+  );
+
+  const proc = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run',
+      scenario(),
+      '--coding-agent',
+      'serf-alias',
+      '--coding-agents-dir',
+      join(root, 'coding-agents'),
+      '--out-root',
+      outRoot,
+      '--credential',
+      'candidate',
+      '--credentials-file',
+      credentials,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        QUORUM_INTERNAL_CREDENTIALS_SNAPSHOT_PATH: credentials,
+      },
+    },
+  );
+
+  expect(proc.status).toBe(1);
+  expect(proc.stderr).toContain('route-attestation labels');
+  expect(readdirSync(outRoot)).toEqual([]);
 });

@@ -29,6 +29,24 @@ const TokensViewSchema = z
   .partial()
   .passthrough();
 
+const LabelsViewSchema = z
+  .object({
+    model: z.unknown(),
+    provider: z.unknown(),
+    quantization: z.unknown(),
+  })
+  .partial()
+  .passthrough();
+
+const OpenRouterEconomicsViewSchema = z
+  .object({
+    charged_cost_usd: z.unknown(),
+    estimated_cost_usd: z.unknown(),
+    cost_delta_usd: z.unknown(),
+  })
+  .partial()
+  .passthrough();
+
 const BlockViewSchema = z
   .object({
     duration_ms: z.unknown(),
@@ -36,6 +54,7 @@ const BlockViewSchema = z
     model: z.unknown(),
     tokens: TokensViewSchema.nullish(),
     has_unpriced_model: z.unknown(),
+    openrouter: OpenRouterEconomicsViewSchema.nullish().catch(null),
   })
   .passthrough();
 
@@ -55,15 +74,38 @@ const VerdictViewSchema = z
     credential: z.unknown(),
     started_at: z.unknown(),
     finished_at: z.unknown(),
+    final: z.unknown(),
+    labels: LabelsViewSchema.nullish().catch(null),
     economics: EconViewSchema.nullish(),
   })
   .passthrough();
 type VerdictView = z.infer<typeof VerdictViewSchema>;
 
 const numOrNull = (v: unknown): number | null =>
-  typeof v === 'number' && !Number.isNaN(v) ? v : null;
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
 const strOrNull = (v: unknown): string | null =>
   typeof v === 'string' && v !== '' ? v : null;
+
+interface CostLabels {
+  readonly model: string;
+  readonly provider: string;
+  readonly quantization: string;
+}
+
+function costLabels(
+  labels: z.infer<typeof LabelsViewSchema> | null | undefined,
+): CostLabels | null {
+  if (labels === null || labels === undefined) {
+    return null;
+  }
+  const model = strOrNull(labels.model);
+  const provider = strOrNull(labels.provider);
+  const quantization = strOrNull(labels.quantization);
+  if (model === null || provider === null || quantization === null) {
+    return null;
+  }
+  return { model, provider, quantization };
+}
 
 // ── row shape ────────────────────────────────────────────────────────────
 
@@ -91,6 +133,13 @@ export interface CostRow {
   readonly credential: string;
   readonly coding: SideCost;
   readonly gauntlet: SideCost;
+  // Candidate labels and route-attested economics are optional so older
+  // artifacts retain the compact cost view.
+  readonly labels: CostLabels | null;
+  readonly final: string | null;
+  readonly chargedCostUsd: number | null;
+  readonly estimatedCostUsd: number | null;
+  readonly costDeltaUsd: number | null;
   // The run's wall-clock span (finished_at − started_at) in ms, or null when
   // either timestamp is missing/unparseable.
   readonly wallClockMs: number | null;
@@ -154,14 +203,21 @@ function rowFromVerdict(
   fallbackScenario: string,
   fallbackAgent: string,
   fallbackCredential: string,
+  fallbackLabels: CostLabels | null,
 ): CostRow {
   const econ = verdict.economics ?? undefined;
+  const openrouter = econ?.coding_agent?.openrouter ?? undefined;
   return {
     scenario: strOrNull(verdict.scenario) ?? fallbackScenario,
     agent: strOrNull(verdict.coding_agent) ?? fallbackAgent,
     credential: strOrNull(verdict.credential) ?? fallbackCredential,
     coding: sideCost(econ?.coding_agent),
     gauntlet: sideCost(econ?.gauntlet),
+    labels: costLabels(verdict.labels) ?? fallbackLabels,
+    final: strOrNull(verdict.final),
+    chargedCostUsd: numOrNull(openrouter?.charged_cost_usd),
+    estimatedCostUsd: numOrNull(openrouter?.estimated_cost_usd),
+    costDeltaUsd: numOrNull(openrouter?.cost_delta_usd),
     wallClockMs: wallClockMs(verdict.started_at, verdict.finished_at),
   };
 }
@@ -172,6 +228,7 @@ function unreadableRow(
   scenario: string,
   agent: string,
   credential: string,
+  labels: CostLabels | null = null,
 ): CostRow {
   const blank = sideCost(null);
   return {
@@ -180,6 +237,11 @@ function unreadableRow(
     credential,
     coding: blank,
     gauntlet: blank,
+    labels,
+    final: null,
+    chargedCostUsd: null,
+    estimatedCostUsd: null,
+    costDeltaUsd: null,
     wallClockMs: null,
   };
 }
@@ -206,6 +268,7 @@ const BatchResultSchema = z
     scenario: z.string(),
     coding_agent: z.string(),
     credential: z.string().optional(),
+    labels: LabelsViewSchema.nullish().catch(null),
     run_id: z.string().nullable().optional(),
     skipped: z.unknown().optional(),
   })
@@ -248,11 +311,18 @@ function batchRows(batchDir: string): CostRow[] {
       continue;
     }
     const credential = rec.credential ?? '';
+    const labels = costLabels(rec.labels);
     const view = readVerdictView(join(outRoot, runId));
     rows.push(
       view === null
-        ? unreadableRow(rec.scenario, rec.coding_agent, credential)
-        : rowFromVerdict(view, rec.scenario, rec.coding_agent, credential),
+        ? unreadableRow(rec.scenario, rec.coding_agent, credential, labels)
+        : rowFromVerdict(
+            view,
+            rec.scenario,
+            rec.coding_agent,
+            credential,
+            labels,
+          ),
     );
   }
   return rows;
@@ -275,7 +345,7 @@ export function loadCostRows(
   if (view === null) {
     return [unreadableRow('?', '?', '')];
   }
-  return [rowFromVerdict(view, '?', '?', '')];
+  return [rowFromVerdict(view, '?', '?', '', null)];
 }
 
 // ── formatting helpers (mirror src/cli/render.ts _fmt_*) ─────────────────
@@ -294,6 +364,10 @@ function fmtCost(c: number | null): string {
 // priced/unpriced split in agreement.
 function fmtSideCost(side: SideCost): string {
   return side.unpriced ? UNPRICED : fmtCost(side.estCostUsd);
+}
+
+function fmtMetricCost(c: number | null): string {
+  return c === null ? '—' : fmtCost(c);
 }
 
 function fmtTokens(n: number | null): string {
@@ -317,6 +391,19 @@ function fmtMs(ms: number | null): string {
   return h
     ? `${h}h ${String(m).padStart(2, '0')}m`
     : `${m}m ${String(sec).padStart(2, '0')}s`;
+}
+
+function fmtCacheReadPercent(percent: number | null): string {
+  return percent === null ? '—' : `${percent.toFixed(0)}%`;
+}
+
+export function cacheReadPercent(args: {
+  readonly input: number | null;
+  readonly cacheRead: number | null;
+}): number | null {
+  if (args.input === null || args.cacheRead === null) return null;
+  const denominator = args.input + args.cacheRead;
+  return denominator === 0 ? null : (args.cacheRead / denominator) * 100;
 }
 
 // ── ANSI (TTY-only, best-effort — mirrors render.ts:style) ───────────────
@@ -360,7 +447,7 @@ interface Column {
   readonly alignRight: boolean;
 }
 
-function codingColumns(withGauntlet: boolean): Column[] {
+function compactCodingColumns(withGauntlet: boolean): Column[] {
   const cols: Column[] = [
     { header: 'scenario', cell: (r) => r.scenario, alignRight: false },
     { header: 'agent', cell: (r) => r.agent, alignRight: false },
@@ -411,6 +498,116 @@ function codingColumns(withGauntlet: boolean): Column[] {
   return cols;
 }
 
+function builderCodingColumns(withGauntlet: boolean): Column[] {
+  const cols: Column[] = [
+    { header: 'scenario', cell: (r) => r.scenario, alignRight: false },
+    { header: 'agent', cell: (r) => r.agent, alignRight: false },
+    {
+      header: 'credential',
+      cell: (r) => (r.credential === '' ? '—' : r.credential),
+      alignRight: false,
+    },
+    {
+      header: 'model',
+      cell: (r) => r.labels?.model ?? '—',
+      alignRight: false,
+    },
+    {
+      header: 'provider',
+      cell: (r) => r.labels?.provider ?? '—',
+      alignRight: false,
+    },
+    {
+      header: 'quant',
+      cell: (r) => r.labels?.quantization ?? '—',
+      alignRight: false,
+    },
+    {
+      header: 'final',
+      cell: (r) => r.final ?? '—',
+      alignRight: false,
+    },
+    {
+      header: 'comparable',
+      cell: (r) => (r.final === 'pass' ? 'yes' : '—'),
+      alignRight: false,
+    },
+    {
+      header: 'charged',
+      cell: (r) => fmtMetricCost(r.chargedCostUsd),
+      alignRight: true,
+    },
+    {
+      header: 'estimated',
+      cell: (r) => fmtMetricCost(r.estimatedCostUsd),
+      alignRight: true,
+    },
+    {
+      header: 'delta',
+      cell: (r) => fmtMetricCost(r.costDeltaUsd),
+      alignRight: true,
+    },
+    {
+      header: 'input',
+      cell: (r) => fmtTokens(r.coding.tokensInput),
+      alignRight: true,
+    },
+    {
+      header: 'cache create',
+      cell: (r) => fmtTokens(r.coding.tokensCacheCreate),
+      alignRight: true,
+    },
+    {
+      header: 'cache read',
+      cell: (r) => fmtTokens(r.coding.tokensCacheRead),
+      alignRight: true,
+    },
+    {
+      header: 'cache read%',
+      cell: (r) =>
+        fmtCacheReadPercent(
+          cacheReadPercent({
+            input: r.coding.tokensInput,
+            cacheRead: r.coding.tokensCacheRead,
+          }),
+        ),
+      alignRight: true,
+    },
+    {
+      header: 'output',
+      cell: (r) => fmtTokens(r.coding.tokensOutput),
+      alignRight: true,
+    },
+    {
+      header: 'duration',
+      cell: (r) => fmtMs(r.coding.durationMs),
+      alignRight: true,
+    },
+    {
+      header: 'wall',
+      cell: (r) => fmtMs(r.wallClockMs),
+      alignRight: true,
+    },
+  ];
+  if (withGauntlet) {
+    cols.push({
+      header: 'qa cost',
+      cell: (r) => fmtSideCost(r.gauntlet),
+      alignRight: true,
+    });
+  }
+  return cols;
+}
+
+function codingColumns(
+  rows: readonly CostRow[],
+  withGauntlet: boolean,
+): Column[] {
+  return rows.some((row) => row.labels !== null)
+    ? builderCodingColumns(withGauntlet)
+    : compactCodingColumns(withGauntlet);
+}
+
 function pad(text: string, width: number, alignRight: boolean): string {
   return alignRight ? text.padStart(width) : text.padEnd(width);
 }
@@ -429,15 +626,19 @@ function aggregate(rows: readonly CostRow[]): {
   let priced = 0;
   let unpriced = 0;
   for (const row of rows) {
-    // The `unpriced` flag already folds in estCostUsd === null AND the mixed
-    // has_unpriced_model case (sideCost), so it is the single source of truth
-    // for the priced/unpriced split — and a mixed row's partial cost is never
-    // added to the sum.
-    if (row.coding.unpriced) {
+    // A labeled builder row has route-attested OpenRouter charged cost as its
+    // authority. Missing charged evidence makes that row unpriced even when an
+    // obol estimate exists. Legacy/unlabeled rows retain estimated authority.
+    const authoritativeCost =
+      row.labels !== null ? row.chargedCostUsd : row.coding.estCostUsd;
+    if (
+      authoritativeCost === null ||
+      (row.labels === null && row.coding.unpriced)
+    ) {
       unpriced += 1;
     } else {
       priced += 1;
-      codingCostUsd += row.coding.estCostUsd ?? 0;
+      codingCostUsd += authoritativeCost;
     }
     codingTokens += row.coding.tokensTotal ?? 0;
   }
@@ -461,7 +662,7 @@ export function renderCosts(
   if (rows.length === 0) {
     return `${sep}\n  (no eval runs found)\n`;
   }
-  const cols = codingColumns(opts.withGauntlet === true);
+  const cols = codingColumns(rows, opts.withGauntlet === true);
   const widths = cols.map((c) =>
     Math.max(c.header.length, ...rows.map((r) => c.cell(r).length)),
   );
@@ -514,13 +715,16 @@ interface RowJson {
   readonly credential: string;
   readonly coding: SideJson;
   readonly gauntlet: SideJson;
+  readonly charged_cost_usd: number | null;
+  readonly estimated_cost_usd: number | null;
+  readonly cost_delta_usd: number | null;
   readonly wall_clock_ms: number | null;
 }
 
 export interface CostsJson {
   readonly rows: readonly RowJson[];
   readonly aggregate: {
-    readonly coding_cost_usd: number;
+    readonly coding_cost_usd: number | null;
     readonly coding_tokens: number;
     readonly priced: number;
     readonly unpriced: number;
@@ -550,10 +754,13 @@ export function costsJson(rows: readonly CostRow[]): CostsJson {
       credential: r.credential,
       coding: sideJson(r.coding),
       gauntlet: sideJson(r.gauntlet),
+      charged_cost_usd: r.chargedCostUsd,
+      estimated_cost_usd: r.estimatedCostUsd,
+      cost_delta_usd: r.costDeltaUsd,
       wall_clock_ms: r.wallClockMs,
     })),
     aggregate: {
-      coding_cost_usd: agg.codingCostUsd,
+      coding_cost_usd: agg.priced > 0 ? agg.codingCostUsd : null,
       coding_tokens: agg.codingTokens,
       priced: agg.priced,
       unpriced: agg.unpriced,

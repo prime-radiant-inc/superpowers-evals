@@ -275,6 +275,7 @@ export function buildMatrix(args: BuildMatrixArgs): MatrixEntry[] {
           tier,
           status,
           credential: credName,
+          ...(cred?.labels !== undefined ? { labels: cred.labels } : {}),
           limiterKey: limiter,
         });
       }

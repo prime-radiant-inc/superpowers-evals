@@ -43,6 +43,27 @@ export interface CheckContext {
   readonly env: (key: string) => string | undefined;
 }
 
+const COMMAND_ENV_ALLOWLIST = [
+  'CI',
+  'COMSPEC',
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'NO_COLOR',
+  'PATH',
+  'PATHEXT',
+  'QUORUM_CODING_AGENT',
+  'QUORUM_RUN_DIR',
+  'SYSTEMROOT',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'TZ',
+  'XDG_CACHE_HOME',
+] as const;
+
 export function defaultContext(): CheckContext {
   return { cwd: process.cwd(), env: getEnv };
 }
@@ -296,8 +317,15 @@ export function verbCommandSucceeds(
     // `bash -c ''` exits 0: an empty command would vacuously pass.
     return broken('command-succeeds: needs a <command> argument');
   }
+  // command-succeeds may execute source produced by the evaluated agent. Keep
+  // check-only paths such as SUPERPOWERS_ROOT out of that nested process while
+  // retaining the minimal toolchain and Quorum run contract it needs.
+  const env = Object.fromEntries(
+    COMMAND_ENV_ALLOWLIST.map((name) => [name, ctx.env(name)]),
+  );
   const proc = spawnSync('bash', ['-c', command], {
     cwd: ctx.cwd,
+    env,
     encoding: 'utf8',
     maxBuffer: Number.POSITIVE_INFINITY,
   });

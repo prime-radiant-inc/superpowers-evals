@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCodingAgentsDirective } from '../src/checks/index.ts';
 import { repoRoot } from '../src/paths.ts';
@@ -17,6 +17,9 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'sdd-spec-context-consumed',
   'worktree-creation-under-pressure',
   'worktree-no-drift-to-main',
+  // Builder campaign fixture: intentionally limited to the Serf harness and
+  // Linux, where its Go toolchain and SDD subagent workflow are validated.
+  'serf-builder-fractals',
   // User-override evals: pinned to the agents whose ambient-instructions file is
   // verified (the inject-user-preference map) — pi/antigravity/opencode excluded
   // until probed.
@@ -40,6 +43,36 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'writing-good-tests-rejects-test-only-teardown',
   'writing-good-tests-mock-at-right-level',
 ]);
+
+test('Serf builder scenario pins its exact content-addressed source pair', () => {
+  const scenarioDir = join(repoRoot(), 'scenarios', 'serf-builder-fractals');
+  const manifestPath = join(scenarioDir, 'baseline-manifest.json');
+  expect(existsSync(manifestPath)).toBe(true);
+  if (!existsSync(manifestPath)) return;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
+
+  expect(manifest).toEqual({
+    schema_version: 1,
+    roles: {
+      spec: 'docs/superpowers/specs/2026-07-01-fractals-cli-design.md',
+      plan: 'docs/superpowers/plans/2026-07-01-fractals-cli.md',
+    },
+    files: [
+      {
+        path: 'docs/superpowers/plans/2026-07-01-fractals-cli.md',
+        mode: '100644',
+        sha256:
+          '927f9ed4a0ef20c29c8232899c7ae13af01620a0931c18f2fa46f0f4ed2c5dd6',
+      },
+      {
+        path: 'docs/superpowers/specs/2026-07-01-fractals-cli-design.md',
+        mode: '100644',
+        sha256:
+          '7d7e963333e562103bace8c27281d69a0ada2511b269db180412e75796d0c5be',
+      },
+    ],
+  });
+});
 
 test('harness pins are exactly the explicitly intentional scenarios', () => {
   const scenarioRoot = join(repoRoot(), 'scenarios');

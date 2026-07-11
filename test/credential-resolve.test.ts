@@ -3,6 +3,7 @@ import type { Credential } from '../src/contracts/credential.ts';
 import {
   limiterKey,
   resolveApiKey,
+  resolveApiKeyEnvName,
   resolveCredentialName,
 } from '../src/credentials/resolve.ts';
 import { setProcessEnv } from '../src/env.ts';
@@ -39,10 +40,24 @@ describe('credential resolution', () => {
       value: 'k2',
     });
   });
+  test('selects the conventional Serf key name or a credential override', () => {
+    expect(resolveApiKeyEnvName({ ...base }, 'ANTHROPIC_API_KEY')).toBe(
+      'ANTHROPIC_API_KEY',
+    );
+    expect(
+      resolveApiKeyEnvName(
+        { ...base, api_key_env: 'OPENROUTER_API_KEY' },
+        'ANTHROPIC_API_KEY',
+      ),
+    ).toBe('OPENROUTER_API_KEY');
+  });
   test('subscription/oauth resolve native', () => {
     expect(resolveApiKey({ ...base, auth: 'subscription' }, undefined)).toEqual(
       { kind: 'native' },
     );
+    expect(
+      resolveApiKeyEnvName({ ...base, auth: 'subscription' }, undefined),
+    ).toBeNull();
     expect(resolveApiKey({ ...base, auth: 'oauth' }, undefined)).toEqual({
       kind: 'native',
     });
@@ -52,6 +67,13 @@ describe('credential resolution', () => {
     expect(() =>
       resolveApiKey(
         { ...base, api_key_env: 'A2_TEST_MISSING_NEVER_SET' },
+        undefined,
+      ),
+    ).toThrow();
+    setProcessEnv('A2_TEST_EMPTY_NEVER_SET', '');
+    expect(() =>
+      resolveApiKey(
+        { ...base, api_key_env: 'A2_TEST_EMPTY_NEVER_SET' },
         undefined,
       ),
     ).toThrow();

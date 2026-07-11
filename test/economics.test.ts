@@ -393,3 +393,102 @@ test('coding-agent economics marks an unknown model unpriced (tokens kept, cost 
   expect(e.coding_agent?.est_cost_usd).toBeNull();
   expect(e.coding_agent?.has_unpriced_model).toBe(true);
 });
+
+// ── OpenRouter charged generation economics ─────────────────────────────────
+
+function openRouterAttestation(
+  chargedCostUsd: number | null,
+): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    expected: {
+      model: 'example/model-a',
+      provider: 'example-provider',
+      preset_version_id: '00000000-0000-4000-8000-000000000005',
+      is_byok: false,
+    },
+    generations: [
+      {
+        id: 'gen-1',
+        model: 'example/model-a',
+        provider_name: 'Example Provider',
+        preset_id: '00000000-0000-4000-8000-000000000005',
+        is_byok: false,
+        latency: null,
+        generation_time: null,
+        native_tokens_prompt: 100,
+        native_tokens_completion: 20,
+        native_tokens_reasoning: null,
+        native_tokens_cached: 5,
+        total_cost: 0.0125,
+        upstream_inference_cost: 0.01,
+      },
+      {
+        id: 'gen-2',
+        model: 'example/model-a',
+        provider_name: 'Example Provider',
+        preset_id: '00000000-0000-4000-8000-000000000005',
+        is_byok: false,
+        latency: null,
+        generation_time: null,
+        native_tokens_prompt: 100,
+        native_tokens_completion: 20,
+        native_tokens_reasoning: null,
+        native_tokens_cached: 5,
+        total_cost: 0.0075,
+        upstream_inference_cost: 0.01,
+      },
+    ],
+    charged_cost_usd: chargedCostUsd,
+  };
+}
+
+test('OpenRouter economics carries charged multi-generation cost, estimate, and explicit delta', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-openrouter-economics-'));
+  frozenUsage(runDir);
+  writeFileSync(
+    join(runDir, 'openrouter-generations.json'),
+    JSON.stringify(openRouterAttestation(0.02)),
+  );
+
+  const econ = await buildRunEconomics(runDir);
+  const openrouter = econ?.coding_agent?.openrouter;
+  expect(openrouter).toEqual({
+    charged_cost_usd: 0.02,
+    estimated_cost_usd: 0.5,
+    cost_delta_usd: -0.48,
+    generation_count: 2,
+    model: 'example/model-a',
+    provider: 'example-provider',
+  });
+});
+
+test('missing or malformed OpenRouter sidecars preserve legacy coding-agent economics', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-openrouter-legacy-'));
+  frozenUsage(runDir);
+
+  expect(
+    (await buildRunEconomics(runDir))?.coding_agent?.openrouter,
+  ).toBeUndefined();
+
+  writeFileSync(join(runDir, 'openrouter-generations.json'), '{not json');
+  const malformed = await buildRunEconomics(runDir);
+  expect(malformed?.coding_agent?.openrouter).toBeUndefined();
+  expect(malformed?.coding_agent?.est_cost_usd).toBe(0.5);
+});
+
+test('semantically incomplete OpenRouter sidecars preserve legacy coding-agent economics', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-openrouter-incomplete-'));
+  frozenUsage(runDir);
+  writeFileSync(
+    join(runDir, 'openrouter-generations.json'),
+    JSON.stringify({
+      ...openRouterAttestation(0.02),
+      generations: [{ id: 'gen-1', total_cost: 0.02 }],
+    }),
+  );
+
+  const econ = await buildRunEconomics(runDir);
+  expect(econ?.coding_agent?.openrouter).toBeUndefined();
+  expect(econ?.coding_agent?.est_cost_usd).toBe(0.5);
+});
