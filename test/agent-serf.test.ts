@@ -245,14 +245,10 @@ test('provision rejects tool-choice compat outside the OpenRouter campaign profi
     withEnv(spRoot, () => {
       withEnvValue('TASK3A_SERF_OPENROUTER_KEY', 'test-key', () => {
         expect(() =>
-          new SerfAgent(serfConfig()).provision(
-            home,
-            new FakeCommandRunner(),
-            {
-              ...openRouterCredential,
-              compat: { tool_choice_auto_only: true },
-            },
-          ),
+          new SerfAgent(serfConfig()).provision(home, new FakeCommandRunner(), {
+            ...openRouterCredential,
+            compat: { tool_choice_auto_only: true },
+          }),
         ).toThrow(/requires the Serf OpenRouter campaign profile/);
       });
     });
