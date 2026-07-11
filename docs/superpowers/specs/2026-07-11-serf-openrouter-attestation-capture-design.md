@@ -59,9 +59,10 @@ No floating branch is embedded in the image.
 ## Security and artifact boundary
 
 Raw provider response identifiers are sensitive operational metadata. They may
-exist only in the private per-run ATIF artifact and the transient in-memory
-attestation request. Existing result-directory handling already treats run
-homes and trajectories as sensitive.
+exist only in the private per-run ATIF artifact, the private closed-shape
+OpenRouter attestation sidecar (`openrouter-generations.json`), and the
+transient in-memory attestation request. Existing result-directory handling
+already treats run homes, trajectories, and attestation sidecars as sensitive.
 
 The public repository receives only:
 
@@ -69,10 +70,11 @@ The public repository receives only:
 - an immutable public Serf commit SHA; and
 - tests asserting the launcher and container provenance contracts.
 
-The sanitized OpenRouter attestation sidecar continues to contain only its
-existing closed metadata shape. No prompt, response body, credential, provider
-key, private hostname, run identifier, or private repository information is
-added to source control or public documentation.
+The private OpenRouter attestation sidecar continues to contain only its
+existing closed metadata shape, including `generations[].id`; it does not
+contain prompts or response bodies. No prompt, response body, credential,
+provider key, private hostname, run identifier, or private repository
+information is added to source control or public documentation.
 
 ## Failure behavior
 

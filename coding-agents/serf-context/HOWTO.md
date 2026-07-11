@@ -30,9 +30,13 @@ cd <prepared-workdir> && env -i PATH=<path> HOME=<per-run-isolated-home> ... \
   SERF_PROVIDERS_CONFIG=<home>/.serf/providers.toml \
   serf --model <model> --plugin-dir <superpowers-root> \
        --export-atif <home>/.serf/exports/trajectory.json \
+       --export-atif-provider-handles raw-local \
        --dir <prepared-workdir> --state-dir <home>/.serf \
        'Describe the task here'
 ```
+
+The ATIF contains sensitive provider response identifiers for route
+attestation and must remain a private run artifact.
 
 Do not hand-type a bare `serf` or reconstruct the command yourself — the cd,
 isolated environment, plugin dir, model, and export path live inside the
