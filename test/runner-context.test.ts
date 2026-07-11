@@ -361,6 +361,26 @@ test('Serf launcher preserves a shell-significant model as one exact argv withou
   expect(argv[modelFlag + 1]).toBe(model);
 });
 
+test('Serf launcher exports raw-local provider handles for OpenRouter attestation', () => {
+  const selectedName = 'SERF_TEST_SELECTED_API_KEY';
+  const { launcher, binDir, argvDump } = installSerfLauncher(selectedName);
+
+  const proc = spawnSync('bash', [launcher, 'do work'], {
+    encoding: 'utf8',
+    env: {
+      PATH: `${binDir}:/usr/bin:/bin`,
+      [selectedName]: crypto.randomUUID(),
+    },
+  });
+
+  expect(proc.status).toBe(0);
+  const argv = readFileSync(argvDump, 'utf8').trimEnd().split('\n');
+  const modeFlag = argv.indexOf('--export-atif-provider-handles');
+  expect(modeFlag).toBeGreaterThanOrEqual(0);
+  expect(argv[modeFlag + 1]).toBe('raw-local');
+  expect(argv.lastIndexOf('--export-atif-provider-handles')).toBe(modeFlag);
+});
+
 test('Serf launcher rejects missing and empty selected API-key values before it invokes Serf', () => {
   const selectedName = 'SERF_TEST_SELECTED_API_KEY';
   for (const selectedValue of [undefined, '']) {

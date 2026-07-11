@@ -13,8 +13,8 @@
 #   - --plugin-dir pointed straight at SUPERPOWERS_ROOT (like the claude
 #     launcher); serf loads the unmodified Superpowers Claude Code plugin and the
 #     SessionStart bootstrap auto-triggers skills
-#   - --export-atif: serf writes its native ATIF v1.7 trajectory here; capture
-#     normalizes it
+#   - --export-atif: serf writes its native ATIF v1.7 trajectory here; the
+#     private ATIF export retains provider response IDs for route attestation
 #   - the credential-selected model (falling back to serf.yaml), safely rendered
 #     as one shell argument ($SERF_MODEL_SH)
 #
@@ -51,6 +51,7 @@ exec env -i \
     --model $SERF_MODEL_SH \
     --plugin-dir "$SUPERPOWERS_ROOT" \
     --export-atif "$QUORUM_AGENT_HOME/.serf/exports/trajectory.json" \
+    --export-atif-provider-handles raw-local \
     --dir "$QUORUM_AGENT_CWD" \
     --state-dir "$QUORUM_AGENT_HOME/.serf" \
     "$@"
