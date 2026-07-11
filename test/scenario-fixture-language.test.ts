@@ -128,6 +128,8 @@ test('branch campaign tests and fixtures contain no private candidate identities
 test('quorum smoke story uses the neutral Coding-Agent actor', () => {
   const story = read('scenarios/00-quorum-smoke-hello-world/story.md');
   expect(story).toContain('Drive the Coding-Agent through this trivial task');
+  expect(story).toContain('Invoke the Coding-Agent exactly once.');
+  expect(story).toContain('Do not retry the Coding-Agent if it fails.');
   expect(story).not.toMatch(/Coding-Agent \([^)]+\)/);
 });
 
