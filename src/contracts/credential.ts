@@ -59,7 +59,9 @@ export const CredentialLabelsSchema = z
       .refine(
         (value) => !['unknown', 'unverified'].includes(value.toLowerCase()),
       ),
+    preset_id: z.string().uuid(),
     preset_version_id: z.string().uuid(),
+    is_byok: z.boolean(),
     catalog_as_of: z.string().date(),
   })
   .strict();

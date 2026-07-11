@@ -404,6 +404,7 @@ function openRouterAttestation(
     expected: {
       model: 'example/model-a',
       provider: 'example-provider',
+      preset_id: '00000000-0000-4000-8000-000000000004',
       preset_version_id: '00000000-0000-4000-8000-000000000005',
       is_byok: false,
     },

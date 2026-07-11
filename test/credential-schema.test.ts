@@ -85,7 +85,9 @@ describe('CredentialSchema', () => {
         model: 'example/model',
         provider: 'example-provider',
         quantization: 'fp8',
+        preset_id: '00000000-0000-4000-8000-000000000002',
         preset_version_id: '00000000-0000-4000-8000-000000000001',
+        is_byok: false,
         catalog_as_of: '2026-07-10',
       },
     };
@@ -121,7 +123,9 @@ describe('CredentialSchema', () => {
         model: 'example/model',
         provider: 'example-provider',
         quantization: 'fp8',
+        preset_id: '00000000-0000-4000-8000-000000000002',
         preset_version_id: '00000000-0000-4000-8000-000000000001',
+        is_byok: false,
         catalog_as_of: '2026-07-10',
       },
     };
@@ -155,7 +159,19 @@ describe('CredentialSchema', () => {
     expect(() =>
       CredentialSchema.parse({
         ...labeled,
+        labels: { ...labeled.labels, preset_id: 'not-a-uuid' },
+      }),
+    ).toThrow();
+    expect(() =>
+      CredentialSchema.parse({
+        ...labeled,
         labels: { ...labeled.labels, preset_version_id: 'not-a-uuid' },
+      }),
+    ).toThrow();
+    expect(() =>
+      CredentialSchema.parse({
+        ...labeled,
+        labels: { ...labeled.labels, is_byok: 'false' },
       }),
     ).toThrow();
     expect(() =>
@@ -177,7 +193,9 @@ describe('CredentialSchema', () => {
         model: 'example/model',
         provider: 'example-provider',
         quantization: 'fp8',
+        preset_id: '00000000-0000-4000-8000-000000000002',
         preset_version_id: '00000000-0000-4000-8000-000000000001',
+        is_byok: false,
         catalog_as_of: '2026-07-10',
       },
     };

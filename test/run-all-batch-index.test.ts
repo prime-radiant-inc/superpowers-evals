@@ -177,7 +177,9 @@ test('appendResultRecord preserves labels from its selected matrix entry', () =>
     model: 'example/model-a',
     provider: 'example-provider',
     quantization: 'fp16',
+    preset_id: '00000000-0000-4000-8000-000000000001',
     preset_version_id: '00000000-0000-4000-8000-000000000002',
+    is_byok: false,
     catalog_as_of: '2026-07-10',
   };
   const entry: MatrixEntry = {

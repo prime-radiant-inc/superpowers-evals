@@ -388,7 +388,9 @@ describe.serial('Serf credential runner integration', () => {
     model: 'example/model-a',
     provider: 'example-provider',
     quantization: 'fp8',
+    preset_id: '00000000-0000-4000-8000-000000000004',
     preset_version_id: '00000000-0000-4000-8000-000000000005',
+    is_byok: false,
     catalog_as_of: '2026-07-10',
   } as const;
   const ATTESTATION_TRANSCRIPT = 'transcript-content-must-not-persist';
@@ -437,7 +439,9 @@ describe.serial('Serf credential runner integration', () => {
       `    model: ${OPENROUTER_LABELS.model}`,
       `    provider: ${OPENROUTER_LABELS.provider}`,
       `    quantization: ${OPENROUTER_LABELS.quantization}`,
+      `    preset_id: ${OPENROUTER_LABELS.preset_id}`,
       `    preset_version_id: ${OPENROUTER_LABELS.preset_version_id}`,
+      `    is_byok: ${OPENROUTER_LABELS.is_byok}`,
       `    catalog_as_of: ${OPENROUTER_LABELS.catalog_as_of}`,
     ];
     writeFileSync(
@@ -525,8 +529,8 @@ writeFileSync(join(exportsDir, 'trajectory.json'), ${JSON.stringify(
         id,
         model: OPENROUTER_LABELS.model,
         provider_name: 'Example Provider',
-        preset_id: OPENROUTER_LABELS.preset_version_id,
-        is_byok: false,
+        preset_id: OPENROUTER_LABELS.preset_id,
+        is_byok: OPENROUTER_LABELS.is_byok,
         latency: 1,
         generation_time: 1,
         native_tokens_prompt: 100,

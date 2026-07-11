@@ -3,7 +3,7 @@
     "id": "gen-dated-2",
     "model": "example/model-a-20260710",
     "provider_name": "Example.Provider!",
-    "preset_id": "00000000-0000-4000-8000-000000000005",
+    "preset_id": "00000000-0000-4000-8000-000000000004",
     "is_byok": false,
     "latency": null,
     "generation_time": 1.25,

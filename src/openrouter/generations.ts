@@ -38,8 +38,9 @@ export const OpenRouterAttestationSchema = z
       .object({
         model: z.string().min(1),
         provider: z.string().min(1),
+        preset_id: z.string().uuid(),
         preset_version_id: z.string().uuid(),
-        is_byok: z.literal(false),
+        is_byok: z.boolean(),
       })
       .strict(),
     generations: z.array(OpenRouterGenerationFieldsSchema),
@@ -70,8 +71,9 @@ export interface OpenRouterAttestation {
   readonly expected: {
     readonly model: string;
     readonly provider: string;
+    readonly preset_id: string;
     readonly preset_version_id: string;
-    readonly is_byok: false;
+    readonly is_byok: boolean;
   };
   readonly generations: readonly OpenRouterGeneration[];
   readonly charged_cost_usd: number | null;
@@ -282,14 +284,16 @@ export async function captureOpenRouterGenerations(
         'model did not match the candidate label',
       );
     }
-    if (data.is_byok) {
+    if (data.is_byok !== args.labels.is_byok) {
       throw new OpenRouterAttestationError(
         generationId,
         null,
-        'generation unexpectedly used BYOK routing',
+        'BYOK routing did not match the candidate label',
       );
     }
-    if (data.preset_id !== args.labels.preset_version_id) {
+    // Generation metadata exposes the stable preset UUID. The designated
+    // preset-version UUID is retained separately as campaign provenance.
+    if (data.preset_id !== args.labels.preset_id) {
       throw new OpenRouterAttestationError(
         generationId,
         null,
@@ -311,8 +315,9 @@ export async function captureOpenRouterGenerations(
     expected: {
       model: args.labels.model,
       provider: args.labels.provider,
+      preset_id: args.labels.preset_id,
       preset_version_id: args.labels.preset_version_id,
-      is_byok: false,
+      is_byok: args.labels.is_byok,
     },
     generations,
     charged_cost_usd: chargedCostUsd,

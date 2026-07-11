@@ -16,7 +16,9 @@ const LABELS = {
   model: 'example/model-a',
   provider: 'example-provider',
   quantization: 'fp8',
+  preset_id: '00000000-0000-4000-8000-000000000004',
   preset_version_id: '00000000-0000-4000-8000-000000000005',
+  is_byok: false,
   catalog_as_of: '2026-07-10',
 } as const;
 
@@ -138,15 +140,16 @@ describe('captureOpenRouterGenerations', () => {
       expected: {
         model: LABELS.model,
         provider: LABELS.provider,
+        preset_id: LABELS.preset_id,
         preset_version_id: LABELS.preset_version_id,
-        is_byok: false,
+        is_byok: LABELS.is_byok,
       },
       generations: [
         {
           id: generationId,
           model: 'example/model-a',
           provider_name: 'Example Provider',
-          preset_id: LABELS.preset_version_id,
+          preset_id: LABELS.preset_id,
           is_byok: false,
           latency: 125.5,
           generation_time: 2.75,
@@ -193,6 +196,21 @@ describe('captureOpenRouterGenerations', () => {
 
     expect(attestation.generations).toHaveLength(2);
     expect(attestation.charged_cost_usd).toBeCloseTo(0.02);
+  });
+
+  test('accepts an explicitly labeled BYOK route', async () => {
+    const payload = fixture('openrouter-generation-valid.json');
+    const data = payload['data'] as Record<string, unknown>;
+    data['preset_id'] = LABELS.preset_id;
+    data['is_byok'] = true;
+
+    const attestation = await captureOpenRouterGenerations({
+      ...captureArgs(['gen-valid-1'], [generationResponse(payload)]),
+      labels: { ...LABELS, is_byok: true },
+    });
+
+    expect(attestation.expected.is_byok).toBe(true);
+    expect(attestation.generations[0]?.is_byok).toBe(true);
   });
 
   test('fetches generation metadata sequentially', async () => {
@@ -244,7 +262,7 @@ describe('captureOpenRouterGenerations', () => {
   test.each([
     ['wrong provider', { provider_name: 'Another Provider' }],
     ['wrong model', { model: 'example/model-b' }],
-    ['unexpected BYOK', { is_byok: true }],
+    ['BYOK mismatch', { is_byok: true }],
     ['null preset', { preset_id: null }],
     ['absent preset', { preset_id: undefined }],
   ])('rejects %s metadata', async (_name, overrides) => {

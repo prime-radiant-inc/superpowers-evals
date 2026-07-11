@@ -49,7 +49,9 @@ test('runScenario persists labels from the selected credential snapshot', async 
     model: 'pi-test-model',
     provider: 'openrouter',
     quantization: 'fp16',
+    preset_id: '00000000-0000-4000-8000-000000000002',
     preset_version_id: '00000000-0000-4000-8000-000000000003',
+    is_byok: false,
     catalog_as_of: '2026-07-10',
   };
   writeFileSync(
@@ -64,7 +66,9 @@ test('runScenario persists labels from the selected credential snapshot', async 
       `    model: ${labels.model}`,
       `    provider: ${labels.provider}`,
       `    quantization: ${labels.quantization}`,
+      `    preset_id: ${labels.preset_id}`,
       `    preset_version_id: ${labels.preset_version_id}`,
+      `    is_byok: ${labels.is_byok}`,
       `    catalog_as_of: ${labels.catalog_as_of}`,
       '',
     ].join('\n'),

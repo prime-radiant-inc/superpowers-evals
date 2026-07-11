@@ -30,7 +30,9 @@ const LABELS = {
   model: 'example/model-a',
   provider: 'example-provider',
   quantization: 'fp16',
+  preset_id: '00000000-0000-4000-8000-000000000003',
   preset_version_id: '00000000-0000-4000-8000-000000000004',
+  is_byok: false,
   catalog_as_of: '2026-07-10',
 };
 
@@ -221,7 +223,9 @@ test('quorum run stopped during agent phase keeps parsed credential labels', asy
       `    model: ${LABELS.model}`,
       `    provider: ${LABELS.provider}`,
       `    quantization: ${LABELS.quantization}`,
+      `    preset_id: ${LABELS.preset_id}`,
       `    preset_version_id: ${LABELS.preset_version_id}`,
+      `    is_byok: ${LABELS.is_byok}`,
       `    catalog_as_of: ${LABELS.catalog_as_of}`,
       '',
     ].join('\n'),
