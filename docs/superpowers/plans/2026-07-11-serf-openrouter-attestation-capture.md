@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Raw provider response identifiers may exist only in the private per-run ATIF artifact and transient attestation request.
+- Raw provider response identifiers may exist only in the private per-run ATIF artifact, the private closed-shape OpenRouter attestation sidecar (`openrouter-generations.json`), and the transient in-memory attestation request.
 - Do not add prompts, responses, credentials, private hostnames, run identifiers, or private repository information to source control.
 - Keep OpenRouter attestation fail-closed when no `gen-...` identifier is available.
 - Pin Serf to exact commit `2ae123e1b1301db060efd958bc1c7ff32b14de86`; do not embed a floating branch.
