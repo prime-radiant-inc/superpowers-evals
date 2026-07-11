@@ -13,7 +13,6 @@ export const CREDENTIAL_AUTHS = [
   'oauth',
   'bedrock-bearer',
 ] as const;
-const _COMPAT_KEYS = ['thinking_format', 'max_tokens_field'] as const;
 const LABEL_VALUE_RE = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
 const DISPLAY_LABEL_RE = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 const API_KEY_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
