@@ -45,6 +45,7 @@ const CompatSchema = z
   .object({
     thinking_format: z.enum(['zai']).optional(),
     max_tokens_field: z.string().optional(),
+    tool_choice_auto_only: z.boolean().optional(),
   })
   .strict() // unknown compat keys are an error (spec §12)
   .default({});

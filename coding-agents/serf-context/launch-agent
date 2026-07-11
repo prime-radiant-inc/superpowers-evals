@@ -18,11 +18,11 @@
 #   - the credential-selected model (falling back to serf.yaml), safely rendered
 #     as one shell argument ($SERF_MODEL_SH)
 #
-# SERF_PROVIDERS_CONFIG points at a fresh (nonexistent) per-run path so serf
-# re-seeds its provider instances from the selected environment variable
-# rather than reading a host ~/.serf/providers.toml that may not declare the
-# provider. SERF_API_KEY_ENV names the one API key forwarded into the otherwise
-# clean environment.
+# SERF_PROVIDERS_CONFIG points at the isolated per-run path. Provisioning may
+# materialize a credential-free model-compat profile there; when absent, serf
+# seeds its provider instance from the selected environment variable. The path
+# never falls back to a host ~/.serf/providers.toml. SERF_API_KEY_ENV names the
+# one API key forwarded into the otherwise clean environment.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 

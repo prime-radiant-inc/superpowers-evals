@@ -1,8 +1,12 @@
-import { mkdirSync, statSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { resolveApiKey } from '../credentials/resolve.ts';
+import {
+  isSerfOpenRouterCampaignCredentialV1,
+  SERF_OPENROUTER_V1_API_KEY_ENV,
+} from '../credentials/serf-openrouter-profile.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
@@ -94,10 +98,30 @@ export class SerfAgent implements CodingAgent {
       } catch (e) {
         throw new ProvisionError(e instanceof Error ? e.message : String(e));
       }
+
+      if (credential.compat.tool_choice_auto_only === true) {
+        if (!isSerfOpenRouterCampaignCredentialV1(credential)) {
+          throw new ProvisionError(
+            'serf: compat.tool_choice_auto_only requires the Serf OpenRouter campaign profile',
+          );
+        }
+        const wireModel = credential.model.slice('openrouter/'.length);
+        const body =
+          'default = "openrouter"\n\n' +
+          '[instances.openrouter]\n' +
+          'type = "openrouter"\n' +
+          `api_key = "$${SERF_OPENROUTER_V1_API_KEY_ENV}"\n\n` +
+          `[instances.openrouter.models."${wireModel}".compat]\n` +
+          'tool_choice_auto_only = true\n';
+        writeFileSync(join(home.configDir, 'providers.toml'), body, {
+          mode: 0o600,
+        });
+      }
     }
 
     // No extra env: the launcher forwards only the credential-selected key,
-    // sets a fresh SERF_PROVIDERS_CONFIG, and bakes the model/plugin-dir/export-atif flags.
+    // loads the isolated per-run SERF_PROVIDERS_CONFIG when provisioned (or
+    // seeds from env when absent), and bakes the model/plugin-dir/export flags.
     return {};
   }
 }

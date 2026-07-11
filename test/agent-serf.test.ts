@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { ProvisionError } from '../src/agents/index.ts';
 import { SerfAgent } from '../src/agents/serf.ts';
@@ -94,6 +100,23 @@ const openRouterCredential: Credential = {
   compat: {},
 };
 
+const openRouterCampaignCredential: Credential = {
+  model: 'openrouter/@preset/serf-test',
+  harnesses: ['serf'],
+  api: 'openai-chat',
+  base_url: 'https://openrouter.ai/api/v1',
+  auth: 'api-key',
+  api_key_env: 'OPENROUTER_API_KEY',
+  compat: { tool_choice_auto_only: true },
+  labels: {
+    model: 'example/model',
+    provider: 'example-provider',
+    quantization: 'fp8',
+    preset_version_id: '00000000-0000-4000-8000-000000000001',
+    catalog_as_of: '2026-07-11',
+  },
+};
+
 test('provision creates the isolated config + exports dirs on success', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, 'superpowers');
@@ -174,6 +197,63 @@ test('provision validates the selected Serf key without returning its value', ()
         expect(result).toEqual({});
         expect(JSON.stringify(result)).not.toContain(apiKey);
         expect(runner.calls).toEqual([]);
+        expect(existsSync(join(home.configDir, 'providers.toml'))).toBe(false);
+      });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision materializes credential-free model compat for an OpenRouter campaign', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, 'superpowers');
+  const apiKey = `task3a-${crypto.randomUUID()}`;
+  stageSuperpowers(spRoot);
+  try {
+    withEnv(spRoot, () => {
+      withEnvValue('OPENROUTER_API_KEY', apiKey, () => {
+        const result = new SerfAgent(serfConfig()).provision(
+          home,
+          new FakeCommandRunner(),
+          openRouterCampaignCredential,
+        );
+        const configPath = join(home.configDir, 'providers.toml');
+        expect(result).toEqual({});
+        expect(readFileSync(configPath, 'utf8')).toBe(
+          'default = "openrouter"\n\n' +
+            '[instances.openrouter]\n' +
+            'type = "openrouter"\n' +
+            'api_key = "$OPENROUTER_API_KEY"\n\n' +
+            '[instances.openrouter.models."@preset/serf-test".compat]\n' +
+            'tool_choice_auto_only = true\n',
+        );
+        expect(statSync(configPath).mode & 0o777).toBe(0o600);
+        expect(readFileSync(configPath, 'utf8')).not.toContain(apiKey);
+      });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision rejects tool-choice compat outside the OpenRouter campaign profile', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, 'superpowers');
+  stageSuperpowers(spRoot);
+  try {
+    withEnv(spRoot, () => {
+      withEnvValue('TASK3A_SERF_OPENROUTER_KEY', 'test-key', () => {
+        expect(() =>
+          new SerfAgent(serfConfig()).provision(
+            home,
+            new FakeCommandRunner(),
+            {
+              ...openRouterCredential,
+              compat: { tool_choice_auto_only: true },
+            },
+          ),
+        ).toThrow(/requires the Serf OpenRouter campaign profile/);
       });
     });
   } finally {

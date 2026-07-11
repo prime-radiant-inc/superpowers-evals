@@ -44,6 +44,22 @@ describe('CredentialSchema', () => {
       }),
     ).toThrow();
   });
+  test('accepts boolean tool-choice compatibility and rejects other types', () => {
+    expect(
+      CredentialSchema.parse({
+        model: 'openrouter/@preset/example-version',
+        harnesses: ['serf'],
+        compat: { tool_choice_auto_only: true },
+      }).compat.tool_choice_auto_only,
+    ).toBe(true);
+    expect(() =>
+      CredentialSchema.parse({
+        model: 'openrouter/@preset/example-version',
+        harnesses: ['serf'],
+        compat: { tool_choice_auto_only: 'yes' },
+      }),
+    ).toThrow();
+  });
   test('parseCredentialsFile enforces name charset', () => {
     expect(() =>
       parseCredentialsFile({ 'bad-name': { model: 'm', harnesses: ['pi'] } }),
