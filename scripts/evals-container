@@ -153,7 +153,15 @@ if [[ "$command" != exec && $# -gt 0 ]]; then
 fi
 
 if [[ -z "$container_name" ]]; then
-  root_hash=$(printf '%s' "$evals_root" | shasum | awk '{print substr($1,1,12)}')
+  # shasum ships with macOS; Linux images generally carry only sha1sum.
+  if command -v shasum >/dev/null 2>&1; then
+    sha1_cmd=shasum
+  elif command -v sha1sum >/dev/null 2>&1; then
+    sha1_cmd=sha1sum
+  else
+    die "need shasum or sha1sum to derive a container name (or pass --container-name)"
+  fi
+  root_hash=$(printf '%s' "$evals_root" | "$sha1_cmd" | awk '{print substr($1,1,12)}')
   container_name="superpowers-evals-$root_hash"
 fi
 
