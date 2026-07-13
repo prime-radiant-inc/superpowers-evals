@@ -86,7 +86,7 @@ RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
 
 RUN npm install -g \
     @anthropic-ai/claude-code@2.1.202 \
-    @openai/codex@0.142.5 \
+    @openai/codex@0.144.3 \
     @google/gemini-cli@0.49.0 \
     opencode-ai@1.17.15 \
     @github/copilot@1.0.68 \
