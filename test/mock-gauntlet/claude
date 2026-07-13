@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# PATH-presence shim: satisfies the runner's Bun.which('claude') preflight and
+# the best-effort provenance `--version` probe on hosts without Claude Code
+# (CI). The mock gauntlet never launches the coding agent, so nothing else
+# executes this.
+if [ "${1:-}" = "--version" ]; then
+  echo "0.0.0 (mock-claude)"
+fi
+exit 0
