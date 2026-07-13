@@ -112,7 +112,9 @@ RUN mkdir -p /opt/cursor-agent \
   && ln -sf /opt/cursor-agent/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
   && agent --version
 
-RUN uv tool install mini-swe-agent \
+# Both tools pin Python 3.12: litellm builds a pyo3 extension whose maximum
+# supported interpreter is 3.13, and unpinned uv resolves to CPython 3.14.
+RUN uv tool install --python 3.12 mini-swe-agent \
   && uv tool install --python 3.12 "trae-agent[test,evaluation] @ git+https://github.com/bytedance/trae-agent.git" \
   && chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR" \
   && mini-swe-agent --help >/dev/null \
