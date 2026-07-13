@@ -1,15 +1,18 @@
-import { expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandResult } from '../src/agents/command-runner.ts';
 import { ProvisionError } from '../src/agents/index.ts';
@@ -23,6 +26,24 @@ import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
+
+// The provision preflight probes PATH for the real `opencode` binary
+// (Bun.which); dev machines have it, a bare CI runner does not. Every test in
+// this file runs with a shim dir prepended so the probe resolves
+// hermetically. Tests that need a different PATH (the node-absent B2 case)
+// still override it themselves inside the test body.
+const SHIM_BIN = mkdtempSync(join(tmpdir(), 'opencode-shim-'));
+writeFileSync(join(SHIM_BIN, 'opencode'), '#!/bin/sh\nexit 0\n');
+chmodSync(join(SHIM_BIN, 'opencode'), 0o755);
+const PREV_PATH = process.env['PATH'];
+beforeAll(() => {
+  process.env['PATH'] = `${SHIM_BIN}:${PREV_PATH ?? ''}`;
+});
+afterAll(() => {
+  if (PREV_PATH === undefined) delete process.env['PATH'];
+  else process.env['PATH'] = PREV_PATH;
+  rmSync(SHIM_BIN, { recursive: true, force: true });
+});
 
 // An opencode.yaml-shaped config (mirrors coding-agents/opencode.yaml). The
 // fields the adapter reads are home_config_subdir and required_env
