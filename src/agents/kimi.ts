@@ -826,28 +826,48 @@ function validateSuperpowersKimiRoot(rootArg: string): string {
   return resolved;
 }
 
-// Compute a temp-dir parent that is NOT inside the run artifact root, so the
-// capture snapshot never sweeps up the mode-0600 secret env file. The artifact
-// root is run_dir's parent. If the OS tmpdir (or override) resolves inside the
-// artifact root, walk one level above the artifact root. As a last-line guard,
-// RAISE if the chosen parent still resolves inside the artifact root.
-function kimiRuntimeEnvTempParent(
-  runDir: string,
-  tmpDirOverride?: string,
-): string {
-  const runDirResolved = realpathSync(resolve(runDir));
+// Make the run-scoped secret dir under a temp parent that is NOT inside the
+// run artifact root, so the capture snapshot never sweeps up the mode-0600
+// secret env file. The artifact root is run_dir's parent. Candidates, in
+// order: the OS tmpdir (or override); one level above the artifact root (for
+// when tmpdir resolves inside it); a ~/.quorum-tmp fallback (the level-above
+// walk can land on an unwritable dir — '/' when the artifact root sits
+// directly under /tmp, e.g. --out-root /tmp). A candidate that resolves
+// inside the artifact root or refuses the mkdtemp is skipped; exhausting all
+// candidates raises.
+function makeKimiRuntimeEnvSecretDir(opts: {
+  readonly runDir: string;
+  readonly tmpDirOverride?: string;
+}): string {
+  const runDirResolved = realpathSync(resolve(opts.runDir));
   const artifactRootResolved = dirname(runDirResolved);
-  let tempParent = realpathSync(resolve(tmpDirOverride ?? tmpdir()));
-  if (isInsideOrEqual(tempParent, artifactRootResolved)) {
-    tempParent = dirname(artifactRootResolved);
+  const candidates = [
+    resolve(opts.tmpDirOverride ?? tmpdir()),
+    dirname(artifactRootResolved),
+    join(homedir(), '.quorum-tmp'),
+  ];
+  for (const candidate of candidates) {
+    let parent: string;
+    try {
+      mkdirSync(candidate, { recursive: true });
+      parent = realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    if (isInsideOrEqual(parent, artifactRootResolved)) {
+      continue;
+    }
+    try {
+      return mkdtempSync(
+        join(parent, `quorum-kimi-env-${basename(opts.runDir)}-`),
+      );
+    } catch {
+      continue;
+    }
   }
-  mkdirSync(tempParent, { recursive: true });
-  if (isInsideOrEqual(realpathSync(tempParent), artifactRootResolved)) {
-    throw new ProvisionError(
-      'Kimi runtime env temp directory resolved inside artifact root',
-    );
-  }
-  return tempParent;
+  throw new ProvisionError(
+    'no writable Kimi runtime env temp directory outside the artifact root',
+  );
 }
 
 // Is `candidate` the same as or nested under `ancestor`?
@@ -864,10 +884,7 @@ export function writeKimiRuntimeEnvFile(
   env: Readonly<Record<string, string>>,
   opts: { readonly runDir: string; readonly tmpDirOverride?: string },
 ): string {
-  const tempParent = kimiRuntimeEnvTempParent(opts.runDir, opts.tmpDirOverride);
-  const secretDir = mkdtempSync(
-    join(tempParent, `quorum-kimi-env-${basename(opts.runDir)}-`),
-  );
+  const secretDir = makeKimiRuntimeEnvSecretDir(opts);
   const path = join(secretDir, KIMI_RUNTIME_ENV_FILE_NAME);
   const keys = Object.keys(env).sort();
   const body = keys

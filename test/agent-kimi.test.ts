@@ -954,6 +954,33 @@ test('writeKimiRuntimeEnvFile walks the temp parent out when tmpdir is inside th
   }
 });
 
+test('writeKimiRuntimeEnvFile falls back when the walked-out temp parent is unwritable', () => {
+  // When the artifact root sits directly under the OS tmpdir (e.g.
+  // --out-root /tmp), walking one level above it lands on '/', which is not
+  // writable. The secret dir must fall back to a writable parent that is
+  // still outside the artifact root, not crash with EACCES.
+  const base = mkdtempSync(join(tmpdir(), 'kimi-locked-'));
+  const locked = join(base, 'locked');
+  const artifactRoot = join(locked, 'artifacts');
+  const runDir = join(artifactRoot, 'run-x');
+  const insideTmp = join(artifactRoot, 'tmp-inside');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(insideTmp, { recursive: true });
+  // The walk target (parent of the artifact root) refuses new entries.
+  chmodSync(locked, 0o555);
+  try {
+    const path = writeKimiRuntimeEnvFile(
+      { KIMI_MODEL_API_KEY: API_KEY },
+      { runDir, tmpDirOverride: insideTmp },
+    );
+    expect(existsSync(path)).toBe(true);
+    expect(path.startsWith(`${realpathSync(artifactRoot)}/`)).toBe(false);
+  } finally {
+    chmodSync(locked, 0o755);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Live preflight session_index / workDir / sessionDir / wire.jsonl attribution
 // ---------------------------------------------------------------------------
