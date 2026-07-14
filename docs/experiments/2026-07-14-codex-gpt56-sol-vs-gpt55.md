@@ -87,8 +87,25 @@ parity, slightly favorable to Sol.
    re-grade above). Stored verdicts in `results/` still carry the artifact
    fails; either re-run the 28 affected 5.6 cells for clean stored verdicts or
    build a regrade command (open decision).
-2. ~~Top up OpenAI billing~~ — done; re-run of the 15 quota-dead cells started
-   2026-07-14 (standalone runs, not part of the original batch dir).
+2. ~~Top up OpenAI billing~~ — done; the 15 quota-dead cells were re-run
+   2026-07-14 (standalone runs, not part of the original batch dir):
+   **12 pass / 1 fail / 2 indet**. The 5.6 passes graded through the FIXED
+   normalizer — live end-to-end confirmation of the PRI-2584 fix. The fail
+   (`writing-plans-no-spec-conversational` × 5.6) is gauntlet-confirmed
+   behavioral. The 2 indets are run-variance, not quota: 5.6
+   `worktree-no-drift-to-main` timed out mid-subagent-dispatch; 5.5
+   `writing-plans-no-spec-conversational` hit a grader anomaly (degenerate
+   summary "test").
+
+   **Final campaign standing** (batch + offline re-grade + quota re-runs):
+
+   | column | pass | fail | indet |
+   |---|---|---|---|
+   | gpt-5.5 | 50 | 12 | 5 |
+   | gpt-5.6-sol | 52 | 12–13 | 2 |
+
+   (5.6 fail range: `sdd-quality-reviewer-catches-planted-defect` still counts
+   as fail pending a live re-run of its `command-succeeds` FS check.)
 3. obol: add `gpt-5.6-sol` ($5/$0.50/$30) so the column prices.
 4. Do NOT log a "5.6 regresses skill compliance" finding anywhere — the raw
    matrix says that and the raw matrix is wrong.
