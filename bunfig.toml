@@ -1,2 +1,8 @@
 [test]
 root = "test"
+
+[install]
+# First-party packages published from our own CI are exempt from the global
+# 7-day minimum-release-age quarantine (~/.bunfig.toml); the age floor still
+# applies to every third-party dependency.
+minimumReleaseAgeExcludes = ["@primeradianthq/obol"]

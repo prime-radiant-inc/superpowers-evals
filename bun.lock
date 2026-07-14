@@ -5,7 +5,7 @@
     "": {
       "name": "quorum",
       "dependencies": {
-        "@primeradianthq/obol": "^0.7.0",
+        "@primeradianthq/obol": "^0.8.0",
         "commander": "^12",
         "yaml": "^2",
         "zod": "^3",
@@ -45,7 +45,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.0", "", { "os": "win32", "cpu": "x64" }, "sha512-VT/lF+GId+67j8aDfLkxdxNoVApsPSTbyAtB3jJq0IWTrY77WXfbPfpngxq0bA6JCEv/7k8C9qWjDRKRznDlyw=="],
 
-    "@primeradianthq/obol": ["@primeradianthq/obol@0.7.0", "", { "dependencies": { "koffi": "2.16.2" } }, "sha512-UC87eb327o2Bynae0EKXF8rVq6heL+L7D7O+SHqS2xZrkKcP+1mPt/PiSoGTH1YEJQb5VHiCbEgRl+XZaJAI9w=="],
+    "@primeradianthq/obol": ["@primeradianthq/obol@0.8.0", "", { "dependencies": { "koffi": "2.16.2" } }, "sha512-gCKYFBbA/qaRsludg0ugpRD/tvAk1u60uPOijpHfAXjCFgDr/ETKVniaCat+Cr6auv2ddLOrl+vIC5/6nH76VA=="],
 
     "@quorum/dashboard": ["@quorum/dashboard@workspace:packages/dashboard"],
 
