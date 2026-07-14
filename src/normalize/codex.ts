@@ -265,34 +265,146 @@ function parseOutputBlob(raw: unknown): string | undefined {
   return String(raw);
 }
 
-function normalizeToolCallPayload(payload: CodexPayload): AtifToolCall | null {
+// codex ≥0.144 driving the gpt-5.6 family routes ALL tool use through a single
+// custom tool named `exec` whose input is a JavaScript program invoking
+// tools.exec_command / tools.apply_patch / tools.update_plan / tools.write_stdin
+// (PRI-2584). Unpack those invocations into the same canonical calls the
+// 5.5-era function_call rollouts produce, or every transcript verb goes blind.
+// Segmentation is regex-based, not a JS parse: each tools.<verb>( starts a new
+// segment, and the JS preamble (often `const p = ".../SKILL.md"`) rides with
+// the first segment so content-matching verbs still see referenced paths.
+const EXEC_SCRIPT_VERB_RE =
+  /tools\.(exec_command|apply_patch|update_plan|write_stdin|spawn_agent)\s*\(/g;
+
+function unescapeJsLiteral(body: string): string {
+  return body.replace(/\\(.)/g, (_, ch: string) => {
+    if (ch === 'n') return '\n';
+    if (ch === 't') return '\t';
+    if (ch === 'r') return '\r';
+    return ch;
+  });
+}
+
+// Extract `<key>: "<literal>"` from a JS segment when the value is a static
+// string literal. Template literals with ${…} interpolate variables defined
+// elsewhere in the script, so they are NOT extracted — the caller keeps the
+// whole segment instead, which still contains whatever the variables name.
+function plainStringProp(segment: string, key: string): string | null {
+  const re = new RegExp(
+    `\\b${key}\\s*:\\s*("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)`,
+  );
+  const m = re.exec(segment);
+  const lit = m?.[1];
+  if (!lit) return null;
+  const body = lit.slice(1, -1);
+  if (lit.startsWith('`') && body.includes('${')) return null;
+  return unescapeJsLiteral(body);
+}
+
+function normalizeExecScript(callId: string, input: string): AtifToolCall[] {
+  const matches = [...input.matchAll(EXEC_SCRIPT_VERB_RE)];
+  if (matches.length === 0) {
+    // Pure JS (or an unrecognized vocabulary): the script IS what executed;
+    // carry it whole so shell-content verbs can still match it.
+    return [
+      {
+        tool_call_id: callId,
+        function_name: 'Bash',
+        arguments: { command: input },
+      },
+    ];
+  }
+  const calls: AtifToolCall[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (!m) continue;
+    const verb = m[1] ?? '';
+    const start = i === 0 ? 0 : (m.index ?? 0);
+    const next = matches[i + 1];
+    const end = next?.index ?? input.length;
+    const segment = input.slice(start, end);
+    const id = i === 0 ? callId : callId ? `${callId}#${i}` : '';
+    if (verb === 'exec_command') {
+      const cmd = plainStringProp(segment, 'cmd');
+      calls.push({
+        tool_call_id: id,
+        function_name: 'Bash',
+        arguments: { command: cmd ?? segment },
+      });
+      continue;
+    }
+    if (verb === 'apply_patch') {
+      // The patch text is a string/template literal either inline or assigned
+      // to a variable in the segment's preamble. Template literals carry real
+      // newlines; quoted literals carry \n escapes, so retry unescaped before
+      // giving up on path extraction.
+      let patchSource = segment;
+      if (applyPatchPaths(patchSource).length === 0) {
+        const unescaped = unescapeJsLiteral(segment);
+        if (applyPatchPaths(unescaped).length > 0) patchSource = unescaped;
+      }
+      calls.push({
+        tool_call_id: id,
+        function_name: 'Edit',
+        arguments: withPatchPaths({ patch: patchSource }),
+      });
+      continue;
+    }
+    if (verb === 'spawn_agent') {
+      const prompt =
+        plainStringProp(segment, 'prompt') ?? plainStringProp(segment, 'task');
+      calls.push({
+        tool_call_id: id,
+        function_name: 'Agent',
+        arguments: prompt !== null ? { prompt } : { input: segment },
+      });
+      continue;
+    }
+    calls.push({
+      tool_call_id: id,
+      function_name: CODEX_TOOL_MAP[verb] ?? verb,
+      arguments: { input: segment },
+    });
+  }
+  return calls;
+}
+
+function normalizeToolCallPayload(
+  payload: CodexPayload,
+): AtifToolCall[] | null {
   if (payload.type === 'function_call') {
     const p = payload as CodexFunctionCallPayload;
     const name = p.name ?? '';
     const args = parseArgs(p.arguments);
     const callId = p.call_id ?? '';
     if (name === 'exec_command') {
-      return {
-        tool_call_id: callId,
-        function_name: 'Bash',
-        arguments: {
-          command: typeof args['cmd'] === 'string' ? args['cmd'] : '',
+      return [
+        {
+          tool_call_id: callId,
+          function_name: 'Bash',
+          arguments: {
+            command: typeof args['cmd'] === 'string' ? args['cmd'] : '',
+          },
         },
-      };
+      ];
     }
     if (name === 'apply_patch') {
-      return {
-        tool_call_id: callId,
-        function_name: 'Edit',
-        arguments: withPatchPaths(args),
-      };
+      return [
+        {
+          tool_call_id: callId,
+          function_name: 'Edit',
+          arguments: withPatchPaths(args),
+        },
+      ];
     }
     const canonical = CODEX_TOOL_MAP[name] ?? name;
-    return canonicalizeAgentPrompt({
-      tool_call_id: callId,
-      function_name: canonical,
-      arguments: args,
-    });
+    return [
+      canonicalizeAgentPrompt({
+        tool_call_id: callId,
+        function_name: canonical,
+        arguments: args,
+      }),
+    ];
   }
 
   if (payload.type === 'custom_tool_call') {
@@ -300,29 +412,38 @@ function normalizeToolCallPayload(payload: CodexPayload): AtifToolCall | null {
     const name = p.name ?? '';
     const callId = p.call_id ?? '';
     if (name === 'apply_patch') {
-      return {
-        tool_call_id: callId,
-        function_name: 'Edit',
-        arguments: withPatchPaths({ patch: p.input ?? '' }),
-      };
+      return [
+        {
+          tool_call_id: callId,
+          function_name: 'Edit',
+          arguments: withPatchPaths({ patch: p.input ?? '' }),
+        },
+      ];
+    }
+    if (name === 'exec') {
+      return normalizeExecScript(callId, p.input ?? '');
     }
     const canonical = CODEX_TOOL_MAP[name] ?? name;
-    return {
-      tool_call_id: callId,
-      function_name: canonical,
-      arguments: { input: p.input ?? '' },
-    };
+    return [
+      {
+        tool_call_id: callId,
+        function_name: canonical,
+        arguments: { input: p.input ?? '' },
+      },
+    ];
   }
 
   if (payload.type === 'local_shell_call') {
     const p = payload as CodexLocalShellCallPayload;
     const cmd = p.action?.command ?? [];
     const cmdStr = Array.isArray(cmd) ? cmd.join(' ') : String(cmd);
-    return {
-      tool_call_id: '',
-      function_name: 'Bash',
-      arguments: { command: cmdStr },
-    };
+    return [
+      {
+        tool_call_id: '',
+        function_name: 'Bash',
+        arguments: { command: cmdStr },
+      },
+    ];
   }
 
   if (payload.type === 'web_search_call') {
@@ -334,11 +455,13 @@ function normalizeToolCallPayload(payload: CodexPayload): AtifToolCall | null {
     if (action.query !== undefined) arguments_['query'] = action.query;
     if (action.queries !== undefined) arguments_['queries'] = action.queries;
     if (action.url !== undefined) arguments_['url'] = action.url;
-    return {
-      tool_call_id: '',
-      function_name: 'WebSearch',
-      arguments: arguments_,
-    };
+    return [
+      {
+        tool_call_id: '',
+        function_name: 'WebSearch',
+        arguments: arguments_,
+      },
+    ];
   }
 
   return null;
@@ -555,17 +678,21 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     }
 
     // ── tool call events ───────────────────────────────────────────────────────
-    const tc = normalizeToolCallPayload(payload);
-    if (!tc) continue;
+    // One rollout payload can normalize to SEVERAL canonical calls (the 5.6
+    // unified `exec` tool); they share one step, and the FIRST call keeps the
+    // rollout call_id so the payload's single output pairs onto it.
+    const tcs = normalizeToolCallPayload(payload);
+    const first = tcs?.[0];
+    if (!tcs || !first) continue;
 
     // Deduplicate: skip if we've seen this call_id (non-empty).
-    if (tc.tool_call_id && seenCallIds.has(tc.tool_call_id)) continue;
-    if (tc.tool_call_id) seenCallIds.add(tc.tool_call_id);
+    if (first.tool_call_id && seenCallIds.has(first.tool_call_id)) continue;
+    if (first.tool_call_id) seenCallIds.add(first.tool_call_id);
 
     const step: AtifStep = {
       step_id: stepId++,
       source: 'agent',
-      tool_calls: [tc],
+      tool_calls: tcs,
     };
     if (timestamp) step.timestamp = timestamp;
 
@@ -576,8 +703,8 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     }
 
     // Register this step for output pairing (only for calls with a real call_id)
-    if (tc.tool_call_id) {
-      pendingCallStepIndex.set(tc.tool_call_id, steps.length);
+    if (first.tool_call_id) {
+      pendingCallStepIndex.set(first.tool_call_id, steps.length);
     }
 
     steps.push(step);

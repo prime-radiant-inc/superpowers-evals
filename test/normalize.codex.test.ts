@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { flattenToolCalls } from '../src/atif/project.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { isImplementationPath } from '../src/detect/implementation.ts';
+import { isSkillInvocation } from '../src/detect/skill.ts';
 import { normalizeCodex } from '../src/normalize/codex.ts';
 
 test('codex apply_patch (function_call) exposes file paths for implementation-path checks', () => {
@@ -699,4 +701,125 @@ test('full trajectory with all new features validates against ATIF schema', () =
   expect(r.ok).toBe(true);
   expect(traj.session_id).toBe('session-abc-123');
   expect(traj.agent.version).toBe('0.140.0');
+});
+
+// ---------------------------------------------------------------------------
+// codex ≥0.144 driving the gpt-5.6 family: ALL tool use arrives as one custom
+// tool named `exec` whose input is a JavaScript program invoking
+// tools.exec_command / tools.apply_patch / tools.update_plan / … (PRI-2584).
+// The normalizer must unpack those into the same canonical calls the 5.5-era
+// function_call rollouts produce, or every transcript verb goes blind.
+// ---------------------------------------------------------------------------
+
+function execScriptLine(input: string, callId = 'exec-1'): string {
+  return JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'custom_tool_call', name: 'exec', input, call_id: callId },
+  });
+}
+
+test('56-exec: plain-literal exec_command surfaces the exact cmd as Bash', () => {
+  const traj = normalizeCodex(
+    execScriptLine(
+      'const r=await tools.exec_command({cmd:"npm test",workdir:"/w",yield_time_ms:10000});\ntext(r.output);\n',
+    ),
+    'test',
+  );
+  expect(validateTrajectory(traj).ok).toBe(true);
+  const call = flattenToolCalls(traj).find((c) => c.tool === 'Bash')!;
+  expect(call.args['command']).toBe('npm test');
+});
+
+test('56-exec: template-literal cmd keeps the whole segment so variable-referenced skill paths stay visible', () => {
+  const input =
+    'const p="/x/skills/writing-plans/SKILL.md";\n' +
+    "const r=await tools.exec_command({cmd:`sed -n '1,320p' '" +
+    '${p}' +
+    '\'`,workdir:"/w"});\ntext(r.output);\n';
+  const call = flattenToolCalls(
+    normalizeCodex(execScriptLine(input), 'test'),
+  ).find((c) => c.tool === 'Bash')!;
+  expect(
+    isSkillInvocation(call, 'superpowers:writing-plans', 'writing-plans'),
+  ).toBe(true);
+});
+
+test('56-exec: multiple tools.* invocations unpack into ordered canonical calls in one step', () => {
+  const input =
+    'const r=await tools.exec_command({cmd:"git status"});\n' +
+    'await tools.update_plan({plan:[{step:"a",status:"in_progress"}]});\n';
+  const traj = normalizeCodex(execScriptLine(input, 'multi-1'), 'test');
+  const step = traj.steps.find((s) => s.tool_calls)!;
+  expect(step.tool_calls?.map((c) => c.function_name)).toEqual([
+    'Bash',
+    'update_plan',
+  ]);
+  // First sub-call keeps the rollout call_id (outputs pair to it); later
+  // sub-calls get derived unique ids.
+  expect(step.tool_calls?.[0]?.tool_call_id).toBe('multi-1');
+  expect(step.tool_calls?.[1]?.tool_call_id).toBe('multi-1#1');
+});
+
+test('56-exec: apply_patch with the patch in a JS variable exposes file paths', () => {
+  const input =
+    'const patch = `*** Begin Patch\n*** Update File: src/auth.js\n@@\n-a\n+b\n*** End Patch`;\n' +
+    'await tools.apply_patch(patch);\n';
+  const call = flattenToolCalls(
+    normalizeCodex(execScriptLine(input), 'test'),
+  ).find((c) => c.tool === 'Edit')!;
+  expect(call.args['file_path']).toBe('src/auth.js');
+  expect(isImplementationPath(call)).toBe(true);
+});
+
+test('56-exec: apply_patch with an escaped string literal still yields paths', () => {
+  const input =
+    'await tools.apply_patch("*** Begin Patch\\n*** Add File: hello.txt\\n+hi\\n*** End Patch");\n';
+  const call = flattenToolCalls(
+    normalizeCodex(execScriptLine(input), 'test'),
+  ).find((c) => c.tool === 'Edit')!;
+  expect(call.args['file_path']).toBe('hello.txt');
+});
+
+test('56-exec: JS with no tools.* falls back to one Bash call carrying the input', () => {
+  const input = 'const x = 1 + 1;\ntext(String(x));\n';
+  const calls = flattenToolCalls(normalizeCodex(execScriptLine(input), 'test'));
+  expect(calls.map((c) => c.tool)).toEqual(['Bash']);
+  expect(calls[0]?.args['command']).toBe(input);
+});
+
+test('56-exec: custom_tool_call_output pairs onto the exec step', () => {
+  const raw = [
+    execScriptLine('await tools.exec_command({cmd:"ls"});', 'pair-1'),
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'pair-1',
+        output: 'ok',
+      },
+    }),
+  ].join('\n');
+  const traj = normalizeCodex(raw, 'test');
+  const step = traj.steps.find((s) => s.tool_calls)!;
+  expect(step.observation?.results[0]?.source_call_id).toBe('pair-1');
+  expect(step.observation?.results[0]?.content).toBe('ok');
+});
+
+test('56-exec: real gpt-5.6-sol rollout slice — skill read via JS variable is detected', () => {
+  const raw = readFileSync(
+    new URL('./fixtures/codex-56-exec.slice.jsonl', import.meta.url),
+    'utf8',
+  );
+  const traj = normalizeCodex(raw, 'fallback');
+  expect(validateTrajectory(traj).ok).toBe(true);
+  expect(traj.agent.model_name).toBe('gpt-5.6-sol');
+  const calls = flattenToolCalls(traj);
+  expect(
+    calls.some((c) =>
+      isSkillInvocation(c, 'superpowers:writing-plans', 'writing-plans'),
+    ),
+  ).toBe(true);
+  expect(calls.some((c) => c.tool === 'update_plan')).toBe(true);
+  // The whole point of PRI-2584: no raw `exec` calls survive normalization.
+  expect(calls.some((c) => c.tool === 'exec')).toBe(false);
 });
