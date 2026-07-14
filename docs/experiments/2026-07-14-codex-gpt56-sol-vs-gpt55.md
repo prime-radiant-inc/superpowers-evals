@@ -62,12 +62,33 @@ Column scenario mixes differ slightly (which runs died of quota), so treat
 percentages as first-read approximations. 5.6 cells report `est_cost_usd:
 null`/`partial` — obol 0.7.0 (as_of 2026-07-09) has no `gpt-5.6-*` keys.
 
+## Offline re-grade with the fixed normalizer (2026-07-14, PRI-2584 @ `8527d9c`)
+
+The normalizer fix (unpack the unified `exec` JS into canonical calls) landed
+the same day. Re-normalizing the batch's stored 5.6 rollouts and re-executing
+the exact transcript checks that decided each cell (offline analysis — stored
+verdicts NOT rewritten):
+
+- **26 of the 27 artifact-fails flip to pass.** The 27th
+  (`sdd-quality-reviewer-catches-planted-defect`) has its `skill-called` cured
+  too; its remaining fail is a `command-succeeds` FS check that needs a live
+  re-run to settle.
+- **1 vacuous pass flips to fail:** `subagent-dispatch-no-overtrigger` —
+  codex-5.6 really did over-trigger brainstorming; the blind detector had
+  passed it via `not skill-called`.
+
+**Corrected 5.6 column (projection): 46 ✓ · 11–12 ✗ · 9 ⊘** vs gpt-5.5's
+44 ✓ · 12 ✗ · 11 ⊘ — deterministic layer now agrees with the Gauntlet lens:
+parity, slightly favorable to Sol.
+
 ## Follow-ups
 
-1. Fix `src/normalize/codex.ts` for the 5.6-era rollout shape (map `exec`-style
-   items to canonical tool names); then re-grade this batch's 5.6 transcripts
-   before drawing any deterministic-layer conclusions.
-2. Top up OpenAI billing; re-run the 15 quota-dead cells.
+1. ~~Fix `src/normalize/codex.ts`~~ — done (PRI-2584, `8527d9c`, offline
+   re-grade above). Stored verdicts in `results/` still carry the artifact
+   fails; either re-run the 28 affected 5.6 cells for clean stored verdicts or
+   build a regrade command (open decision).
+2. ~~Top up OpenAI billing~~ — done; re-run of the 15 quota-dead cells started
+   2026-07-14 (standalone runs, not part of the original batch dir).
 3. obol: add `gpt-5.6-sol` ($5/$0.50/$30) so the column prices.
 4. Do NOT log a "5.6 regresses skill compliance" finding anywhere — the raw
    matrix says that and the raw matrix is wrong.
