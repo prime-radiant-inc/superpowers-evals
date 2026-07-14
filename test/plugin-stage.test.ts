@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,6 +31,13 @@ function makeFakeRoot(): string {
   );
   mkdirSync(join(root, '.claude', 'worktrees'), { recursive: true });
   writeFileSync(join(root, '.claude', 'state.json'), '{}');
+  mkdirSync(join(root, '.worktrees', 'pri-0000-stale', 'skills'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(root, '.worktrees', 'pri-0000-stale', 'skills', 'SKILL.md'),
+    '# stale\n',
+  );
   mkdirSync(join(root, '.git'), { recursive: true });
   writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   mkdirSync(join(root, 'node_modules', 'commander'), { recursive: true });
@@ -66,6 +74,57 @@ test('excludes top-level evals/ and .claude/ but keeps .claude-plugin/', () => {
     expect(existsSync(join(dest, 'evals'))).toBe(false);
     expect(existsSync(join(dest, '.claude'))).toBe(false);
     expect(existsSync(join(dest, '.claude-plugin', 'plugin.json'))).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('excludes top-level .worktrees/ — dev worktrees are full checkouts, not plugin payload', () => {
+  const root = makeFakeRoot();
+  const dest = mkdtempSync(join(tmpdir(), 'dest-'));
+  try {
+    stageSuperpowersPlugin(root, dest);
+    expect(existsSync(join(dest, '.worktrees'))).toBe(false);
+    expect(existsSync(join(dest, 'skills', 'brainstorming', 'SKILL.md'))).toBe(
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('stages a file symlink as its target contents (self-contained, no links back into root)', () => {
+  const root = makeFakeRoot();
+  writeFileSync(join(root, 'skills', 'brainstorming', 'REAL.md'), 'real\n');
+  symlinkSync('REAL.md', join(root, 'skills', 'brainstorming', 'LINK.md'));
+  const dest = mkdtempSync(join(tmpdir(), 'dest-'));
+  try {
+    stageSuperpowersPlugin(root, dest);
+    expect(
+      readFileSync(join(dest, 'skills', 'brainstorming', 'LINK.md'), 'utf8'),
+    ).toBe('real\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('skips directory-target and broken symlinks without throwing', () => {
+  const root = makeFakeRoot();
+  // Directory-target link (the real-world crash: fixtures -> ../fixtures in a
+  // stale worktree) and a dangling link.
+  symlinkSync('brainstorming', join(root, 'skills', 'dirlink'));
+  symlinkSync('no-such-file', join(root, 'skills', 'dangling'));
+  const dest = mkdtempSync(join(tmpdir(), 'dest-'));
+  try {
+    expect(() => stageSuperpowersPlugin(root, dest)).not.toThrow();
+    expect(existsSync(join(dest, 'skills', 'dirlink'))).toBe(false);
+    expect(existsSync(join(dest, 'skills', 'dangling'))).toBe(false);
+    expect(existsSync(join(dest, 'skills', 'brainstorming', 'SKILL.md'))).toBe(
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(dest, { recursive: true, force: true });
