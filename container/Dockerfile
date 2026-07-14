@@ -85,21 +85,21 @@ RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
   && mise --version
 
 RUN npm install -g \
-    @anthropic-ai/claude-code@2.1.202 \
-    @openai/codex@0.144.3 \
-    @google/gemini-cli@0.49.0 \
-    opencode-ai@1.17.15 \
-    @github/copilot@1.0.68 \
-    @factory/cli@0.164.1 \
-    @qwen-code/qwen-code@0.19.7 \
-    @moonshot-ai/kimi-code@0.23.1 \
-    @kilocode/cli@7.4.1 \
-    openclaw@2026.6.11 \
-    @sourcegraph/amp@0.0.1783442717-g42dbc6 \
-    cline@3.0.38 \
-    @earendil-works/pi-coding-agent@0.80.3 \
+    @anthropic-ai/claude-code@2.1.209 \
+    @openai/codex@0.144.4 \
+    @google/gemini-cli@0.50.0 \
+    opencode-ai@1.18.1 \
+    @github/copilot@1.0.70 \
+    @factory/cli@0.171.0 \
+    @qwen-code/qwen-code@0.19.10 \
+    @moonshot-ai/kimi-code@0.24.1 \
+    @kilocode/cli@7.4.7 \
+    openclaw@2026.7.1 \
+    @sourcegraph/amp@0.0.1784060561-g91077d \
+    cline@3.0.40 \
+    @earendil-works/pi-coding-agent@0.80.7 \
     pi-subagents@0.34.0 \
-    @xai-official/grok@0.2.87 \
+    @xai-official/grok@0.2.101 \
   && if command -v kilocode >/dev/null 2>&1 && ! command -v kilo >/dev/null 2>&1; then ln -s "$(command -v kilocode)" /usr/local/bin/kilo; fi \
   && if command -v factory >/dev/null 2>&1 && ! command -v droid >/dev/null 2>&1; then ln -s "$(command -v factory)" /usr/local/bin/droid; fi \
   && if command -v kimi >/dev/null 2>&1 && [ "$(command -v kimi)" != /usr/local/bin/kimi ]; then ln -s "$(command -v kimi)" /usr/local/bin/kimi; fi
