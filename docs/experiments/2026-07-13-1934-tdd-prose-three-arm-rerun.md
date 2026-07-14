@@ -167,4 +167,42 @@ runs never had the skill in context, attribute the gap to invocation noise
 
 ### Addendum results
 
-(pending)
+Completed 2026-07-14T21:56Z. 41 submissions → 40 valid (n=20/arm), 1
+transient indeterminate (D), zero infra failures. Interleaved D,E
+throughout.
+
+| Arm | Pass rate | Fisher |
+|---|---|---|
+| D — dev `92164e2d` | 10/20 (50%) | — |
+| E — dev+#1934 `67714e03` | 8/20 (40%) | p = 0.751 vs D |
+
+**Merge-safety confirmed as pre-registered: FLAT.** The rebased #1934 is
+behaviorally indistinguishable from its dev base on this probe. Mechanism
+audit: 21 of 22 failures never had the TDD skill in context (same
+invocation-miss mode as the main run); the 22nd is noted below. Arms
+swapped the lead three times across the batch (D opened 0/4, E later
+failed 5 of 7) — the within-batch streakiness that motivates the n≥20 +
+interleaving discipline.
+
+Two observations logged for follow-up, neither blocking #1934:
+
+1. **First loaded-then-caved failure** (run `...200522Z-6b0c`, arm D —
+   full Why-Order-Matters prose in context): the agent invoked the TDD
+   skill before touching the workdir, then explicitly treated the user's
+   "tests after" framing as license to skip test-first entirely — no test
+   file ever written. Grader failed it on the crux criterion; deterministic
+   checks all passed. In 100 valid runs of this probe across both batches,
+   this is the only failure with the skill body in context — and it
+   happened WITH the prose the campaign theorized was protective.
+2. **Cross-day base-rate drop.** Today pooled 18/40 (45%) vs yesterday
+   pooled 41/60 (68%), Fisher p=0.024. Confounded: different day AND
+   different base content (both of today's arms carry dev's post-v6.1.1
+   TDD-family rewrite, including the `writing-good-tests` ground-up
+   experiment commit at dev HEAD). If real and content-caused, it is a
+   DEV regression independent of #1934. Distinguishing content from
+   day-drift needs a same-day interleaved dev-vs-v6.1.1 pair (~$25, ~2h).
+   Not run; recorded as the open question.
+
+**Bottom line for #1934:** rebased head `67714e03` is merge-safe — flat
+against its true base at n=20/arm, with conflict-resolution fidelity
+verified file-by-file before the run.
