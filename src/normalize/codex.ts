@@ -301,17 +301,37 @@ function plainStringProp(segment: string, key: string): string | null {
   return unescapeJsLiteral(body);
 }
 
+// Provenance convention for unified_exec unpacking (documented in
+// docs/atif-unified-exec-convention.md): every call derived from an exec
+// script is stamped with the physical rollout call that executed it
+// (composite_call_id) and the verbatim JS segment it came from (script), so
+// the composite structure and the raw script survive the logical flattening
+// and parity tooling can re-group the sub-calls.
+function stampProvenance(
+  call: AtifToolCall,
+  compositeCallId: string,
+  script: string,
+): AtifToolCall {
+  const extra: Record<string, unknown> = { script };
+  if (compositeCallId) extra['composite_call_id'] = compositeCallId;
+  return { ...call, extra };
+}
+
 function normalizeExecScript(callId: string, input: string): AtifToolCall[] {
   const matches = [...input.matchAll(EXEC_SCRIPT_VERB_RE)];
   if (matches.length === 0) {
     // Pure JS (or an unrecognized vocabulary): the script IS what executed;
     // carry it whole so shell-content verbs can still match it.
     return [
-      {
-        tool_call_id: callId,
-        function_name: 'Bash',
-        arguments: { command: input },
-      },
+      stampProvenance(
+        {
+          tool_call_id: callId,
+          function_name: 'Bash',
+          arguments: { command: input },
+        },
+        callId,
+        input,
+      ),
     ];
   }
   const calls: AtifToolCall[] = [];
@@ -326,11 +346,17 @@ function normalizeExecScript(callId: string, input: string): AtifToolCall[] {
     const id = i === 0 ? callId : callId ? `${callId}#${i}` : '';
     if (verb === 'exec_command') {
       const cmd = plainStringProp(segment, 'cmd');
-      calls.push({
-        tool_call_id: id,
-        function_name: 'Bash',
-        arguments: { command: cmd ?? segment },
-      });
+      calls.push(
+        stampProvenance(
+          {
+            tool_call_id: id,
+            function_name: 'Bash',
+            arguments: { command: cmd ?? segment },
+          },
+          callId,
+          segment,
+        ),
+      );
       continue;
     }
     if (verb === 'apply_patch') {
@@ -343,28 +369,46 @@ function normalizeExecScript(callId: string, input: string): AtifToolCall[] {
         const unescaped = unescapeJsLiteral(segment);
         if (applyPatchPaths(unescaped).length > 0) patchSource = unescaped;
       }
-      calls.push({
-        tool_call_id: id,
-        function_name: 'Edit',
-        arguments: withPatchPaths({ patch: patchSource }),
-      });
+      calls.push(
+        stampProvenance(
+          {
+            tool_call_id: id,
+            function_name: 'Edit',
+            arguments: withPatchPaths({ patch: patchSource }),
+          },
+          callId,
+          segment,
+        ),
+      );
       continue;
     }
     if (verb === 'spawn_agent') {
       const prompt =
         plainStringProp(segment, 'prompt') ?? plainStringProp(segment, 'task');
-      calls.push({
-        tool_call_id: id,
-        function_name: 'Agent',
-        arguments: prompt !== null ? { prompt } : { input: segment },
-      });
+      calls.push(
+        stampProvenance(
+          {
+            tool_call_id: id,
+            function_name: 'Agent',
+            arguments: prompt !== null ? { prompt } : { input: segment },
+          },
+          callId,
+          segment,
+        ),
+      );
       continue;
     }
-    calls.push({
-      tool_call_id: id,
-      function_name: CODEX_TOOL_MAP[verb] ?? verb,
-      arguments: { input: segment },
-    });
+    calls.push(
+      stampProvenance(
+        {
+          tool_call_id: id,
+          function_name: CODEX_TOOL_MAP[verb] ?? verb,
+          arguments: { input: segment },
+        },
+        callId,
+        segment,
+      ),
+    );
   }
   return calls;
 }

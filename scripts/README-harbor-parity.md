@@ -62,6 +62,18 @@ bun scripts/harbor-parity.ts claude \
   results/superpowers-bootstrap-claude-*/home/.claude/projects/*/
 ```
 
+## Known divergence: codex `unified_exec` logs
+
+Codex rollouts produced with `unified_exec` (default for gpt-5.6-family
+models) record one `exec` custom_tool_call per JavaScript script. Harbor keeps
+that call verbatim; our normalizer unpacks it into canonical calls
+(`Bash`/`Edit`/`update_plan`/…), one per `tools.*` invocation, per
+`docs/atif-unified-exec-convention.md`. The tool-call histograms therefore
+disagree **by design** on such logs: Harbor reports N × `exec`, we report the
+unpacked vocabulary. To compare, group our calls by `extra.composite_call_id`
+— the groups must correspond 1:1 with Harbor's `exec` calls. Token buckets are
+unaffected.
+
 ## Output
 
 The tool prints three sections:

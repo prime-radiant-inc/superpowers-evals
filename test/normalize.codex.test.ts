@@ -805,6 +805,33 @@ test('56-exec: custom_tool_call_output pairs onto the exec step', () => {
   expect(step.observation?.results[0]?.content).toBe('ok');
 });
 
+test('56-exec: every unpacked call carries the composite provenance convention in extra', () => {
+  const input =
+    'const r=await tools.exec_command({cmd:"npm test",workdir:"/w"});\n' +
+    'await tools.update_plan({plan:[{step:"a",status:"in_progress"}]});\ntext(r.output);\n';
+  const traj = normalizeCodex(execScriptLine(input, 'prov-1'), 'test');
+  const step = traj.steps.find((s) => s.tool_calls)!;
+  const [bash, plan] = step.tool_calls!;
+  // Physical grouping is machine-recoverable: both sub-calls name the rollout
+  // call that actually executed.
+  expect(bash?.extra?.['composite_call_id']).toBe('prov-1');
+  expect(plan?.extra?.['composite_call_id']).toBe('prov-1');
+  // Verbatim-script fidelity: the exact JS segment that produced each call,
+  // even when the command was extracted to a plain literal.
+  expect(bash?.arguments['command']).toBe('npm test');
+  expect(String(bash?.extra?.['script'])).toContain('workdir:"/w"');
+  expect(String(plan?.extra?.['script'])).toContain('tools.update_plan');
+  expect(String(plan?.extra?.['script'])).not.toContain('exec_command');
+});
+
+test('56-exec: the no-verb fallback call is also stamped with provenance', () => {
+  const input = 'const x = 1 + 1;\ntext(String(x));\n';
+  const traj = normalizeCodex(execScriptLine(input, 'prov-2'), 'test');
+  const call = traj.steps.find((s) => s.tool_calls)!.tool_calls![0]!;
+  expect(call.extra?.['composite_call_id']).toBe('prov-2');
+  expect(call.extra?.['script']).toBe(input);
+});
+
 test('56-exec: real gpt-5.6-sol rollout slice — skill read via JS variable is detected', () => {
   const raw = readFileSync(
     new URL('./fixtures/codex-56-exec.slice.jsonl', import.meta.url),
