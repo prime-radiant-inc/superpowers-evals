@@ -136,3 +136,35 @@ differences the agent never saw.
 Raw records: driver TSV + per-run job IDs in the session scratchpad
 (`1934-rerun.tsv`, `audit-full.txt`); run artifacts on the appliance under
 `results/tdd-holds-under-tests-later-pressure-claude-opus_bedrock-linux-202607*`.
+
+---
+
+## Addendum: rebased-head merge-safety check (2026-07-14, pre-registered)
+
+Jesse rebased #1934 onto current dev (head `67714e03`, base dev
+`92164e2d`), hand-resolving 3 conflicted skills. Verified before running:
+the branch's effect is byte-identical on the new base for
+systematic-debugging and test-driven-development, and equivalent for
+executing-plans (dev's own line gained "and Gemini CLI"; the branch applies
+the same trim to it). Frontmatter/descriptions: unchanged, again.
+
+**What this run is:** regression assurance on the actual merge
+configuration — dev itself rewrote the TDD family under the branch
+(writing-good-tests ground-up rewrite, broadened trigger), so the base is
+new even though the PR content is not. **What it is not:** a content test.
+Per the mechanism finding above, this probe cannot see body-only deltas.
+
+Design: two arms, D = dev `92164e2d1a1eb8aa78113202030191e499f0590d`,
+E = dev+#1934 `67714e036cd0b0ee4f7899a5c87834eb32693c7d`; n=20 valid/arm,
+interleaved D,E; same probe, agent (claude/opus_bedrock), grader
+(sonnet-5), exclusion + top-up rules as the main run.
+
+Pre-registered expectation: **FLAT** (descriptions identical across arms).
+Decision rule: Fisher two-sided D vs E. p≥0.05 → rebased #1934 confirmed
+merge-safe. p<0.05 → run the rule-4 mechanism audit FIRST; if the failing
+runs never had the skill in context, attribute the gap to invocation noise
+(not the PR), report it as probe variance, and do not block the merge on it.
+
+### Addendum results
+
+(pending)
