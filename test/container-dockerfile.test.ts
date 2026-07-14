@@ -65,7 +65,7 @@ test('container Dockerfile installs headless agent CLIs without desktop IDE spra
     '@github/copilot',
     '@factory/cli',
     '@qwen-code/qwen-code',
-    '@moonshot-ai/kimi-code@0.23.1',
+    '@moonshot-ai/kimi-code',
     '@kilocode/cli',
     'openclaw',
     '@sourcegraph/amp',
