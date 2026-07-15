@@ -76,6 +76,45 @@ regression CONFIRMED → proceed to localization (bisect dev's TDD-family
 commits with the same probe). p≥0.05 → close as drift/noise; record the
 pooled cross-batch observation as unresolved-but-noted.
 
-## Final results
+## Final results (n=40/arm, 2026-07-15T07:14Z)
 
-(pending)
+| Arm | Pass rate | Fisher |
+|---|---|---|
+| F — v6.1.1 | 20/40 (50%) | — |
+| G — dev tip | 16/40 (40%) | **p = 0.50** |
+
+**CLOSED per the locked extension rule: no content regression confirmed;
+the cross-day drop is attributed to drift.** The n=20 interim gap (65% vs
+40%, p=0.20) evaporated in the extension — and the decisive exhibit is the
+CONTROL arm's own trajectory: F ran 13/20 (65%) in its first half and 7/20
+(35%) in its second (within-arm p=0.11, including a six-fail streak),
+drifting against itself by more than any arm-vs-arm gap this probe has
+ever produced. G was flat across halves (8/20, 8/20).
+
+Mechanism audit (44 fails): 39 invocation-misses (skill never in context);
+5 loaded-then-caved, balanced across arms (F:2, G:3) — so not a content
+effect. All 5 occurred on claude 2.1.209 versus 1 in the ~100 prior runs
+on 2.1.202 (Fisher ≈0.09): the loaded-then-caved mode is a plausible
+CLI-version behavior shift. Watch item, not a finding.
+
+## Conclusions
+
+1. **Dev tip (including merged #1934) is not a confirmed regression** on
+   TDD-pressure behavior vs v6.1.1. The 07-13→07-14 pooled drop (p=0.024)
+   and the pooled cross-era pattern (p=0.006) are explained by the probe's
+   demonstrated nonstationarity: its base rate wanders ±25 points on
+   timescales of hours, so day- and batch-level aggregates confound
+   content with time.
+2. **Probe doctrine, now with three strikes:** invocation-rate probes like
+   `tdd-holds-under-tests-later-pressure` (a) cannot see body-only edits
+   (07-13 retraction), (b) hand out significant-looking arm gaps the agent
+   never saw (B-vs-C p=0.041), and (c) are nonstationary enough that
+   absolute pass rates must never be compared across batches — only
+   interleaved same-batch arms are interpretable, and even n=20/arm
+   interim reads mislead (both this screen's n=20 gap and the original
+   campaign finding were the same illusion).
+3. **claude 2.1.209 watch item:** the loaded-then-caved failure mode (read
+   the skill, rationalized past it) went from ~1% to ~6% of valid runs
+   across the CLI bump. If it grows, it becomes the argument for a
+   load-conditioned compliance probe — which is also the right instrument
+   for any future body-content question.
