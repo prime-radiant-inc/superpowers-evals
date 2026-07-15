@@ -53,6 +53,29 @@ indeterminates excluded + topped up, max 25 submissions/arm.
 Uncertain by design. The surface-identity facts argue FLAT; the p=0.024
 cross-day observation is the reason to check anyway.
 
-## Results
+## Interim results @ n=20/arm (2026-07-15T01:35Z)
+
+F 13/20 (65%), G 8/20 (40%) — Fisher p=0.205. Rule 2 fires at this n: not
+significant, cannot confirm a content regression. Mechanism audit: 16/19
+failures never loaded the skill (invocation-miss); per-arm invocation rates
+F 70% vs G 50%. THREE loaded-then-caved failures (F:1, G:2) — vs one in the
+previous 100 runs, all three on claude 2.1.209 — flagged as a possible
+CLI-version behavior shift, small numbers, watch item only.
+
+Post-hoc (recorded, not a decision input): pooling all three batches by
+content era gives v6.1.1-era 54/80 (67.5%) vs dev-era 26/60 (43%), Fisher
+p=0.006 — but batches 1-2 confound day with content perfectly; only this
+batch tests within-day.
+
+## Extension (locked 2026-07-15, before any extension data)
+
+Drew authorized extending THIS design to n=40/arm (20 more valid verdicts
+per arm, same interleave, same environment, resumed from the same TSV).
+Decision rule at n=40: Fisher two-sided F vs G. p<0.05 with G<F → content
+regression CONFIRMED → proceed to localization (bisect dev's TDD-family
+commits with the same probe). p≥0.05 → close as drift/noise; record the
+pooled cross-batch observation as unresolved-but-noted.
+
+## Final results
 
 (pending)
