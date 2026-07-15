@@ -23,6 +23,8 @@ import {
 import {
   addSddAuthPlan,
   scaffoldSddBrokenPlan,
+  scaffoldSddMidloopParked,
+  scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
@@ -111,6 +113,8 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   add_flawed_spec_for_review: { fn: addFlawedSpecForReview },
   add_sdd_auth_plan: { fn: addSddAuthPlan },
   scaffold_sdd_broken_plan: { fn: scaffoldSddBrokenPlan },
+  scaffold_sdd_midloop_parked: { fn: scaffoldSddMidloopParked },
+  scaffold_sdd_midloop_structural: { fn: scaffoldSddMidloopStructural },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
   scaffold_sdd_same_plan_resume: { fn: scaffoldSddSamePlanResume },
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },

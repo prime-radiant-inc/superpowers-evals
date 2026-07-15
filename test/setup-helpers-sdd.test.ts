@@ -10,6 +10,8 @@ import {
   EXPORT_CSV_BLOB,
   STALE_LEDGER_BLOB,
   scaffoldSddBrokenPlan,
+  scaffoldSddMidloopParked,
+  scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
@@ -151,6 +153,7 @@ describe('sdd fixtures', () => {
     }
   });
 
+<<<<<<< HEAD
   test('scaffoldSddStaleForeignWorkspace plants a hash-bearing stale flat ledger', () => {
     const dir = tmp();
     try {
@@ -255,5 +258,54 @@ describe('sdd fixtures', () => {
       }
     }
     expect(heads[0]).toBe(heads[1]);
+  });
+
+  test('scaffoldSddMidloopParked seeds a round-5 ledger with real SHAs and green tests', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddMidloopParked({ workdir: dir } as never);
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).toContain('Task 1: complete (commits ');
+      expect(ledger).toContain('fix round 5/5 (0 addressed, 1 open — ');
+      expect(ledger).not.toContain('Task 2: complete');
+      expect(ledger).not.toContain('Task 3:');
+      // Ledger SHAs are real commits in the fixture repo.
+      const head = runGit(['rev-parse', '--short=7', 'HEAD'], dir).trim();
+      expect(ledger).toContain(head);
+      // The open finding exists in the code: triplicated pad-and-join expression.
+      const duration = readFileSync(join(dir, 'src/duration.js'), 'utf8');
+      expect(
+        duration.split('String(s).padStart(2, "0")').length - 1,
+      ).toBeGreaterThanOrEqual(3);
+      expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddMidloopStructural seeds a plan-contradiction finding', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddMidloopStructural({ workdir: dir } as never);
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).toContain('fix round 5/5 (0 addressed, 1 open — ');
+      expect(ledger).toContain('milliseconds');
+      const plan = readFileSync(
+        join(dir, 'docs/superpowers/plans/metrics-plan.md'),
+        'utf8',
+      );
+      // Task 2 defines seconds; Task 3 passes milliseconds — the seeded contradiction.
+      expect(plan).toContain('formatDuration(seconds)');
+      expect(plan).toContain('durationMs');
+      expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
