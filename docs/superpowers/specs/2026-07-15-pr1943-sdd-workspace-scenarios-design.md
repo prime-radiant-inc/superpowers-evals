@@ -100,8 +100,10 @@ pass."
   hashes, so the helper makes those commits **deterministic** (fixed
   `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`, fixed author/committer
   identity) — same commits every run, same short hashes, same ledger
-  bytes — and `checks.sh` compares against a hardcoded SHA-256 literal
-  via `command-succeeds` (unit tests assert the hash is stable). Also:
+  bytes — and `checks.sh` compares against a hardcoded `git hash-object`
+  blob-hash literal via `command-succeeds` (portable everywhere git is;
+  unit tests assert the hash is stable — which requires the fixed
+  commit dates to pin an explicit timezone offset). Also:
   `not file-exists '.superpowers/sdd/2026-07-15-report-export/'` (own
   workspace cleaned up after clean final review — meaningful only
   because the story drives the full endgame and pins the main checkout).
@@ -157,9 +159,13 @@ there."
 - Neutral core (`post`): both modules exist; `npm test` passes; skill +
   Agent dispatch in transcript.
 - Resume discrimination (`post`): `src/export-csv.js` byte-identical to
-  the fixture version — compared against a **hardcoded SHA-256 of the
-  fixture constant** (the file body is a fixed string in the helper), via
-  `command-succeeds 'echo "<sha>  src/export-csv.js" | shasum -a 256 -c'`.
+  the fixture version — compared against a **hardcoded git blob hash of
+  the fixture constant** (the file body is a fixed string in the helper),
+  via `command-succeeds 'test "$(git hash-object src/export-csv.js)" =
+  "<hash>"'`. Git is already required everywhere the checks run;
+  `shasum`/`sha256sum` differ between macOS hosts and the Linux
+  container, so no external hashing tool is used. The stale-ledger check
+  in scenario 1 uses the same `git hash-object` form.
   Git archaeology (`git log --diff-filter=A`) was rejected: it returns
   newest-first with one hash per add, so a violator that deletes and
   re-adds the file makes the natural pick the violator's own commit — a
@@ -205,7 +211,7 @@ a comment noting this so a control-arm result is never mis-triaged.
   interpolation (resume fixture), the stale ledger's old format + real
   commit ranges (foreign fixture), the `.gitignore` content in **both**
   fixtures, commit determinism (two runs produce identical commit hashes
-  and identical ledger bytes; the hardcoded SHA-256 literals in
+  and identical ledger bytes; the hardcoded blob-hash literals in
   `checks.sh` match), and that `npm test` is green at handoff in the
   resume fixture.
 - `bun run quorum check` passes on both scenarios (with drafts included).
@@ -227,7 +233,8 @@ two-scenario shape; all hardened fixtures, checks, or claims:
 3. **Content-SHA anchors, no git archaeology**: `git log
    --diff-filter=A` is newest-first/one-per-add → false pass on
    delete-and-re-add redos; both byte-identity checks now compare
-   hardcoded SHA-256 literals of deterministic fixture content, and S2's
+   hardcoded `git hash-object` literals of deterministic fixture
+   content (portable across macOS/Linux, unlike shasum), and S2's
    plan forbids task 2 from touching `export-csv.js` so legitimate work
    can't trip the anchor.
 4. **Discrimination claims corrected**: S1 Goals no longer claim
