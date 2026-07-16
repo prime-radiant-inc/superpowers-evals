@@ -15,6 +15,9 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'codex-subagent-wait-mapping',
   'codex-tool-mapping-comprehension',
   'sdd-spec-context-consumed',
+  // SDD fix-cycle probe: the resume mechanism under test — the controller
+  // re-engaging the original implementer via SendMessage — is Claude-specific.
+  'sdd-fix-loop-resumes-implementer',
   'worktree-creation-under-pressure',
   'worktree-no-drift-to-main',
   // Builder campaign fixture: intentionally limited to the Serf harness and
