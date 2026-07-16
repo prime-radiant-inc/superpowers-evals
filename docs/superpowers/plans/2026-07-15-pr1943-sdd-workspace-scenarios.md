@@ -24,7 +24,7 @@
 
 **Files:**
 - Modify: `src/setup-helpers/git.ts`
-- Test: `test/setup-helpers-git.test.ts` (create)
+- Test: `test/setup-helpers-git.test.ts` (exists — APPEND, do not overwrite)
 
 **Interfaces:**
 - Consumes: existing `runGit(args, cwd)` from `src/setup-helpers/git.ts`.
@@ -32,29 +32,22 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/setup-helpers-git.test.ts`:
+`test/setup-helpers-git.test.ts` already exists with a `describe('runGit')` block and 3 passing tests — do NOT overwrite it. Append a new sibling `describe` block (its `tmp()` helper and `writeFixtureFile` import are already present at the top of the file; reuse them, do not re-import). Add this after the existing `describe('runGit', ...)` block:
 
 ```typescript
-// test/setup-helpers-git.test.ts
-import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { runGit } from '../src/setup-helpers/git.ts';
-
-const DATES = {
-  GIT_AUTHOR_DATE: '2026-07-10T12:00:00+0000',
-  GIT_COMMITTER_DATE: '2026-07-10T12:00:00+0000',
-};
-
 describe('runGit extraEnv', () => {
+  const DATES = {
+    GIT_AUTHOR_DATE: '2026-07-10T12:00:00+0000',
+    GIT_COMMITTER_DATE: '2026-07-10T12:00:00+0000',
+  };
+
   test('extraEnv dates make commit hashes deterministic', () => {
     const hashes: string[] = [];
     for (let i = 0; i < 2; i++) {
-      const dir = mkdtempSync(join(tmpdir(), 'sh-git-'));
+      const dir = tmp();
       try {
         runGit(['init', '-b', 'main'], dir);
-        writeFileSync(join(dir, 'a.txt'), 'same bytes\n');
+        writeFixtureFile(dir, 'a.txt', 'same bytes\n');
         runGit(['add', '-A'], dir);
         runGit(['commit', '-m', 'initial'], dir, DATES);
         hashes.push(runGit(['rev-parse', 'HEAD'], dir).trim());
