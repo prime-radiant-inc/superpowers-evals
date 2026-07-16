@@ -41,21 +41,27 @@ describe('runGit extraEnv', () => {
     GIT_COMMITTER_DATE: '2026-07-10T12:00:00+0000',
   };
 
-  test('extraEnv dates make commit hashes deterministic', () => {
-    const hashes: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      const dir = tmp();
-      try {
-        runGit(['init', '-b', 'main'], dir);
-        writeFixtureFile(dir, 'a.txt', 'same bytes\n');
-        runGit(['add', '-A'], dir);
-        runGit(['commit', '-m', 'initial'], dir, DATES);
-        hashes.push(runGit(['rev-parse', 'HEAD'], dir).trim());
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+  test('extraEnv injects the commit author and committer dates', () => {
+    const dir = tmp();
+    try {
+      runGit(['init', '-b', 'main'], dir);
+      writeFixtureFile(dir, 'a.txt', 'same bytes\n');
+      runGit(['add', '-A'], dir);
+      runGit(['commit', '-m', 'initial'], dir, DATES);
+      // The injected dates must reach the commit. Asserting the DATE (not
+      // the commit hash) is what makes this a valid TDD red: two commits
+      // made in the same wall-clock second collide on hash even WITHOUT
+      // injection, so a hash-equality assertion is vacuously green. The
+      // committed date is wall-clock pre-fix, the injected value post-fix.
+      expect(
+        runGit(['log', '-1', '--format=%cd', '--date=iso-strict'], dir).trim(),
+      ).toBe('2026-07-10T12:00:00Z');
+      expect(
+        runGit(['log', '-1', '--format=%ad', '--date=iso-strict'], dir).trim(),
+      ).toBe('2026-07-10T12:00:00Z');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    expect(hashes[0]).toBe(hashes[1]);
   });
 });
 ```
@@ -63,7 +69,7 @@ describe('runGit extraEnv', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bun test test/setup-helpers-git.test.ts`
-Expected: FAIL — the two hashes differ (commit timestamps come from the wall clock; `runGit` has no third parameter yet, and the extra argument is silently ignored by JS).
+Expected: FAIL — the committed date is the wall-clock time, not `2026-07-10T12:00:00Z`, because pre-fix `runGit(args, cwd)` silently drops the third `DATES` argument. (A hash-equality assertion would NOT fail here: whole-second git timestamps make two same-second commits hash-identical regardless of the fix, which is why this test asserts the date instead.)
 
 - [ ] **Step 3: Add extraEnv to runGit**
 
