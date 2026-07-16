@@ -13,6 +13,7 @@ post() {
     file-contains '.superpowers/sdd/progress.md' 'Task 2: parked —'
     file-contains '.superpowers/sdd/progress.md' 'ruling:'
     file-contains '.superpowers/sdd/progress.md' 'Task 3: complete'
+    file-contains '.superpowers/sdd/progress.md' 'Task 2: complete'
     not file-contains '.superpowers/sdd/progress.md' 'fix round 6'
     file-exists 'src/summary.js'
     command-succeeds 'npm test'

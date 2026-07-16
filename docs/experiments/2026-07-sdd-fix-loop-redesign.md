@@ -84,8 +84,8 @@ transcript of `...T161831Z-1e52`.
   two builds died ENOSPC, one took the VM down. Built
   a claude-only variant (same base, same pinned claude-code 2.1.209, same
   gauntlet block and `container/bin/quorum` wrapper; agents and toolchains
-  we don't run dropped): 1.43GB. Dockerfile in the session scratchpad;
-  contents recorded in the superpowers-repo campaign ledger. Gauntlet baked
+  we don't run dropped): 1.43GB. Dockerfile committed as
+  `container/Dockerfile.claude-slim` in this repo. Gauntlet baked
   from `prime-radiant-inc/gauntlet` main @ 1b6bf09 (the host clone's branch
   predated `gauntlet config`).
 - **Mount hygiene**: both roots are clean clones. The first GREEN attempt

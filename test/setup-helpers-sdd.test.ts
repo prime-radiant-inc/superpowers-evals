@@ -260,7 +260,7 @@ describe('sdd fixtures', () => {
     expect(heads[0]).toBe(heads[1]);
   });
 
-  test('scaffoldSddMidloopParked seeds a round-5 ledger with real SHAs and green tests', () => {
+  test('scaffoldSddMidloopParked seeds a round-5 ledger with real SHAs', () => {
     const dir = tmp();
     try {
       scaffoldSddMidloopParked({ workdir: dir } as never);

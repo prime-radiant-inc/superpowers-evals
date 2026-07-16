@@ -1,7 +1,8 @@
-// SDD-fixture helpers. Five embedded-body helpers (auth/broken/quality/yagni/
-// spec-constraint) write their plan bodies inline. The PLAN_BODY constants carry
-// literal backslash-n sequences and literal ${...} interpolations that must reach
-// the file unchanged. (Per-scenario file fixtures now live under
+// SDD-fixture helpers. Eight embedded-body helpers (auth/broken/quality/yagni/
+// spec-constraint/midloop-parked/midloop-structural/resume-trigger) write their
+// plan bodies inline. The PLAN_BODY constants carry literal backslash-n
+// sequences and literal ${...} interpolations that must reach the file
+// unchanged. (Per-scenario file fixtures now live under
 // scenarios/<name>/fixtures/ and are read by init_repo_from_fixtures.)
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';

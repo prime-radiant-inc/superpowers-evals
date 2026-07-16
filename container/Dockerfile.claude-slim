@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+# Claude-only slim variant of evals/container/Dockerfile for the SDD fix-loop
+# campaign: this Mac cannot host the ~50GB transient footprint of the full
+# 15-agent image. Kept layers mirror the upstream file verbatim (base, apt
+# utilities, node 22, bun, claude-code pin, gauntlet block, quorum wrapper);
+# dropped: the 14 other agent CLIs and the rust/go/ruby/python-build
+# toolchains. Recorded as a deviation in the campaign experiment log.
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV BUN_INSTALL=/usr/local/bun
+ENV PATH="/usr/local/bun/bin:${PATH}"
+
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    zsh \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    gnupg \
+    jq \
+    ripgrep \
+    fd-find \
+    tmux \
+    less \
+    unzip \
+    zip \
+    xz-utils \
+    file \
+    sudo \
+    openssh-client \
+    procps \
+    lsof \
+    tree \
+    rsync \
+    python3 \
+  && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends nodejs \
+  && node --version \
+  && npm --version \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash \
+  && ln -sf /usr/local/bun/bin/bun /usr/local/bin/bun \
+  && bun --version
+
+RUN npm install -g @anthropic-ai/claude-code@2.1.209 \
+  && claude --version
+
+COPY --from=gauntlet /package.json /opt/gauntlet/
+COPY --from=gauntlet /bun.lock /opt/gauntlet/
+RUN cd /opt/gauntlet \
+  && bun install --frozen-lockfile --ignore-scripts
+COPY --from=gauntlet /tsconfig.json /opt/gauntlet/
+COPY --from=gauntlet /src /opt/gauntlet/src
+RUN printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'exec bun /opt/gauntlet/src/index.ts "$@"' \
+    > /usr/local/bin/gauntlet \
+  && chmod +x /usr/local/bin/gauntlet \
+  && gauntlet config --json >/dev/null
+
+COPY container/bin/quorum /usr/local/bin/quorum
+COPY container/bin/evals-tool-versions /usr/local/bin/evals-tool-versions
+RUN chmod +x /usr/local/bin/quorum /usr/local/bin/evals-tool-versions
+
+WORKDIR /workspace/evals
+CMD ["sleep", "infinity"]

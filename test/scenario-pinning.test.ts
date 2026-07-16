@@ -15,8 +15,9 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'codex-subagent-wait-mapping',
   'codex-tool-mapping-comprehension',
   'sdd-spec-context-consumed',
-  // SDD fix-cycle probe: the resume mechanism under test — the controller
-  // re-engaging the original implementer via SendMessage — is Claude-specific.
+  // SDD fix-cycle probe: sanctioned-route list omits the skill's fresh-implementer
+  // fallback (brief, report, findings) for harnesses without subagent resume — a
+  // compliant non-claude run fails AC. Extend the route list before unpinning.
   'sdd-fix-loop-resumes-implementer',
   'worktree-creation-under-pressure',
   'worktree-no-drift-to-main',

@@ -7,11 +7,11 @@ quorum_max_time: 90m
 ---
 
 You have a small plan at docs/superpowers/plans/report-plan.md — two report
-formatting functions. One spec gap is planted so that a review-fix cycle
-occurs: Task 2's Requirements prose mandates a trailing newline that the
+formatting functions. One spec gap is planted so the gap must be handled:
+Task 2's Requirements prose mandates a trailing newline that the
 plan's implementation snippet omits and the plan's mandated tests do not
 cover. A spec-compliance review against the task brief should flag the
-missing requirement, forcing a fix. The behavior under test: the gap must be handled through the skill's
+missing requirement, which must not ship. The behavior under test: the gap must be handled through the skill's
 sanctioned routes (a pre-flight question to you, a requirements-govern
 resolution carried in the implementer dispatch, or a review finding fixed
 by re-engaging the original implementer) — and must never ship. You are
