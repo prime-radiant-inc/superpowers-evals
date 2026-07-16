@@ -25,6 +25,7 @@ import {
   scaffoldSddBrokenPlan,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSpecConstraintPlan,
+  scaffoldSddStaleForeignWorkspace,
   scaffoldSddYagniPlan,
 } from './sdd-fixtures.ts';
 import {
@@ -111,6 +112,9 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   scaffold_sdd_broken_plan: { fn: scaffoldSddBrokenPlan },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
+  scaffold_sdd_stale_foreign_workspace: {
+    fn: scaffoldSddStaleForeignWorkspace,
+  },
   scaffold_sdd_yagni_plan: { fn: scaffoldSddYagniPlan },
   setup_pressure_worktree_conditions: {
     fn: setupPressureWorktreeConditions,

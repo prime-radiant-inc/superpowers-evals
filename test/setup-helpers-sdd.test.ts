@@ -1,14 +1,16 @@
 // test/setup-helpers-sdd.test.ts
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runGit } from '../src/setup-helpers/git.ts';
 import {
   addSddAuthPlan,
+  STALE_LEDGER_BLOB,
   scaffoldSddBrokenPlan,
   scaffoldSddQualityDefectPlan,
   scaffoldSddSpecConstraintPlan,
+  scaffoldSddStaleForeignWorkspace,
   scaffoldSddYagniPlan,
 } from '../src/setup-helpers/sdd-fixtures.ts';
 
@@ -144,5 +146,60 @@ describe('sdd fixtures', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('scaffoldSddStaleForeignWorkspace plants a hash-bearing stale flat ledger', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddStaleForeignWorkspace({ workdir: dir } as never);
+      // Tracked state: notes module green, plan committed, clean tree.
+      expect(runGit(['status', '--porcelain'], dir).trim()).toBe('');
+      expect(
+        runGit(
+          ['show', 'HEAD:docs/superpowers/plans/2026-07-15-report-export.md'],
+          dir,
+        ),
+      ).toContain('do not modify `src/export-csv.js`');
+      // Untracked stale ledger: old flat format, no identity line, real hashes.
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).not.toContain('# SDD ledger');
+      const shorts = runGit(['log', '--format=%h', '--abbrev=7'], dir)
+        .trim()
+        .split('\n')
+        .reverse(); // oldest first: [skeleton, notesTask1, notesTask2, plan]
+      expect(ledger).toContain(
+        `Task 1: complete (commits ${shorts[0]}..${shorts[1]}, review clean)`,
+      );
+      expect(ledger).toContain(
+        `Task 2: complete (commits ${shorts[1]}..${shorts[2]}, review clean)`,
+      );
+      // Self-ignoring gitignore, exactly as pre-PR sdd-workspace wrote it.
+      expect(
+        readFileSync(join(dir, '.superpowers/sdd/.gitignore'), 'utf8'),
+      ).toBe('*\n');
+      // Ledger blob hash is stable and matches the exported literal.
+      expect(
+        runGit(['hash-object', '.superpowers/sdd/progress.md'], dir).trim(),
+      ).toBe(STALE_LEDGER_BLOB);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddStaleForeignWorkspace is fully deterministic across runs', () => {
+    const heads: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const dir = tmp();
+      try {
+        scaffoldSddStaleForeignWorkspace({ workdir: dir } as never);
+        heads.push(runGit(['rev-parse', 'HEAD'], dir).trim());
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    expect(heads[0]).toBe(heads[1]);
   });
 });

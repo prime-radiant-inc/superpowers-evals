@@ -504,3 +504,165 @@ export function scaffoldSddSpecConstraintPlan(ctx: HelperContext): void {
     ctx.workdir,
   );
 }
+
+const EXPORT_PACKAGE_JSON = `{
+  "name": "report-export-fixture",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
+`;
+
+const NOTES_BODY = `export function addNote(notes, text) {
+  return [...notes, { text, done: false }];
+}
+
+export function searchNotes(notes, term) {
+  return notes.filter((n) => n.text.includes(term));
+}
+`;
+
+const NOTES_TEST_BODY = `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { addNote, searchNotes } from '../src/notes.js';
+
+test('addNote appends an open note', () => {
+  assert.deepEqual(addNote([], 'buy milk'), [{ text: 'buy milk', done: false }]);
+});
+
+test('searchNotes filters by substring', () => {
+  const notes = addNote(addNote([], 'buy milk'), 'call bank');
+  assert.deepEqual(searchNotes(notes, 'bank'), [{ text: 'call bank', done: false }]);
+});
+`;
+
+export const EXPORT_CSV_BODY = `export function toCsv(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const headers = Object.keys(rows[0]);
+  const lines = [headers.join(',')];
+  for (const row of rows) {
+    lines.push(headers.map((h) => String(row[h] ?? '')).join(','));
+  }
+  return lines.join('\\n');
+}
+`;
+
+export const EXPORT_CSV_TEST_BODY = `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { toCsv } from '../src/export-csv.js';
+
+test('toCsv renders headers then rows', () => {
+  assert.equal(
+    toCsv([{ a: 1, b: 'x' }, { a: 2, b: 'y' }]),
+    'a,b\\n1,x\\n2,y',
+  );
+});
+
+test('toCsv returns empty string for empty input', () => {
+  assert.equal(toCsv([]), '');
+});
+`;
+
+export const REPORT_EXPORT_PLAN_BODY = `# Report Export — Implementation Plan
+
+Two small export modules. Implement exactly what each task specifies.
+
+## Global Constraints
+
+- Node.js ESM project; tests run via \`npm test\` (\`node --test\`).
+- Each task writes its own module AND that module's tests under \`test/\`.
+- Keep \`npm test\` green after every task.
+
+## Task 1: CSV export
+
+**Files:** \`src/export-csv.js\`, \`test/export-csv.test.js\`
+
+**Requirements:**
+- Export a function \`toCsv(rows)\` from \`src/export-csv.js\`.
+- \`toCsv\` takes an array of flat objects; returns a CSV string: header
+  row from the first object's keys, then one line per row, values joined
+  with commas; missing values render as the empty string.
+- \`toCsv([])\` and non-array input return \`''\`.
+- Write node:test coverage for the header/rows shape and the empty case.
+
+## Task 2: JSON export
+
+**Files:** \`src/export-json.js\`, \`test/export-json.test.js\`
+
+**Requirements:**
+- Export a function \`toJson(rows)\` from \`src/export-json.js\`.
+- \`toJson\` takes an array of flat objects; returns a pretty-printed JSON
+  string (two-space indent) of \`{ count, rows }\`.
+- \`toJson([])\` returns the JSON for \`{ count: 0, rows: [] }\`.
+- \`export-json.js\` is self-contained; **do not modify \`src/export-csv.js\`**.
+- Write node:test coverage for the count/rows shape and the empty case.
+`;
+
+// Deterministic commit dates (explicit offset — TZ-dependent hashes would
+// break the hardcoded blob literals in checks.sh). One timestamp per commit
+// so histories are stable AND distinct.
+function dateEnv(iso: string): Record<string, string> {
+  return { GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso };
+}
+
+export const STALE_LEDGER_BLOB = '318f0e1d8394ee56d3c48b31e98bdf2912ba2d2c';
+
+export function scaffoldSddStaleForeignWorkspace(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
+  runGit(['init', '-b', 'main'], ctx.workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
+  runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'package.json', EXPORT_PACKAGE_JSON);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'initial: project skeleton'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:00:00+0000'),
+  );
+
+  writeFixtureFile(ctx.workdir, 'src/notes.js', NOTES_BODY);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'Task 1: notes module (SDD)'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:01:00+0000'),
+  );
+
+  writeFixtureFile(ctx.workdir, 'test/notes.test.js', NOTES_TEST_BODY);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'Task 2: notes tests (SDD)'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:02:00+0000'),
+  );
+
+  writeFixtureFile(
+    ctx.workdir,
+    'docs/superpowers/plans/2026-07-15-report-export.md',
+    REPORT_EXPORT_PLAN_BODY,
+  );
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'docs: report-export plan'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:03:00+0000'),
+  );
+
+  // UNTRACKED stale state — written after all commits, never added. The
+  // ledger describes the finished notes plan in the pre-PR flat format
+  // (no identity line) with the real short hashes of those commits.
+  const shorts = runGit(['log', '--format=%h', '--abbrev=7'], ctx.workdir)
+    .trim()
+    .split('\n')
+    .reverse(); // oldest first: [skeleton, notesTask1, notesTask2, plan]
+  writeFixtureFile(ctx.workdir, '.superpowers/sdd/.gitignore', '*\n');
+  writeFixtureFile(
+    ctx.workdir,
+    '.superpowers/sdd/progress.md',
+    `Task 1: complete (commits ${shorts[0]}..${shorts[1]}, review clean)\n` +
+      `Task 2: complete (commits ${shorts[1]}..${shorts[2]}, review clean)\n`,
+  );
+}
