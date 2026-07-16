@@ -4,8 +4,9 @@ import { envSnapshot } from '../env.ts';
 
 // Runs `git <args>` in cwd with the fixed Drill Test identity injected, so
 // commits are deterministic in author/committer regardless of host git config.
-// The real env WINS over the identity defaults, so spread it LAST. Throws on
-// nonzero exit; returns decoded stdout.
+// Env precedence is identity defaults < real env < explicit `extraEnv`, so each
+// later source is spread last (caller intent wins over the real env, which wins
+// over the identity defaults). Throws on nonzero exit; returns decoded stdout.
 const IDENTITY = {
   GIT_AUTHOR_NAME: 'Drill Test',
   GIT_AUTHOR_EMAIL: 'drill@test.local',
@@ -13,10 +14,14 @@ const IDENTITY = {
   GIT_COMMITTER_EMAIL: 'drill@test.local',
 };
 
-export function runGit(args: readonly string[], cwd: string): string {
+export function runGit(
+  args: readonly string[],
+  cwd: string,
+  extraEnv?: Record<string, string>,
+): string {
   const proc = spawnSync('git', [...args], {
     cwd,
-    env: { ...IDENTITY, ...envSnapshot() },
+    env: { ...IDENTITY, ...envSnapshot(), ...(extraEnv ?? {}) },
     encoding: 'utf8',
   });
   if (proc.status !== 0) {

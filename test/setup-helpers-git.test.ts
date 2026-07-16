@@ -51,3 +51,33 @@ describe('runGit', () => {
     }
   });
 });
+
+describe('runGit extraEnv', () => {
+  const DATES = {
+    GIT_AUTHOR_DATE: '2026-07-10T12:00:00+0000',
+    GIT_COMMITTER_DATE: '2026-07-10T12:00:00+0000',
+  };
+
+  test('extraEnv injects the commit author and committer dates', () => {
+    const dir = tmp();
+    try {
+      runGit(['init', '-b', 'main'], dir);
+      writeFixtureFile(dir, 'a.txt', 'same bytes\n');
+      runGit(['add', '-A'], dir);
+      runGit(['commit', '-m', 'initial'], dir, DATES);
+      // The injected dates must reach the commit. Asserting the DATE (not
+      // the commit hash) is what makes this a valid TDD red: two commits
+      // made in the same wall-clock second collide on hash even WITHOUT
+      // injection, so a hash-equality assertion is vacuously green. The
+      // committed date is wall-clock pre-fix, the injected value post-fix.
+      expect(
+        runGit(['log', '-1', '--format=%cd', '--date=iso-strict'], dir).trim(),
+      ).toBe('2026-07-10T12:00:00Z');
+      expect(
+        runGit(['log', '-1', '--format=%ad', '--date=iso-strict'], dir).trim(),
+      ).toBe('2026-07-10T12:00:00Z');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
