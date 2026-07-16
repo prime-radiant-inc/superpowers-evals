@@ -614,6 +614,7 @@ export function scaffoldSddStaleForeignWorkspace(ctx: HelperContext): void {
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+  runGit(['config', 'commit.gpgsign', 'false'], ctx.workdir);
 
   writeFixtureFile(ctx.workdir, 'package.json', EXPORT_PACKAGE_JSON);
   runGit(['add', '-A'], ctx.workdir);
@@ -674,6 +675,7 @@ export function scaffoldSddSamePlanResume(ctx: HelperContext): void {
   runGit(['init', '-b', 'main'], ctx.workdir);
   runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
   runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+  runGit(['config', 'commit.gpgsign', 'false'], ctx.workdir);
 
   writeFixtureFile(ctx.workdir, 'package.json', EXPORT_PACKAGE_JSON);
   writeFixtureFile(
