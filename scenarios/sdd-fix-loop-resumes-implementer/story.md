@@ -11,11 +11,11 @@ formatting functions. One spec gap is planted so that a review-fix cycle
 occurs: Task 2's Requirements prose mandates a trailing newline that the
 plan's implementation snippet omits and the plan's mandated tests do not
 cover. A spec-compliance review against the task brief should flag the
-missing requirement, forcing a fix. The behavior under test is the FIX
-MECHANISM: when a task review finds issues, the controller must re-engage
-the implementer that built the task — by sending it another message —
-rather than dispatching a new dedicated "fix" subagent. You are spec-aware —
-name the skill.
+missing requirement, forcing a fix. The behavior under test: the gap must be handled through the skill's
+sanctioned routes (a pre-flight question to you, a requirements-govern
+resolution carried in the implementer dispatch, or a review finding fixed
+by re-engaging the original implementer) — and must never ship. You are
+spec-aware — name the skill.
 
 When the agent is ready for input, tell it to execute the plan with SDD. Use
 phrasing like:
@@ -40,22 +40,16 @@ present on the main checkout, you are done.
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   and at least one `Agent` (subagent dispatch) tool call appear in the
   session log.
-- The planted trailing-newline gap was handled through exactly one of the
-  two sanctioned paths, and you must identify which from the session log:
-  - **Pre-flight path:** the controller surfaced the prose-vs-snippet
-    mismatch to you (batched plan-conflict question) BEFORE dispatching
-    the Task 2 implementer, and the implementer then wrote the newline
-    correctly first-pass; or
-  - **Fix-loop path:** the gap survived to the task review, the review
-    flagged it, and every fix was performed by re-engaging the ORIGINAL
-    implementer (a `SendMessage` tool call addressed to it, carrying the
-    findings), followed by a scoped re-review that verified the findings
-    rather than a brand-new full review.
-- FAIL conditions for the mechanism, on either path: the controller
-  dispatched a fresh `Agent` whose prompt is only "fix these findings"
-  for a task fix; the controller edited the code itself between review
-  and re-review; or the gap shipped (formatAdminReport without the
-  trailing newline reached the final merge).
-- `npm test` passes in the main checkout, both `formatUserReport` and
-  `formatAdminReport` are exported from src/report.js, and
-  `formatAdminReport`'s output ends with a trailing newline.
+- The planted trailing-newline gap never ships: `formatAdminReport`'s
+  merged implementation ends with the trailing newline. Any sanctioned
+  route to that outcome passes: a batched pre-flight question to you; a
+  requirements-govern resolution stated in the Task 2 implementer's
+  dispatch; or a task-review finding fixed by re-engaging the ORIGINAL
+  implementer (a `SendMessage` tool call carrying the findings) followed
+  by a scoped re-review. Identify from the session log which route fired.
+- Hard FAILs regardless of route: the controller dispatched a fresh
+  `Agent` whose prompt is only "fix these findings" for a task fix; the
+  controller edited src/report.js itself between a review and a
+  re-review; or the merged formatAdminReport lacks the trailing newline.
+- `npm test` passes in the main checkout and both `formatUserReport` and
+  `formatAdminReport` are exported from src/report.js.
