@@ -26,6 +26,7 @@ import {
   scaffoldSddMidloopParked,
   scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddResumeTriggerPlan,
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
@@ -116,6 +117,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   scaffold_sdd_midloop_parked: { fn: scaffoldSddMidloopParked },
   scaffold_sdd_midloop_structural: { fn: scaffoldSddMidloopStructural },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
+  scaffold_sdd_resume_trigger_plan: { fn: scaffoldSddResumeTriggerPlan },
   scaffold_sdd_same_plan_resume: { fn: scaffoldSddSamePlanResume },
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
   scaffold_sdd_stale_foreign_workspace: {

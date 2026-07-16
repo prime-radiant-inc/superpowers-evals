@@ -13,6 +13,7 @@ import {
   scaffoldSddMidloopParked,
   scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddResumeTriggerPlan,
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
@@ -153,7 +154,6 @@ describe('sdd fixtures', () => {
     }
   });
 
-<<<<<<< HEAD
   test('scaffoldSddStaleForeignWorkspace plants a hash-bearing stale flat ledger', () => {
     const dir = tmp();
     try {
@@ -304,6 +304,25 @@ describe('sdd fixtures', () => {
       expect(plan).toContain('formatDuration(seconds)');
       expect(plan).toContain('durationMs');
       expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddResumeTriggerPlan plants the newline gap, not the old triggers', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddResumeTriggerPlan({ workdir: dir } as never);
+      const plan = runGit(
+        ['show', 'HEAD:docs/superpowers/plans/report-plan.md'],
+        dir,
+      );
+      expect(plan).toContain('ends with a single trailing newline');
+      // The snippet omits the newline: it returns the bare join.
+      expect(plan).toContain('return lines.join("\\n");');
+      expect(plan).not.toContain('asserts nothing');
+      // Mandated tests stay newline-agnostic so the fix cannot break them.
+      expect(plan).not.toContain('starts and ends with the 40-char banner');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
