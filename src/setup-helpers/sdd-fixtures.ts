@@ -666,3 +666,55 @@ export function scaffoldSddStaleForeignWorkspace(ctx: HelperContext): void {
       `Task 2: complete (commits ${shorts[1]}..${shorts[2]}, review clean)\n`,
   );
 }
+
+export const EXPORT_CSV_BLOB = 'f5a3654f48c0a1549d1af6d55a2b9e49cd14ee33';
+
+export function scaffoldSddSamePlanResume(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
+  runGit(['init', '-b', 'main'], ctx.workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
+  runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'package.json', EXPORT_PACKAGE_JSON);
+  writeFixtureFile(
+    ctx.workdir,
+    'docs/superpowers/plans/2026-07-15-report-export.md',
+    REPORT_EXPORT_PLAN_BODY,
+  );
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'initial: skeleton + report-export plan'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:00:00+0000'),
+  );
+
+  // Task 1's real work: the interrupted session's commit, green tests.
+  writeFixtureFile(ctx.workdir, 'src/export-csv.js', EXPORT_CSV_BODY);
+  writeFixtureFile(
+    ctx.workdir,
+    'test/export-csv.test.js',
+    EXPORT_CSV_TEST_BODY,
+  );
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'Task 1: CSV export (SDD)'],
+    ctx.workdir,
+    dateEnv('2026-07-10T12:01:00+0000'),
+  );
+
+  // UNTRACKED scoped workspace, exactly as post-#1943 sdd-workspace lays
+  // it out, with a truthful identity-bearing ledger (real hashes — the
+  // PR's own eval discarded a fixture over fabricated ones).
+  const head7 = runGit(['rev-parse', '--short=7', 'HEAD'], ctx.workdir).trim();
+  const base7 = runGit(
+    ['rev-parse', '--short=7', 'HEAD~1'],
+    ctx.workdir,
+  ).trim();
+  writeFixtureFile(ctx.workdir, '.superpowers/sdd/.gitignore', '*\n');
+  writeFixtureFile(
+    ctx.workdir,
+    '.superpowers/sdd/2026-07-15-report-export/progress.md',
+    '# SDD ledger — plan: docs/superpowers/plans/2026-07-15-report-export.md\n' +
+      `Task 1: complete (commits ${base7}..${head7}, review clean)\n`,
+  );
+}

@@ -1,14 +1,17 @@
 // test/setup-helpers-sdd.test.ts
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runGit } from '../src/setup-helpers/git.ts';
 import {
   addSddAuthPlan,
+  EXPORT_CSV_BLOB,
   STALE_LEDGER_BLOB,
   scaffoldSddBrokenPlan,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
   scaffoldSddYagniPlan,
@@ -195,6 +198,57 @@ describe('sdd fixtures', () => {
       const dir = tmp();
       try {
         scaffoldSddStaleForeignWorkspace({ workdir: dir } as never);
+        heads.push(runGit(['rev-parse', 'HEAD'], dir).trim());
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    expect(heads[0]).toBe(heads[1]);
+  });
+
+  test('scaffoldSddSamePlanResume plants a truthful scoped ledger with real hashes', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddSamePlanResume({ workdir: dir } as never);
+      expect(runGit(['status', '--porcelain'], dir).trim()).toBe('');
+      // Task-1 commit is real and its subject matches the spec.
+      const subjects = runGit(['log', '--format=%s'], dir).trim().split('\n');
+      expect(subjects[0]).toBe('Task 1: CSV export (SDD)');
+      // Scoped ledger: identity first line + truthful range base..head.
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/2026-07-15-report-export/progress.md'),
+        'utf8',
+      );
+      expect(ledger.split('\n')[0]).toBe(
+        '# SDD ledger — plan: docs/superpowers/plans/2026-07-15-report-export.md',
+      );
+      const head7 = runGit(['rev-parse', '--short=7', 'HEAD'], dir).trim();
+      const base7 = runGit(['rev-parse', '--short=7', 'HEAD~1'], dir).trim();
+      expect(ledger).toContain(
+        `Task 1: complete (commits ${base7}..${head7}, review clean)`,
+      );
+      expect(
+        readFileSync(join(dir, '.superpowers/sdd/.gitignore'), 'utf8'),
+      ).toBe('*\n');
+      // The anchor literal matches the shipped file.
+      expect(runGit(['hash-object', 'src/export-csv.js'], dir).trim()).toBe(
+        EXPORT_CSV_BLOB,
+      );
+      // Green at handoff (a red suite under a "review clean" ledger is
+      // the contradiction the PR's own eval discarded a fixture over).
+      const npm = spawnSync('npm', ['test'], { cwd: dir, encoding: 'utf8' });
+      expect(npm.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddSamePlanResume is fully deterministic across runs', () => {
+    const heads: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const dir = tmp();
+      try {
+        scaffoldSddSamePlanResume({ workdir: dir } as never);
         heads.push(runGit(['rev-parse', 'HEAD'], dir).trim());
       } finally {
         rmSync(dir, { recursive: true, force: true });

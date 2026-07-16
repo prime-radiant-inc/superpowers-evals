@@ -24,6 +24,7 @@ import {
   addSddAuthPlan,
   scaffoldSddBrokenPlan,
   scaffoldSddQualityDefectPlan,
+  scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
   scaffoldSddYagniPlan,
@@ -111,6 +112,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   add_sdd_auth_plan: { fn: addSddAuthPlan },
   scaffold_sdd_broken_plan: { fn: scaffoldSddBrokenPlan },
   scaffold_sdd_quality_defect_plan: { fn: scaffoldSddQualityDefectPlan },
+  scaffold_sdd_same_plan_resume: { fn: scaffoldSddSamePlanResume },
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
   scaffold_sdd_stale_foreign_workspace: {
     fn: scaffoldSddStaleForeignWorkspace,
