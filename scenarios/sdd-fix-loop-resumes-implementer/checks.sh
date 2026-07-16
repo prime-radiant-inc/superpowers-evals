@@ -10,7 +10,6 @@ pre() {
 post() {
     check-transcript skill-called superpowers:subagent-driven-development
     check-transcript tool-called Agent
-    check-transcript tool-called SendMessage
     command-succeeds 'npm test'
     file-contains 'src/report.js' 'export function formatUserReport'
     file-contains 'src/report.js' 'export function formatAdminReport'

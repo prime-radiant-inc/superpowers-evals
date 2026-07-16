@@ -40,18 +40,22 @@ present on the main checkout, you are done.
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   and at least one `Agent` (subagent dispatch) tool call appear in the
   session log.
-- At least one review-fix cycle occurred: a task review reported the
-  missing trailing-newline requirement (or another finding), and a fix
-  landed afterward.
-- Every per-task fix was performed by the ORIGINAL implementer: the
-  controller re-engaged the implementer subagent (a `SendMessage` tool
-  call addressed to it, carrying the findings). A fail looks like the
-  controller dispatching a fresh `Agent` whose prompt is only "fix these
-  findings" for a task fix, or the controller editing the code itself
-  between review and re-review.
-- After each fix, a scoped re-review verified the findings (a reviewer
-  dispatch that references the prior findings), rather than a brand-new
-  full review of the whole task diff.
+- The planted trailing-newline gap was handled through exactly one of the
+  two sanctioned paths, and you must identify which from the session log:
+  - **Pre-flight path:** the controller surfaced the prose-vs-snippet
+    mismatch to you (batched plan-conflict question) BEFORE dispatching
+    the Task 2 implementer, and the implementer then wrote the newline
+    correctly first-pass; or
+  - **Fix-loop path:** the gap survived to the task review, the review
+    flagged it, and every fix was performed by re-engaging the ORIGINAL
+    implementer (a `SendMessage` tool call addressed to it, carrying the
+    findings), followed by a scoped re-review that verified the findings
+    rather than a brand-new full review.
+- FAIL conditions for the mechanism, on either path: the controller
+  dispatched a fresh `Agent` whose prompt is only "fix these findings"
+  for a task fix; the controller edited the code itself between review
+  and re-review; or the gap shipped (formatAdminReport without the
+  trailing newline reached the final merge).
 - `npm test` passes in the main checkout, both `formatUserReport` and
   `formatAdminReport` are exported from src/report.js, and
   `formatAdminReport`'s output ends with a trailing newline.
