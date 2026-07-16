@@ -1,6 +1,6 @@
-// SDD-fixture helpers. Eight embedded-body helpers (auth/broken/quality/yagni/
-// spec-constraint/midloop-parked/midloop-structural/resume-trigger) write their
-// plan bodies inline. The PLAN_BODY constants carry literal backslash-n
+// SDD-fixture helpers. Each embedded-body helper writes its plan bodies
+// inline (see the registry for the dispatchable set). The PLAN_BODY
+// constants carry literal backslash-n
 // sequences and literal ${...} interpolations that must reach the file
 // unchanged. (Per-scenario file fixtures now live under
 // scenarios/<name>/fixtures/ and are read by init_repo_from_fixtures.)
