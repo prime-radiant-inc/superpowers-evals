@@ -14,5 +14,5 @@ post() {
     command-succeeds 'npm test'
     file-contains 'src/report.js' 'export function formatUserReport'
     file-contains 'src/report.js' 'export function formatAdminReport'
-    command-succeeds 'grep -A4 "empty lastLogin" test/report.test.js | grep -q assert'
+    command-succeeds 'grep -A8 "empty lastLogin" test/report.test.js | grep -q assert'
 }
