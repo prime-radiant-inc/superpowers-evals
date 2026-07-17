@@ -557,11 +557,35 @@ replay. No additional scenario changes pending.
 
 Planned: 30 runs (18 claude + 12 codex).
 
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Round | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| 1 | Treatment (PR) | sdd-breaker-structural-blocks | codex | openai_responses | fail | sdd-breaker-structural-blocks-codex-openai_responses-linux-20260717T175954Z-28a3 |
+| 1 | Treatment (PR) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | pass | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T175954Z-664d |
+| 1 | Treatment (PR) | sdd-breaker-structural-blocks | claude | opus_bedrock | fail | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260717T175954Z-0361 |
+| 1 | Treatment (PR) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | pass | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T175954Z-3d50 |
+| 1 | Control (dev) | sdd-breaker-structural-blocks | claude | opus_bedrock | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260717T181146Z-9d12 |
+| 1 | Control (dev) | sdd-breaker-structural-blocks | codex | openai_responses | fail | sdd-breaker-structural-blocks-codex-openai_responses-linux-20260717T181146Z-9a47 |
+| 1 | Control (dev) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | fail | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T181146Z-a1c8 |
+| 1 | Control (dev) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | fail | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T181146Z-85f3 |
+
 ### Block 2 — Coin-flip base rate
 
 | Arm | Agent | Scenario | Additional n | Verdict |
 |---|---|---|---|---|
 | Control (dev) | claude | sdd-fix-loop-resumes-implementer | 4 (→ n=7 cumulative with block 1) | |
+
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Round | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| 1 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T182138Z-cf10 |
+| 1 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | indeterminate | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T183433Z-3e82 |
 
 Planned: 4 runs.
 
