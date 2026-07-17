@@ -19,5 +19,5 @@ post() {
     # a fixed window (-A4, then -A8) let an unmandated test landing right
     # after a never-fixed planted test satisfy the assertion check on the
     # neighbor's assert instead of the planted test's own.
-    command-succeeds 'awk "/empty lastLogin/{capture=1;depth=0;started=0} capture{print; o=split(\$0,tmpO,/\{/)-1; c=split(\$0,tmpC,/\}/)-1; depth+=o-c; if(o>0)started=1; if(started && depth<=0){exit}}" test/report.test.js | grep -q assert'
+    command-succeeds 'awk "!capture && /empty lastLogin/{capture=1;depth=0;started=0} capture{print; o=split(\$0,tmpO,/\{/)-1; c=split(\$0,tmpC,/\}/)-1; depth+=o-c; if(o>0)started=1; if(started && depth<=0){exit}}" test/report.test.js | grep -q assert'
 }
