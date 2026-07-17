@@ -166,11 +166,18 @@ sweep. Scenario work lands on a branch and is PR'd to evals `main`.
   re-check the balance **between every batch**, and size batches so a
   drain voids at most one batch. (PRI-2524, grader-on-Mantle, is the
   durable fix if it lands first.)
-- **Bedrock credential probe:** `opus_bedrock` funds ~60% of the runs and
-  its account RPM/TPM quota is explicitly unprobed (credentials.yaml
-  comment). Verify the token is live and probe quota headroom; if headroom
-  allows, raise `max_concurrency` above 2 via evals `main` + appliance
-  repo sync — this is the single biggest wall-clock lever.
+- **Bedrock cap raise (quota probed 2026-07-16):** account 526275945504
+  us-east-1 mantle-endpoint quotas for Claude Opus 4.8 are 20M input TPM /
+  4M output TPM, with **no request-per-minute quota row** — orders of
+  magnitude above what any plausible appliance concurrency draws, so the
+  conservative `max_concurrency: 2` (set "until the quota is probed") can
+  rise. Raise `opus_bedrock` to `max_concurrency: 6` on evals `main` +
+  appliance `sync-repos.sh` before wave 1; the scheduler's rate-limit
+  latch backstops any surprise throttling. Verify the bearer token is
+  live with a smoke call. Monitoring note: an account-level daily token
+  cap (~100M invocation tokens/day, non-adjustable) exists — track
+  cumulative run-sidecar tokens per campaign day; wave structure keeps us
+  under it, but it is the only hard ceiling in sight.
 - Confirm obol prices every model in play (both coding models + grader).
 
 **Two waves:**
@@ -185,14 +192,14 @@ sweep. Scenario work lands on a branch and is PR'd to evals `main`.
   iteration.
 - Contingency re-runs fold into whichever wave surfaces them.
 
-**Schedule honesty:** at the current Bedrock cap of 2, the claude lane
-alone is ~20+ serial slots — ≈12–18 h of appliance time for wave 1 at
-realistic SDD run durations, i.e. ~2 appliance days, not the burn-rate
-figure a parallel claude lane would give. If the preflight quota probe
-supports raising the cap to 4–6, wave 1 compresses to ≈6–9 h. The spec
-commits to the honest number and treats the cap raise as the optimization,
-not the assumption. The single-job lock constrains batch submission, not
-throughput — submit waves as large batches, don't dribble blocks.
+**Schedule:** with the cap raise to 6 (quota-backed, see preflight), the
+~40-run wave-1 claude lane is ~7 serial slots ≈ 4–7 h; codex at 5
+overlaps inside it. Wave 1 ≈ 6–9 h of appliance time, wave 2 ≈ 2–3 h;
+calendar ≈ 1–2 days including local scenario iteration and triage.
+Fallback: if the cap raise cannot land for any reason, wave 1 at cap 2 is
+≈12–18 h (~2 appliance days) — the campaign proceeds either way, slower.
+The single-job lock constrains batch submission, not throughput — submit
+waves as large batches, don't dribble blocks.
 
 The draft-status #1943 pair runs by explicit scenario name (excluded from
 run-all). The block-6 end-to-end builds run as individual jobs with a
