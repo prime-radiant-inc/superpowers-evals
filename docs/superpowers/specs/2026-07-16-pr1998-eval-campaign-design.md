@@ -88,9 +88,17 @@ Negative results get equal billing.
 | 4 Regression (author's 4) | PR arm: claude n=1 each except planted-defect n=3 (noisy); codex n=1 each; a fail triggers a contemporaneous *paired* re-run (both arms, same window, n=2) | 10 | 10 (+4 gated) |
 | 5 Interaction | #1943 pair (`sdd-same-plan-resume`, `sdd-stale-foreign-workspace`) 2 × 2 arms × 2 agents, n=1 — differential **per cell** against the paired dev arm, with priors from the 1943 validation (stale-foreign on dev: claude ✗ / codex ✓ — so a codex ✗ on the PR arm is a candidate regression, not expected noise); `sdd-spec-context-consumed` claude n=3 × 2 arms (demonstrated noisy); `user-pref-sdd-no-strategy-prompt` codex-only, both arms n=1 (claude fails both refs — known scenario debt); `mid-conversation-skill-invocation` claude PR n=1 | 8+6+2+1 | 17 |
 | 6 End-to-end | `sdd-go-fractals-opus48` (claude) + `sdd-go-fractals-gpt55` (codex), PR arm n=1; fails trigger contemporaneous paired re-runs as in block 4. Fractals over svelte to dodge the vite-orphan wedge | 2 | 2 (+2 gated) |
-| 7 New hostile probes | (a) round-4 escalation integrity; (b) scoped re-review discipline; (c) final-review single-fix-wave; claude treat n=2 + control n=1 each for (a)/(b); (c) treat n=2 + control n=2 (dev lacks the rule entirely — control shows the scenario discriminates) | 6+4 | 10 |
+| 7 New hostile probes | (a) round-4 escalation integrity; (b) scoped re-review discipline; (c) final-review single-fix-wave; claude treat n=2 + control n=2 each (dev lacks these rules entirely — the control arm is the RED half of the probes' before/after claim, so it gets real n) | 12 | 12 |
 
-**Totals:** ≈78 measured runs + ≤8 triage-gated contingency ≈ $260–380.
+**Totals:** ≈80 measured runs + ≤8 triage-gated contingency ≈ $270–390.
+
+**Amendment (2026-07-17, execution):** the implementation plan
+(`docs/superpowers/plans/2026-07-17-pr1998-eval-campaign.md`) supersedes
+the two-wave schedule with a local-first order: all scenario work merges
+to evals `main` in one PR before the box syncs, and every measured block
+runs in one campaign window — strictly better contemporaneity. Probe
+controls raised n=1→n=2 for (a)/(b) so each new scenario's dev-RED /
+PR-GREEN improvement claim has ≥2 observations per arm.
 
 ## Measurement protocols
 

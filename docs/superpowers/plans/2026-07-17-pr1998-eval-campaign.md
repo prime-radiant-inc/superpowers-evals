@@ -291,7 +291,7 @@ post() {
 - Produces: block 3/7 verdicts + transcripts; classification per protocol.
 
 - [ ] **Step 1: Block 3.** Codex on the route-extended scenario: treatment ×3, control ×2, paired windows (single-scenario jobs or TARGET_FLAG batches — reuse whichever path Task 7 Step 3 validated for codex-with-credentials). Read each transcript for the route actually taken; compare to EXPECTED_ROUTE.
-- [ ] **Step 2: Block 7.** Probes (a)/(b): claude treatment ×2 + control ×1 each. Probe (c): treatment ×2 + control ×2. Paired windows throughout; grader-credit check between batches.
+- [ ] **Step 2: Block 7.** All three probes: claude treatment ×2 + control ×2, paired windows throughout; grader-credit check between batches. The control (DEV_PIN) arm is the RED half of each probe's improvement claim — a dev run that *passes* a probe means the probe doesn't discriminate; triage it as scenario debt, not as evidence against the PR.
 - [ ] **Step 3: Triage + classify** (same protocol as Task 8, including the 5a–5d "defeated probe = documented negative result" rule); write block verdicts; commit the log.
 
 ### Task 16: Finalize the experiment log
