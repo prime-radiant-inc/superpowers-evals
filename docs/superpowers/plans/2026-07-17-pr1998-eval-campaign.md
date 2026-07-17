@@ -8,6 +8,10 @@
 
 **Tech Stack:** quorum (Bun ≥1.3), the `evals-appliance` helper (see `docs/appliance-runbook.md`), setup-helpers fixtures (TypeScript), bash check-verb DSL.
 
+**Execution order (local-first — supersedes the spec's author-during-wave-1 parallelism):**
+`1 → 2 → 4 → 5 → 9 → 10 → 11 → 12 → 13 → 14 → 3 → 6 → 7 → 15 → 8 → 16 → 17`.
+All local work (config, audit, hardening, precheck, scenario authoring) merges to evals `main` in ONE reviewed PR (Task 14) before the box syncs (Task 3). All measured runs then share one campaign window: Tasks 6, 7, and 15's submission groups run back-to-back; Task 8's triage/classification covers all of them (run it after Task 15's batches complete, folding Task 15 Step 3 into it). Consequence: block-1 claude cells run the route-extended `sdd-fix-loop-resumes-implementer` — Task 10's claude-semantics guard is therefore load-bearing: diff the claude-visible ACs and checks before/after the extension and confirm they are identical.
+
 ## Global Constraints
 
 - **Spec is law:** `docs/superpowers/specs/2026-07-16-pr1998-eval-campaign-design.md`. Any deviation gets logged in the experiment log's Deviations section.
@@ -121,7 +125,7 @@ evals-appliance run-all --json --detach \
   --superpowers-ref <DEV_PIN> \
   -- <TARGET_FLAG selecting S1> --coding-agents claude,codex --credentials openai_responses --jobs 4
 ```
-  Note: codex cells for `sdd-fix-loop-resumes-implementer` are skipped automatically (still claude-pinned until Task 10 merges — that is correct for block 1).
+  Note: under the local-first execution order, Task 10's route extension has already merged, so `sdd-fix-loop-resumes-implementer` is UNPINNED by the time this task runs. Do NOT let codex run it here — submit S1 for claude, and S1 minus `sdd-fix-loop-resumes-implementer` for codex (two targeted submissions per arm). Codex-on-fix-loop cells belong exclusively to block 3 (Task 15 Step 1, 3 treatment / 2 control).
 - [ ] **Step 2: Between rounds, grader-credit check** (Task 3 Step 3 method). If drained: STOP submissions, surface to Drew, mark affected cells void in the log (they are re-run, not counted).
 - [ ] **Step 3: Coin-flip extension — 4 more dev-arm claude runs** of the fix-loop scenario:
 ```bash
