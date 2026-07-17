@@ -1,4 +1,3 @@
-# coding-agents: claude
 pre() {
     git-repo
     git-branch main

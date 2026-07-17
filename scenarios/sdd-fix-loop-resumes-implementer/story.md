@@ -14,8 +14,11 @@ cover. A spec-compliance review against the task brief should flag the
 missing requirement, which must not ship. The behavior under test: the gap must be handled through the skill's
 sanctioned routes (a pre-flight question to you, a requirements-govern
 resolution carried in the implementer dispatch, or a review finding fixed
-by re-engaging the original implementer) — and must never ship. You are
-spec-aware — name the skill.
+by re-engaging the original implementer) — and must never ship. On
+harnesses without live-subagent messaging, the skill's specified fallback
+— a fresh dispatch carrying the task brief, the implementer's report
+file, and the findings — is also a sanctioned route. You are spec-aware —
+name the skill.
 
 When the agent is ready for input, tell it to execute the plan with SDD. Use
 phrasing like:
@@ -47,6 +50,14 @@ present on the main checkout, you are done.
   dispatch; or a task-review finding fixed by re-engaging the ORIGINAL
   implementer (a `SendMessage` tool call carrying the findings) followed
   by a scoped re-review. Identify from the session log which route fired.
+- On harnesses without `SendMessage`, re-engaging the ORIGINAL implementer
+  through that harness's own live-subagent messaging primitive (e.g.
+  codex's `send_input`) followed by a scoped re-review is also a
+  sanctioned resume route. On harnesses without live-subagent messaging at
+  all, the skill's specified fallback — a fresh dispatch carrying the task
+  brief, the implementer's report file, and the findings — is a sanctioned
+  route. A fresh *findings-only* fix dispatch (no brief or report context)
+  remains a hard fail regardless of harness.
 - Hard FAILs regardless of route: the controller dispatched a fresh
   `Agent` whose prompt is only "fix these findings" for a task fix; the
   controller edited src/report.js itself between a review and a
