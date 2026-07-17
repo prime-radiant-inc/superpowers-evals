@@ -587,6 +587,12 @@ Recorded faithfully as jobs land, no interpretation/triage performed here.
 | 3 | Control (dev) | sdd-breaker-structural-blocks | codex | openai_responses | fail | sdd-breaker-structural-blocks-codex-openai_responses-linux-20260717T215046Z-5601 |
 | 3 | Control (dev) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | fail | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T215046Z-fe83 |
 | 3 | Control (dev) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | fail | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T215046Z-7fb7 |
+| 1 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T182138Z-cf10 |
+| 1 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | indeterminate | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T183433Z-3e82 |
+| 2 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T191558Z-3077 |
+| 2 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T192837Z-0428 |
+| 3 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T220030Z-be4b |
+| 3 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T221308Z-59fd |
 
 ### Block 2 — Coin-flip base rate
 
@@ -596,16 +602,17 @@ Recorded faithfully as jobs land, no interpretation/triage performed here.
 
 #### Round-level cell results
 
-Recorded faithfully as jobs land, no interpretation/triage performed here.
+Recorded faithfully as jobs land, no interpretation/triage performed here. These 4 rows are
+*additional* to the 3 dev-arm `sdd-fix-loop-resumes-implementer` runs already recorded under
+Block 1's round-level table above (rounds 1–3 B-ctrl) — cumulative n=7 for the coin-flip base
+rate per the pre-registered protocol.
 
-| Round | Arm | Scenario | Agent | Credential | Verdict | run_id |
+| # | Arm | Scenario | Agent | Credential | Verdict | run_id |
 |---|---|---|---|---|---|---|
-| 1 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T182138Z-cf10 |
-| 1 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | indeterminate | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T183433Z-3e82 |
-| 2 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T191558Z-3077 |
-| 2 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T192837Z-0428 |
-| 3 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T220030Z-be4b |
-| 3 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T221308Z-59fd |
+| B2-1 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T222551Z-f991 |
+| B2-2 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T223907Z-c833 |
+| B2-3 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T225451Z-e521 |
+| B2-4 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T230728Z-6ae5 |
 
 Planned: 4 runs.
 
