@@ -681,3 +681,12 @@ runs (obol-priced coding-agent cost + gauntlet grader spend, tracked
 separately per the preflight's grader-budget note — grader bills the
 shared direct-Anthropic key, a distinct exhaustible budget from the
 `opus_bedrock`/`openai_responses` coding-agent credentials).
+
+## Appliance preflight (2026-07-17, Task 3)
+
+- Tailscale SSH; doctor healthy (container running). Box evals synced to `e9870ba`.
+- Arms prepared: treatment `1f97eda` (job-20260717T175602Z-5a9e), control `fb7b0708` (job-20260717T175630Z-b43c, ok:true).
+- On-box claude 2.1.209 (matches author campaign); codex-cli 0.144.4 (local precheck probe was 0.142.0 — send_input existence assumed stable; block-3 transcript sweep verifies).
+- Grader key: live (200 on 1-token direct-Anthropic call from the box; first probe 401 was a wrong bundle path — real path `/srv/quorum/credentials/blessed/credentials.env`).
+- obol 0.8.0 locked. TARGET_FLAG resolved: `run-all --scenarios <csv>` (+ `--include-drafts` for the draft pair).
+- Batch shape note: fix-loop scenario is now unpinned, so wave-1 jobs split per arm into (breakers × claude,codex) + (fix-loop × claude) to keep codex×fix-loop cells exclusively in block 3. Credentials passed as `opus_bedrock,openai_responses` (harness filter routes each agent to its own).
