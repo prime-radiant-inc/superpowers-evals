@@ -19,7 +19,8 @@ The author-run campaign is well-documented but not independent evidence:
 3. **One agent, one model**: claude on direct-API opus 4.8 in a custom slim
    container. The PR *specifies* a fallback for harnesses without subagent
    resume (fresh dispatch carrying brief + report + findings) that was never
-   executed; codex is exactly that harness and got zero runs.
+   executed; codex — which has no *demonstrated* resume path (whether one
+   exists at all is unverified; see claim 3) — got zero runs.
 4. Adjacent open PR #1943 touches SDD ledger/workspace semantics, and #1998
    specifies exact ledger line formats — untested interaction.
 
@@ -63,7 +64,9 @@ Negative results get equal billing.
 - **Control:** superpowers `dev` tip, SHA pinned at campaign start.
 - **Treatment:** PR head `1f97eda`, pinned. A force-push mid-campaign stops
   affected blocks and re-pins (noted in the log).
-- Arms run **contemporaneously paired** (same batch window). No comparisons
+- Arms run **contemporaneously paired** (same batch window; the two arms'
+  lock-serialized back-to-back jobs count as one window, per 1943 panel
+  practice). No comparisons
   to the author's numbers or the #1943 panel's — nonstationarity doctrine:
   base rates wander across batches; only within-campaign pairs count.
 - **claude:** appliance default credential (`opus_bedrock`).
@@ -78,12 +81,12 @@ Negative results get equal billing.
 
 | Block | What | Cells | ~Runs |
 |---|---|---|---|
-| 0 Scenario audit | Hostile read of the 3 new scenarios' checks/fixtures for false-pass holes (incl. non-ASCII literal traps, e.g. the em-dash in the `parked —` ledger greps that a compliant ASCII-writing agent would fail); fix before running | — | 0 |
+| 0 Scenario audit | Hostile read of the 3 new scenarios' checks/fixtures for false-pass holes (incl. non-ASCII literal traps, e.g. the em-dash in the `parked —` ledger greps that a compliant ASCII-writing agent would fail); also close the *known* planted-defect false-pass residual (bound the grep to the planted test block) since block 4 counts that scenario for the PR; fix before running | — | 0 |
 | 1 Replication core | 3 new scenarios × 2 arms: claude n=3 all; codex n=3 on the 2 unpinned breakers | 18 + 12 | 30 |
 | 2 Coin-flip base rate | +4 claude dev-arm reps of `sdd-fix-loop-resumes-implementer` (→ n=7 dev-arm with block 1) | 4 | 4 |
 | 3 Codex fix-route | Route-extend the pinned scenario to sanction every sanctioned codex route (native resume if supported, else the fallback); codex treat n=3 / control n=2. Gated on the capability precheck (below) | 5 | 5 |
 | 4 Regression (author's 4) | PR arm: claude n=1 each except planted-defect n=3 (noisy); codex n=1 each; a fail triggers a contemporaneous *paired* re-run (both arms, same window, n=2) | 10 | 10 (+4 gated) |
-| 5 Interaction | #1943 pair (`sdd-same-plan-resume`, `sdd-stale-foreign-workspace`) 2 × 2 arms × 2 agents, n=1 — differential **per cell** against the 1943-validation dev profiles (stale-foreign on dev: claude ✗ / codex ✓ — a codex ✗ on the PR arm is a candidate regression, not expected noise); `sdd-spec-context-consumed` claude n=3 × 2 arms (demonstrated noisy); `user-pref-sdd-no-strategy-prompt` codex-only, both arms n=1 (claude fails both refs — known scenario debt); `mid-conversation-skill-invocation` claude PR n=1 | 8+6+2+1 | 17 |
+| 5 Interaction | #1943 pair (`sdd-same-plan-resume`, `sdd-stale-foreign-workspace`) 2 × 2 arms × 2 agents, n=1 — differential **per cell** against the paired dev arm, with priors from the 1943 validation (stale-foreign on dev: claude ✗ / codex ✓ — so a codex ✗ on the PR arm is a candidate regression, not expected noise); `sdd-spec-context-consumed` claude n=3 × 2 arms (demonstrated noisy); `user-pref-sdd-no-strategy-prompt` codex-only, both arms n=1 (claude fails both refs — known scenario debt); `mid-conversation-skill-invocation` claude PR n=1 | 8+6+2+1 | 17 |
 | 6 End-to-end | `sdd-go-fractals-opus48` (claude) + `sdd-go-fractals-gpt55` (codex), PR arm n=1; fails trigger contemporaneous paired re-runs as in block 4. Fractals over svelte to dodge the vite-orphan wedge | 2 | 2 (+2 gated) |
 | 7 New hostile probes | (a) round-4 escalation integrity; (b) scoped re-review discipline; (c) final-review single-fix-wave; claude treat n=2 + control n=1 each for (a)/(b); (c) treat n=2 + control n=2 (dev lacks the rule entirely — control shows the scenario discriminates) | 6+4 | 10 |
 
@@ -114,7 +117,7 @@ Negative results get equal billing.
 
 ## New scenario work
 
-Three authored artifacts. Iteration happens **locally in the claude-slim
+Four authored artifacts. Iteration happens **locally in the claude-slim
 container**; every measured run is **100% on the appliance**.
 
 1. **Route-list extension** of `sdd-fix-loop-resumes-implementer` (its
@@ -123,7 +126,9 @@ container**; every measured run is **100% on the appliance**.
    precheck shows it exists, else the specified fallback (fresh dispatch
    carrying brief + report + findings); unsanctioned mechanisms (fresh
    fix-only dispatch, controller self-edit, gap shipping) stay hard-fails.
-   Unpin codex.
+   Unpin codex. The extension must leave claude-arm semantics untouched —
+   block 1's claude replication depends on the scenario meaning the same
+   thing on both sides of the merge.
 2. **Probe (a) — round-4 escalation integrity:** fixture seeded mid-loop
    with the ledger's last line a completed fix round 3/5 with open
    findings, and the stuck implementer's model tier recorded in the
@@ -184,12 +189,13 @@ sweep. Scenario work lands on a branch and is PR'd to evals `main`.
 
 - **Wave 1** (no authoring dependency): blocks 1+2+4+5+6 ≈ 63 runs,
   submitted as paired batches in one window; claude and codex lanes run
-  concurrently. **Claude is the slow lane**: `opus_bedrock` is capped at
-  `max_concurrency: 2` (codex `openai_responses` is 5), and claude carries
-  ~46 of the 78 runs. Local scenario authoring for wave 2 proceeds in
-  parallel.
+  concurrently. **Claude is the larger lane** (~50 of the 78 total runs,
+  ~40 in wave 1) — hence the cap raise to 6 in preflight; codex runs at 5.
+  Local scenario authoring for wave 2 proceeds in parallel.
 - **Wave 2:** blocks 3+7 ≈ 15 runs once the new scenarios pass local
-  iteration.
+  iteration **and** their PR has merged to evals `main` and synced to the
+  box (the appliance's `evals_ref` is pinned to main — unmerged scenarios
+  cannot produce measured runs).
 - Contingency re-runs fold into whichever wave surfaces them.
 
 **Schedule:** with the cap raise to 6 (quota-backed, see preflight), the
