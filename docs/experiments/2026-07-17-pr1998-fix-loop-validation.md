@@ -78,6 +78,154 @@ every seeded-restart fixture kills the live implementer, so rounds 1–3
 *live* resume cannot be forced by any seeded scenario — only observed
 organically, which is what the sweep above is for.)
 
+## Codex capability precheck
+
+**EXPECTED_ROUTE = `native-resume`.** High confidence. codex has a working
+send-message-to-a-live-agent primitive; the harness's known primitives are
+not limited to `spawn_agent`/`wait_agent`/`close_agent`. This gates block
+3's expected route (task 10 reads the route actually taken per-transcript
+against this expectation).
+
+### Document trail
+
+This repo's own artifacts only ever named the 3-primitive surface:
+
+- `src/normalize/codex.ts`: `"spawn_agent aliases to Agent (1:1 with a
+  subagent launch). wait_agent and close_agent are async-protocol
+  join/teardown calls..."` — `CODEX_TOOL_MAP = { spawn_agent: 'Agent' }`.
+- `src/setup-helpers/codex-app-server.ts` speaks JSON-RPC to
+  `codex app-server --listen stdio://`, but only for `initialize` +
+  `hooks/list` (querying the staged Superpowers SessionStart hook at
+  provision time) — it never touches agent spawn/message/wait/close and is
+  silent on the question.
+- `coding-agents/codex-context/HOWTO.md` documents driving the top-level
+  codex TUI session (launch, rollout-log tailing, `wake_on_idle_log`) and
+  says nothing about subagent messaging.
+- `coding-agents/codex.yaml`: `normalizer: codex`, `default_credential:
+  codex_sub` — no model/tool-surface detail.
+
+But the *superpowers reference the codex coding-agent under test actually
+reads* already anticipates exactly this uncertainty. Quoted verbatim from
+`skills/using-superpowers/references/codex-tools.md` in the superpowers repo
+(`SUPERPOWERS_ROOT`, checked at `/Users/drewritter/prime-rad/superpowers`,
+branch `sdd-fix-loop-redesign`):
+
+> "This enables `spawn_agent`, `wait_agent`, and `close_agent` for skills
+> like `dispatching-parallel-agents` and `subagent-driven-development`. When
+> using subagent-driven-development, close reviewer subagents when their
+> review returns. Keep each implementer subagent open until its task's
+> review passes — the fix loop resumes the implementer — then close it. If
+> your harness cannot send another message to a spawned agent, dispatch each
+> fix round as a fresh implementer carrying the brief, the report file, and
+> the findings."
+
+And `skills/subagent-driven-development/SKILL.md` (the skill under test),
+section "4. The fix loop":
+
+> "**Rounds 1-3 — resume the original implementer.** Send it the open
+> findings verbatim. Its context is intact: it knows the task, the code, and
+> its own choices. If your harness cannot send another message to a live
+> subagent, dispatch a fresh implementer carrying the brief path, the
+> report-file path, and the findings — the report file is the persistent
+> memory either way."
+
+This confirms the task's `native-resume`/`fallback` terminology is not
+invented for this campaign — it's load-bearing language already in the
+skill the coding-agent is graded against. Absence of a fourth primitive in
+*our* normalizer/docs is explicitly not proof codex lacks one, hence the
+empirical probe below.
+
+### Static binary evidence (corroborating, not decisive alone)
+
+`strings` over the host's installed codex binary
+(`~/.bun/install/global/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`,
+`codex-cli 0.142.0`) turned up embedded Rust source paths and tool-schema
+description strings:
+
+```
+core/src/tools/handlers/multi_agents/close_agent.rs
+core/src/tools/handlers/multi_agents/resume_agent.rs
+core/src/tools/handlers/multi_agents/spawn.rs
+core/src/tools/handlers/multi_agents/send_input.rs
+core/src/tools/handlers/multi_agents/wait.rs
+```
+
+and, verbatim, tool descriptions including:
+
+> `send_input` — "Send a message to an existing agent. Use interrupt=true to
+> redirect work immediately. You should reuse the agent by send_input if you
+> believe your assigned task is highly dependent on the context of a
+> previous task."
+>
+> `resume_agent` — "Resume a previously closed agent by id so it can
+> receive send_input and wait_agent calls."
+
+So the binary ships a 5-handler `multi_agents` module
+(`spawn`/`send_input`/`wait`/`close_agent`/`resume_agent`), not 3. This is
+static evidence only — it doesn't prove the tool is *exposed to the model*
+or *actually works* on a live agent; the empirical probe settles that.
+
+### Empirical probe
+
+Host `codex` CLI (`codex-cli 0.142.0`), ChatGPT-subscription auth
+(`auth_mode: chatgpt`, confirmed via `codex doctor`), non-interactive
+`codex exec`, cheapest catalog model (`codex debug models` →
+`gpt-5.4-mini`, "Small, fast, and cost-efficient model for simpler coding
+tasks"), `model_reasoning_effort=low`, in an isolated non-repo scratch
+directory (`--skip-git-repo-check -s workspace-write`), `multi_agent`
+feature already `stable=true` by default (`codex features list`).
+
+Prompt instructed the agent to: spawn one trivial subagent running
+`sleep 8` then replying `SUBAGENT_DONE`; before calling `wait_agent` or
+`close_agent`, find and call whatever tool sends an additional message to
+that still-live agent, with text `PROBE_FOLLOWUP`; then `wait_agent` +
+`close_agent`; then report tool names, the exact call, and the exact
+result, verbatim.
+
+Ground truth is the raw `--json` event stream (not the model's self-report,
+which matched it anyway). The decisive sequence:
+
+```
+item_3  collab_tool_call tool=spawn_agent  → receiver_thread_ids=["019f6f24-235e-…"], agents_states={"019f6f24-235e-…":{"status":"pending_init"}}
+item_4  collab_tool_call tool=send_input   prompt="PROBE_FOLLOWUP" receiver_thread_ids=["019f6f24-235e-…"]
+        → status="completed" (no error), agents_states={"019f6f24-235e-…":{"status":"running"}}
+item_5  collab_tool_call tool=wait         → agents_states={"019f6f24-235e-…":{"status":"completed","message":"SUBAGENT_DONE"}}
+item_6  collab_tool_call tool=close_agent  → same completed state
+```
+
+The model self-reported its full agent-tool list as exactly `spawn_agent`,
+`send_input`, `wait_agent`, `close_agent`, `resume_agent` (5 tools — the
+binary's `send_message`/`followup_task` description strings were not in
+this session's live tool list, so treat those two names as not confirmed
+exposed under this config; `send_input` is). It called `send_input` with
+`{"target": "019f6f24-235e-7580-9f63-148a44dbd573", "message":
+"PROBE_FOLLOWUP"}` and got back `{"submission_id":
+"019f6f24-4017-7753-a6b7-e1fc6f6e74c0"}` — success, not an error. The raw
+event confirms the target's `agents_states` was `"running"` (i.e. genuinely
+live, not `pending_init` or `completed`) at the moment `send_input` was
+accepted.
+
+**Caveat (not a blocker, flagged for task 10):** `send_input` without
+`interrupt=true` *queues* the message rather than interrupting immediately
+(per its own description string). The subagent's final message was exactly
+`SUBAGENT_DONE` — the original task's literal expected output — with no
+visible trace of having consumed `PROBE_FOLLOWUP`. This transcript alone
+doesn't prove a queued message is reliably *acted on* by the target agent
+before it finishes its turn; it proves the primitive exists, targets a live
+agent, and the runtime accepts it without error. Whether a real fix-round
+resume (findings sent while the implementer is mid-task) gets consumed
+reliably is exactly what block 3's organic-transcript sweep should confirm
+or refute.
+
+**Version-drift note:** host codex is `0.142.0`; the eval appliance/CI
+images observed across recent campaigns range `0.140.0`–`0.144.3`
+(`docs/experiments/2026-07-06-skill-edit-campaign-1932-1935.md`,
+`docs/experiments/2026-07-14-codex-gpt56-sol-vs-gpt55.md`), so this probe's
+build is representative of the range actually in use, not a stale outlier.
+
+Full probe transcript (raw prompt, JSONL events, model's last message):
+task report `.superpowers/sdd/task-9-report.md`.
+
 ## Verdicts
 
 Empty per-block tables, mirroring the spec's Run matrix block names and
