@@ -850,11 +850,14 @@ test("formatDuration formats minutes", () => {
 // One fix-round's ledger accounting. `applyChange` defaults to the
 // whitespace-grade churn that keeps rounds honest commits without resolving
 // anything; pass it to make a round a real fix (e.g. the round-3 escalation
-// drill's one genuinely addressed finding).
+// drill's one genuinely addressed finding). `resolvedFinding` names what
+// that real fix addressed, for the report appendix's note — kept as round
+// data rather than hardcoded prose in the shared report builder.
 interface FixRound {
   readonly addressed: number;
   readonly open: number;
   readonly finding: string;
+  readonly resolvedFinding?: string;
   readonly applyChange?: (workdir: string) => void;
 }
 
@@ -892,9 +895,12 @@ function buildTask2Report(
     ? `Implementer model: ${implementerModel} (cheapest tier).\n\n`
     : '';
   const addressedNote =
-    finalRound.addressed > 0
-      ? `Round ${n} addressed the zero-seconds edge-case test gap that had been open since round 1.\n\n`
+    finalRound.addressed > 0 && finalRound.resolvedFinding
+      ? `Round ${n} addressed: ${finalRound.resolvedFinding}.\n\n`
       : '';
+  // The appendix body below is byte-identical, for n=5 with no addressed
+  // note, to the pre-parameterization text scaffoldSddMidloopParked/
+  // Structural shipped with — do not reflow it further.
   return `# Task 2 Report
 
 ${modelLine}Implemented formatDuration per brief. Tests: test/duration.test.js, 2/2
@@ -902,8 +908,8 @@ passing via \`npm test\`, output pristine.
 
 ## Fix round appendix
 
-${addressedNote}Rounds 1-${n} attempted the open review finding below; each re-review
-through round ${n} returned NOT ADDRESSED:
+${addressedNote}Rounds 1-${n} attempted the open review finding below; each re-review returned
+NOT ADDRESSED:
 
 - ${finalRound.finding}
 `;
@@ -1161,6 +1167,7 @@ export function scaffoldSddMidloopRound3(ctx: HelperContext): void {
         addressed: 1,
         open: 1,
         finding: ROUND3_STUCK_FINDING,
+        resolvedFinding: ROUND3_RESOLVED_FINDING,
         applyChange: (workdir: string): void =>
           writeFixtureFile(
             workdir,
