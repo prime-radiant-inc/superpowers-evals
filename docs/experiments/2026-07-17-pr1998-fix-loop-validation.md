@@ -278,6 +278,145 @@ checklist cells fully clean with no caveat.
 
 **Status:** COMPLETE.
 
+### Local iteration (non-measured) — Task 14 Step 1
+
+Per the plan's Global Constraint "Local slim-container runs are iteration
+only and never count," these three runs are **not** campaign observations —
+they exist only to shake out fixture/check bugs in the three new probe
+scenarios (`sdd-round4-escalates-model`, `sdd-re-review-scoped`,
+`sdd-final-review-single-wave`) before any appliance money is spent. Config:
+coding agent `claude` (Claude Code 2.1.202, `superpowers-evals:local` local
+container image — see Deviations below), credential `opus` (direct
+Anthropic API — the local container has no Bedrock bearer token seeded),
+treatment root = clean clone of PR head `1f97eda0fc73faac6cdc870bfeadfdaa3b431a00`
+at `/tmp/pri2650-superpowers`. One run per scenario.
+
+| Scenario | Verdict | Triage | Cost |
+|---|---|---|---|
+| `sdd-round4-escalates-model` | pass | clean pass | $2.19 |
+| `sdd-re-review-scoped` | fail | **legitimate defuse** (negative result) | $2.36 |
+| `sdd-final-review-single-wave` | pass | clean pass | $1.54 |
+
+**`sdd-round4-escalates-model` — pass, verified independently of the judge.**
+Raw session-log inspection (not just the judge's summary) confirms: the
+round-4 fix dispatch (`description: "Task 2 round 4 fix"`) carries an
+explicit `model: sonnet` field — one tier above the ledger's recorded stuck
+implementer (`claude-haiku-4-5`) — and its own re-review dispatch is
+correctly scoped (`"Re-review Task 2 fix round 4"`, not a fresh review). No
+round 5/6 dispatch occurred. Ledger and `npm test` both consistent. No
+fixture or check bug found.
+
+**`sdd-re-review-scoped` — fail, triaged as a legitimate defuse, not a bug.**
+The judge failed the run because round 2's fix dispatch did not carry both
+open findings — it explicitly told the implementer to ignore the
+"missing input guard in formatDuration" finding. Investigated against the
+raw transcript and SKILL.md at `1f97eda` before accepting this triage:
+
+- The agent used `AskUserQuestion` to flag that the finding conflicts with
+  the plan's Task 2 spec, which states the parameter contract verbatim:
+  `seconds`: "a non-negative integer count of seconds." Verified against the
+  actual seeded `docs/superpowers/plans/metrics-plan.md` in the run's
+  workdir — the agent's citation is accurate, not fabricated.
+- SKILL.md's fix-loop section (§4) states explicitly: "A finding labeled
+  plan-mandated — or any finding that conflicts with what the plan's text
+  requires — is the human's decision, like any plan contradiction: present
+  the finding and the plan text, ask which governs," and this is one of
+  "two routes [that] leave [the loop] immediately" **before** the
+  round-numbered loop starts.
+- The story script answers "Your call — follow your skill" to any
+  procedural question, which the agent correctly treated as a
+  skill-conformant delegation, not resolution of the plan-conflict question
+  itself — it picked the recommended, plan-consistent option and wrote a
+  ledger `ruling:` line explaining the decision.
+- The `tool-arg-match` deterministic check passed even though the finding
+  was dropped, because the finding's text appears in the round-2 prompt in
+  a negating clause ("A separate finding about a 'missing input guard' was
+  DROPPED — ignore it"). This is the exact, disclosed limitation in
+  `checks.sh`'s header comment ("necessary but not sufficient evidence for
+  'scoped'") — not a check regression; the judge is doing exactly the job
+  the deterministic floor was designed to hand off.
+
+This is the same "skill's rich judgment machinery defeats a seeded
+assumption" pattern the `sdd-fix-loop-resumes-implementer` scenario
+family hit repeatedly (see `docs/experiments/2026-07-sdd-fix-loop-redesign.md`).
+The scenario's story.md AC2 implicitly assumed both seeded findings would
+enter round 2 together; it did not anticipate SKILL.md's own
+plan-mandated-conflict carve-out, which a correctly-reasoning agent is
+supposed to take. **No AC reshaping performed** — flagged to the controller
+per the 5a–5d discipline instead of acted on. No re-run (not a bug; budget
+would not have sanctioned one anyway).
+
+**`sdd-final-review-single-wave` — pass, verified independently of the
+judge.** The seeded fixture's final review is expected to surface two
+genuinely review-findable, undiscovered warts alongside the one
+already-parked finding (per `task-13-report.md`'s fixture design). Raw
+ledger inspection confirms the single `Agent` dispatch (`"Final
+whole-branch code review"`, the only Agent call in the whole session, as
+expected — all three tasks were pre-seeded complete) caught the seeded
+`summary.js` dead-branch duplicate-logic wart and rated it Minor
+(non-blocking, matching its actual quality-only/no-behavioral-impact
+character), confirmed the already-parked `formatDuration` finding
+non-blocking, and correctly took the zero-fix-wave path. This exactly
+matches SKILL.md's own worked example (`"Final reviewer: All requirements
+met. Deferred minors triaged: none block merge." → "Done!"` — no fix wave,
+no re-review dispatched when nothing returned needs fixing), which the
+judge cited directly. Story.md's AC2/AC3 wording ("fixed in ONE fix
+dispatch," "not skipped outright") reads naturally as conditioned on the
+final review returning something that needs fixing; this run's seed
+happened to return only Minors, so the zero-fix-wave path is the
+skill-correct outcome, not evidence the AC is untestable. No fixture or
+check bug found.
+
+**Deviations from the plan's local-iteration description (documented, not
+silently substituted):**
+
+- **Image**: the plan text names `container/Dockerfile.claude-slim`, but
+  `scripts/evals-container` has no mechanism to select it — its `build`
+  command is hardcoded to `container/Dockerfile` (the full 15-agent image)
+  under a fixed tag `superpowers-evals:local`. That image already existed
+  on this host, freshly built 3 days prior (`claude-code@2.1.202`, one
+  patch behind the worktree's current pin of `2.1.209` from
+  `6a0aba8`, dated one day after the image build). Used as-is rather than
+  rebuilt — code executes via the live bind mount of this worktree
+  (`repoRoot()` is filesystem-path-derived, not baked into the image), so
+  only the OS/toolchain layer is affected, and a 1-patch claude-code
+  version delta is immaterial to fixture/check-bug shakeout. Two other
+  images present on the host, tagged `quorum/claude:latest` and
+  `quorum-base:latest`, turned out to be ~5-week-old relics of an
+  unrelated, superseded Python-based quorum generation (`uv`/`pyproject.toml`
+  layout) — not usable by this repo's wrapper at all; not used.
+- **Worktree `.git` pointer**: this checkout is a git worktree; its `.git`
+  file points at `<main-checkout>/.git/worktrees/pri-2650-pr1998-campaign`,
+  a path the container does not mount (only the worktree itself and the
+  clean superpowers clone are mounted). `git status`/`git rev-parse` fail
+  inside the container for `/workspace/evals`. Traced the only consumer
+  (`src/runner/provenance.ts`'s `collectProvenance`) — it is an explicitly
+  best-effort, fallible-by-design probe ("a probe failure yields null for
+  that field and MUST NOT fail the run"); the only effect is a null
+  `harness_rev` in each run's `verdict.json`. Confirmed benign; not fixed
+  (fixing it would mean mounting the main checkout's `.git` dir into the
+  container, out of scope for this task).
+- **Credential**: `credentials.yaml`'s `opus_bedrock` (the appliance
+  default for claude) needs `AWS_BEARER_TOKEN_BEDROCK`, which is not
+  provisioned locally. Used `--credential opus` (direct Anthropic API,
+  `ANTHROPIC_API_KEY`) instead, sourced from the main checkout's
+  `.env` (this worktree has none of its own — expected, `.env` is
+  gitignored per-checkout). Matches the precedent in
+  `docs/experiments/2026-07-sdd-fix-loop-redesign.md`'s own local-container
+  config.
+
+**Economics:** 3 runs, $6.09 total ($1.54–$2.36 each, all under the $3–4
+estimate).
+
+**Tally:** 0 fixture/check bugs found across all 3 new scenarios; 2 clean
+passes, 1 legitimate-defuse fail (documented negative result, not a bug).
+No commits to `scenarios/` or `src/setup-helpers/` from this task — nothing
+needed fixing.
+
+**Status:** COMPLETE. Interpretability bar met for all 3 probes; Task 14
+Step 2 (PR) and Step 3 (box sync) remain deferred to the controller per the
+task dispatch.
+
 ### Block 1 — Replication core
 
 | Arm | Agent | Scenarios | n each | Verdict |
