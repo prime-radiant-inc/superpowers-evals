@@ -11,6 +11,7 @@ import {
   STALE_LEDGER_BLOB,
   scaffoldSddBrokenPlan,
   scaffoldSddMidloopParked,
+  scaffoldSddMidloopRound1,
   scaffoldSddMidloopRound3,
   scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
@@ -282,6 +283,31 @@ describe('sdd fixtures', () => {
         duration.split('String(s).padStart(2, "0")').length - 1,
       ).toBeGreaterThanOrEqual(3);
       expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddMidloopRound1 seeds a round-1/5 ledger with two open findings and a cheap-tier implementer recorded', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddMidloopRound1({ workdir: dir } as never);
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).toContain('fix round 1/5');
+      expect(ledger).not.toContain('fix round 2');
+      expect(ledger).toContain('2 open');
+      expect(ledger).toMatch(/implementer model: .*haiku/i);
+      expect(ledger).toContain('missing input guard in formatDuration');
+      expect(ledger).toContain('repeated formatting expression');
+      const report = readFileSync(
+        join(dir, '.superpowers/sdd/task-2-report.md'),
+        'utf8',
+      );
+      expect(report).toContain('missing input guard in formatDuration');
+      expect(report).toContain('repeated formatting expression');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1118,6 +1118,58 @@ export function scaffoldSddMidloopParked(ctx: HelperContext): void {
   });
 }
 
+const ROUND1_INPUT_GUARD_FINDING = 'missing input guard in formatDuration';
+const ROUND1_REPEATED_EXPRESSION_FINDING = 'repeated formatting expression';
+const ROUND1_RESOLVED_FINDING =
+  'missing boundary test for exactly one hour (3600 seconds) in test/duration.test.js';
+
+const MIDLOOP_DURATION_TEST_WITH_HOUR_BOUNDARY_CASE = `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { formatDuration } from "../src/duration.js";
+
+test("formatDuration formats hours", () => {
+  assert.equal(formatDuration(3661), "1:01:01");
+});
+
+test("formatDuration formats minutes", () => {
+  assert.equal(formatDuration(65), "1:05");
+});
+
+test("formatDuration formats an exact one-hour boundary", () => {
+  assert.equal(formatDuration(3600), "1:00:00");
+});
+`;
+
+// Fix-loop resume drill (round 1 → round 2): Task 2's original review found
+// three findings; round 1 (the original cheap-tier implementer,
+// claude-haiku-4-5) genuinely resolves one (adds the missing hour-boundary
+// test) while the other two — an input-validation gap and the triplicated
+// formatting expression — stay open. Stops at round 1/5, inside SKILL.md's
+// "Rounds 1-3 — resume the original implementer" range, so a resuming
+// controller must dispatch round 2 on the SAME implementer (no escalation;
+// R<4) and scope the re-review to exactly the two still-open findings.
+export function scaffoldSddMidloopRound1(ctx: HelperContext): void {
+  scaffoldSddMidloop(ctx, {
+    task3Arg: 'durationSeconds',
+    openFinding: ROUND1_REPEATED_EXPRESSION_FINDING,
+    implementerModel: 'claude-haiku-4-5',
+    rounds: [
+      {
+        addressed: 1,
+        open: 2,
+        finding: `${ROUND1_INPUT_GUARD_FINDING}; ${ROUND1_REPEATED_EXPRESSION_FINDING}`,
+        resolvedFinding: ROUND1_RESOLVED_FINDING,
+        applyChange: (workdir: string): void =>
+          writeFixtureFile(
+            workdir,
+            'test/duration.test.js',
+            MIDLOOP_DURATION_TEST_WITH_HOUR_BOUNDARY_CASE,
+          ),
+      },
+    ],
+  });
+}
+
 const MIDLOOP_DURATION_TEST_WITH_ZERO_CASE = `import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatDuration } from "../src/duration.js";
