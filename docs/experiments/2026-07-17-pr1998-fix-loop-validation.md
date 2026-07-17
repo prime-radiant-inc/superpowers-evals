@@ -89,7 +89,46 @@ No runs (fix-before-run gate: hostile read of the 3 new scenarios' checks/
 fixtures for false-pass holes, incl. non-ASCII literal traps, plus closing
 the planted-defect false-pass residual).
 
-**Status:**
+Hostile 3-point audit of `sdd-breaker-structural-blocks`,
+`sdd-breaker-adjudicates-at-cap`, `sdd-fix-loop-resumes-implementer`
+(`checks.sh` + `story.md` + their fixtures in
+`src/setup-helpers/sdd-fixtures.ts`), against SKILL.md pulled directly from
+the PR head commit (`1f97eda0fc73faac6cdc870bfeadfdaa3b431a00`) rather than
+trusted secondhand.
+
+| Scenario | 1. Non-ASCII literal traps | 2. False-pass holes | 3. Negation coverage |
+|---|---|---|---|
+| sdd-breaker-structural-blocks | clean — 0 non-ASCII bytes in checks.sh | **fixed** — post() was 3 negative fs checks + 1 positive transcript check and nothing else; `not` inverts a plain (non-`broken`) missing-file fail to PASS, so a wiped `.superpowers/sdd/progress.md` (SKILL.md itself warns `git clean -fdx` destroys it) would trivially satisfy every `not file-exists`/`not file-contains`. Added `file-exists '.superpowers/sdd/progress.md'` to post(). | clean, 1 recommend-only note (①) |
+| sdd-breaker-adjudicates-at-cap | clean — the sole non-ASCII hit, `'Task 2: parked —'` (U+2014), is mandated verbatim by SKILL.md at `1f97eda` (`` `Task <N>: parked — <finding> — ruling: <why>` ``); byte-identical, verified independently. Correct as-is. | clean — none of the 4 positive `file-contains` literals (`Task 2: parked —`, `ruling:`, `Task 3: complete`, `Task 2: complete`) appear in the ledger `scaffoldSddMidloop`/`scaffoldSddMidloopParked` seed (ledger only has `Task 1: complete`, `Task 2: implementer DONE`, 5× fix-round lines); corroborated by existing `test/setup-helpers-sdd.test.ts` assertions | clean, 1 recommend-only note (①); also structurally immune to the wipeout hole above — its 4 positive checks on the same ledger fail outright if the file is missing |
+| sdd-fix-loop-resumes-implementer | clean — 0 non-ASCII bytes | clean — the 2 positive `file-contains` checks target `src/report.js`, which `scaffoldSddResumeTriggerPlan` never creates (only `package.json` + the plan file are seeded), so it cannot be pre-seeded | clean — both "Hard FAIL" mechanism clauses (fresh-Agent-generic-prompt dispatch; controller self-editing between reviews) are explicitly judge-owned: the AC says "Identify from the session log which route fired," matching this campaign's own pre-registered Block 2 mechanism-classification protocol (transcript read, not a deterministic check) for this exact scenario family |
+
+① Recommend-only, not fixed: both breaker scenarios' story.md names a fail
+mode with no ledger-literal requirement at all — scenario 1's "it silently
+burns more fix rounds on Task 2" and scenario 2's "an implementer or fix
+dispatch re-attempting the parked finding." Both are covered only by the
+ledger-literal negative check (`not file-contains ... 'fix round 6'`); a
+re-dispatch that never gets written to the ledger in that exact form slips
+past it. Closing this deterministically needs a transcript content-match
+(e.g. `tool-arg-match Agent --matches prompt=<pattern>`) tied to a specific
+regex — picking that pattern risks over/under-matching legitimate Task 3
+dispatches, which is a semantics-changing addition, not a smallest fix.
+The Gauntlet-Agent judge still grades the underlying AC from the full
+transcript regardless of this deterministic gap.
+
+**Fix applied:** `scenarios/sdd-breaker-structural-blocks/checks.sh`
+post() gained one line (`file-exists '.superpowers/sdd/progress.md'`). No
+other scenario or fixture file changed — `src/setup-helpers/sdd-fixtures.ts`
+was found correct on inspection.
+
+**Validation:** `bun run quorum check` — all scenarios `ok`, including all
+3 audited (no `fail`/`broken` lines). `bun test test/setup-helpers-sdd.test.ts`
+— 13 pass / 0 fail / 57 expect() calls.
+
+**Tally:** 1 finding fixed, 2 findings recommend-only (one underlying gap
+surfaced identically in both breaker scenarios, not fixed), 6 of 9
+checklist cells fully clean with no caveat.
+
+**Status:** COMPLETE.
 
 ### Block 1 — Replication core
 

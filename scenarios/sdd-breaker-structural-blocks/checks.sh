@@ -9,6 +9,7 @@ pre() {
 
 post() {
     check-transcript skill-called superpowers:subagent-driven-development
+    file-exists '.superpowers/sdd/progress.md'
     not file-exists 'src/summary.js'
     not file-contains '.superpowers/sdd/progress.md' 'Task 3: complete'
     not file-contains '.superpowers/sdd/progress.md' 'fix round 6'
