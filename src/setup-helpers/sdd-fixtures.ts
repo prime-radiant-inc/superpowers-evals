@@ -4,6 +4,8 @@
 // sequences and literal ${...} interpolations that must reach the file
 // unchanged. (Per-scenario file fixtures now live under
 // scenarios/<name>/fixtures/ and are read by init_repo_from_fixtures.)
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { HelperContext } from './context.ts';
 import { ensureWorkdir, writeFixtureFile } from './fs.ts';
 import { runGit } from './git.ts';
@@ -1108,13 +1110,17 @@ export function scaffoldSddResumeTriggerPlan(ctx: HelperContext): void {
   runGit(['commit', '-m', 'initial: report formatter plan'], ctx.workdir);
 }
 
+// Shared with scaffoldSddTasksDoneFinalPending, whose Task 2 has already
+// been through this exact breaker-and-park cycle.
+export const MIDLOOP_PADSTART_FINDING =
+  'Important: formatDuration repeats the String(...).padStart(2, "0") formatting expression in three branches — extract it';
+
 // Non-load-bearing open finding: quality-only, nothing downstream consumes
 // formatDuration's internals. The breaker should park it and continue.
 export function scaffoldSddMidloopParked(ctx: HelperContext): void {
   scaffoldSddMidloop(ctx, {
     task3Arg: 'durationSeconds',
-    openFinding:
-      'Important: formatDuration repeats the String(...).padStart(2, "0") formatting expression in three branches — extract it',
+    openFinding: MIDLOOP_PADSTART_FINDING,
   });
 }
 
@@ -1239,4 +1245,103 @@ export function scaffoldSddMidloopStructural(ctx: HelperContext): void {
     openFinding:
       'Important: plan contradiction — Task 3 passes milliseconds (durationMs) into formatDuration, whose brief defines seconds; unresolvable within Task 2',
   });
+}
+
+const TASKS_DONE_PARKED_RULING =
+  'quality-only — nothing downstream depends on formatDuration internals; real but not load-bearing';
+
+// Undiscovered quality wart for the final whole-branch review to find:
+// Task 3's own task review missed that the zero-events branch is byte-for-
+// byte identical to the fallthrough — dead branching, not a correctness
+// bug (both paths return the same string), so it never showed up as a test
+// failure.
+const TASKS_DONE_SUMMARY_JS = `import { formatCount } from './count.js';
+import { formatDuration } from './duration.js';
+
+export function summarize(metrics) {
+  if (metrics.events === 0) {
+    return formatCount(metrics.events) + " events in " + formatDuration(metrics.durationSeconds);
+  }
+  return formatCount(metrics.events) + " events in " + formatDuration(metrics.durationSeconds);
+}
+`;
+
+const TASKS_DONE_SUMMARY_TEST = `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { summarize } from "../src/summary.js";
+
+test("summarize combines formatted count and duration", () => {
+  assert.equal(
+    summarize({ events: 12345, durationSeconds: 65 }),
+    "12,345 events in 1:05",
+  );
+});
+`;
+
+// Returns the short (7-char) hash of the most recent commit whose message
+// contains `subject` verbatim — used to recover a fixture's own earlier
+// commit boundaries without threading extra return values through
+// scaffoldSddMidloop.
+function commitFor(workdir: string, subject: string): string {
+  return runGit(
+    [
+      'log',
+      '--format=%h',
+      '--abbrev=7',
+      '--fixed-strings',
+      `--grep=${subject}`,
+      '-1',
+    ],
+    workdir,
+  ).trim();
+}
+
+// Final-review probe base: all three tasks already complete. Task 2's fix
+// loop tripped the breaker exactly as scaffoldSddMidloopParked's does, but
+// this fixture picks up one step further along — the open finding is
+// already adjudicated (parked with a ruling) and Task 2 is marked
+// complete, matching the outcome sdd-breaker-adjudicates-at-cap's live run
+// produces. Two further warts sit undiscovered in the completed code (the
+// formatDuration input-guard gap already present in MIDLOOP_DURATION_JS,
+// unchanged, plus the dead branch in summarize above) for the final
+// whole-branch review to find fresh — the parked finding alone would give
+// that review nothing new to do. No final-review ledger marker of any
+// kind: SKILL.md's Final Review section defines no ledger vocabulary for
+// "final review ran/complete" (its own adjudication vocabulary reuses the
+// per-task `Task <N>: parked —`/`Task <N>: BLOCKED —` lines), so none is
+// seeded here — see task-13-report.md.
+export function scaffoldSddTasksDoneFinalPending(ctx: HelperContext): void {
+  scaffoldSddMidloop(ctx, {
+    task3Arg: 'durationSeconds',
+    openFinding: MIDLOOP_PADSTART_FINDING,
+  });
+
+  const task1Head = commitFor(ctx.workdir, 'Task 1: formatCount with tests');
+  const task2Base = task1Head;
+  const task2FinalHead = shortHead(ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'src/summary.js', TASKS_DONE_SUMMARY_JS);
+  writeFixtureFile(
+    ctx.workdir,
+    'test/summary.test.js',
+    TASKS_DONE_SUMMARY_TEST,
+  );
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(['commit', '-m', 'Task 3: summarize with tests'], ctx.workdir);
+  const task3Head = shortHead(ctx.workdir);
+
+  const existingLedger = readFileSync(
+    join(ctx.workdir, '.superpowers/sdd/progress.md'),
+    'utf8',
+  );
+  const newLines = [
+    `Task 2: parked — ${MIDLOOP_PADSTART_FINDING} — ruling: ${TASKS_DONE_PARKED_RULING}`,
+    `Task 2: complete (commits ${task2Base}..${task2FinalHead}, 1 parked)`,
+    `Task 3: complete (commits ${task2FinalHead}..${task3Head}, review clean)`,
+  ];
+  writeFixtureFile(
+    ctx.workdir,
+    '.superpowers/sdd/progress.md',
+    `${existingLedger}${newLines.join('\n')}\n`,
+  );
 }

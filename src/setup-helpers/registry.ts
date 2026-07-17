@@ -32,6 +32,7 @@ import {
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
+  scaffoldSddTasksDoneFinalPending,
   scaffoldSddYagniPlan,
 } from './sdd-fixtures.ts';
 import {
@@ -126,6 +127,9 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   scaffold_sdd_spec_constraint_plan: { fn: scaffoldSddSpecConstraintPlan },
   scaffold_sdd_stale_foreign_workspace: {
     fn: scaffoldSddStaleForeignWorkspace,
+  },
+  scaffold_sdd_tasks_done_final_pending: {
+    fn: scaffoldSddTasksDoneFinalPending,
   },
   scaffold_sdd_yagni_plan: { fn: scaffoldSddYagniPlan },
   setup_pressure_worktree_conditions: {

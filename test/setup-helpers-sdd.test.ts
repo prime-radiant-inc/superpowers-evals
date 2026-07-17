@@ -19,6 +19,7 @@ import {
   scaffoldSddSamePlanResume,
   scaffoldSddSpecConstraintPlan,
   scaffoldSddStaleForeignWorkspace,
+  scaffoldSddTasksDoneFinalPending,
   scaffoldSddYagniPlan,
 } from '../src/setup-helpers/sdd-fixtures.ts';
 
@@ -348,6 +349,51 @@ describe('sdd fixtures', () => {
       expect(plan).toContain('formatDuration(seconds)');
       expect(plan).toContain('durationMs');
       expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddTasksDoneFinalPending seeds all three tasks complete, one parked ruling, and no final-review marker', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddTasksDoneFinalPending({ workdir: dir } as never);
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).toContain('Task 1: complete (commits ');
+      expect(ledger).toContain('fix round 5/5');
+      expect(ledger).toContain('Task 2: parked —');
+      expect(ledger).toContain('ruling:');
+      expect(ledger).toMatch(
+        /Task 2: complete \(commits [0-9a-f]{7}\.\.[0-9a-f]{7}, 1 parked\)/,
+      );
+      expect(ledger).toContain('Task 3: complete (commits ');
+      // SKILL.md defines no ledger vocabulary for "final review
+      // ran/complete" (see task-13-report.md) — the fixture must not
+      // pre-seed one.
+      expect(ledger).not.toMatch(/final.?review/i);
+
+      // All three tasks' code present.
+      expect(existsSync(join(dir, 'src/count.js'))).toBe(true);
+      expect(existsSync(join(dir, 'src/duration.js'))).toBe(true);
+      expect(existsSync(join(dir, 'src/summary.js'))).toBe(true);
+
+      // The parked finding is real: triplicated pad-and-join expression.
+      const duration = readFileSync(join(dir, 'src/duration.js'), 'utf8');
+      expect(
+        duration.split('String(s).padStart(2, "0")').length - 1,
+      ).toBeGreaterThanOrEqual(3);
+
+      // The undiscovered dead-branch wart is real too.
+      const summary = readFileSync(join(dir, 'src/summary.js'), 'utf8');
+      expect(summary.split('events in').length - 1).toBeGreaterThanOrEqual(2);
+
+      // Green at handoff — the ledger's "review clean"/"1 parked" claims
+      // must be truthful, not just prose.
+      const npm = spawnSync('npm', ['test'], { cwd: dir, encoding: 'utf8' });
+      expect(npm.status).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
