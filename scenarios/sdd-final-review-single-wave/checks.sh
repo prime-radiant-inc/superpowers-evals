@@ -14,6 +14,19 @@
 # final review dispatch (as opposed to, say, the fix-wave dispatch quoting
 # it back). The Gauntlet-Agent judge grades the wave-count and
 # scoping/adjudication ACs from the full transcript.
+#
+# The matched literal is deliberately the single token "padStart", not a
+# multi-word phrase: sdd-re-review-scoped hit exactly this failure mode
+# (commit f7c3820) when its literal spanned "...60 in formatDuration" and a
+# live dispatch wrapped just the function name in a markdown code span
+# (`` `formatDuration` ``), breaking the plain-text substring match. A
+# single contiguous identifier survives being wrapped in backticks (the
+# letters stay adjacent either way) and tolerates paraphrase of the
+# surrounding prose better than a fixed phrase would. "padStart" appears
+# once in the seeded parked-finding text (MIDLOOP_PADSTART_FINDING in
+# src/setup-helpers/sdd-fixtures.ts) inside the code fragment
+# `String(...).padStart(2, "0")`, not adjacent to any other code-span-prone
+# token, so it stays specific to this finding.
 
 pre() {
     git-repo
@@ -33,6 +46,6 @@ pre() {
 post() {
     check-transcript skill-called superpowers:subagent-driven-development
     check-transcript tool-called Agent
-    check-transcript tool-arg-match Agent --matches 'prompt=formatDuration repeats the' --ignore-case
+    check-transcript tool-arg-match Agent --matches 'prompt=padStart' --ignore-case
     command-succeeds 'npm test'
 }

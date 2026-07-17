@@ -1,3 +1,4 @@
+# coding-agents: claude
 # The scoped-vs-full re-review distinction (story AC 3) is otherwise
 # judge-owned: no trace verb can assert that a review prompt is ABSENT a
 # findings list, or that a dispatch matches re-review-prompt.md's shape.

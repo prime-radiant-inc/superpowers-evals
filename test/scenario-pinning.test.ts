@@ -42,6 +42,10 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'writing-good-tests-no-coverage-over-correction',
   'writing-good-tests-rejects-test-only-teardown',
   'writing-good-tests-mock-at-right-level',
+  // Block-7 probes: fixtures hardcode claude-haiku-4-5 stuck-implementer tier
+  // semantics; escalation ACs are incoherent on other harnesses.
+  'sdd-round4-escalates-model',
+  'sdd-re-review-scoped',
 ]);
 
 test('Serf builder scenario pins its exact content-addressed source pair', () => {

@@ -200,10 +200,12 @@ this session's live tool list, so treat those two names as not confirmed
 exposed under this config; `send_input` is). It called `send_input` with
 `{"target": "019f6f24-235e-7580-9f63-148a44dbd573", "message":
 "PROBE_FOLLOWUP"}` and got back `{"submission_id":
-"019f6f24-4017-7753-a6b7-e1fc6f6e74c0"}` — success, not an error. The raw
-event confirms the target's `agents_states` was `"running"` (i.e. genuinely
-live, not `pending_init` or `completed`) at the moment `send_input` was
-accepted.
+"019f6f24-4017-7753-a6b7-e1fc6f6e74c0"}` (per the model's self-report; the
+raw `--json` stream shows the call's non-error completion and the target's
+pending_init→running transition, which are the ground-truth anchors) —
+success, not an error. The raw event confirms the target's `agents_states`
+was `"running"` (i.e. genuinely live, not `pending_init` or `completed`) at
+the moment `send_input` was accepted.
 
 **Caveat (not a blocker, flagged for task 10):** `send_input` without
 `interrupt=true` *queues* the message rather than interrupting immediately
@@ -643,6 +645,33 @@ experiment-log convention.
   (`docs/superpowers/specs/2026-07-16-pr1998-eval-campaign-design.md`) is
   dated 2026-07-16; this log is created 2026-07-17 — the campaign started a
   day after spec sign-off. No content deviation, just a date-label offset.
+- **2026-07-17 — execution deviations, consolidated.** Three deviations
+  from the plan's stated per-task/per-image directives, each previously
+  recorded only in prose within a task subsection above; gathered here for
+  a single top-level pointer:
+  1. **Per-task pushes superseded by a single-PR worktree flow.** The
+     plan's per-task briefs each specified a `git push origin main` commit
+     step (e.g. Task 1/2/4/5's briefs, `docs/superpowers/plans/2026-07-17-pr1998-eval-campaign.md`
+     Steps 3/4/6). Execution ran instead inside one PR worktree
+     (`.claude/worktrees/pri-2650-pr1998-campaign`), landing all local work
+     as a single PR at Task 14 rather than pushing to `main` after every
+     task; the literal `git push origin main` steps were skipped
+     throughout (see `.superpowers/sdd/progress.md`'s deviation line and
+     `task-2-report.md`).
+  2. **Local-container image.** Local iteration used the wrapper's
+     hardcoded `superpowers-evals:local` full-image build
+     (`container/Dockerfile`), not the plan-named slim image
+     (`container/Dockerfile.claude-slim`) — `scripts/evals-container` has
+     no flag to select it. The other on-host images matching the plan's
+     "images present" note by name (`quorum/claude:latest`,
+     `quorum-base:latest`) were, on inspection, stale relics of an
+     unrelated, superseded Python-based quorum generation, not images this
+     repo's wrapper builds or expects at all (see the Task 14 Step 1
+     Deviations subsection above).
+  3. **Task 14 Steps 2-3 deferred.** Task 14's Step 2 (PR) and Step 3 (box
+     sync) were deferred until after this final-review fix wave rather
+     than run immediately after local iteration, per the task dispatch
+     (see Task 14 Step 1's Status line above).
 
 ## Economics
 

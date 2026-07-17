@@ -44,7 +44,11 @@ present in the main checkout.
   carrying both the magic-numbers finding and the repeated-expression
   finding, plus a pointer to the report file — on the same implementer
   that ran round 1 (rounds 1-3 stay on the original implementer per the
-  skill).
+  skill). The round-1 implementer subagent is not live after this
+  restart, so re-engaging it literally is impossible: the skill's
+  specified fallback — a fresh dispatch carrying the task brief, the
+  implementer's report file, and the findings — is a sanctioned
+  realization of "the same implementer that ran round 1" here.
 - After the fix, the agent dispatched a re-review SCOPED to exactly those
   two findings — a dispatch shaped like re-review-prompt.md's "Findings
   Under Verification" list, not a fresh task review. Identify from the
