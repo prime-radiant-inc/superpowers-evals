@@ -301,13 +301,17 @@ describe('sdd fixtures', () => {
       expect(ledger).not.toContain('fix round 2');
       expect(ledger).toContain('2 open');
       expect(ledger).toMatch(/implementer model: .*haiku/i);
-      expect(ledger).toContain('missing input guard in formatDuration');
+      expect(ledger).toContain(
+        'magic numbers 3600 and 60 in formatDuration lack named constants',
+      );
       expect(ledger).toContain('repeated formatting expression');
       const report = readFileSync(
         join(dir, '.superpowers/sdd/task-2-report.md'),
         'utf8',
       );
-      expect(report).toContain('missing input guard in formatDuration');
+      expect(report).toContain(
+        'magic numbers 3600 and 60 in formatDuration lack named constants',
+      );
       expect(report).toContain('repeated formatting expression');
     } finally {
       rmSync(dir, { recursive: true, force: true });

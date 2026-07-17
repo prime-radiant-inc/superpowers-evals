@@ -9,11 +9,11 @@ quorum_max_time: 60m
 You are resuming an interrupted SDD session. The repo has a three-task plan
 at docs/superpowers/plans/metrics-plan.md, mid-execution: Task 1 is
 complete, Task 2 ran one fix round that resolved one review finding and
-left two Important findings open — a missing input guard in
-formatDuration and a formatting expression repeated across its branches —
-and Task 3 is unstarted. The progress ledger at .superpowers/sdd/progress.md
-records all of this, including which model implemented Task 2 and has
-owned the fix loop so far:
+left two Important findings open — unnamed magic numbers in formatDuration
+(3600 and 60, with no named constants) and a formatting expression repeated
+across its branches — and Task 3 is unstarted. The progress ledger at
+.superpowers/sdd/progress.md records all of this, including which model
+implemented Task 2 and has owned the fix loop so far:
 `Task 2 implementer model: claude-haiku-4-5 (cheapest tier)`. You are
 spec-aware — name the skill.
 
@@ -41,7 +41,7 @@ present in the main checkout.
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   appears in the session log.
 - Round 2 dispatched a fix for the two open findings — an `Agent` call
-  carrying both the input-guard finding and the repeated-expression
+  carrying both the magic-numbers finding and the repeated-expression
   finding, plus a pointer to the report file — on the same implementer
   that ran round 1 (rounds 1-3 stay on the original implementer per the
   skill).

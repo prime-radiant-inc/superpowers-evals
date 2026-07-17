@@ -1124,7 +1124,18 @@ export function scaffoldSddMidloopParked(ctx: HelperContext): void {
   });
 }
 
-const ROUND1_INPUT_GUARD_FINDING = 'missing input guard in formatDuration';
+// Plan-neutral by construction: the seeded plan's Task 2 section is
+// verbatim-silent on formatDuration's internals — it states only the call
+// contract (`formatDuration(seconds)`), the non-negative-integer parameter,
+// the H:MM:SS/M:SS output shape, and two test cases. It says nothing about
+// named constants, so this finding cannot trigger SKILL.md's
+// plan-mandated-conflict carve-out the way an input-validation finding did
+// (that finding contradicted the plan's own "non-negative integer" contract
+// and got legitimately dropped pre-loop in local iteration — see
+// task-14-report.md). The magic numbers are real: 3600 and 60 appear
+// unnamed in MIDLOOP_DURATION_JS below.
+const ROUND1_MAGIC_NUMBERS_FINDING =
+  'magic numbers 3600 and 60 in formatDuration lack named constants';
 const ROUND1_REPEATED_EXPRESSION_FINDING = 'repeated formatting expression';
 const ROUND1_RESOLVED_FINDING =
   'missing boundary test for exactly one hour (3600 seconds) in test/duration.test.js';
@@ -1149,11 +1160,12 @@ test("formatDuration formats an exact one-hour boundary", () => {
 // Fix-loop resume drill (round 1 → round 2): Task 2's original review found
 // three findings; round 1 (the original cheap-tier implementer,
 // claude-haiku-4-5) genuinely resolves one (adds the missing hour-boundary
-// test) while the other two — an input-validation gap and the triplicated
-// formatting expression — stay open. Stops at round 1/5, inside SKILL.md's
-// "Rounds 1-3 — resume the original implementer" range, so a resuming
-// controller must dispatch round 2 on the SAME implementer (no escalation;
-// R<4) and scope the re-review to exactly the two still-open findings.
+// test) while the other two — unnamed magic numbers and the triplicated
+// formatting expression, both pure code-quality and plan-neutral — stay
+// open. Stops at round 1/5, inside SKILL.md's "Rounds 1-3 — resume the
+// original implementer" range, so a resuming controller must dispatch
+// round 2 on the SAME implementer (no escalation; R<4) and scope the
+// re-review to exactly the two still-open findings.
 export function scaffoldSddMidloopRound1(ctx: HelperContext): void {
   scaffoldSddMidloop(ctx, {
     task3Arg: 'durationSeconds',
@@ -1163,7 +1175,7 @@ export function scaffoldSddMidloopRound1(ctx: HelperContext): void {
       {
         addressed: 1,
         open: 2,
-        finding: `${ROUND1_INPUT_GUARD_FINDING}; ${ROUND1_REPEATED_EXPRESSION_FINDING}`,
+        finding: `${ROUND1_MAGIC_NUMBERS_FINDING}; ${ROUND1_REPEATED_EXPRESSION_FINDING}`,
         resolvedFinding: ROUND1_RESOLVED_FINDING,
         applyChange: (workdir: string): void =>
           writeFixtureFile(
