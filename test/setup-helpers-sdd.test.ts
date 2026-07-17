@@ -11,6 +11,7 @@ import {
   STALE_LEDGER_BLOB,
   scaffoldSddBrokenPlan,
   scaffoldSddMidloopParked,
+  scaffoldSddMidloopRound3,
   scaffoldSddMidloopStructural,
   scaffoldSddQualityDefectPlan,
   scaffoldSddResumeTriggerPlan,
@@ -281,6 +282,23 @@ describe('sdd fixtures', () => {
         duration.split('String(s).padStart(2, "0")').length - 1,
       ).toBeGreaterThanOrEqual(3);
       expect(existsSync(join(dir, 'src/summary.js'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('scaffoldSddMidloopRound3 seeds a round-3/5 ledger with a cheap-tier implementer recorded', () => {
+    const dir = tmp();
+    try {
+      scaffoldSddMidloopRound3({ workdir: dir } as never);
+      const ledger = readFileSync(
+        join(dir, '.superpowers/sdd/progress.md'),
+        'utf8',
+      );
+      expect(ledger).toContain('fix round 3/5');
+      expect(ledger).not.toContain('fix round 4');
+      expect(ledger).toMatch(/implementer model: .*haiku/i);
+      expect(ledger).toContain('1 open');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

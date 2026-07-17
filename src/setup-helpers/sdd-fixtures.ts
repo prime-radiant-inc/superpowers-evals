@@ -847,14 +847,72 @@ test("formatDuration formats minutes", () => {
 });
 `;
 
+// One fix-round's ledger accounting. `applyChange` defaults to the
+// whitespace-grade churn that keeps rounds honest commits without resolving
+// anything; pass it to make a round a real fix (e.g. the round-3 escalation
+// drill's one genuinely addressed finding).
+interface FixRound {
+  readonly addressed: number;
+  readonly open: number;
+  readonly finding: string;
+  readonly applyChange?: (workdir: string) => void;
+}
+
 interface MidloopOptions {
   task3Arg: 'durationSeconds' | 'durationMs';
   openFinding: string;
+  // Overrides the default five all-unresolved rounds (used by the round-3
+  // escalation drill, which stops the loop early with one round addressed).
+  rounds?: FixRound[];
+  // When set, records Task 2's stuck implementer's model tier in both the
+  // ledger and the task-2 report — the escalation drill's fixed point for
+  // checking that a resuming controller actually escalates past it.
+  implementerModel?: string;
 }
 
-// Builds a repo mid-SDD-execution: Task 1 complete, Task 2 at fix round 5/5
-// with one open finding, Task 3 unstarted. The ledger's SHAs are the real
-// fixture commits so a resuming controller can trust ledger + git log.
+function defaultRoundChurn(round: number): (workdir: string) => void {
+  return (workdir: string): void =>
+    writeFixtureFile(
+      workdir,
+      'src/duration.js',
+      `${MIDLOOP_DURATION_JS}// fix round ${round}: reviewed, expression retained\n`,
+    );
+}
+
+function buildTask2Report(
+  rounds: FixRound[],
+  implementerModel: string | undefined,
+): string {
+  const n = rounds.length;
+  const finalRound = rounds[n - 1];
+  if (finalRound === undefined) {
+    throw new Error('scaffoldSddMidloop requires at least one fix round');
+  }
+  const modelLine = implementerModel
+    ? `Implementer model: ${implementerModel} (cheapest tier).\n\n`
+    : '';
+  const addressedNote =
+    finalRound.addressed > 0
+      ? `Round ${n} addressed the zero-seconds edge-case test gap that had been open since round 1.\n\n`
+      : '';
+  return `# Task 2 Report
+
+${modelLine}Implemented formatDuration per brief. Tests: test/duration.test.js, 2/2
+passing via \`npm test\`, output pristine.
+
+## Fix round appendix
+
+${addressedNote}Rounds 1-${n} attempted the open review finding below; each re-review
+through round ${n} returned NOT ADDRESSED:
+
+- ${finalRound.finding}
+`;
+}
+
+// Builds a repo mid-SDD-execution: Task 1 complete, Task 2 at a fix round
+// (5/5 by default; the round-3 escalation drill stops earlier) with one open
+// finding, Task 3 unstarted. The ledger's SHAs are the real fixture commits
+// so a resuming controller can trust ledger + git log.
 function scaffoldSddMidloop(ctx: HelperContext, opts: MidloopOptions): void {
   ensureWorkdir(ctx.workdir);
   runGit(['init', '-b', 'main'], ctx.workdir);
@@ -886,49 +944,52 @@ function scaffoldSddMidloop(ctx: HelperContext, opts: MidloopOptions): void {
   const task2Head = shortHead(ctx.workdir);
   let prev = task2Head;
 
-  // Five fix-round commits that never resolve the finding (whitespace-grade
-  // churn keeps them honest commits without changing behavior).
+  // Fix-round commits (five by default) that never resolve the finding
+  // (whitespace-grade churn keeps them honest commits without changing
+  // behavior), unless a round supplies its own `applyChange`.
+  const rounds: FixRound[] =
+    opts.rounds ??
+    Array.from({ length: 5 }, () => ({
+      addressed: 0,
+      open: 1,
+      finding: opts.openFinding,
+    }));
   const roundLines: string[] = [];
-  for (let round = 1; round <= 5; round++) {
-    writeFixtureFile(
-      ctx.workdir,
-      'src/duration.js',
-      `${MIDLOOP_DURATION_JS}// fix round ${round}: reviewed, expression retained\n`,
-    );
+  for (const [i, spec] of rounds.entries()) {
+    const round = i + 1;
+    const applyChange = spec.applyChange ?? defaultRoundChurn(round);
+    applyChange(ctx.workdir);
     runGit(['add', '-A'], ctx.workdir);
     runGit(['commit', '-m', `Task 2 fix round ${round}`], ctx.workdir);
     const head = shortHead(ctx.workdir);
     roundLines.push(
-      `Task 2: fix round ${round}/5 (0 addressed, 1 open — ${opts.openFinding}; commits ${prev}..${head})`,
+      `Task 2: fix round ${round}/5 (${spec.addressed} addressed, ${spec.open} open — ${spec.finding}; commits ${prev}..${head})`,
     );
     prev = head;
   }
 
-  const ledger = [
+  const ledgerLines = [
     '# SDD Progress Ledger',
     'Plan: docs/superpowers/plans/metrics-plan.md',
     `Task 1: complete (commits ${base}..${task1Head}, review clean)`,
     `Task 2: implementer DONE (commits ${task2Base}..${task2Head})`,
-    ...roundLines,
-    '',
-  ].join('\n');
-  writeFixtureFile(ctx.workdir, '.superpowers/sdd/progress.md', ledger);
+  ];
+  if (opts.implementerModel) {
+    ledgerLines.push(
+      `Task 2 implementer model: ${opts.implementerModel} (cheapest tier)`,
+    );
+  }
+  ledgerLines.push(...roundLines, '');
+  writeFixtureFile(
+    ctx.workdir,
+    '.superpowers/sdd/progress.md',
+    ledgerLines.join('\n'),
+  );
 
   writeFixtureFile(
     ctx.workdir,
     '.superpowers/sdd/task-2-report.md',
-    `# Task 2 Report
-
-Implemented formatDuration per brief. Tests: test/duration.test.js, 2/2
-passing via \`npm test\`, output pristine.
-
-## Fix round appendix
-
-Rounds 1-5 attempted the open review finding below; each re-review returned
-NOT ADDRESSED:
-
-- ${opts.openFinding}
-`,
+    buildTask2Report(rounds, opts.implementerModel),
   );
 }
 
@@ -1048,6 +1109,66 @@ export function scaffoldSddMidloopParked(ctx: HelperContext): void {
     task3Arg: 'durationSeconds',
     openFinding:
       'Important: formatDuration repeats the String(...).padStart(2, "0") formatting expression in three branches — extract it',
+  });
+}
+
+const MIDLOOP_DURATION_TEST_WITH_ZERO_CASE = `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { formatDuration } from "../src/duration.js";
+
+test("formatDuration formats hours", () => {
+  assert.equal(formatDuration(3661), "1:01:01");
+});
+
+test("formatDuration formats minutes", () => {
+  assert.equal(formatDuration(65), "1:05");
+});
+
+test("formatDuration formats zero seconds", () => {
+  assert.equal(formatDuration(0), "0:00");
+});
+`;
+
+const ROUND3_STUCK_FINDING = 'repeated formatting expression in formatDuration';
+const ROUND3_RESOLVED_FINDING =
+  'missing zero-seconds edge case test in test/duration.test.js';
+
+// Fix-loop escalation drill: Task 2 stalls for two unresolved rounds under a
+// cheap-tier implementer (claude-haiku-4-5), then round 3 genuinely resolves
+// one of its two open findings (adds the zero-seconds test) while the other
+// — the formatting-expression finding — stays open. Stops at round 3/5 so a
+// resuming controller must dispatch round 4 itself, on a fresh implementer
+// at least one tier above the recorded stuck one (SKILL.md Model Selection:
+// "Fix-loop escalation (rounds 4-5): use a model at least one tier above the
+// implementer that got stuck").
+export function scaffoldSddMidloopRound3(ctx: HelperContext): void {
+  scaffoldSddMidloop(ctx, {
+    task3Arg: 'durationSeconds',
+    openFinding: ROUND3_STUCK_FINDING,
+    implementerModel: 'claude-haiku-4-5',
+    rounds: [
+      {
+        addressed: 0,
+        open: 2,
+        finding: `${ROUND3_STUCK_FINDING}; ${ROUND3_RESOLVED_FINDING}`,
+      },
+      {
+        addressed: 0,
+        open: 2,
+        finding: `${ROUND3_STUCK_FINDING}; ${ROUND3_RESOLVED_FINDING}`,
+      },
+      {
+        addressed: 1,
+        open: 1,
+        finding: ROUND3_STUCK_FINDING,
+        applyChange: (workdir: string): void =>
+          writeFixtureFile(
+            workdir,
+            'test/duration.test.js',
+            MIDLOOP_DURATION_TEST_WITH_ZERO_CASE,
+          ),
+      },
+    ],
   });
 }
 
