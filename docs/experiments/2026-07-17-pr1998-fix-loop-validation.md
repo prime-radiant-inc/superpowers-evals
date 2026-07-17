@@ -417,6 +417,133 @@ needed fixing.
 Step 2 (PR) and Step 3 (box sync) remain deferred to the controller per the
 task dispatch.
 
+**Correction (see follow-up subsection below):** the "legitimate defuse"
+triage above for `sdd-re-review-scoped` was itself the symptom of a fixture
+bug, not a skill-behavior finding — the seeded "missing input guard in
+formatDuration" finding genuinely conflicted with the seeded plan's own
+verbatim contract, so SKILL.md's pre-loop plan-conflict carve-out was the
+*correct* thing for the agent to take; the seed, not the AC, was wrong.
+Controller ruling: fix the seed. Closed below.
+
+### Local iteration re-run — sdd-re-review-scoped fixture fix (follow-up)
+
+Controller ruling on the Task 14 Step 1 "legitimate defuse" triage above:
+the dropped finding, "missing input guard in formatDuration," textually
+conflicts with the seeded plan's own Task 2 contract ("Takes one parameter
+`seconds`: a non-negative integer count of seconds") — so SKILL.md's §4
+pre-loop carve-out ("A finding labeled plan-mandated — or any finding that
+conflicts with what the plan's text requires — is the human's decision...
+present the finding and the plan text, ask which governs") legitimately
+fires on it every time. That's a fixture-design flaw (a seeded finding that
+defuses the very mechanism the scenario exists to probe), not a discovery
+about the skill. Fix the seed, not the ACs.
+
+**Fix (commit `c5e76ce`):** replaced finding #1 with a plan-neutral,
+pure-code-quality finding: `magic numbers 3600 and 60 in formatDuration
+lack named constants`. Verified against all four constraints:
+
+1. **Real in the seeded code** — `src/duration.js`'s `MIDLOOP_DURATION_JS`
+   body uses the literals `3600` and `60` directly with no named constant.
+2. **Plan-neutral** — the seeded plan's Task 2 section, quoted in full:
+   > **Requirements:**
+   > - Function named `formatDuration`
+   > - Call contract: `formatDuration(seconds)`
+   > - Takes one parameter `seconds`: a non-negative integer count of
+   >   seconds
+   > - Returns `H:MM:SS` when hours > 0, else `M:SS`
+   > - Export the function
+   >
+   > **Tests:** Create `test/duration.test.js` verifying `formatDuration(3661)`
+   > returns `"1:01:01"` and `formatDuration(65)` returns `"1:05"`.
+   No sentence touches internal implementation style, named constants, or
+   literals — the plan is verbatim-silent on this axis, so the finding
+   cannot trigger the same carve-out the input-guard finding did.
+3. **Distinct from finding #2** ("repeated formatting expression," the
+   triplicated `padStart` call) — a different quality axis (unnamed
+   literals vs. duplicated logic).
+4. **Plausibly reviewer-flagged** — unnamed magic numbers are a standard
+   code-review nit.
+
+Updated coherently: the fixture ledger line + seeded `task-2-report.md`
+enumeration (`scaffoldSddMidloopRound1`, `src/setup-helpers/sdd-fixtures.ts`),
+the fixture test's assertions (`test/setup-helpers-sdd.test.ts`), story.md's
+finding mentions, and the `tool-arg-match` literal in `checks.sh`. AC
+semantics unchanged. `bun test test/setup-helpers-sdd.test.ts`, `bun run
+check`, and `bun run quorum check` all green before proceeding.
+
+**Re-run:** one live local-container run, same invocation as Task 14 Step 1
+(clean clone re-created at `/tmp/pri2650-superpowers`, pinned to
+`1f97eda0fc73faac6cdc870bfeadfdaa3b431a00`; container
+`superpowers-evals-195eadbd5c52`; `--credential opus`, direct Anthropic
+API). Run `sdd-re-review-scoped-claude-opus-linux-20260717T104256Z-a9a2`,
+cost $2.20 ($0.39 Gauntlet + $1.80 coding: $1.64 opus / $0.16 haiku).
+
+**Result: the seed fix worked, but the run still showed `fail`** — 11/12
+deterministic checks passed and the Gauntlet-Agent judge independently
+verdicted **pass**, explicitly confirming round 2 carried both findings to
+the same implementer and dispatched a properly scoped re-review matching
+re-review-prompt.md's "Findings Under Verification" shape. The ledger
+confirms it directly: `Task 2: fix round 2/5 (2 addressed, 0 open — named
+constants SECONDS_PER_HOUR/SECONDS_PER_MINUTE + pad2 helper; commits
+05ada47..2f924f2)`. Raw transcript inspection of both dispatches (step 7,
+`"Task 2 fix round 2"`; step 21, `"Re-review Task 2 fix round 2"`) confirms
+both open findings appear verbatim in each. **This is not a second
+defuse** — the carve-out gap is closed, AC2 is genuinely exercised.
+
+**Root cause of the remaining `fail`:** a bug in the deterministic check I
+authored, not scenario/skill behavior. The `tool-arg-match` literal
+`'prompt=magic numbers 3600 and 60 in formatDuration'` assumed plain text,
+but the real dispatch wrapped the function name in a markdown code span —
+both real, skill-compliant Markdown, not evasive phrasing:
+
+- Fix dispatch (verbatim): "\*\*Magic numbers 3600 and 60\*\* in
+  `` `formatDuration` `` lack named constants."
+- Re-review (verbatim): "Magic numbers 3600 and 60 in `` `formatDuration` ``
+  lack named constants."
+
+The inserted `**`/backtick characters broke the plain-text substring match.
+Confirmed by replaying both the old and new literal directly against this
+run's own captured `trajectory.json` via `check-transcript` (no second live
+run spent):
+
+```
+$ QUORUM_TRANSCRIPT_PATH=.../trajectory.json bun run src/cli/check-transcript.ts \
+    tool-arg-match Agent --matches 'prompt=magic numbers 3600 and 60 in formatDuration' --ignore-case
+exit: 1   # reproduces the run's failure
+
+$ QUORUM_TRANSCRIPT_PATH=.../trajectory.json bun run src/cli/check-transcript.ts \
+    tool-arg-match Agent --matches 'prompt=magic numbers 3600 and 60' --ignore-case
+exit: 0   # passes
+```
+
+**Fix (commit `f7c3820`):** dropped the fragile `"in formatDuration"` tail;
+`"magic numbers 3600 and 60"` alone is markdown-formatting-proof and still
+specific enough not to collide with an unrelated dispatch. `bun test
+test/setup-helpers-sdd.test.ts`, `bun run check`, and `bun run quorum
+check` all green (one incidental `bun run check` flake mid-verification —
+`test/runner-credential.test.ts` — reproduced as a pass in isolation and
+again in a clean re-run after the container was torn down; consistent with
+resource contention from the still-running container, not a regression).
+
+No further live re-run performed for this specific fix: the replay above
+against the actual failing run's own transcript is conclusive for the
+literal-matching question (the same real prompts, the same check code
+path), and spending a second paid container run to re-confirm a
+string-matching fix already proven against real data would not be budget
+discipline.
+
+**Final triage for `sdd-re-review-scoped`:** the fixture-seed flaw is
+closed. Round 2 now genuinely exercises both open findings and dispatches a
+correctly scoped re-review, matching AC2 as designed — superseding the
+Task 14 Step 1 "legitimate defuse" entry above, which was itself downstream
+of the plan-conflicting seed. Two follow-up commits: `c5e76ce` (seed fix)
+and `f7c3820` (check-literal fix, an independent bug this re-run also
+surfaced).
+
+**Status:** CLOSED. `sdd-re-review-scoped`'s carve-out defuse is fixed and
+independently confirmed via judge verdict + raw transcript + deterministic-check
+replay. No additional scenario changes pending.
+
 ### Block 1 — Replication core
 
 | Arm | Agent | Scenarios | n each | Verdict |
