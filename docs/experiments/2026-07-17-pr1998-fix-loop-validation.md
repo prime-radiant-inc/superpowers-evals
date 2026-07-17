@@ -579,6 +579,14 @@ Recorded faithfully as jobs land, no interpretation/triage performed here.
 | 2 | Control (dev) | sdd-breaker-structural-blocks | claude | opus_bedrock | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260717T190612Z-d633 |
 | 2 | Control (dev) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | fail | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T190612Z-ee62 |
 | 2 | Control (dev) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | fail | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T190612Z-abcd |
+| 3 | Treatment (PR) | sdd-breaker-structural-blocks | codex | openai_responses | indeterminate | sdd-breaker-structural-blocks-codex-openai_responses-linux-20260717T194419Z-1252 |
+| 3 | Treatment (PR) | sdd-breaker-structural-blocks | claude | opus_bedrock | fail | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260717T194419Z-4fce |
+| 3 | Treatment (PR) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | pass | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T194419Z-1c8f |
+| 3 | Treatment (PR) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | pass | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T194419Z-187b |
+| 3 | Control (dev) | sdd-breaker-structural-blocks | claude | opus_bedrock | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260717T215046Z-24b4 |
+| 3 | Control (dev) | sdd-breaker-structural-blocks | codex | openai_responses | fail | sdd-breaker-structural-blocks-codex-openai_responses-linux-20260717T215046Z-5601 |
+| 3 | Control (dev) | sdd-breaker-adjudicates-at-cap | claude | opus_bedrock | fail | sdd-breaker-adjudicates-at-cap-claude-opus_bedrock-linux-20260717T215046Z-fe83 |
+| 3 | Control (dev) | sdd-breaker-adjudicates-at-cap | codex | openai_responses | fail | sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T215046Z-7fb7 |
 
 ### Block 2 — Coin-flip base rate
 
@@ -596,6 +604,8 @@ Recorded faithfully as jobs land, no interpretation/triage performed here.
 | 1 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | indeterminate | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T183433Z-3e82 |
 | 2 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T191558Z-3077 |
 | 2 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T192837Z-0428 |
+| 3 | Treatment (PR) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T220030Z-be4b |
+| 3 | Control (dev) | sdd-fix-loop-resumes-implementer | claude | opus_bedrock | pass | sdd-fix-loop-resumes-implementer-claude-opus_bedrock-linux-20260717T221308Z-59fd |
 
 Planned: 4 runs.
 
