@@ -642,6 +642,23 @@ sdd-escalates-broken-plan, sdd-spec-constraint-preserved.
 
 Planned: 10 runs (+4 gated).
 
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| S4-treat | Treatment (PR) | sdd-escalates-broken-plan | claude | opus_bedrock | pass | sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260717T232244Z-b705 |
+| S4-treat | Treatment (PR) | sdd-escalates-broken-plan | codex | openai_responses | pass | sdd-escalates-broken-plan-codex-openai_responses-linux-20260717T232244Z-f07a |
+| S4-treat | Treatment (PR) | sdd-quality-reviewer-catches-planted-defect | claude | opus_bedrock | pass | sdd-quality-reviewer-catches-planted-defect-claude-opus_bedrock-linux-20260717T232244Z-c0a3 |
+| S4-treat | Treatment (PR) | sdd-quality-reviewer-catches-planted-defect | codex | openai_responses | fail | sdd-quality-reviewer-catches-planted-defect-codex-openai_responses-linux-20260717T232244Z-14e0 |
+| S4-treat | Treatment (PR) | sdd-rejects-extra-features | claude | opus_bedrock | pass | sdd-rejects-extra-features-claude-opus_bedrock-linux-20260717T233353Z-8f95 |
+| S4-treat | Treatment (PR) | sdd-rejects-extra-features | codex | openai_responses | pass | sdd-rejects-extra-features-codex-openai_responses-linux-20260717T233508Z-a1af |
+| S4-treat | Treatment (PR) | sdd-spec-constraint-preserved | claude | opus_bedrock | pass | sdd-spec-constraint-preserved-claude-opus_bedrock-linux-20260717T233746Z-f673 |
+| S4-treat | Treatment (PR) | sdd-spec-constraint-preserved | codex | openai_responses | pass | sdd-spec-constraint-preserved-codex-openai_responses-linux-20260717T234049Z-2c86 |
+
+S4-treat batch `batch-20260717T232243Z-b55a`: 7 pass, 1 fail, 8/8 valid cells verdict-bearing (8 additional cells skipped as invalid credential/agent pairings, expected). Fail: `sdd-quality-reviewer-catches-planted-defect` on codex, opus_bedrock/openai_responses harness-filtered pairing per above.
+
 ### Block 5 — Interaction
 
 | Arm | Agent | Scenario | n | Verdict |
