@@ -682,6 +682,22 @@ dev arm, with priors from the #1943 validation (stale-foreign on dev:
 claude ✗ / codex ✓ — so a codex ✗ on the PR arm is a candidate regression,
 not expected noise).
 
+#### Round-level cell results — spec-context-consumed paired sweep (jobs 4-9)
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+Contemporaneous pairing order: T,C,T,C,T,C.
+
+| Job | Pair | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|---|
+| Job4 | 1 | Treatment (PR) | sdd-spec-context-consumed | claude | opus_bedrock | fail | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T002619Z-9583 |
+| Job5 | 1 | Control (dev) | sdd-spec-context-consumed | claude | opus_bedrock | fail | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T004449Z-336a |
+| Job6 | 2 | Treatment (PR) | sdd-spec-context-consumed | claude | opus_bedrock | fail | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T005411Z-26c6 |
+| Job7 | 2 | Control (dev) | sdd-spec-context-consumed | claude | opus_bedrock | fail | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T010333Z-f4f9 |
+| Job8 | 3 | Treatment (PR) | sdd-spec-context-consumed | claude | opus_bedrock | pass | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T010956Z-f60a |
+| Job9 | 3 | Control (dev) | sdd-spec-context-consumed | claude | opus_bedrock | fail | sdd-spec-context-consumed-claude-opus_bedrock-linux-20260718T012828Z-4b57 |
+
+Cumulative n=3 each arm: Treatment fail, fail, pass. Control fail, fail, fail.
+
 ### Block 6 — End-to-end
 
 | Arm | Agent | Scenario | n | Verdict |
