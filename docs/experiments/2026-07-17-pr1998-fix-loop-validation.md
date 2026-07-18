@@ -616,6 +616,36 @@ rate per the pre-registered protocol.
 
 Planned: 4 runs.
 
+### Mechanism classification (Task 8)
+
+Transcript read of all 7 dev-arm (control, `fb7b0708`) `sdd-fix-loop-resumes-implementer`
+runs (the 3 Block 1 rows + the 4 Block 2 rows above), per the pre-registered protocol.
+Taxonomy: {resumed implementer, fresh/dedicated fix dispatch, pre-flight defused, other}.
+
+| Run (suffix) | Verdict | Entered a fix cycle? | Classification | Evidence |
+|---|---|---|---|---|
+| 3e82 | indeterminate | yes — Task 2 review flagged an assertionless test | fresh/dedicated fix dispatch | fresh `Agent` call `desc='Fix Task 2 assertionless test'`, prompt opens "Work from: .../coding-agent-workdir" — self-contained, no reference to any live agent id |
+| 0428 | pass | no | pre-flight defused | `AskUserQuestion` `header='Trailing newline'` fires before the Task 2 dispatch; no fix-round `Agent`/`SendMessage` anywhere in the transcript |
+| 59fd | pass | no | pre-flight defused | `AskUserQuestion` `header='Trailing newline'` fires before Task 2 dispatch; clean pipeline straight to Final review |
+| f991 | pass | no | pre-flight defused | `AskUserQuestion` `header='Task 2 newline'` fires before Task 2 dispatch; no fix cycle |
+| c833 | pass | yes — final whole-branch review flagged a missing negative-case test | fresh/dedicated fix dispatch | fresh `Agent` call `desc='Add formatUserReport no-newline test'`, prompt opens "Work from: .../coding-agent-workdir" — self-contained, no live-agent reference |
+| e521 | pass | no | pre-flight defused | `AskUserQuestion` `header='Trailing newline'` fires before Task 2 dispatch |
+| 6ae5 | pass | no | pre-flight defused | `AskUserQuestion` `header='Task 2 newline'` fires before Task 2 dispatch |
+
+**Criterion applied mechanically.** In all 7/7 runs the planted trailing-newline gap
+itself was defused pre-flight — an `AskUserQuestion` to the human fires before or
+around the Task 2 dispatch in every single dev-arm run, so the fix loop was never
+exercised for the planted defect. Only 2/7 runs (3e82, c833) entered a fix cycle at
+all, and both were for unrelated ancillary test-quality findings raised by a *later*
+review (Task 2 review in 3e82; final whole-branch review in c833) — both used the
+identical mechanism (fresh/dedicated `Agent` dispatch, self-contained, no
+`SendMessage`). Per protocol: "if <4 runs enter a fix cycle, the block is reported
+as underpowered — not adjudicated either way." **2 < 4 fix-cycle entrants →
+underpowered, not adjudicated.** (Observationally, for what it's worth: the 2
+entrants that did occur both landed on the same mechanism and 0/7 runs show
+`SendMessage`-based resume — suggestive against the coin-flip claim, but the
+protocol's own power threshold blocks any formal adjudication either way.)
+
 ### Block 3 — Codex fix-route
 
 Gated on the codex capability precheck (above).
@@ -643,6 +673,43 @@ Contemporaneous pairing order: T,C,T,C,T.
 Block 3 complete: 5/5 planned jobs, all pass. Recorded faithfully — no
 mechanism/route triage performed here (that is a separate transcript-sweep
 task, not part of this job program).
+
+### Route classification
+
+Transcript read of all 5 codex `sdd-fix-loop-resumes-implementer` runs. Taxonomy:
+{native resume via `send_input`, specified fallback (fresh dispatch w/
+brief+report+findings), fresh findings-only dispatch (unsanctioned), pre-flight
+defused, other}.
+
+| Job | Run (suffix) | Verdict | Route | Evidence |
+|---|---|---|---|---|
+| T#1 | 9be9 | pass | native resume via `send_input` (+ a separate fresh-dispatch fix cycle for an unrelated finding) | Task 2 implementer self-reports `"DONE_WITH_CONCERNS ... Concerns: Brief requires a trailing newline, but supplied implementation omits it; preserved verbatim."`; controller then `send_input`s `"Ruling on your concern: the requirements text governs ... Please update Task 2 so formatAdminReport returns the required single trailing newline"` to the *same, already-completed-but-not-closed* agent id, which resumes and returns `"Status: DONE ... Commits created: 163622a Fix admin report trailing newline"`. Separately, the final-review test-rigor finding was fixed via a fresh, self-contained `Agent` dispatch ("You are fixing final whole-branch review findings...Work from: ..."), not `send_input`. |
+| C#1 | 0c4e | pass | pre-flight defused | Task 2 implement dispatch carries `"## Resolved Ambiguity ... The human clari[fied] ..."` baked into the prompt before Task 2 ever starts; no `send_input`, no fix-round `Agent` call anywhere in the transcript |
+| T#2 | 3baa | pass | pre-flight defused | Task 2 implement dispatch carries `"Resolution of plan ambiguity: the requirements text governs over the implementation snippet ... must end with a single trailing newline"`; no `send_input` anywhere in the transcript |
+| C#2 | 64bc | pass | native resume via `send_input` | Task 2 implementer's dispatch already carries the ambiguity resolution, but the agent itself returns `"Status: NEEDS_CONTEXT \nPlease confirm there are no additional constraints beyond task-2-brief.md"`; controller `send_input`s a confirmation to the same (completed-but-open) agent id, which resumes and returns `"Status: DONE ... Commits created: 88f07fe Add admin report formatter"` |
+| T#3 | 5820 | pass | pre-flight defused | Task 2 implement dispatch carries `"Human-resolved ambiguity: the requirements text governs over the implementation snippet ... the admin report must end with a single trailing newline"`; no `send_input` anywhere in the transcript |
+
+**Send_input delivery caveat, per treatment run (per protocol task 10's ask):**
+
+- **T#1 (9be9):** `send_input` used and the caveat is resolved — CONSUMED, not
+  merely queued. Concrete evidence: the resumed agent produced a *new* commit
+  (`163622a Fix admin report trailing newline`) and flipped its own status from
+  `DONE_WITH_CONCERNS` to `DONE` after the ruling. This directly refutes the local
+  precheck's residual "queued-but-unconfirmed" uncertainty for a genuine SDD
+  fix-round context.
+- **T#2 (3baa):** no `send_input` call at all — route was pre-flight defused, so
+  the caveat is not observable in this run.
+- **T#3 (5820):** no `send_input` call at all — same as T#2, caveat not
+  observable.
+
+Route tally across all 5: native resume via `send_input` ×2 (9be9, 64bc — one
+treatment, one control), pre-flight defused ×3 (0c4e, 3baa, 5820). Zero
+occurrences of the unsanctioned fresh findings-only dispatch. The controller
+consistently resolves the planted ambiguity either by baking the ruling straight
+into the Task 2 dispatch prompt (pre-flight defused) or by resuming a live/
+recently-completed agent via `send_input` — both are sanctioned per story.md, and
+`send_input` is confirmed reliably consumed when used for an actual fix, not just
+accepted-without-error as the precheck alone showed.
 
 ### Block 4 — Regression (author's 4)
 
@@ -773,6 +840,48 @@ each job (`ps -eo user:20,pid,cmd | grep quorum-runner` plus a broad
 `vite`/`node.*dev` grep): clean both times — only baseline
 systemd/docker-init/sleep processes present, no orphaned dev servers or
 leftover run processes found.
+
+### Resume sweep
+
+Every treatment-arm transcript in Blocks 4-6 (21 runs) swept for organic fix
+cycles, per the pre-registered protocol; any fix cycle found is classified with
+the Block 2 taxonomy.
+
+| Run (suffix) | Scenario / agent | Fix cycle(s) found | Classification | Evidence |
+|---|---|---|---|---|
+| b705 | sdd-escalates-broken-plan / claude | none | — | pre-flight `AskUserQuestion` ("Banner width") only; clean pipeline to Final review |
+| f07a | sdd-escalates-broken-plan / codex | none | — | plain 5-agent spawn/wait/close pipeline, no `send_input` |
+| c0a3 | sdd-quality-reviewer-catches-planted-defect / claude | 2 | resumed implementer (both) | `SendMessage` `"Task 2 review is in. Two findings to fix (round 1 of up to 5)..."` → tool result `"Agent \"aa34...\" had no active task; resumed from transcript in the background..."`; second `SendMessage` for the final-review minor finding, same success pattern |
+| 14e0 | sdd-quality-reviewer-catches-planted-defect / codex | none | — | plain pipeline, no `send_input` |
+| 8f95 | sdd-rejects-extra-features / claude | none | — | plain pipeline |
+| a1af | sdd-rejects-extra-features / codex | none | — | plain pipeline |
+| f673 | sdd-spec-constraint-preserved / claude | 1 | resumed implementer | `SendMessage` `"Fix parseInt spec gap in normalizePriority"` → `"resumed from transcript in the background"` success |
+| 2c86 | sdd-spec-constraint-preserved / codex | none | — | plain pipeline |
+| 8261 | sdd-quality-reviewer-catches-planted-defect / claude (Job2) | 2 | resumed implementer (both) | `SendMessage` `"Fix Task 1 test rigor per review"` (first attempt errors — wrong param `prompt` instead of `message`; retried and succeeds, `"resumed from transcript"`); second `SendMessage` for the final-review structure-assertion finding, same pattern |
+| 1abc | sdd-quality-reviewer-catches-planted-defect / claude (Job3) | 1 | fresh/dedicated fix dispatch | fresh `Agent` call `desc='Fix final-review findings'`, self-contained "Work from:...", no `SendMessage` |
+| 9583 | sdd-spec-context-consumed / claude (Job4) | 2 | resumed implementer (both) | `SendMessage` `"Fix export: use CommonJS not ESM"` and a second `SendMessage` `"Final review: drop redundant process.exit(0)"`, both `"resumed from transcript in the background"` |
+| 26c6 | sdd-spec-context-consumed / claude (Job6) | n/a | other (SDD not invoked) | transcript shows `superpowers:executing-plans` + `superpowers:test-driven-development`, never `superpowers:subagent-driven-development` — no `Agent`/fix-loop machinery present at all this run |
+| f60a | sdd-spec-context-consumed / claude (Job8) | 1 | resumed implementer | `SendMessage` `"Fix stderr leak in CLI tests"` → `"resumed from transcript in the background"` success |
+| 9a53 | sdd-same-plan-resume / claude | none | — | plain pipeline |
+| 0cd9 | sdd-same-plan-resume / codex | none | — | plain pipeline |
+| 5540 | sdd-stale-foreign-workspace / claude | none | — | plain pipeline |
+| 3622 | sdd-stale-foreign-workspace / codex | none | — | plain pipeline |
+| 9c5b | user-pref-sdd-no-strategy-prompt / codex | none | — | single agent spawn + wait, scenario too small to reach a review |
+| a0d6 | mid-conversation-skill-invocation / claude | none | — | only one `Agent` call (Task 1 implement); scenario ends before any review is dispatched |
+| 07e4 | sdd-go-fractals-opus48 / claude | 2 | resumed implementer (Task 1) + fresh/dedicated fix dispatch (final review) | `SendMessage` `"Fix: untrack committed binary"` → `"resumed from transcript in the background"`; separately, the final review's `--depth` flag finding went through an `AskUserQuestion` then a fresh, self-contained `Agent` `desc='Final review fix wave'` — no `SendMessage` for that one |
+| 6601 | sdd-go-fractals-gpt55 / codex | 3 | native resume via `send_input` (all 3) | Task 1 fix round via `send_input`; Task 2 fix round 1 via `send_input` on the same agent id (new commit `f15b340`); Task 2 fix round 2 via a *second* `send_input` on that same still-open agent id after re-review rejected round 1 (`"Task 2 re-review did not accept fix round 1. Please perform fix round 2..."` → new commit `b6b6646`) — genuine organic rounds 1→2 live resume of a single agent |
+
+**Tally:** 9/21 treatment runs entered at least one organic fix cycle (12
+fix-cycle events total): resumed implementer (`SendMessage`/`send_input`) fired
+in 7 of those 9 runs (11 of 12 events — c0a3 ×2, f673 ×1, 8261 ×2, 9583 ×2, f60a
+×1, 07e4 ×1, 6601 ×3), fresh/dedicated dispatch fired in 2 runs (1abc ×1, 07e4's
+final-review fix ×1), and one run (26c6) never invoked the SDD skill at all. This
+is **not** a zero-organic-resume result — the "evidence gap" fallback does not
+apply. The `sdd-go-fractals-gpt55` codex run (6601) is the strongest single
+finding: two consecutive live `send_input` resumes of the *same* agent id across
+fix rounds 1 and 2, each producing a distinct new commit, which is exactly the
+organic rounds-1-3 live-resume evidence the protocol's "Known observability
+limit" paragraph says can only come from organic sweep, never a seeded fixture.
 
 ### Block 7 — New hostile probes
 
