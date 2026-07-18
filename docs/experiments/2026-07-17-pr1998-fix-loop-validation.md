@@ -659,6 +659,15 @@ Recorded faithfully as jobs land, no interpretation/triage performed here.
 
 S4-treat batch `batch-20260717T232243Z-b55a`: 7 pass, 1 fail, 8/8 valid cells verdict-bearing (8 additional cells skipped as invalid credential/agent pairings, expected). Fail: `sdd-quality-reviewer-catches-planted-defect` on codex, opus_bedrock/openai_responses harness-filtered pairing per above.
 
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| Job2 | Treatment (PR) | sdd-quality-reviewer-catches-planted-defect | claude | opus_bedrock | pass | sdd-quality-reviewer-catches-planted-defect-claude-opus_bedrock-linux-20260717T235206Z-8261 |
+| Job3 | Treatment (PR) | sdd-quality-reviewer-catches-planted-defect | claude | opus_bedrock | pass | sdd-quality-reviewer-catches-planted-defect-claude-opus_bedrock-linux-20260718T001036Z-1abc |
+
+Jobs 2-3 are the two additional treatment-arm singles bringing
+`sdd-quality-reviewer-catches-planted-defect` on claude to cumulative n=3
+(S4-treat's cell + these two): pass, pass, pass.
+
 ### Block 5 — Interaction
 
 | Arm | Agent | Scenario | n | Verdict |
