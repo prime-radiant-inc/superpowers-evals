@@ -1156,6 +1156,14 @@ Recorded faithfully as jobs land, no interpretation/triage performed here
 
 Tally: Treatment (PR) 4/5 pass; Control (dev) 3/5 pass.
 
+### Part 2 — protocol re-runs
+
+| Cell | Arm | Rep | Verdict | run_id |
+|---|---|---|---|---|
+| sdd-quality-reviewer-catches-planted-defect (codex) | Treatment (PR) | 1 | fail | sdd-quality-reviewer-catches-planted-defect-codex-openai_responses-linux-20260718T075002Z-405f |
+| sdd-quality-reviewer-catches-planted-defect (codex) | Control (dev) | 1 | pass | sdd-quality-reviewer-catches-planted-defect-codex-openai_responses-linux-20260718T080551Z-d7b0 |
+| sdd-round4-escalates-model (claude) | Control (dev) | 1 | fail | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T081819Z-07d0 |
+
 ## Negative results
 
 None yet — no measured runs have started. Recorded here at equal billing
