@@ -1051,6 +1051,33 @@ GREEN-replicating. No new paid run needed to confirm: replay the fixed
 literal against this run's existing `trajectory.json` (same technique as
 `f7c3820`'s verification).
 
+**Re-score (PRI-2650 contingency wave, commit `85132bf`)**: hardened by
+switching the matcher to the finding string's plain-English tail — `'prompt=lack
+named constants'` (was `'prompt=magic numbers 3600 and 60'`) — since neither
+the numerals nor "formatDuration" survive markdown-safe replay but "lack
+named constants" does, in both this run's dispatch and the other treatment
+rep's. Replayed the old and new literals locally against both probe-b
+treatment `trajectory.json`s (T#1 `…-e9a7`, T#2 `…-beac`) via:
+
+```
+QUORUM_TRANSCRIPT_PATH=<run>/trajectory.json bun run src/cli/check-transcript.ts \
+  tool-arg-match Agent --matches 'prompt=<literal>' --ignore-case
+```
+
+| literal | `…-e9a7` (T#1) | `…-beac` (T#2) |
+|---|---|---|
+| `magic numbers 3600 and 60` (old) | exit 1 (fail) | exit 0 (pass) |
+| `lack named constants` (new) | exit 0 (pass) | exit 0 (pass) |
+
+Confirms the prediction above exactly: probe (b) T#1 re-scores fail → pass
+on the corrected check; T#2 was already passing and stays passing. Judge
+concurrence for T#1 is unchanged from the analysis above (`gauntlet.summary`
+already confirms AC2 was genuinely exercised, no defuse) — this is a check
+fix, not a re-interpretation. `bun run quorum check` passes with the new
+literal. **Probe (b) treatment now reads pass, pass — counts for PR /
+GREEN-replicating**, superseding the "one post-check failed" line recorded
+for T#1 in the ledger and Block 7 table.
+
 ### 5. Probe (c) control pass#1 (`…-ea34`)
 
 **Attribution**: scenario debt (probe under-discriminates on one AC
