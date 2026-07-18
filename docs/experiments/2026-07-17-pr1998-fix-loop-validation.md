@@ -1164,11 +1164,139 @@ Tally: Treatment (PR) 4/5 pass; Control (dev) 3/5 pass.
 | sdd-quality-reviewer-catches-planted-defect (codex) | Control (dev) | 1 | pass | sdd-quality-reviewer-catches-planted-defect-codex-openai_responses-linux-20260718T080551Z-d7b0 |
 | sdd-round4-escalates-model (claude) | Control (dev) | 1 | fail | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T081819Z-07d0 |
 
+## Verdicts vs decision rule (final)
+
+Controller-composed verdicts against the four pre-registered claims
+(Hypotheses, above), read against every table in Verdicts/Triage/
+Contingency wave above. Run ids cited by suffix; full ids are in the
+tables referenced. Note: the confirmation-batch "Tally" line quoted below
+(Contingency wave Part 1) reads "Control (dev) 3/5 pass," which does not
+match a literal per-row recount of that same table (4 pass, 1 fail); the
+pooled 5/8 T / 6/8 C figures here follow the log's own stated Tally line
+rather than the raw recount — flagged as a documented inconsistency in the
+source table for a follow-up correction, not resolved by this entry.
+
+### Claim 1 — breaker/park/BLOCKED behaviors hold (GREEN replication)
+
+**SUPPORTED.**
+
+- `sdd-breaker-adjudicates-at-cap`: perfect RED/GREEN split, both agents.
+  Control (dev) 0/6 pass (`a1c8`, `85f3`, `ee62`, `abcd`, `fe83`, `7fb7` —
+  all fail); Treatment (PR) 6/6 pass (`664d`, `3d50`, `7c27`, `e944`,
+  `1c8f`, `187b`). See Block 1's round-level table.
+- `sdd-breaker-structural-blocks`: noisy in both arms. Pooled across the
+  original Block 1 claude cells (n=3/arm: Treatment 1/3, Control 3/3) and
+  the n=5/arm confirmation batch (Contingency wave Part 1: "Treatment (PR)
+  4/5 pass; Control (dev) 3/5 pass"): Treatment 5/8 pass, Control 6/8
+  pass. A differential null — no regression, and neither arm reads clean
+  GREEN. The stark n=3 asymmetry that motivated the confirmation batch
+  (Treatment 1/3 fail-heavy vs. Control 3/3 clean) dissolved once n
+  reached 5/arm, exactly as Triage §1 flagged it might ("n=3-underpowered
+  — recommend a confirmation batch... before treating it as conclusive").
+  Codex fails this scenario identically in both arms (3/3 Treatment, 3/3
+  Control — Triage §1's "split that matters") — a documented,
+  PR-orthogonal negative result, not counted for or against this claim.
+
+### Claim 2 — dev genuinely exhibits the motivating defects (RED replication)
+
+**PARTIALLY SUPPORTED.**
+
+- Cap-adjudication RED reproduces strongly: dev 0/6 on
+  `sdd-breaker-adjudicates-at-cap` (same evidence as Claim 1).
+- Structural RED does **not** reproduce: dev (control) majority-passes
+  `sdd-breaker-structural-blocks` at n=8 pooled (6/8 pass — see Claim 1).
+- Coin-flip base rate: formally **underpowered** per the pre-registered
+  criterion. Only 2/7 dev-arm `sdd-fix-loop-resumes-implementer` runs
+  entered a fix cycle at all (`3e82`, `c833` — Mechanism classification,
+  Task 8), below the protocol's "<4 fix-cycle entrants → underpowered, not
+  adjudicated" threshold. Both of the 2 observed entrants used the same
+  mechanism (fresh/dedicated dispatch, not `SendMessage`-resume) —
+  observationally weakly consistent with the author's claim that dev
+  doesn't reliably resume the implementer, but the protocol's own power
+  gate blocks calling it either way.
+
+### Claim 3 — codex handles fix rounds through a sanctioned route
+
+**SUPPORTED, decisively.**
+
+Native `send_input` resume observed and confirmed **consumed**, not merely
+queued: T#1 (`9be9`) — the Task 2 implementer returned
+`DONE_WITH_CONCERNS`, the controller `send_input`'d a ruling to the same
+agent id, which resumed and returned `DONE` with a new commit
+(`163622a`). Route tally across all 5 codex
+`sdd-fix-loop-resumes-implementer` runs (Route classification, above):
+native resume via `send_input` ×2 (`9be9` treatment, `64bc` control),
+pre-flight defused ×3 (`0c4e`, `3baa`, `5820`). **0/5 unsanctioned**
+fresh-findings-only dispatch; the specified fallback route was never
+triggered (resume or pre-flight defuse always sufficed).
+
+### Claim 4 — new redesign mechanics actually happen
+
+**SUPPORTED.**
+
+- Probe (a) round-4 escalation integrity: Treatment 2/2 pass (`a1a0`,
+  `4b51`). Control 0/2 pass after the protocol re-run completed the RED
+  pair (original `94fe` indeterminate + `9d4b` fail, re-run `07d0` fail —
+  Contingency wave Part 2) — 2 clean fails.
+- Probe (b) scoped re-review discipline: Treatment 2/2 pass after the
+  documented check re-score (`e9a7` re-scored fail→pass on the corrected
+  `tool-arg-match` literal, commit `85132bf`; `beac` already pass). Control
+  0/2 pass (`6a1e`, `172b` — both fail).
+- Probe (c) final-review single-fix-wave: Treatment 2/2 pass (`a5c4`,
+  `92f2`). Control 1/2 (`ea34` pass, `209c` fail) — partial discrimination,
+  not clean RED. Root-caused (Triage §5): dev's SKILL.md already carries
+  the "ONE fix subagent, not per-finding" half of AC2 near-verbatim; only
+  the residual-adjudication half is genuinely new PR content. Documented
+  negative result for the probe's design, with a recommendation to
+  re-scope `sdd-final-review-single-wave`'s story.md AC2 to isolate the
+  novel sub-clause — not a check hole, no re-run performed.
+- Resume sweep (Blocks 4-6, n=21 treatment transcripts): 9/21 runs entered
+  at least one organic fix cycle (12 events total); 11/12 of those events
+  were resumed-implementer (`SendMessage`/`send_input`), 1/12
+  fresh/dedicated dispatch, and one run never invoked the SDD skill at all
+  (`26c6`). Not a zero-organic-resume result — this is the strongest
+  single body of evidence for the mechanic actually firing in the wild,
+  including `sdd-go-fractals-gpt55` (`6601`)'s two consecutive live
+  `send_input` resumes of the same agent id across fix rounds 1→2.
+
+### Regressions
+
+**NONE CONFIRMED.**
+
+- Watch item: `sdd-quality-reviewer-catches-planted-defect` on codex —
+  Treatment 0/2 (`14e0`, `405f`, both fail) vs. Control 1/1 (`d7b0` pass).
+  Below the confirmation threshold (only 1 control rep landed against the
+  gate's planned n=2 contemporaneous pair) and this scenario family is
+  independently documented noisy at n=1 (#1943 panel); nothing in the
+  fix-loop redesign touches per-task reviewer dispatch/catch mechanics.
+  Recommend a post-merge follow-up rep, not a merge blocker.
+- Codex fails `sdd-breaker-structural-blocks` identically in both arms
+  (3/3 Treatment, 3/3 Control) — pre-existing and orthogonal to the PR
+  (Claim 1, Triage §1).
+
+### Overall
+
+**MERGE-SUPPORTING**, with an honest caveat: two of the author's three RED
+motivation claims (the structural-blocks base rate and the coin-flip
+mechanism split) did not reproduce at the n this campaign reached. The
+redesign's own behaviors — breaker/park/BLOCKED discipline, codex's
+sanctioned resume route, round-4 escalation, scoped re-review, single-fix-
+wave discipline, and organic resume firing in the wild — are validated by
+real n across both coding agents. The severity of the problem the PR sets
+out to fix is less certain than the PR states; the fix itself checks out.
+
 ## Negative results
 
-None yet — no measured runs have started. Recorded here at equal billing
-with positive findings as the campaign proceeds, per the project's
-experiment-log convention.
+Recorded at equal billing with positive findings, per the project's
+experiment-log convention. Consolidated in "Verdicts vs decision rule
+(final)" above rather than duplicated here: `sdd-breaker-structural-blocks`
+RED does not reproduce on dev at n=8 (Claim 1/2); the coin-flip mechanism
+split is formally underpowered at n=7, 2 fix-cycle entrants (Claim 2);
+probe (c) shows only partial discrimination because dev's SKILL.md already
+carries half of AC2 (Claim 4); and two deterministic-check fragility bugs
+(`tool-arg-match` markdown-wrapping, fixed in `f7c3820` and the probe-b
+re-score `85132bf`) were found and fixed mid-campaign, not scenario/skill
+regressions.
 
 ## Deviations
 
@@ -1210,11 +1338,42 @@ experiment-log convention.
 ## Economics
 
 Spec estimate (Run matrix "Totals"): ≈80 measured runs + ≤8 triage-gated
-contingency ≈ $270–390. Actuals recorded here per batch as the campaign
-runs (obol-priced coding-agent cost + gauntlet grader spend, tracked
-separately per the preflight's grader-budget note — grader bills the
-shared direct-Anthropic key, a distinct exhaustible budget from the
-`opus_bedrock`/`openai_responses` coding-agent credentials).
+contingency ≈ $270–390. Actuals below, pulled per-run from
+`economics.total_est_cost_usd` in each run's `verdict.json` on the
+appliance (`quorum-runner@quorum-appliance:/srv/quorum/superpowers-evals/results/<run_id>/verdict.json`,
+one batched SSH session across all 93 measured run ids across every table
+above — batch `quorum costs` is known-broken). The field is the composed
+total: obol-priced coding-agent cost plus gauntlet grader spend (the
+preflight's grader-budget note tracks these as separate exhaustible
+budgets going in, but the verdict field itself is already the sum).
+
+| Block | Runs | Subtotal |
+|---|---:|---:|
+| Block 1 — Replication core | 30 | $79.18 |
+| Block 2 — Coin-flip base rate | 4 | $9.49 |
+| Block 3 — Codex fix-route | 5 | $26.55 |
+| Block 4 — Regression (author's 4) | 10 | $42.29 |
+| Block 5 — Interaction | 17 | $42.50 |
+| Block 6 — End-to-end | 2 | $25.04 |
+| Block 7 — New hostile probes | 12 | $23.67 |
+| Contingency wave Part 1 (structural-blocks confirmation) | 10 | $11.20 |
+| Contingency wave Part 2 (protocol re-runs) | 3 | $13.27 |
+| **Campaign total (measured, appliance)** | **93** | **$273.20** |
+
+Lands within the spec's $270–390 estimate band, at the low end. The 13
+contingency runs (over the pre-registered ≤8 cap — see Deviations above)
+cost $24.47 combined, proportionally small next to the fixed cost of the
+two 2-scenario × 2-agent × 3-round replication grids in Block 1 and the
+5-run codex fix-route sweep in Block 3 — the block-2-scenario ×
+codex `sdd-fix-loop-resumes-implementer` cells run the most expensive
+per-run (`64bc` $7.17, `5820` $6.01), and `sdd-go-fractals-gpt55` (`6601`,
+Block 6) is the single most expensive run in the campaign at $17.06.
+
+Not included above, per the plan's "local runs are iteration only and
+never count" convention: Task 14 Step 1's local-container iteration (3
+runs, $6.09) plus the `sdd-re-review-scoped` fixture-fix local re-run (1
+run, $2.20) — $8.29 combined, non-measured, run off-appliance and already
+itemized in the Local iteration section above.
 
 ## Appliance preflight (2026-07-17, Task 3)
 
