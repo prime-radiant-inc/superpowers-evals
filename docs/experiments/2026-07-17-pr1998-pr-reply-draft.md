@@ -29,7 +29,7 @@ independently tested per a pre-registered decision rule:
 agents: dev 0/6 pass, PR 6/6 pass. `sdd-breaker-structural-blocks` is
 noisier — pooled across the original n=3/arm and a follow-up n=5/arm
 confirmation batch (13 claude runs total), Treatment 5/8 pass vs. Control
-6/8 pass. That's a differential null, not a regression: the sharp n=3
+7/8 pass. That's a differential null, not a regression: the sharp n=3
 asymmetry that triggered the confirmation batch dissolved once n reached
 8. Codex fails this scenario identically in both arms (3/3 T, 3/3 C) —
 pre-existing, orthogonal to the PR.
@@ -37,7 +37,7 @@ pre-existing, orthogonal to the PR.
 **2. dev genuinely exhibits the motivating defects (RED replication) —
 PARTIALLY SUPPORTED.** The cap-adjudication RED reproduces strongly (dev
 0/6, above). The structural-blocks RED does **not** reproduce — dev
-majority-passes at n=8 (6/8), contradicting the motivating narrative for
+majority-passes at n=8 (7/8), contradicting the motivating narrative for
 that scenario. The coin-flip mechanism-split claim is formally
 **underpowered**: only 2 of 7 dev-arm `sdd-fix-loop-resumes-implementer`
 runs entered a fix cycle at all, against a pre-registered ≥4-entrant power

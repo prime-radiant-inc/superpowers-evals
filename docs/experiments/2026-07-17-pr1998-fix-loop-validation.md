@@ -1154,7 +1154,7 @@ Recorded faithfully as jobs land, no interpretation/triage performed here
 | sdd-breaker-structural-blocks (claude) | Treatment (PR) | 5 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T073319Z-90b6 |
 | sdd-breaker-structural-blocks (claude) | Control (dev) | 5 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T074243Z-6a6b |
 
-Tally: Treatment (PR) 4/5 pass; Control (dev) 3/5 pass.
+Tally: Treatment (PR) 4/5 pass; Control (dev) 4/5 pass. [Corrected 2026-07-18: the orchestrator ledger mis-transcribed C rep 2 as fail; per-run verdict.json files re-read on the box confirm C = pass,pass,fail,pass,pass = 4/5. The table rows above were always correct.]
 
 ### Part 2 — protocol re-runs
 
@@ -1170,9 +1170,9 @@ Controller-composed verdicts against the four pre-registered claims
 (Hypotheses, above), read against every table in Verdicts/Triage/
 Contingency wave above. Run ids cited by suffix; full ids are in the
 tables referenced. Note: the confirmation-batch "Tally" line quoted below
-(Contingency wave Part 1) reads "Control (dev) 3/5 pass," which does not
+(Contingency wave Part 1) initially read "Control (dev) 3/5 pass," which did not
 match a literal per-row recount of that same table (4 pass, 1 fail); the
-pooled 5/8 T / 6/8 C figures here follow the log's own stated Tally line
+discrepancy is now RESOLVED by re-reading all five control verdict.json files on the appliance (authoritative): C = 4/5. Corrected pooled figures: Treatment 5/8, Control 7/8. Original text followed the stated Tally line
 rather than the raw recount — flagged as a documented inconsistency in the
 source table for a follow-up correction, not resolved by this entry.
 
@@ -1187,7 +1187,7 @@ source table for a follow-up correction, not resolved by this entry.
 - `sdd-breaker-structural-blocks`: noisy in both arms. Pooled across the
   original Block 1 claude cells (n=3/arm: Treatment 1/3, Control 3/3) and
   the n=5/arm confirmation batch (Contingency wave Part 1: "Treatment (PR)
-  4/5 pass; Control (dev) 3/5 pass"): Treatment 5/8 pass, Control 6/8
+  4/5 pass; Control (dev) 4/5 pass — corrected, see above): Treatment 5/8 pass, Control 7/8
   pass. A differential null — no regression, and neither arm reads clean
   GREEN. The stark n=3 asymmetry that motivated the confirmation batch
   (Treatment 1/3 fail-heavy vs. Control 3/3 clean) dissolved once n
@@ -1204,7 +1204,7 @@ source table for a follow-up correction, not resolved by this entry.
 - Cap-adjudication RED reproduces strongly: dev 0/6 on
   `sdd-breaker-adjudicates-at-cap` (same evidence as Claim 1).
 - Structural RED does **not** reproduce: dev (control) majority-passes
-  `sdd-breaker-structural-blocks` at n=8 pooled (6/8 pass — see Claim 1).
+  `sdd-breaker-structural-blocks` at n=8 pooled (7/8 pass, corrected — see Claim 1).
 - Coin-flip base rate: formally **underpowered** per the pre-registered
   criterion. Only 2/7 dev-arm `sdd-fix-loop-resumes-implementer` runs
   entered a fix cycle at all (`3e82`, `c833` — Mechanism classification,
