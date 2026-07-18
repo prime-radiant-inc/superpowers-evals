@@ -782,14 +782,38 @@ probe's before/after claim, so it gets real n (raised 1→2 per the
 
 | Arm | Agent | Probe | n | Verdict |
 |---|---|---|---|---|
-| Treatment (PR) | claude | (a) round-4 escalation integrity | 2 | |
-| Control (dev) | claude | (a) round-4 escalation integrity | 2 | |
-| Treatment (PR) | claude | (b) scoped re-review discipline | 2 | |
-| Control (dev) | claude | (b) scoped re-review discipline | 2 | |
-| Treatment (PR) | claude | (c) final-review single-fix-wave | 2 | |
-| Control (dev) | claude | (c) final-review single-fix-wave | 2 | |
+| Treatment (PR) | claude | (a) round-4 escalation integrity | 2 | pass, pass |
+| Control (dev) | claude | (a) round-4 escalation integrity | 2 | indeterminate, fail |
+| Treatment (PR) | claude | (b) scoped re-review discipline | 2 | fail, pass |
+| Control (dev) | claude | (b) scoped re-review discipline | 2 | fail, fail |
+| Treatment (PR) | claude | (c) final-review single-fix-wave | 2 | pass, pass |
+| Control (dev) | claude | (c) final-review single-fix-wave | 2 | pass, fail |
 
 Planned: 12 runs.
+
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+Per-scenario contemporaneous pairing order: T,C,T,C.
+
+| Job | Probe | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|---|
+| T#1 | (a) | Treatment (PR) | sdd-round4-escalates-model | claude | opus_bedrock | pass | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T041206Z-a1a0 |
+| C#1 | (a) | Control (dev) | sdd-round4-escalates-model | claude | opus_bedrock | indeterminate | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T042127Z-94fe |
+| T#2 | (a) | Treatment (PR) | sdd-round4-escalates-model | claude | opus_bedrock | pass | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T043052Z-4b51 |
+| C#2 | (a) | Control (dev) | sdd-round4-escalates-model | claude | opus_bedrock | fail | sdd-round4-escalates-model-claude-opus_bedrock-linux-20260718T044013Z-9d4b |
+| T#1 | (b) | Treatment (PR) | sdd-re-review-scoped | claude | opus_bedrock | fail | sdd-re-review-scoped-claude-opus_bedrock-linux-20260718T045240Z-e9a7 |
+| C#1 | (b) | Control (dev) | sdd-re-review-scoped | claude | opus_bedrock | fail | sdd-re-review-scoped-claude-opus_bedrock-linux-20260718T050201Z-6a1e |
+| T#2 | (b) | Treatment (PR) | sdd-re-review-scoped | claude | opus_bedrock | pass | sdd-re-review-scoped-claude-opus_bedrock-linux-20260718T051425Z-beac |
+| C#2 | (b) | Control (dev) | sdd-re-review-scoped | claude | opus_bedrock | fail | sdd-re-review-scoped-claude-opus_bedrock-linux-20260718T052346Z-172b |
+| T#1 | (c) | Treatment (PR) | sdd-final-review-single-wave | claude | opus_bedrock | pass | sdd-final-review-single-wave-claude-opus_bedrock-linux-20260718T053309Z-a5c4 |
+| C#1 | (c) | Control (dev) | sdd-final-review-single-wave | claude | opus_bedrock | pass | sdd-final-review-single-wave-claude-opus_bedrock-linux-20260718T054232Z-ea34 |
+| T#2 | (c) | Treatment (PR) | sdd-final-review-single-wave | claude | opus_bedrock | pass | sdd-final-review-single-wave-claude-opus_bedrock-linux-20260718T055156Z-92f2 |
+| C#2 | (c) | Control (dev) | sdd-final-review-single-wave | claude | opus_bedrock | fail | sdd-final-review-single-wave-claude-opus_bedrock-linux-20260718T060119Z-209c |
+
+Block 7 complete: 12/12 planned jobs. Recorded faithfully — no
+interpretation/triage performed here, including the probe-c control pass
+(important data per the pre-registered discipline, no adjudication made).
 
 ## Negative results
 
