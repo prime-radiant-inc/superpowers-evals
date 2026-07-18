@@ -9,14 +9,16 @@
 # Gauntlet-Agent judge grades the scoping AC itself from the full
 # transcript.
 #
-# The matched literal is deliberately "magic numbers 3600 and 60" WITHOUT
-# "in formatDuration": a live run showed the dispatched prompt wraps the
-# function name in a markdown code span (`` `formatDuration` ``, and the
-# fix dispatch additionally bolds the whole clause, `**Magic numbers 3600
-# and 60**`) — real, skill-compliant prose, not a defuse — which broke a
-# plain-text "...60 in formatDuration..." substring match. "magic numbers
-# 3600 and 60" alone is unaffected by that formatting and stays specific
-# enough not to collide with an unrelated dispatch.
+# The matched literal is deliberately "lack named constants" — the tail of
+# the seeded finding string (ROUND1_MAGIC_NUMBERS_FINDING in
+# src/setup-helpers/sdd-fixtures.ts). Live runs show the dispatched prompt
+# can wrap the function name AND the numerals in markdown code spans
+# (`` `formatDuration` ``, `` `3600` ``, `` `60` ``) — real, skill-compliant
+# prose, not a defuse — which breaks any plain-text substring spanning those
+# tokens (a prior literal, "magic numbers 3600 and 60", false-failed a
+# treatment run for exactly this reason). "lack named constants" sits after
+# the numerals in plain English, is unaffected by that formatting, and stays
+# specific enough not to collide with an unrelated dispatch.
 
 pre() {
     git-repo
@@ -31,7 +33,7 @@ pre() {
 post() {
     check-transcript skill-called superpowers:subagent-driven-development
     check-transcript tool-called Agent
-    check-transcript tool-arg-match Agent --matches 'prompt=magic numbers 3600 and 60' --ignore-case
+    check-transcript tool-arg-match Agent --matches 'prompt=lack named constants' --ignore-case
     file-contains '.superpowers/sdd/progress.md' 'fix round 2/5'
     command-succeeds 'npm test'
 }
