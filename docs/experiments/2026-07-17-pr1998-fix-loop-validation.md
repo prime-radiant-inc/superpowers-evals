@@ -622,10 +622,27 @@ Gated on the codex capability precheck (above).
 
 | Arm | Agent | n | Verdict |
 |---|---|---|---|
-| Treatment (PR) | codex | 3 | |
-| Control (dev) | codex | 2 | |
+| Treatment (PR) | codex | 3 | 3 pass |
+| Control (dev) | codex | 2 | 2 pass |
 
 Planned: 5 runs.
+
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+Contemporaneous pairing order: T,C,T,C,T.
+
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| T#1 | Treatment (PR) | sdd-fix-loop-resumes-implementer | codex | openai_responses | pass | sdd-fix-loop-resumes-implementer-codex-openai_responses-linux-20260718T031214Z-9be9 |
+| C#1 | Control (dev) | sdd-fix-loop-resumes-implementer | codex | openai_responses | pass | sdd-fix-loop-resumes-implementer-codex-openai_responses-linux-20260718T032445Z-0c4e |
+| T#2 | Treatment (PR) | sdd-fix-loop-resumes-implementer | codex | openai_responses | pass | sdd-fix-loop-resumes-implementer-codex-openai_responses-linux-20260718T033411Z-3baa |
+| C#2 | Control (dev) | sdd-fix-loop-resumes-implementer | codex | openai_responses | pass | sdd-fix-loop-resumes-implementer-codex-openai_responses-linux-20260718T034640Z-64bc |
+| T#3 | Treatment (PR) | sdd-fix-loop-resumes-implementer | codex | openai_responses | pass | sdd-fix-loop-resumes-implementer-codex-openai_responses-linux-20260718T035910Z-5820 |
+
+Block 3 complete: 5/5 planned jobs, all pass. Recorded faithfully — no
+mechanism/route triage performed here (that is a separate transcript-sweep
+task, not part of this job program).
 
 ### Block 4 — Regression (author's 4)
 
