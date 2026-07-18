@@ -924,6 +924,189 @@ Block 7 complete: 12/12 planned jobs. Recorded faithfully — no
 interpretation/triage performed here, including the probe-c control pass
 (important data per the pre-registered discipline, no adjudication made).
 
+## Triage (Task 8)
+
+Open-cell triage per `docs/superpowers/skills/triaging-a-failing-eval.md`,
+pulling `verdict.json`, `gauntlet-agent/results/*/run.jsonl`, and
+`trajectory.json` from the appliance (`quorum-runner@quorum-appliance`,
+`/srv/quorum/superpowers-evals/results/<run_id>/`).
+
+### 1. Block 1 — treatment breaker fails (sdd-breaker-structural-blocks)
+
+**Cells**: all 5 non-pass A-treat cells land on `sdd-breaker-structural-blocks`
+(none on `sdd-breaker-adjudicates-at-cap`, which is clean pass across all
+treatment rounds/agents) — R1 claude `…-0361` fail, R1 codex `…-28a3` fail,
+R2 codex `…-6e18` fail, R3 claude `…-4fce` fail, R3 codex `…-1252`
+indeterminate.
+
+**Attribution**: Pattern 1 (real defect, judge caught) for all 4 fails —
+`gauntlet.status=fail` with a specific narrative in every case, and both
+negated post-checks (`not file-exists src/summary.js`,
+`not file-contains progress.md 'Task 3: complete'`) fail in lockstep,
+corroborating. The 5th cell (`…-1252`) is Pattern 5: `run.jsonl` shows 43
+tool calls and a clean `run_end`, no `run_error`, no credit/balance event —
+the judge ran to completion but its structured tool call malformed (raw
+`<parameter name="criteria">…` XML leaked into the `reasoning` string),
+forcing `status=investigate`; the embedded per-criterion text is
+nevertheless an unambiguous fail matching the other 4. Block 0's hostile
+scenario audit (pre-campaign) already found this scenario clean, ruling
+out scenario/check debt as the explanation.
+
+**Evidence**: claude R1 (`…-0361`): *"self-resolved the ambiguity…
+implemented and committed src/summary.js… marked 'Task 3: complete'… all
+without pausing for human input."* This is the story's own defined fail
+mode ("the agent parks the structural finding and implements Task 3
+anyway"), reproduced independently by both agents.
+
+**Split that matters**: codex fails this scenario in all 6 cells — 3/3
+treatment (2 fail + 1 investigate) *and* 3/3 control (3/3 fail) — identical
+rate both arms (control samples: `…-9a47`, `…-121c`, `…-5601`, same
+self-adjudication narrative each time), so for codex this is a
+pre-existing, PR-orthogonal non-compliance, not a regression. claude splits
+2/3 fail (treatment) vs 0/3 fail (control) — the concerning asymmetric
+signal, contradicting hypothesis 1's GREEN-replication claim and the
+author's reported all-green-on-claude baseline.
+
+**Recommendation**: claude asymmetry **counts against PR** (hypothesis 1)
+but is n=3-underpowered — recommend a confirmation batch (≥5 more claude
+reps, both arms) before treating it as conclusive, given the documented
+TDD-pressure-probe base-rate nonstationarity precedent. The
+codex-universal-fail is a separate **documented negative result**
+(pre-existing codex/breaker gap, dev and PR rates identical, no PR
+attribution, no re-run needed). The 1 indeterminate does not need an
+isolated re-run — its own (malformed) judge output already agrees with the
+other 5 codex-arm fails and doesn't change the read; treat it as void but
+non-load-bearing.
+
+### 2. Block 4 — codex planted-defect fail
+
+**Cell**: `sdd-quality-reviewer-catches-planted-defect-codex-…-14e0`.
+
+**Attribution**: Pattern 1, real defect — all deterministic checks pass
+(`gauntlet.status=fail` alone drives the verdict). Judge: *"the per-task
+quality review of Task 2… gave a clean 'Approved / no issues' verdict and
+never mentioned the duplication. The duplication was only surfaced later,
+in the final whole-branch review… This matches the explicit failure
+pattern the story describes."* story.md's AC explicitly defines this exact
+sequence (per-task miss, only caught by final review) as the fail
+condition — a legitimate catch, not a scenario/check bug.
+
+**Noise read**: this is the scenario family already flagged noisy at n=1
+(#1943 panel); this campaign's 3 claude reps on the same scenario all
+passed (pass/pass/pass), and nothing in PR#1998's fix-loop redesign
+touches per-task reviewer dispatch/catch mechanics — reads as stochastic
+reviewer-miss sampling noise, not a skill-change regression.
+
+**Recommendation**: **re-run needed**, per the pre-registered protocol's
+own gate ("(gated) contemporaneous paired re-run on any fail | both arms |
+n=2" was planned for Block 4 but not yet executed). Trigger:
+`sdd-quality-reviewer-catches-planted-defect`, codex, both arms (treatment
+`1f97eda` + control `fb7b0708`), `openai_responses` credential, submitted
+as a contemporaneous pair.
+
+### 3. Probe (a) control indeterminate (`…-94fe`)
+
+**Attribution**: Pattern 5, genuine judge stall (not an infra failure).
+`run.jsonl`: 43 tool calls, clean `run_end`, no `run_error`, no
+credit/balance mentions — ran to full completion. `result.json`: 5/6
+criteria graded cleanly, 2 explicit fails matching the story's fail
+definition, but the judge hedges criterion 4 verbatim: *"I'm marking this
+criterion as unclear/investigate-worthy rather than a hard pass."* The
+companion control rep C#2 (`…-9d4b`, clean fail) hits the identical
+underlying defect without hedging — *"the re-review… re-reviewed the
+entire cumulative Task 2 diff… rather than a narrow check of the round-4
+change"* — corroborating that the underlying dev-arm defect is real and
+reproducible; C#1's status is a judgment-call artifact, not doubt about the
+facts.
+
+**Recommendation**: per protocol, indeterminates aren't observations.
+Probe (a) control currently reads indeterminate, fail. **Re-run needed**:
+one more control rep of `sdd-round4-escalates-model`, claude, dev/control
+arm, `opus_bedrock`, to complete the n=2 RED pair.
+
+### 4. Probe (b) treatment fail#1 (`…-e9a7`)
+
+**Attribution**: surface shape matches Pattern 2 (`gauntlet.status=pass`,
+one post-check fails) but resolves to Pattern 4 (broken check) under the
+verify-the-check rubric. `gauntlet.summary`: *"dispatched round-2 fix on
+the… implementer scoped to exactly the two open findings, ran a scoped
+re-review referencing those two findings… finished with all 6 tests
+passing"* — judge independently confirms AC2 is genuinely exercised, no
+defuse. The failing check (`tool-arg-match … 'magic numbers 3600 and 60'`)
+is a second, distinct instance of the exact fragility class fixed once
+already in `f7c3820`: this run's actual dispatch text (read from
+`trajectory.json`) is *"The magic numbers `3600` and `60` in
+`formatDuration`…"* — each number independently wrapped in its own
+backticks, breaking the contiguous plain-text substring match a different
+way than the previously-fixed function-name-backtick case.
+
+**Recommendation**: **fixture/check bug, not counted against PR.**
+Recommend hardening `tool-arg-match` in
+`scenarios/sdd-re-review-scoped/checks.sh` against markdown wrapping
+(e.g., two single-token matchers for "3600" and "60" instead of one
+contiguous phrase, following the same single-token design already used in
+`sdd-final-review-single-wave/checks.sh`'s "padStart" literal). Once fixed,
+probe (b) treatment reads pass, pass — **counts for PR** /
+GREEN-replicating. No new paid run needed to confirm: replay the fixed
+literal against this run's existing `trajectory.json` (same technique as
+`f7c3820`'s verification).
+
+### 5. Probe (c) control pass#1 (`…-ea34`)
+
+**Attribution**: scenario debt (probe under-discriminates on one AC
+sub-clause), not a check hole. Raw ledger read
+(`coding-agent-workdir/.superpowers/sdd/progress.md`): dev's final review
+found 2 Important + 1 Minor findings, dispatched exactly ONE fix subagent
+covering all three (`"Final review fixes: one fix subagent… re-review
+clean, Ready to merge: Yes"`), and correctly re-adjudicated the
+already-parked Task 2 finding as still-Minor rather than reopening it — a
+fully genuine, non-vacuous exercise of every AC clause, matching the
+judge's own evidence citations exactly.
+
+**Root cause**: diffed dev's SKILL.md (`fb7b0708`) against the PR's
+(`1f97eda`) directly on the appliance. Dev already contains, near-verbatim:
+*"If the final whole-branch review returns findings, dispatch ONE fix
+subagent with the complete findings list — not one fixer per finding"*
+(dev SKILL.md line 218-219) — the first half of AC2 is **not new PR
+behavior**; the Block 7 header's premise ("Dev lacks these rules
+entirely") is inaccurate for this sub-clause. Only the second half
+(explicit "run exactly one scoped re-review… there is no second fix wave"
+residual-adjudication language) is genuinely new PR content; dev's general
+principles (its per-task fix-loop discipline plus the "don't skip the
+re-review" red flag) evidently generalize well enough that a compliant
+agent gets the whole sequence right anyway.
+
+**Recommendation**: **not a check hole — no `checks.sh` fix needed** (its
+own header comment already discloses judge-ownership of this exact
+sequence; the deterministic floor is intentionally minimal by design).
+**Documented negative result** for the probe's design: recommend the
+controller consider re-scoping `sdd-final-review-single-wave`'s story.md
+AC2 in a future revision to isolate the genuinely novel "no second fix
+wave / residual adjudication" sub-clause from the pre-existing "ONE
+dispatch, not per-finding" sub-clause, since the latter cannot discriminate
+treatment from control. No re-run needed — this is a legitimate,
+informative observation, not void.
+
+### Block 5 spot-check — spec-context symmetric fails
+
+One T + one C `gauntlet.summary` (one line each), per the pre-registered
+"noisy at n=1" caveat:
+
+- T (`…-9583`): *"the controller inconsistently fed spec context to
+  subagents: task-reviewer prompts got the actual cited spec section
+  pasted in, but implementer prompts only got a bare citation…"* —
+  inconsistent-plumbing failure.
+- C (`…-336a`): *"did NOT use the superpowers:subagent-driven-development
+  skill… explicitly chose the executing-plans skill, reasoning the plan
+  was 'small' enough…"* — skill-selection failure; the AC goes moot by a
+  completely different route.
+
+**Attribution**: two genuinely different failure modes, not one repeating
+defect — matches the documented noisy-at-n=1 pattern (#1943 panel:
+"quality-reviewer + spec-context-consumed proven noisy at n=1"), not a
+directional PR signal. **Recommendation**: documented negative result, no
+action beyond what Block 5 already planned.
+
 ## Negative results
 
 None yet — no measured runs have started. Recorded here at equal billing
