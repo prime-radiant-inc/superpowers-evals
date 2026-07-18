@@ -698,6 +698,26 @@ Contemporaneous pairing order: T,C,T,C,T,C.
 
 Cumulative n=3 each arm: Treatment fail, fail, pass. Control fail, fail, fail.
 
+#### Round-level cell results — #1943 draft pair (jobs 10-11)
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| Job10 | Treatment (PR) | sdd-same-plan-resume | claude | opus_bedrock | fail | sdd-same-plan-resume-claude-opus_bedrock-linux-20260718T013508Z-9a53 |
+| Job10 | Treatment (PR) | sdd-same-plan-resume | codex | openai_responses | fail | sdd-same-plan-resume-codex-openai_responses-linux-20260718T013508Z-0cd9 |
+| Job10 | Treatment (PR) | sdd-stale-foreign-workspace | claude | opus_bedrock | pass | sdd-stale-foreign-workspace-claude-opus_bedrock-linux-20260718T013508Z-5540 |
+| Job10 | Treatment (PR) | sdd-stale-foreign-workspace | codex | openai_responses | pass | sdd-stale-foreign-workspace-codex-openai_responses-linux-20260718T013508Z-3622 |
+| Job11 | Control (dev) | sdd-same-plan-resume | claude | opus_bedrock | fail | sdd-same-plan-resume-claude-opus_bedrock-linux-20260718T014742Z-7f5b |
+| Job11 | Control (dev) | sdd-same-plan-resume | codex | openai_responses | fail | sdd-same-plan-resume-codex-openai_responses-linux-20260718T014742Z-c10e |
+| Job11 | Control (dev) | sdd-stale-foreign-workspace | claude | opus_bedrock | pass | sdd-stale-foreign-workspace-claude-opus_bedrock-linux-20260718T014742Z-cfb3 |
+| Job11 | Control (dev) | sdd-stale-foreign-workspace | codex | openai_responses | pass | sdd-stale-foreign-workspace-codex-openai_responses-linux-20260718T014742Z-16b3 |
+
+Batches: Job10 `batch-20260718T013508Z-4655` (2 pass, 2 fail, 4 skipped
+expected); Job11 `batch-20260718T014742Z-09f4` (2 pass, 2 fail, 4 skipped
+expected). Both arms same split: same-plan-resume fail on both agents,
+stale-foreign-workspace pass on both agents.
+
 ### Block 6 — End-to-end
 
 | Arm | Agent | Scenario | n | Verdict |
