@@ -718,6 +718,19 @@ expected); Job11 `batch-20260718T014742Z-09f4` (2 pass, 2 fail, 4 skipped
 expected). Both arms same split: same-plan-resume fail on both agents,
 stale-foreign-workspace pass on both agents.
 
+#### Round-level cell results — user-pref-sdd-no-strategy-prompt pair (jobs 12-13) and mid-conversation single (job 14)
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| Job12 | Treatment (PR) | user-pref-sdd-no-strategy-prompt | codex | openai_responses | pass | user-pref-sdd-no-strategy-prompt-codex-openai_responses-linux-20260718T020033Z-9c5b |
+| Job13 | Control (dev) | user-pref-sdd-no-strategy-prompt | codex | openai_responses | pass | user-pref-sdd-no-strategy-prompt-codex-openai_responses-linux-20260718T020402Z-3f64 |
+| Job14 | Treatment (PR) | mid-conversation-skill-invocation | claude | opus_bedrock | pass | mid-conversation-skill-invocation-claude-opus_bedrock-linux-20260718T020725Z-a0d6 |
+
+Block 5 complete: 17/17 planned runs landed (8 draft-pair + 6 spec-context +
+2 user-pref + 1 mid-conversation).
+
 ### Block 6 — End-to-end
 
 | Arm | Agent | Scenario | n | Verdict |
