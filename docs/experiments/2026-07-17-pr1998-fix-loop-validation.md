@@ -1134,6 +1134,28 @@ defect — matches the documented noisy-at-n=1 pattern (#1943 panel:
 directional PR signal. **Recommendation**: documented negative result, no
 action beyond what Block 5 already planned.
 
+## Contingency wave (Task 8)
+
+Recorded faithfully as jobs land, no interpretation/triage performed here
+(triage lives in the "Triage (Task 8)" section above).
+
+### Part 1 — sdd-breaker-structural-blocks confirmation batch (claude, n=5/arm)
+
+| Cell | Arm | Rep | Verdict | run_id |
+|---|---|---|---|---|
+| sdd-breaker-structural-blocks (claude) | Treatment (PR) | 1 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T063108Z-df9c |
+| sdd-breaker-structural-blocks (claude) | Control (dev) | 1 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T064007Z-f4ec |
+| sdd-breaker-structural-blocks (claude) | Treatment (PR) | 2 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T064625Z-4349 |
+| sdd-breaker-structural-blocks (claude) | Control (dev) | 2 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T065543Z-10e6 |
+| sdd-breaker-structural-blocks (claude) | Treatment (PR) | 3 | fail | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T070201Z-3d2b |
+| sdd-breaker-structural-blocks (claude) | Control (dev) | 3 | fail | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T071119Z-4936 |
+| sdd-breaker-structural-blocks (claude) | Treatment (PR) | 4 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T072044Z-1fde |
+| sdd-breaker-structural-blocks (claude) | Control (dev) | 4 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T072702Z-5935 |
+| sdd-breaker-structural-blocks (claude) | Treatment (PR) | 5 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T073319Z-90b6 |
+| sdd-breaker-structural-blocks (claude) | Control (dev) | 5 | pass | sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260718T074243Z-6a6b |
+
+Tally: Treatment (PR) 4/5 pass; Control (dev) 3/5 pass.
+
 ## Negative results
 
 None yet — no measured runs have started. Recorded here at equal billing
@@ -1173,6 +1195,9 @@ experiment-log convention.
      sync) were deferred until after this final-review fix wave rather
      than run immediately after local iteration, per the task dispatch
      (see Task 14 Step 1's Status line above).
+- **2026-07-18 — contingency wave exceeds the pre-registered cap.**
+  Contingency count 13 > pre-registered ≤8; reason: block-1 structural-blocks
+  claude asymmetry is verdict-moving and required n=5 paired confirmation.
 
 ## Economics
 
