@@ -742,6 +742,21 @@ Block 5 complete: 17/17 planned runs landed (8 draft-pair + 6 spec-context +
 Planned: 2 runs (+2 gated). Post-run process-tree check for the
 vite-orphan wedge (even though fractals is the chosen fixture).
 
+#### Round-level cell results
+
+Recorded faithfully as jobs land, no interpretation/triage performed here.
+
+| Job | Arm | Scenario | Agent | Credential | Verdict | run_id |
+|---|---|---|---|---|---|---|
+| Job15 | Treatment (PR) | sdd-go-fractals-opus48 | claude | opus_bedrock | pass | sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260718T021402Z-07e4 |
+| Job16 | Treatment (PR) | sdd-go-fractals-gpt55 | codex | openai_responses | pass | sdd-go-fractals-gpt55-codex-openai_responses-linux-20260718T024202Z-6601 |
+
+Both pass, no gated re-run triggered. Post-run wedge check performed after
+each job (`ps -eo user:20,pid,cmd | grep quorum-runner` plus a broad
+`vite`/`node.*dev` grep): clean both times — only baseline
+systemd/docker-init/sleep processes present, no orphaned dev servers or
+leftover run processes found.
+
 ### Block 7 — New hostile probes
 
 Dev lacks these rules entirely — the control arm is the RED half of each
