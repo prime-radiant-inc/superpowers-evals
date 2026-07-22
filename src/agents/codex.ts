@@ -336,6 +336,7 @@ function mapWireApi(api: string): string {
 
 // Subscription path: enable plugins and the superpowers@debug plugin.
 // PRI-2506: plugins-only, no hooks/plugin_hooks/trusted_hash.
+// multi_agent enables spawn_agent for the SDD dispatch scenarios (codex 0.145+).
 function writePluginsOnlyConfig(configPath: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(
@@ -343,6 +344,7 @@ function writePluginsOnlyConfig(configPath: string): void {
     [
       '[features]',
       'plugins = true',
+      'multi_agent = true',
       '',
       '[plugins."superpowers@debug"]',
       'enabled = true',
@@ -376,6 +378,7 @@ function writeApiKeyConfig(
       '',
       '[features]',
       'plugins = true',
+      'multi_agent = true',
       '',
       '[plugins."superpowers@debug"]',
       'enabled = true',

@@ -250,6 +250,7 @@ test('provision copies subscription auth and stages hook-less plugin', () => {
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).toContain('enabled = true');
       expect(configToml).not.toContain('hooks = true');
@@ -748,6 +749,7 @@ test('subscription credential: auth.json seeded, no model_providers, no codex-ap
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).not.toContain('trusted_hash');
       expect(configToml).not.toContain('hooks = true');
@@ -998,6 +1000,7 @@ test('subscription: manifest with hooks:null gets injected hooks:{}, plugins-onl
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('hooks = true');
@@ -1035,6 +1038,7 @@ test('subscription: manifest with hooks:{} gets identical injected hooks:{}, plu
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('hooks = true');
@@ -1077,6 +1081,7 @@ test('subscription: manifest with hooks:"./hooks/x.json" gets injected hooks:{},
       );
       expect(configToml).toContain('[features]');
       expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
       expect(configToml).toContain('[plugins."superpowers@debug"]');
       expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('hooks = true');
@@ -1116,6 +1121,7 @@ test('api-key: injected hooks:{}, model_providers block present, plugins-only fe
         );
         expect(configToml).toContain('[features]');
         expect(configToml).toContain('plugins = true');
+      expect(configToml).toContain('multi_agent = true');
         expect(configToml).toContain('[model_providers."quorum"]');
         expect(configToml).toContain('[plugins."superpowers@debug"]');
         expect(configToml).not.toContain('plugin_hooks');
