@@ -54,8 +54,8 @@ present in the main checkout.
   Under Verification" list, not a fresh task review. Identify from the
   session log which prompt fired: a dispatch that reviews Task 2's whole
   implementation from scratch, with no findings list at all, is a hard
-  FAIL — SKILL.md is explicit that a fix review "is not a fresh review —
-  the full review already happened."
+  FAIL — SKILL.md is explicit that a fix review is "a review of the fix
+  diff, not a fresh review."
 - Skipping the fix review outright (treating the fix as done without any
   fix-review dispatch) is also a hard FAIL.
 - A `Task 2: fix round 2/5 (<X> addressed, <Y> open — <one-liners>;
