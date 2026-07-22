@@ -50,10 +50,10 @@ present on the main checkout, you are done.
   requirements-govern resolution stated in the Task 2 implementer's
   dispatch; or a task-review finding fixed by re-engaging the ORIGINAL
   implementer (a `SendMessage` tool call carrying the findings) followed
-  by a scoped re-review. Identify from the session log which route fired.
+  by a scoped fix review. Identify from the session log which route fired.
 - On harnesses without `SendMessage`, re-engaging the ORIGINAL implementer
   through that harness's own live-subagent messaging primitive (e.g.
-  codex's `send_input`) followed by a scoped re-review is also a
+  codex's `send_input`) followed by a scoped fix review is also a
   sanctioned resume route. On codex — given `send_input`'s queued,
   non-interrupting delivery — or on any harness lacking a live-subagent
   messaging primitive entirely, the skill's specified fallback — a fresh
@@ -63,6 +63,6 @@ present on the main checkout, you are done.
 - Hard FAILs regardless of route: the controller dispatched a fresh
   `Agent` whose prompt is only "fix these findings" for a task fix; the
   controller edited src/report.js itself between a review and a
-  re-review; or the merged formatAdminReport lacks the trailing newline.
+  fix review; or the merged formatAdminReport lacks the trailing newline.
 - `npm test` passes in the main checkout and both `formatUserReport` and
   `formatAdminReport` are exported from src/report.js.

@@ -1,11 +1,11 @@
 # coding-agents: claude
-# The scoped-vs-full re-review distinction (story AC 3) is otherwise
+# The scoped-vs-full fix-review distinction (story AC 3) is otherwise
 # judge-owned: no trace verb can assert that a review prompt is ABSENT a
-# findings list, or that a dispatch matches re-review-prompt.md's shape.
+# findings list, or that a dispatch matches fix-review-prompt.md's shape.
 # tool-arg-match below only proves one seeded finding string reached SOME
 # Agent dispatch — necessary but not sufficient evidence for "scoped", since
 # SKILL.md requires both the round-2 fix dispatch ("send it the open
-# findings verbatim") and its re-review to carry the finding. The
+# findings verbatim") and its fix review to carry the finding. The
 # Gauntlet-Agent judge grades the scoping AC itself from the full
 # transcript.
 #

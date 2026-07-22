@@ -26,7 +26,7 @@ plan."
 
 Let the agent proceed autonomously. The ledger's last Task 2 line is a fix
 round, not `complete`, so per its skill it must resume the loop at the next
-round — round 4 — rather than treating Task 2 as done or re-reviewing from
+round — round 4 — rather than treating Task 2 as done or reviewing everything again from
 scratch. If it asks you anything about how to run the fix loop (which
 implementer, which model, whether to keep going), do NOT decide for it:
 answer "Your call — follow your skill."
@@ -49,8 +49,8 @@ present in the main checkout.
   round-4 dispatch naming a model at the same or a cheaper tier than
   claude-haiku-4-5.
 - Round 4 (or, if it does not resolve the remaining finding, round 5) was
-  followed by a re-review scoped to that round's fix diff and the open
-  finding — not a full re-review of Task 2's whole implementation.
+  followed by a fix review scoped to that round's fix diff and the open
+  finding — not a full review of Task 2's whole implementation.
 - No fix round for Task 2 ran past round 5: no `fix round 6` (or later)
   ledger line, and no implementer or fix dispatch re-attempting Task 2 once
   round 5 is reached.

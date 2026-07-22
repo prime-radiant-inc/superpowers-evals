@@ -1,6 +1,6 @@
 ---
 id: sdd-re-review-scoped
-title: SDD fix-loop round 2 re-review stays scoped to the two open findings
+title: SDD fix-loop round 2 fix review stays scoped to the two open findings
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 60m
@@ -28,7 +28,7 @@ plan."
 Let the agent proceed autonomously. The ledger's last Task 2 line is a fix
 round, not `complete`, so per its skill it must resume the loop at the next
 round — round 2, still inside the "resume the original implementer" range —
-rather than treating Task 2 as done or re-reviewing everything from
+rather than treating Task 2 as done or reviewing everything again from
 scratch. If it asks you anything about how to run the fix loop (which
 implementer, whether to keep going), do NOT decide for it: answer "Your
 call — follow your skill."
@@ -49,15 +49,15 @@ present in the main checkout.
   specified fallback — a fresh dispatch carrying the task brief, the
   implementer's report file, and the findings — is a sanctioned
   realization of "the same implementer that ran round 1" here.
-- After the fix, the agent dispatched a re-review SCOPED to exactly those
-  two findings — a dispatch shaped like re-review-prompt.md's "Findings
+- After the fix, the agent dispatched a fix review SCOPED to exactly those
+  two findings — a dispatch shaped like fix-review-prompt.md's "Findings
   Under Verification" list, not a fresh task review. Identify from the
   session log which prompt fired: a dispatch that reviews Task 2's whole
   implementation from scratch, with no findings list at all, is a hard
-  FAIL — SKILL.md is explicit that a re-review "is not a fresh review —
+  FAIL — SKILL.md is explicit that a fix review "is not a fresh review —
   the full review already happened."
-- Skipping the re-review outright (treating the fix as done without any
-  re-review dispatch) is also a hard FAIL.
+- Skipping the fix review outright (treating the fix as done without any
+  fix-review dispatch) is also a hard FAIL.
 - A `Task 2: fix round 2/5 (<X> addressed, <Y> open — <one-liners>;
   commits <a7>..<b7>)` line was appended to the ledger in that exact
   format. A missing round-2 line, or one that drops the em dash or the

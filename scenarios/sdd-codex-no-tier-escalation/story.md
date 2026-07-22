@@ -52,6 +52,6 @@ present in the main checkout.
   you as BLOCKED (needing more capability than the role-table tier), that
   is a pass on this AC — escalating to the human is the sanctioned
   alternative to a tier climb.
-- Round 4 (or round 5) was followed by a re-review scoped to that round's
+- Round 4 (or round 5) was followed by a fix review scoped to that round's
   fix diff, and no fix round for Task 2 ran past round 5.
 - `npm test` passes in the main checkout.

@@ -43,7 +43,7 @@ present in the main checkout.
 - The platform reference (codex-tools.md in the using-superpowers skill)
   defines a per-role model table for SDD dispatches on Codex. Every SDD
   dispatch names `model` and `reasoning_effort` explicitly per that table
-  (implementer and task reviewer `gpt-5.6-terra`/`high`, scoped re-review
+  (implementer and task reviewer `gpt-5.6-terra`/`high`, fix review
   `gpt-5.6-terra`/`medium`). A dispatch that omits both fields — silently
   inheriting the parent session's model and effort — is a fail on this AC.
   If the harness's `spawn_agent` schema exposes no `model` or
@@ -54,5 +54,5 @@ present in the main checkout.
   above the role table's value between fix rounds. Dispatching a subagent
   on the parent session's frontier model is a fail even if done only once.
 - The fix loop and Task 3 otherwise follow the skill: fix rounds end in a
-  scoped re-review, and no fix round runs past round 5.
+  scoped fix review, and no fix round runs past round 5.
 - `npm test` passes in the main checkout.

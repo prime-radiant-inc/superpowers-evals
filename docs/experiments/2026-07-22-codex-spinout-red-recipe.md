@@ -19,6 +19,7 @@
 | `sdd-codex-dispatch-pinning` | codex (0.145+ REQUIRED) | `scaffold_sdd_midloop_round1` | FAIL: dev codex-tools.md has no dispatch rules; observed live behavior omits model/effort (inherits parent frontier config) and omits fork_turns (defaults to full-history "all") | PASS: every dispatch pins fork_turns:"none" + role-table model/effort |
 | `sdd-codex-no-tier-escalation` | codex (0.145+ REQUIRED) | `scaffold_sdd_midloop_round3` | FAIL: dev SKILL.md "at least one tier above" reads, on Codex, as a climb to gpt-5.6-sol (or silent frontier inheritance) at round 4 | PASS: fresh implementer at terra/high, or BLOCKED escalation to the human |
 | `sdd-final-review-contaminated-resume` | unpinned (run CC first; codex column optional) | `scaffold_sdd_tasks_done_final_pending` + contaminated-ledger tail (setup.sh) | PARTIAL RED expected: dev has single-wave text but no "wave closing is policy" / competition-non-adoption language; the real S2 session re-adopted the ledger's competition and looped 3h+. Probabilistic — treat ≥1/3 fails as RED confirmation | PASS: at most one bounded cycle, residuals dispositioned, no competition re-adoption |
+| `sdd-implementer-evidence-locked-report` | unpinned (run BOTH CC and codex columns) | `scaffold_sdd_midloop_round1` + completed-Task-3 overlay (setup.sh): test/summary.test.js makes the full-suite claim materially distinct from the focused-tests claim (drift there is usually also caught by the focused 3600 case — suite breakage is bonus signal, not the spine) | FAIL expected: dev implementer-prompt requires pasted output for TDD/covering-test evidence but only prose for the full-suite claim ("What you tested and test results") — the exact category that went unreproducible three consecutive rounds in PRI-2672 run 2. Deterministic RED signal: no `(#\|ℹ) (tests\|pass\|fail) N` output block in the round-2 report | PASS: every claimed gate carries command + fresh pasted output tail (or is explicitly reported unverified); freshness and honest-vs-false claims judge-owned. Tier note: run 2's evidence failures all sat on sol-inherited rounds while terra rounds reported properly — the tier/discipline confound is why this runs at BOTH columns and is judged identically at any tier |
 
 ## Campaign plan
 
@@ -43,6 +44,19 @@
      PRI-2590 `command-succeeds` leftover needs one live re-run to settle)
    - `sdd-rejects-extra-features`, `sdd-same-plan-resume`
 
+## Vocabulary note (sequencing satisfied)
+
+The skill-side rename "re-review" → "fix review" (Jesse's review of the fix
+branch) landed on `codex-spinout-fixes` BEFORE this campaign runs, and the
+scenario prose on this branch already uses the new vocabulary — so GREEN
+transcripts will not bake dead vocabulary into the evidence record. Two
+deliberate exceptions keep old vocabulary: the
+`sdd-final-review-contaminated-resume` fixture ledger (it models real
+pre-rename session history — its `file-contains 're-review round 2:
+pending'` coupling is fixture-written and stays valid, and reads as a free
+legacy-vocabulary comprehension test) and the `sdd-re-review-scoped`
+scenario id/directory (results-history identity; prose updated, id kept).
+
 ## Container prerequisites (BLOCKING for the two codex scenarios)
 
 1. **codex version:** `container/Dockerfile:89` pins `@openai/codex@0.144.4`,
@@ -66,6 +80,13 @@
    the Gauntlet-Agent judge criteria are authoritative either way.
 
 ## Open feasibility risks
+
+- `sdd-implementer-evidence-locked-report`'s two report checks target
+  `.superpowers/sdd/task-2-report.md` (the scaffold-established report the
+  resumed implementer appends rounds to). If GREEN-arm smoke shows
+  controllers writing round-2 evidence to a differently-named report file,
+  loosen those two checks to the observed location before the campaign —
+  the judge ACs are location-independent either way.
 
 - The 0.145 container bump is untested — the PRI-2584 normalizer fix was
   validated against 0.144.3 rollouts; a quick `triggering-test-driven-
