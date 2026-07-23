@@ -35,9 +35,12 @@ pre() {
 
 post() {
     check-transcript skill-called superpowers:subagent-driven-development
-    file-contains '.superpowers/sdd/progress.md' 'fix round 2/5'
+    # The ledger and report live in the plan-scoped SDD workspace, which the
+    # controller correctly deletes at plan end — post-checks race that cleanup
+    # (observed: absent in 6/6 campaign cells, RED and GREEN alike). The
+    # evidence-locked and freshness ACs are judge-owned (raw tool logs are
+    # location-independent); the deterministic layer keeps only what survives
+    # plan completion.
     file-contains 'test/summary.test.js' '1:00:05'
-    file-contains '.superpowers/sdd/task-2-report.md' 'npm test|node --test'
-    file-contains '.superpowers/sdd/task-2-report.md' '(#|ℹ) (tests|pass|fail) [0-9]+'
     command-succeeds 'npm test'
 }
