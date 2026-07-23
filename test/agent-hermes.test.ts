@@ -43,8 +43,8 @@ const HERMES_CONFIG: AgentConfig = {
   name: 'hermes',
   binary: 'sh',
   home_config_subdir: '.hermes',
-  session_log_dir: '${QUORUM_AGENT_HOME}/.hermes/sessions',
-  session_log_glob: '**/*.json',
+  session_log_dir: '${QUORUM_AGENT_HOME}/.hermes/sessions-export',
+  session_log_glob: '*.json',
   normalizer: 'hermes',
   required_env: ['SUPERPOWERS_ROOT'],
   os_support: ['linux'],
@@ -226,10 +226,14 @@ test('provision requires a credential', () => {
 // template pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV but does NOT set
 // HERMES_HOME. Hermes defaults HERMES_HOME to $HOME/.hermes, which is where
 // HermesAgent.provision seeds config.yaml/.env/plugins/superpowers — so
-// Hermes finds it all via the isolated $HOME. Without this launcher, hand-
-// typing `hermes --yes --no-memory` runs against the operator's real
-// ~/.hermes and bypasses everything provision() seeded.
-test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME, and launches with --yes --no-memory', () => {
+// Hermes finds it all via the isolated $HOME. Verified live (Task 5 container
+// probe): `--yes` and `--no-memory` do NOT exist on the real CLI and crash it
+// with "unrecognized arguments"; the real approval-bypass flag is `--yolo`.
+// Memory isolation comes from the throwaway per-run $HOME (a fresh
+// ~/.hermes/state.db every run), not from a flag. Without this launcher,
+// hand-typing `hermes --yolo` runs against the operator's real ~/.hermes and
+// bypasses everything provision() seeded.
+test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME, and launches with --yolo', () => {
   const launcher = readFileSync(
     join(
       import.meta.dir,
@@ -246,11 +250,16 @@ test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME,
   // env assignment on the exec line (the comment block may still mention it).
   expect(launcher).not.toContain('HERMES_HOME="$HERMES_HOME"');
   expect(launcher).not.toMatch(/\bHERMES_HOME=/);
-  // The exec line launches hermes (not a bare, unisolated invocation) with the
-  // memoryless auto-approve flags the eval requires.
-  expect(launcher).toContain(
-    'exec env $QUORUM_HOME_ENV hermes --yes --no-memory',
-  );
+  // The exec line itself: launches hermes (not a bare, unisolated invocation)
+  // with the real approval-bypass flag, and the nonexistent --yes/--no-memory
+  // flags (which would crash the real CLI) must never appear on it — the
+  // comment block above may still mention them as history.
+  const execLine = launcher
+    .split('\n')
+    .find((line) => line.startsWith('exec '));
+  expect(execLine).toBe('exec env $QUORUM_HOME_ENV hermes --yolo "$@"');
+  expect(execLine).not.toContain('--yes');
+  expect(execLine).not.toContain('--no-memory');
   // cd into the prepared workdir before launch, like every other launcher.
   expect(launcher).toContain('cd "$QUORUM_AGENT_CWD"');
 });

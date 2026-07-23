@@ -31,6 +31,11 @@ import {
   scanCopilotSecretLeaks,
 } from '../agents/copilot.ts';
 import { geminiAuthType } from '../agents/gemini.ts';
+import {
+  exportHermesSessions,
+  HermesCaptureError,
+  snapshotHermesSessions,
+} from '../agents/hermes-capture.ts';
 import { xdgHomeEnv, xdgHomeSubdirs } from '../agents/home-env.ts';
 import {
   CLAUDE_ENV_FILE_NAME,
@@ -1395,6 +1400,29 @@ async function runInnerBody(
     }
   }
 
+  // hermes sessions are not files either: they live in a SQLite store
+  // (~/.hermes/state.db). Snapshot the pre-existing session ids before the
+  // run so the post-run export can diff to the NEW ones. A
+  // HermesCaptureError -> capture indeterminate.
+  let hermesSessionSnapshot = new Set<string>();
+  if (cfg.normalizer === 'hermes') {
+    try {
+      hermesSessionSnapshot = snapshotHermesSessions({
+        home: runHomeDir,
+        launchCwd,
+      });
+    } catch (e: unknown) {
+      if (e instanceof HermesCaptureError) {
+        return writeIndeterminate({
+          finalReason: `Hermes session snapshot failed: ${e.message}`,
+          checks: pre.records,
+          error: { stage: 'capture', message: e.message },
+        });
+      }
+      throw e;
+    }
+  }
+
   const snapshot = snapshotDir(logDir, cfg.session_log_glob);
 
   // Populate <runDir>/gauntlet-agent/context/ with the per-agent HOWTO +
@@ -1616,6 +1644,32 @@ async function runInnerBody(
     }
   }
 
+  // hermes: after gauntlet exits, export the NEW sessions (SQLite-stored, not
+  // files) into the file-diffed session-log dir so the generic capture can see
+  // them. Without this every hermes run captures zero rows. A
+  // HermesCaptureError -> capture indeterminate carrying the gauntlet layer.
+  let hermesExportedPaths: readonly string[] = [];
+  if (cfg.normalizer === 'hermes') {
+    try {
+      hermesExportedPaths = exportHermesSessions({
+        hermesHome: runHomeDir,
+        exportDir: logDir,
+        launchCwd,
+        snapshot: hermesSessionSnapshot,
+      });
+    } catch (e: unknown) {
+      if (e instanceof HermesCaptureError) {
+        return writeIndeterminate({
+          finalReason: `Hermes session export failed: ${e.message}`,
+          gauntlet,
+          checks: pre.records,
+          error: { stage: 'capture', message: e.message },
+        });
+      }
+      throw e;
+    }
+  }
+
   // Windows runtime: pull the guest's session logs + workdir into the local run
   // dir so the pre-run snapshot diff and post-checks see them (reproduce the
   // local artifact layout). Must precede the capture diff below.
@@ -1769,6 +1823,27 @@ async function runInnerBody(
       error: {
         stage: 'capture',
         message: 'OpenCode export/capture snapshot mismatch',
+      },
+    });
+  }
+
+  // hermes export/capture snapshot mismatch, same rationale as opencode's: the
+  // export wrote session files but the file-diff capture saw none as new — an
+  // export-snapshot timing problem rather than a genuinely empty run.
+  if (
+    cfg.normalizer === 'hermes' &&
+    capture.sourceLogs.length === 0 &&
+    hermesExportedPaths.length > 0
+  ) {
+    return writeIndeterminate({
+      finalReason:
+        'Hermes exported session files, but file-diff capture did not ' +
+        'see them as new; check export snapshot timing',
+      gauntlet,
+      checks: pre.records,
+      error: {
+        stage: 'capture',
+        message: 'Hermes export/capture snapshot mismatch',
       },
     });
   }

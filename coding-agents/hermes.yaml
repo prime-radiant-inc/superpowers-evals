@@ -1,15 +1,18 @@
 name: hermes
 binary: hermes
 # Hermes keeps everything under ~/.hermes (config.yaml, .env, plugins/,
-# sessions/, logs/); HERMES_HOME can override but quorum's $HOME pinning makes
-# the default land inside the throwaway run home.
+# logs/); HERMES_HOME can override but quorum's $HOME pinning makes the
+# default land inside the throwaway run home.
 home_config_subdir: ".hermes"
-# Session export format is a single JSON with a `messages` array (Harbor pin
-# v0.14.0, src/normalize/hermes.ts). The glob is deliberately wide until the
-# Task 5 live smoke confirms the current CLI's layout; tighten it there if the
-# observed layout allows.
-session_log_dir: "${QUORUM_AGENT_HOME}/.hermes/sessions"
-session_log_glob: "**/*.json"
+# Verified live (Task 5 container probe): hermes sessions are NOT files — they
+# live in a SQLite store at ~/.hermes/state.db (~/.hermes/sessions/ is never
+# created). The runner exports each new session post-run via
+# src/agents/hermes-capture.ts (`hermes sessions list` + `hermes sessions
+# export --format jsonl --session-id <id> -`) into this dir, one JSON object
+# per session, matching the format src/normalize/hermes.ts parses (Harbor pin
+# v0.14.0, plus our session-level token/cost metrics on top).
+session_log_dir: "${QUORUM_AGENT_HOME}/.hermes/sessions-export"
+session_log_glob: "*.json"
 normalizer: hermes
 required_env:
   - SUPERPOWERS_ROOT

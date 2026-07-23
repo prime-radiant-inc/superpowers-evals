@@ -37,7 +37,7 @@ Live evals run the Coding-Agent under test with broad execution power:
   browser/keyring auth for `agy`.
 - Gemini uses `--skip-trust --approval-mode=yolo`; API-key auth is default,
   with opt-in OAuth auth for trusted local runs.
-- Hermes uses `--yes` and API-key auth in the run-local .env.
+- Hermes uses `--yolo` and API-key auth in the run-local .env.
 - Kimi uses `--yolo`.
 - OpenCode uses `--dangerously-skip-permissions`.
 - Pi uses explicit tool allowlists and API-key auth in a run-local config dir.

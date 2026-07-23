@@ -10,7 +10,14 @@
 # HERMES_HOME. Hermes defaults HERMES_HOME to $HOME/.hermes, which is exactly
 # where HermesAgent.provision seeds config.yaml, .env, and
 # plugins/superpowers/ — so Hermes finds its config, auth, and plugin, and
-# writes sessions/logs, via the isolated $HOME with no config-dir flag needed.
+# writes its SQLite session store (~/.hermes/state.db) and logs, via the
+# isolated $HOME with no config-dir flag needed.
+#
+# Verified live (Task 5 container probe): `--yes` and `--no-memory` do NOT
+# exist on this CLI — passing them crashes with "unrecognized arguments". The
+# real approval-bypass flag is `--yolo`. Cross-session memory isolation still
+# holds: it comes from the throwaway per-run $HOME above (a fresh
+# ~/.hermes/state.db every run), not from a memory-disabling flag.
 set -euo pipefail
 
 cd "$QUORUM_AGENT_CWD" || {
@@ -18,4 +25,4 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
-exec env $QUORUM_HOME_ENV hermes --yes --no-memory "$@"
+exec env $QUORUM_HOME_ENV hermes --yolo "$@"

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeHermes } from '../src/normalize/hermes.ts';
@@ -391,4 +392,157 @@ test('tool arguments that are already objects (not strings) are handled', () => 
   expect(r.ok).toBe(true);
   const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
   expect(toolStep!.tool_calls![0]!.arguments).toEqual({ command: 'pwd' });
+});
+
+// ---------------------------------------------------------------------------
+// Session-level token/cost fields (top-level on the session export object,
+// e.g. input_tokens/output_tokens/cache_read_tokens/cache_write_tokens/
+// reasoning_tokens/actual_cost_usd) fold into trajectory-level final_metrics.
+// Real hermes messages carry no per-message `usage` (verified live: session
+// messages have token_count: null), so this is the ONLY token/cost source for
+// a real capture — but the fold is still gated on "no per-step metrics
+// already present" so a hypothetical log carrying both never double-counts
+// (mirrors normalize/kimi.ts's turn-vs-session single-source rule).
+//
+// Field mapping (obol's atif dialect reads these exact final_metrics paths —
+// verified against the obol native lib's embedded string table):
+//   input_tokens          -> final_metrics.total_prompt_tokens
+//   output_tokens +
+//     reasoning_tokens     -> final_metrics.total_completion_tokens (folded,
+//                             matching normalize/opencode.ts's output+reasoning
+//                             fold convention)
+//   cache_read_tokens      -> final_metrics.extra.total_cached_tokens (the
+//                             literal key obol's atif dialect looks up)
+//   cache_write_tokens     -> final_metrics.extra.cache_write (matches the
+//                             per-step extra.cache_write key convention)
+//   actual_cost_usd        -> final_metrics.total_cost_usd (only when it is a
+//                             real number; estimated_cost_usd is never used —
+//                             it is an estimate, not a committed charge)
+// ---------------------------------------------------------------------------
+
+function sessionWithTopLevelTokens(overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    id: 'session-tokens',
+    input_tokens: 1000,
+    output_tokens: 40,
+    cache_read_tokens: 500,
+    cache_write_tokens: 20,
+    reasoning_tokens: 10,
+    actual_cost_usd: 0.0042,
+    estimated_cost_usd: 0.0099,
+    messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'done' },
+    ],
+    ...overrides,
+  });
+}
+
+test('session-level token/cost fields fold into final_metrics', () => {
+  const traj = normalizeHermes(sessionWithTopLevelTokens(), '1.0.0');
+  const r = validateTrajectory(traj);
+  expect(r.ok).toBe(true);
+  expect(traj.final_metrics).toEqual({
+    total_prompt_tokens: 1000,
+    total_completion_tokens: 50, // output_tokens(40) + reasoning_tokens(10) folded
+    total_cost_usd: 0.0042,
+    extra: {
+      total_cached_tokens: 500,
+      cache_write: 20,
+    },
+  });
+});
+
+test('estimated_cost_usd is never carried; only actual_cost_usd maps to total_cost_usd', () => {
+  const traj = normalizeHermes(
+    sessionWithTopLevelTokens({ actual_cost_usd: null }),
+    '1.0.0',
+  );
+  expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
+});
+
+test('session-level totals are omitted entirely when no top-level token fields are present', () => {
+  // SAMPLE_SESSION (defined above) carries per-message usage only, no
+  // top-level input_tokens/output_tokens.
+  const traj = normalizeHermes(SAMPLE_SESSION, '1.0.0');
+  expect(traj.final_metrics).toBeUndefined();
+});
+
+test('per-step metrics win over session-level totals (single-source: no double count)', () => {
+  // A hypothetical log carrying BOTH per-message usage AND top-level session
+  // totals: per-step metrics must win so obol never double-counts.
+  const raw = JSON.stringify({
+    id: 'session-both',
+    input_tokens: 9999,
+    output_tokens: 9999,
+    messages: [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: 'done',
+        usage: { prompt_tokens: 100, completion_tokens: 50 },
+      },
+    ],
+  });
+  const traj = normalizeHermes(raw, '1.0.0');
+  const usageStep = traj.steps.find((s) => s.metrics !== undefined);
+  expect(usageStep!.metrics!.prompt_tokens).toBe(100);
+  expect(usageStep!.metrics!.completion_tokens).toBe(50);
+  expect(traj.final_metrics).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// Real captured session (test/fixtures/hermes-real-session.jsonl) — a live
+// `hermes sessions export --format jsonl --session-id <id> -` capture from the
+// Task 5 container probe. Locks in the verified-live shape: 3 steps
+// (user, agent tool-call+observation, agent text), terminal -> Bash, and the
+// session-level token totals folding into final_metrics.
+// ---------------------------------------------------------------------------
+
+const realSession = readFileSync(
+  new URL('./fixtures/hermes-real-session.jsonl', import.meta.url),
+  'utf8',
+);
+
+test('real captured session produces a valid ATIF trajectory', () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  const r = validateTrajectory(traj);
+  expect(r.errors).toEqual([]);
+  expect(r.ok).toBe(true);
+});
+
+test('real captured session: 3 steps (user, agent tool-call, agent text)', () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  expect(traj.steps.map((s) => s.source)).toEqual(['user', 'agent', 'agent']);
+});
+
+test('real captured session: terminal tool call canonicalizes to Bash', () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('Bash');
+});
+
+test('real captured session: session-level totals fold into final_metrics', () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  // Real fixture: input_tokens=11780, output_tokens=33, cache_read_tokens=17856,
+  // cache_write_tokens=0, reasoning_tokens=18, actual_cost_usd=null (only
+  // estimated_cost_usd is set, so total_cost_usd must be absent).
+  expect(traj.final_metrics).toEqual({
+    total_prompt_tokens: 11780,
+    total_completion_tokens: 51, // 33 + 18 reasoning, folded
+    extra: {
+      total_cached_tokens: 17856,
+      cache_write: 0,
+    },
+  });
+});
+
+test('real captured session: no per-step metrics were fabricated from real messages', () => {
+  // Real hermes messages carry token_count: null (no per-message `usage`
+  // object), so no step should carry metrics — the totals live only on
+  // final_metrics.
+  const traj = normalizeHermes(realSession, '1.0.0');
+  for (const step of traj.steps) {
+    expect(step.metrics).toBeUndefined();
+  }
 });

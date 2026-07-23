@@ -259,7 +259,7 @@ and the raw Gemini transcripts.
   `openrouter_glm_5_2` credential). No OAuth path is wired.
 - **Config collapse:** everything under `<run>/home/.hermes/` — config.yaml,
   `.env` (0600), `plugins/superpowers/` (staged from `SUPERPOWERS_ROOT`),
-  `sessions/`, `logs/`.
+  `logs/`.
 - **Superpowers source:** provisioning requires `.hermes-plugin/plugin.yaml`,
   `.hermes-plugin/__init__.py`, `skills/using-superpowers/SKILL.md`, and
   `skills/using-superpowers/references/hermes-tools.md` in `SUPERPOWERS_ROOT`,
@@ -270,11 +270,21 @@ and the raw Gemini transcripts.
   API; the bootstrap scenario's RED result on the unfixed plugin is the
   expected baseline, not a harness bug. See the design spec
   (2026-07-23-hermes-coding-agent-design.md).
-- **Capture:** session export JSON (`messages` array) from
-  `~/.hermes/sessions/`, normalized by the Harbor-ported `normalizeHermes`
-  (pin v0.14.0). If the current CLI's session layout drifts from the pin,
-  fix the normalizer with a captured fixture — do not loosen the strict
-  empty-trace failure.
+- **Capture:** sessions are NOT files — they live in a SQLite store
+  (`~/.hermes/state.db`). The runner (`src/agents/hermes-capture.ts`) exports
+  each new session post-run via `hermes sessions list` +
+  `hermes sessions export --format jsonl --session-id <id> -` into
+  `<run>/home/.hermes/sessions-export/<id>.json`. Token/cost fields
+  (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+  `reasoning_tokens`, `actual_cost_usd`) come embedded on the exported session
+  object and fold into `final_metrics` (`normalizeHermes`,
+  `src/normalize/hermes.ts`). If the current CLI's export layout drifts,
+  fix the normalizer/capture module with a captured fixture — do not loosen
+  the strict empty-trace failure.
+- **Bundled skills library:** Hermes self-installs a large bundled skills tree
+  under `<run>/home/.hermes/skills/` on first run. This is unrelated to the
+  Superpowers plugin (staged separately at `<run>/home/.hermes/plugins/
+  superpowers/`) — harmless, but it explains the large `.hermes/` tree.
 
 ### Antigravity
 

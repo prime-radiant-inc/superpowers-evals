@@ -7,6 +7,7 @@
 
 import {
   ATIF_SCHEMA_VERSION,
+  type AtifFinalMetrics,
   type AtifMetrics,
   type AtifObservationResult,
   type AtifStep,
@@ -92,6 +93,73 @@ function extractContent(content: unknown): string {
   return '';
 }
 
+/** A finite number, else undefined (real hermes sessions carry `null` for
+ *  unset numeric fields like actual_cost_usd — never coerce that to 0). */
+function numOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/**
+ * Fold a hermes session object's top-level token/cost fields into ATIF
+ * final_metrics. Field mapping (obol's atif dialect reads these exact
+ * final_metrics paths — verified against the obol native lib's embedded
+ * string table):
+ *   input_tokens                     -> total_prompt_tokens
+ *   output_tokens + reasoning_tokens  -> total_completion_tokens (folded,
+ *                                        matching normalize/opencode.ts's
+ *                                        output+reasoning fold convention)
+ *   cache_read_tokens                 -> extra.total_cached_tokens (the
+ *                                        literal key obol's atif dialect
+ *                                        looks up)
+ *   cache_write_tokens                -> extra.cache_write (matches the
+ *                                        per-step extra.cache_write key
+ *                                        convention used elsewhere)
+ *   actual_cost_usd                   -> total_cost_usd, only when it is a
+ *                                        real number. estimated_cost_usd is
+ *                                        NEVER used: it is an estimate, not a
+ *                                        committed charge.
+ * Returns undefined when the session carries no input_tokens/output_tokens
+ * at all (nothing to fold).
+ */
+function buildSessionFinalMetrics(
+  session: Record<string, unknown>,
+): AtifFinalMetrics | undefined {
+  const inputTokens = numOrUndefined(session['input_tokens']);
+  const outputTokens = numOrUndefined(session['output_tokens']);
+  if (inputTokens === undefined && outputTokens === undefined) {
+    return undefined;
+  }
+  const reasoningTokens = numOrUndefined(session['reasoning_tokens']);
+  const cacheReadTokens = numOrUndefined(session['cache_read_tokens']);
+  const cacheWriteTokens = numOrUndefined(session['cache_write_tokens']);
+  const actualCostUsd = numOrUndefined(session['actual_cost_usd']);
+
+  const finalMetrics: AtifFinalMetrics = {};
+  if (inputTokens !== undefined) {
+    finalMetrics.total_prompt_tokens = inputTokens;
+  }
+  if (outputTokens !== undefined || reasoningTokens !== undefined) {
+    finalMetrics.total_completion_tokens =
+      (outputTokens ?? 0) + (reasoningTokens ?? 0);
+  }
+  if (actualCostUsd !== undefined) {
+    finalMetrics.total_cost_usd = actualCostUsd;
+  }
+  const extra: Record<string, unknown> = {};
+  if (cacheReadTokens !== undefined) {
+    extra['total_cached_tokens'] = cacheReadTokens;
+  }
+  if (cacheWriteTokens !== undefined) {
+    extra['cache_write'] = cacheWriteTokens;
+  }
+  if (Object.keys(extra).length > 0) {
+    finalMetrics.extra = extra;
+  }
+  return finalMetrics;
+}
+
 /**
  * Convert a Hermes session log (JSONL or single JSON {messages:[...]}) into
  * an ATIF v1.7 trajectory.
@@ -108,12 +176,22 @@ function extractContent(content: unknown): string {
  * messages. No cache-split fields are present → prompt_tokens is treated as
  * the uncached input (DISJOINT buckets, no cached_tokens emitted). Usage is
  * per-message, so we emit per-step metrics (SINGLE-SOURCE: no final_metrics
- * token totals — Harbor accumulates to final_metrics but our convention is
- * per-step for per-message logs).
+ * token totals from per-message usage — Harbor accumulates to final_metrics
+ * but our convention is per-step for per-message logs).
+ *
+ * Session-level totals: a real `hermes sessions export` session object also
+ * carries top-level input_tokens/output_tokens/cache_read_tokens/
+ * cache_write_tokens/reasoning_tokens/actual_cost_usd fields (verified live —
+ * real hermes messages carry no per-message usage at all, token_count is
+ * always null). When present, and only when no per-step usage was already
+ * extracted (single-source: never double-count), these fold into
+ * trajectory-level final_metrics — see the field mapping above
+ * buildSessionFinalMetrics.
  */
 export function normalizeHermes(raw: string, version: string): AtifTrajectory {
   const messages: Record<string, unknown>[] = [];
   let sessionId: string | undefined;
+  let sessionTokenFields: Record<string, unknown> | undefined;
 
   // Parse: handle both single-object and JSONL formats.
   for (const line of raw.split('\n')) {
@@ -130,6 +208,7 @@ export function normalizeHermes(raw: string, version: string): AtifTrajectory {
       // Single-object session export: has a `messages` array
       if (Array.isArray(obj['messages'])) {
         if (typeof obj['id'] === 'string') sessionId = obj['id'];
+        sessionTokenFields = obj;
         for (const msg of obj['messages']) {
           if (msg && typeof msg === 'object' && !Array.isArray(msg)) {
             messages.push(msg as Record<string, unknown>);
@@ -297,10 +376,20 @@ export function normalizeHermes(raw: string, version: string): AtifTrajectory {
     if (step) step.step_id = j + 1;
   }
 
+  // Session-level totals only fold into final_metrics when no per-step usage
+  // was already extracted (single-source: never double-count a total that a
+  // per-message usage field already covered).
+  const hasPerStepMetrics = steps.some((s) => s.metrics !== undefined);
+  const finalMetrics =
+    !hasPerStepMetrics && sessionTokenFields !== undefined
+      ? buildSessionFinalMetrics(sessionTokenFields)
+      : undefined;
+
   const traj: AtifTrajectory = {
     schema_version: ATIF_SCHEMA_VERSION,
     agent: { name: 'hermes', version },
     steps,
+    ...(finalMetrics ? { final_metrics: finalMetrics } : {}),
   };
   if (sessionId !== undefined) traj.session_id = sessionId;
 

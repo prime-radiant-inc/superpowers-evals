@@ -10,9 +10,10 @@ configure anything yourself.
 Your bash starts in a scratch directory, NOT the workdir quorum prepared.
 quorum has generated a launcher that handles everything: it cds into the
 prepared workdir, pins a throwaway `$HOME` for the run, and starts Hermes with
-`--yes` (auto-approves command execution so the run never blocks on an
-approval prompt) and `--no-memory` (disables cross-session memory; each eval
-run must be memoryless). Type this one line, verbatim, as your first action:
+`--yolo` (auto-approves command execution and tool use so the run never
+blocks on an approval prompt). Each eval run gets a fresh throwaway `$HOME`,
+so there is no cross-session memory to disable. Type this one line, verbatim,
+as your first action:
 
 ```
 "$QUORUM_LAUNCH_AGENT"
@@ -32,15 +33,19 @@ press Enter.
 
 ## Observing progress
 
-- The session transcript accumulates under `$HOME/.hermes/sessions/`.
-- Errors and gateway traces: `$HOME/.hermes/logs/errors.log` and
-  `$HOME/.hermes/logs/gateway.log`.
+- Logs: `$HOME/.hermes/logs/agent.log` and `$HOME/.hermes/logs/errors.log`.
+- Sessions live in a SQLite store (`$HOME/.hermes/state.db`), not files —
+  there is nothing to tail. The harness exports the session to JSON after the
+  run finishes (`hermes sessions export`), so progress must be read from the
+  logs above and the terminal output itself, not a growing transcript file.
 
 ## Completion
 
 The turn is complete when Hermes returns to its input prompt with no spinner
 or streaming output. When the story's task is done, exit the REPL (`/exit`,
-or Ctrl-D at the prompt) so the session file is finalized before capture.
+or Ctrl-D at the prompt) so the session is finalized before capture. (Whether
+this exact exit sequence is required for hermes has not been verified
+interactively — treat it as the safe default until confirmed.)
 
 ## Quirks
 
