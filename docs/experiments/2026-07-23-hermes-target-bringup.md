@@ -96,3 +96,17 @@ AttributeError inside hermes and silently disables the plugin; (3) injected
 context is transient — never persisted in session exports — so injection proof
 must be behavioral. Known residual gap: obol prices the coding side at $0.00
 (`UnknownModelForTurn`) — `z-ai/glm-5.2` rate missing.
+
+## Hermes-4 validation attempt (negative result, equal billing)
+
+Goal: acceptance evidence on a Hermes-family model (what Hermes users actually
+run). Added `openrouter_hermes4` (nousresearch/hermes-4-405b) and ran the
+bootstrap scenario: the coding side never completed a single API call —
+OpenRouter returns HTTP 404 "No endpoints found that support tool use" on
+every request, and the models API confirms neither hermes-4-405b nor
+hermes-4-70b advertises `tools` in supported_parameters. The hermes CLI is
+tool-driven, so Hermes-4-via-OpenRouter is structurally impossible, not flaky.
+Native Hermes-4 evidence requires the Nous Portal API (new credential + key).
+The credential entry stays, comment-marked KNOWN-BROKEN, as the documented
+disproof. GLM 5.2 remains the checked-in default and the basis of the GREEN
+acceptance evidence.
