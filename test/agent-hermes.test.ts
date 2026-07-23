@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -164,6 +165,47 @@ test('provision fails when the enable subprocess exits non-zero', () => {
       agent.provision(home, runner, OPENROUTER_CRED),
     ),
   ).toThrow(ProvisionError);
+  cleanup();
+});
+
+test('provision rejects a symlink inside SUPERPOWERS_ROOT/skills before staging', () => {
+  const { home, cleanup } = makeTempHome();
+  const sproot = join(home.workdir, 'superpowers-src');
+  stageSuperpowers(sproot);
+  // Plant a symlink inside the skills tree; staging must refuse to copy it.
+  symlinkSync(
+    join(sproot, 'skills', 'using-superpowers', 'SKILL.md'),
+    join(sproot, 'skills', 'using-superpowers', 'SKILL-link.md'),
+  );
+  const agent = new HermesAgent(HERMES_CONFIG);
+  expect(() =>
+    withEnvVars(
+      { SUPERPOWERS_ROOT: sproot, OPENROUTER_API_KEY: 'or-key-123' },
+      () => agent.provision(home, new FakeCommandRunner(), OPENROUTER_CRED),
+    ),
+  ).toThrow(ProvisionError);
+  cleanup();
+});
+
+test('provision expands a ~-prefixed SUPERPOWERS_ROOT via HOME', () => {
+  const { home, cleanup } = makeTempHome();
+  const sproot = join(home.workdir, 'superpowers-src');
+  stageSuperpowers(sproot);
+  const runner = new FakeCommandRunner();
+  const agent = new HermesAgent(HERMES_CONFIG);
+  withEnvVars(
+    {
+      SUPERPOWERS_ROOT: '~/superpowers-src',
+      OPENROUTER_API_KEY: 'or-key-123',
+      HOME: home.workdir,
+    },
+    () => agent.provision(home, runner, OPENROUTER_CRED),
+  );
+  const plug = join(home.configDir, 'plugins', 'superpowers');
+  expect(existsSync(join(plug, 'plugin.yaml'))).toBe(true);
+  expect(
+    existsSync(join(plug, 'skills', 'using-superpowers', 'SKILL.md')),
+  ).toBe(true);
   cleanup();
 });
 

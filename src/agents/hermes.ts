@@ -1,4 +1,11 @@
-import { cpSync, mkdirSync, statSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
@@ -26,6 +33,50 @@ function isFile(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+// Recursively reject any symlink under `root`. A missing root is fine (the
+// required-files check reports absence).
+function rejectSymlinks(root: string, label: string): void {
+  if (isSymlink(root)) {
+    throw new ProvisionError(`${label} contains unsupported symlink: ${root}`);
+  }
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    return;
+  }
+  for (const entry of readdirSync(root)) {
+    rejectSymlinks(join(root, entry), label);
+  }
+}
+
+// Source trees staged into the Hermes plugin dir must not contain symlinks —
+// cpSync would otherwise copy them in as live symlinks that can escape the
+// staged plugin dir.
+function rejectHermesStagingSourceSymlinks(superpowersRoot: string): void {
+  rejectSymlinks(
+    join(superpowersRoot, '.hermes-plugin'),
+    'SUPERPOWERS_ROOT .hermes-plugin',
+  );
+  rejectSymlinks(join(superpowersRoot, 'skills'), 'SUPERPOWERS_ROOT skills');
+}
+
+// Expand a leading ~ to HOME. Reads HOME only through env.ts.
+function expanduser(p: string): string {
+  if (p === '~' || p.startsWith('~/')) {
+    const home = getEnv('HOME');
+    if (home !== undefined && home !== '') {
+      return p === '~' ? home : join(home, p.slice(2));
+    }
+  }
+  return p;
 }
 
 function requireHermesEnv(name: string, purpose: string): string {
@@ -78,9 +129,11 @@ export class HermesAgent implements CodingAgent {
     runner: CommandRunner,
     credential?: Credential,
   ): Record<string, string> {
-    const superpowersRoot = requireHermesEnv(
-      'SUPERPOWERS_ROOT',
-      'stage the Superpowers plugin for Hermes',
+    const superpowersRoot = expanduser(
+      requireHermesEnv(
+        'SUPERPOWERS_ROOT',
+        'stage the Superpowers plugin for Hermes',
+      ),
     );
     requireHermesSuperpowersSource(superpowersRoot);
 
@@ -143,7 +196,10 @@ export class HermesAgent implements CodingAgent {
 
     // Stage the plugin: .hermes-plugin/* plus the stock skills tree, co-located
     // the way the plugin loader expects (plugins/superpowers/{plugin.yaml,
-    // __init__.py, skills/...}).
+    // __init__.py, skills/...}). Reject any symlink in the source trees first
+    // so cpSync can never copy in a live symlink that escapes the staged
+    // plugin dir.
+    rejectHermesStagingSourceSymlinks(superpowersRoot);
     const pluginDir = join(configDir, 'plugins', 'superpowers');
     mkdirSync(pluginDir, { recursive: true });
     cpSync(join(superpowersRoot, '.hermes-plugin'), pluginDir, {
