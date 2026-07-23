@@ -2,7 +2,7 @@
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
 **Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini,
-Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA agent and grades them
+Hermes, Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA agent and grades them
 against scenario acceptance criteria plus deterministic post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
@@ -37,6 +37,7 @@ Live evals run the Coding-Agent under test with broad execution power:
   browser/keyring auth for `agy`.
 - Gemini uses `--skip-trust --approval-mode=yolo`; API-key auth is default,
   with opt-in OAuth auth for trusted local runs.
+- Hermes uses `--yes` and API-key auth in the run-local .env.
 - Kimi uses `--yolo`.
 - OpenCode uses `--dangerously-skip-permissions`.
 - Pi uses explicit tool allowlists and API-key auth in a run-local config dir.
@@ -46,7 +47,7 @@ quorum pins each Coding-Agent's `HOME` (plus the XDG base dirs and `TMPDIR`)
 to a throwaway per-run home at `<run>/home` — the launcher splices in the
 `$QUORUM_HOME_ENV` token built by `src/agents/home-env.ts` (`xdgHomeEnv`, the
 single source of truth). Each agent's config dir is collapsed *under* that home
-(Claude `.claude`, Codex `.codex`, Gemini `.`, OpenCode `.`, Antigravity `.`,
+(Claude `.claude`, Codex `.codex`, Gemini `.`, Hermes `.hermes`, OpenCode `.`, Antigravity `.`,
 Copilot `.copilot`, Kimi `.kimi-code`, Pi `.pi/agent`), so the Coding-Agent
 finds its config via its own `$HOME` default and never sees the host's real
 `~/.claude`, `~/.codex`, `~/.gemini`, `~/.kimi-code`, `~/.pi`, `~/.copilot`,

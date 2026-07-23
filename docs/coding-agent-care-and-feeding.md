@@ -252,6 +252,28 @@ Useful evidence:
 Extension files prove linking. Behavioral evidence comes from `trajectory.json`
 and the raw Gemini transcripts.
 
+### Hermes Agent
+
+- **Auth:** OpenRouter API key only (`OPENROUTER_API_KEY`, via the
+  `openrouter_glm_5_2` credential). No OAuth path is wired.
+- **Config collapse:** everything under `<run>/home/.hermes/` — config.yaml,
+  `.env` (0600), `plugins/superpowers/` (staged from `SUPERPOWERS_ROOT`),
+  `sessions/`, `logs/`.
+- **Superpowers source:** provisioning requires `.hermes-plugin/` in
+  `SUPERPOWERS_ROOT` and fails closed without it. Until that branch merges to
+  superpowers dev, point `SUPERPOWERS_ROOT` at a `hermes-harness-rebase`
+  checkout.
+- **Known state:** the shipped plugin's `on_session_start` +
+  `ctx.inject_message` mechanism is unverified against the documented plugin
+  API; the bootstrap scenario's RED result on the unfixed plugin is the
+  expected baseline, not a harness bug. See the design spec
+  (2026-07-23-hermes-coding-agent-design.md).
+- **Capture:** session export JSON (`messages` array) from
+  `~/.hermes/sessions/`, normalized by the Harbor-ported `normalizeHermes`
+  (pin v0.14.0). If the current CLI's session layout drifts from the pin,
+  fix the normalizer with a captured fixture — do not loosen the strict
+  empty-trace failure.
+
 ### Antigravity
 
 Antigravity runs host-side for now. The generated launcher pins the throwaway
