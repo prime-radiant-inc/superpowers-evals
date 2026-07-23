@@ -21,6 +21,7 @@ import { CodexAgent } from './codex.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { CopilotAgent } from './copilot.ts';
 import { GeminiAgent } from './gemini.ts';
+import { HermesAgent } from './hermes.ts';
 import { KimiAgent } from './kimi.ts';
 import { OpenCodeAgent } from './opencode.ts';
 import { PiAgent } from './pi.ts';
@@ -281,6 +282,7 @@ const CUSTOM_AGENTS: Readonly<
 > = {
   codex: (config) => new CodexAgent(config),
   gemini: (config) => new GeminiAgent(config),
+  hermes: (config) => new HermesAgent(config),
   pi: (config) => new PiAgent(config),
   copilot: (config) => new CopilotAgent(config),
   opencode: (config) => new OpenCodeAgent(config),
