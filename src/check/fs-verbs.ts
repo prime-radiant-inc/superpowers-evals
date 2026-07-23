@@ -595,6 +595,28 @@ export function verbCopilotPluginInstalled(
   return fail(`missing Copilot Superpowers plugin files: ${result.detail}`);
 }
 
+// hermes-plugin-staged — the Superpowers plugin dir HermesAgent.provision
+// stages under the run home: plugin manifest, loader, and the stock skills.
+export function verbHermesPluginStaged(
+  _args: string[],
+  ctx: CheckContext,
+): CheckOutcome {
+  const configDir = ctx.env('QUORUM_AGENT_CONFIG_DIR');
+  if (!configDir) {
+    return fail('QUORUM_AGENT_CONFIG_DIR is not set');
+  }
+  const root = join(configDir, 'plugins/superpowers');
+  const result = filesExistUnder(root, [
+    'plugin.yaml',
+    '__init__.py',
+    'skills/using-superpowers/SKILL.md',
+  ]);
+  if (result.passed) {
+    return pass(`Superpowers plugin staged at ${root}`);
+  }
+  return fail(`missing Hermes Superpowers plugin files: ${result.detail}`);
+}
+
 // opencode-plugin-installed
 export function verbOpencodePluginInstalled(
   _args: string[],
@@ -995,6 +1017,7 @@ const BOOTSTRAP_DELEGATES: Record<string, BootstrapVerb> = {
   codex: verbCodexNativeHookConfigured,
   copilot: verbCopilotPluginInstalled,
   gemini: verbGeminiExtensionLinked,
+  hermes: verbHermesPluginStaged,
   kimi: verbKimiPluginInstalled,
   opencode: verbOpencodePluginInstalled,
 };

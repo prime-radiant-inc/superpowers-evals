@@ -18,6 +18,7 @@ import {
   verbCodexSessionStartHookExecutes,
   verbCopilotPluginInstalled,
   verbGeminiExtensionLinked,
+  verbHermesPluginStaged,
   verbKimiPluginInstalled,
   verbOpencodePluginInstalled,
 } from '../src/check/fs-verbs.ts';
@@ -489,6 +490,43 @@ windowsPowerShellTest(
     expect(out.passed).toBe(true);
   },
 );
+
+// ---------------------------------------------------------------------------
+// hermes-plugin-staged: <configDir>/plugins/superpowers
+// ---------------------------------------------------------------------------
+const HERMES_SUBPATH = 'plugins/superpowers';
+const HERMES_FILES = [
+  'plugin.yaml',
+  '__init__.py',
+  'skills/using-superpowers/SKILL.md',
+];
+
+test('hermes-plugin-staged passes when the plugin files exist', () => {
+  const cfg = configDir();
+  for (const rel of HERMES_FILES) {
+    writeUnder(cfg, join(HERMES_SUBPATH, rel));
+  }
+  const out = verbHermesPluginStaged([], ctxFor(cfg));
+  expect(out.passed).toBe(true);
+});
+
+test('hermes-plugin-staged fails when a plugin file is missing', () => {
+  const cfg = configDir();
+  for (const rel of HERMES_FILES.slice(0, -1)) {
+    writeUnder(cfg, join(HERMES_SUBPATH, rel));
+  }
+  const out = verbHermesPluginStaged([], ctxFor(cfg));
+  expect(out.passed).toBe(false);
+});
+
+test('hermes-plugin-staged fails when QUORUM_AGENT_CONFIG_DIR is unset', () => {
+  const out = verbHermesPluginStaged([], {
+    cwd: '/tmp',
+    env: () => undefined,
+  });
+  expect(out.passed).toBe(false);
+  expect(out.detail).toContain('QUORUM_AGENT_CONFIG_DIR');
+});
 
 // ---------------------------------------------------------------------------
 // bootstrap-installed: dispatch on QUORUM_CODING_AGENT
