@@ -252,17 +252,18 @@ Useful evidence:
 Extension files prove linking. Behavioral evidence comes from `trajectory.json`
 and the raw Gemini transcripts.
 
-### Hermes Agent
+### Hermes
 
 - **Auth:** OpenRouter API key only (`OPENROUTER_API_KEY`, via the
   `openrouter_glm_5_2` credential). No OAuth path is wired.
 - **Config collapse:** everything under `<run>/home/.hermes/` — config.yaml,
   `.env` (0600), `plugins/superpowers/` (staged from `SUPERPOWERS_ROOT`),
   `sessions/`, `logs/`.
-- **Superpowers source:** provisioning requires `.hermes-plugin/` in
-  `SUPERPOWERS_ROOT` and fails closed without it. Until that branch merges to
-  superpowers dev, point `SUPERPOWERS_ROOT` at a `hermes-harness-rebase`
-  checkout.
+- **Superpowers source:** provisioning requires `.hermes-plugin/plugin.yaml`,
+  `.hermes-plugin/__init__.py`, `skills/using-superpowers/SKILL.md`, and
+  `skills/using-superpowers/references/hermes-tools.md` in `SUPERPOWERS_ROOT`,
+  and fails closed without them. Until that branch merges to superpowers dev,
+  point `SUPERPOWERS_ROOT` at a `hermes-harness-rebase` checkout.
 - **Known state:** the shipped plugin's `on_session_start` +
   `ctx.inject_message` mechanism is unverified against the documented plugin
   API; the bootstrap scenario's RED result on the unfixed plugin is the

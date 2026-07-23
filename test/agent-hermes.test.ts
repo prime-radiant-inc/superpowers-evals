@@ -221,3 +221,36 @@ test('provision requires a credential', () => {
   ).toThrow(ProvisionError);
   cleanup();
 });
+
+// Guards the HOME isolation + HERMES_HOME collapse: the hermes launch-agent
+// template pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV but does NOT set
+// HERMES_HOME. Hermes defaults HERMES_HOME to $HOME/.hermes, which is where
+// HermesAgent.provision seeds config.yaml/.env/plugins/superpowers — so
+// Hermes finds it all via the isolated $HOME. Without this launcher, hand-
+// typing `hermes --yes --no-memory` runs against the operator's real
+// ~/.hermes and bypasses everything provision() seeded.
+test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME, and launches with --yes --no-memory', () => {
+  const launcher = readFileSync(
+    join(
+      import.meta.dir,
+      '..',
+      'coding-agents',
+      'hermes-context',
+      'launch-agent',
+    ),
+    'utf8',
+  );
+  // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token.
+  expect(launcher).toContain('$QUORUM_HOME_ENV');
+  // HERMES_HOME is collapsed into $HOME — the launcher must NOT set it as an
+  // env assignment on the exec line (the comment block may still mention it).
+  expect(launcher).not.toContain('HERMES_HOME="$HERMES_HOME"');
+  expect(launcher).not.toMatch(/\bHERMES_HOME=/);
+  // The exec line launches hermes (not a bare, unisolated invocation) with the
+  // memoryless auto-approve flags the eval requires.
+  expect(launcher).toContain(
+    'exec env $QUORUM_HOME_ENV hermes --yes --no-memory',
+  );
+  // cd into the prepared workdir before launch, like every other launcher.
+  expect(launcher).toContain('cd "$QUORUM_AGENT_CWD"');
+});

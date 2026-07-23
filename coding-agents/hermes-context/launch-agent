@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# quorum-generated launcher for Hermes Agent (the agent under test).
+#
+# The cd and throwaway-$HOME pin are baked in here so the QA agent launches
+# Hermes with ONE command and cannot accidentally run it against the
+# operator's real ~/.hermes. quorum substitutes the $... values below at
+# runtime, so the installed copy contains literal absolute paths.
+#
+# HERMES_HOME collapse: this launcher sets HOME (via $QUORUM_HOME_ENV) but NOT
+# HERMES_HOME. Hermes defaults HERMES_HOME to $HOME/.hermes, which is exactly
+# where HermesAgent.provision seeds config.yaml, .env, and
+# plugins/superpowers/ — so Hermes finds its config, auth, and plugin, and
+# writes sessions/logs, via the isolated $HOME with no config-dir flag needed.
+set -euo pipefail
+
+cd "$QUORUM_AGENT_CWD" || {
+  echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2
+  exit 1
+}
+
+exec env $QUORUM_HOME_ENV hermes --yes --no-memory "$@"

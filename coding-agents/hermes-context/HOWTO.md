@@ -5,16 +5,27 @@ Hermes Agent is a terminal REPL. Provisioning has already seeded
 key) and staged + enabled the Superpowers plugin — do not install or
 configure anything yourself.
 
-## Launch
+## Launch Hermes with one command
 
-From the scenario workdir, run:
+Your bash starts in a scratch directory, NOT the workdir quorum prepared.
+quorum has generated a launcher that handles everything: it cds into the
+prepared workdir, pins a throwaway `$HOME` for the run, and starts Hermes with
+`--yes` (auto-approves command execution so the run never blocks on an
+approval prompt) and `--no-memory` (disables cross-session memory; each eval
+run must be memoryless). Type this one line, verbatim, as your first action:
 
-    hermes --yes --no-memory
+```
+"$QUORUM_LAUNCH_AGENT"
+```
 
-- `--yes` auto-approves command execution so the run never blocks on an
-  approval prompt.
-- `--no-memory` disables cross-session memory; each eval run must be
-  memoryless.
+That path is burned into this HOWTO at runtime by quorum.
+
+Because the `cd`, throwaway `$HOME`, and launch flags live inside the
+launcher, do not hand-type a bare `hermes` or reconstruct the command
+yourself — that would run Hermes against the operator's real `~/.hermes`
+instead of the isolated per-run home where provisioning seeded
+`config.yaml`, `.env`, and the staged Superpowers plugin. Just run the one
+line above.
 
 Wait for the input prompt before typing. Type the story's message exactly and
 press Enter.
