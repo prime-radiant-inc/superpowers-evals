@@ -1,4 +1,4 @@
-// Unit tests for the 6 per-harness bootstrap check verbs. Each verb resolves the
+// Unit tests for the 7 per-harness bootstrap check verbs. Each verb resolves the
 // coding-agent's collapsed config dir from QUORUM_AGENT_CONFIG_DIR and appends a
 // per-agent subpath. The tests stage the expected files under a temp config dir,
 // set QUORUM_AGENT_CONFIG_DIR via the CheckContext, and assert pass when the

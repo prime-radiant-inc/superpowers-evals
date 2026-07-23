@@ -19,7 +19,7 @@ quorum has two very different execution modes:
 - **Static/unit checks** are safe for public CI. They run `biome`, `tsc`, and
   `bun test`. They do not call model APIs and do not launch agent CLIs.
 - **Live evals** are trusted-maintainer operations. They launch Claude Code,
-  Codex CLI, Antigravity CLI, Gemini CLI, Kimi Code, OpenCode CLI, Pi CLI, or
+  Codex CLI, Antigravity CLI, Gemini CLI, Hermes CLI, Kimi Code, OpenCode CLI, Pi CLI, or
   Copilot CLI in permissive modes and collect raw transcripts, tool calls,
   filesystem state, and session logs.
 

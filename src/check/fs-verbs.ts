@@ -545,7 +545,7 @@ function gitOut(cwd: string, gitArgs: string[]): string {
 
 // ---------------------------------------------------------------------------
 // Bootstrap checks: per-harness "is the Superpowers plugin staged?" verbs.
-// Each keeps its own record `check` name; the simple four delegate to
+// Each keeps its own record `check` name; the simple five delegate to
 // filesExistUnder. kimi/codex carry extra structured logic.
 // ---------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@ artifacts without checking them first.
 | `codex` | Codex CLI | `SUPERPOWERS_ROOT`; local ChatGPT subscription login via `codex login` |
 | `antigravity` | Google Antigravity CLI, `agy` | `SUPERPOWERS_ROOT`; local browser/keyring auth |
 | `gemini` | Gemini CLI, `gemini` | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
+| `hermes` | Hermes CLI | default credential `openrouter_glm_5_2` uses `OPENROUTER_API_KEY`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY` or Kimi OAuth login; `SUPERPOWERS_ROOT` |
 | `opencode` | OpenCode CLI | `SUPERPOWERS_ROOT`; provider credentials for the selected OpenCode model |
 | `pi` | Pi CLI, `pi` | default credential `openrouter_glm_5_2` uses `OPENROUTER_API_KEY`; custom API-key auth uses `PI_PROVIDER`, `PI_MODEL`, and `PI_API_KEY`; Pi OAuth login remains opt-in; `SUPERPOWERS_ROOT` |
