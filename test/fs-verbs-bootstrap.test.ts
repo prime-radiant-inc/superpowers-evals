@@ -496,8 +496,8 @@ windowsPowerShellTest(
 // ---------------------------------------------------------------------------
 const HERMES_SUBPATH = 'plugins/superpowers';
 const HERMES_FILES = [
-  'plugin.yaml',
-  '__init__.py',
+  '.hermes-plugin/plugin.yaml',
+  '.hermes-plugin/__init__.py',
   'skills/using-superpowers/SKILL.md',
 ];
 

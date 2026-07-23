@@ -194,17 +194,22 @@ export class HermesAgent implements CodingAgent {
       `${keyEnvName}=${apiKey}\n`,
     );
 
-    // Stage the plugin: .hermes-plugin/* plus the stock skills tree, co-located
-    // the way the plugin loader expects (plugins/superpowers/{plugin.yaml,
-    // __init__.py, skills/...}). Reject any symlink in the source trees first
-    // so cpSync can never copy in a live symlink that escapes the staged
-    // plugin dir.
+    // Stage the plugin clone-faithfully: a real `hermes plugins install`
+    // clones the plugin repo, whose root has `.hermes-plugin/` (plugin.yaml +
+    // __init__.py) and `skills/` as SIBLINGS — hermes discovers the nested
+    // plugin.yaml one level down, and the plugin resolves `../skills` from
+    // .hermes-plugin/ (falling back to ./skills). Mirror that layout under
+    // plugins/superpowers/ rather than flattening .hermes-plugin/* into it.
+    // Reject any symlink in the source trees first so cpSync can never copy
+    // in a live symlink that escapes the staged plugin dir.
     rejectHermesStagingSourceSymlinks(superpowersRoot);
     const pluginDir = join(configDir, 'plugins', 'superpowers');
     mkdirSync(pluginDir, { recursive: true });
-    cpSync(join(superpowersRoot, '.hermes-plugin'), pluginDir, {
-      recursive: true,
-    });
+    cpSync(
+      join(superpowersRoot, '.hermes-plugin'),
+      join(pluginDir, '.hermes-plugin'),
+      { recursive: true },
+    );
     cpSync(join(superpowersRoot, 'skills'), join(pluginDir, 'skills'), {
       recursive: true,
       dereference: true,

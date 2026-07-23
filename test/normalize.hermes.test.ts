@@ -289,6 +289,52 @@ test('tool map: str_replace_based_edit_tool → Edit', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Skill invocation: skill_view → Skill, args.skill carries the raw `name`
+// verbatim (no namespace prefixing — see src/normalize/hermes.ts).
+// ---------------------------------------------------------------------------
+
+function sessionWithSkillView(name: string) {
+  return JSON.stringify({
+    messages: [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'tc-skill',
+            function: {
+              name: 'skill_view',
+              arguments: JSON.stringify({ name }),
+            },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'tc-skill', content: 'ok' },
+    ],
+  });
+}
+
+test('skill_view with a namespaced name normalizes to Skill with args.skill verbatim', () => {
+  const traj = normalizeHermes(
+    sessionWithSkillView('superpowers:brainstorming'),
+    '1.0.0',
+  );
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('Skill');
+  expect(toolStep!.tool_calls![0]!.arguments['skill']).toBe(
+    'superpowers:brainstorming',
+  );
+});
+
+test('skill_view with a bare name (hermes bundled skill) keeps args.skill unchanged', () => {
+  const traj = normalizeHermes(sessionWithSkillView('computer-use'), '1.0.0');
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('Skill');
+  expect(toolStep!.tool_calls![0]!.arguments['skill']).toBe('computer-use');
+});
+
+// ---------------------------------------------------------------------------
 // Multiple tool calls in one assistant message: all bundled in one step
 // ---------------------------------------------------------------------------
 

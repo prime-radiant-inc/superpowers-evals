@@ -114,11 +114,11 @@ test('provision writes .env mode 0600 with the credential key', () => {
   cleanup();
 });
 
-test('provision stages the plugin + stock skills co-located', () => {
+test('provision stages the plugin clone-faithfully (.hermes-plugin/ + skills/ siblings)', () => {
   const { home, cleanup } = provisionOk();
   const plug = join(home.configDir, 'plugins', 'superpowers');
-  expect(existsSync(join(plug, 'plugin.yaml'))).toBe(true);
-  expect(existsSync(join(plug, '__init__.py'))).toBe(true);
+  expect(existsSync(join(plug, '.hermes-plugin', 'plugin.yaml'))).toBe(true);
+  expect(existsSync(join(plug, '.hermes-plugin', '__init__.py'))).toBe(true);
   expect(
     existsSync(join(plug, 'skills', 'using-superpowers', 'SKILL.md')),
   ).toBe(true);
@@ -202,7 +202,7 @@ test('provision expands a ~-prefixed SUPERPOWERS_ROOT via HOME', () => {
     () => agent.provision(home, runner, OPENROUTER_CRED),
   );
   const plug = join(home.configDir, 'plugins', 'superpowers');
-  expect(existsSync(join(plug, 'plugin.yaml'))).toBe(true);
+  expect(existsSync(join(plug, '.hermes-plugin', 'plugin.yaml'))).toBe(true);
   expect(
     existsSync(join(plug, 'skills', 'using-superpowers', 'SKILL.md')),
   ).toBe(true);

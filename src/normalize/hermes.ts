@@ -53,6 +53,13 @@ const HERMES_TOOL_MAP: Record<string, string> = {
   spawn_agent: 'Agent',
   invoke_agent: 'Agent',
   delegate: 'Agent',
+  // Skill invocation — hermes calls skill_view with {name: "<value>"} for
+  // both Superpowers-registered skills (namespaced, e.g.
+  // "superpowers:brainstorming") and Hermes' own bundled skills (bare, e.g.
+  // "computer-use"). The name is carried into args.skill verbatim below —
+  // NOT namespace-prefixed like OpenCode's `skill` tool does for bare names,
+  // since a bare hermes name may refer to a bundled skill, not Superpowers.
+  skill_view: 'Skill',
 };
 
 /** Parse tool arguments: accepts either a JSON string or an already-parsed object. */
@@ -73,6 +80,22 @@ function parseArgs(
     }
   }
   return {};
+}
+
+/**
+ * Translate a skill_view call's arguments so `args.skill` carries the raw
+ * `name` value verbatim (no namespace prefixing — a bare name may refer to
+ * one of Hermes' own bundled skills, not a Superpowers one). No-op for any
+ * other native tool name.
+ */
+function normalizeHermesArgs(
+  nativeName: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (nativeName !== 'skill_view') return args;
+  const name = args['name'];
+  if (typeof name !== 'string') return args;
+  return { ...args, skill: name };
 }
 
 /** Extract text from a content field that may be a string or a list of blocks. */
@@ -263,7 +286,10 @@ export function normalizeHermes(raw: string, version: string): AtifTrajectory {
           const nativeName =
             typeof func['name'] === 'string' ? func['name'] : 'unknown';
           const canonicalName = HERMES_TOOL_MAP[nativeName] ?? nativeName;
-          const args = parseArgs(func['arguments']);
+          const args = normalizeHermesArgs(
+            nativeName,
+            parseArgs(func['arguments']),
+          );
           const atifTc: AtifToolCall = canonicalizeAgentPrompt({
             tool_call_id: tcId,
             function_name: canonicalName,

@@ -596,7 +596,9 @@ export function verbCopilotPluginInstalled(
 }
 
 // hermes-plugin-staged — the Superpowers plugin dir HermesAgent.provision
-// stages under the run home: plugin manifest, loader, and the stock skills.
+// stages under the run home, clone-faithfully: plugin manifest + loader
+// nested under .hermes-plugin/ (as a real `hermes plugins install` clone
+// lays them out), with the stock skills tree as a sibling.
 export function verbHermesPluginStaged(
   _args: string[],
   ctx: CheckContext,
@@ -607,8 +609,8 @@ export function verbHermesPluginStaged(
   }
   const root = join(configDir, 'plugins/superpowers');
   const result = filesExistUnder(root, [
-    'plugin.yaml',
-    '__init__.py',
+    '.hermes-plugin/plugin.yaml',
+    '.hermes-plugin/__init__.py',
     'skills/using-superpowers/SKILL.md',
   ]);
   if (result.passed) {

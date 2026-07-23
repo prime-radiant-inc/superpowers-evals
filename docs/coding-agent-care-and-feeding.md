@@ -258,8 +258,10 @@ and the raw Gemini transcripts.
 - **Auth:** OpenRouter API key only (`OPENROUTER_API_KEY`, via the
   `openrouter_glm_5_2` credential). No OAuth path is wired.
 - **Config collapse:** everything under `<run>/home/.hermes/` — config.yaml,
-  `.env` (0600), `plugins/superpowers/` (staged from `SUPERPOWERS_ROOT`),
-  `logs/`.
+  `.env` (0600), `plugins/superpowers/` (staged clone-faithfully from
+  `SUPERPOWERS_ROOT`: `.hermes-plugin/{plugin.yaml,__init__.py}` nested one
+  level down plus a sibling `skills/`, matching what a real
+  `hermes plugins install` clone lays out), `logs/`.
 - **Superpowers source:** provisioning requires `.hermes-plugin/plugin.yaml`,
   `.hermes-plugin/__init__.py`, `skills/using-superpowers/SKILL.md`, and
   `skills/using-superpowers/references/hermes-tools.md` in `SUPERPOWERS_ROOT`,
