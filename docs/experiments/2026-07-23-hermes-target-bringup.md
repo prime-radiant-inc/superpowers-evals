@@ -75,3 +75,24 @@ the way in, unused by the current plugin).
 3. Negative results recorded at equal billing: `inject_message`-from-
    `on_session_start` is refused (returns False) — do not re-purchase this
    disproof.
+
+## GREEN rerun (same day)
+
+After the superpowers-side plugin fix (hermes-harness-rebase 178528c:
+`pre_llm_call` first-turn injection, `ctx.register_skill(Path(...))` over the
+stock skills, layout-robust path resolution) and the evals-side pair (00e6253:
+clone-faithful staging, `skill_view`→`Skill` normalization):
+
+`quorum run scenarios/superpowers-bootstrap --coding-agent hermes` → **PASS.**
+pre 3/3; post 3/3 — `skill-called superpowers:brainstorming` ✓,
+`skill-before-tool` vs Write ✓ and Edit ✓. Gauntlet grading note: the agent's
+reasoning trace explicitly cited the using-superpowers rule ("'Let's build X' →
+superpowers:brainstorming first") before executing it. GLM 5.2, 140K coding
+tokens, 1m38s gauntlet drive.
+
+Root-cause chain for the record: (1) `inject_message`-from-`on_session_start`
+returns False (refused); (2) `register_skill` with a str path raises
+AttributeError inside hermes and silently disables the plugin; (3) injected
+context is transient — never persisted in session exports — so injection proof
+must be behavioral. Known residual gap: obol prices the coding side at $0.00
+(`UnknownModelForTurn`) — `z-ai/glm-5.2` rate missing.
