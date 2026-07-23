@@ -1,0 +1,19 @@
+name: hermes
+binary: hermes
+# Hermes keeps everything under ~/.hermes (config.yaml, .env, plugins/,
+# sessions/, logs/); HERMES_HOME can override but quorum's $HOME pinning makes
+# the default land inside the throwaway run home.
+home_config_subdir: ".hermes"
+# Session export format is a single JSON with a `messages` array (Harbor pin
+# v0.14.0, src/normalize/hermes.ts). The glob is deliberately wide until the
+# Task 5 live smoke confirms the current CLI's layout; tighten it there if the
+# observed layout allows.
+session_log_dir: "${QUORUM_AGENT_HOME}/.hermes/sessions"
+session_log_glob: "**/*.json"
+normalizer: hermes
+required_env:
+  - SUPERPOWERS_ROOT
+max_time: 10m
+# Mechanism/skill-compliance target: GLM 5.2 via OpenRouter, same credential as
+# pi/opencode (spec decision 2). Alternatives via --credential.
+default_credential: openrouter_glm_5_2

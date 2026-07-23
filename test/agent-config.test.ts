@@ -15,16 +15,25 @@ import {
 // The claude fixtures list ANTHROPIC_API_KEY in required_env, and the loader now
 // rejects unset required_env at load time (parity with Python). Set it for the
 // happy-path fixtures; RX-4 uses a deliberately-unset var to assert the failure.
+// Similarly, hermes requires SUPERPOWERS_ROOT.
 let prevKey: string | undefined;
+let prevRoot: string | undefined;
 beforeAll(() => {
   prevKey = process.env['ANTHROPIC_API_KEY'];
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
+  prevRoot = process.env['SUPERPOWERS_ROOT'];
+  process.env['SUPERPOWERS_ROOT'] = '/tmp/superpowers';
 });
 afterAll(() => {
   if (prevKey === undefined) {
     delete process.env['ANTHROPIC_API_KEY'];
   } else {
     process.env['ANTHROPIC_API_KEY'] = prevKey;
+  }
+  if (prevRoot === undefined) {
+    delete process.env['SUPERPOWERS_ROOT'];
+  } else {
+    process.env['SUPERPOWERS_ROOT'] = prevRoot;
   }
 });
 
@@ -316,4 +325,14 @@ test('agent config accepts default_credential', () => {
     default_credential: 'pi_default',
   });
   expect(cfg.default_credential).toBe('pi_default');
+});
+
+test('loads hermes config', () => {
+  const cfg = loadAgentConfig('coding-agents', 'hermes');
+  expect(cfg.name).toBe('hermes');
+  expect(cfg.binary).toBe('hermes');
+  expect(cfg.home_config_subdir).toBe('.hermes');
+  expect(cfg.normalizer).toBe('hermes');
+  expect(cfg.default_credential).toBe('openrouter_glm_5_2');
+  expect(cfg.required_env).toEqual(['SUPERPOWERS_ROOT']);
 });
