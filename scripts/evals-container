@@ -348,6 +348,31 @@ run_up() {
     mounts+=(--mount "type=bind,source=$source,target=$target$mode")
   }
 
+  # Host-side provenance override (queue-campaign item 22 / PRI-2494): resolve
+  # superpowers_root's rev and dirty flag out here, where a linked worktree's
+  # `.git` gitdir pointer still resolves into its primary checkout, and hand
+  # them into the container as the authoritative provenance for
+  # src/runner/provenance.ts. The equivalent in-container `git -C
+  # /workspace/superpowers ...` fails for a linked worktree, since only
+  # superpowers_root itself gets bind-mounted -- the primary checkout its
+  # gitdir pointer resolves into does not. Best-effort: a resolution failure
+  # (e.g. superpowers_root is not a git repo) just omits the env var, and
+  # provenance capture falls back to its in-container probe.
+  local provenance_env=()
+  local superpowers_rev
+  superpowers_rev=$(git -C "$superpowers_root" rev-parse HEAD 2>/dev/null || true)
+  if [[ -n "$superpowers_rev" ]]; then
+    provenance_env+=(--env "QUORUM_SUPERPOWERS_REV=$superpowers_rev")
+    local superpowers_status
+    if superpowers_status=$(git -C "$superpowers_root" status --porcelain 2>/dev/null); then
+      if [[ -n "$superpowers_status" ]]; then
+        provenance_env+=(--env "QUORUM_SUPERPOWERS_DIRTY=true")
+      else
+        provenance_env+=(--env "QUORUM_SUPERPOWERS_DIRTY=false")
+      fi
+    fi
+  fi
+
   mkdir -p "$runtime_dir"
   {
     printf 'root:x:0:0:root:/root:/bin/bash\n'
@@ -395,6 +420,7 @@ run_up() {
     --env "XDG_CONFIG_HOME=$container_config_home" \
     --env "XDG_STATE_HOME=$container_state_home" \
     --env "TMPDIR=/tmp" \
+    "${provenance_env[@]+"${provenance_env[@]}"}" \
     "${mounts[@]}" \
     "$image_tag" \
     bash -lc 'mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" && exec sleep infinity'

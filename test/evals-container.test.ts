@@ -310,6 +310,66 @@ function makeSuperpowersRoot(root: string): string {
   return superpowersRoot;
 }
 
+function gitInit(dir: string): void {
+  spawnSync('git', ['init', '-q', dir]);
+  spawnSync(
+    'git',
+    [
+      '-C',
+      dir,
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'x',
+    ],
+    { cwd: dir },
+  );
+}
+
+function gitRevParseHead(dir: string): string {
+  const p = spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  });
+  return (p.stdout ?? '').trim();
+}
+
+// A real superpowers root: a git repo with one commit, standing in for a
+// normal (non-worktree) checkout.
+function makeGitSuperpowersRoot(root: string): string {
+  const superpowersRoot = join(root, 'superpowers');
+  mkdirSync(superpowersRoot);
+  gitInit(superpowersRoot);
+  return superpowersRoot;
+}
+
+// A primary repo plus a linked worktree cut from it (`git worktree add`),
+// standing in for a `cp-arm-*` campaign fixture (PRI-2494 item 22). Unlike
+// the provenance.ts unit test, this does not need to hide the primary
+// checkout's .git -- scripts/evals-container resolves the rev on the HOST,
+// where the worktree's gitdir pointer resolves normally either way. That is
+// exactly why resolving it here, rather than in-container, is the fix.
+function makeLinkedWorktreeSuperpowersRoot(root: string): string {
+  const primary = join(root, 'superpowers-primary');
+  const worktree = join(root, 'superpowers-worktree');
+  mkdirSync(primary);
+  gitInit(primary);
+  spawnSync('git', [
+    '-C',
+    primary,
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'wt-branch',
+    worktree,
+  ]);
+  return worktree;
+}
+
 function removeResultProbeFiles(): void {
   const results = join(REPO, 'results');
   try {
@@ -445,6 +505,93 @@ describe('scripts/evals-container', () => {
       expect(statSync(results).mode & 0o777).toBe(0o700);
     } finally {
       chmodSync(results, 0o700);
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('up passes the host-resolved superpowers rev and dirty flag to the container', () => {
+    const harness = makeHarness();
+    try {
+      const superpowersRoot = makeGitSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_REV')).toBe(
+        gitRevParseHead(superpowersRoot),
+      );
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_DIRTY')).toBe('false');
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('up reports the dirty flag when superpowers root has uncommitted changes', () => {
+    const harness = makeHarness();
+    try {
+      const superpowersRoot = makeGitSuperpowersRoot(harness.root);
+      writeFileSync(join(superpowersRoot, 'dirt.txt'), 'x');
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_DIRTY')).toBe('true');
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  // PRI-2494 item 22: a linked git worktree's rev must resolve correctly
+  // because scripts/evals-container resolves it on the HOST (where the
+  // worktree's gitdir pointer is reachable), not in-container.
+  test('up resolves the superpowers rev correctly for a linked git worktree', () => {
+    const harness = makeHarness();
+    try {
+      const superpowersRoot = makeLinkedWorktreeSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      const rev = envValue(args, 'QUORUM_SUPERPOWERS_REV');
+      expect(rev).toBe(gitRevParseHead(superpowersRoot));
+      expect(rev).not.toBe('');
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_DIRTY')).toBe('false');
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('up omits the superpowers rev env vars when superpowers root is not a git repo', () => {
+    const harness = makeHarness();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_REV')).toBeUndefined();
+      expect(envValue(args, 'QUORUM_SUPERPOWERS_DIRTY')).toBeUndefined();
+    } finally {
       rmSync(harness.root, { recursive: true, force: true });
     }
   });
