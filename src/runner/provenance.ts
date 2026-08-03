@@ -4,6 +4,19 @@
 // renderers may ignore it. It exists so a run dir can answer "which
 // superpowers rev / agent CLI / gauntlet produced this verdict" (triage,
 // longitudinal baselines, commit-per-skill bisection).
+//
+// superpowers_rev/superpowers_dirty are normally read by running `git` here,
+// in-container, against SUPERPOWERS_ROOT (bind-mounted to /workspace/superpowers).
+// That breaks for a LINKED git worktree (`git worktree add`): its `.git` is a
+// file containing a `gitdir:` pointer into the primary checkout's
+// `.git/worktrees/<name>` on the host, a path that is never mounted into the
+// container, so the in-container `git rev-parse` fails and both fields go
+// null. scripts/evals-container resolves the rev (and dirty flag) on the HOST
+// side at `up` time — where the primary checkout's .git is reachable
+// regardless of worktree layout — and passes them in as
+// QUORUM_SUPERPOWERS_REV / QUORUM_SUPERPOWERS_DIRTY. Those env overrides win
+// when present; the in-container git probe remains the fallback for direct
+// (non-evals-container) invocations and normal, non-worktree checkouts.
 
 import { spawnSync } from 'node:child_process';
 import { envSnapshot, getEnv } from '../env.ts';
@@ -22,12 +35,30 @@ export function collectProvenance(args: {
 }): RunProvenance {
   const sproot = getEnv('SUPERPOWERS_ROOT');
   return {
-    superpowers_rev: sproot ? gitRev(sproot) : null,
-    superpowers_dirty: sproot ? gitDirty(sproot) : null,
+    superpowers_rev: sproot ? (hostRev() ?? gitRev(sproot)) : null,
+    superpowers_dirty: sproot ? (hostDirty() ?? gitDirty(sproot)) : null,
     harness_rev: gitRev(args.repoRoot),
     agent_cli_version: args.agentBinary ? versionLine(args.agentBinary) : null,
     gauntlet_version: versionLine('gauntlet'),
   };
+}
+
+// QUORUM_SUPERPOWERS_REV, when set to a non-empty value, is a host-resolved
+// override for superpowers_rev (see the file header). Anything else (unset,
+// empty) defers to the in-container probe.
+function hostRev(): string | null {
+  const rev = getEnv('QUORUM_SUPERPOWERS_REV');
+  return rev && rev.trim() !== '' ? rev.trim() : null;
+}
+
+// QUORUM_SUPERPOWERS_DIRTY, when set to exactly "true" or "false", is a
+// host-resolved override for superpowers_dirty. Anything else defers to the
+// in-container probe.
+function hostDirty(): boolean | null {
+  const dirty = getEnv('QUORUM_SUPERPOWERS_DIRTY');
+  if (dirty === 'true') return true;
+  if (dirty === 'false') return false;
+  return null;
 }
 
 function gitRev(cwd: string): string | null {
