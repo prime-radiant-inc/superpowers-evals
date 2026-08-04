@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -166,6 +167,16 @@ export class CodexAgent implements CodingAgent {
         `codex has no ${credential.auth} provisioner (only subscription and api-key are supported)`,
       );
     }
+
+    // Per-scenario config fragment: a scenario dir carrying codex.config.toml
+    // gets its contents appended verbatim to the generated config.toml (both
+    // auth paths), so a scenario can tune codex runtime knobs (e.g.
+    // model_context_window to force mid-run compaction). Append-only: no
+    // templating, no validation beyond "file exists".
+    appendScenarioConfigFragment(
+      join(configDir, 'config.toml'),
+      home.scenarioDir,
+    );
 
     // No extra env: Codex finds CODEX_HOME via its $HOME/.codex default.
     return {};
@@ -381,6 +392,23 @@ function writeApiKeyConfig(
       'enabled = true',
       '',
     ].join('\n'),
+  );
+}
+
+// Append a scenario's codex.config.toml fragment to the generated config.toml:
+// a separating blank line, a provenance comment, then the fragment byte-exact.
+// A run without a scenario dir, or a scenario without the fragment, leaves the
+// generated config untouched.
+function appendScenarioConfigFragment(
+  configPath: string,
+  scenarioDir: string | undefined,
+): void {
+  if (scenarioDir === undefined) return;
+  const fragmentPath = join(scenarioDir, 'codex.config.toml');
+  if (!existsSync(fragmentPath)) return;
+  appendFileSync(
+    configPath,
+    `\n# appended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}`,
   );
 }
 

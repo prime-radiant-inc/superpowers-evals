@@ -37,6 +37,10 @@ export interface RunHome {
   readonly workdir: string;
   /** Root holding `<runtime>-home-skeleton/`, or undefined when none is seeded. */
   readonly skeletonRoot: string | undefined;
+  /** The run's scenario dir (the same one setup.sh/checks.sh are read from),
+   *  so provisioning can consume per-scenario config fragments (e.g. codex's
+   *  codex.config.toml). Undefined when the run has no scenario dir. */
+  readonly scenarioDir?: string | undefined;
 }
 
 /** Behavior contract for a coding agent (§5.4): config plus a single

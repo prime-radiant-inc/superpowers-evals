@@ -1278,6 +1278,10 @@ async function runInnerBody(
     // a <family>-home-skeleton there gets it copied. Only CodexAgent consumes it
     // now (claude no longer seeds an onboarding skeleton).
     skeletonRoot: a.skeletonRoot ?? a.codingAgentsDir,
+    // The scenario dir, so provisioning can consume per-scenario config
+    // fragments (codex's codex.config.toml) from the same place setup.sh and
+    // checks.sh live.
+    scenarioDir: a.scenarioDir,
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner

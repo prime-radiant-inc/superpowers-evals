@@ -1130,6 +1130,167 @@ test('api-key: injected hooks:{}, model_providers block present, plugins-only fe
   }
 });
 
+// ---------------------------------------------------------------------------
+// Per-scenario codex config fragment (codex.config.toml)
+// ---------------------------------------------------------------------------
+
+// The exact plugins-only config.toml the subscription path generates. The
+// no-fragment test asserts byte-identity against this so any accidental
+// change to the generated config (or a stray append) lands RED.
+const GENERATED_SUBSCRIPTION_CONFIG = [
+  '[features]',
+  'plugins = true',
+  '',
+  '[plugins."superpowers@debug"]',
+  'enabled = true',
+  '',
+].join('\n');
+
+// The separator + provenance comment the appender writes between the
+// generated config and the scenario fragment.
+const FRAGMENT_PROVENANCE = '\n# appended from scenario codex.config.toml\n';
+
+// Stage a scenario dir next to the temp home carrying a codex.config.toml
+// fragment (or no fragment when `fragment` is undefined); return its path.
+function stageScenarioDir(workdir: string, fragment?: string): string {
+  const scenarioDir = join(workdir, '..', 'scenario');
+  mkdirSync(scenarioDir, { recursive: true });
+  if (fragment !== undefined) {
+    writeFileSync(join(scenarioDir, 'codex.config.toml'), fragment);
+  }
+  return scenarioDir;
+}
+
+test('scenario codex.config.toml is appended to the subscription config', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(
+    base.workdir,
+    'model_context_window = 40000\n',
+  );
+  const home = { ...base, scenarioDir };
+  const authParent = join(base.workdir, '..', 'host-auth-frag');
+  const spRoot = join(base.workdir, '..', 'sp-frag');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      // Generated content first, then the provenance comment, then the
+      // fragment byte-exact.
+      expect(configToml).toBe(
+        `${GENERATED_SUBSCRIPTION_CONFIG}${FRAGMENT_PROVENANCE}model_context_window = 40000\n`,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('scenario codex.config.toml is appended to the api-key config', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(
+    base.workdir,
+    'model_context_window = 40000\n',
+  );
+  const home = { ...base, scenarioDir };
+  const spRoot = join(base.workdir, '..', 'sp-frag-api');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+  const credential = makeApiKeyCredential();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: spRoot, CODEX_B4_TEST_API_KEY: 'frag-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, runner, credential);
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        // The generated api-key config is intact and leads...
+        expect(configToml).toContain('[model_providers."quorum"]');
+        expect(configToml).toContain('[plugins."superpowers@debug"]');
+        // ...and the fragment lands verbatim at the very end.
+        expect(
+          configToml.endsWith(
+            `${FRAGMENT_PROVENANCE}model_context_window = 40000\n`,
+          ),
+        ).toBe(true);
+        expect(
+          configToml.indexOf('[plugins."superpowers@debug"]'),
+        ).toBeLessThan(configToml.indexOf(FRAGMENT_PROVENANCE));
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('no scenario codex.config.toml leaves the generated config byte-identical', () => {
+  const { home: base, cleanup } = makeTempHome();
+  // Scenario dir present but WITHOUT a codex.config.toml fragment.
+  const scenarioDir = stageScenarioDir(base.workdir);
+  const home = { ...base, scenarioDir };
+  const authParent = join(base.workdir, '..', 'host-auth-nofrag');
+  const spRoot = join(base.workdir, '..', 'sp-nofrag');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toBe(GENERATED_SUBSCRIPTION_CONFIG);
+      expect(configToml).not.toContain('appended from scenario');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('fragment content lands byte-exact, including a no-trailing-newline fragment', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const fragment =
+    '# scenario knobs\nmodel_context_window = 40000\n\n[sandbox_workspace_write]\nnetwork_access = true';
+  const scenarioDir = stageScenarioDir(base.workdir, fragment);
+  const home = { ...base, scenarioDir };
+  const authParent = join(base.workdir, '..', 'host-auth-exact');
+  const spRoot = join(base.workdir, '..', 'sp-exact');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toBe(
+        `${GENERATED_SUBSCRIPTION_CONFIG}${FRAGMENT_PROVENANCE}${fragment}`,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 // Test group 3: manifest missing `skills` field is a provision error.
 test('provision throws when manifest is missing skills field', () => {
   const { home, cleanup } = makeTempHome();
