@@ -1146,9 +1146,10 @@ const GENERATED_SUBSCRIPTION_CONFIG = [
   '',
 ].join('\n');
 
-// The separator + provenance comment the appender writes between the
-// generated config and the scenario fragment.
-const FRAGMENT_PROVENANCE = '\n# appended from scenario codex.config.toml\n';
+// The provenance comment the prepender writes ahead of the scenario
+// fragment, which lands before the generated config so its bare keys stay at
+// TOML root scope.
+const FRAGMENT_PROVENANCE = '# prepended from scenario codex.config.toml\n';
 
 // Stage a scenario dir next to the temp home carrying a codex.config.toml
 // fragment (or no fragment when `fragment` is undefined); return its path.
@@ -1161,7 +1162,7 @@ function stageScenarioDir(workdir: string, fragment?: string): string {
   return scenarioDir;
 }
 
-test('scenario codex.config.toml is appended to the subscription config', () => {
+test('scenario codex.config.toml is prepended to the subscription config', () => {
   const { home: base, cleanup } = makeTempHome();
   const scenarioDir = stageScenarioDir(
     base.workdir,
@@ -1182,10 +1183,11 @@ test('scenario codex.config.toml is appended to the subscription config', () => 
         join(home.configDir, 'config.toml'),
         'utf8',
       );
-      // Generated content first, then the provenance comment, then the
-      // fragment byte-exact.
+      // Provenance comment first, then the fragment byte-exact, then a
+      // separating newline, then the generated content — root keys stay at
+      // TOML root scope only if they precede every generated [table].
       expect(configToml).toBe(
-        `${GENERATED_SUBSCRIPTION_CONFIG}${FRAGMENT_PROVENANCE}model_context_window = 40000\n`,
+        `${FRAGMENT_PROVENANCE}model_context_window = 40000\n\n${GENERATED_SUBSCRIPTION_CONFIG}`,
       );
     });
   } finally {
@@ -1193,7 +1195,7 @@ test('scenario codex.config.toml is appended to the subscription config', () => 
   }
 });
 
-test('scenario codex.config.toml is appended to the api-key config', () => {
+test('scenario codex.config.toml is prepended to the api-key config', () => {
   const { home: base, cleanup } = makeTempHome();
   const scenarioDir = stageScenarioDir(
     base.workdir,
@@ -1216,18 +1218,19 @@ test('scenario codex.config.toml is appended to the api-key config', () => {
           join(home.configDir, 'config.toml'),
           'utf8',
         );
-        // The generated api-key config is intact and leads...
+        // The generated api-key config is intact...
         expect(configToml).toContain('[model_providers."quorum"]');
         expect(configToml).toContain('[plugins."superpowers@debug"]');
-        // ...and the fragment lands verbatim at the very end.
+        // ...and the fragment lands verbatim at the very start, before any
+        // generated [table] can capture its root-level keys.
         expect(
-          configToml.endsWith(
-            `${FRAGMENT_PROVENANCE}model_context_window = 40000\n`,
+          configToml.startsWith(
+            `${FRAGMENT_PROVENANCE}model_context_window = 40000\n\n`,
           ),
         ).toBe(true);
-        expect(
-          configToml.indexOf('[plugins."superpowers@debug"]'),
-        ).toBeLessThan(configToml.indexOf(FRAGMENT_PROVENANCE));
+        expect(configToml.indexOf(FRAGMENT_PROVENANCE)).toBeLessThan(
+          configToml.indexOf('[model_providers."quorum"]'),
+        );
       },
     );
   } finally {
@@ -1255,7 +1258,7 @@ test('no scenario codex.config.toml leaves the generated config byte-identical',
         'utf8',
       );
       expect(configToml).toBe(GENERATED_SUBSCRIPTION_CONFIG);
-      expect(configToml).not.toContain('appended from scenario');
+      expect(configToml).not.toContain('prepended from scenario');
     });
   } finally {
     cleanup();
@@ -1283,7 +1286,7 @@ test('fragment content lands byte-exact, including a no-trailing-newline fragmen
         'utf8',
       );
       expect(configToml).toBe(
-        `${GENERATED_SUBSCRIPTION_CONFIG}${FRAGMENT_PROVENANCE}${fragment}`,
+        `${FRAGMENT_PROVENANCE}${fragment}\n${GENERATED_SUBSCRIPTION_CONFIG}`,
       );
     });
   } finally {

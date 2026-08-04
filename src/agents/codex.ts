@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -169,11 +168,14 @@ export class CodexAgent implements CodingAgent {
     }
 
     // Per-scenario config fragment: a scenario dir carrying codex.config.toml
-    // gets its contents appended verbatim to the generated config.toml (both
+    // gets its contents prepended verbatim to the generated config.toml (both
     // auth paths), so a scenario can tune codex runtime knobs (e.g.
-    // model_context_window to force mid-run compaction). Append-only: no
-    // templating, no validation beyond "file exists".
-    appendScenarioConfigFragment(
+    // model_context_window to force mid-run compaction). Prepend, not append:
+    // the generated config ends in [table] headers, so appended root-level
+    // keys would silently land inside the last table (a real 2026-08-04 run
+    // shipped model_context_window into [plugins."superpowers@debug"], where
+    // codex ignored it). No templating, no validation beyond "file exists".
+    prependScenarioConfigFragment(
       join(configDir, 'config.toml'),
       home.scenarioDir,
     );
@@ -395,20 +397,23 @@ function writeApiKeyConfig(
   );
 }
 
-// Append a scenario's codex.config.toml fragment to the generated config.toml:
-// a separating blank line, a provenance comment, then the fragment byte-exact.
-// A run without a scenario dir, or a scenario without the fragment, leaves the
-// generated config untouched.
-function appendScenarioConfigFragment(
+// Prepend a scenario's codex.config.toml fragment to the generated config.toml:
+// a provenance comment, the fragment byte-exact, then a separating blank line
+// before the generated content. Prepending keeps the fragment's bare keys at
+// TOML root scope — appending would place them inside the config's last
+// [table]. A run without a scenario dir, or a scenario without the fragment,
+// leaves the generated config untouched.
+function prependScenarioConfigFragment(
   configPath: string,
   scenarioDir: string | undefined,
 ): void {
   if (scenarioDir === undefined) return;
   const fragmentPath = join(scenarioDir, 'codex.config.toml');
   if (!existsSync(fragmentPath)) return;
-  appendFileSync(
+  const generated = readFileSync(configPath, 'utf8');
+  writeFileSync(
     configPath,
-    `\n# appended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}`,
+    `# prepended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}\n${generated}`,
   );
 }
 
