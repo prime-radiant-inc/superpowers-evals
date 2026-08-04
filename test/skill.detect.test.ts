@@ -135,3 +135,52 @@ test('Skill tool with missing skill arg → false', () => {
 test('Read with missing path fields → false', () => {
   expect(isSkillInvocation(call('Read', {}), name, dir)).toBe(false);
 });
+
+// --- Relative reads from a skills-root workdir (codex false negative, 2026-08-04) ---
+// Real command from run sdd-quality-reviewer-…-1cf0: the agent's exec script set
+// workdir to the staged skills root and read the skill with a relative path, so
+// no `skills/` prefix appears in the normalized command.
+
+test('Bash relative read from skills root (real codex command) → true', () => {
+  expect(
+    isSkillInvocation(
+      call('Bash', {
+        command: "sed -n '1,280p' subagent-driven-development/SKILL.md",
+      }),
+      'superpowers:subagent-driven-development',
+      'subagent-driven-development',
+    ),
+  ).toBe(true);
+});
+
+test('Bash relative read names a different skill → false', () => {
+  expect(
+    isSkillInvocation(
+      call('Bash', {
+        command: "sed -n '1,280p' subagent-driven-development/SKILL.md",
+      }),
+      'superpowers:brainstorming',
+      'brainstorming',
+    ),
+  ).toBe(false);
+});
+
+test('Bash dir appearing as suffix of another dir → false', () => {
+  expect(
+    isSkillInvocation(
+      call('Bash', { command: 'cat not-foo/SKILL.md' }),
+      name,
+      dir,
+    ),
+  ).toBe(false);
+});
+
+test('Read with relative <dir>/SKILL.md path → true', () => {
+  expect(
+    isSkillInvocation(
+      call('Read', { path: 'subagent-driven-development/SKILL.md' }),
+      'superpowers:subagent-driven-development',
+      'subagent-driven-development',
+    ),
+  ).toBe(true);
+});

@@ -11,10 +11,13 @@ function escapeRegex(s: string): string {
  *
  *   1. Native Skill tool call with matching `.args.skill`.
  *   2. Shell command (Bash / Shell / LocalShellCall) whose command/cmd
- *      contains `skills/(superpowers/)?<dir>/SKILL.md` with appropriate
- *      word-boundary characters on each side.
+ *      contains `<dir>/SKILL.md` — with or without a leading
+ *      `skills/(superpowers/)?` — with appropriate word-boundary
+ *      characters on each side. The prefix is optional because codex
+ *      agents run their reads from a skills-root workdir, so the
+ *      normalized command carries only the relative path.
  *   3. Read call whose file_path/path ends with
- *      `(^|/)skills/(superpowers/)?<dir>/SKILL.md`.
+ *      `<dir>/SKILL.md`, prefix optional as above.
  */
 export function isSkillInvocation(
   call: ToolCallView,
@@ -34,7 +37,7 @@ export function isSkillInvocation(
     // Leading boundary: start-of-string or [\s'"/]
     // Trailing boundary: end-of-string or [\s'";]
     const shellRe = new RegExp(
-      `(^|[\\s'"/])skills/(superpowers/)?${safeDir}/SKILL\\.md([\\s'";]|$)`,
+      `(^|[\\s'"/])(skills/(superpowers/)?)?${safeDir}/SKILL\\.md([\\s'";]|$)`,
     );
     return shellRe.test(cmd);
   }
@@ -43,7 +46,7 @@ export function isSkillInvocation(
   if (call.tool === 'Read') {
     const p = String(call.args['file_path'] ?? call.args['path'] ?? '');
     const readRe = new RegExp(
-      `(^|/)skills/(superpowers/)?${safeDir}/SKILL\\.md$`,
+      `(^|/)(skills/(superpowers/)?)?${safeDir}/SKILL\\.md$`,
     );
     return readRe.test(p);
   }
