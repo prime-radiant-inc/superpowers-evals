@@ -17,13 +17,21 @@
 #
 # Equivalent manual command (for debugging):
 #   subscription path:
-#     cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" codex --dangerously-bypass-approvals-and-sandbox
+#     cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust
 #   api-key path (CODEX_ENV_FILE written by provision):
-#     . "$CODEX_ENV_FILE" && cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CODEX_PROVIDER_API_KEY="$CODEX_PROVIDER_API_KEY" codex --dangerously-bypass-approvals-and-sandbox
+#     . "$CODEX_ENV_FILE" && cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" HOME="$QUORUM_AGENT_HOME" TMPDIR="<…>" XDG_DATA_HOME="<…>" XDG_CONFIG_HOME="<…>" XDG_STATE_HOME="<…>" XDG_CACHE_HOME="<…>" CODEX_PROVIDER_API_KEY="$CODEX_PROVIDER_API_KEY" codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust
+#
+# Hook trust: the staged superpowers plugin may declare its own codex hooks in
+# its manifest (e.g. the compaction re-injection SessionStart hook). Codex
+# silently SKIPS untrusted hooks, and a headless run has no interactive trust
+# prompt — so the launcher passes --dangerously-bypass-hook-trust, exactly the
+# flag the superpowers README prescribes for headless automation. Quorum vets
+# the hook source by construction: it stages the plugin tree itself from the
+# branch under test. A plugin with no hooks (manifest hooks: {}) is unaffected.
 #
 # CODEX_HOME collapse: this launcher sets HOME (via $QUORUM_HOME_ENV) but NOT
 # CODEX_HOME. Codex defaults CODEX_HOME to $HOME/.codex, which is exactly where
-# the runner seeds the per-run config (auth.json + the trusted plugin hook) —
+# the runner seeds the per-run config (auth.json + the staged plugin) —
 # so Codex finds its config via the isolated $HOME with no config-dir var.
 #
 # HOME isolation: Codex discovers user-scope skills and plugin marketplaces from
@@ -65,4 +73,4 @@ fi
 exec env -i \
   "${env_args[@]}" \
   $QUORUM_HOME_ENV \
-  codex --dangerously-bypass-approvals-and-sandbox "$@"
+  codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust "$@"

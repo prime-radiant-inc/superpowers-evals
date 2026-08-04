@@ -20,7 +20,7 @@ import { writePrivateFileNoFollow } from './private-file.ts';
 
 // Codex-family provisioning. provision() is SETUP ONLY: it seeds the per-run
 // CODEX_HOME so the agent boots past the sign-in picker with Superpowers staged
-// as a trusted SessionStart plugin hook.
+// as an enabled plugin (skills + whatever codex hooks its manifest declares).
 //
 // B4: provision() now requires a Credential and branches on credential.auth:
 //
@@ -41,12 +41,11 @@ import { writePrivateFileNoFollow } from './private-file.ts';
 // codex.yaml: home_config_subdir ".codex". Codex defaults CODEX_HOME to
 // $HOME/.codex so the launcher sets only the isolated $HOME — no CODEX_HOME var.
 //
-// That leaves exactly ONE subprocess interaction on both paths:
-//   - `codex app-server --listen stdio://` JSON-RPC (initialize + hooks/list)
-//     to read the staged Superpowers hook's key + currentHash, written as
-//     trusted_hash in config.toml. Driven through the injected AppServerClient —
-//     a BOUNDED spawn seam so tests stub it and live runs have a per-handshake
-//     deadline.
+// Provisioning spawns NO codex subprocess. The staged plugin's hooks are not
+// trust-hashed into config.toml (the PRI-2506-era app-server handshake is
+// gone); instead the launcher passes --dangerously-bypass-hook-trust, the
+// mechanism the superpowers README prescribes for headless rigs, so the
+// staged manifest's own hooks run without a trust prompt.
 
 // Basename of the per-run env file the api-key path writes under configDir. The
 // runner derives the launcher's $CODEX_ENV_FILE substitution from this
@@ -245,21 +244,23 @@ export class CodexAgent implements CodingAgent {
 
   // Subscription path: stage Superpowers with bare features/plugins config.toml
   // (no model/model_provider/[model_providers] — subscription is account-driven).
-  // PRI-2506: uniform hook-less provisioning — inject hooks:{}, no trust dance.
+  // No trust dance: the launcher's --dangerously-bypass-hook-trust runs the
+  // staged plugin's own hooks (when its manifest declares any) headlessly.
   private installPluginHooksSubscription(
     configDir: string,
     _workdir: string,
     superpowersRoot: string,
   ): void {
     this.stagePlugin(configDir, superpowersRoot);
-    this.injectEmptyHooks(configDir);
+    this.normalizeManifestHooks(configDir);
     const configPath = join(configDir, 'config.toml');
     writePluginsOnlyConfig(configPath);
   }
 
   // Api-key path: stage Superpowers with a full config.toml (model + provider
   // block + features/plugins).
-  // PRI-2506: uniform hook-less provisioning — inject hooks:{}, no trust dance.
+  // No trust dance: the launcher's --dangerously-bypass-hook-trust runs the
+  // staged plugin's own hooks (when its manifest declares any) headlessly.
   private installPluginHooksApiKey(
     configDir: string,
     _workdir: string,
@@ -269,7 +270,7 @@ export class CodexAgent implements CodingAgent {
     wireApi: string,
   ): void {
     this.stagePlugin(configDir, superpowersRoot);
-    this.injectEmptyHooks(configDir);
+    this.normalizeManifestHooks(configDir);
     const configPath = join(configDir, 'config.toml');
     writeApiKeyConfig(configPath, model, baseUrl, wireApi);
   }
@@ -293,10 +294,15 @@ export class CodexAgent implements CodingAgent {
     stageSuperpowersPlugin(superpowersRoot, pluginRoot);
   }
 
-  // PRI-2506: inject `hooks: {}` into the STAGED plugin manifest so codex's
-  // hooks.json auto-discovery is suppressed on every superpowers ref. Validates
-  // that the manifest has a `skills` field (codex needs it for native discovery).
-  private injectEmptyHooks(configDir: string): void {
+  // Normalize the STAGED plugin manifest's `hooks` field. Absent or null is
+  // forced to `{}` so codex's hooks.json auto-discovery fallback
+  // (DEFAULT_HOOKS_CONFIG_FILE — the Claude-shaped hook) cannot kick in and
+  // stall the run on a trust prompt. An EXPLICIT hooks value is the branch
+  // under test's own codex hook config (e.g. "./hooks/hooks-codex.json") and
+  // is preserved verbatim — clobbering it silently disables the very hooks the
+  // eval measures. Also validates that the manifest has a `skills` field
+  // (codex needs it for native discovery).
+  private normalizeManifestHooks(configDir: string): void {
     const pluginRoot = join(
       configDir,
       'plugins',
@@ -329,8 +335,11 @@ export class CodexAgent implements CodingAgent {
       );
     }
 
-    // Force hooks to empty object, preserving all other fields.
-    obj['hooks'] = {};
+    // Absent/null becomes {} (auto-discovery defense); an explicit value —
+    // including dev's literal {} — passes through untouched.
+    if (obj['hooks'] === undefined || obj['hooks'] === null) {
+      obj['hooks'] = {};
+    }
 
     writeFileSync(manifestPath, `${JSON.stringify(obj, null, 2)}\n`);
   }

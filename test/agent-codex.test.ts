@@ -107,9 +107,11 @@ function spawnBackedClient(stdout: string): SpawnAppServerClient {
 
 // Stage a SUPERPOWERS_ROOT the adapter can copytree (one staged file proves the
 // plugin copy ran) plus the dirs the copy filter must drop.
-// Stage a minimal SUPERPOWERS_ROOT the adapter can copytree. PRI-2506: must
+// Stage a minimal SUPERPOWERS_ROOT the adapter can copytree. The manifest must
 // include a .codex-plugin/plugin.json with a `skills` field (codex needs it
-// for native discovery); the `hooks` value will be injected at provision time.
+// for native discovery). Its `hooks: null` is normalized to `{}` at provision
+// time (absent/null suppresses codex's hooks.json auto-discovery fallback);
+// an EXPLICIT hooks value would be preserved verbatim.
 function stageSuperpowers(root: string): void {
   mkdirSync(join(root, 'skills'), { recursive: true });
   writeFileSync(join(root, 'skills', 'a-skill.md'), '# skill\n');
@@ -923,7 +925,10 @@ test('codex launch-agent sources $CODEX_ENV_FILE conditionally', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PRI-2506: Uniform hook-less provisioning
+// Staged-manifest hooks normalization: absent/null hooks are forced to {}
+// (suppressing codex's hooks.json auto-discovery fallback and its trust
+// prompt), while an EXPLICIT hooks value — the branch under test's own codex
+// hooks — is preserved verbatim so those hooks actually run in the eval.
 // ---------------------------------------------------------------------------
 
 // Stage a fixture manifest with varying hooks fields, then mutate it. Three
@@ -968,10 +973,9 @@ function expectStagedManifestHookless(manifest: unknown): void {
   expect(Object.keys(hooks as object).length).toBe(0);
 }
 
-// Test group 1: provisioning ref-invariance (subscription path).
-// Three fixture manifests (hooks: null, hooks: {}, hooks: "./hooks/x.json") must
-// ALL produce the SAME staged manifest (`hooks == {}`), the SAME plugins-only
-// config.toml (no trusted_hash/plugin_hooks), and zero app-server calls.
+// Test group 1: subscription path. hooks:null and hooks:{} both stage as {};
+// an explicit pointer stages verbatim. All produce the SAME plugins-only
+// config.toml (no trusted_hash/plugin_hooks) and zero app-server calls.
 test('subscription: manifest with hooks:null gets injected hooks:{}, plugins-only config, zero app-server calls', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth-hookless');
@@ -1047,14 +1051,18 @@ test('subscription: manifest with hooks:{} gets identical injected hooks:{}, plu
   }
 });
 
-test('subscription: manifest with hooks:"./hooks/x.json" gets injected hooks:{}, plugins-only config, zero app-server calls', () => {
+// A branch under test that SHIPS codex hooks (e.g. superpowers#2088's
+// compaction re-injection hook) declares them via an explicit manifest pointer.
+// Provisioning must carry that pointer through verbatim — clobbering it to {}
+// silently disables the very hooks the eval exists to measure.
+test('subscription: manifest with an explicit hooks pointer preserves it verbatim, plugins-only config, zero app-server calls', () => {
   const { home, cleanup } = makeTempHome();
   const authParent = join(home.workdir, '..', 'host-auth-hookless3');
   const spRoot = join(home.workdir, '..', 'sp-string-hooks');
   mkdirSync(spRoot, { recursive: true });
   stageSuperpowers(spRoot);
   writeSuperpowersManifest(spRoot, './hooks/hooks-codex.json');
-  // Stage the actual hook file so the ref is a realistic control.
+  // Stage the actual hook file so the pointer is realistic.
   mkdirSync(join(spRoot, 'hooks'), { recursive: true });
   writeFileSync(
     join(spRoot, 'hooks', 'hooks-codex.json'),
@@ -1068,8 +1076,26 @@ test('subscription: manifest with hooks:"./hooks/x.json" gets injected hooks:{},
       const agent = new CodexAgent(CODEX_CONFIG, appServer);
       agent.provision(home, runner, SUBSCRIPTION_CRED);
 
+      // The explicit pointer survives byte-exact; the other fields are intact.
       const staged = readStagedManifest(home.configDir);
-      expectStagedManifestHookless(staged);
+      expect(staged).toMatchObject({
+        name: 'superpowers',
+        version: '1.0.0',
+        skills: './skills/',
+        hooks: './hooks/hooks-codex.json',
+      });
+      // ...and the hook file itself was staged alongside it.
+      const pluginRoot = join(
+        home.configDir,
+        'plugins',
+        'cache',
+        'debug',
+        'superpowers',
+        'local',
+      );
+      expect(existsSync(join(pluginRoot, 'hooks', 'hooks-codex.json'))).toBe(
+        true,
+      );
 
       const configToml = readFileSync(
         join(home.configDir, 'config.toml'),
@@ -1081,6 +1107,43 @@ test('subscription: manifest with hooks:"./hooks/x.json" gets injected hooks:{},
       expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('hooks = true');
       expect(configToml).not.toContain('trusted_hash');
+
+      expect(appServer.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+// An ABSENT hooks field must still be forced to {}: without it codex falls back
+// to its DEFAULT_HOOKS_CONFIG_FILE (hooks/hooks.json — the Claude-shaped hook)
+// and stalls the run on a trust prompt.
+test('subscription: manifest with no hooks field gets injected hooks:{}', () => {
+  const { home, cleanup } = makeTempHome();
+  const authParent = join(home.workdir, '..', 'host-auth-hookless4');
+  const spRoot = join(home.workdir, '..', 'sp-absent-hooks');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  // Overwrite the fixture manifest WITHOUT any hooks field.
+  const manifest = {
+    name: 'superpowers',
+    version: '1.0.0',
+    skills: './skills/',
+  };
+  writeFileSync(
+    join(spRoot, '.codex-plugin', 'plugin.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, appServer);
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+
+      const staged = readStagedManifest(home.configDir);
+      expectStagedManifestHookless(staged);
 
       expect(appServer.calls.length).toBe(0);
     });
@@ -1128,6 +1191,63 @@ test('api-key: injected hooks:{}, model_providers block present, plugins-only fe
   } finally {
     cleanup();
   }
+});
+
+// The manifest rewrite is shared by both auth paths: the api-key path must also
+// carry an explicit hooks pointer through verbatim.
+test('api-key: manifest with an explicit hooks pointer preserves it verbatim', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'sp-api-hooks-ptr');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  writeSuperpowersManifest(spRoot, './hooks/hooks-codex.json');
+  const runner = unusedRunner();
+  const appServer = new FakeAppServerClient();
+  const credential = makeApiKeyCredential();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: spRoot, CODEX_B4_TEST_API_KEY: 'api-hooks-ptr' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, appServer);
+        agent.provision(home, runner, credential);
+
+        const staged = readStagedManifest(home.configDir);
+        expect(staged).toMatchObject({
+          skills: './skills/',
+          hooks: './hooks/hooks-codex.json',
+        });
+
+        expect(appServer.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// Staged plugin hooks are quorum-vetted (quorum stages the plugin itself), but
+// codex silently SKIPS untrusted hooks and there is no interactive session to
+// answer the one-time trust prompt. The superpowers README prescribes
+// --dangerously-bypass-hook-trust for exactly this: headless automation that
+// already vets hook sources. Verified present on codex-cli 0.144.4 and
+// 0.146.0. Without it, a branch under test that ships codex hooks (e.g. the
+// compaction re-injection hook) provisions cleanly but never fires.
+test('codex launch-agent bypasses hook trust so staged plugin hooks run headlessly', () => {
+  const launcher = readFileSync(
+    join(
+      import.meta.dir,
+      '..',
+      'coding-agents',
+      'codex-context',
+      'launch-agent',
+    ),
+    'utf8',
+  );
+  // The flag must be on the exec line, alongside the approvals bypass.
+  expect(launcher).toMatch(
+    /codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust "\$@"/,
+  );
 });
 
 // ---------------------------------------------------------------------------
