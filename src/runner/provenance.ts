@@ -27,6 +27,11 @@ export interface RunProvenance {
   harness_rev: string | null;
   agent_cli_version: string | null;
   gauntlet_version: string | null;
+  // Where the run actually executed (process.platform: 'darwin' | 'linux' |
+  // 'win32'). The verdict's top-level `os` field is the run TARGET (defaulted
+  // 'linux', also the host-vs-guest discriminator), which mislabels local
+  // darwin runs; this field records ground truth.
+  host_platform: string;
 }
 
 export function collectProvenance(args: {
@@ -40,6 +45,7 @@ export function collectProvenance(args: {
     harness_rev: gitRev(args.repoRoot),
     agent_cli_version: args.agentBinary ? versionLine(args.agentBinary) : null,
     gauntlet_version: versionLine('gauntlet'),
+    host_platform: process.platform,
   };
 }
 

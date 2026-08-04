@@ -77,6 +77,8 @@ export const FinalVerdictSchema = z.object({
       harness_rev: z.string().nullable(),
       agent_cli_version: z.string().nullable(),
       gauntlet_version: z.string().nullable(),
+      // Optional: verdicts predating 2026-08-04 lack it.
+      host_platform: z.string().optional(),
     })
     .optional(),
 });

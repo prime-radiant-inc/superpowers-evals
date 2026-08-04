@@ -6,6 +6,7 @@ import {
   AgentConfigSchema,
   agentConfigDir,
   CodingAgentConfigError,
+  enforceCliVersionPin,
   loadAgentConfig,
   loadAgentConfigForValidation,
   resolveSessionLogDir,
@@ -335,4 +336,50 @@ test('loads hermes config', () => {
   expect(cfg.normalizer).toBe('hermes');
   expect(cfg.default_credential).toBe('openrouter_glm_5_2');
   expect(cfg.required_env).toEqual(['SUPERPOWERS_ROOT']);
+});
+
+// --- pin_cli_version (PATH-binary drift guard, 2026-08-04) ---
+// Motivating failure: a full codex A/B battery silently ran host codex 0.144.4
+// (PATH resolution) while the analysis assumed current; provenance recorded the
+// version but nothing asserted against it.
+
+function pinnedCfg(pin: string | undefined) {
+  return AgentConfigSchema.parse({
+    name: 'codex',
+    binary: 'codex',
+    session_log_dir: 'x',
+    session_log_glob: 'y',
+    normalizer: 'codex',
+    home_config_subdir: '.codex',
+    ...(pin === undefined ? {} : { pin_cli_version: pin }),
+  });
+}
+
+test('pin_cli_version absent → no version probe runs', () => {
+  const cfg = pinnedCfg(undefined);
+  enforceCliVersionPin('codex.yaml', cfg, () => {
+    throw new Error('probe must not run without a pin');
+  });
+});
+
+test('pin_cli_version contained in probed version line → passes', () => {
+  const cfg = pinnedCfg('0.146.0');
+  enforceCliVersionPin('codex.yaml', cfg, () => 'codex-cli 0.146.0');
+});
+
+test('pin_cli_version mismatch → CodingAgentConfigError naming both versions', () => {
+  const cfg = pinnedCfg('0.146.0');
+  expect(() =>
+    enforceCliVersionPin('codex.yaml', cfg, () => 'codex-cli 0.144.4'),
+  ).toThrow(CodingAgentConfigError);
+  expect(() =>
+    enforceCliVersionPin('codex.yaml', cfg, () => 'codex-cli 0.144.4'),
+  ).toThrow(/0\.146\.0.*0\.144\.4|0\.144\.4.*0\.146\.0/);
+});
+
+test('pin_cli_version set but version unprobeable → CodingAgentConfigError', () => {
+  const cfg = pinnedCfg('0.146.0');
+  expect(() => enforceCliVersionPin('codex.yaml', cfg, () => null)).toThrow(
+    CodingAgentConfigError,
+  );
 });

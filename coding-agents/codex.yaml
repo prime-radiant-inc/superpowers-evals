@@ -12,3 +12,7 @@ required_env:
   - SUPERPOWERS_ROOT
 max_time: 10m
 default_credential: codex_sub
+# Refuse to run against anything but the validated codex version: the 2026-08
+# battery silently tested PATH codex 0.144.4 (predates the model spawn param)
+# while the analysis assumed current. Update deliberately when bumping codex.
+pin_cli_version: "0.146.0"

@@ -193,3 +193,10 @@ test('collectProvenance never throws: every probe failure is a null field', () =
     else process.env['SUPERPOWERS_ROOT'] = prev;
   }
 });
+
+// The battery that silently ran a stale PATH binary also reported os "linux"
+// on a Darwin host; provenance now records where the run actually executed.
+test('collectProvenance records the host platform', () => {
+  const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+  expect(p.host_platform).toBe(process.platform);
+});

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -37,6 +38,11 @@ export const AgentConfigSchema = z.object({
   // e.g. gemini/opencode). See agentConfigDir().
   home_config_subdir: z.string(),
   required_env: z.array(z.string()).default([]),
+  // When set, the resolved binary's --version line must contain this string or
+  // the run fails at setup. Guards against silent PATH-binary drift: a full
+  // codex battery once ran a stale 0.144.4 from PATH while the analysis
+  // assumed current, and only provenance (which nothing asserted on) knew.
+  pin_cli_version: z.string().optional(),
   max_time: z.string().optional(),
   project_prompt: z.string().optional(),
   model: z.string().optional(),
@@ -62,6 +68,47 @@ export class CodingAgentConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CodingAgentConfigError';
+  }
+}
+
+// First line of `<binary> --version`, or null when the binary is missing or
+// exits nonzero. Kept here (not imported from runner/provenance) so contracts
+// stays free of runner imports.
+function probeCliVersionLine(binary: string): string | null {
+  const p = spawnSync(binary, ['--version'], { encoding: 'utf8' });
+  if (p.error || p.status !== 0) {
+    return null;
+  }
+  const line = (p.stdout ?? '').split('\n')[0]?.trim() ?? '';
+  return line === '' ? null : line;
+}
+
+/**
+ * Enforce `pin_cli_version`: when the config pins a version, the binary's
+ * --version line must contain the pinned string. Absent pin → no probe.
+ * A mismatch or an unprobeable binary throws CodingAgentConfigError (mapped
+ * by the runner to a setup-stage indeterminate — an environment error, not a
+ * result).
+ */
+export function enforceCliVersionPin(
+  path: string,
+  cfg: AgentConfig,
+  probeVersion: (binary: string) => string | null = probeCliVersionLine,
+): void {
+  const pin = cfg.pin_cli_version;
+  if (pin === undefined) {
+    return;
+  }
+  const actual = probeVersion(cfg.binary);
+  if (actual === null) {
+    throw new CodingAgentConfigError(
+      `${path}: pin_cli_version '${pin}' set but '${cfg.binary} --version' is unavailable — cannot verify the binary under test`,
+    );
+  }
+  if (!actual.includes(pin)) {
+    throw new CodingAgentConfigError(
+      `${path}: pinned CLI version '${pin}' but '${cfg.binary} --version' reports '${actual}' — refusing to run against an unpinned binary`,
+    );
   }
 }
 
@@ -166,6 +213,8 @@ export function loadAgentConfig(
       `${path}: required env vars not set: ${missingEnv.join(', ')}`,
     );
   }
+
+  enforceCliVersionPin(path, cfg);
 
   return resolveProjectPrompt(path, cfg);
 }
