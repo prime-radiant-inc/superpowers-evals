@@ -46,6 +46,10 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // semantics; escalation ACs are incoherent on other harnesses.
   'sdd-round4-escalates-model',
   'sdd-re-review-scoped',
+  // Compaction probe: ships a codex.config.toml fragment (model_context_window)
+  // that only the codex provisioner consumes; the forced-compaction premise
+  // does not exist on other harnesses.
+  'sdd-survives-compaction',
 ]);
 
 test('Serf builder scenario pins its exact content-addressed source pair', () => {
