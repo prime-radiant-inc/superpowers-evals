@@ -69,17 +69,43 @@ on the current hermes CLI (v0.20.0), not the v0.19.0 it was proven on.
 - Reporting: existence proofs only, no reliability rates from n≤3; compaction
   untested by design; GLM-5.2-only; OpenRouter provider routing uncontrolled.
 
+## Toolset probe (2026-08-05, in-container, one live --yolo session)
+
+Session `20260805_230601_8dc20c` (scratch HOME, subagent-create + self-edit
+task). Native tool names observed: `delegate_task`, `process`, `read_file`,
+`patch` — **`delegate_task` and `patch` confirmed as the real v0.20 names**,
+matching the shipped `HERMES_TOOL_MAP`. `process` is background-process
+control (poll/wait/kill for `terminal(background=true)`, per
+`tools/process_registry.py`), not the shell executor — correctly unmapped;
+`terminal` remains the shell (`tools/terminal_tool.py` present). Subagent
+dispatch minted **no child session** (`sessions list` and the export both show
+exactly one), and the session's `estimated_cost_usd` (0.0201) covers the whole
+run including the delegated work — the `mergeTrajectories` multi-session
+under-count concern does not apply to hermes; no merge fix needed. Export
+carries `model: z-ai/glm-5.2` and `billing_provider: openrouter`, the exact
+fields the normalizer fix stamps. `mid-conversation-skill-invocation` stays in
+the battery (subagent tool exists).
+
 ## Run matrix
 
-(filled as runs complete; run dirs under `results/`)
+(run dirs under `results/`; provenance gate = superpowers_rev `b661305…` +
+CLI `Hermes Agent v0.20.0 (2026.8.3)`, both verified per counted run)
 
 | # | Cell | Verdict | Coding cost | Skill detection | Notes |
 |---|---|---|---|---|---|
-| 1 | superpowers-bootstrap (smoke) | — | — | — | — |
+| 1 | superpowers-bootstrap (smoke = run 1) | **PASS** 3/3 pre, 3/3 post | $0.027 / 135K, priced | native `Skill` (skill_view) | `…230752Z-76d1`; v0.20.0 needs no fallback; economics fix live-verified |
+| C | RED arm (neutered `pre_llm_call` → None) | **FAIL** (required) | $0.03 / 126K | none — Write fired with no skill load | `…231013Z-f65f`; `superpowers_dirty: true` expected (the neuter edit); control discriminates on today's CLI/model — greens are meaningful |
+
+Battery (10 further runs) launched 2026-08-05 ~23:15Z, sequential, order:
+triggering-writing-plans, -tdd, -systematic-debugging, bootstrap run 2,
+bootstrap-persistence, -requesting-code-review, -finishing-a-development-
+branch, -executing-plans, -dispatching-parallel-agents,
+mid-conversation-skill-invocation, bootstrap run 3.
 
 ## Status
 
 2026-08-05: trust fixes landed (`main` @ e2ef518), image rebuilt + pinned,
-PR clone pinned, probes recorded. **Battery blocked on `OPENROUTER_API_KEY`
-in the local credential env** — key requested from the maintainer; no
-model-call-dependent step (toolset probe, smoke, battery) has run yet.
+PR clone pinned, probes recorded. `OPENROUTER_API_KEY` sourced from the
+appliance blessed bundle into local `.env` (0600) — **rotate after the
+campaign** (plaintext copies land in `results/` run homes). Smoke PASS,
+RED arm FAIL (as required); battery in flight.
