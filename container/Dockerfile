@@ -147,7 +147,11 @@ RUN case "$TARGETARCH" in \
 
 # Run as root, the hermes installer uses the FHS layout: code at
 # /usr/local/lib/hermes-agent, command at /usr/local/bin/hermes (already on PATH).
-RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup \
+# HERMES_COMMIT pins the installed revision: the installer defaults to main
+# HEAD, which BuildKit's layer cache would otherwise freeze invisibly — a bare
+# rebuild is a cache no-op. Bump the default to move hermes.
+ARG HERMES_COMMIT=9ea01979dc00d3ed0b08977c28325e6c3ed592d0
+RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup --commit "$HERMES_COMMIT" \
   && hermes version
 
 RUN curl -fsSL https://mimo.xiaomi.com/install | bash \

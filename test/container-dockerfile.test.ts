@@ -174,3 +174,12 @@ test('container Dockerfile exposes quorum shims and stable workspace entrypoint'
   expect(source).toMatch(/^WORKDIR \/workspace\/evals$/m);
   expect(source).toMatch(/^CMD \["sleep", "infinity"\]$/m);
 });
+
+test('hermes install is commit-pinned via HERMES_COMMIT', () => {
+  const source = dockerfileSource();
+  // The installer defaults to main HEAD, which BuildKit's layer cache freezes
+  // invisibly — a bare rebuild is a cache no-op. The ARG default is the pin;
+  // bumping it busts exactly the hermes layer.
+  expect(source).toContain('ARG HERMES_COMMIT=');
+  expect(source).toContain('--commit "$HERMES_COMMIT"');
+});
