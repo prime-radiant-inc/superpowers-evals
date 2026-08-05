@@ -288,6 +288,39 @@ and the raw Gemini transcripts.
   Superpowers plugin (staged separately at `<run>/home/.hermes/plugins/
   superpowers/`) — harmless, but it explains the large `.hermes/` tree.
 
+#### Testing a superpowers PR against hermes
+
+Hermes provisioning stages `.hermes-plugin/` + `skills/` from
+`SUPERPOWERS_ROOT` and fails closed if `.hermes-plugin/` is absent — so a
+checkout of the wrong branch cannot silently produce a verdict, and testing a
+superpowers PR means pointing the harness at a checkout of that PR. The order
+below is mandatory: `QUORUM_SUPERPOWERS_REV` is frozen into the container at
+create time and overrides the in-container probe, so a checkout switched
+after `up` stamps the WRONG rev into every verdict.
+
+1. Dedicated clone (never a linked worktree — its in-container git probe
+   fails; never a checkout other sessions share), detached at the recorded
+   PR-head SHA:
+
+       git clone git@github.com:obra/superpowers.git ../superpowers-pr<N>
+       cd ../superpowers-pr<N>
+       git fetch origin pull/<N>/head && git checkout --detach FETCH_HEAD
+       git rev-parse HEAD   # record this SHA; it names the subject everywhere
+
+2. Recreate the container against it (a running container keeps its old
+   image AND its old env):
+
+       scripts/evals-container down
+       scripts/evals-container --superpowers-root ../superpowers-pr<N> up
+
+3. Run, then verify provenance before trusting anything:
+
+       scripts/evals-container exec quorum run scenarios/superpowers-bootstrap --coding-agent hermes
+       # verdict.json .provenance.superpowers_rev must equal the recorded SHA
+
+Identify the subject only as `pull/<N>/head @ <sha>` in docs and comments —
+plugin manifest version strings inside PRs go stale and misdate evidence.
+
 ### Antigravity
 
 Antigravity runs host-side for now. The generated launcher pins the throwaway
