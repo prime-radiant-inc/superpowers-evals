@@ -48,7 +48,6 @@ const PLUGIN_FILES: readonly string[] = [
   'hooks/session-start',
   'skills/using-superpowers/SKILL.md',
   'skills/brainstorming/SKILL.md',
-  'skills/using-superpowers/references/copilot-tools.md',
 ];
 
 // Build a fake SUPERPOWERS_ROOT carrying every required plugin file, plus the

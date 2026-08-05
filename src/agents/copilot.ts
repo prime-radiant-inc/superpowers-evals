@@ -45,7 +45,6 @@ const COPILOT_REQUIRED_SUPERPOWERS_FILES: readonly string[] = [
   'hooks/session-start',
   'skills/using-superpowers/SKILL.md',
   'skills/brainstorming/SKILL.md',
-  'skills/using-superpowers/references/copilot-tools.md',
 ];
 
 // Provider env vars copied verbatim when COPILOT_PROVIDER_BASE_URL is set.

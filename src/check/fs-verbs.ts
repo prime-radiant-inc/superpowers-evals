@@ -587,7 +587,6 @@ export function verbCopilotPluginInstalled(
     'hooks/session-start',
     'skills/using-superpowers/SKILL.md',
     'skills/brainstorming/SKILL.md',
-    'skills/using-superpowers/references/copilot-tools.md',
   ]);
   if (result.passed) {
     return pass('Copilot Superpowers plugin staged in isolated config');

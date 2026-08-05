@@ -94,7 +94,6 @@ const COPILOT_FILES = [
   'hooks/session-start',
   'skills/using-superpowers/SKILL.md',
   'skills/brainstorming/SKILL.md',
-  'skills/using-superpowers/references/copilot-tools.md',
 ];
 
 test('copilot-plugin-installed passes when the plugin files exist', () => {
