@@ -33,11 +33,13 @@ const HERMES_TOOL_MAP: Record<string, string> = {
   // File writing
   write_file: 'Write',
   create_file: 'Write',
-  // File editing
+  // File editing (`patch` is the edit tool named by PR #2025's
+  // hermes-tools.md; live-verify at the campaign's container toolset probe)
   str_replace_based_edit_tool: 'Edit',
   str_replace: 'Edit',
   edit_file: 'Edit',
   replace_in_file: 'Edit',
+  patch: 'Edit',
   // Search
   grep: 'Grep',
   search_files: 'Grep',
@@ -47,12 +49,17 @@ const HERMES_TOOL_MAP: Record<string, string> = {
   // Web
   web_fetch: 'WebFetch',
   fetch_url: 'WebFetch',
+  web_extract: 'WebFetch',
   web_search: 'WebSearch',
   search_web: 'WebSearch',
+  // Task tracking
+  todo: 'TodoWrite',
   // Subagent dispatch — alias to Agent and canonicalize prompt arg
+  // (`delegate_task(goal=…)` is the dispatch tool named by hermes-tools.md)
   spawn_agent: 'Agent',
   invoke_agent: 'Agent',
   delegate: 'Agent',
+  delegate_task: 'Agent',
   // Skill invocation — hermes calls skill_view with {name: "<value>"} for
   // both Superpowers-registered skills (namespaced, e.g.
   // "superpowers:brainstorming") and Hermes' own bundled skills (bare, e.g.
@@ -83,19 +90,31 @@ function parseArgs(
 }
 
 /**
- * Translate a skill_view call's arguments so `args.skill` carries the raw
- * `name` value verbatim (no namespace prefixing — a bare name may refer to
- * one of Hermes' own bundled skills, not a Superpowers one). No-op for any
- * other native tool name.
+ * Per-tool argument translation:
+ * - skill_view: `args.skill` carries the raw `name` value verbatim (no
+ *   namespace prefixing — a bare name may refer to one of Hermes' own bundled
+ *   skills, not a Superpowers one).
+ * - delegate_task: the instruction lives under `goal`; rename it to the house
+ *   canonical `prompt` (canonicalizeAgentPrompt only renames `task`, so the
+ *   hermes-specific key is handled here, mirroring the codex/pi rename).
+ * No-op for any other native tool name.
  */
 function normalizeHermesArgs(
   nativeName: string,
   args: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (nativeName !== 'skill_view') return args;
-  const name = args['name'];
-  if (typeof name !== 'string') return args;
-  return { ...args, skill: name };
+  if (nativeName === 'skill_view') {
+    const name = args['name'];
+    if (typeof name !== 'string') return args;
+    return { ...args, skill: name };
+  }
+  if (nativeName === 'delegate_task') {
+    const goal = args['goal'];
+    if (typeof goal !== 'string' || 'prompt' in args) return args;
+    const { goal: _goal, ...rest } = args;
+    return { ...rest, prompt: goal };
+  }
+  return args;
 }
 
 /** Extract text from a content field that may be a string or a list of blocks. */

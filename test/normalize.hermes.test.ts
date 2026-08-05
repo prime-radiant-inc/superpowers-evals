@@ -338,6 +338,70 @@ test('skill_view with a bare name (hermes bundled skill) keeps args.skill unchan
 });
 
 // ---------------------------------------------------------------------------
+// Tool map: names from PR #2025's hermes-tools.md (delegate_task, patch,
+// web_extract, todo) — live-verify at the campaign's container toolset probe.
+// ---------------------------------------------------------------------------
+
+function sessionWithOneToolCall(name: string, args: Record<string, unknown>) {
+  return JSON.stringify({
+    messages: [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'tc-1', function: { name, arguments: JSON.stringify(args) } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'tc-1', content: 'ok' },
+    ],
+  });
+}
+
+test('tool map: delegate_task → Agent with goal renamed to prompt', () => {
+  const traj = normalizeHermes(
+    sessionWithOneToolCall('delegate_task', {
+      goal: 'write the tests',
+      context: 'repo uses bun',
+      role: 'leaf',
+    }),
+    '1.0.0',
+  );
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('Agent');
+  expect(toolStep!.tool_calls![0]!.arguments['prompt']).toBe('write the tests');
+  expect(toolStep!.tool_calls![0]!.arguments['goal']).toBeUndefined();
+  expect(toolStep!.tool_calls![0]!.arguments['context']).toBe('repo uses bun');
+});
+
+test('tool map: patch → Edit', () => {
+  const traj = normalizeHermes(
+    sessionWithOneToolCall('patch', { path: 'a.ts' }),
+    '1.0.0',
+  );
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('Edit');
+});
+
+test('tool map: web_extract → WebFetch', () => {
+  const traj = normalizeHermes(
+    sessionWithOneToolCall('web_extract', { url: 'https://example.com' }),
+    '1.0.0',
+  );
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('WebFetch');
+});
+
+test('tool map: todo → TodoWrite', () => {
+  const traj = normalizeHermes(
+    sessionWithOneToolCall('todo', { items: [] }),
+    '1.0.0',
+  );
+  const toolStep = traj.steps.find((s) => s.tool_calls !== undefined);
+  expect(toolStep!.tool_calls![0]!.function_name).toBe('TodoWrite');
+});
+
+// ---------------------------------------------------------------------------
 // Multiple tool calls in one assistant message: all bundled in one step
 // ---------------------------------------------------------------------------
 
