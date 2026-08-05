@@ -71,11 +71,20 @@ export class CodingAgentConfigError extends Error {
   }
 }
 
-// First line of `<binary> --version`, or null when the binary is missing or
-// exits nonzero. Kept here (not imported from runner/provenance) so contracts
-// stays free of runner imports.
-function probeCliVersionLine(binary: string): string | null {
-  const p = spawnSync(binary, ['--version'], { encoding: 'utf8' });
+// First line of `<binary> --version`, or null when the binary is missing,
+// exits nonzero, or exceeds timeoutMs (some CLIs — hermes — run a synchronous
+// network update check inside --version and can wedge in an egress-restricted
+// container; a timeout maps to the same null → config-error path). Kept here
+// (not imported from runner/provenance) so contracts stays free of runner
+// imports. Exported for direct testing.
+export function probeCliVersionLine(
+  binary: string,
+  timeoutMs = 30_000,
+): string | null {
+  const p = spawnSync(binary, ['--version'], {
+    encoding: 'utf8',
+    timeout: timeoutMs,
+  });
   if (p.error || p.status !== 0) {
     return null;
   }

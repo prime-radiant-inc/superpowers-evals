@@ -9,6 +9,7 @@ import {
   enforceCliVersionPin,
   loadAgentConfig,
   loadAgentConfigForValidation,
+  probeCliVersionLine,
   resolveSessionLogDir,
   substituteEnv,
 } from '../src/contracts/agent-config.ts';
@@ -382,4 +383,24 @@ test('pin_cli_version set but version unprobeable → CodingAgentConfigError', (
   expect(() => enforceCliVersionPin('codex.yaml', cfg, () => null)).toThrow(
     CodingAgentConfigError,
   );
+});
+
+// --- probeCliVersionLine: real-subprocess probe behavior ---
+
+test('probeCliVersionLine returns the first stdout line', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pin-probe-'));
+  const bin = join(dir, 'fake-agent');
+  writeFileSync(bin, '#!/bin/sh\necho "Fake Agent v1.2.3 (2026.1.1)"\n', {
+    mode: 0o755,
+  });
+  expect(probeCliVersionLine(bin)).toBe('Fake Agent v1.2.3 (2026.1.1)');
+});
+
+test('probeCliVersionLine times out (null) on a wedged binary', () => {
+  // hermes --version performs a synchronous network update check; in an
+  // egress-restricted container it can hang forever without a timeout.
+  const dir = mkdtempSync(join(tmpdir(), 'pin-probe-'));
+  const bin = join(dir, 'wedged-agent');
+  writeFileSync(bin, '#!/bin/sh\nsleep 5\n', { mode: 0o755 });
+  expect(probeCliVersionLine(bin, 200)).toBeNull();
 });

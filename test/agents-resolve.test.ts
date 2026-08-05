@@ -4,6 +4,7 @@ import { WindowsClaudeAgent } from '../src/agents/claude-windows.ts';
 import { CodexAgent } from '../src/agents/codex.ts';
 import { CopilotAgent } from '../src/agents/copilot.ts';
 import { GeminiAgent } from '../src/agents/gemini.ts';
+import { HermesAgent } from '../src/agents/hermes.ts';
 import { ProvisionError, resolveAgent } from '../src/agents/index.ts';
 import { KimiAgent } from '../src/agents/kimi.ts';
 import { OpenCodeAgent } from '../src/agents/opencode.ts';
@@ -37,6 +38,7 @@ test('resolveAgent dispatches each dialect name to its custom adapter', () => {
   expect(resolveAgent(cfg('kimi'))).toBeInstanceOf(KimiAgent);
   expect(resolveAgent(cfg('antigravity'))).toBeInstanceOf(AntigravityAgent);
   expect(resolveAgent(cfg('serf'))).toBeInstanceOf(SerfAgent);
+  expect(resolveAgent(cfg('hermes'))).toBeInstanceOf(HermesAgent);
 });
 
 test('resolveAgent maps the claude runtime family to ClaudeAgent', () => {
