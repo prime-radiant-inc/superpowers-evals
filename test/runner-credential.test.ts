@@ -760,3 +760,119 @@ writeFileSync(join(exportsDir, 'trajectory.json'), ${JSON.stringify(
     expect(existsSync(postMarker)).toBe(false);
   });
 });
+
+// --- $COPILOT_MODEL_SH sourced from credential ---
+
+function makeCopilotScenario(root: string): string {
+  const scenario = join(root, 'scenario');
+  mkdirSync(scenario, { recursive: true });
+  writeFileSync(
+    join(scenario, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nExercise Copilot context substitution.\n',
+  );
+  const setup = join(scenario, 'setup.sh');
+  writeFileSync(setup, '#!/usr/bin/env bash\n:\n');
+  chmodSync(setup, 0o755);
+  writeFileSync(join(scenario, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
+  return scenario;
+}
+
+function makeCopilotSuperpowersRoot(root: string): string {
+  const superpowersRoot = join(root, 'superpowers');
+  for (const path of [
+    '.claude-plugin/plugin.json',
+    'hooks/hooks.json',
+    'hooks/run-hook.cmd',
+    'hooks/session-start',
+    'skills/using-superpowers/SKILL.md',
+    'skills/brainstorming/SKILL.md',
+  ]) {
+    const destination = join(superpowersRoot, path);
+    mkdirSync(join(destination, '..'), { recursive: true });
+    writeFileSync(destination, '{}\n');
+  }
+  return superpowersRoot;
+}
+
+function writeCopilotCredentialFixture(path: string): void {
+  writeFileSync(
+    path,
+    [
+      'copilot_default:',
+      '  model: claude-opus-5',
+      '  harnesses: [copilot]',
+      '  auth: oauth',
+      'copilot_campaign:',
+      '  model: gpt-5.6-sol',
+      '  harnesses: [copilot]',
+      '  auth: oauth',
+      '',
+    ].join('\n'),
+  );
+}
+
+async function generateCopilotContext(
+  credential: string | undefined,
+): Promise<string> {
+  const root = mkdtempSync(join(tmpdir(), 'runner-copilot-context-'));
+  const bin = join(root, 'bin');
+  const credentialsPath = join(root, 'credentials.yaml');
+  const previousPath = Bun.env['PATH'];
+  const previousRoot = Bun.env['SUPERPOWERS_ROOT'];
+  const previousAuth = new Map<string, string | undefined>();
+
+  mkdirSync(bin, { recursive: true });
+  for (const binary of ['copilot', 'gauntlet']) {
+    const path = join(bin, binary);
+    writeFileSync(path, '#!/bin/sh\nexit 0\n');
+    chmodSync(path, 0o755);
+  }
+  writeCopilotCredentialFixture(credentialsPath);
+
+  Bun.env['PATH'] = `${bin}:${previousPath ?? ''}`;
+  Bun.env['SUPERPOWERS_ROOT'] = makeCopilotSuperpowersRoot(root);
+  // COPILOT_GITHUB_TOKEN is the sole auth input; the other chain vars are
+  // cleared so a host token can never satisfy provisioning by accident.
+  for (const name of ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    previousAuth.set(name, Bun.env[name]);
+    delete Bun.env[name];
+  }
+  Bun.env['COPILOT_GITHUB_TOKEN'] = 'ghp_test_token';
+
+  try {
+    const { runDir } = await runScenario({
+      scenarioDir: makeCopilotScenario(root),
+      codingAgent: 'copilot',
+      codingAgentsDir: REAL_CODING_AGENTS,
+      outRoot: join(root, 'results'),
+      credential,
+      credentialsPath,
+    });
+    return readFileSync(
+      join(runDir, 'gauntlet-agent', 'context', 'launch-agent'),
+      'utf8',
+    );
+  } finally {
+    if (previousPath === undefined) delete Bun.env['PATH'];
+    else Bun.env['PATH'] = previousPath;
+    if (previousRoot === undefined) delete Bun.env['SUPERPOWERS_ROOT'];
+    else Bun.env['SUPERPOWERS_ROOT'] = previousRoot;
+    for (const [name, value] of previousAuth) {
+      if (value === undefined) delete Bun.env[name];
+      else Bun.env[name] = value;
+    }
+  }
+}
+
+describe.serial('Copilot credential runner integration', () => {
+  test('Copilot launcher passes the named credential model via --model', async () => {
+    const context = await generateCopilotContext('copilot_campaign');
+    expect(context).toContain(`--model ${shellSingleQuote('gpt-5.6-sol')}`);
+    expect(context).not.toContain('claude-opus-5');
+  }, 10_000);
+
+  test('Copilot launcher falls back to the default credential model', async () => {
+    const context = await generateCopilotContext(undefined);
+    expect(context).toContain(`--model ${shellSingleQuote('claude-opus-5')}`);
+  }, 10_000);
+});

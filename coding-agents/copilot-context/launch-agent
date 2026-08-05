@@ -37,6 +37,13 @@ secret_env_vars=(
   COPILOT_PROVIDER_API_KEY COPILOT_PROVIDER_BEARER_TOKEN
 )
 
+# Credential-selected model. Under BYOK (COPILOT_PROVIDER_BASE_URL) the
+# COPILOT_PROVIDER_* env owns model routing, so the flag is withheld.
+model_args=()
+if [[ -z "${COPILOT_PROVIDER_BASE_URL-}" ]]; then
+  model_args=(--model $COPILOT_MODEL_SH)
+fi
+
 # HOME/XDG/TMPDIR come from the QUORUM_HOME_ENV token. With COPILOT_HOME unset,
 # copilot resolves its home to $HOME/.copilot, where provisioning seeded the
 # config; the --plugin-dir/--log-dir/COPILOT_CACHE_HOME paths point at that same
@@ -54,6 +61,7 @@ exec env -i \
     --no-auto-update \
     --no-remote \
     --disable-builtin-mcps \
+    "${model_args[@]}" \
     --secret-env-vars="$(IFS=,; echo "${secret_env_vars[*]}")" \
     --log-dir "$QUORUM_AGENT_HOME/.copilot/logs" \
     "$@"

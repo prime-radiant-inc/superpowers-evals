@@ -413,3 +413,43 @@ test('Serf launcher rejects an empty selected API-key name before it invokes Ser
   expect(proc.stderr).toContain('selected Serf API key env name is empty');
   expect(existsSync(invoked)).toBe(false);
 });
+
+test('populateContextDir raises when $COPILOT_MODEL_SH survives unsubstituted', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const configDir = join(runDir, 'coding-agent-config');
+  const launchCwd = join(runDir, 'coding-agent-workdir');
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(launchCwd, { recursive: true });
+  const envFile = join(configDir, '.copilot-env');
+  // The full copilot sub set MINUS $COPILOT_MODEL_SH: the guard must fire so a
+  // run can never silently launch on the CLI's default model.
+  const subs: Record<string, string> = {
+    $QUORUM_AGENT_CWD: launchCwd,
+    $QUORUM_AGENT_CWD_SH: shellSingleQuote(launchCwd),
+    $SUPERPOWERS_ROOT: '/tmp/sproot',
+    $QUORUM_LAUNCH_AGENT: join(
+      runDir,
+      'gauntlet-agent',
+      'context',
+      'launch-agent',
+    ),
+    $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(
+      join(runDir, 'gauntlet-agent', 'context', 'launch-agent'),
+    ),
+    $COPILOT_ENV_FILE: envFile,
+    $COPILOT_ENV_FILE_SH: shellSingleQuote(envFile),
+    $QUORUM_COPILOT_SESSION_ID: 'sess-1',
+    ...homeEnvSubstitutions(join(runDir, 'home')),
+  };
+
+  expect(() =>
+    populateContextDir({
+      codingAgentsDir: REAL_CODING_AGENTS,
+      codingAgent: 'copilot',
+      runDir,
+      substitutions: subs,
+      required: true,
+      forbiddenPlaceholders: ['$COPILOT_MODEL_SH'],
+    }),
+  ).toThrow(/COPILOT_MODEL/);
+});

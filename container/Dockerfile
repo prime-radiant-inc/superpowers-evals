@@ -89,7 +89,7 @@ RUN npm install -g \
     @openai/codex@0.146.0 \
     @google/gemini-cli@0.50.0 \
     opencode-ai@1.18.1 \
-    @github/copilot@1.0.70 \
+    @github/copilot@1.0.78 \
     @factory/cli@0.171.0 \
     @qwen-code/qwen-code@0.19.10 \
     @moonshot-ai/kimi-code@0.24.1 \

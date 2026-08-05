@@ -1504,6 +1504,11 @@ async function runInnerBody(
       copilotProvisioning.envFile,
     );
     substitutions['$QUORUM_COPILOT_SESSION_ID'] = copilotProvisioning.sessionId;
+    // Mirrors the $CLAUDE_MODEL pattern: the credential's model reaches the
+    // launcher's --model flag, so distinct credentials test distinct models.
+    substitutions['$COPILOT_MODEL_SH'] = shellSingleQuote(
+      resolvedCredential?.model ?? cfg.model ?? '',
+    );
   }
   if (cfg.normalizer === 'kimi') {
     // KimiAgent.provision returns $KIMI_ENV_FILE / $KIMI_BINARY in its extra-env
@@ -1527,7 +1532,9 @@ async function runInnerBody(
         ? ['$CLAUDE_MODEL']
         : family === 'serf'
           ? ['$SERF_MODEL', '$SERF_API_KEY_ENV']
-          : [],
+          : cfg.name === 'copilot'
+            ? ['$COPILOT_MODEL_SH']
+            : [],
   });
 
   // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full
