@@ -136,13 +136,21 @@ function numOrUndefined(value: unknown): number | undefined {
  *   cache_read_tokens                 -> extra.total_cached_tokens (the
  *                                        literal key obol's atif dialect
  *                                        looks up)
- *   cache_write_tokens                -> extra.cache_write (matches the
- *                                        per-step extra.cache_write key
- *                                        convention used elsewhere)
- *   actual_cost_usd                   -> total_cost_usd, only when it is a
- *                                        real number. estimated_cost_usd is
- *                                        NEVER used: it is an estimate, not a
- *                                        committed charge.
+ *   cache_write_tokens                -> extra.cache_write (bookkeeping only —
+ *                                        obol's atif dialect does not read
+ *                                        this key; probe-verified 2026-08-05)
+ *   actual_cost_usd, else
+ *     estimated_cost_usd              -> total_cost_usd. hermes' estimate is
+ *                                        honored per the pi/opencode
+ *                                        embedded-estimate precedent (spec v2
+ *                                        decision 4); a real charged figure
+ *                                        still wins when present.
+ *   billing_provider                  -> extra.provider (the provider hint
+ *                                        obol's atif dialect needs to resolve
+ *                                        provider-gated rates like
+ *                                        z-ai/glm-5.2)
+ * The session's `model` id is stamped onto agent.model_name by the caller
+ * (copilot precedent, src/normalize/copilot.ts).
  * Returns undefined when the session carries no input_tokens/output_tokens
  * at all (nothing to fold).
  */
@@ -158,6 +166,7 @@ function buildSessionFinalMetrics(
   const cacheReadTokens = numOrUndefined(session['cache_read_tokens']);
   const cacheWriteTokens = numOrUndefined(session['cache_write_tokens']);
   const actualCostUsd = numOrUndefined(session['actual_cost_usd']);
+  const estimatedCostUsd = numOrUndefined(session['estimated_cost_usd']);
 
   const finalMetrics: AtifFinalMetrics = {};
   if (inputTokens !== undefined) {
@@ -167,8 +176,9 @@ function buildSessionFinalMetrics(
     finalMetrics.total_completion_tokens =
       (outputTokens ?? 0) + (reasoningTokens ?? 0);
   }
-  if (actualCostUsd !== undefined) {
-    finalMetrics.total_cost_usd = actualCostUsd;
+  const costUsd = actualCostUsd ?? estimatedCostUsd;
+  if (costUsd !== undefined) {
+    finalMetrics.total_cost_usd = costUsd;
   }
   const extra: Record<string, unknown> = {};
   if (cacheReadTokens !== undefined) {
@@ -176,6 +186,10 @@ function buildSessionFinalMetrics(
   }
   if (cacheWriteTokens !== undefined) {
     extra['cache_write'] = cacheWriteTokens;
+  }
+  const billingProvider = session['billing_provider'];
+  if (typeof billingProvider === 'string' && billingProvider !== '') {
+    extra['provider'] = billingProvider;
   }
   if (Object.keys(extra).length > 0) {
     finalMetrics.extra = extra;
@@ -418,6 +432,12 @@ export function normalizeHermes(raw: string, version: string): AtifTrajectory {
     ...(finalMetrics ? { final_metrics: finalMetrics } : {}),
   };
   if (sessionId !== undefined) traj.session_id = sessionId;
+  // Session-level model id -> agent.model_name (copilot precedent). Without
+  // it obol has no model to price against and every turn is UnknownModelForTurn.
+  const sessionModel = sessionTokenFields?.['model'];
+  if (typeof sessionModel === 'string' && sessionModel !== '') {
+    traj.agent.model_name = sessionModel;
+  }
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

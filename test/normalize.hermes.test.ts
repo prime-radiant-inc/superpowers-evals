@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ATIF_SCHEMA_VERSION } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
 import { normalizeHermes } from '../src/normalize/hermes.ts';
+import { estimateTrajectory } from '../src/obol/index.ts';
 
 // ---------------------------------------------------------------------------
 // SAMPLE_SESSION fixture — ported from Harbor's test_hermes_cli.py
@@ -459,11 +462,17 @@ test('tool arguments that are already objects (not strings) are handled', () => 
 //                             fold convention)
 //   cache_read_tokens      -> final_metrics.extra.total_cached_tokens (the
 //                             literal key obol's atif dialect looks up)
-//   cache_write_tokens     -> final_metrics.extra.cache_write (matches the
-//                             per-step extra.cache_write key convention)
-//   actual_cost_usd        -> final_metrics.total_cost_usd (only when it is a
-//                             real number; estimated_cost_usd is never used —
-//                             it is an estimate, not a committed charge)
+//   cache_write_tokens     -> final_metrics.extra.cache_write (bookkeeping
+//                             only — obol's atif dialect does not read this
+//                             key; probe-verified 2026-08-05)
+//   actual_cost_usd, else
+//     estimated_cost_usd   -> final_metrics.total_cost_usd (hermes' estimate
+//                             is honored per the pi/opencode embedded-estimate
+//                             precedent — spec v2 decision 4)
+//   billing_provider       -> final_metrics.extra.provider (the provider hint
+//                             obol needs to resolve provider-gated rates like
+//                             z-ai/glm-5.2)
+//   model                  -> agent.model_name (copilot precedent)
 // ---------------------------------------------------------------------------
 
 function sessionWithTopLevelTokens(overrides: Record<string, unknown> = {}) {
@@ -499,12 +508,40 @@ test('session-level token/cost fields fold into final_metrics', () => {
   });
 });
 
-test('estimated_cost_usd is never carried; only actual_cost_usd maps to total_cost_usd', () => {
+test('estimated_cost_usd is honored when actual_cost_usd is absent', () => {
   const traj = normalizeHermes(
     sessionWithTopLevelTokens({ actual_cost_usd: null }),
     '1.0.0',
   );
-  expect(traj.final_metrics?.total_cost_usd).toBeUndefined();
+  // Policy (spec v2 decision 4): hermes' own estimate is the same kind of
+  // harness-computed estimate quorum already honors from pi/opencode.
+  expect(traj.final_metrics?.total_cost_usd).toBe(0.0099);
+});
+
+test('actual_cost_usd wins over estimated_cost_usd when both are set', () => {
+  const traj = normalizeHermes(sessionWithTopLevelTokens(), '1.0.0');
+  expect(traj.final_metrics?.total_cost_usd).toBe(0.0042);
+});
+
+test('billing_provider folds into final_metrics.extra.provider', () => {
+  const traj = normalizeHermes(
+    sessionWithTopLevelTokens({ billing_provider: 'openrouter' }),
+    '1.0.0',
+  );
+  expect(traj.final_metrics?.extra?.['provider']).toBe('openrouter');
+});
+
+test('agent.model_name is stamped from the session-level model id', () => {
+  const traj = normalizeHermes(
+    sessionWithTopLevelTokens({ model: 'z-ai/glm-5.2' }),
+    '1.0.0',
+  );
+  expect(traj.agent.model_name).toBe('z-ai/glm-5.2');
+});
+
+test('agent.model_name is absent when the session carries no model field', () => {
+  const traj = normalizeHermes(SAMPLE_SESSION, '1.0.0');
+  expect(traj.agent.model_name).toBeUndefined();
 });
 
 test('session-level totals are omitted entirely when no top-level token fields are present', () => {
@@ -571,16 +608,25 @@ test('real captured session: terminal tool call canonicalizes to Bash', () => {
 test('real captured session: session-level totals fold into final_metrics', () => {
   const traj = normalizeHermes(realSession, '1.0.0');
   // Real fixture: input_tokens=11780, output_tokens=33, cache_read_tokens=17856,
-  // cache_write_tokens=0, reasoning_tokens=18, actual_cost_usd=null (only
-  // estimated_cost_usd is set, so total_cost_usd must be absent).
+  // cache_write_tokens=0, reasoning_tokens=18, actual_cost_usd=null with
+  // estimated_cost_usd=0.012235862 (honored as the fallback), and
+  // billing_provider="openrouter" (the provider hint obol needs to resolve
+  // its provider-gated z-ai/glm-5.2 rate).
   expect(traj.final_metrics).toEqual({
     total_prompt_tokens: 11780,
     total_completion_tokens: 51, // 33 + 18 reasoning, folded
+    total_cost_usd: 0.012235862, // estimated_cost_usd (actual is null)
     extra: {
       total_cached_tokens: 17856,
       cache_write: 0,
+      provider: 'openrouter',
     },
   });
+});
+
+test('real captured session: agent.model_name is the session model id', () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  expect(traj.agent.model_name).toBe('z-ai/glm-5.2');
 });
 
 test('real captured session: no per-step metrics were fabricated from real messages', () => {
@@ -591,4 +637,17 @@ test('real captured session: no per-step metrics were fabricated from real messa
   for (const step of traj.steps) {
     expect(step.metrics).toBeUndefined();
   }
+});
+
+test('real captured session prices end-to-end via obol (no UnknownModelForTurn)', async () => {
+  const traj = normalizeHermes(realSession, '1.0.0');
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-price-'));
+  const path = join(dir, 'trajectory.json');
+  writeFileSync(path, JSON.stringify(traj));
+  const usage = await estimateTrajectory(path);
+  expect(usage).not.toBeNull();
+  // Structural only — never an exact dollar figure (obol 0.8.0 vs 0.9.0 differ).
+  expect(usage!.est_cost_usd).not.toBeNull();
+  expect(usage!.est_cost_usd!).toBeGreaterThan(0);
+  expect(usage!.unpriced_models).toEqual([]);
 });
