@@ -50,6 +50,11 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // that only the codex provisioner consumes; the forced-compaction premise
   // does not exist on other harnesses.
   'sdd-survives-compaction',
+  // PR #2025 persistence probe: observes hermes' first-turn api_content replay
+  // (the only harness where the bootstrap injects once and must survive to a
+  // later turn); other harnesses re-inject or use context files, so the
+  // two-turn premise is hermes-specific for now.
+  'superpowers-bootstrap-persistence',
 ]);
 
 test('Serf builder scenario pins its exact content-addressed source pair', () => {
