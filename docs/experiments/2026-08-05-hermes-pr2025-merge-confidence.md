@@ -153,10 +153,57 @@ library). Escalation for those five is therefore waived as purchased-already;
 both indeterminates get fresh screens. This is a deviation from the letter of
 the rules in service of their purpose, decided before any escalation ran.
 
+## Escalation (pre-registered; 23:46–23:58Z)
+
+| Cell | Run | Verdict | Skills loaded | Meaning |
+|---|---|---|---|---|
+| triggering-writing-plans, hermes n2 | `…4613Z-63c3` | fail | bundled `plan` | the "silent" cell exhibits the same collision on re-run |
+| triggering-writing-plans, **pi pair** | `…4939Z-37f1` | **PASS** | (pi-native path) | **same model, same credential, passes ⇒ hermes-environment-attributed, not model** |
+| triggering-writing-plans, hermes n3 | `…5219Z-a672` | fail | none | cell final 0/3 |
+| triggering-systematic-debugging re-screen | `…5424Z-0836` | fail | bundled `systematic-debugging` | collision, deterministic across both attempts |
+| triggering-dispatching-parallel-agents re-screen | `…5540Z-dc29` | fail | none | gauntlet completed this time; silent miss |
+
+Footnote: the pi pair's coding cost printed $0.00 (66K tokens) — a pi
+credential-override pricing quirk worth a look someday, out of scope here.
+
+## Verdict
+
+**Merge-supporting for PR #2025's mechanism.** Every claim the PR makes was
+verified behaviorally on the current CLI (v0.20.0), each priced, each
+provenance-gated, with a discriminating RED control:
+
+1. **Bootstrap delivery:** 3/3 PASS (pre-registered bar ≥2/3).
+2. **Cross-turn persistence (`api_content` replay):** PASS on the new
+   two-turn naive probe — the only run shape that can observe it.
+3. **Native skill registration:** every green used a native `skill_view`
+   call; zero Read-fallback greens across the campaign.
+4. **Subagent dispatch + tool mapping:** PASS (`delegate_task` → `Agent`
+   live-verified).
+5. **RED control (neutered `pre_llm_call`):** FAIL as required — greens mean
+   the mechanism, not scenario laxity.
+
+**Not a blocker, but the finding obra should see:** on hermes, superpowers'
+gate-invocation under weak cues (the `triggering-*` family, 0/7) loses a
+namespace race to hermes' own bundled skill library, which ships
+name-for-name twins (`test-driven-development`, `systematic-debugging`,
+`requesting-code-review`, `plan`, `github-pr-workflow` adjacent). The model
+triggers on the right concept and loads the wrong provider's skill. The
+same-model pi control passing places the cause in the hermes environment,
+not GLM 5.2. Scope limits: existence proofs only (n≤3); compaction untested
+by design (hermes has no post-compaction hook — documented PR limitation);
+GLM-5.2-only; provider routing uncontrolled.
+
+Campaign spend: 18 runs (1 smoke + 1 RED + 10 battery + 5 escalation + 1
+toolset probe session), ≈ $4.75 total (gauntlet ≈ $3.75, coding ≈ $1.00).
+
 ## Status
 
-2026-08-05: trust fixes landed (`main` @ e2ef518), image rebuilt + pinned,
-PR clone pinned, probes recorded. `OPENROUTER_API_KEY` sourced from the
-appliance blessed bundle into local `.env` (0600) — **rotate after the
-campaign** (plaintext copies land in `results/` run homes). Smoke PASS,
-RED arm FAIL (as required); battery in flight.
+2026-08-05: CAMPAIGN COMPLETE (verdict above). Housekeeping still open:
+- `OPENROUTER_API_KEY` was sourced from the **appliance blessed bundle** into
+  local `.env` (0600); plaintext copies now sit in ~17 run homes under
+  `results/`. Rotation is an appliance-wide decision (it would break the
+  shared bundle until reseeded) — maintainer's call, flagged.
+- Container is up against `../superpowers-pr2025`; the neutered RED copy
+  lives at `../superpowers-pr2025-red` (keep until the PR merges, then both
+  go).
+- Nothing posted to PR #2025 — maintainer decides whether/what to comment.
