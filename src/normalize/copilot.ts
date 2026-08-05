@@ -1,6 +1,6 @@
 import {
   ATIF_SCHEMA_VERSION,
-  type AtifFinalMetrics,
+  type AtifMetrics,
   type AtifStep,
   type AtifToolCall,
   type AtifTrajectory,
@@ -123,25 +123,30 @@ function numberOrUndefined(value: unknown): number | undefined {
 }
 
 /**
- * Extract the session-total usage from a `session.shutdown` event into ATIF
- * `final_metrics` + the trajectory model name. Copilot logs the full INPUT
- * breakdown only at shutdown: `modelMetrics.<model>.usage` carries
- * `inputTokens` (which INCLUDES `cacheReadTokens`) and `cacheReadTokens`; the
- * non-cached prompt count is `tokenDetails.input`.
+ * Extract the session-total usage from a `session.shutdown` event. Copilot logs
+ * the full INPUT breakdown only at shutdown: `tokenDetails` carries the
+ * non-cached prompt count (`input`), `cache_read`, `cache_write`, and `output`
+ * (which equals the sum of per-message `outputTokens`, so nothing is lost).
  *
- * Copilot reports ALL usage at shutdown (prompt, completion, cached); ATIF carries
- * it ENTIRELY in `final_metrics` (no per-step metrics). This keeps copilot a
- * single-source agent — the obol `atif` dialect skips `final_metrics` whenever any
- * step has metrics, so a hybrid (completion per-step + prompt/cached in
- * final_metrics) would silently drop the final_metrics buckets. The shutdown
- * `output` total equals the sum of per-message `outputTokens`, so nothing is lost.
+ * The totals ride a single SUMMARY STEP (metrics + extra.cache_write), not
+ * `final_metrics`: the obol `atif` dialect reads cache_write only from
+ * step.extra — final_metrics has no cache-write slot it honors — and it skips
+ * final_metrics entirely whenever any step has metrics, so a hybrid would
+ * silently drop buckets. One metrics-bearing step keeps copilot single-source
+ * and prices all four buckets.
  */
-function shutdownFinalMetrics(data: Record<string, unknown>): {
-  finalMetrics?: AtifFinalMetrics | undefined;
+function shutdownUsage(data: Record<string, unknown>): {
+  metrics?: AtifMetrics | undefined;
+  cacheWrite?: number | undefined;
   model?: string | undefined;
 } {
+  const model =
+    typeof data['currentModel'] === 'string'
+      ? (data['currentModel'] as string)
+      : undefined;
+
   const tokenDetails = data['tokenDetails'];
-  if (!tokenDetails || typeof tokenDetails !== 'object') return {};
+  if (!tokenDetails || typeof tokenDetails !== 'object') return { model };
   const td = tokenDetails as Record<string, unknown>;
 
   const countOf = (key: string): number | undefined => {
@@ -152,22 +157,16 @@ function shutdownFinalMetrics(data: Record<string, unknown>): {
 
   const prompt = countOf('input');
   const cached = countOf('cache_read');
+  const cacheWrite = countOf('cache_write');
   const completion = countOf('output');
 
-  const finalMetrics: AtifFinalMetrics = {};
-  if (prompt !== undefined) finalMetrics.total_prompt_tokens = prompt;
-  if (completion !== undefined)
-    finalMetrics.total_completion_tokens = completion;
-  if (cached !== undefined)
-    finalMetrics.extra = { total_cached_tokens: cached };
+  const metrics: AtifMetrics = {};
+  if (prompt !== undefined) metrics.prompt_tokens = prompt;
+  if (completion !== undefined) metrics.completion_tokens = completion;
+  if (cached !== undefined) metrics.cached_tokens = cached;
 
-  const model =
-    typeof data['currentModel'] === 'string'
-      ? (data['currentModel'] as string)
-      : undefined;
-
-  if (Object.keys(finalMetrics).length === 0) return { model };
-  return { finalMetrics, model };
+  if (Object.keys(metrics).length === 0) return { model };
+  return { metrics, cacheWrite, model };
 }
 
 /**
@@ -188,7 +187,8 @@ function shutdownFinalMetrics(data: Record<string, unknown>): {
 export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
   const steps: AtifStep[] = [];
   let stepId = 1;
-  let finalMetrics: AtifFinalMetrics | undefined;
+  let usageMetrics: AtifMetrics | undefined;
+  let usageCacheWrite: number | undefined;
   let agentModel: string | undefined;
 
   // Index tool results by toolCallId for observation attachment.
@@ -233,11 +233,12 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
     if (entry['type'] === 'session.shutdown') {
       const data = entry['data'];
       if (data && typeof data === 'object') {
-        const { finalMetrics: fm, model } = shutdownFinalMetrics(
-          data as Record<string, unknown>,
-        );
-        if (fm) finalMetrics = fm;
-        if (model) agentModel = model;
+        const usage = shutdownUsage(data as Record<string, unknown>);
+        if (usage.metrics) {
+          usageMetrics = usage.metrics;
+          usageCacheWrite = usage.cacheWrite;
+        }
+        if (usage.model) agentModel = usage.model;
       }
       continue;
     }
@@ -254,10 +255,10 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
       typeof rawContent === 'string' && rawContent ? rawContent : undefined;
 
     // Usage is NOT taken per-message: copilot reports the full prompt/completion/
-    // cached totals at session.shutdown → final_metrics (single source; see
-    // shutdownFinalMetrics). Per-message `outputTokens` summed to the same total,
-    // but mixing it into step.metrics made copilot a hybrid the obol atif dialect
-    // mishandles. Steps here carry only tool calls.
+    // cached/cache-write totals at session.shutdown → one summary step (single
+    // source; see shutdownUsage). Per-message `outputTokens` summed to the same
+    // total, but mixing it into tool steps' metrics made copilot a hybrid the
+    // obol atif dialect mishandles. Tool steps here carry only tool calls.
     let isFirstStepOfMessage = true;
     for (const request of toolRequests) {
       if (!request || typeof request !== 'object') continue;
@@ -311,6 +312,18 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
 
   if (steps.length === 0) {
     steps.push({ step_id: 1, source: 'user', message: '' });
+    stepId = 2;
+  }
+
+  // Session-total usage rides one summary step (see shutdownUsage).
+  if (usageMetrics) {
+    const summary: (typeof steps)[number] = {
+      step_id: stepId++,
+      source: 'agent',
+      metrics: usageMetrics,
+    };
+    if (usageCacheWrite) summary.extra = { cache_write: usageCacheWrite };
+    steps.push(summary);
   }
 
   const traj: AtifTrajectory = {
@@ -320,7 +333,6 @@ export function normalizeCopilot(raw: string, version: string): AtifTrajectory {
   };
 
   if (agentModel) traj.agent.model_name = agentModel;
-  if (finalMetrics) traj.final_metrics = finalMetrics;
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

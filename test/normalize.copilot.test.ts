@@ -258,29 +258,32 @@ const usageLog = [
   }),
 ].join('\n');
 
-test('copilot tool steps carry only tool_calls; usage is final_metrics-only', () => {
+test('copilot tool steps carry only tool_calls; usage rides the summary step alone', () => {
   const traj = normalizeCopilot(usageLog, '1.0.0');
   expect(validateTrajectory(traj).errors).toEqual([]);
-  const agentSteps = traj.steps.filter((s) => s.source === 'agent');
-  // Single-source agent: no per-step metrics/model_name (mixing per-step
-  // completion with final_metrics prompt/cached made copilot a hybrid the obol
-  // atif dialect mishandles by skipping final_metrics).
-  for (const s of agentSteps) {
+  // Single-source agent: tool steps carry no metrics/model_name (mixing
+  // per-step completion with session totals made copilot a hybrid the obol
+  // atif dialect mishandles). Exactly one metrics-bearing summary step.
+  for (const s of traj.steps.filter((s) => s.tool_calls)) {
     expect(s.metrics).toBeUndefined();
     expect(s.model_name).toBeUndefined();
   }
+  expect(traj.steps.filter((s) => s.metrics).length).toBe(1);
 });
 
-test('session.shutdown totals populate final_metrics (prompt+completion+cached) and agent.model_name', () => {
+test('session.shutdown totals populate the summary step (prompt+completion+cached) and agent.model_name', () => {
   const traj = normalizeCopilot(usageLog, '1.0.0');
-  // Copilot reports ALL usage at shutdown; ATIF carries it entirely in
-  // final_metrics: prompt = non-cached input, completion = shutdown output total,
-  // cached in extra. (Single source — no per-step metrics.)
-  expect(traj.final_metrics).toEqual({
-    total_prompt_tokens: 26055,
-    total_completion_tokens: 571,
-    extra: { total_cached_tokens: 58880 },
+  // Copilot reports ALL usage at shutdown; ATIF carries it entirely on one
+  // summary step: prompt = non-cached input, completion = shutdown output
+  // total, cached alongside. (Single source — tool steps carry no metrics.)
+  const summary = traj.steps.at(-1);
+  expect(summary?.metrics).toEqual({
+    prompt_tokens: 26055,
+    completion_tokens: 571,
+    cached_tokens: 58880,
   });
+  expect(summary?.tool_calls).toBeUndefined();
+  expect(traj.final_metrics).toBeUndefined();
   expect(traj.agent.model_name).toBe('gpt-5.4');
 });
 
@@ -364,9 +367,12 @@ test('copilot disjoint buckets conserve the session total (no completion double-
 test('copilot completion comes from the shutdown total (covers the text-only turn too)', () => {
   const traj = normalizeCopilot(realCopilotLog, '1.0.0');
   // 234+267+55+15 = 571 output total, incl. the text-only final turn — captured
-  // once in final_metrics, not per-step (so nothing is dropped or double-counted).
-  expect(traj.final_metrics?.total_completion_tokens).toBe(571);
-  for (const s of traj.steps) expect(s.metrics).toBeUndefined();
+  // once on the summary step, not per tool step (so nothing is dropped or
+  // double-counted).
+  const withMetrics = traj.steps.filter((s) => s.metrics);
+  expect(withMetrics.length).toBe(1);
+  expect(withMetrics[0]?.metrics?.completion_tokens).toBe(571);
+  expect(withMetrics[0]?.tool_calls).toBeUndefined();
 });
 
 test('logs without usage produce no metrics or final_metrics', () => {
@@ -571,4 +577,57 @@ test('content fidelity: token guardrail — no per-step metrics introduced', () 
     expect(s.metrics).toBeUndefined();
     expect(s.model_name).toBeUndefined();
   }
+});
+
+// obol's atif dialect reads cache_write ONLY from step.extra (per-step mode);
+// final_metrics has no cache-write slot it honors, and any per-step metrics
+// make it skip final_metrics entirely. So shutdown usage must ride a summary
+// step, or every copilot run's cache-write spend is silently unpriced.
+const cacheWriteLog = [
+  JSON.stringify({
+    type: 'assistant.message',
+    data: {
+      model: 'claude-opus-5',
+      outputTokens: 571,
+      toolRequests: [{ name: 'bash', arguments: { command: 'ls' } }],
+    },
+  }),
+  JSON.stringify({
+    type: 'session.shutdown',
+    data: {
+      currentModel: 'claude-opus-5',
+      tokenDetails: {
+        input: { tokenCount: 26055 },
+        cache_read: { tokenCount: 58880 },
+        cache_write: { tokenCount: 4242 },
+        output: { tokenCount: 571 },
+      },
+    },
+  }),
+].join('\n');
+
+test('shutdown usage rides a summary step with cache_write in extra (not final_metrics)', () => {
+  const traj = normalizeCopilot(cacheWriteLog, '1.0.0');
+  expect(validateTrajectory(traj).errors).toEqual([]);
+  expect(traj.final_metrics).toBeUndefined();
+  const summary = traj.steps.at(-1);
+  expect(summary?.source).toBe('agent');
+  expect(summary?.tool_calls).toBeUndefined();
+  expect(summary?.metrics).toEqual({
+    prompt_tokens: 26055,
+    completion_tokens: 571,
+    cached_tokens: 58880,
+  });
+  expect(summary?.extra).toEqual({ cache_write: 4242 });
+});
+
+test('summary step omits extra.cache_write when shutdown reports none', () => {
+  const traj = normalizeCopilot(usageLog, '1.0.0');
+  const summary = traj.steps.at(-1);
+  expect(summary?.metrics).toEqual({
+    prompt_tokens: 26055,
+    completion_tokens: 571,
+    cached_tokens: 58880,
+  });
+  expect(summary?.extra).toBeUndefined();
 });
