@@ -96,11 +96,62 @@ CLI `Hermes Agent v0.20.0 (2026.8.3)`, both verified per counted run)
 | 1 | superpowers-bootstrap (smoke = run 1) | **PASS** 3/3 pre, 3/3 post | $0.027 / 135K, priced | native `Skill` (skill_view) | `…230752Z-76d1`; v0.20.0 needs no fallback; economics fix live-verified |
 | C | RED arm (neutered `pre_llm_call` → None) | **FAIL** (required) | $0.03 / 126K | none — Write fired with no skill load | `…231013Z-f65f`; `superpowers_dirty: true` expected (the neuter edit); control discriminates on today's CLI/model — greens are meaningful |
 
-Battery (10 further runs) launched 2026-08-05 ~23:15Z, sequential, order:
-triggering-writing-plans, -tdd, -systematic-debugging, bootstrap run 2,
-bootstrap-persistence, -requesting-code-review, -finishing-a-development-
-branch, -executing-plans, -dispatching-parallel-agents,
-mid-conversation-skill-invocation, bootstrap run 3.
+Battery (10 further runs, sequential, 23:11–23:42Z; every run passed the
+provenance gate, every run priced — no unpriced models anywhere):
+
+| # | Cell | Verdict | Coding cost | Skill detection | Notes |
+|---|---|---|---|---|---|
+| 2 | superpowers-bootstrap (run 2) | **PASS** 3/3 | $0.032 | native `Skill` | `…231628Z-24d5` |
+| 3 | superpowers-bootstrap (run 3) | **PASS** 3/3 | $0.025 | native `Skill` | `…234147Z-ed12` — bootstrap cell final: **3/3 ≥ 2/3 ⇒ PASS** |
+| 4 | superpowers-bootstrap-persistence | **PASS** 3/3 | $0.038 | native `Skill` | `…231729Z-dd35` — turn-2 naive trigger loaded brainstorming: **`api_content` replay behaviorally proven** |
+| 5 | mid-conversation-skill-invocation | **PASS** | $0.128 | native `Skill` | `…233828Z-97fe` — `tool-called Agent` fired via the new `delegate_task` mapping |
+| 6 | triggering-test-driven-development | fail | $0.024 | Skill (wrong one) | loaded BUNDLED `test-driven-development` (see collision analysis) |
+| 7 | triggering-requesting-code-review | fail | $0.074 | Skill (wrong one) | loaded BUNDLED `requesting-code-review` |
+| 8 | triggering-finishing-a-development-branch | fail | $0.090 | Skill (wrong one) | loaded BUNDLED `github-pr-workflow` |
+| 9 | triggering-executing-plans | fail | $0.072 | Skill (wrong one) | loaded BUNDLED `plan` + `subagent-driven-development` |
+| 10 | triggering-writing-plans | fail | $0.046 | none | silent — no skill loaded at all; the one cell that gets the full pre-registered escalation |
+| 11 | triggering-systematic-debugging | ⊘ indeterminate | $0.029 | Skill (wrong one) | Gauntlet did not complete (investigate); loaded BUNDLED `systematic-debugging`; re-screened below |
+| 12 | triggering-dispatching-parallel-agents | ⊘ indeterminate | $0.130 | none | Gauntlet ran out of budget (10m45s); re-screened below |
+
+## Collision analysis — the campaign's headline finding
+
+Every skill-detection green in the battery is a **native `skill_view` call —
+zero Read-fallback greens** — so the PR's native-registration claim is
+isolated and confirmed. But 5 of the 7 triggering cells show the agent
+loading a **same-named or near-named skill from hermes' own bundled
+library**: the run homes' `~/.hermes/skills/software-development/` ships
+`test-driven-development`, `systematic-debugging`, `requesting-code-review`,
+`plan`, `spike`, `simplify-code` — name-for-name twins of superpowers
+vocabulary. Transcript proof (run `…231349Z-66f3`):
+`skill_view("test-driven-development")` returned
+`description: "TDD: enforce RED-GREEN-REFACTOR, tests before code."` with
+`related_skills: ["systematic-debugging", "plan",
+"subagent-driven-development"]` — hermes' bundled skill, not superpowers'.
+
+Attribution: under weak cues the model consults hermes'
+`<available_skills>` catalog, recognizes the right *concept* (it reached for
+a TDD skill exactly when TDD was warranted), and resolves the **bare bundled
+name** instead of the plugin-registered `superpowers:X`. This is neither a
+delivery failure (bootstrap 3/3 + persistence + RED control prove delivery)
+nor pure gate disobedience (the concept triggered) — it is a **namespace
+collision that out-competes the plugin's skills on hermes specifically**.
+
+Upstream recommendation for PR #2025: the finding, not a blocker — the
+mechanism the PR ships works as designed. Options obra could weigh:
+bootstrap prose steering ("prefer superpowers:X over similarly-named bundled
+skills"), or hermes-side dedup/priority when a plugin registers a
+same-concept skill. Recorded here; nothing posted to the PR without
+maintainer say-so.
+
+**Pre-registered-rule deviation, stated plainly:** the escalation rule
+(n=3 + paired pi on any triggering fail) existed to attribute fails that are
+silent by construction. The five collision fails are not silent — the
+transcripts carry positive evidence of the alternative cause, and a pi pair
+cannot speak to a collision mechanism pi does not have (no bundled twin
+library). Escalation for those five is therefore waived as purchased-already;
+`triggering-writing-plans` (genuinely silent) keeps its full escalation, and
+both indeterminates get fresh screens. This is a deviation from the letter of
+the rules in service of their purpose, decided before any escalation ran.
 
 ## Status
 
