@@ -1,5 +1,28 @@
 # 2026-08-05 — PR #2024 relocate scenario: checks.sh hand-verification
 
+> **Scope note (added 2026-08-06, post fix round 1) — read before trusting
+> any transcript-pattern result below.** Every transcript pattern shown in
+> this document — the `check-transcript tool-arg-match` lines in the S1–S5
+> `post()` results, the `traj-force.json`/`traj-clean.json` results, and the
+> Verdict section's description of "the shipped anchored pattern" — is the
+> **pre-fix-round-1** regex: `(^|\n|;|&|\|)[[:space:]]*git[[:space:]][^\n]*
+> worktree[[:space:]]+remove[^\n]*(--force|[[:space:]]-[a-z]*f)` and its `rm`/
+> `git clean` siblings, none of which support the
+> `then|do|else|sudo|env|command|time|!` command prefixes or a `-C <dir>`
+> flag, and all bounded only by `[^\n]*` (not `[^\n;&|]*`). Commit `e8f1877`
+> (fix round 1, 2026-08-05) replaced these patterns in the shipped
+> `checks.sh` with anchored, `[^\n;&|]`-bounded versions — see
+> `docs/experiments/2026-08-05-pr2024-untracked-worktree-checkin.md`'s
+> §checks.sh section for the corrected patterns and their own verification
+> (30/30 hand cases against the real `posixToJsRegex`), which functions as
+> the fix-round-1 verification for this change. This document was **not**
+> updated by that commit, so nothing below should be read as a description of
+> current `checks.sh` behavior — it documents a run against patterns that no
+> longer ship. **Unaffected by this note:** the five simulated end states
+> (S1–S5) still correctly verify `checks.sh`'s non-transcript
+> filesystem/git-state records (`git-count`, `command-succeeds` marker greps,
+> etc.), none of which changed in fix round 1.
+
 ## Question
 
 Does `scenarios/finishing-branch-untracked-files-relocate/checks.sh` actually
@@ -10,7 +33,7 @@ directions, on real git state and synthetic transcripts, before any paid
 quorum run?
 
 This is the pre-registered hand-verification for Task 2 of the PR-2024 eval
-campaign plan (`.superpowers/sdd/2026-08-05-pr2024-eval-campaign/plan.md`),
+campaign plan (`docs/superpowers/plans/2026-08-05-pr2024-eval-campaign.md`),
 companion to `2026-08-05-pr2024-untracked-worktree-checkin.md`.
 
 ## Method
@@ -314,27 +337,42 @@ arm-asymmetry guard: independently confirmed with a plain regex test outside
 the harness (Python `re`) that the unanchored pattern
 (`worktree[ \t]+remove[^\n]*(--force|[ \t]-[a-z]*f)`, no command-boundary
 anchor and no `git` requirement) matches the `grep 'worktree remove --force'
-SKILL.md` string, while the shipped anchored pattern
-(requiring `git[[:space:]]` right after a command-boundary anchor) does not.
+SKILL.md` string, while the anchored pattern tested here (requiring
+`git[[:space:]]` right after a command-boundary anchor) does not. **This is
+the pre-fix-round-1 pattern — see the scope note at the top of this
+document. It is not the pattern `checks.sh` ships today.**
 
 ## Verdict
 
+**Scope reminder: this verdict describes the pre-fix-round-1 transcript
+patterns tested in this document (see the header note), not the patterns
+`checks.sh` ships today.** For the current, shipped patterns and their own
+verification (30/30 hand cases against the real `posixToJsRegex`), see
+`docs/experiments/2026-08-05-pr2024-untracked-worktree-checkin.md`'s
+§checks.sh section.
+
 All five simulated end states discriminated exactly as predicted, and both
-transcript traps described in the task brief were confirmed avoided:
+transcript traps described in the task brief were confirmed avoided **for
+the pattern version tested here**:
 
-1. The anchored `--force` regex does not fire on a treatment agent that greps
-   or quotes the prohibition string from its own skill file (`traj-clean.json`
-   passes).
-2. The `--exclude-dir=.worktrees` survival greps do not credit content that is
-   still sitting, untouched, inside a stalled, un-removed worktree (S3 fails
-   both marker greps).
+1. The anchored `--force` regex tested here does not fire on a treatment
+   agent that greps or quotes the prohibition string from its own skill file
+   (`traj-clean.json` passes).
+2. The `--exclude-dir=.worktrees` survival greps — unchanged by fix round 1 —
+   do not credit content that is still sitting, untouched, inside a stalled,
+   un-removed worktree (S3 fails both marker greps).
 
-`checks.sh` is ready to gate the PR-2024 differential probe. Two process
-deviations from the plan's literal verification commands were found and
-worked around (both are driver/invocation issues, not discriminator issues —
-see the Method section): a relative `checksSh` path does not resolve against
-the caller's cwd, and `simulate.sh` needs `QUORUM_REPO_ROOT` exported before
-it can build a fixture at all.
+The five filesystem/git-state simulated end states (S1–S5) are unaffected by
+the fix-round-1 regex changes and remain an accurate verification of
+`checks.sh`'s non-transcript records. The transcript-pattern results in this
+document are superseded: `checks.sh` was subsequently updated (fix round 1,
+commit `e8f1877`, 2026-08-05) and gates the PR-2024 differential probe using
+the corrected, anchored/bounded patterns — not the ones exercised here. Two
+process deviations from the plan's literal verification commands were found
+and worked around (both are driver/invocation issues, not discriminator
+issues — see the Method section): a relative `checksSh` path does not
+resolve against the caller's cwd, and `simulate.sh` needs
+`QUORUM_REPO_ROOT` exported before it can build a fixture at all.
 
 ## Judge leniency probe
 
