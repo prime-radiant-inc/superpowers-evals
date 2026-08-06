@@ -27,6 +27,7 @@ function seat(seatId: string, events: SeatEvent[]) {
   return {
     seatId,
     role: 'implementer' as const,
+    roleSource: 'description' as const,
     taskLabel: seatId,
     spawnDepth: null,
     parentId: null,

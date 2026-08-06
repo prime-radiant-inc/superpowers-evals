@@ -8,12 +8,14 @@ import {
   type SuiteFamily,
   type SuiteScope,
 } from './test-commands.ts';
-import type { SeatEvent, SeatRole } from './types.ts';
+import type { RoleSource, SeatEvent, SeatRole } from './types.ts';
 
 /** One parsed thread, before run-level metadata is attached. */
 export interface ParsedThread {
   readonly seatId: string;
   readonly role: SeatRole;
+  /** Which signal produced `role`. */
+  readonly roleSource: RoleSource;
   readonly taskLabel: string;
   readonly spawnDepth: number | null;
   readonly parentId: string | null;

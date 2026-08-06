@@ -7,7 +7,7 @@
 // an unrecognized label is `other` so it shows up in the rollup as
 // unclassified rather than silently inflating a role's rate.
 
-import type { SeatEvent, SeatRole } from './types.ts';
+import type { RoleSource, SeatEvent, SeatRole } from './types.ts';
 
 /**
  * A structural cross-check on the label-derived role: did this seat change the
@@ -166,4 +166,148 @@ export function classifyCodexRole(agentPath: string | null): SeatRole {
   // A seat named for the feature it built (task4_titlecase, task1_slugify)
   // names no role. Left unclassified rather than assumed to be an implementer.
   return 'other';
+}
+
+// --- Codex: the dispatch prompt ----------------------------------------------
+//
+// Codex CLI 0.140.0 and 0.144.4 recorded thread_spawn with `agent_path: null`
+// and only `agent_role`, so the seat name the controller chose is simply gone:
+// 543 of the appliance corpus's 547 spawned Codex threads. What survives is the
+// dispatch prompt the child received as its first instruction, and the
+// controller writes that prompt from the superpowers templates, so its OPENING
+// LINE names the job:
+//
+//   "You are reviewing one task's implementation: …"  task-reviewer-prompt.md
+//   "You are re-reviewing Task 3 after fixes. …"      re-review-prompt.md
+//   "You are a Senior Code Reviewer …"                code-reviewer.md
+//   "You are implementing Task 1: User Report."       implementer-prompt.md
+//
+// The patterns below were enumerated from those 543 threads (321 distinct
+// opening lines) and cover all 543. Only the opening line is read: the BODY of
+// a task-reviewer prompt says "a broad whole-branch review happens separately"
+// and the body of an implementer prompt says "a fresh reviewer against your
+// diff", so matching the whole prompt would cross-contaminate every family.
+//
+// An independent structural check backs the result out-of-band: across the 543,
+// every seat these patterns call a reviewer (300) applied zero patches, and 241
+// of the 243 called implementers applied at least one. Classification never
+// reads patch behavior, so the agreement is evidence rather than construction.
+
+/**
+ * A doer's leading verb. Anchored, because the same fix-vs-fix-review trap the
+ * agent_path rules handle lives here: "You are fixing Task 3 after re-review"
+ * applies findings, and "You are re-reviewing the final-review fix wave" judges
+ * them. Whoever leads the sentence owns it.
+ *
+ * The periphrastic form ("You are handling the one final review fix wave") is
+ * matched only on a `fix wave` / `cleanup pass` / `fix round` head noun, so
+ * "You are doing the final whole-branch review … after all fixes and cleanup"
+ * stays a review.
+ */
+const DISPATCH_IMPLEMENTER: readonly RegExp[] = [
+  /^you are implementing\b/i,
+  /^you are fixing\b/i,
+  /^fix\b/i,
+  /^you are (a|the) fix implementer\b/i,
+  /^you are the single final[-\s]review fix\b/i,
+  /^you are (doing|handling|performing)\b[^.]*\b(fix|cleanup)\s+(wave|pass|round)\b/i,
+];
+
+// Any re-review, at any scope. Matches the agent_path rule that
+// /root/final_rereview is a fix reviewer, not a final reviewer.
+const DISPATCH_REREVIEW = /\bre-?review(s|er|ers|ed|ing)?\b/i;
+
+// The per-task gate: "one task's implementation", or a numbered task.
+const DISPATCH_TASK_REVIEW: readonly RegExp[] = [
+  /^you are reviewing one task'?s implementation\b/i,
+  /^you are reviewing task\s*\d/i,
+];
+
+// The whole-branch review. "Senior Code Reviewer" is the opening of
+// requesting-code-review/code-reviewer.md and is the dominant form.
+const DISPATCH_FINAL_REVIEW: readonly RegExp[] = [
+  /^you are (a|the) senior code reviewer\b/i,
+  /^you are the final whole[-\s]branch\b/i,
+  /^you are (doing|performing) (the|a) final whole[-\s]branch\b/i,
+];
+
+/** The prompt's first non-blank line — the sentence that names the job. */
+function openingLine(prompt: string): string {
+  for (const line of prompt.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return '';
+}
+
+/** The role a Codex dispatch prompt names, or null when it names none. */
+export function classifyCodexDispatchPrompt(prompt: string): SeatRole | null {
+  const line = openingLine(prompt);
+  if (line.length === 0) {
+    return null;
+  }
+  if (DISPATCH_IMPLEMENTER.some((pattern) => pattern.test(line))) {
+    return 'implementer';
+  }
+  if (DISPATCH_REREVIEW.test(line)) {
+    return 'fix_reviewer';
+  }
+  if (DISPATCH_TASK_REVIEW.some((pattern) => pattern.test(line))) {
+    return 'task_reviewer';
+  }
+  if (DISPATCH_FINAL_REVIEW.some((pattern) => pattern.test(line))) {
+    return 'final_reviewer';
+  }
+  return null;
+}
+
+/** What a Codex thread's log says about the seat it filled. */
+export interface CodexSeatSignals {
+  /** thread_spawn.agent_path, or null when the CLI recorded none. */
+  readonly agentPath: string | null;
+  /** thread_spawn.agent_role: "worker" or "default". */
+  readonly agentRole: string | null;
+  /** The child's opening instruction, or null when the log holds none. */
+  readonly dispatchPrompt: string | null;
+}
+
+export interface ClassifiedRole {
+  readonly role: SeatRole;
+  readonly source: RoleSource;
+}
+
+/**
+ * The seat role a Codex thread's log identifies, and the signal that named it.
+ *
+ * Precedence, strongest first:
+ *   1. `agent_path` — the seat name the controller chose. When present it
+ *      decides, including deciding `other`; the fallbacks exist for logs that
+ *      lack it, not to second-guess it.
+ *   2. the dispatch prompt's opening line.
+ *   3. `agent_role`, which is a two-way split and nothing finer. On the corpus
+ *      `default` was a reviewer 265/265 times and `worker` an implementer
+ *      243/278, so it can name the side of the split — a doer, or a judge — but
+ *      never which review seat. A judge it cannot place becomes the coarse
+ *      `reviewer`, never a guessed `task_reviewer`.
+ *   4. nothing: `other`, `unclassified`.
+ */
+export function classifyCodexSeat(signals: CodexSeatSignals): ClassifiedRole {
+  if (signals.agentPath !== null) {
+    return { role: classifyCodexRole(signals.agentPath), source: 'agent_path' };
+  }
+  if (signals.dispatchPrompt !== null) {
+    const role = classifyCodexDispatchPrompt(signals.dispatchPrompt);
+    if (role !== null) {
+      return { role, source: 'dispatch_prompt' };
+    }
+  }
+  if (signals.agentRole === 'worker') {
+    return { role: 'implementer', source: 'agent_role' };
+  }
+  if (signals.agentRole === 'default') {
+    return { role: 'reviewer', source: 'agent_role' };
+  }
+  return { role: 'other', source: 'unclassified' };
 }
