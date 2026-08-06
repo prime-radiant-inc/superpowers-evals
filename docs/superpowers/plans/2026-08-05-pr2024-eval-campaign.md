@@ -653,11 +653,18 @@ Expected: success line, no problems.
 - [ ] **Step 5: Verify pre() passes on a freshly-built fixture**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
+WT=/Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
+cd "$WT"
 SP=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad
 export QUORUM_WORKDIR="$SP/t5"; rm -rf "$SP/t5"; mkdir -p "$SP/t5"
+export QUORUM_REPO_ROOT="$WT"
 BASH_ENV=src/checks/prelude.sh bash scenarios/finishing-branch-untracked-files-discard-descriptive/setup.sh
-bun "$SP/runphase.ts" scenarios/finishing-branch-untracked-files-discard-descriptive/checks.sh "$SP/t5" pre
+# checksSh MUST be absolute: runPhase spawns bash with cwd set to the target
+# workdir, so a path relative to the repo root will not resolve there.
+# QUORUM_REPO_ROOT must be exported: prelude.sh dereferences it under `set -u`.
+bun "$SP/runphase.ts" \
+  "$WT/scenarios/finishing-branch-untracked-files-discard-descriptive/checks.sh" \
+  "$SP/t5" pre
 ```
 Expected: 6 records, all PASS.
 
