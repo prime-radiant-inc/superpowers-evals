@@ -261,6 +261,8 @@ interface ThreadSpawn {
   readonly parentId: string | null;
   readonly depth: number | null;
   readonly agentPath: string | null;
+  /** "worker" / "default". The only label older CLIs recorded. */
+  readonly agentRole: string | null;
 }
 
 function readThreadSpawn(meta: Record<string, unknown>): ThreadSpawn | null {
@@ -276,10 +278,12 @@ function readThreadSpawn(meta: Record<string, unknown>): ThreadSpawn | null {
   const parent = spawn['parent_thread_id'];
   const depth = spawn['depth'];
   const agentPath = spawn['agent_path'];
+  const agentRole = spawn['agent_role'];
   return {
     parentId: typeof parent === 'string' ? parent : null,
     depth: typeof depth === 'number' ? depth : null,
     agentPath: typeof agentPath === 'string' ? agentPath : null,
+    agentRole: typeof agentRole === 'string' ? agentRole : null,
   };
 }
 
@@ -323,6 +327,25 @@ function toolCommands(
     return { tool: name, commands: [] };
   }
   return null;
+}
+
+/**
+ * The raw label the seat role was read from.
+ *
+ * Codex CLI 0.134.0 and 0.144.3 recorded thread_spawn with `agent_path: null`
+ * and only `agent_role` ("worker" / "default"): 968 of the recorded sdd seats
+ * look like that. agent_role cannot distinguish a task reviewer from a final
+ * reviewer, so it never becomes a role — but keeping it as the label means the
+ * unclassifiable seats are still analyzable downstream instead of blank.
+ */
+function seatLabel(spawn: ThreadSpawn | null): string {
+  if (spawn === null) {
+    return '';
+  }
+  if (spawn.agentPath !== null) {
+    return spawn.agentPath;
+  }
+  return spawn.agentRole === null ? '' : `agent_role:${spawn.agentRole}`;
 }
 
 /**
@@ -389,7 +412,7 @@ export function parseCodexThreads(runDir: string): ParsedThread[] {
     threads.push({
       seatId,
       role: spawn === null ? 'controller' : classifyCodexRole(spawn.agentPath),
-      taskLabel: spawn?.agentPath ?? '',
+      taskLabel: seatLabel(spawn),
       spawnDepth: spawn?.depth ?? null,
       parentId: spawn?.parentId ?? null,
       models,

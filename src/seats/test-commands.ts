@@ -76,7 +76,7 @@ const RUNNER_PREFIX =
   '|npm\\s+exec\\s+(?:-{1,2}\\S+\\s+)*(?:--\\s+)?' +
   '|pnpm\\s+(?:exec|dlx)\\s+|yarn\\s+(?:exec|dlx)\\s+' +
   '|uv\\s+run\\s+|poetry\\s+run\\s+|pipenv\\s+run\\s+' +
-  '|python[0-9]?(?:\\.[0-9]+)?\\s+-m\\s+' +
+  '|(?:[\\w.@+-]+/)*python[0-9]?(?:\\.[0-9]+)?\\s+-m\\s+' +
   '|do\\s+|then\\s+|else\\s+|\\{\\s*|\\(\\s*' +
   ')*';
 
@@ -86,12 +86,19 @@ const RUNNER_PREFIX =
 // character, dot, slash, dash, or `=`.
 const FAMILY_TAIL = '(?![\\w./=-])';
 
+// A runner may be invoked by path: `.venv/bin/python -m pytest`,
+// `./node_modules/.bin/vitest run`. The trailing `/` is required, so a wrapper
+// script named `run-jest` does not read as jest.
+const FAMILY_PATH_PREFIX = '(?:[\\w.@+-]+/)*';
+
 const FAMILY_HEAD_REGEXES: readonly (readonly [SuiteFamily, RegExp])[] =
   FAMILY_PATTERNS.map(
     ([family, pattern]) =>
       [
         family,
-        new RegExp(`^${RUNNER_PREFIX}(?:${pattern})${FAMILY_TAIL}`),
+        new RegExp(
+          `^${RUNNER_PREFIX}${FAMILY_PATH_PREFIX}(?:${pattern})${FAMILY_TAIL}`,
+        ),
       ] as const,
   );
 
@@ -266,4 +273,17 @@ export function isEvidenceRead(command: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * True when a bare path is SDD bookkeeping evidence — a report, brief, plan,
+ * ledger, progress note, or log.
+ *
+ * Needed separately from isEvidenceRead because the two dialects re-read
+ * evidence differently: Codex shells out (`sed -n '1,120p' …task-1-report.md`)
+ * while Claude uses the native Read tool. Measuring only the shell form would
+ * make Claude reviewers look like they never opened the report.
+ */
+export function isEvidencePath(path: string): boolean {
+  return EVIDENCE_PATH.test(path);
 }

@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseClaudeThreads } from '../src/seats/parse-claude.ts';
 import {
@@ -74,12 +76,14 @@ test('Claude: the commit whose heredoc message says "npm test passes" is not a s
   expect(commit?.isSuiteRun).toBeUndefined();
 });
 
-test('Claude: a reviewer seat that only greps the report has 0 suite runs and 1 evidence read', () => {
+test('Claude: a reviewer seat that only re-reads the report has 0 suite runs', () => {
+  // The seat greps the report through Bash and opens the brief with the native
+  // Read tool. Both are evidence reads; the Read of src/report.js is not, so a
+  // source file merely named "report" does not inflate the count.
   const reviewer = parseClaudeThreads(CLAUDE_RUN)[2];
   expect(reviewer?.events.filter((e) => e.isSuiteRun === true)).toHaveLength(0);
-  expect(
-    reviewer?.events.filter((e) => e.isEvidenceRead === true),
-  ).toHaveLength(1);
+  const reads = reviewer?.events.filter((e) => e.isEvidenceRead === true) ?? [];
+  expect(reads.map((e) => e.tool)).toEqual(['Bash', 'Read']);
   expect(appliedNoPatches(reviewer?.events ?? [])).toBe(true);
 });
 
@@ -213,4 +217,43 @@ test('Codex: escaped newlines inside a cmd literal become real separators', () =
 test('a run dir with no logs of a dialect parses to no threads', () => {
   expect(parseCodexThreads(CLAUDE_RUN)).toEqual([]);
   expect(parseClaudeThreads(CODEX_RUN)).toEqual([]);
+});
+
+test('Codex: a thread whose CLI recorded no agent_path keeps its agent_role as label', () => {
+  // Codex CLI 0.134.0 and 0.144.3 spawned subagents with agent_path: null and
+  // only agent_role ("worker" / "default"). 968 recorded sdd seats look like
+  // this. agent_role cannot tell a task reviewer from a final reviewer, so the
+  // role stays `other` — but the raw label is preserved so downstream analysis
+  // can see what the log did say instead of an opaque blank.
+  const root = mkdtempSync(join(tmpdir(), 'seats-codex-'));
+  const dir = join(root, 'home', '.codex', 'sessions', '2026', '06', '02');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'rollout-2026-06-02T14-52-21-019e8a52-c87d.jsonl'),
+    `${JSON.stringify({
+      timestamp: '2026-06-02T21:52:21.661Z',
+      type: 'session_meta',
+      payload: {
+        id: '019e8a52-c87d-75b3-b0ee-5b9730439e08',
+        cli_version: '0.134.0',
+        source: {
+          subagent: {
+            thread_spawn: {
+              parent_thread_id: '019e8a52-04ea-7bc3-8447-7108c0612274',
+              depth: 1,
+              agent_path: null,
+              agent_nickname: 'Faraday',
+              agent_role: 'worker',
+            },
+          },
+        },
+        thread_source: 'subagent',
+      },
+    })}\n`,
+  );
+  const [thread] = parseCodexThreads(root);
+  expect(thread?.role).toBe('other');
+  expect(thread?.taskLabel).toBe('agent_role:worker');
+  expect(thread?.spawnDepth).toBe(1);
+  expect(thread?.parentId).toBe('019e8a52-04ea-7bc3-8447-7108c0612274');
 });

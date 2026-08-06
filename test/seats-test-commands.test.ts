@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  isEvidencePath,
   isEvidenceRead,
   matchSuiteRuns,
   normalizeCommand,
@@ -209,5 +210,39 @@ test('evidence reads are the read-only inspections of report/brief/log paths', (
   expect(isEvidenceRead('cat src/report.js')).toBe(false);
   expect(isEvidenceRead('rm -f .superpowers/sdd/plan/task-1-report.md')).toBe(
     false,
+  );
+});
+
+test('evidence paths are recognized on their own, for native file-read tools', () => {
+  // Claude reviewers re-read the report with the Read tool, not with cat, so a
+  // shell-only evidence rule undercounts one dialect and not the other. The
+  // path predicate is shared so both are measured the same way.
+  expect(isEvidencePath('.superpowers/sdd/report-plan/task-1-report.md')).toBe(
+    true,
+  );
+  expect(isEvidencePath('/w/.git/sdd/task-5-brief.md')).toBe(true);
+  expect(isEvidencePath('/w/docs/superpowers/plans/report-plan.md')).toBe(true);
+  expect(isEvidencePath('/w/build.log')).toBe(true);
+  expect(isEvidencePath('/w/src/report.js')).toBe(false);
+  expect(isEvidencePath('/w/test/report.test.js')).toBe(false);
+});
+
+test('a suite run counts when the runner is invoked by path', () => {
+  // Real Claude Bash call: `.venv/bin/python -m pytest -q`. Anchoring the
+  // family to the head of its segment must still allow a path-qualified
+  // interpreter or a node_modules shim, or real runs go missing.
+  expect(
+    matchSuiteRuns(
+      normalizeCommand('.venv/bin/python -m pytest -q 2>&1 | tail -20'),
+    ).map((m) => m.family),
+  ).toEqual(['pytest']);
+  expect(
+    matchSuiteRuns(normalizeCommand('./node_modules/.bin/vitest run')).map(
+      (m) => m.family,
+    ),
+  ).toEqual(['vitest']);
+  // A wrapper SCRIPT named after a family is still not that family.
+  expect(matchSuiteRuns(normalizeCommand('./scripts/jest-wrapper.sh'))).toEqual(
+    [],
   );
 });

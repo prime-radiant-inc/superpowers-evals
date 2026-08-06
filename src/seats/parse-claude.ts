@@ -17,6 +17,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { classifyClaudeRole } from './roles.ts';
+import { isEvidencePath } from './test-commands.ts';
 import {
   orderThreads,
   type ParsedThread,
@@ -36,6 +37,9 @@ const PATCH_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 
 // Tools whose input is a shell command.
 const SHELL_TOOLS = new Set(['Bash', 'BashOutput']);
+
+// Tools that read a file or search a path without changing anything.
+const READ_TOOLS = new Set(['Read', 'Grep', 'NotebookRead']);
 
 /** Project dirs under a run dir, across both config layouts. */
 function projectDirs(runDir: string): string[] {
@@ -201,6 +205,23 @@ function eventsAndModels(rows: readonly Record<string, unknown>[]): {
       if (SHELL_TOOLS.has(name) && typeof command === 'string') {
         events.push(shellEvent(name, command, timestamp));
         continue;
+      }
+      // Claude reads the implementer's report with the native Read/Grep tools,
+      // where Codex shells out to sed/rg. Counting only the shell form would
+      // make Claude reviewers look like they never opened the evidence.
+      if (READ_TOOLS.has(name) && input !== null) {
+        const target =
+          input['file_path'] ?? input['path'] ?? input['notebook_path'];
+        if (typeof target === 'string' && isEvidencePath(target)) {
+          events.push({
+            kind: 'tool_call',
+            tool: name,
+            command: target,
+            timestamp,
+            isEvidenceRead: true,
+          });
+          continue;
+        }
       }
       events.push({ kind: 'tool_call', tool: name, timestamp });
     }
