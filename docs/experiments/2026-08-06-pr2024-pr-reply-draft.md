@@ -1,19 +1,17 @@
 # Draft PR comment for obra/superpowers#2024 — FOR DREW'S REVIEW, NOT POSTED
 
-Trimmed to confirm-comment length. Everything cut is preserved in
-`2026-08-05-pr2024-untracked-worktree-checkin.md` and the ledger, and the
-comment links there rather than restating it.
+State: the `-uall` commit **is pushed** to the PR branch (`17b42c81`, on top of
+Jesse's `1f0e2ab9`). This comment explains it and reports the evals. Nothing is
+posted yet.
 
-Judgment calls still worth your eye:
-- The `*` footnote on luna treatment is the one place the comment explains away
-  a failure in the PR's favour. Cutting it costs nothing — luna control carries
-  the argument alone.
-- The five spec questions are compressed to one line plus an offer. If you'd
-  rather they go as a separate issue, say so and I'll pull the sentence.
+Verified before writing: the tree of the variant we validated (`ab7735c`) is
+byte-identical to the pushed commit (`a681678…`), so the validation genuinely
+covers what is now on the branch — not a near-copy of it.
 
 ---
 
-Ran the behavioral micro-tests this PR flags as outstanding. **Merge-supporting.**
+Ran the behavioral micro-tests this PR flags as outstanding. **Merge-supporting**,
+and I've pushed one commit to the branch — explained below.
 
 Ref-pinned differential: control = merge-base `0146173`, treatment = PR tip
 `1f0e2ab` (merge-base, not `dev` tip — this branch is behind `dev`). Scenario
@@ -37,8 +35,11 @@ worktrees where the new text should be inert: **9/9 pass, both arms**, including
 three treatment reps on the over-trigger probe. No over-trigger, and no misparse
 of the `**Otherwise:**` boundary the new block now sits above.
 
-**One change worth making before merge.** The status command in the new block
-prints a bare directory in exactly #2016's shape:
+### The commit I pushed (`17b42c81`)
+
+`git status --porcelain` collapses a wholly-untracked directory to one line, so in
+exactly #2016's shape the file list this step shows the human partner names no
+file:
 
 ```
 $ git -C "$WORKTREE_PATH" status --porcelain
@@ -47,27 +48,23 @@ $ git -C "$WORKTREE_PATH" status --porcelain -uall
 ?? docs/superpowers/plans/2026-08-04-csv-export-rollout.md
 ```
 
-Git collapses a wholly-untracked tree, so the file list your text asks the agent
-to show its human partner names no file. Both forms are identical (empty) on a
-clean worktree, so `-uall` carries no over-trigger risk.
+Both forms are identical (empty) on a clean worktree, so this adds no
+over-trigger surface.
 
-It matters because every treatment agent dug past `?? docs/` on its own and named
-the document — the guidance works, but because the agents were diligent, not
-because the instruction asked. One tier down that diligence isn't reliable:
-haiku **control** failed for exactly this shape, asking a question that never
-named the file and then deciding for the human when they deferred. Nothing in the
-current wording stops a treatment agent from relaying `?? docs/` verbatim and
-satisfying the letter of it.
+Every treatment agent dug past `?? docs/` unprompted and named the document, so
+the step already worked — but on agent initiative, not because the text asked.
+That initiative isn't reliable one tier down: **haiku control failed for exactly
+this shape**, and nothing in the prior wording stopped a treatment agent from
+relaying `?? docs/` verbatim and satisfying the letter of it.
 
-I re-ran the three treatment cells against your text plus `-uall`, so the
-evidence matches the amended wording rather than the original: Opus **pass**
-(refusal fired, named the file), Haiku **pass** (named the file), luna named the
-file correctly but failed on the same Copilot answer-routing bug as before,
-compounded by the CLI losing its working directory after the worktree was
-removed — the plan ended up committed to the feature branch instead of moved to
-main, and the wrap-up stalled. No regression on either Claude cell; the luna
-failure has no plausible connection to the flag, though with n=1 and luna failing
-on both variants it isn't a clean cell to judge from.
+Re-ran the treatment cells against the amended text so the evidence matches what's
+now on the branch rather than the original: **Opus pass** (refusal fired, named
+the file), **Haiku pass** (named the file). No regression. luna named the file
+correctly too, but failed downstream on the same Copilot answer-routing bug —
+see below.
+
+Revert it if you'd rather take it separately; it's one flag and it's isolated in
+its own commit.
 
 Limits: n=1 per cell, merge path only (discard path unmeasured), no adversarial
 pressure pass — this is scenario-level differential evidence, not a full
@@ -75,14 +72,15 @@ pressure pass — this is scenario-level differential evidence, not a full
 the text (discard-path consent, option 1 vs the following `git branch -d`) are in
 the campaign doc; happy to raise those separately rather than clutter this.
 
-\* luna treatment's `fail` is a Copilot question-widget bug — it substituted a
-menu option for the user's typed reply. Zero deterministic checks failed; the
-document survived. Reporting that separately, unrelated to this PR.
+\* Both luna failures are Copilot CLI defects, not agent behavior or anything to
+do with this PR: its question widget substitutes a highlighted menu option for the
+user's freeform typed reply, and the CLI loses its shell working directory once
+the worktree it is standing in is removed. Reporting those separately.
 
 <sub>Claude Opus 5 (1M) in Claude Code 2.1.223 (macOS). Agents under test: Claude
 Code 2.1.223 (Opus 4.8, Haiku 4.5), Copilot CLI 1.0.78 (gpt-5.6-luna). Grader
 claude-sonnet-5. Harness: quorum (superpowers-evals). Plugins: superpowers (dev),
 superpowers-chrome, elements-of-style, episodic-memory, cloud-build, decision-log,
 greenfield, iterative-development, linear, primeradiant-ops, rust-analyzer-lsp,
-unifi-network. Runs designed and executed by an agent; results and this comment
-reviewed by Drew Ritter before posting.</sub>
+unifi-network. Runs designed and executed by an agent; results, the pushed commit,
+and this comment reviewed by Drew Ritter.</sub>
