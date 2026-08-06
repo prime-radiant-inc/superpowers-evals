@@ -196,6 +196,44 @@ GLM-5.2-only; provider routing uncontrolled.
 Campaign spend: 18 runs (1 smoke + 1 RED + 10 battery + 5 escalation + 1
 toolset probe session), ≈ $4.75 total (gauntlet ≈ $3.75, coding ≈ $1.00).
 
+## Post-campaign provider-serving isolation (2026-08-05, local)
+
+Maintainer manual testing could not reproduce the collision, which forced a
+proper isolation. Fixed everything (machine = maintainer's Mac, hermes
+v0.20.0, plugin from the same PR head, same bundled twins present in
+`~/.hermes/skills/software-development/`, same fixture + naive
+"returns the wrong date on the last day of the month" cue, fresh session per
+sample) and varied ONLY the serving path for `z-ai/glm-5.2`:
+
+| Arm | skill_view calls | Namespace held |
+|---|---|---|
+| GLM via **Nous Portal** (`--provider nous`, maintainer default) | `superpowers:systematic-debugging` ×3 | **3/3** |
+| GLM via **OpenRouter** (`--provider openrouter`, same key as harness) | namespaced ×1, bare `systematic-debugging` ×2 | 1/3 |
+| (campaign harness runs, GLM via OpenRouter, sterile env) | bare ×2 | 0/2 |
+
+Pooled: Nous-served 3/3 vs OpenRouter-served 1/5. Small n, but the variable
+that moves the outcome is the provider, in the same environment, same model
+id. **Re-attribution of the campaign headline:** the root cause is not a
+hermes-specific selection bug — OpenRouter's routed GLM serving (provider/
+quantization uncontrolled per request) degrades the model's namespace
+discipline, and hermes' bundled twin catalog converts each dropped
+`superpowers:` prefix into a wrong-skill load. On harnesses without twin
+names (pi), a dropped prefix has nothing to collide with — hence the pi
+control's pass.
+
+Consequences:
+- For PR #2025: mechanism verdict unchanged (merge-supporting). The
+  namespace-discipline bootstrap line is still cheap hardening for
+  weak-serving cases, but the primary user guidance is **provider quality**:
+  Nous-Portal-served GLM held discipline 3/3.
+- For quorum: `openrouter_glm_5_2`'s uncontrolled routing is now a
+  *demonstrated* behavioral variable, not a theoretical one — triggering-*
+  results on this credential carry serving noise for hermes (and plausibly
+  pi/opencode). Consider provider pinning in the credential when OpenRouter
+  supports it, and record served-provider metadata when available.
+- The brainstorm→writing-plans→SDD spine is expected robust either way
+  (chained skills carry explicit names); spine run pending below.
+
 ## Status
 
 2026-08-05: CAMPAIGN COMPLETE (verdict above). Housekeeping still open:
