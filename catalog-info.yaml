@@ -2,16 +2,18 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: superpowers-evals
-  description: "Behavioral eval lab (Quorum) that drives real coding-agent CLIs through a QA agent and grades them on Superpowers workflow compliance."
+  description: "Behavioral eval lab (Quorum) that drives real coding-agent CLIs through a Gauntlet QA agent and grades them on Superpowers workflow compliance."
   annotations:
     backstage.io/techdocs-ref: dir:.
-    prime-radiant.com/repo-map-rev: "9b860e16ee9287a0569abb6b38e3e2b887bf3a10"
+    prime-radiant.com/repo-map-rev: "aa43f4c8f170e5de3d6a6649ef1f2a4815616d9d"
     prime-radiant.com/evaluates: superpowers-private
-  tags: [python, evals]
+  tags: [typescript, evals]
 spec:
   type: tool
   lifecycle: experimental
-  owner: user:mhat
+  owner: user:obra
   system: superpowers
   dependsOn:
     - component:gauntlet
+    - component:obol
+    - component:serf
