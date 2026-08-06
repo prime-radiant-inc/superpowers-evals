@@ -7,7 +7,20 @@
 // an unrecognized label is `other` so it shows up in the rollup as
 // unclassified rather than silently inflating a role's rate.
 
-import type { SeatRole } from './types.ts';
+import type { SeatEvent, SeatRole } from './types.ts';
+
+/**
+ * A structural cross-check on the label-derived role: did this seat change the
+ * tree at all?
+ *
+ * A reviewer seat should be true here and an implementer seat should be false.
+ * Where the two disagree, trust neither silently — the disagreement is the
+ * finding. Kept separate from classification on purpose: deriving the role from
+ * behavior would make "reviewers do not patch" true by construction.
+ */
+export function appliedNoPatches(events: readonly SeatEvent[]): boolean {
+  return !events.some((event) => event.kind === 'patch');
+}
 
 // --- Claude: meta.json descriptions -----------------------------------------
 //

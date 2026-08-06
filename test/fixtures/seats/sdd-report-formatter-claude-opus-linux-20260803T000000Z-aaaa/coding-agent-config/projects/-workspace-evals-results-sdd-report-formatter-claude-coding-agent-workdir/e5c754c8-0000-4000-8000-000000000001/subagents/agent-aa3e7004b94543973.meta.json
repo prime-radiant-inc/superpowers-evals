@@ -1,0 +1,6 @@
+{
+  "agentType": "general-purpose",
+  "description": "Final whole-branch review",
+  "spawnDepth": 1,
+  "toolUseId": "toolu_01final1"
+}

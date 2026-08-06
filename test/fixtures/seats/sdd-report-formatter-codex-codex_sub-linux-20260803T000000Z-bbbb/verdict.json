@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "scenario": "sdd-report-formatter",
+  "coding_agent": "codex",
+  "credential": "codex_sub",
+  "os": "linux",
+  "final": "pass",
+  "provenance": {
+    "superpowers_rev": "1f0e2ab9d7c4e5f6a7b8c9d0e1f2a3b4c5d6e7f8",
+    "superpowers_dirty": false,
+    "harness_rev": "4161105b8729cc4f41323886e35e918e20201c8d",
+    "agent_cli_version": "0.144.4 (codex)",
+    "gauntlet_version": null
+  }
+}

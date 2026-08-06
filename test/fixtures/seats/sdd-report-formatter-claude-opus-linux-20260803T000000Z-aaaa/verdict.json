@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "scenario": "sdd-report-formatter",
+  "coding_agent": "claude",
+  "credential": "opus",
+  "os": "linux",
+  "final": "pass",
+  "provenance": {
+    "superpowers_rev": "c686bb947ab1469bd396e0b691f28f96a3c4ee0c",
+    "superpowers_dirty": false,
+    "harness_rev": "4161105b8729cc4f41323886e35e918e20201c8d",
+    "agent_cli_version": "2.1.209 (Claude Code)",
+    "gauntlet_version": null
+  }
+}
