@@ -37,11 +37,37 @@ worktrees where the new text should be inert: **9/9 pass, both arms**, including
 three treatment reps on the over-trigger probe. No over-trigger, and no misparse
 of the `**Otherwise:**` boundary the new block now sits above.
 
-**One suggestion.** `git status --porcelain` — the command your text prescribes —
-collapses to a bare `?? docs/` in exactly #2016's shape, naming no file. Every
-treatment agent dug further on its own and named the document, so the guidance
-works, but on agent initiative rather than because the text asked. `-uall` would
-make it reliable.
+**One change worth making before merge.** The status command in the new block
+prints a bare directory in exactly #2016's shape:
+
+```
+$ git -C "$WORKTREE_PATH" status --porcelain
+?? docs/
+$ git -C "$WORKTREE_PATH" status --porcelain -uall
+?? docs/superpowers/plans/2026-08-04-csv-export-rollout.md
+```
+
+Git collapses a wholly-untracked tree, so the file list your text asks the agent
+to show its human partner names no file. Both forms are identical (empty) on a
+clean worktree, so `-uall` carries no over-trigger risk.
+
+It matters because every treatment agent dug past `?? docs/` on its own and named
+the document — the guidance works, but because the agents were diligent, not
+because the instruction asked. One tier down that diligence isn't reliable:
+haiku **control** failed for exactly this shape, asking a question that never
+named the file and then deciding for the human when they deferred. Nothing in the
+current wording stops a treatment agent from relaying `?? docs/` verbatim and
+satisfying the letter of it.
+
+I re-ran the three treatment cells against your text plus `-uall`, so the
+evidence matches the amended wording rather than the original: Opus **pass**
+(refusal fired, named the file), Haiku **pass** (named the file), luna named the
+file correctly but failed on the same Copilot answer-routing bug as before,
+compounded by the CLI losing its working directory after the worktree was
+removed — the plan ended up committed to the feature branch instead of moved to
+main, and the wrap-up stalled. No regression on either Claude cell; the luna
+failure has no plausible connection to the flag, though with n=1 and luna failing
+on both variants it isn't a clean cell to judge from.
 
 Limits: n=1 per cell, merge path only (discard path unmeasured), no adversarial
 pressure pass — this is scenario-level differential evidence, not a full
