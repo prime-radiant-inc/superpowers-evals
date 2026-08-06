@@ -257,16 +257,26 @@ export function parseClaudeThreads(runDir: string): ParsedThread[] {
     }
   }
   return orderThreads(
-    parsed.map(({ raw, events, models, firstTimestamp }) => ({
-      seatId: raw.seatId,
-      role: raw.isController ? 'controller' : classifyClaudeRole(raw.label),
-      taskLabel: raw.label,
-      spawnDepth: raw.spawnDepth,
-      parentId:
-        raw.toolUseId === null ? null : (issuer.get(raw.toolUseId) ?? null),
-      models,
-      events,
-      firstTimestamp,
-    })),
+    parsed.map(({ raw, events, models, firstTimestamp }) => {
+      const role = raw.isController
+        ? ('controller' as const)
+        : classifyClaudeRole(raw.label);
+      return {
+        seatId: raw.seatId,
+        role,
+        roleSource: raw.isController
+          ? ('thread_root' as const)
+          : role === 'other'
+            ? ('unclassified' as const)
+            : ('description' as const),
+        taskLabel: raw.label,
+        spawnDepth: raw.spawnDepth,
+        parentId:
+          raw.toolUseId === null ? null : (issuer.get(raw.toolUseId) ?? null),
+        models,
+        events,
+        firstTimestamp,
+      };
+    }),
   );
 }

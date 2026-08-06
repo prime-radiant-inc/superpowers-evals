@@ -115,6 +115,7 @@ export function scanRun(runDir: string): RunSeats | null {
     credential,
     seatId: thread.seatId,
     role: thread.role,
+    roleSource: thread.roleSource,
     taskLabel: thread.taskLabel,
     spawnDepth: thread.spawnDepth,
     parentId: thread.parentId,

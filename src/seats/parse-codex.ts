@@ -7,6 +7,8 @@
 // One file per thread. The first row is `session_meta`; a spawned thread's
 // payload.source.subagent.thread_spawn carries {parent_thread_id, depth,
 // agent_path}, and the controller has thread_source "user" with no thread_spawn.
+// Where the CLI recorded `agent_path: null` the seat role comes from the child's
+// own dispatch prompt instead — see roles.ts.
 //
 // The hard part is getting a shell command out of a tool call. The modern Codex
 // `exec` tool takes a JS SNIPPET, not arguments:
@@ -23,7 +25,7 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { classifyCodexRole } from './roles.ts';
+import { classifyCodexSeat } from './roles.ts';
 import {
   orderThreads,
   type ParsedThread,
@@ -329,21 +331,68 @@ function toolCommands(
   return null;
 }
 
+// The environment block the CLI injects as the child's first user-role message,
+// before the dispatch prompt. Skipped by prefix rather than by position,
+// because whether it is present at all varies by CLI version.
+const ENVIRONMENT_PREAMBLE = '<environment_context>';
+
+/**
+ * The instruction a spawned thread received: its first user-role message that
+ * is not the CLI's environment preamble.
+ *
+ * Only the FIRST such message counts. An implementer resumed with review
+ * findings receives further user messages, and those describe the fix round,
+ * not the seat.
+ */
+function dispatchPrompt(
+  rows: readonly Record<string, unknown>[],
+): string | null {
+  for (const row of rows) {
+    if (row['type'] !== 'response_item') {
+      continue;
+    }
+    const payload = asRecord(row['payload']);
+    if (payload?.['type'] !== 'message' || payload['role'] !== 'user') {
+      continue;
+    }
+    const content = payload['content'];
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    const text = content
+      .map((part) => asRecord(part)?.['text'])
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n')
+      .trim();
+    if (text.length === 0 || text.startsWith(ENVIRONMENT_PREAMBLE)) {
+      continue;
+    }
+    return text;
+  }
+  return null;
+}
+
 /**
  * The raw label the seat role was read from.
  *
- * Codex CLI 0.134.0 and 0.144.3 recorded thread_spawn with `agent_path: null`
- * and only `agent_role` ("worker" / "default"): 968 of the recorded sdd seats
- * look like that. agent_role cannot distinguish a task reviewer from a final
- * reviewer, so it never becomes a role — but keeping it as the label means the
- * unclassifiable seats are still analyzable downstream instead of blank.
+ * `agent_path` when the CLI recorded one. Otherwise the opening line of the
+ * dispatch prompt — the sentence the role was actually read from, kept whole so
+ * a reader can check the call. Failing both, `agent_role` ("worker" /
+ * "default"), which names only the side of the doer/judge split but is still
+ * better than an opaque blank.
  */
-function seatLabel(spawn: ThreadSpawn | null): string {
+function seatLabel(spawn: ThreadSpawn | null, prompt: string | null): string {
   if (spawn === null) {
     return '';
   }
   if (spawn.agentPath !== null) {
     return spawn.agentPath;
+  }
+  if (prompt !== null) {
+    const opening = prompt.split('\n').find((line) => line.trim().length > 0);
+    if (opening !== undefined) {
+      return opening.trim();
+    }
   }
   return spawn.agentRole === null ? '' : `agent_role:${spawn.agentRole}`;
 }
@@ -409,10 +458,20 @@ export function parseCodexThreads(runDir: string): ParsedThread[] {
         events.push(shellEvent(call.tool, command, ts));
       }
     }
+    const prompt = spawn === null ? null : dispatchPrompt(rows);
+    const classified =
+      spawn === null
+        ? { role: 'controller' as const, source: 'thread_root' as const }
+        : classifyCodexSeat({
+            agentPath: spawn.agentPath,
+            agentRole: spawn.agentRole,
+            dispatchPrompt: prompt,
+          });
     threads.push({
       seatId,
-      role: spawn === null ? 'controller' : classifyCodexRole(spawn.agentPath),
-      taskLabel: seatLabel(spawn),
+      role: classified.role,
+      roleSource: classified.source,
+      taskLabel: seatLabel(spawn, prompt),
       spawnDepth: spawn?.depth ?? null,
       parentId: spawn?.parentId ?? null,
       models,

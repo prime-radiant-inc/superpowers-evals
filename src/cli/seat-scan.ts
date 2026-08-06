@@ -120,6 +120,7 @@ function jsonPayload(runs: readonly RunSeats[], rows: readonly RollupRow[]) {
           superpowers_dirty: run.superpowersDirty,
           seat_id: seat.seatId,
           role: seat.role,
+          role_source: seat.roleSource,
           task_label: seat.taskLabel,
           spawn_depth: seat.spawnDepth,
           parent_id: seat.parentId,

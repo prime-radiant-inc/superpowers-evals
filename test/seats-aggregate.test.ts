@@ -9,10 +9,12 @@ const CLAUDE_ID =
   'sdd-report-formatter-claude-opus-linux-20260803T000000Z-aaaa';
 const CODEX_ID =
   'sdd-report-formatter-codex-codex_sub-linux-20260803T000000Z-bbbb';
+const CODEX_NULL_PATH_ID =
+  'sdd-breaker-adjudicates-at-cap-codex-openai_responses-linux-20260717T175954Z-3d50';
 
 test('discoverRuns finds run dirs by their log tree, filtered by scenario prefix', () => {
   expect(discoverRuns(FIXTURES, 'sdd-').map((d) => d.split('/').pop())).toEqual(
-    [CLAUDE_ID, CODEX_ID],
+    [CODEX_NULL_PATH_ID, CLAUDE_ID, CODEX_ID],
   );
   expect(discoverRuns(FIXTURES, 'sdd-report-formatter-codex')).toHaveLength(1);
   expect(discoverRuns(FIXTURES, 'nope-')).toEqual([]);
