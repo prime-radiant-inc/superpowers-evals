@@ -6,16 +6,23 @@
 > independent re-verification and are unchanged. Disposition on #2089 was
 > merge-as-is; the follow-on work is tracked in PRI-2845.
 
-Instrument: `src/seats/` + `src/cli/seat-scan.ts`.
+**Instrument:** `src/seats/` + `src/cli/seat-scan.ts`. Offline, read-only,
+regenerate with:
 
-Two corpora, scanned separately:
+```
+bun run src/cli/seat-scan.ts --results <results-dir> --scenario-prefix sdd- --json out.json
+```
 
-- `analysis/pr2089/seat-scan.json` — the **local** corpus, 293 run dirs with
-  per-thread logs (140 claude, 153 codex, 3501 seats). Findings 1 and 2 came
-  from here. Superseded.
-- `analysis/pr2089/appliance-scan-v2.json` — the **appliance** corpus at
-  `/srv/quorum/superpowers-evals/results`, 161 of 210 `sdd-*` dirs that carry
-  per-thread logs. This is the usable one.
+It exists because `trajectory.json` cannot answer per-seat questions (see Known
+limits #3); it reads the raw per-thread logs the agent CLIs leave behind.
+
+Two corpora, scanned separately. Raw scan output is not committed — it is ~6 MB
+and regenerable from the command above:
+
+- The **local** corpus, 293 run dirs with per-thread logs (140 claude, 153
+  codex, 3501 seats). Findings 1 and 2 came from here. Superseded.
+- The **appliance** corpus at `/srv/quorum/superpowers-evals/results`, 161 of
+  210 `sdd-*` dirs that carry per-thread logs. This is the usable one.
 
 PR #2089 adds a paragraph to `skills/subagent-driven-development/task-reviewer-prompt.md`
 telling the per-task reviewer to re-read illegible test evidence rather than re-run the suite.
