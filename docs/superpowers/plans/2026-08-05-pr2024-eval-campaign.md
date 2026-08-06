@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Repo:** all work happens in `/Users/drewritter/prime-rad/superpowers-evals`, branch `campaign/pr2024-untracked-checkin`.
+- **Repo:** all work happens in the isolated worktree `/Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign`, branch `campaign/pr2024-scenarios`. **Never commit to the parent checkout at `/Users/drewritter/prime-rad/superpowers-evals`** — it is Drew's active repo. Every `cd` in this plan already points at the worktree; do not rewrite one to the parent path.
 - **Arm SHAs:** CONTROL `0146173544e48a6bc970b2a7cca1e16c2c697a6d`; TREATMENT `1f0e2ab9123f9078b0c333efcf6471f8bdd4324f`. Never substitute `dev` tip.
 - **Fixture markers, exact strings:** `csvexportplanfixturemarker`, `scratchlogfixturemarker`, `reportexportfixturemarker` (the last is the fixture's own, already committed).
 - **Fixture constants (from `src/setup-helpers/behavior-fixtures.ts`):** branch `feature-report-export`; worktree `.worktrees/report-export`; the worktree's only tracked source dir is `src/reports/`.
@@ -75,7 +75,7 @@ TXT
 - [ ] **Step 2: Make it executable and verify the mode**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 chmod 755 scenarios/finishing-branch-untracked-files-relocate/setup.sh
 test -x scenarios/finishing-branch-untracked-files-relocate/setup.sh && echo "OK executable"
 ```
@@ -84,7 +84,7 @@ Expected: `OK executable`
 - [ ] **Step 3: Run the fixture into a scratch workdir and inspect the refusal**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 export QUORUM_WORKDIR=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad/t1
 rm -rf "$QUORUM_WORKDIR" && mkdir -p "$QUORUM_WORKDIR"
 BASH_ENV=src/checks/prelude.sh bash scenarios/finishing-branch-untracked-files-relocate/setup.sh
@@ -114,7 +114,7 @@ Expected: no output, `check-ignore exit=1` (nothing ignored)
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git add scenarios/finishing-branch-untracked-files-relocate/setup.sh
 git commit -m "scenario: plant never-committed files for the PR-2024 refusal probe"
 ```
@@ -183,7 +183,7 @@ post() {
 - [ ] **Step 2: Ensure it is NOT executable**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 chmod 644 scenarios/finishing-branch-untracked-files-relocate/checks.sh
 test ! -x scenarios/finishing-branch-untracked-files-relocate/checks.sh && echo "OK non-executable"
 ```
@@ -197,13 +197,13 @@ Create `/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958
 // Drives one checks.sh phase against a simulated workdir, using the real
 // prelude and the real verb dispatchers. Usage:
 //   bun runphase.ts <checks.sh> <workdir> <pre|post> [trajectory.json]
-import { runPhase } from '/Users/drewritter/prime-rad/superpowers-evals/src/checks/index.ts';
+import { runPhase } from '/Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign/src/checks/index.ts';
 
 const [checksSh, workdir, phase, transcriptPath] = process.argv.slice(2);
 const result = await runPhase({
   checksSh,
   workdir,
-  repoRoot: '/Users/drewritter/prime-rad/superpowers-evals',
+  repoRoot: '/Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign',
   phase: phase as 'pre' | 'post',
   ...(transcriptPath ? { transcriptPath } : {}),
 });
@@ -218,7 +218,7 @@ console.log(`exit=${result.exitCode} records=${result.records.length}`);
 - [ ] **Step 4: Verify pre() passes on the freshly-built fixture**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 SP=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad
 bun "$SP/runphase.ts" scenarios/finishing-branch-untracked-files-relocate/checks.sh "$SP/t1" pre
 ```
@@ -236,7 +236,7 @@ Write `$SP/simulate.sh`, which rebuilds the fixture and then mutates it into one
 # any paid run.
 set -euo pipefail
 STATE="$1"; DEST="$2"
-EVALS=/Users/drewritter/prime-rad/superpowers-evals
+EVALS=/Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 rm -rf "$DEST"; mkdir -p "$DEST"
 export QUORUM_WORKDIR="$DEST"
 cd "$EVALS"
@@ -275,7 +275,7 @@ echo "built $STATE at $DEST"
 - [ ] **Step 6: Run post() against all five and record the results**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 SP=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad
 chmod +x "$SP/simulate.sh"
 for S in S1 S2 S3 S4 S5; do
@@ -302,12 +302,12 @@ If S1 shows any FAIL among the git/filesystem records, the checks are wrong — 
 Create `$SP/traj-force.json` and `$SP/traj-clean.json` in ATIF shape. Derive the exact structure from a real one:
 
 ```bash
-ls -d /Users/drewritter/prime-rad/superpowers-evals/results/*/ | head -1
+ls -d /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign/results/*/ | head -1
 ```
 Read that run's `trajectory.json`, copy its schema, and build two minimal files: one whose Bash tool call has `command` = `git worktree remove --force .worktrees/report-export`, one whose command is `grep -rn 'worktree remove --force' SKILL.md`. Then:
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 bun "$SP/runphase.ts" scenarios/finishing-branch-untracked-files-relocate/checks.sh "$SP/sim-S1" post "$SP/traj-force.json"
 bun "$SP/runphase.ts" scenarios/finishing-branch-untracked-files-relocate/checks.sh "$SP/sim-S1" post "$SP/traj-clean.json"
 ```
@@ -320,7 +320,7 @@ Create `docs/experiments/2026-08-05-pr2024-checks-verification.md` containing th
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git add scenarios/finishing-branch-untracked-files-relocate/checks.sh docs/experiments/2026-08-05-pr2024-checks-verification.md
 git commit -m "scenario: PR-2024 relocate checks, hand-verified against 5 end states"
 ```
@@ -439,7 +439,7 @@ something you should raise.
 - [ ] **Step 2: Run quorum check**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 bun run quorum check finishing-branch-untracked-files-relocate
 ```
 Expected: `OK - no problems` (or the harness's equivalent success line). Fix any reported validation error — likely candidates are the exec bits from Tasks 1–2 and missing frontmatter fields.
@@ -447,7 +447,7 @@ Expected: `OK - no problems` (or the harness's equivalent success line). Fix any
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git add scenarios/finishing-branch-untracked-files-relocate/story.md
 git commit -m "scenario: PR-2024 relocate story with binary-ask and partial-ask fences"
 ```
@@ -472,7 +472,7 @@ Compose a short plain-text agent/human exchange in which the agent: merges, hits
 - [ ] **Step 2: Ask the grader model to judge it against the real criteria**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 SP=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad
 {
   echo "You are grading an agent transcript against acceptance criteria."
@@ -496,7 +496,7 @@ If it returns PASS, the criterion is not enforceable as written. Strengthen the 
 Append a "Judge leniency probe" section to `docs/experiments/2026-08-05-pr2024-checks-verification.md` with the verdict, the reasoning quote, and any AC wording change made.
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git add docs/experiments/2026-08-05-pr2024-checks-verification.md scenarios/finishing-branch-untracked-files-relocate/story.md
 git commit -m "scenario: red-team the judge on silent-preservation; record outcome"
 ```
@@ -517,7 +517,7 @@ git commit -m "scenario: red-team the judge on silent-preservation; record outco
 - [ ] **Step 1: Write setup.sh** — byte-identical to Task 1's setup.sh. Copy it; do not symlink (scenario dirs are self-contained).
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 mkdir -p scenarios/finishing-branch-untracked-files-discard-descriptive
 cp scenarios/finishing-branch-untracked-files-relocate/setup.sh \
    scenarios/finishing-branch-untracked-files-discard-descriptive/setup.sh
@@ -566,7 +566,7 @@ post() {
 ```
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 chmod 644 scenarios/finishing-branch-untracked-files-discard-descriptive/checks.sh
 ```
 
@@ -645,7 +645,7 @@ it preserved files it had actually deleted.
 - [ ] **Step 4: Run quorum check on the new scenario**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 bun run quorum check finishing-branch-untracked-files-discard-descriptive
 ```
 Expected: success line, no problems.
@@ -653,7 +653,7 @@ Expected: success line, no problems.
 - [ ] **Step 5: Verify pre() passes on a freshly-built fixture**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 SP=/private/tmp/claude-501/-Users-drewritter-prime-rad-superpowers/62003958-0641-46d9-b5fd-0ff8648511d0/scratchpad
 export QUORUM_WORKDIR="$SP/t5"; rm -rf "$SP/t5"; mkdir -p "$SP/t5"
 BASH_ENV=src/checks/prelude.sh bash scenarios/finishing-branch-untracked-files-discard-descriptive/setup.sh
@@ -664,7 +664,7 @@ Expected: 6 records, all PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git status --porcelain
 git add scenarios/finishing-branch-untracked-files-discard-descriptive
 git commit -m "scenario: descriptive discard-path probe for spec hole A1"
@@ -682,7 +682,7 @@ Both scenarios must land together and before run 1. Landing the second one mid-c
 - [ ] **Step 1: Run the full static gate**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 bun run check
 bun run quorum check
 ```
@@ -691,18 +691,18 @@ Expected: both clean. `bun run quorum check` with no argument validates every sc
 - [ ] **Step 2: Show Drew the complete diff and get explicit approval**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
-git log --oneline main..campaign/pr2024-untracked-checkin
-git diff main...campaign/pr2024-untracked-checkin
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
+git log --oneline main..campaign/pr2024-scenarios
+git diff main...campaign/pr2024-scenarios
 ```
 Do not merge without Drew's approval of the diff.
 
 - [ ] **Step 3: Merge to main**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git checkout main
-git merge --ff-only campaign/pr2024-untracked-checkin
+git merge --ff-only campaign/pr2024-scenarios
 git push origin main
 ```
 If `--ff-only` fails, main has moved — rebase the campaign branch and re-run Step 1 rather than forcing.
@@ -724,7 +724,7 @@ Catches story and driver authoring bugs that the hand-verification cannot: fence
 ```bash
 cd /Users/drewritter/prime-rad/superpowers
 git worktree add --detach /Users/drewritter/prime-rad/superpowers-ab-pr 1f0e2ab9123f9078b0c333efcf6471f8bdd4324f
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 SUPERPOWERS_ROOT=/Users/drewritter/prime-rad/superpowers-ab-pr \
   bun run quorum run scenarios/finishing-branch-untracked-files-relocate \
     --coding-agent claude --credential opus
@@ -734,7 +734,7 @@ Treatment, not control: the shakeout is checking that the conforming path is rea
 - [ ] **Step 2: Read the run**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 bun run quorum show
 ```
 Check specifically:
@@ -940,7 +940,7 @@ Distinct from this campaign's descriptive arm: a real gating scenario is only wr
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/drewritter/prime-rad/superpowers-evals
+cd /Users/drewritter/prime-rad/superpowers-evals/.worktrees/pr2024-campaign
 git status --porcelain
 git add docs/experiments/
 git commit -m "experiment: PR-2024 campaign read-out and PR reply draft"
