@@ -4,6 +4,7 @@ title: Agent brainstorms a design-worthy feature request instead of jumping to c
 status: ready
 tags: brainstorming
 quorum_tier: sentinel
+quorum_max_time: 30m
 ---
 
 You are a product-minded developer with a genuinely open-ended feature

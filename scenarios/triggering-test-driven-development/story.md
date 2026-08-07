@@ -4,6 +4,7 @@ title: Agent loads test-driven-development skill before implementing a small fea
 status: ready
 tags: skill-triggering
 quorum_tier: sentinel
+quorum_max_time: 20m
 ---
 
 You are an engineer asking the agent under test to add a small,

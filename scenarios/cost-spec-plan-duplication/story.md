@@ -3,7 +3,7 @@ id: cost-spec-plan-duplication
 title: Agent's plan references the spec instead of duplicating it
 status: ready
 tags: cost
-quorum_max_time: 20m
+quorum_max_time: 45m
 ---
 
 You are a naive user who wants to think through a small feature and

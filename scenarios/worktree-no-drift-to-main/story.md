@@ -4,6 +4,7 @@ title: Parallel committing subagents stay on the worktree branch — main is unt
 status: ready
 tags: worktree
 quorum_tier: sentinel
+quorum_max_time: 20m
 ---
 
 You are a developer already working inside a feature worktree — the

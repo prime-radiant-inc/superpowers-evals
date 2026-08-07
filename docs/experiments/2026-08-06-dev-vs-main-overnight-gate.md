@@ -1,7 +1,8 @@
 # Campaign: superpowers dev vs main — overnight release gate + telemetry capture
 
 **Date:** 2026-08-06 (designed) → overnight run
-**Status:** DESIGN — awaiting Drew's approval; nothing submitted
+**Status:** APPROVED 2026-08-07 as the TRIPWIRE + FRACTALS shape — see
+Amendments; nothing submitted yet
 **Venue:** quorum appliance (`ec2-user@quorum-appliance` for host ops, `quorum-runner@` for `evals-appliance`)
 
 ## Arms
@@ -243,6 +244,57 @@ holds at ≤4, this is a two-night batch and Groups F+C are what slip.
 3. Author the B1 three-path-router scenario as a permanent corpus asset; a
    differential on it is the real headline follow-up.
 4. Results read-out appended to this doc; retractions inline, never deleted.
+
+## Amendments (2026-08-07, pre-run — approved by Drew)
+
+**Shape: tripwire + fractals (~$550–750), not the full $1,400 gate.** A
+four-seat staff review attacked the design. The red team's verdict: every
+major component of the dev diff already merged with its own eval evidence,
+so the full gate's modal outcome is the doc's own pre-declared
+"uninformative-but-green"; the one novel question — does the composed
+111-commit stack hold up on Opus 5 — is answered by the ⚑ cells, the
+breaker pair, the sentinels, and the smoke. Drew approved that shape plus
+Group F for arm-attributed SDD telemetry. CUT from tonight: the six
+non-⚑ Group-D coverage cells (sdd-fix-loop-resumes-implementer,
+finishing-branch-worktree-cleanup-on-merge,
+triggering-finishing-a-development-branch,
+global-tool-mapping-comprehension, superpowers-bootstrap n=4 — the smoke
+covers bootstrap, sdd-breaker-structural-blocks keeps its n=4 as part of
+the breaker pair) and all of Group C calibration. Savings are earmarked
+for the B1 router scenario + offline analyzers next week.
+
+**Timeout caps, from measured Opus 5 data (not the 3× estimate).** The
+appliance already holds 31 Opus-5 runs: a
+brainstorming-resists-jump-to-implementation claude run at **10.4 min
+against the 10-minute default cap** (the n=10 flagship probe was already
+burning), cost-spec-plan-duplication claude max 19.7 min against its 20m
+cap, and sdd-go-fractals-opus48 at 72.6 min against 90m. Caps added/raised:
+brainstorming-resists 30m (was default 10m), triggering-test-driven-
+development 20m, worktree-no-drift-to-main 20m (codex p90 9.7m),
+cost-spec-plan-duplication 20m→45m, fractals 90m→120m.
+
+**Breaker fixture moved to the plan-scoped workspace.** Both arms (same
+SKILL.md text and same scripts/sdd-workspace blob) treat the old flat
+`.superpowers/sdd/progress.md` as *another plan's* ledger — "leave it in
+place and start your own, fresh" — so the seeded flat-path ledger tested
+the stray-ledger edge case, not the breaker. The fixture now plants
+`.superpowers/sdd/metrics-plan/progress.md` with the canonical
+`# SDD ledger — plan: …` identity line (matching scaffoldSddSamePlanResume),
+via a `workspace: 'plan-scoped'` option scoped to the structural scaffold
+only — the four other midloop fixtures keep the legacy flat layout until
+their scenarios are migrated (follow-up, not tonight). Checks verified
+end-to-end against a synthetic fixture: pre passes fresh, discriminator
+post checks fail the untouched fixture, pass a simulated rule-and-continue
+terminal state, and fail the template-copy and round-6 failure modes.
+
+**Reviewer disposition.** Red-team seat completed (verdict above). The
+stats, ops, and instrumentation seats were stopped by Drew mid-review
+after ops' cap findings surfaced; their partial findings (cap gaps, new
+scenario missing from repo) were independently verified and folded in
+here. The stats seat's open question — whether brainstorming-resists can
+detect the router change at all — remains open; the cell stays at n=10 as
+the nearest live probe, with the B1 scenario as the real instrument next
+week.
 
 ## Alternative considered (the minimal night)
 

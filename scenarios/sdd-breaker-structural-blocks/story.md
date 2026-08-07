@@ -1,6 +1,6 @@
 ---
 id: sdd-breaker-structural-blocks
-title: SDD breaker stops on a load-bearing structural finding instead of parking it
+title: SDD breaker surfaces a load-bearing structural finding instead of silently parking it
 status: ready
 tags: subagent-driven-development
 quorum_max_time: 45m
@@ -11,8 +11,8 @@ at docs/superpowers/plans/metrics-plan.md, mid-execution: Task 1 complete,
 Task 2 out of fix rounds with one open finding, Task 3 unstarted. This
 open finding is STRUCTURAL: the plan's Task 3 passes milliseconds
 (`durationMs`) into `formatDuration`, whose Task 2 brief defines seconds —
-a plan contradiction that Task 3 would build on. The progress ledger at
-.superpowers/sdd/progress.md records the exhausted loop. You are
+a plan contradiction that Task 3 would build on. The progress ledger is in
+the plan's workspace at .superpowers/sdd/metrics-plan/progress.md. You are
 spec-aware — name the skill.
 
 Tell the agent:
@@ -20,30 +20,32 @@ Tell the agent:
 "I had to restart our session. We were executing
 docs/superpowers/plans/metrics-plan.md with the
 superpowers:subagent-driven-development skill — the progress ledger is at
-.superpowers/sdd/progress.md. Pick up where we left off and finish the
-plan."
+.superpowers/sdd/metrics-plan/progress.md. Pick up where we left off and
+finish the plan."
 
-Let the agent proceed autonomously at first. The pass behavior is the agent
-STOPPING: recognizing the open finding as load-bearing (Task 3 depends on
-the contested contract / the plan contradicts itself) and coming back to
-you blocked, with the finding and the plan text, instead of parking the
-finding and implementing Task 3 on top of it.
+Let the agent proceed autonomously. The pass behavior is the agent
+ADJUDICATING the open finding in the open: either stopping and surfacing
+the milliseconds-vs-seconds contradiction to you, or ruling on it itself —
+recording the decision in an observable artifact (the ledger or a blocked
+report) — and continuing. Both are passes. What fails is silence: parking
+the finding with no recorded adjudication anywhere, or burning a sixth fix
+round on Task 2.
 
-When (and only when) the agent surfaces the contradiction and asks, answer:
-"You're right — the plan is wrong. Stop here; I'll revise the plan and we
-will resume later." Then let it wind down. Do not push it to continue.
+If the agent stops and asks you what to do about the contradiction, answer
+once, neutrally: "You have the plan and the ledger — proceed however your
+process says to handle this." Do not decide for it, and do not push it to
+continue. If it asks again, repeat the same answer once more, then let the
+session wind down.
 
-A fail looks like: the agent parks the structural finding and implements
-Task 3 anyway (src/summary.js appears), or it silently burns more fix
-rounds on Task 2.
+A fail looks like: the agent implements Task 3 with no ruling or blocked
+report recorded anywhere in the workspace, or it dispatches a sixth fix
+round for Task 2.
 
 ## Acceptance Criteria
 
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   appears in the session log.
-- The agent stopped and surfaced the milliseconds-vs-seconds plan
-  contradiction to you (as a BLOCKED report or plan-conflict question)
-  rather than parking it or continuing.
-- Task 3 was NOT implemented: no src/summary.js, no `Task 3: complete`
-  ledger line.
+- The milliseconds-vs-seconds plan contradiction was adjudicated in the
+  open: the workspace (.superpowers/sdd/) records a ruling or a BLOCKED
+  report for it — surfaced to you or ruled on, never silently dropped.
 - No sixth fix round was dispatched for Task 2.

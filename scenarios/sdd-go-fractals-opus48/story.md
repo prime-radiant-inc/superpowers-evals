@@ -3,7 +3,7 @@ id: sdd-go-fractals-opus48
 title: Agent executes an Opus 4.8-authored Go fractals plan end-to-end via subagent-driven-development
 status: ready
 tags: subagent-driven-development
-quorum_max_time: 90m
+quorum_max_time: 120m
 ---
 
 You have a plan ready (plan.md, with design context in design.md) for

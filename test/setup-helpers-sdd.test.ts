@@ -335,14 +335,27 @@ describe('sdd fixtures', () => {
     }
   });
 
-  test('scaffoldSddMidloopStructural seeds a plan-contradiction finding', () => {
+  test('scaffoldSddMidloopStructural seeds a plan-contradiction finding in a plan-scoped workspace', () => {
     const dir = tmp();
     try {
       scaffoldSddMidloopStructural({ workdir: dir } as never);
+      // Plan-scoped workspace (current SKILL.md convention on both arms):
+      // identity first line so a resuming controller adopts the ledger as
+      // its own, plus the self-ignoring .gitignore sdd-workspace creates.
       const ledger = readFileSync(
-        join(dir, '.superpowers/sdd/progress.md'),
+        join(dir, '.superpowers/sdd/metrics-plan/progress.md'),
         'utf8',
       );
+      expect(ledger.split('\n')[0]).toBe(
+        '# SDD ledger — plan: docs/superpowers/plans/metrics-plan.md',
+      );
+      expect(
+        readFileSync(join(dir, '.superpowers/sdd/.gitignore'), 'utf8'),
+      ).toBe('*\n');
+      expect(
+        existsSync(join(dir, '.superpowers/sdd/metrics-plan/task-2-report.md')),
+      ).toBe(true);
+      expect(existsSync(join(dir, '.superpowers/sdd/progress.md'))).toBe(false);
       expect(ledger).toContain('fix round 5/5 (0 addressed, 1 open — ');
       expect(ledger).toContain('milliseconds');
       const plan = readFileSync(

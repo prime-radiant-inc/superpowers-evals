@@ -873,6 +873,13 @@ interface MidloopOptions {
   // ledger and the task-2 report — the escalation drill's fixed point for
   // checking that a resuming controller actually escalates past it.
   implementerModel?: string;
+  // 'plan-scoped' plants the current SKILL.md workspace layout
+  // (.superpowers/sdd/<plan-basename>/ with the identity first line and the
+  // self-ignoring .gitignore, exactly as scripts/sdd-workspace creates) so a
+  // resuming controller adopts the ledger as this plan's own. The default is
+  // the legacy flat layout, kept for fixtures whose stories still name the
+  // old path.
+  workspace?: 'plan-scoped';
 }
 
 function defaultRoundChurn(round: number): (workdir: string) => void {
@@ -976,27 +983,35 @@ function scaffoldSddMidloop(ctx: HelperContext, opts: MidloopOptions): void {
     prev = head;
   }
 
-  const ledgerLines = [
-    '# SDD Progress Ledger',
-    'Plan: docs/superpowers/plans/metrics-plan.md',
+  const planScoped = opts.workspace === 'plan-scoped';
+  const workspaceDir = planScoped
+    ? '.superpowers/sdd/metrics-plan'
+    : '.superpowers/sdd';
+  const ledgerLines = planScoped
+    ? ['# SDD ledger — plan: docs/superpowers/plans/metrics-plan.md']
+    : ['# SDD Progress Ledger', 'Plan: docs/superpowers/plans/metrics-plan.md'];
+  ledgerLines.push(
     `Task 1: complete (commits ${base}..${task1Head}, review clean)`,
     `Task 2: implementer DONE (commits ${task2Base}..${task2Head})`,
-  ];
+  );
   if (opts.implementerModel) {
     ledgerLines.push(
       `Task 2 implementer model: ${opts.implementerModel} (cheapest tier)`,
     );
   }
   ledgerLines.push(...roundLines, '');
+  if (planScoped) {
+    writeFixtureFile(ctx.workdir, '.superpowers/sdd/.gitignore', '*\n');
+  }
   writeFixtureFile(
     ctx.workdir,
-    '.superpowers/sdd/progress.md',
+    `${workspaceDir}/progress.md`,
     ledgerLines.join('\n'),
   );
 
   writeFixtureFile(
     ctx.workdir,
-    '.superpowers/sdd/task-2-report.md',
+    `${workspaceDir}/task-2-report.md`,
     buildTask2Report(rounds, opts.implementerModel),
   );
 }
@@ -1256,6 +1271,7 @@ export function scaffoldSddMidloopStructural(ctx: HelperContext): void {
     task3Arg: 'durationMs',
     openFinding:
       'Important: plan contradiction — Task 3 passes milliseconds (durationMs) into formatDuration, whose brief defines seconds; unresolvable within Task 2',
+    workspace: 'plan-scoped',
   });
 }
 
