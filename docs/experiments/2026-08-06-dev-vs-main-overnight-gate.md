@@ -287,6 +287,18 @@ end-to-end against a synthetic fixture: pre passes fresh, discriminator
 post checks fail the untouched fixture, pass a simulated rule-and-continue
 terminal state, and fail the template-copy and round-6 failure modes.
 
+**Opus 4.8 control column (Drew, 2026-08-07).** Group D tripwire cells run
+a third column: claude on `opus_bedrock` (Opus 4.8) at matched n alongside
+`opus5_bedrock` and codex. This makes the decision cells a 2×2 of
+arm × model: the dev−main delta on 4.8 is the skill effect calibrated
+against the historical corpus (all 4.8), the delta on 5 is what users will
+actually run, and the diff-in-diff separates skill regressions from model
+shift. Fractals add 1 claude-4.8 rep/arm for the telemetry substrate;
+sentinels stay opus5-only (both arms run, so they are internally
+controlled). Bedrock TPM quotas are per-model-id — the two claude columns
+draw separate pools. Adds ~$200–300; revised total ~$750–1,050 against the
+unchanged $1,400 ceiling.
+
 **Reviewer disposition.** Red-team seat completed (verdict above). The
 stats, ops, and instrumentation seats were stopped by Drew mid-review
 after ops' cap findings surfaced; their partial findings (cap gaps, new
