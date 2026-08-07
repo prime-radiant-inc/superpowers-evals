@@ -15,6 +15,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import type { Credential } from '../contracts/credential.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
@@ -105,7 +106,11 @@ export class KimiAgent implements CodingAgent {
     this.config = config;
   }
 
-  provision(home: RunHome, runner: CommandRunner): Record<string, string> {
+  provision(
+    home: RunHome,
+    runner: CommandRunner,
+    credential?: Credential,
+  ): Record<string, string> {
     // SECURITY: the whole provisioning motion — binary resolve, preflight,
     // plugin install, and the env-file/config writes — can surface diagnostics
     // that echo secrets (e.g. the API key in a failing preflight's stderr). Wrap
@@ -114,7 +119,7 @@ export class KimiAgent implements CodingAgent {
     // ProvisionError we already raise is re-wrapped through the same scrub
     // (idempotent: a value already redacted has nothing left to match).
     try {
-      return this.seedKimiConfig(home, runner);
+      return this.seedKimiConfig(home, runner, credential);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       throw new ProvisionError(sanitizeKimiDiagnostic(message));
@@ -124,6 +129,7 @@ export class KimiAgent implements CodingAgent {
   private seedKimiConfig(
     home: RunHome,
     runner: CommandRunner,
+    credential?: Credential,
   ): Record<string, string> {
     const { configDir, workdir } = home;
 
@@ -147,8 +153,18 @@ export class KimiAgent implements CodingAgent {
     //    provider + oauth from KIMI_CODE_HOME's config.toml/credentials).
     const apiKey = getEnv('KIMI_MODEL_API_KEY');
     const useOauth = apiKey === undefined || apiKey === '';
+    // A non-default credential.model is a per-credential pin (kimi_k3). The
+    // OAuth path cannot honor it — model selection there is driven by the
+    // seeded subscription login — so reject loudly instead of silently running
+    // the wrong model.
+    const pinnedModel = credentialPinnedModel(credential);
+    if (useOauth && pinnedModel !== undefined) {
+      throw new ProvisionError(
+        `kimi credential pins model '${pinnedModel}' but the OAuth path cannot honor it; set KIMI_MODEL_API_KEY to use the api-key path`,
+      );
+    }
     const oauthSource = useOauth ? requireKimiOauthSource() : undefined;
-    const kimiModelEnv = useOauth ? {} : effectiveKimiModelEnv();
+    const kimiModelEnv = useOauth ? {} : effectiveKimiModelEnv(pinnedModel);
 
     // Seed the per-run KIMI_CODE_HOME (configDir) before any preflight so the
     // live probe runs against the same credentials the eval will use.
@@ -319,10 +335,31 @@ function resolveKimiBinary(binary: string): string {
   return resolved;
 }
 
+// A credential.model other than the baked-in default is a per-credential model
+// pin (kimi_k3 -> 'k3'). The default ('kimi-for-coding', kimi_default) means
+// "no pin", so its behavior is identical to a credential-less call.
+function credentialPinnedModel(
+  credential: Credential | undefined,
+): string | undefined {
+  const model = credential?.model;
+  if (
+    model === undefined ||
+    model === DEFAULT_KIMI_MODEL_ENV['KIMI_MODEL_NAME']
+  ) {
+    return undefined;
+  }
+  return model;
+}
+
 // Reject unsupported host KIMI_MODEL_* overrides, require KIMI_MODEL_API_KEY,
-// merge defaults + runtime flags, then overlay the host api key and optional
-// model-name override. Reads env only through env.ts.
-function effectiveKimiModelEnv(): Record<string, string> {
+// merge defaults + runtime flags, then overlay the host api key and the model
+// name. Model precedence: a host KIMI_MODEL_NAME override and a credential pin
+// must AGREE when both are present (loud conflict, no silent winner); otherwise
+// whichever is present wins over the baked-in default. Reads env only through
+// env.ts.
+function effectiveKimiModelEnv(
+  pinnedModel: string | undefined,
+): Record<string, string> {
   const source = envSnapshot();
   const unknown: string[] = [];
   for (const key of Object.keys(source)) {
@@ -349,8 +386,20 @@ function effectiveKimiModelEnv(): Record<string, string> {
   };
   merged['KIMI_MODEL_API_KEY'] = apiKey;
   const modelName = getEnv('KIMI_MODEL_NAME');
-  if (modelName !== undefined && modelName !== '') {
-    merged['KIMI_MODEL_NAME'] = modelName;
+  const hostModel =
+    modelName !== undefined && modelName !== '' ? modelName : undefined;
+  if (
+    hostModel !== undefined &&
+    pinnedModel !== undefined &&
+    hostModel !== pinnedModel
+  ) {
+    throw new ProvisionError(
+      `host KIMI_MODEL_NAME override '${hostModel}' conflicts with credential model '${pinnedModel}'; unset one`,
+    );
+  }
+  const model = hostModel ?? pinnedModel;
+  if (model !== undefined) {
+    merged['KIMI_MODEL_NAME'] = model;
   }
   return merged;
 }

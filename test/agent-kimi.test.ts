@@ -24,6 +24,7 @@ import {
   writeKimiRuntimeEnvFile,
 } from '../src/agents/kimi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
+import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -1299,6 +1300,217 @@ test('oauth path: a failing preflight surfaces a ProvisionError', () => {
       () => {
         const agent = new KimiAgent(KIMI_CONFIG);
         expect(() => agent.provision(home, runner)).toThrow(ProvisionError);
+      },
+    );
+  } finally {
+    oauth.cleanup();
+    cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// credential.model pinning (kimi_k3). The api-key path resolves KIMI_MODEL_NAME
+// from the host override / the credential pin / the baked-in default, throwing
+// when a host override and a credential pin disagree (loud conflict, no silent
+// winner). The OAuth path rejects any non-default pin: model selection there is
+// driven by the seeded subscription login, so a pin would silently run the
+// wrong model. credential.model equal to the default ('kimi-for-coding',
+// kimi_default) means "no pin" and behaves exactly like a credential-less call.
+// ---------------------------------------------------------------------------
+
+// Build a synthetic kimi credential (mirrors the credentials.yaml kimi_k3 /
+// kimi_default shapes). The adapter consumes only `model`; auth branches on the
+// KIMI_MODEL_API_KEY env, not credential.auth.
+function makeKimiCredential(model: string): Credential {
+  return {
+    model,
+    harnesses: ['kimi'],
+    api: 'openai-chat',
+    auth: 'api-key',
+    compat: {},
+  };
+}
+
+test('credential.model pins KIMI_MODEL_NAME in the api-key path', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        agent.provision(home, runner, makeKimiCredential('k3'));
+        expect(runner.calls[0]?.options?.env?.['KIMI_MODEL_NAME']).toBe('k3');
+        const summary = JSON.parse(
+          readFileSync(
+            join(home.configDir, 'effective-kimi-model-config.json'),
+            'utf8',
+          ),
+        );
+        expect(summary.model_env.KIMI_MODEL_NAME).toBe('k3');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('a host KIMI_MODEL_NAME override conflicting with credential.model throws naming both', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: 'kimi-custom',
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        let caught: unknown;
+        try {
+          agent.provision(home, runner, makeKimiCredential('k3'));
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ProvisionError);
+        // The conflict names BOTH values — no silent winner.
+        const message = (caught as ProvisionError).message;
+        expect(message).toContain('kimi-custom');
+        expect(message).toContain('k3');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('the default credential.model defers to a host KIMI_MODEL_NAME override (kimi_default unchanged)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: 'kimi-custom',
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        // The default model is "no pin": the host override wins, no conflict.
+        agent.provision(home, runner, makeKimiCredential('kimi-for-coding'));
+        expect(runner.calls[0]?.options?.env?.['KIMI_MODEL_NAME']).toBe(
+          'kimi-custom',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('the default credential.model keeps the baked-in model in the api-key path', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        agent.provision(home, runner, makeKimiCredential('kimi-for-coding'));
+        expect(runner.calls[0]?.options?.env?.['KIMI_MODEL_NAME']).toBe(
+          'kimi-for-coding',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('oauth path throws ProvisionError on a non-default credential.model pin', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const oauth = makeKimiOauthHome();
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: undefined,
+        KIMI_OAUTH_HOME: oauth.home,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        expect(() =>
+          agent.provision(home, runner, makeKimiCredential('k3')),
+        ).toThrow(/KIMI_MODEL_API_KEY/);
+        // The guard fires at setup, before any live preflight is spent.
+        expect(runner.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    oauth.cleanup();
+    cleanup();
+  }
+});
+
+test('oauth path accepts the default credential.model (kimi_default unchanged)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const oauth = makeKimiOauthHome();
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: undefined,
+        KIMI_OAUTH_HOME: oauth.home,
+        KIMI_MODEL_NAME: undefined,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        expect(() =>
+          agent.provision(home, runner, makeKimiCredential('kimi-for-coding')),
+        ).not.toThrow();
+        expect(runner.calls.length).toBe(1);
       },
     );
   } finally {
