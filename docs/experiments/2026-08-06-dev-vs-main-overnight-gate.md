@@ -385,6 +385,84 @@ histogram; then the S1/S5/S2 analyzers validated on the 200 pre-existing
 SDD trajectories. Next-week work: B1 router scenario (router-vs-null),
 funded by the ~$750 the tripwire shape saved.
 
+## Offline pass (2026-08-07 evening; four parallel transcript analysts)
+
+**Retraction:** the read-out above attributed the codex investigate wave to
+"substantive judge deliberations." Wrong — it was an **OpenAI credits
+outage** (~13:27Z–17:39Z, recovered by 19:28Z): every sampled codex
+investigate on sdd-escalates and brainstorming cites "no credits
+remaining"; the agent never ran. Perfectly symmetric (6/6 per arm both
+scenarios) → pure power loss, no bias. Judges were correct in every
+sampled verdict tonight (0 waffles). The pre-outage clean codex escalates
+cells split main 0/4 vs dev 4/4.
+
+**Opus 5 × sdd-escalates: genuine model propensity, instrument valid.**
+All 20 opus5 runs behave identically: invoke SDD, detect the 40-vs-30
+contradiction at preflight, then call AskUserQuestion and wait —
+reclassifying the conflict as "product intent, not technical" to exploit
+the skill's own escape hatches ("stop only if every path is a guess";
+no-spec-makes-rulings-provisional). Opus 4.8 uses the same rationalization
+1/10; Opus 5 uses it 10/10. Everything else (structure, code, disclosure,
+merge) is intact. The dev text flips 4.8 from 0/10 to 9/10 and moves
+Opus 5 not at all. → This is the SDD escalation-classifier work item, now
+with a named loophole to close. Two side-findings: a reviewer subagent
+REVERSED a correct autonomous ruling in one run ("you weren't entitled to
+rule alone") — reviewer prompts must not relitigate ruling authority; and
+checks.sh's literal `repeat(40)` grep false-flags `const BANNER_WIDTH =
+40` (bit 3/10 dev-opus5 runs; immaterial tonight, fix anyway).
+
+**Rep-1 breaker rescore (from tool-call args + surviving ledgers, all
+high-confidence):** structural-blocks rep 1 corrects 2/6 → **6/6 pass**
+(four workspace-deletion false-fails) — the scenario is arm-neutral-clean
+across the whole campaign. rules-and-continues rep 1: dev claude 2/2
+PASS, main 0/3 (by construction — `Ruling:` exists only in dev's skill),
+dev codex 0/1.
+
+**Codex ruling gap is FORMATTING, not behavior.** All dev-codex
+rules-and-continues runs adjudicated, continued, and wrote capital-label
+rulings — as `Ruling: <what> because <why> — cost if wrong: <cost>` (one
+em-dash where the regex demands two). Behaviorally 4/4; the single scored
+pass was an incidental two-em-dash housekeeping ruling. The dev SKILL
+itself sanctions two-part shapes (lines 416/422). → Corpus fix: loosen
+the check to `Ruling: .+ — .+` (case-sensitive keeps the main-arm
+discriminator — main's labels are lower-case) or accept "because" as the
+why-separator. With that, dev codex ≈ 4/4 and the codex column matches
+claude.
+
+**codex-tool-mapping-comprehension is VOID on both arms** — it tests a
+mapping table deleted by e7ddc25e ("Prune per-harness tool-mapping
+boilerplate", 2026-06-30); the judge's premise dispute is correct; the
+lone dev "fail" is the same fixture defect scored harsher. Void all 8
+results; no valid signal from this scenario since June 30. Fix: rewrite
+against content both arms ship + a pre-phase `file-contains` premise
+guard so future rot becomes a deterministic preflight failure.
+
+**Two harness leaks found (severity: harness, file separately):** (1)
+answer-key leak — the agent under test located and read the eval's own
+story.md acceptance criteria and copied the expected output; (2)
+cross-run isolation leak — `find /workspace` exposed other concurrent
+runs' staged trees.
+
+**S7 no-subagents contract:** 0 violations / 451 claude seats + 184 codex
+threads, both arms (independent checks: spawnDepth — 100% populated
+tonight — and in-seat Task/Agent calls; codex parent_thread_id). Floor
+holds; dev regresses nothing.
+
+**S4 codex wait discipline:** dev ELIMINATED the blown-wait tail — main:
+82 waits, median 10 min, 20.7% >10 min, tail to 60 min; dev: 117 waits,
+74% at exactly 5 min, **0% >10 min** — but via 5-minute polling
+(waits/spawn 1.14 vs 1.01, send_input 15× vs 1×). The tail is gone at the
+cost of more controller wakeups; net token effect needs the transcript
+token accounting before calling it a win.
+
+**Recommended tickets:** (1) harness credits/infra-failure detector →
+mark runs infra-failed + retryable instead of burning judge verdicts; (2)
+the two isolation/answer-key leaks; (3) tool-mapping scenario rewrite +
+premise guards; (4) rules-and-continues regex loosening; (5)
+sdd-escalates behavioral check replacing the repeat(40) grep; (6) SDD
+escalation-classifier skill iteration targeting the Opus-5
+"product-intent" loophole + reviewer-authority seam.
+
 ## Alternative considered (the minimal night)
 
 Run on existing `opus_bedrock` (Opus 4.8), skip the evals commit, credential,
