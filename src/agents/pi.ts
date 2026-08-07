@@ -17,11 +17,13 @@ import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
 
-// Map credential.api values to pi's internal api name. Only openai-chat is
-// supported on the api-key custom-endpoint path. All other CREDENTIAL_APIS are
-// unsupported by pi's custom-endpoint provisioner.
+// Map credential.api values to pi's internal api name. openai-chat and
+// openai-responses are supported on the api-key custom-endpoint path (pi's
+// models.json takes 'openai-responses' verbatim as a provider api). All other
+// CREDENTIAL_APIS are unsupported by pi's custom-endpoint provisioner.
 const CREDENTIAL_API_TO_PI_API: Readonly<Record<string, string>> = {
   'openai-chat': 'openai-completions',
+  'openai-responses': 'openai-responses',
 };
 
 // Characters shlex.quote treats as safe (its unsafe-char regex is
@@ -284,9 +286,9 @@ function writePiModelsJson(
 //
 //   api-key: custom-endpoint (e.g. GLM/ollama). Requires credential.base_url.
 //     Resolves the API key via resolveApiKey. Maps credential.api to pi's api
-//     name (only openai-chat → openai-completions is supported). Writes
-//     models.json, settings.json, auth.json (with the RESOLVED key), and pi.env
-//     under a fixed provider name 'quorum'.
+//     name (openai-chat → openai-completions, openai-responses →
+//     openai-responses). Writes models.json, settings.json, auth.json (with the
+//     RESOLVED key), and pi.env under a fixed provider name 'quorum'.
 //
 //   oauth: native pi host login. Seeds the host auth.json + writes settings.json
 //     (provider from host settings, model from credential.model) and pi.env.
@@ -351,7 +353,7 @@ export class PiAgent implements CodingAgent {
     const piApi = CREDENTIAL_API_TO_PI_API[credential.api];
     if (piApi === undefined) {
       throw new ProvisionError(
-        `pi: api '${credential.api}' is not supported; pi custom-endpoint supports openai-chat (maps to openai-completions)`,
+        `pi: api '${credential.api}' is not supported; pi custom-endpoint supports openai-chat (maps to openai-completions) and openai-responses`,
       );
     }
 

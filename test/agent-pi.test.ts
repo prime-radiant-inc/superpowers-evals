@@ -220,6 +220,49 @@ test('api-key credential: provision writes models.json with quorum provider', ()
   }
 });
 
+test('api-key openai-responses credential: models.json carries api openai-responses', () => {
+  const { home, cleanup } = makeTempHome();
+  const sp = makeSuperpowersRoot();
+  // gpt-5.6-sol rejects function tools + reasoning_effort on chat completions;
+  // the responses API path maps openai-responses straight through to pi.
+  const credential = makeApiKeyCredential({
+    api: 'openai-responses',
+    model: 'gpt-5.6-sol',
+    compat: {},
+  });
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: sp.root, PI_API_KEY_FIXTURE: 'test-api-key-abc123' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, credential);
+
+        const models: unknown = JSON.parse(
+          readFileSync(join(home.configDir, 'models.json'), 'utf8'),
+        );
+        expect(models).toMatchObject({
+          providers: {
+            quorum: {
+              baseUrl: 'https://example.com/v1',
+              api: 'openai-responses',
+              apiKey: 'test-api-key-abc123',
+              models: [
+                {
+                  id: 'gpt-5.6-sol',
+                  name: 'gpt-5.6-sol',
+                },
+              ],
+            },
+          },
+        });
+      },
+    );
+  } finally {
+    sp.cleanup();
+    cleanup();
+  }
+});
+
 test('api-key credential: models.json is mode 0600 and auth.json carries resolved key', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
@@ -387,7 +430,7 @@ test('api-key credential: provision seeds config dir + sessions subdir', () => {
   }
 });
 
-test('api-key credential: unsupported api (gemini) throws ProvisionError', () => {
+test('api-key credential: unsupported api (gemini) throws naming both supported apis', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
   const credential = makeApiKeyCredential({ api: 'gemini' });
@@ -397,7 +440,7 @@ test('api-key credential: unsupported api (gemini) throws ProvisionError', () =>
       () => {
         const agent = new PiAgent(piConfig());
         expect(() => agent.provision(home, stubRunner, credential)).toThrow(
-          /gemini.*not supported|unsupported api.*gemini/i,
+          /pi: api 'gemini' is not supported; pi custom-endpoint supports openai-chat \(maps to openai-completions\) and openai-responses/,
         );
       },
     );
