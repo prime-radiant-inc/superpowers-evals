@@ -475,6 +475,34 @@ per-process cost of dev (ledger rulings, preflight, wait-polling) on the
 users' model; next token-objective target, to be measured with SUP-196
 transcript accounting (totals here are cache-read-dominated).
 
+## Statistical correction (2026-08-07 evening — supersedes rate claims above)
+
+The read-out and offline-pass sections above state several deltas without
+significance testing. Two-sided Fisher exact on pass counts corrects them:
+
+- **Significant (p<.05), all dev-favorable:** escalates opus4.8 0/10 vs
+  9/10 (p=.0001); escalates codex 0/4 vs 4/4 (p=.029);
+  rules-and-continues opus5 0/4 vs 4/4 (p=.029) — but the last one only
+  reaches significance WITH the rep-1 rescored cell; clean-instrument reps
+  alone are 0/3 vs 3/3, p=.10 (suggestive).
+- **Suggestive, not significant:** rules-and-continues opus4.8 (p=.14
+  rescored, .40 clean); cost-spec-plan-duplication pooled 2/12 vs 6/12
+  (p=.19; no single column better than p=.43) — the "dev-ward on all
+  three columns" framing above is directional consistency, NOT a finding.
+- **No n=2 sentinel movement can reach significance** (min p=.33) — all
+  sentinel "dev-ward" phrasing above is noise-level observation.
+- **Token deltas:** the +12%/run pooled figure is mix-confounded; the
+  honest central tendency is the matched-cell median **+3%** (IQR −12% to
+  +32%, 40 cells). All fractals claude cost cells are n=1/arm —
+  "opus5 +28%" is a single-run anecdote and a hypothesis, not a
+  measurement. "Biggest skill effect ever measured on this corpus" is
+  retracted as unverifiable; the supportable claim is "largest effect in
+  this campaign, p=.0001."
+
+Gate verdict unchanged: the block rule is about collapse detection and
+produced no candidates; none of the corrections above involve a
+dev-unfavorable significant result.
+
 ## Alternative considered (the minimal night)
 
 Run on existing `opus_bedrock` (Opus 4.8), skip the evals commit, credential,
