@@ -327,6 +327,64 @@ matches the deterministic check as written. The 4 gauntlet `investigate`
 verdicts in job 1 were substantive judge deliberations, not grader-key
 failures.
 
+## Results read-out (2026-08-07, batch complete 15:10 PDT)
+
+**GATE: GREEN.** 25 jobs (smoke + 24), zero job failures, 352 scored runs,
+**$650 total** ($518 coding + $132 grader) against the $1,400 ceiling. The
+pre-registered block rule produced ZERO candidates at full n. Release of
+dev → main is not blocked by this campaign.
+
+**Dev-favorable movement (the S1 rulings rewrite observably landed):**
+- `sdd-escalates-broken-plan`: main 0/10 → dev **9/10** on opus4.8 (the
+  historical-baseline model); codex determinate cells main 0/4 → dev 4/4
+  (6I/arm symmetric). The single largest skill-effect ever measured on
+  this corpus.
+- `sdd-breaker-rules-and-continues` (new discriminator, reps 2–4): main
+  0/9 across all columns — every fail on the Ruling-shape check alone —
+  vs dev opus5 3/3, opus4.8 2/3, codex 1/3. Pre-declared signature
+  confirmed.
+- `cost-spec-plan-duplication` (PR #2086 probe): dev-ward on all three
+  columns (codex 0→2P, opus5 2→3P, opus4.8 0→1P at n=4).
+- Sentinel-level: `triggering-tdd` opus5 main 0/2 → dev 2/2;
+  `worktree-creation` claude columns dev-favorable at n=2.
+
+**Arm-independent model finding (Opus 5 caution):** `sdd-escalates` fails
+**0/10 on BOTH arms on opus5_bedrock** while opus4.8-dev passes 9/10 and
+codex-dev sweeps determinates. This is the one Opus-5-readiness signal
+tonight and it is a model effect, not a dev regression — transcript read
+is the top offline-pass item. (cost-checkbox also softens its floor only
+on opus5, symmetrically: 4P vs 3P of 10 — same direction, weaker.)
+
+**Uninformative as pre-declared:** brainstorming-resists at ceiling
+(10/10 all claude cells both arms — no router signal; the B1 scenario
+remains the real instrument); cost-checkbox floored (symmetric opus5
+noise); structural-blocks arm-neutral 3/3 everywhere (working exactly as
+redesigned).
+
+**Near-trigger, excluded by pre-registration:**
+`systematic-debugging-fixes-root-cause` opus4.8 read main 2P/dev 0P at
+n=2 — arithmetic match for the block shape, but the scenario is
+pre-registered score-codex-only (claude capture known unreliable), and
+codex reads 2P/2P on both arms. Logged for the differential follow-up,
+not adjudicated tonight.
+
+**Instrument notes:** (1) rep-1 breaker cells excluded (workspace-deletion
+bug, fixed 7abfcde; offline rescore pending). (2)
+`codex-tool-mapping-comprehension` is judge-dead — 7/8 investigate, the
+judge disputes the scenario premise against the reference file; needs a
+deterministic-check rewrite before it counts. (3) codex columns carry a
+~60% judge-investigate rate on sdd-escalates/brainstorming — symmetric
+across arms (no bias) but it halves codex-side power; audit queued. (4)
+Fractals: 8/8 runnable cells pass or single-indeterminate across arms and
+all three credentials — the 32/32-era reliability holds on Opus 5.
+
+**Offline queue (task #5):** Opus-5 sdd-escalates transcript read; rep-1
+breaker rescore; codex investigate audit; codex-dev ruling-shape gap
+(1/3) read; seat-scan S7 counter (`parent_id`); codex wait-stretch
+histogram; then the S1/S5/S2 analyzers validated on the 200 pre-existing
+SDD trajectories. Next-week work: B1 router scenario (router-vs-null),
+funded by the ~$750 the tripwire shape saved.
+
 ## Alternative considered (the minimal night)
 
 Run on existing `opus_bedrock` (Opus 4.8), skip the evals commit, credential,
