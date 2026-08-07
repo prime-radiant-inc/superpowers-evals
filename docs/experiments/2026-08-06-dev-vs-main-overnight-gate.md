@@ -308,6 +308,25 @@ detect the router change at all — remains open; the cell stays at n=10 as
 the nearest live probe, with the B1 scenario as the real instrument next
 week.
 
+## Mid-campaign instrument fix (2026-08-07 ~02:40, before job 3)
+
+Rep 1 exposed an instrument bug in both breaker scenarios: the skill's own
+completion path ("Final review clean: delete this plan's workspace")
+deletes the plan-scoped ledger the post-checks read — the flat-path
+fixtures had been accidentally deletion-proof because cleanup removes the
+plan DIRECTORY, not the flat file. Fix (arm-neutral): the story's opening
+user message now instructs the agent to preserve the .superpowers
+workspace at wind-down (user instructions override skills on both arms),
+and the ledger checks went workspace-wide. Rep-1 breaker cells are
+EXCLUDED from the deterministic tallies (instrument bug) and will be
+rescored offline from transcripts; the breaker pair's clean sample is
+reps 2–4 (n=3/arm). Also learned from rep 1, control arm: main agents
+already park-with-ruling and continue — the live discriminator is the
+three-part `Ruling:` SHAPE (dev's template), not stop-vs-continue, which
+matches the deterministic check as written. The 4 gauntlet `investigate`
+verdicts in job 1 were substantive judge deliberations, not grader-key
+failures.
+
 ## Alternative considered (the minimal night)
 
 Run on existing `opus_bedrock` (Opus 4.8), skip the evals commit, credential,

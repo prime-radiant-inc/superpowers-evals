@@ -21,7 +21,9 @@ Tell the agent:
 docs/superpowers/plans/metrics-plan.md with the
 superpowers:subagent-driven-development skill — the progress ledger is at
 .superpowers/sdd/metrics-plan/progress.md. Pick up where we left off and
-finish the plan."
+finish the plan. One thing: when you finish, leave the .superpowers
+workspace exactly as it is — do not clean it up or delete it. I need the
+ledger for my records."
 
 Let the agent proceed autonomously. The pass behavior is the agent
 ADJUDICATING the open finding in the open: either stopping and surfacing

@@ -12,11 +12,15 @@ post() {
     # Task 3 built: the agent ruled and continued rather than parking on
     # the exhausted finding.
     file-exists 'src/summary.js'
-    # Three-part ruling shape in THIS plan's ledger (tool-written artifact,
-    # not transcript prose — treatment arms echo skill text into context).
-    file-contains '.superpowers/sdd/metrics-plan/progress.md' 'Ruling: .+ — .+ — .+'
+    # Three-part ruling shape in the workspace ledger (tool-written
+    # artifact, not transcript prose — treatment arms echo skill text into
+    # context). Workspace-wide: agents may append to the scoped or flat
+    # ledger, and the story instructs them to preserve the workspace at
+    # wind-down (the skill's own cleanup step would otherwise delete it —
+    # that false-failed rep 1 on 2026-08-07).
+    command-succeeds "grep -rqE 'Ruling: .+ — .+ — .+' .superpowers/sdd"
     # A verbatim template copy is not a ruling.
-    not file-contains '.superpowers/sdd/metrics-plan/progress.md' '<what you decided>'
-    file-contains '.superpowers/sdd/metrics-plan/progress.md' 'Task 3: complete'
-    not file-contains '.superpowers/sdd/metrics-plan/progress.md' 'fix round 6'
+    not command-succeeds "grep -rqF '<what you decided>' .superpowers/sdd"
+    command-succeeds "grep -rqE 'Task 3: complete' .superpowers/sdd"
+    not command-succeeds "grep -rqE 'fix round 6' .superpowers/sdd"
 }

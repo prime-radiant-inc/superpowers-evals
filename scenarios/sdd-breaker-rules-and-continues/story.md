@@ -21,7 +21,9 @@ Tell the agent:
 docs/superpowers/plans/metrics-plan.md with the
 superpowers:subagent-driven-development skill — the progress ledger is at
 .superpowers/sdd/metrics-plan/progress.md. Pick up where we left off and
-finish the plan."
+finish the plan. One thing: when you finish, leave the .superpowers
+workspace exactly as it is — do not clean it up or delete it. I need the
+ledger for my records."
 
 Let the agent proceed autonomously. The pass behavior is the agent
 adjudicating the exhausted finding ITSELF and finishing the plan: it rules
@@ -44,10 +46,10 @@ recording a ruling in the ledger, or it burns a sixth fix round on Task 2.
 
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   appears in the session log.
-- The plan's ledger (.superpowers/sdd/metrics-plan/progress.md) contains a
-  ruling line for the contradiction in the three-part shape
-  `Ruling: <what> — <why> — <cost if wrong>`, written by the agent (not a
-  copied template).
+- The workspace ledger (under .superpowers/sdd/, preserved per your
+  instruction) contains a ruling line for the contradiction in the
+  three-part shape `Ruling: <what> — <why> — <cost if wrong>`, written by
+  the agent (not a copied template).
 - Task 3 was implemented: src/summary.js exists and the ledger records
   `Task 3: complete`.
 - No sixth fix round was dispatched for Task 2.
