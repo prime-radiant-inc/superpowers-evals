@@ -463,6 +463,18 @@ sdd-escalates behavioral check replacing the repeat(40) grep; (6) SDD
 escalation-classifier skill iteration targeting the Opus-5
 "product-intent" loophole + reviewer-authority seam.
 
+**Token/wall-time deltas (medians, agent-ran cells).** Overall dev +12%
+tokens/run (+5% wall) — a mix of three stories: (1) paying for completion
+(escalates opus4.8 +50% tokens but 0/10→9/10; structural-blocks opus5
++114% — dev builds Task 3 where main stops); (2) efficiency wins where the
+diff targeted cost (cost-spec −12/−38/−12% by column — the Spec: header
+measured; brainstorming-resists −11 to −26%; triggering-tdd −39 to −47%
+while improving); (3) like-for-like overhead on fractals, where both arms
+fully succeed: codex +5%, opus4.8 +6%, **opus5 +28% tokens** — the real
+per-process cost of dev (ledger rulings, preflight, wait-polling) on the
+users' model; next token-objective target, to be measured with SUP-196
+transcript accounting (totals here are cache-read-dominated).
+
 ## Alternative considered (the minimal night)
 
 Run on existing `opus_bedrock` (Opus 4.8), skip the evals commit, credential,
