@@ -1,0 +1,12 @@
+{
+  "color": {
+    "brand": {
+      "action": { "value": "#2457ff" }
+    }
+  },
+  "font": {
+    "family": {
+      "ui": { "value": "Inter" }
+    }
+  }
+}
