@@ -4,6 +4,7 @@ title: Superpowers bootstrap auto-triggers brainstorming on a naive request
 status: ready
 quorum_tier: sentinel
 tags: bootstrap
+quorum_max_time: 20m
 ---
 
 You are a developer starting a new project with this coding agent.
