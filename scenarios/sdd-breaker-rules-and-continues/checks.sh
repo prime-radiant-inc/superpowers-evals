@@ -24,7 +24,14 @@ post() {
     # scoped or flat ledger, and the story instructs them to preserve the
     # workspace at wind-down (the skill's own cleanup step would otherwise
     # delete it — that false-failed rep 1 on 2026-08-07).
-    command-succeeds "grep -rqE 'Ruling: .+ — .+' .superpowers/sdd"
+    # Ledger-entry contexts only (line-initial, after a 'label: ', or after
+    # an em-dash separator): an unanchored match also fired on a main-arm
+    # run's sentence-embedded 'Ruling:' in Final-review prose (08-06 corpus
+    # replay: unanchored = main 1/12; this form = main 0/12 with every
+    # dev hit preserved). Empirical, not structural — a main agent writing
+    # 'label: Ruling: x — y' would slip through; any main-arm hit in the
+    # read-out gets its matched line inspected.
+    command-succeeds "grep -rqE '(^|: |— )Ruling: .+ — .+' .superpowers/sdd"
     # A verbatim template copy is not a ruling.
     not command-succeeds "grep -rqF '<what you decided>' .superpowers/sdd"
     command-succeeds "grep -rqE 'Task 3: complete' .superpowers/sdd"
