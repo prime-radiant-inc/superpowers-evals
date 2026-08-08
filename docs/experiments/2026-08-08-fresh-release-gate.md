@@ -219,6 +219,21 @@ so truncation at any point leaves matched pairs with decision cells maximally co
 Never add a credential to a template whose scenario list its column doesn't fully want:
 run-all cross-products credentials × scenarios and silently buys excluded cells.
 
+## Leak-flag adjudication rule (recorded mid-battery 2026-08-08 ~06:30Z, before drain)
+
+The live detector over-triggers in three inspected modes, all mechanically identifiable and
+arm-blind. At read-out, a flagged hit is re-adjudicated SELF (not a leak) iff:
+(a) it is a case/elision variant of the run's own dir name (compaction rewrites its own
+paths — e.g. `…052933f-fe37` / `…052933z-fe37` for `…052933Z-fe37`, or a literal `…`);
+(b) it is a strict PREFIX of the run's own dir name (self-referencing glob — the `*` stops
+the match, e.g. `results/sdd-breaker-structural-blocks-` from `…structural-blocks-*`);
+(c) it is the literal `results/evals` or `results/...` artifact.
+Everything else stays flagged: the run is scored indeterminate and backfilled. Confirmed
+REAL catch so far: sdd-survives-compaction sol/main `…053430Z-31b1` — a broad package.json
+search whose output enumerated 27 other runs' dirs (the 08-06 leak-2 channel, live).
+Adjudication is applied mechanically to both arms; every kept and dismissed flag is listed
+in the read-out with its matched line.
+
 ## What this gate cannot answer (attach to any GREEN verbatim)
 
 1. The brainstorming three-path router (+106/−7, dev's largest change) — no instrument exists;
