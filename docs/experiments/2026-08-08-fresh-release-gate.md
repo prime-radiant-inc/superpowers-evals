@@ -197,6 +197,28 @@ launches only after it is on origin/main.
 - **Salvage boundary:** the 08-06 corpus is calibration-and-sizing material only. If any
   old number appears in the read-out for context it is labeled `[08-06, not gate evidence]`.
 
+## Job schedule (published pre-launch; generator is authoritative)
+
+66 jobs, 388 runs, generated and selftest-asserted by `gate-driver.py` (session scratchpad;
+dry-run prints every job with its full flag string; selftest proves the generated cell grid
+equals this doc's table, 33 cells/arm). Four job templates — a job is one template × one arm:
+
+- **A** (`--coding-agents claude --credentials opus_bedrock`): reps 1-2 full list incl. the
+  5-scenario rider; reps 3-4 drop the rider; reps 5-6 drop the n=4 cells; reps 7-10 run
+  escalates + breaker r-a-c + cost-spec only. 20 jobs.
+- **B** (`--credentials opus5_bedrock`): reps 1-8, breaker r-a-c only. 16 jobs.
+- **C** (`--coding-agents codex --credentials openai_responses_56sol,openai_responses_56luna`):
+  sol+luna have IDENTICAL scenario sets, so bundling is exact — each scenario runs once per
+  credential per job. Reps 1-2 full 8-scenario list; compaction drops after rep 2, structural
+  after 4, finishing/brainstorming after 6, r-a-c/wait-mapping after 8. 20 jobs.
+- **F** (fractals, all four credentials, `--coding-agents claude,codex`): exactly 4 runs/job,
+  one per column. Reps 1-5, LAST in the schedule (jobs 57-66). 10 jobs.
+
+Ordering: per rep index k — A-k(main), A-k(dev), C-k(main), C-k(dev), B-k(main), B-k(dev) —
+so truncation at any point leaves matched pairs with decision cells maximally complete.
+Never add a credential to a template whose scenario list its column doesn't fully want:
+run-all cross-products credentials × scenarios and silently buys excluded cells.
+
 ## What this gate cannot answer (attach to any GREEN verbatim)
 
 1. The brainstorming three-path router (+106/−7, dev's largest change) — no instrument exists;
