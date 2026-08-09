@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { SpawnCommandRunner } from '../src/agents/command-runner.ts';
 import { exportRuns } from '../src/export-runs/index.ts';
+import type { BundleEntry } from '../src/export-runs/manifest.ts';
 import { BundleManifestSchema } from '../src/export-runs/manifest.ts';
 
 const runner = new SpawnCommandRunner();
@@ -58,7 +59,8 @@ function verdict(overrides: Record<string, unknown> = {}): string {
 function resultsTree(): { root: string; runId: string } {
   const root = mkdtempSync(join(tmpdir(), 'results-'));
   const runId = 'demo-codex-codex_sub-linux-20260730T201515Z-a325';
-  const run = join(root, 'cx-demo-rep1', runId);
+  // Label shape mirrors the real corpora: <campaign>-<arm>-rep<n>.
+  const run = join(root, 'cx-eff-demo-rep1', runId);
 
   write(join(run, 'verdict.json'), verdict());
   write(join(run, 'trajectory.json'), '{"steps":[]}');
@@ -67,6 +69,26 @@ function resultsTree(): { root: string; runId: string } {
   write(join(run, 'credentials.snapshot.yaml'), 'codex_sub:\n  api: openai\n');
   write(join(run, 'gauntlet-agent/results/g-1/run.jsonl'), '{"e":1}\n');
   write(join(run, 'coding-agent-workdir/src/main.go'), 'package main\n');
+  // The agent's own git history is real output and must survive.
+  write(join(run, 'coding-agent-workdir/.git/HEAD'), 'ref: refs/heads/main\n');
+  // Vendored dependency bulk the agent's toolchain created. Reproducible, and
+  // it drags in trust stores that trip the credential denylist.
+  write(
+    join(
+      run,
+      'coding-agent-workdir/.venv/lib/python3.12/site-packages/certifi/cacert.pem',
+    ),
+    '-----BEGIN CERTIFICATE-----\n',
+  );
+  write(
+    join(run, 'coding-agent-workdir/.venv/lib/python3.12/site-packages/x.py'),
+    'x = 1\n',
+  );
+  write(
+    join(run, 'coding-agent-workdir/__pycache__/main.cpython-312.pyc'),
+    'x',
+  );
+  write(join(run, 'coding-agent-workdir/node_modules/left-pad/index.js'), 'x');
 
   // Secrets and bulk that must be dropped.
   write(
@@ -170,6 +192,21 @@ test('export keeps the analytical payload and lifts raw sessions', () => {
   expect(existsSync(join(run, 'raw-sessions/2026/rollout.jsonl'))).toBe(true);
   // The npm cache is bulk, not payload.
   expect(existsSync(join(run, 'raw-sessions/_cacache'))).toBe(false);
+  // The agent's commits are output worth keeping.
+  expect(existsSync(join(run, 'coding-agent-workdir/.git/HEAD'))).toBe(true);
+});
+
+test('vendored dependency dirs are excluded from the workdir', () => {
+  const { bundle, runId } = runExport();
+  const workdir = join(bundle, 'runs', runId, 'coding-agent-workdir');
+
+  expect(existsSync(join(workdir, '.venv'))).toBe(false);
+  expect(existsSync(join(workdir, 'node_modules'))).toBe(false);
+  expect(existsSync(join(workdir, '__pycache__'))).toBe(false);
+  // Excluding them is what keeps a vendored CA trust store from tripping the
+  // credential denylist and aborting a 600-run export.
+  expect(walk(workdir).some((f) => f.endsWith('.pem'))).toBe(false);
+  expect(existsSync(join(workdir, 'src/main.go'))).toBe(true);
 });
 
 test('the manifest records identity, recovery status, and checksums', () => {
@@ -203,6 +240,58 @@ test('the manifest records identity, recovery status, and checksums', () => {
     expect(actual).toBe(sha);
   }
   expect(Object.keys(entry.files).length).toBeGreaterThan(0);
+});
+
+// A run with no archived tree (gemini/claude install superpowers by link)
+// alongside a codex run from the same campaign whose sha is recoverable.
+function corpusWithUnrecoverableRun(startedAt: string): string {
+  const { root } = resultsTree();
+  const run = join(root, 'cx-eff-cc-ceremony-arch-dev-rep1', 'gem-run');
+  write(
+    join(run, 'verdict.json'),
+    verdict({ coding_agent: 'gemini', started_at: startedAt }),
+  );
+  write(join(run, 'trajectory.json'), '{"steps":[]}');
+  return root;
+}
+
+function exportCorpus(root: string): BundleEntry[] {
+  const bundle = join(mkdtempSync(join(tmpdir(), 'bundle-')), 'out');
+  exportRuns({
+    resultsDir: root,
+    outDir: bundle,
+    superpowersRepo: superpowersRepo(),
+    runner,
+    sourceHost: 'test-host',
+    now: '2026-08-09T00:00:00.000Z',
+  });
+  return BundleManifestSchema.parse(
+    JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8')),
+  ).entries;
+}
+
+test('an unrecoverable run borrows a co-temporal sha from its campaign', () => {
+  // The seeded codex run started 2026-07-30T20:15:15Z; three hours later is
+  // well inside the window.
+  const entries = exportCorpus(
+    corpusWithUnrecoverableRun('2026-07-30T23:15:15.000Z'),
+  );
+  const gem = entries.find((e) => e.run_id === 'gem-run');
+
+  expect(gem?.rev_recovery).toBe('inferred');
+  expect(gem?.inferred_superpowers_sha).toMatch(/^[0-9a-f]{40}$/);
+  // The borrowed sha must never occupy the field meaning "this run's sha".
+  expect(gem?.superpowers_sha).toBeNull();
+});
+
+test('a run with no neighbour inside the window stays unknown', () => {
+  const entries = exportCorpus(
+    corpusWithUnrecoverableRun('2026-08-15T00:00:00.000Z'),
+  );
+  const gem = entries.find((e) => e.run_id === 'gem-run');
+
+  expect(gem?.rev_recovery).toBe('unknown');
+  expect(gem?.inferred_superpowers_sha).toBeNull();
 });
 
 test('a run whose verdict will not parse is skipped, not fatal', () => {

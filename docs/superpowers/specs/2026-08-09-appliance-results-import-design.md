@@ -55,19 +55,30 @@ Gemini and claude archive nothing. Gemini's extension is installed as
 `plugins/data/superpowers-inline` is empty. For those the rev is genuinely
 unrecoverable from the artifacts.
 
-This yields a five-state recovery ladder, recorded per run:
+This yields a five-state recovery ladder, recorded per run. Counts are the
+measured result of exporting both corpora:
 
 | status | meaning | count |
 |---|---|---|
 | `recorded` | the verdict already had it | 294 |
-| `recovered` | tree hash matched exactly one commit (after timestamp disambiguation) | 285 (expected) |
-| `tree_only` | tree hash computed, no commit matches — the run used a modified tree | part of the 285 |
-| `inferred` | copied from the nearest co-temporal run in the same experiment directory | 47 (expected) |
-| `unknown` | no evidence at all | 0 (expected) |
+| `recovered` | tree hash matched history (timestamp breaks ties) | 217 |
+| `tree_only` | tree hash computed, no commit matches — the run used a modified tree | 68 |
+| `inferred` | borrowed from the nearest co-temporal run in the same campaign | 47 |
+| `unknown` | no evidence at all | 0 |
 
-`recovered` and `tree_only` are both derived from the archived tree; the split
-between them is not knowable until the export runs, so the 285 covers both. An
-`inferred` sha is stored in a distinct field and never presented as recovered.
+511 runs carry an exact sha. The 68 `tree_only` runs are the experiment arms
+that ran a modified superpowers tree — a real finding, and their tree hash still
+identifies which arm uniquely. The 47 `inferred` are exactly the gemini and
+claude runs predicted above; an inferred sha is stored in a distinct field and
+never presented as recovered.
+
+Inference is scoped to the campaign (the first two segments of an experiment
+label, so `cx-eff-cc-ceremony-arch-dev-rep1` is `cx-eff`) rather than the
+experiment directory, because arms are agent-specific: a gemini-only arm has no
+sibling to learn from, but its campaign does. A 24-hour window bounds it —
+superpowers moves several times a day mid-campaign, so a run with no closer
+neighbour stays `unknown` rather than borrowing a probably-wrong sha. Every one
+of the 47 had a same-campaign neighbour within 1.1 to 15.6 hours (median 3).
 
 Recovery reads `home/`, which is also what gets discarded. Export therefore
 mines the sha before scrubbing, and the appliance never needs the 60 GB.
@@ -135,6 +146,14 @@ Everything else under `home/` is dropped, including `auth.json`, the npm and
 bun caches, sqlite logs, and the archived plugin trees.
 `credentials.snapshot.yaml` is dropped: it is a registry listing, and the
 credential actually used is already named in `verdict.credential`.
+
+Vendored dependency trees inside `coding-agent-workdir/` — `.venv`,
+`node_modules`, `__pycache__`, and the mypy/pytest/ruff caches — are excluded.
+They are reproducible bulk the agent's toolchain materialized rather than
+authored, and they vendor CA trust stores (certifi's `cacert.pem`) that are not
+credentials but match the denylist exactly; the first real export run aborted on
+one. The agent's own `.git` is kept: its commits are genuine output that the
+campaign reports cite.
 
 Raw sessions are kept because `trajectory.json` is a normalized projection of
 them; keeping the source means a future normalizer fix can be replayed.
@@ -246,6 +265,15 @@ pattern with a tmpdir config:
 The end-to-end check is the real export: 626 runs, then a walk of both bundles
 asserting zero credential-shaped files and recovery-status counts matching the
 294 / 285 / 47 prediction.
+
+Measured result, 2026-08-09:
+
+- 626 runs exported, 0 skipped, 62 GB in, 2.4 GB out
+- 0 credential-shaped paths in either bundle; grepping both for the actual
+  token values taken from 9 source `auth.json` files finds nothing
+- recovery: 294 recorded, 217 recovered, 68 tree_only, 47 inferred, 0 unknown
+- both bundles import cleanly into a throwaway appliance state dir (346 in
+  8.8s, 280 in 8.0s), and a second import of each is a no-op
 
 ## Out Of Scope
 
