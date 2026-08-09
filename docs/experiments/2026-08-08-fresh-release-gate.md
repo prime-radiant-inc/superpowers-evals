@@ -244,3 +244,24 @@ in the read-out with its matched line.
 5. Harness generalization beyond these four columns (five-column campaign covers a snapshot
    at the older dev SHA).
 6. Real-user token burn — fractals telemetry feeds the offline analyzers; no purchased verdict.
+
+## Copilot extension (added 2026-08-09, pre-registered before its first scored run)
+
+Drew's directive: add copilot columns for gpt-5.6-sol and claude-opus-5. Value: model-matched
+harness pairs — copilot_opus5 vs opus5_bedrock and copilot_gpt56_sol vs openai_responses_56sol
+isolate the HARNESS effect at fixed model, the confound no prior campaign could break.
+
+Same arms (main `44c9b2d6` vs dev `2d4b675b`), same cell classes, same Fisher table and
+decision rule, same leak adjudication. Grid = the main battery minus codex-only cells:
+escalates n=10 (C), rules-and-continues n=8 (C), structural n=4 (T), cost-spec n=10 (P),
+finishing n=6 (C), brainstorming-resists n=6 (T), fractals n=5 (D) — per column, per arm:
+**196 runs, 30 jobs** (both copilot credentials bundled per job; identical scenario sets so
+the cross-product is exact). Instrument: evals main `817f2e1` (copilot pool concurrency
+raised 1→4 — one shared limiter pool for all copilot credentials; 1 would have serialized
+the whole extension to ~70h). Copilot model verification: launcher `--model` via
+$COPILOT_MODEL_SH; readback field is coding-agent-token-usage.json `.model`
+(trajectory `.agent.model_name` is not populated for copilot). Smoke must prove: both model
+ids from live runs, ≥2 truly concurrent copilot runs (overlapping start/finish windows),
+non-null costs, no throttle cluster. Driver aborts on job failure or ≥3
+indeterminate/throttle runs in one job. Pre-declared caveat: copilot pricing runs far below
+Bedrock list (subscription-side billing) — cost columns are comparable within-harness only.
