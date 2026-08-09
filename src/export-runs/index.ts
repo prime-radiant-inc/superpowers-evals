@@ -27,6 +27,20 @@ const PAYLOAD_FILES = [
 
 const PAYLOAD_DIRS = ['gauntlet-agent', 'coding-agent-workdir'] as const;
 
+// Dependency trees the agent's toolchain materialized rather than authored.
+// They are reproducible bulk, and they vendor trust stores (certifi's
+// cacert.pem) that are not credentials but look exactly like one. The agent's
+// own .git is deliberately absent from this list: its commits are real output.
+const VENDOR_DIRS = new Set([
+  '.venv',
+  'venv',
+  'node_modules',
+  '__pycache__',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+]);
+
 // Raw coding-agent session logs, lifted out of the throwaway home into
 // raw-sessions/ so the rest of home/ can be dropped wholesale.
 const SESSION_DIRS = [
@@ -90,12 +104,16 @@ function copyTree(
   src: string,
   dest: string,
   record: (destPath: string) => void,
+  skipVendor = false,
 ): void {
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     const from = join(src, entry.name);
     const to = join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyTree(from, to, record);
+      if (skipVendor && VENDOR_DIRS.has(entry.name)) {
+        continue;
+      }
+      copyTree(from, to, record, skipVendor);
       continue;
     }
     if (!entry.isFile()) {
@@ -128,7 +146,12 @@ function copyPayload(runDir: string, destRun: string): Record<string, string> {
   for (const name of PAYLOAD_DIRS) {
     const from = join(runDir, name);
     if (existsSync(from) && statSync(from).isDirectory()) {
-      copyTree(from, join(destRun, name), record);
+      copyTree(
+        from,
+        join(destRun, name),
+        record,
+        name === 'coding-agent-workdir',
+      );
     }
   }
   for (const name of SESSION_DIRS) {
@@ -140,9 +163,24 @@ function copyPayload(runDir: string, destRun: string): Record<string, string> {
   return files;
 }
 
+// A campaign groups the experiment directories run against one superpowers
+// build — `cx-eff-cc-ceremony-arch-dev-rep1` and `cx-eff-cx-sdd-small-fix-rep3`
+// are both `cx-eff`. Arms are agent-specific, so a gemini-only arm has no
+// sibling to learn from; the campaign does.
+function campaignOf(sourcePath: string): string {
+  const label = basename(join(sourcePath, '..'));
+  const parts = label.split('-');
+  return parts.slice(0, 2).join('-');
+}
+
+// Beyond this, "co-temporal" stops meaning anything: superpowers moves several
+// times a day during a campaign. A run with no closer neighbour stays unknown
+// rather than borrowing a sha that is probably wrong.
+const INFERENCE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // Runs whose rev could not be recovered borrow the sha from the nearest
-// co-temporal run in the same experiment directory, recorded in a field that
-// never masquerades as a recovered sha.
+// co-temporal run in the same campaign, recorded in a field that never
+// masquerades as a recovered sha.
 function applyInference(entries: BundleEntry[]): BundleEntry[] {
   const known = entries.filter(
     (e) => e.superpowers_sha !== null && e.started_at !== null,
@@ -151,11 +189,11 @@ function applyInference(entries: BundleEntry[]): BundleEntry[] {
     if (entry.rev_recovery !== 'unknown' || entry.started_at === null) {
       return entry;
     }
-    const label = basename(join(entry.source_path, '..'));
+    const campaign = campaignOf(entry.source_path);
     const startedMs = Date.parse(entry.started_at);
     let best: { sha: string; delta: number } | null = null;
     for (const candidate of known) {
-      if (basename(join(candidate.source_path, '..')) !== label) {
+      if (campaignOf(candidate.source_path) !== campaign) {
         continue;
       }
       const sha = candidate.superpowers_sha;
@@ -164,7 +202,10 @@ function applyInference(entries: BundleEntry[]): BundleEntry[] {
         continue;
       }
       const delta = Math.abs(Date.parse(startedAt) - startedMs);
-      if (best === null || delta < best.delta) {
+      if (
+        delta <= INFERENCE_WINDOW_MS &&
+        (best === null || delta < best.delta)
+      ) {
         best = { sha, delta };
       }
     }
