@@ -14,7 +14,12 @@ import { type FinalStatus, FinalVerdictSchema } from '../contracts/verdict.ts';
 import { ApplianceError } from './errors.ts';
 import { readJob } from './jobs.ts';
 import { inspectLock } from './locks.ts';
-import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
+import type {
+  JobRecord,
+  JobStatus,
+  LoadedApplianceConfig,
+  Origin,
+} from './types.ts';
 
 const STARTUP_GRACE_MS = 30_000;
 
@@ -51,6 +56,9 @@ export interface JobStatusPayload {
   readonly status: JobStatus;
   readonly run_id: string | null;
   readonly batch_id: string | null;
+  // Present only for imported runs, so a reader can never mistake one for
+  // something this appliance executed.
+  readonly origin?: Origin;
 }
 
 export interface ArtifactPayload {
@@ -176,6 +184,7 @@ function jobPayload(job: JobRecord | null): JobStatusPayload | null {
     status: job.status,
     run_id: job.artifacts.run_id,
     batch_id: job.artifacts.batch_id,
+    ...(job.origin === undefined ? {} : { origin: job.origin }),
   };
 }
 
