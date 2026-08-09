@@ -11,6 +11,7 @@ import { getEnv } from '../env.ts';
 import { loadConfig as loadApplianceConfig } from './config.ts';
 import { doctorPayload } from './doctor.ts';
 import { ApplianceError, toErrorJson } from './errors.ts';
+import { importBundle } from './import.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
@@ -42,6 +43,11 @@ export interface IdCommandArgs extends BaseCommandArgs {
   readonly id: string;
 }
 
+export interface ImportCommandArgs extends BaseCommandArgs {
+  readonly bundleDir: string;
+  readonly force: boolean;
+}
+
 export type ApplianceActionResult = unknown;
 
 export interface ApplianceActions {
@@ -68,6 +74,9 @@ export interface ApplianceActions {
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
   readonly costs: (
     args: IdCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly import: (
+    args: ImportCommandArgs,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
 }
 
@@ -370,6 +379,13 @@ function defaultActions(): ApplianceActions {
       const loaded = loadApplianceConfig();
       return costsPayload(loaded, args.id, args.json);
     },
+    import: async (args) => {
+      const loaded = loadApplianceConfig(undefined, { ensureState: true });
+      return importBundle(loaded, {
+        bundleDir: args.bundleDir,
+        force: args.force,
+      });
+    },
   };
 }
 
@@ -567,6 +583,21 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
     .action((id: string, options: JsonOption) => {
       const args = { ...commandOptions(options), id };
       return handleAction(args, resolvedDeps, () => actions.costs(args));
+    });
+
+  program
+    .command('import')
+    .description('ingest a scrubbed bundle built by quorum export-runs')
+    .option('--json', 'emit JSON')
+    .option('--force', 'replace runs that are already imported')
+    .argument('<bundle-dir>')
+    .action((bundleDir: string, options: JsonOption & { force?: boolean }) => {
+      const args = {
+        ...commandOptions(options),
+        bundleDir,
+        force: options.force ?? false,
+      };
+      return handleAction(args, resolvedDeps, () => actions.import(args));
     });
 
   return program;

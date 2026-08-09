@@ -51,8 +51,43 @@ export const JobStatusSchema = z.enum([
 ]);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 
-export const ApplianceCommandKindSchema = z.enum(['prepare', 'run', 'run-all']);
+export const ApplianceCommandKindSchema = z.enum([
+  'prepare',
+  'run',
+  'run-all',
+  'import',
+]);
 export type ApplianceCommandKind = z.infer<typeof ApplianceCommandKindSchema>;
+
+export const REV_RECOVERY_STATUSES = [
+  'recorded',
+  'recovered',
+  'tree_only',
+  'inferred',
+  'unknown',
+] as const;
+
+// What an imported run knows about its own provenance. This block exists
+// because an imported run cannot honestly fill in RefSnapshot: it predates the
+// appliance, ran on local credentials, and in many cases had no rev recorded at
+// all. Loosening RefSnapshotSchema to hold partial data would weaken the
+// guarantee it exists to give live jobs, so the uncertainty lives here instead,
+// named explicitly.
+export const OriginSchema = z.object({
+  kind: z.literal('imported'),
+  imported_at: z.string(),
+  source_host: z.string(),
+  source_path: z.string(),
+  superpowers_sha: z.string().nullable(),
+  superpowers_tree_sha: z.string().nullable(),
+  inferred_superpowers_sha: z.string().nullable(),
+  rev_recovery: z.enum(REV_RECOVERY_STATUSES),
+  harness_rev: z.string().nullable(),
+  scenario: z.string().nullable(),
+  coding_agent: z.string().nullable(),
+  credential: z.string().nullable(),
+});
+export type Origin = z.infer<typeof OriginSchema>;
 
 export const RefSnapshotSchema = z.object({
   superpowers_requested_ref: z.string(),
@@ -125,6 +160,8 @@ export const JobRecordSchema = z.object({
     provenance: z.string(),
   }),
   progress: JobProgressSchema.nullable(),
+  // Present only on imported jobs; absent on anything this appliance ran.
+  origin: OriginSchema.optional(),
   result: z.object({
     exit_code: z.number().int().nullable(),
     summary: z.string().nullable(),
@@ -185,6 +222,33 @@ export const ProvenanceRecordSchema = z
     },
   );
 export type ProvenanceRecord = z.infer<typeof ProvenanceRecordSchema>;
+
+// Provenance for an imported run. `kind` discriminates it from a live record,
+// which has no such field, so provenance written before this existed still
+// parses unchanged.
+export const ImportedProvenanceRecordSchema = z.object({
+  schema_version: z.literal(1),
+  kind: z.literal('imported'),
+  job_id: z.string(),
+  created_at: z.string(),
+  origin: OriginSchema,
+  requester: z.object({
+    agent: z.string().nullable().optional(),
+    thread: z.string().nullable().optional(),
+    task: z.string().nullable().optional(),
+    host_user: z.string(),
+    remote_identity: z.string(),
+  }),
+  command_argv: z.array(z.string()),
+});
+export type ImportedProvenanceRecord = z.infer<
+  typeof ImportedProvenanceRecordSchema
+>;
+
+export const AnyProvenanceRecordSchema = z.union([
+  ImportedProvenanceRecordSchema,
+  ProvenanceRecordSchema,
+]);
 
 export interface LoadedApplianceConfig {
   readonly config: ApplianceConfig;
