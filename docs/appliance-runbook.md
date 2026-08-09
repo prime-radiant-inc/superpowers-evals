@@ -146,6 +146,91 @@ The helper sends SIGINT to the tracked process group and waits for stopped
 verdicts or a batch footer. If cancellation returns `lost`, do not retry a new
 live job until `doctor --json` explains the lock and process state.
 
+## Importing Locally-Run Results
+
+Runs produced on a workstation before the appliance existed are moved in two
+steps: a local export that scrubs them, and an appliance-side import that
+ingests the result. Never copy a raw local `results/` tree to the shared box —
+run homes contain live agent credentials.
+
+Design:
+[`docs/superpowers/specs/2026-08-09-appliance-results-import-design.md`](superpowers/specs/2026-08-09-appliance-results-import-design.md).
+
+### Step 1: Export locally
+
+On the workstation that holds the runs:
+
+```bash
+bun run quorum export-runs <results-dir> \
+  --out <bundle-dir> \
+  --superpowers-repo <path-to-superpowers-checkout>
+```
+
+This copies an allowlist — `verdict.json`, `trajectory.json`,
+`coding-agent-token-usage.json`, `phase.json`, `gauntlet-agent/`,
+`coding-agent-workdir/`, and the raw session logs lifted to `raw-sessions/` —
+and drops each run's throwaway `$HOME` wholesale. `auth.json`,
+`credentials.snapshot.yaml`, and agent config files never enter the bundle.
+
+`--superpowers-repo` lets the export resolve the skill tree a run archived back
+to an exact commit. Without it, runs whose verdict lacks a rev degrade to
+`tree_only`: the tree hash is still recorded, but no commit is named. It
+defaults to `$SUPERPOWERS_ROOT`.
+
+The summary line reports how each run's superpowers rev was established:
+
+```
+bundle written to /tmp/lane-b-bundle
+  exported 346, skipped 0
+  superpowers rev: recorded=196 recovered=128 inferred=22
+```
+
+`recorded` came from the verdict, `recovered` was matched exactly from the
+archived tree, `tree_only` means the run used a modified tree that matches no
+commit, `inferred` was borrowed from the nearest co-temporal run in the same
+experiment directory and is stored in its own field, and `unknown` means no
+evidence survived.
+
+### Step 2: Verify before transfer
+
+The bundle is meant to be audited before it crosses to a shared host. Confirm
+it carries no credentials:
+
+```bash
+find <bundle-dir> \( -name auth.json -o -name 'credentials.snapshot.yaml' \
+  -o -name 'config.toml' -o -name '.env*' -o -name '*.pem' -o -name '*.key' \) | head
+```
+
+Expect no output. Then transfer the bundle over the approved private access
+path documented in the private ops runbook.
+
+### Step 3: Import on the appliance
+
+```bash
+evals-appliance import --json <bundle-dir>
+```
+
+Import verifies every checksum in the manifest and re-runs the credential
+denylist against what is actually on disk before anything lands, so a tampered
+or mis-built bundle is rejected whole rather than partially applied. It holds
+`run.lock` for the duration; if a live job holds it, import returns `lock_busy`
+and does nothing. Re-running is safe: runs already present are skipped, and
+`--force` replaces them.
+
+Imported runs are visible to the normal read commands:
+
+```bash
+evals-appliance status --json <run-id>
+evals-appliance show <run-id>
+evals-appliance costs <run-id>
+```
+
+An imported job reports `kind: "import"` and carries an `origin` block instead
+of `refs` and a credential bundle, because it was neither built from an
+appliance-resolved ref nor run against the blessed bundle. Treat
+`origin.rev_recovery` as the confidence marker: `inferred_superpowers_sha` is a
+neighbour's sha, not evidence about the run itself.
+
 ## Dashboard
 
 The dashboard is read-only and must not submit or stop jobs:
