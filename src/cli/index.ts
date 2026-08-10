@@ -6,11 +6,15 @@ import {
   readFileSync,
   statSync,
 } from 'node:fs';
+import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
+import { SpawnCommandRunner } from '../agents/command-runner.ts';
 import type { FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
+import { getEnv } from '../env.ts';
+import { exportRuns } from '../export-runs/index.ts';
 import { runBatch } from '../run-all/index.ts';
 import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
 import {
@@ -373,6 +377,63 @@ program
       now: new Date().toISOString(),
     });
     process.stdout.write(`grid-manifest written to ${outPath}\n`);
+    process.exit(0);
+  });
+
+interface ExportRunsOptions {
+  readonly out: string;
+  readonly superpowersRepo: string | undefined;
+}
+
+program
+  .command('export-runs')
+  .description(
+    'build a scrubbed bundle of local runs for evals-appliance import',
+  )
+  .argument('<results-dir>', 'local results dir to export')
+  .requiredOption('--out <dir>', 'bundle output dir')
+  .option(
+    '--superpowers-repo <path>',
+    'superpowers checkout used to resolve archived skill trees to commits',
+  )
+  .action((resultsDir: string, opts: ExportRunsOptions) => {
+    const source = resolve(resultsDir);
+    if (!existsSync(source) || !statSync(source).isDirectory()) {
+      process.stderr.write(`error: results dir does not exist: ${source}\n`);
+      process.exit(1);
+    }
+    // Without a repo the tree hash is still recorded, so runs degrade to
+    // tree_only rather than failing the export.
+    const superpowersRepo = resolve(
+      opts.superpowersRepo ?? getEnv('SUPERPOWERS_ROOT') ?? '.',
+    );
+
+    let last = 0;
+    const summary = exportRuns({
+      resultsDir: source,
+      outDir: resolve(opts.out),
+      superpowersRepo,
+      runner: new SpawnCommandRunner(),
+      sourceHost: hostname(),
+      now: new Date().toISOString(),
+      onProgress: (done, total) => {
+        // One line per 25 runs keeps a 626-run export legible.
+        if (done === total || done - last >= 25) {
+          last = done;
+          process.stderr.write(`  exported ${done}/${total}\n`);
+        }
+      },
+    });
+
+    const recovery = Object.entries(summary.byRecovery)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([status, count]) => `${status}=${count}`)
+      .join(' ');
+    process.stdout.write(
+      `bundle written to ${summary.bundleDir}\n` +
+        `  exported ${summary.exported}, skipped ${summary.skipped}\n` +
+        `  superpowers rev: ${recovery}\n`,
+    );
     process.exit(0);
   });
 

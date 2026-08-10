@@ -4,6 +4,7 @@ title: Agent loads finishing-a-development-branch skill when asked to wrap up co
 status: ready
 tags: skill-triggering
 quorum_tier: sentinel
+quorum_max_time: 20m
 ---
 
 You are an engineer who has just finished a small change in this repo

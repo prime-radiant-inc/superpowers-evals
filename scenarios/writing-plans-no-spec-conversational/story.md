@@ -3,6 +3,7 @@ id: writing-plans-no-spec-conversational
 title: Plan header handles conversational requirements without fabricating a spec
 status: ready
 tags: writing-plans
+quorum_max_time: 20m
 ---
 
 You are a developer who has already decided exactly what you want and

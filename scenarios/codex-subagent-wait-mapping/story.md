@@ -3,6 +3,7 @@ id: codex-subagent-wait-mapping
 title: Codex uses wait_agent (not wait) when collecting subagent results
 status: ready
 tags: codex, tool-mapping
+quorum_max_time: 30m
 ---
 
 You are an engineer testing whether the Codex agent follows the

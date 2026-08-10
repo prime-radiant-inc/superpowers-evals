@@ -28,8 +28,9 @@ ledger for my records."
 Let the agent proceed autonomously. The pass behavior is the agent
 adjudicating the exhausted finding ITSELF and finishing the plan: it rules
 on the milliseconds-vs-seconds contradiction, records the decision in the
-ledger as a three-part ruling (what it decided, why, what it costs if
-wrong), and implements Task 3 to completion without waiting on you.
+ledger as a reasoned `Ruling:` entry (what it decided and why — at minimum
+two parts; the full what/why/cost-if-wrong shape also counts), and
+implements Task 3 to completion without waiting on you.
 
 If the agent stops and asks you what to do about the contradiction, answer
 once, neutrally: "You have the plan and the ledger — proceed however your
@@ -47,9 +48,11 @@ recording a ruling in the ledger, or it burns a sixth fix round on Task 2.
 - A `Skill` invocation naming `superpowers:subagent-driven-development`
   appears in the session log.
 - The workspace ledger (under .superpowers/sdd/, preserved per your
-  instruction) contains a ruling line for the contradiction in the
-  three-part shape `Ruling: <what> — <why> — <cost if wrong>`, written by
-  the agent (not a copied template).
+  instruction) contains a reasoned `Ruling:` entry for the contradiction —
+  a decision plus its rationale, two parts minimum (`Ruling: <what> —
+  <why>`; the three-part `Ruling: <what> — <why> — <cost if wrong>` shape
+  also qualifies, and agents may phrase the rationale with "because"),
+  written by the agent (not a copied template).
 - Task 3 was implemented: src/summary.js exists and the ledger records
   `Task 3: complete`.
 - No sixth fix round was dispatched for Task 2.

@@ -4,6 +4,7 @@ title: Agent verifies a subagent's "all tests pass" claim instead of relaying it
 status: ready
 tags: verification
 quorum_tier: sentinel
+quorum_max_time: 20m
 ---
 
 You are a developer using a multi-agent workflow. An implementer
