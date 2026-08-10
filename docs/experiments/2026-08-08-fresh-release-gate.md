@@ -265,3 +265,29 @@ ids from live runs, ≥2 truly concurrent copilot runs (overlapping start/finish
 non-null costs, no throttle cluster. Driver aborts on job failure or ≥3
 indeterminate/throttle runs in one job. Pre-declared caveat: copilot pricing runs far below
 Bedrock list (subscription-side billing) — cost columns are comparable within-harness only.
+
+## Fractals output-quality comparison (pre-registered 2026-08-09, before any copilot fractals run and before any workspace was read for quality)
+
+Drew's ask: compare the QUALITY of what each harness actually built in sdd-go-fractals-opus48,
+across copilot / claude / codex columns. Two layers, both descriptive (n=5/column/arm — no
+verdict pills; a ranking with rationale, not a significance claim).
+
+**Layer 1 — deterministic, mechanical, run on every retained fractals workspace (both arms):**
+D1 `go build ./...` clean; D2 `go test ./...` pass/fail counts; D3 golden-fixture byte-fidelity
+vs the plan's committed fixtures; D4 CLI surface: binary builds and every plan-mandated
+subcommand responds (count vs plan); D5 ledger: 7/7 tasks complete + gates re-verified;
+D6 repo hygiene: stray/untracked artifacts, .superpowers committed, commit granularity;
+D7 size: LOC, test-LOC ratio. Harvester script committed with results.
+
+**Layer 2 — blinded LLM judging, at drain:** sanitized trees only (no .git — commit trailers
+name the harness; no .superpowers; grep-assert no harness/model strings remain). Pairwise
+forced-choice between column samples at MATCHED arm, randomized presentation order, 3
+independent judge seats per pair, rubric: correctness risk, idiomatic Go, test quality,
+error handling, plan fidelity. Judge disagreement reported, never averaged away. Primary
+comparison: dev-arm columns (the release candidate); main-arm repeated as an arm-sensitivity
+check. Luna workspaces included descriptively as incomplete builds (0/9 completions).
+
+Pre-declared limits: judges are LLMs with their own model-family tastes (a claude judge may
+favor claude-authored code) — judge model named in the read-out and at least one rubric pass
+run on a non-anthropic judge if available; quality ranking is descriptive evidence, not a
+gate input.
