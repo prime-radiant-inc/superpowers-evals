@@ -1,4 +1,7 @@
 results/
+# Quarantine sweeps park run trees beside results/ under their own name. They
+# carry the same credential-bearing run homes, so they need the same fence.
+results-quarantine*/
 # Committed dashboard-scan test fixture (a results/ tree the unit tests read).
 !packages/dashboard/test/fixtures/scan/results/
 !packages/dashboard/test/fixtures/scan/results/**
@@ -10,6 +13,7 @@ dist/
 build/
 .venv/
 .env
+.env.*
 .claude/
 .superpowers/
 .clearance-rendered-preview-*/

@@ -42,6 +42,7 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
+import { findRunDirs } from '../src/export-runs/index.ts';
 import { BundleManifestSchema } from '../src/export-runs/manifest.ts';
 
 interface Options {
@@ -207,22 +208,6 @@ function classify(
   return { candidate: { runId, homePath, bytes: dirBytes(homePath) } };
 }
 
-function runDirs(resultsDir: string): string[] {
-  const out: string[] = [];
-  for (const label of readdirSync(resultsDir, { withFileTypes: true })) {
-    if (!label.isDirectory()) {
-      continue;
-    }
-    const labelDir = join(resultsDir, label.name);
-    for (const run of readdirSync(labelDir, { withFileTypes: true })) {
-      if (run.isDirectory()) {
-        out.push(join(labelDir, run.name));
-      }
-    }
-  }
-  return out.sort();
-}
-
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
 
@@ -235,7 +220,7 @@ function main(): void {
 
   const candidates: Candidate[] = [];
   const skips: Skip[] = [];
-  for (const runDir of runDirs(options.results)) {
+  for (const runDir of findRunDirs(options.results)) {
     const verdict = classify(options, runDir, manifestFiles);
     if ('candidate' in verdict) {
       candidates.push(verdict.candidate);

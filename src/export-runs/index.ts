@@ -58,11 +58,16 @@ export interface ExportArgs {
   readonly sourceHost: string;
   readonly now: string;
   readonly onProgress?: (done: number, total: number) => void;
+  // Runs a previous bundle already captured. Re-exporting one is worse than
+  // useless: thinning deletes the home the rev recovery reads, so a second pass
+  // over an already-exported run yields a strictly weaker provenance record.
+  readonly excludeRunIds?: ReadonlySet<string>;
 }
 
 export interface ExportSummary {
   readonly exported: number;
   readonly skipped: number;
+  readonly excluded: number;
   readonly byRecovery: Record<string, number>;
   readonly bundleDir: string;
 }
@@ -76,28 +81,52 @@ function sha256(path: string): string {
   return Bun.SHA256.hash(readFileSync(path), 'hex');
 }
 
-// Every run directory under results/<label>/<run-id>/ that has a verdict.
-function discoverRunDirs(resultsDir: string): string[] {
+// A run's own payload can contain a nested results tree — a scenario that
+// exercises quorum itself leaves verdicts under coding-agent-workdir/. Finding
+// a verdict marks a run and stops the descent, and these names are never
+// searched at all.
+const NON_RUN_DIRS = new Set([...PAYLOAD_DIRS, 'home', 'raw-sessions', '.git']);
+
+// Depth is bounded so a stray symlink or a deep fixture tree cannot turn a
+// scan into a full-disk walk.
+const MAX_DISCOVERY_DEPTH = 6;
+
+// Every run directory at any depth. The canonical layout is
+// results/<label>/<run-id>/, but quarantine sweeps move a whole label tree
+// under a holding directory, putting its runs one level deeper.
+//
+// A run is a directory holding a verdict.json or a home/ — the latter marks a
+// run that crashed before it could reach a verdict, which callers thinning
+// disk still need to see. Either marker ends the descent.
+export function findRunDirs(resultsDir: string): string[] {
   const runs: string[] = [];
-  if (!existsSync(resultsDir)) {
-    return runs;
-  }
-  for (const label of readdirSync(resultsDir, { withFileTypes: true })) {
-    if (!label.isDirectory()) {
-      continue;
+  const visit = (dir: string, depth: number): void => {
+    if (
+      existsSync(join(dir, 'verdict.json')) ||
+      existsSync(join(dir, 'home'))
+    ) {
+      runs.push(dir);
+      return;
     }
-    const labelDir = join(resultsDir, label.name);
-    for (const run of readdirSync(labelDir, { withFileTypes: true })) {
-      if (!run.isDirectory()) {
-        continue;
-      }
-      const runDir = join(labelDir, run.name);
-      if (existsSync(join(runDir, 'verdict.json'))) {
-        runs.push(runDir);
+    if (depth >= MAX_DISCOVERY_DEPTH) {
+      return;
+    }
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && !NON_RUN_DIRS.has(entry.name)) {
+        visit(join(dir, entry.name), depth + 1);
       }
     }
+  };
+  if (existsSync(resultsDir)) {
+    visit(resultsDir, 0);
   }
   return runs.sort();
+}
+
+function discoverRunDirs(resultsDir: string): string[] {
+  return findRunDirs(resultsDir).filter((dir) =>
+    existsSync(join(dir, 'verdict.json')),
+  );
 }
 
 function copyTree(
@@ -231,11 +260,30 @@ export function exportRuns(args: ExportArgs): ExportSummary {
 
   let entries: BundleEntry[] = [];
   const skipped: BundleSkip[] = [];
+  const claimedRunIds = new Map<string, string>();
+  let excluded = 0;
 
   let done = 0;
   for (const runDir of runDirs) {
     done += 1;
     args.onProgress?.(done, runDirs.length);
+
+    const runId = basename(runDir);
+    if (args.excludeRunIds?.has(runId) === true) {
+      excluded += 1;
+      continue;
+    }
+    // Bundle layout is keyed on the run id alone, so a collision would merge
+    // two runs' payloads into one directory and corrupt both.
+    const claimed = claimedRunIds.get(runId);
+    if (claimed !== undefined) {
+      skipped.push({
+        source_path: runDir,
+        reason: `duplicate run id, already exported from ${claimed}`,
+      });
+      continue;
+    }
+    claimedRunIds.set(runId, runDir);
 
     let parsed: ReturnType<typeof FinalVerdictSchema.parse>;
     try {
@@ -268,7 +316,6 @@ export function exportRuns(args: ExportArgs): ExportSummary {
       };
     }
 
-    const runId = basename(runDir);
     const destRun = join(args.outDir, 'runs', runId);
     let files: Record<string, string>;
     try {
@@ -332,6 +379,7 @@ export function exportRuns(args: ExportArgs): ExportSummary {
   return {
     exported: entries.length,
     skipped: skipped.length,
+    excluded,
     byRecovery,
     bundleDir: args.outDir,
   };

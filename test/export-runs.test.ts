@@ -317,6 +317,115 @@ test('a run whose verdict will not parse is skipped, not fatal', () => {
   expect(manifest.skipped[0]?.reason).toContain('verdict');
 });
 
+test('a run nested below the usual two levels is still found', () => {
+  const { root } = resultsTree();
+  // Quarantine dirs hold a whole label tree, putting the run one level deeper.
+  const run = join(
+    root,
+    '.quarantine-quota-20260806',
+    'cx-eff-demo-rep9',
+    'quar-run',
+  );
+  write(join(run, 'verdict.json'), verdict());
+  write(join(run, 'trajectory.json'), '{"steps":[]}');
+
+  const entries = exportCorpus(root);
+
+  expect(entries.map((e) => e.run_id).sort()).toEqual([
+    'demo-codex-codex_sub-linux-20260730T201515Z-a325',
+    'quar-run',
+  ]);
+});
+
+test('a verdict inside a payload dir is not mistaken for a run', () => {
+  const { root, runId } = resultsTree();
+  // A scenario that exercises quorum itself leaves a verdict in the workdir.
+  write(
+    join(
+      root,
+      'cx-eff-demo-rep1',
+      runId,
+      'coding-agent-workdir/results/x/y/verdict.json',
+    ),
+    verdict(),
+  );
+  write(
+    join(root, 'cx-eff-demo-rep1', runId, 'home/nested/verdict.json'),
+    verdict(),
+  );
+
+  const entries = exportCorpus(root);
+
+  expect(entries).toHaveLength(1);
+  expect(entries[0]?.run_id).toBe(runId);
+});
+
+test('a colliding run id is skipped rather than overwriting the first', () => {
+  const { root, runId } = resultsTree();
+  const clash = join(
+    root,
+    '.quarantine-quota-20260806',
+    'cx-eff-demo-rep1',
+    runId,
+  );
+  write(join(clash, 'verdict.json'), verdict());
+
+  const bundle = join(mkdtempSync(join(tmpdir(), 'bundle-')), 'out');
+  const summary = exportRuns({
+    resultsDir: root,
+    outDir: bundle,
+    superpowersRepo: superpowersRepo(),
+    runner,
+    sourceHost: 'test-host',
+    now: '2026-08-09T00:00:00.000Z',
+  });
+
+  expect(summary.exported).toBe(1);
+  expect(summary.skipped).toBe(1);
+  const manifest = BundleManifestSchema.parse(
+    JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8')),
+  );
+  // One copy wins by sort order; the skip names both paths so the collision is
+  // diagnosable rather than silent.
+  expect(manifest.skipped[0]?.reason).toContain('duplicate run id');
+  expect(manifest.skipped[0]?.source_path).toBe(
+    join(root, 'cx-eff-demo-rep1', runId),
+  );
+  expect(manifest.skipped[0]?.reason).toContain(clash);
+  expect(manifest.entries[0]?.source_path).toBe(clash);
+});
+
+test('an already-exported run is left out of an incremental bundle', () => {
+  const { root, runId } = resultsTree();
+  const run = join(
+    root,
+    '.quarantine-quota-20260806',
+    'cx-eff-demo-rep9',
+    'new-run',
+  );
+  write(join(run, 'verdict.json'), verdict());
+
+  const bundle = join(mkdtempSync(join(tmpdir(), 'bundle-')), 'out');
+  const summary = exportRuns({
+    resultsDir: root,
+    outDir: bundle,
+    superpowersRepo: superpowersRepo(),
+    runner,
+    sourceHost: 'test-host',
+    now: '2026-08-09T00:00:00.000Z',
+    excludeRunIds: new Set([runId]),
+  });
+
+  // Excluded is not skipped: nothing failed, it is simply already captured.
+  expect(summary.exported).toBe(1);
+  expect(summary.skipped).toBe(0);
+  expect(summary.excluded).toBe(1);
+  expect(existsSync(join(bundle, 'runs', runId))).toBe(false);
+  expect(existsSync(join(bundle, 'runs', 'new-run', 'verdict.json'))).toBe(
+    true,
+  );
+});
+
 test('bundle files are written private', () => {
   const { bundle } = runExport();
   const mode = statSync(join(bundle, 'manifest.json')).mode & 0o777;
