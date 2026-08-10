@@ -136,3 +136,33 @@ Tighten `fix round 6` check to dispatch-evidence (string-proxy artifact); reclas
 wait-mapping; luna transcript study; compaction under namespace isolation; opus-5 fractals
 cap 120m→150m; arm-differential seat-mix analysis; leak-detector prefix/elision
 normalization (three false-positive modes now documented).
+
+## CORRECTION (2026-08-09, ~7h after publication): the luna "model findings" were substantially instrument artifact
+
+Investigation trigger: the fractals quality harvest found every luna workspace builds, passes
+its tests, and renders correctly — while luna's fractals verdicts read 0/9 fail. Root cause,
+verified against raw rollouts: **gpt-5.6-luna routes its multi-agent tool calls through
+scripted exec cells** (spawn_agent appears inside `custom_tool_call_output` script text — the
+fractals-mk3 "cell-wait" pattern at 100%) **and the codex normalizer does not unwrap
+cell-scripted calls**, so every luna trajectory shows zero `Agent`/`wait_agent` events
+(PRI-2584 bug class; the 07-14 fix covers sol's first-class shape only). Luna's parent
+rollouts contain ~21 spawn_agent calls and 17+ child sessions per fractals run.
+
+Cell-by-cell reclassification of luna fails (by failing-check identity):
+- **wait-mapping 16/16, fractals 10/10, compaction 4/4: VOID** — sole failing check is the
+  blind transcript verb; gauntlet passed on every one. "Luna never completes fractals" is
+  **retracted**: 10/10 workspaces build, test, and render (harvester + judge verification).
+- **escalates: 7/20 fail on the blind check alone (flip candidates); 13 also carry judge
+  fails — but judges read the same blinded transcript, so all 20 need re-judging after the
+  normalizer fix. The luna escalates floor is UNRESOLVED, not established.**
+- **What stands as real luna behavior:** the cell-wrapping style itself (all collab calls via
+  exec cells — a doc/skill gap flagged in mk3, now at n=40+), and the rules-and-continues
+  ledger-vocabulary misses (workspace greps, normalizer-independent).
+
+**The gate verdict is untouched**: sol was pre-registered as the sole codex verdict column
+("luna = replication; disagreement → investigate, never auto-RED") — no GREEN input ran
+through a luna cell. This correction affects only the descriptive model-findings section.
+
+Follow-ups now blocking the luna story: normalizer cell-unwrapping fix in
+src/normalize/codex.ts + full luna column rescore (post-copilot-battery, freeze discipline);
+codex-tools.md guidance for the cell-wrapping surface (mk3 backlog item, evidence now ample).
