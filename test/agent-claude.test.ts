@@ -435,6 +435,18 @@ test('provision (oauth credential) writes CLAUDE_CODE_OAUTH_TOKEN to .claude-env
         // The api-key path deliberately does NOT set this — its onboarding
         // run is what activates api-key auth.
         expect(claudeJson.hasCompletedOnboarding).toBe(true);
+        // Claude reads the TOP-LEVEL $HOME/.claude.json, not
+        // configDir/.claude.json (live run 2026-08-11: the nested file was
+        // ignored and claude wrote its own state top-level). The config must
+        // be mirrored there — home root is dirname(configDir).
+        const topLevel: {
+          hasCompletedOnboarding?: boolean;
+          projects?: Record<string, unknown>;
+        } = JSON.parse(
+          readFileSync(join(home.configDir, '..', '.claude.json'), 'utf8'),
+        );
+        expect(topLevel.hasCompletedOnboarding).toBe(true);
+        expect(Object.keys(topLevel.projects ?? {}).length).toBe(1);
       },
     );
   } finally {

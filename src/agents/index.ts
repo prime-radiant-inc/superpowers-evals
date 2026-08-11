@@ -145,10 +145,18 @@ class ClaudeAgent implements CodingAgent {
     // above).
     const onboarding =
       credential?.auth === 'oauth' ? { hasCompletedOnboarding: true } : {};
-    writeFileSync(
-      claudeJsonPath,
-      `${JSON.stringify({ ...claudeJson, ...onboarding, projects }, null, 2)}\n`,
-    );
+    const claudeJsonContent = `${JSON.stringify(
+      { ...claudeJson, ...onboarding, projects },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(claudeJsonPath, claudeJsonContent);
+    // Claude reads the TOP-LEVEL $HOME/.claude.json (verified live
+    // 2026-08-11: a fresh run ignored configDir/.claude.json and wrote its
+    // own state to the home root). Mirror the config there — home root is
+    // dirname(configDir) — keeping the legacy nested write untouched for
+    // anything that reads it.
+    writeFileSync(join(configDir, '..', '.claude.json'), claudeJsonContent);
 
     // Seed the per-run auth when a credential with api-key auth is present.
     // Resolves the key via the credential (honoring api_key_env override), then
