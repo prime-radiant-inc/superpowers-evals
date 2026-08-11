@@ -10,153 +10,58 @@ function dockerfileSource(): string {
   return readFileSync(DOCKERFILE, 'utf8');
 }
 
-function expectInstallIntent(source: string, token: string): void {
-  expect(source).toContain(token);
-}
-
-test('container Dockerfile uses the official Ubuntu 26.04 LTS base', () => {
+test('container Dockerfile builds on the shared everyharness-container base', () => {
   const source = dockerfileSource();
 
   expect(source).toMatch(/^# syntax=docker\/dockerfile:/m);
-  expect(source).toMatch(/^FROM ubuntu:26\.04$/m);
-  expect(source).not.toContain('mcr.microsoft.com/devcontainers');
-  expect(source).not.toContain('ubuntu24.04');
+  // The harness-CLI install layer (agent CLIs + base toolchains) lives in the
+  // shared base image, pinned by digest per its version-pin policy. It must not
+  // be duplicated here.
+  expect(source).toMatch(
+    /^FROM ghcr\.io\/prime-radiant-inc\/everyharness-container@sha256:[0-9a-f]{64}$/m,
+  );
+  expect(source).not.toContain('FROM ubuntu:');
 });
 
-test('container Dockerfile installs the core development toolchain families', () => {
+test('container Dockerfile does not duplicate the base image harness layer', () => {
   const source = dockerfileSource();
 
-  for (const packageName of [
-    'git',
-    'gh',
-    'curl',
-    'jq',
-    'ripgrep',
-    'fd-find',
-    'shellcheck',
-    'build-essential',
-    'python3-pip',
-    'python3-venv',
-    'ruby-full',
-    'golang-go',
-  ]) {
-    expectInstallIntent(source, packageName);
-  }
-
-  for (const toolIntent of [
+  // These installs now belong to everyharness-container. Keeping them here
+  // would reintroduce the duplicate-maintenance problem this base image solves.
+  for (const baseOwned of [
     'deb.nodesource.com',
     'bun.sh/install',
     'astral.sh/uv/install.sh',
     'sh.rustup.rs',
     'mise.run',
-  ]) {
-    expectInstallIntent(source, toolIntent);
-  }
-});
-
-test('container Dockerfile installs headless agent CLIs without desktop IDE sprawl', () => {
-  const source = dockerfileSource();
-
-  for (const npmPackage of [
     '@anthropic-ai/claude-code',
     '@openai/codex',
     '@google/gemini-cli',
-    'opencode-ai',
-    '@github/copilot',
-    '@factory/cli',
-    '@qwen-code/qwen-code',
-    '@moonshot-ai/kimi-code',
-    '@kilocode/cli',
-    'openclaw',
-    '@sourcegraph/amp',
-    'cline',
-    '@earendil-works/pi-coding-agent',
-    'pi-subagents',
-    '@xai-official/grok',
-  ]) {
-    expectInstallIntent(source, npmPackage);
-  }
-
-  for (const externalInstall of [
     'cursor.com/install',
-    'AGY_OAUTH_HOME',
-    'KIMI_OAUTH_HOME',
-    'mini-swe-agent',
-    'git+https://github.com/bytedance/trae-agent.git',
-    'SWE-agent/SWE-agent',
-    '/opt/sweagent-venv',
     'NousResearch/hermes-agent',
-    'mimo.xiaomi.com/install',
     'antigravity.google/cli/install.sh',
-    'prime-radiant-inc/serf',
+    'goose-${goose_arch}-unknown-linux-gnu.tar.gz',
   ]) {
-    expectInstallIntent(source, externalInstall);
+    expect(source).not.toContain(baseOwned);
   }
+});
 
-  for (const commandIntent of [
-    '/usr/local/bin/kilo',
-    '/usr/local/bin/droid',
-    '/usr/local/bin/kimi',
-    '/usr/local/bin/cursor-agent',
-    '/usr/local/bin/sweagent',
-    '/usr/local/bin/hermes',
-    '/usr/local/bin/mimo',
-    '/usr/local/bin/agy',
-    '/usr/local/bin/serf',
-  ]) {
-    expectInstallIntent(source, commandIntent);
-  }
+test('container Dockerfile keeps the serf build pinned by SERF_REF', () => {
+  const source = dockerfileSource();
 
-  expect(source).toContain(
-    'curl -fsSL https://cursor.com/install | HOME=/opt/cursor-agent bash',
-  );
-  expect(source).toContain('test -x /opt/cursor-agent/.local/bin/agent');
-  expect(source).not.toContain('find /opt/cursor-agent -type f -name agent');
-  expect(source).not.toContain(
-    'HOME=/opt/cursor-agent curl -fsSL https://cursor.com/install | bash',
-  );
-  expect(source).toContain('UV_TOOL_BIN_DIR=/usr/local/bin');
-  expect(source).toContain('UV_PYTHON_INSTALL_DIR=/opt/uv-python');
-  expect(source).toContain(
-    'chmod -R a+rX "$UV_TOOL_DIR" "$UV_PYTHON_INSTALL_DIR"',
-  );
-  expect(source).toContain('mini-swe-agent --help');
-  expect(source).toContain('trae-cli --version');
-  expect(source).toContain('sweagent --help');
-  expect(source).toContain('hermes version');
-  expect(source).toContain('mimo --version');
-  expect(source).toContain('agy --version');
   expect(source).toContain(
     'ARG SERF_REF=0a459b633629cd034aa8a800c77bcd75a76496e8',
   );
+  expect(source).toContain('prime-radiant-inc/serf');
   expect(source).toContain('git checkout "$SERF_REF"');
   expect(source).toContain(
     'git rev-parse HEAD > /usr/local/share/serf-source-rev',
   );
   expect(source).toContain('test -x /usr/local/bin/serf');
   expect(source).toContain('serf --version');
-  expect(source).not.toContain('[[');
-  expect(source).not.toContain('uv tool install --tool-dir');
-  expect(source).toContain('ARG TARGETARCH');
-  expect(source).toContain('amd64) goose_arch=x86_64');
-  expect(source).toContain('arm64) goose_arch=aarch64');
-  expect(source).toContain('goose-${goose_arch}-unknown-linux-gnu.tar.gz');
-  expect(source).not.toContain('goose_1.31.1_amd64.deb');
-
-  for (const forbidden of [
-    '.devcontainer/devcontainer.json',
-    '/var/run/docker.sock',
-    'xvfb',
-    'vnc',
-    'novnc',
-    'cursor.deb',
-    'kiro',
-  ]) {
-    expect(source.toLowerCase()).not.toContain(forbidden);
-  }
 });
 
-test('container Dockerfile exposes quorum shims and stable workspace entrypoint', () => {
+test('container Dockerfile exposes gauntlet, quorum shims and stable workspace entrypoint', () => {
   const source = dockerfileSource();
 
   expect(source).toContain('COPY --from=gauntlet /package.json /opt/gauntlet/');
@@ -173,13 +78,4 @@ test('container Dockerfile exposes quorum shims and stable workspace entrypoint'
   );
   expect(source).toMatch(/^WORKDIR \/workspace\/evals$/m);
   expect(source).toMatch(/^CMD \["sleep", "infinity"\]$/m);
-});
-
-test('hermes install is commit-pinned via HERMES_COMMIT', () => {
-  const source = dockerfileSource();
-  // The installer defaults to main HEAD, which BuildKit's layer cache freezes
-  // invisibly — a bare rebuild is a cache no-op. The ARG default is the pin;
-  // bumping it busts exactly the hermes layer.
-  expect(source).toContain('ARG HERMES_COMMIT=');
-  expect(source).toContain('--commit "$HERMES_COMMIT"');
 });

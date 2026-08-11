@@ -86,14 +86,16 @@ test('container/bin/quorum tightens umask for live run artifacts', () => {
   expect(execIndex).toBeGreaterThan(umaskIndex);
 });
 
-test('evals-tool-versions reports available tools without failing on missing optional agents', () => {
+test('evals-tool-versions delegates the base inventory to harness-versions and reports evals tools', () => {
   const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
 
   try {
-    writeFakeTool(bin, 'bun', 'bun 1.3.13');
-    writeFakeTool(bin, 'claude', 'claude 2.0.0');
+    // The base image ships harness-versions; the shared harness/toolchain
+    // inventory is its responsibility, not this script's.
+    writeFakeTool(bin, 'harness-versions', 'claude: claude 2.0.0');
+    writeFakeTool(bin, 'quorum', 'quorum 1.0.0');
 
     const proc = spawnSync('/bin/bash', [TOOL_VERSIONS], {
       env: { PATH: bin },
@@ -102,22 +104,25 @@ test('evals-tool-versions reports available tools without failing on missing opt
 
     expect(proc.status).toBe(0);
     expect(proc.stderr).toBe('');
-    expect(proc.stdout).toContain('bun: bun 1.3.13');
+    // Delegated base inventory passes straight through.
     expect(proc.stdout).toContain('claude: claude 2.0.0');
-    expect(proc.stdout).toContain('codex: missing');
-    expect(proc.stdout).toContain('kimi: missing');
+    // Evals-specific tools are reported by this script.
+    expect(proc.stdout).toContain('quorum: quorum 1.0.0');
+    expect(proc.stdout).toContain('serf: missing');
+    expect(proc.stdout).toContain('gauntlet: missing');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('evals-tool-versions reports the real exit status for failing version checks', () => {
+test('evals-tool-versions reports the real exit status for failing evals-tool version checks', () => {
   const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
 
   try {
-    writeFailingVersionTool(bin, 'claude', 'claude version probe failed', 42);
+    writeFakeTool(bin, 'harness-versions', 'claude: claude 2.0.0');
+    writeFailingVersionTool(bin, 'serf', 'serf version probe failed', 42);
 
     const proc = spawnSync('/bin/bash', [TOOL_VERSIONS], {
       env: { PATH: bin },
@@ -127,10 +132,10 @@ test('evals-tool-versions reports the real exit status for failing version check
     expect(proc.status).toBe(0);
     expect(proc.stderr).toBe('');
     expect(proc.stdout).toContain(
-      'claude: present (version check failed with exit 42): claude version probe failed',
+      'serf: present (version check failed with exit 42): serf version probe failed',
     );
     expect(proc.stdout).not.toContain(
-      'claude: present (version check failed with exit 0)',
+      'serf: present (version check failed with exit 0)',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
