@@ -1,48 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-core_tools=(
-  bash
-  zsh
-  git
-  gh
-  node
-  npm
-  bun
-  python3
-  uv
-  go
-  rustc
-  cargo
-  ruby
-  mise
-  quorum
-)
+# The base image (everyharness-container) owns the harness CLIs and base
+# toolchains and ships `harness-versions` to report them. This script defers to
+# that for the shared inventory, then reports the evals-specific tools layered
+# on top by this repo's Dockerfile.
 
-agent_tools=(
-  claude
-  codex
-  gemini
-  opencode
-  pi
-  copilot
-  grok
-  droid
-  qwen
-  kilo
-  openclaw
-  amp
-  cline
-  cursor-agent
-  goose
-  agy
-  kimi
-  mini-swe-agent
-  sweagent
-  trae-cli
-  hermes
-  mimo
+evals_tools=(
+  quorum
   serf
+  gauntlet
 )
 
 print_version() {
@@ -55,11 +22,16 @@ print_version() {
     return 0
   fi
 
-  case "$tool" in
-    go)
-      args=(version)
-      ;;
-  esac
+  # gauntlet has no --version flag; confirm it runs via `config` instead so we
+  # report presence cleanly rather than dumping its usage text.
+  if [[ "$tool" == 'gauntlet' ]]; then
+    if "$tool" config --json >/dev/null 2>&1; then
+      printf '%s: present\n' "$tool"
+    else
+      printf '%s: present (config check failed)\n' "$tool"
+    fi
+    return 0
+  fi
 
   if output=$("$tool" "${args[@]}" 2>&1); then
     first_line=${output%%$'\n'*}
@@ -85,12 +57,13 @@ print_version() {
   fi
 }
 
-printf 'Core tools:\n'
-for tool in "${core_tools[@]}"; do
-  print_version "$tool"
-done
+if command -v harness-versions >/dev/null 2>&1; then
+  harness-versions
+else
+  printf 'harness-versions: missing (base image not detected)\n'
+fi
 
-printf '\nAgent CLIs:\n'
-for tool in "${agent_tools[@]}"; do
+printf '\nEvals tools:\n'
+for tool in "${evals_tools[@]}"; do
   print_version "$tool"
 done
