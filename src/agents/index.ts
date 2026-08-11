@@ -135,9 +135,19 @@ class ClaudeAgent implements CodingAgent {
       hasClaudeMdExternalIncludesApproved: true,
       hasClaudeMdExternalIncludesWarningShown: true,
     };
+    // OAuth (subscription) auth requires SKIPPING first-run onboarding: on a
+    // never-onboarded config the interactive login-method prompt fires before
+    // the env CLAUDE_CODE_OAUTH_TOKEN is consulted, dead-ending the run
+    // (reproduced live 2026-08-11: fresh HOME + token → "Select login method";
+    // hasCompletedOnboarding: true + token → authenticated straight away, TUI
+    // and -p both). The api-key path deliberately does NOT set this — there,
+    // the first-run flow is what activates api-key auth (see the IS_DEMO note
+    // above).
+    const onboarding =
+      credential?.auth === 'oauth' ? { hasCompletedOnboarding: true } : {};
     writeFileSync(
       claudeJsonPath,
-      `${JSON.stringify({ ...claudeJson, projects }, null, 2)}\n`,
+      `${JSON.stringify({ ...claudeJson, ...onboarding, projects }, null, 2)}\n`,
     );
 
     // Seed the per-run auth when a credential with api-key auth is present.

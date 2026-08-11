@@ -421,10 +421,20 @@ test('provision (oauth credential) writes CLAUDE_CODE_OAUTH_TOKEN to .claude-env
           );
           expect(settings.apiKeyHelper).toBeUndefined();
         }
-        const claudeJson: { customApiKeyResponses?: unknown } = JSON.parse(
+        const claudeJson: {
+          customApiKeyResponses?: unknown;
+          hasCompletedOnboarding?: boolean;
+        } = JSON.parse(
           readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
         );
         expect(claudeJson.customApiKeyResponses).toBeUndefined();
+        // Token auth requires SKIPPING first-run onboarding: on a fresh
+        // config the interactive login-method prompt fires before the env
+        // token is consulted (reproduced live 2026-08-11); with onboarding
+        // marked complete the TUI authenticates straight from the token.
+        // The api-key path deliberately does NOT set this — its onboarding
+        // run is what activates api-key auth.
+        expect(claudeJson.hasCompletedOnboarding).toBe(true);
       },
     );
   } finally {
