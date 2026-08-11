@@ -147,6 +147,13 @@ evals checkout, the Superpowers checkout under test, credentials, auth sources,
 and all run artifacts on the host while quorum runs inside a rich Ubuntu
 workspace container.
 
+The eval image builds `FROM` the shared base image
+[`ghcr.io/prime-radiant-inc/everyharness-container`](https://github.com/prime-radiant-inc/everyharness-container),
+which owns the harness-CLI install layer (every agent CLI plus the base
+toolchains); this repo layers only the evals-specific pieces (serf, gauntlet,
+the quorum shims) on top. See [container/README.md](container/README.md) for the
+base-image relationship and how to bump the pin.
+
 Create `.env.container` or pass an explicit env file to `up`:
 
 ```dotenv

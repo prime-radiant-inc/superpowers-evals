@@ -25,12 +25,23 @@ Do not add public-CI live runs. Live evals are trusted-maintainer operations.
 
 ## Step 0 — Install The CLI In The Eval Container
 
-The eval container (`container/Dockerfile`, `ubuntu:26.04`) bundles every
-agent CLI so quorum can launch the target headlessly. A new target's CLI must
-be installed here before any live run. (A desktop-only IDE integration with no
-headless CLI cannot be containerized and cannot be a quorum target.)
+The eval container bundles every agent CLI so quorum can launch the target
+headlessly. A new target's CLI must be installed before any live run. (A
+desktop-only IDE integration with no headless CLI cannot be containerized and
+cannot be a quorum target.)
 
-**Source the install recipe, don't guess one.** In priority order:
+**The harness CLIs live in the shared base image, not this repo.** The eval
+image (`container/Dockerfile`) now builds `FROM
+ghcr.io/prime-radiant-inc/everyharness-container`, which owns the harness-CLI
+install layer (every agent CLI plus the base toolchains: Node, bun, uv, Rust,
+mise, Python, Go, Ruby). This repo's Dockerfile keeps only the evals-specific
+layers (serf, gauntlet, the quorum/`evals-tool-versions` shims, the workspace).
+See [container/README.md](../container/README.md) for the base-image
+relationship and how to bump the pin.
+
+**So a new harness CLI is added in
+[everyharness-container](https://github.com/prime-radiant-inc/everyharness-container),
+not here.** Source the install recipe, don't guess one. In priority order:
 
 1. **Harbor** (`/tmp/harbor-inspect/src/harbor/agents/installed/<agent>.py`,
    pinned — see `docs/superpowers/reference/porting-harbor-converters.md`): its
@@ -42,7 +53,7 @@ headless CLI cannot be containerized and cannot be a quorum target.)
 Verify the package/URL actually exists before editing (`npm view <pkg> version`,
 `curl -fsSIL <url> | head -1`) — never commit an unverified install.
 
-**Match the existing Dockerfile patterns:**
+**Match the existing base-image Dockerfile patterns** (in everyharness-container):
 
 - npm-distributed CLI → add the package to the existing `npm install -g` block.
 - Python CLI → `uv tool install <pkg>` (grouped with the other uv-tool installs),
@@ -53,18 +64,20 @@ Verify the package/URL actually exists before editing (`npm view <pkg> version`,
 
 End every install block with a `--version`/`--help` check so a bad recipe fails
 the build, and symlink the entrypoint into `/usr/local/bin` if the install dir
-isn't already on `PATH`. Then update:
+isn't already on `PATH`. Then, in everyharness-container, add the CLI's command
+name to its `bin/harness-versions` script. (`evals-tool-versions` in this repo
+delegates the harness inventory to `harness-versions`, so it needs no change for
+a new harness CLI — it only lists the evals-specific tools.)
 
-- `test/container-dockerfile.test.ts` — add the install-intent token(s).
-- `container/bin/evals-tool-versions` — add the CLI's command name.
+Once the base image ships the new CLI, bump this repo's base-image pin (see
+[container/README.md](../container/README.md)) so the eval image picks it up.
 
-**Build and smoke it locally** (the build is the real gate; the static test only
-checks the Dockerfile *mentions* the install):
+**Build and smoke it locally** (the build is the real gate). Smoke the base
+image directly in everyharness-container:
 
 ```bash
-orb start                       # ensure the OrbStack docker daemon is up
-scripts/evals-container build    # multi-stage; resolves the gauntlet build-context
-docker run --rm superpowers-evals:local bash -lc '<cmd> --version'
+docker build -t everyharness-container:local .
+docker run --rm everyharness-container:local bash -lc '<cmd> --version'
 ```
 
 **Gotchas (each cost a failed build — watch for them):**
