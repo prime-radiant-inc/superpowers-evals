@@ -66,7 +66,7 @@ cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" 
 unset CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_BEDROCK \
   AWS_REGION AWS_DEFAULT_REGION AWS_BEARER_TOKEN_BEDROCK \
   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
-  ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
 source "$CLAUDE_ENV_FILE"
 
 # Host-env isolation (PRI-2494): env -i + explicit allowlist, matching the
@@ -93,6 +93,14 @@ fi
 # never host inheritance (PRI-2494).
 if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
   env_args+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+fi
+
+# OAuth (subscription) token: forwarded ONLY on the oauth path — the value can
+# only have come from .claude-env (unset before the source above, PRI-2494).
+# Claude Code authenticates with a setup-token-minted CLAUDE_CODE_OAUTH_TOKEN
+# directly; no api-key helper or approval fingerprint applies.
+if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+  env_args+=("CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN")
 fi
 
 exec env -i \

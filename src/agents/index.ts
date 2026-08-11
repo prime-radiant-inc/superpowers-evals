@@ -15,6 +15,7 @@ import {
   resolveApiKey,
   resolveBedrockBearer,
 } from '../credentials/resolve.ts';
+import { getEnv } from '../env.ts';
 import { AntigravityAgent } from './antigravity.ts';
 import { WindowsClaudeAgent } from './claude-windows.ts';
 import { CodexAgent } from './codex.ts';
@@ -157,6 +158,12 @@ class ClaudeAgent implements CodingAgent {
         );
       }
       seedClaudeAuth(configDir, claudeJsonPath, resolution.value);
+    } else if (credential !== undefined && credential.auth === 'oauth') {
+      try {
+        seedClaudeOAuth(configDir);
+      } catch (e) {
+        throw new ProvisionError(e instanceof Error ? e.message : String(e));
+      }
     } else if (credential !== undefined && credential.api === 'mantle') {
       try {
         seedClaudeMantle(configDir, credential);
@@ -215,6 +222,28 @@ function seedClaudeAuth(
     : {};
   settings['apiKeyHelper'] = helperPath;
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+/** Seed the run-scoped .claude-env for the OAuth (subscription) path: carry the
+ *  CLAUDE_CODE_OAUTH_TOKEN minted by `claude setup-token` from the quorum host
+ *  env into the mode-0600 env file the launcher sources. Deliberately does NOT
+ *  seed the api-key artifacts (helper, apiKeyHelper setting, approval
+ *  fingerprint) — they exist to deliver and pre-approve an API key, and on the
+ *  OAuth path there is none. The token lives ONLY in this file behind the
+ *  launcher's env -i wall; provision returns {} so it never overlays the
+ *  gauntlet subprocess (which reads its own copy from the host env). */
+export function seedClaudeOAuth(configDir: string): void {
+  const token = getEnv('CLAUDE_CODE_OAUTH_TOKEN')?.trim() ?? '';
+  if (token === '') {
+    throw new Error(
+      'claude oauth credential requires CLAUDE_CODE_OAUTH_TOKEN in the host env (mint one with `claude setup-token`)',
+    );
+  }
+  const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+  writePrivateFileNoFollow(
+    envFile,
+    `CLAUDE_CODE_OAUTH_TOKEN=${shellSingleQuote(token)}\n`,
+  );
 }
 
 /** Seed the run-scoped .claude-env for the Bedrock/Mantle path: enable Mantle +

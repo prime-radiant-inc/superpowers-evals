@@ -374,3 +374,108 @@ test('provision merges apiKeyHelper into pre-existing settings.json', () => {
     cleanup();
   }
 });
+
+// ---- Claude OAuth (subscription) auth path ----
+// A credential with auth: oauth authenticates the agent via a
+// CLAUDE_CODE_OAUTH_TOKEN minted by `claude setup-token` (subscription auth),
+// carried to the launcher through the same mode-0600 .claude-env as the
+// api-key path. None of the api-key artifacts (helper, apiKeyHelper setting,
+// approval fingerprint) apply: they exist to deliver and pre-approve an API
+// key, and on the OAuth path there is none.
+
+const OAUTH_TOKEN = 'sk-ant-oat01-0123456789abcdefghijklmnopqrstuv';
+const oauthCredential: Credential = {
+  model: 'claude-opus-5',
+  harnesses: ['claude'],
+  api: 'anthropic',
+  auth: 'oauth',
+  compat: {},
+};
+
+test('provision (oauth credential) writes CLAUDE_CODE_OAUTH_TOKEN to .claude-env and no api-key artifacts', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      { ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN },
+      () => {
+        const agent = resolveAgent(
+          claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+        );
+        agent.provision(home, undefined as never, oauthCredential);
+
+        const envFile = join(home.configDir, '.claude-env');
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `CLAUDE_CODE_OAUTH_TOKEN='${OAUTH_TOKEN}'\n`,
+        );
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+
+        // No api-key artifacts: no helper, no apiKeyHelper setting, no
+        // approval fingerprint.
+        expect(existsSync(join(home.configDir, 'api-key-helper.sh'))).toBe(
+          false,
+        );
+        const settingsPath = join(home.configDir, 'settings.json');
+        if (existsSync(settingsPath)) {
+          const settings: { apiKeyHelper?: string } = JSON.parse(
+            readFileSync(settingsPath, 'utf8'),
+          );
+          expect(settings.apiKeyHelper).toBeUndefined();
+        }
+        const claudeJson: { customApiKeyResponses?: unknown } = JSON.parse(
+          readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
+        );
+        expect(claudeJson.customApiKeyResponses).toBeUndefined();
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision (oauth credential) fails fast when CLAUDE_CODE_OAUTH_TOKEN is unset or empty', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    for (const value of [undefined, '', '   ']) {
+      withEnv(
+        { ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_OAUTH_TOKEN: value },
+        () => {
+          const agent = resolveAgent(
+            claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+          );
+          expect(() =>
+            agent.provision(home, undefined as never, oauthCredential),
+          ).toThrow(/CLAUDE_CODE_OAUTH_TOKEN/);
+          expect(existsSync(join(home.configDir, '.claude-env'))).toBe(false);
+        },
+      );
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision (oauth credential) re-enforces 0600 on a pre-existing looser-perm .claude-env', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      { ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN },
+      () => {
+        mkdirSync(home.configDir, { recursive: true });
+        const envFile = join(home.configDir, '.claude-env');
+        writeFileSync(envFile, 'STALE\n', { mode: 0o644 });
+
+        const agent = resolveAgent(
+          claudeConfig({ required_env: ['SUPERPOWERS_ROOT'] }),
+        );
+        agent.provision(home, undefined as never, oauthCredential);
+
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `CLAUDE_CODE_OAUTH_TOKEN='${OAUTH_TOKEN}'\n`,
+        );
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
