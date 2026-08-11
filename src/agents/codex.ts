@@ -366,6 +366,20 @@ function writePluginsOnlyConfig(configPath: string): void {
       '[features]',
       'plugins = true',
       '',
+      // Hermetic runs: an authenticated codex fetches the curated remote
+      // marketplace at session start, and its stale superpowers (6.2.0)
+      // out-competed the staged v7 plugin in a live run's skill list
+      // (2026-08-11, superpowers-bootstrap-codex). No config key suppresses
+      // the fetch itself (probed live: [plugins] recommended variants either
+      // crash the TUI or don't gate it), so disable the curated superpowers
+      // by plugin id — probed live: the curated skills leave the agent's
+      // skill list while the staged superpowers@debug still loads.
+      '[plugins."superpowers@openai-curated-remote"]',
+      'enabled = false',
+      '',
+      '[plugins."superpowers@openai-curated"]',
+      'enabled = false',
+      '',
       '[plugins."superpowers@debug"]',
       'enabled = true',
       '',
@@ -398,6 +412,20 @@ function writeApiKeyConfig(
       '',
       '[features]',
       'plugins = true',
+      '',
+      // Hermetic runs: an authenticated codex fetches the curated remote
+      // marketplace at session start, and its stale superpowers (6.2.0)
+      // out-competed the staged v7 plugin in a live run's skill list
+      // (2026-08-11, superpowers-bootstrap-codex). No config key suppresses
+      // the fetch itself (probed live: [plugins] recommended variants either
+      // crash the TUI or don't gate it), so disable the curated superpowers
+      // by plugin id — probed live: the curated skills leave the agent's
+      // skill list while the staged superpowers@debug still loads.
+      '[plugins."superpowers@openai-curated-remote"]',
+      'enabled = false',
+      '',
+      '[plugins."superpowers@openai-curated"]',
+      'enabled = false',
       '',
       '[plugins."superpowers@debug"]',
       'enabled = true',

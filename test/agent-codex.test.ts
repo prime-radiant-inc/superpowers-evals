@@ -257,6 +257,15 @@ test('provision copies subscription auth and stages hook-less plugin', () => {
       expect(configToml).not.toContain('hooks = true');
       expect(configToml).not.toContain('plugin_hooks');
       expect(configToml).not.toContain('trusted_hash');
+      // Hermetic runs: the curated remote marketplace's stale superpowers
+      // (6.2.0) polluted a live run's skill list (2026-08-11,
+      // superpowers-bootstrap-codex). The fetch itself has no config gate
+      // (probed live), so the curated superpowers is disabled by plugin id.
+      expect(configToml).toContain(
+        '[plugins."superpowers@openai-curated-remote"]',
+      );
+      expect(configToml).toContain('[plugins."superpowers@openai-curated"]');
+      expect(configToml).toContain('enabled = false');
 
       // PRI-2506: Zero app-server calls (trust dance is dead).
       expect(appServer.calls.length).toBe(0);
@@ -1260,6 +1269,12 @@ test('codex launch-agent bypasses hook trust so staged plugin hooks run headless
 const GENERATED_SUBSCRIPTION_CONFIG = [
   '[features]',
   'plugins = true',
+  '',
+  '[plugins."superpowers@openai-curated-remote"]',
+  'enabled = false',
+  '',
+  '[plugins."superpowers@openai-curated"]',
+  'enabled = false',
   '',
   '[plugins."superpowers@debug"]',
   'enabled = true',
