@@ -5,9 +5,10 @@
 Drew's review; child specs blocked on this parent contract
 **Tracking:** PRI-2874
 **Research brief:** https://claude.ai/code/artifact/c3794032-07aa-405f-88d0-c0587efaa766
-**Review basis:** local `superpowers-evals@ee570dd`, adjacent Gauntlet and
-Stockyard checkouts, prior designs and experiment logs, and a read-only live
-appliance inspection on 2026-08-12
+**Review basis:** `superpowers-evals@ee570dd106fdc3cc2a7cabdf4ce25ab6413c1999`,
+Gauntlet `4d26304a16ae48d85edd26ff2d1abc510273ffa0`, Stockyard
+`a8e881168a1b603c18f9ce9c6f35a7d5b8fd20be`, prior checked-in designs and
+experiment logs, and read-only live appliance inspections on 2026-08-12
 **Builds on:**
 `2026-06-12-quorum-scheduler-design.md` (amends),
 `2026-06-18-shared-eval-appliance-design.md` (adopts Phase 2),
@@ -19,11 +20,15 @@ does not adopt it as the publication shape)
 
 ## Problem
 
-Quorum's turnaround, interpretability, and single-operator design block
-superpowers releases. A release-gate campaign takes ~2 days of appliance
-lock-time; by the time results land, the codebase has changed again. Reading a
-campaign requires the maintainer to hand-triage run dirs against a 7-pattern
-atlas. Nobody but the maintainer can launch runs or read results.
+Quorum's turnaround, interpretability, and effectively single-active-job
+appliance design block superpowers releases. A release-gate campaign takes ~2
+days of appliance lock-time; by the time results land, the codebase has changed
+again. Reading a campaign requires the maintainer to hand-triage run dirs
+against a 7-pattern atlas. The Phase-1 helper already exposes
+run/run-all/status/cancel/show/costs/import and the dashboard exposes a
+read-only grid, but one `run.lock`, shared mutable execution state, no
+idempotent submit/list/event recovery, and incomplete campaign interpretation
+keep normal operation maintainer-mediated.
 
 The 2026-08-12 recon (10-agent sweep of an audited 855-run corpus, adjacent
 repos, and the external SOTA) located the bottleneck precisely. These are
@@ -33,8 +38,9 @@ historical corpus claims, not assertions about every path in current HEAD:
   The wrapper is already fast; micro-optimizing that overhead is a dead end.
 - Batches in the corpus achieve a **median 1.68× effective parallelism** (best
   4.9×; no observed batch used `--jobs > 5`). Current HEAD defaults to 8, but
-  appliance `run.lock` still allows only one live job per host. One rep of the
-  504-cell runnable matrix costs ~67 serial hours.
+  appliance `run.lock` still allows only one live job per host. A historical
+  504-cell matrix cost ~67 serial hours; matrix size is configuration-dependent
+  and must not be hard-coded as the current full grid.
 - **sdd-\*** scenarios consume 73% of all wall hours from 23% of runs; the
   slowest cells gate every batch.
 - **~1/6 of spend is waste** in the corpus: 17.5% of runs ended indeterminate,
@@ -52,6 +58,16 @@ the sanitized corpus manifest, selection/exclusion rules, query or script, and
 output digest must be checked in. The external research brief remains useful
 discussion context; it is not the reproducible evidence artifact.
 
+Read-only appliance inspection at 2026-08-12T21:44:57Z found the Phase-1 helper
+healthy and idle, no run/sync locks, one singleton container, configured mutable
+`evals_ref=main`, and the blessed 2026-08-05 credential bundle. An old June job
+still resolved durably as done (3 pass, 1 indeterminate). The helper exposed
+doctor/prepare/run/run-all/status/cancel/show/costs/import, but not list/events/
+inspect/version/capacity/archive/prune; `doctor` did not expose installed exact
+evals SHA, executor image digest, or enforceable resource capacity. This is a
+sanitized operational snapshot, not a live-eval receipt and not a security
+assessment.
+
 Two doctrine facts shape everything below. First, behavioral base rates are
 nonstationary (±25 points within hours), so only contemporaneous paired arms
 count as evidence — **parallel capacity is a validity mechanism, not just a
@@ -62,43 +78,62 @@ feature**.
 ## Success criteria
 
 1. **Release signal inside eight elapsed hours (critical).** The acceptance
-   workload is a checked-in, pre-registered `campaign.json`. Its initial
-   acceptance fixture is the 2026-08-08 fresh-gate grid: 388 target arm-samples,
-   both arms combined. A changed grid is a new fixture with a new registration
-   hash; “~390 runs” is not itself an acceptance definition.
+   workload is a checked-in, pre-registered `campaign.json`. The initial fixture
+   must be derived from the 2026-08-08 fresh-gate design and spell out all 388
+   historical target arm-samples, both arms combined, their classes, reserves,
+   comparisons, and registration digest. Until that fixture is checked in and
+   validated, 388 is sizing evidence rather than an executable acceptance
+   definition. A changed grid is a new fixture and registration hash; “~390
+   runs” is never an acceptance definition.
 
    The clock starts when the supervisor durably accepts the campaign and ends
    when it durably commits the machine-generated report. The campaign clears
    this criterion only when:
 
-   - every registered confirmatory cell reaches its registered paired sample
-     floor;
-   - every planned sample and launched attempt is explicitly accounted for;
-   - no unresolved duplicate, orphan, provenance failure, or silently omitted
-     cell remains;
+   - all registered primary arm-samples are activated and every cell class
+     satisfies its frozen completion rule;
+   - every activated sample and every admitted attempt reaches a logical
+     terminal state;
+   - every primary slot has an included outcome or a replacement authorized by
+     the frozen outcome-independent rule;
+   - no pending, missing, `not_run`, broken-pair, unclassified, unreconciled
+     duplicate, orphan, provenance failure, or silently omitted activated
+     sample remains;
    - every headline sample passes the provenance and resource-equivalence
      gates;
    - the report applies the frozen decision rule without hand-computed
      statistics; and
-   - actual spend stays within the pre-registered dollar, retry, and backfill
-     caps.
+   - maximum outstanding commitment never exceeds the pre-registered hard
+     commitment cap; reconciled actual spend, retry, and backfill are reported
+     against their separately registered qualification bounds. An actual-dollar
+     hard cap is claimed only where the provider or proxy can enforce it.
 
    W1, W2, W3, and W7 jointly own this criterion. No one workstream may claim
    it independently.
-2. **Sentinel qualification.** The registered ~128-cell sentinel fixture
-   completes through durable report commit in ≤2 elapsed hours under the same
-   credential, resource, retry, and provenance rules.
-3. **Stage-2 full-grid target.** A registered 504-cell matrix rep completes
-   through durable report commit in ≤12 elapsed hours.
+2. **Sentinel qualification.** A checked-in sentinel fixture, expressed in
+   arm-samples rather than ambiguous “cells,” completes through durable report
+   commit in ≤2 elapsed hours under the same credential, resource, retry, and
+   provenance rules. Its registration records pairing, included/excluded slow
+   scenarios, per-pool distribution, measured mean duration, and implied
+   capacity. The fixture is invalid if it silently demands a higher capacity
+   floor than criterion 1 without declaring the extra provisioning.
+3. **Stage-2 full-grid target.** The runnable arm-sample count in a frozen
+   matrix manifest generated from registered evals, credential, agent, OS, tier,
+   and filter inputs completes through durable report commit in ≤12 elapsed
+   hours. Historical “504 cells” is not a frozen current-grid definition.
 4. **Stage-3 headroom.** The critical acceptance campaign still completes in
    ≤8 elapsed hours with 20% of declared worker slots withheld.
 
-Capacity math for criterion 1: 388 arm-samples × mean ~476s ≈ 51.3 serial
-hours. Eight elapsed hours requires ≥6.5× effective parallelism; W7 uses ≥7×
-as the planning floor. The 388 samples already include both arms. Concurrent
-arms concentrate demand on the same quota domains; they do not double the
-388-sample workload again. The capacity model must also prove the makespan of
-each serial or constrained quota path, not only aggregate throughput.
+Preliminary capacity math for criterion 1: 388 arm-samples × mean ~476s ≈ 51.3
+serial hours. Primaries alone require ≈6.41× effective parallelism over eight
+hours. W7 starts at ≥7× but must derive the actual acceptance floor from the
+frozen primary workload plus registered reserve/backfill, retry, cooldown, and
+reporting allowances; 7× is not enough merely because it exceeds 6.41×. The 388
+historical samples already include both arms. Concurrent arms concentrate
+demand on the same quota domains; they do not double that workload again. The
+capacity model proves the makespan of every serial or constrained quota path,
+not only aggregate throughput. Stage 3 separately sizes nominal capacity so the
+full registered workload still clears after 20% of worker slots are withheld.
 
 Wall-clock is an operational service objective, not a behavioral comparison
 metric. Tokens and dollars remain the primary treatment/control efficiency
@@ -109,8 +144,9 @@ metrics under the 2026-06-10 cost-experiments doctrine.
 Recorded from the 2026-08-12 discussion; each binds the child specs.
 
 1. **Staged A+B ("CoA C") with the fleet as a committed destination.** Scale
-   the appliance first. Stage 2 freezes the northbound submit/status/cancel/
-   show/costs contract and the internal leased-executor contract. Stage 3
+   the appliance first. Stage 2 freezes the complete northbound operator
+   contract defined below—not only an illustrative command subset—and the
+   internal leased-executor contract. Stage 3
    preserves those contracts while replacing the local executor and durable
    admission backend; “unchanged” does not prohibit a versioned worker
    lease/upload protocol.
@@ -162,239 +198,356 @@ Recorded from the 2026-08-12 discussion; each binds the child specs.
   Launching belongs to the supervisor.
 - Fan-out ships with a versioned per-run resource class: worker image digest,
   OS/architecture, CPU quota, memory limit, writable-disk allocation, and
-  process/container limits. Actual runtime readback is recorded per attempt.
+  process/container limits. Admission accounts for aggregate resource vectors
+  with reserved system headroom; actual runtime readback is recorded per
+  attempt. Stage 2 must prove enforceable CPU, memory, PID, and disk limits under
+  concurrency. A normal writable bind mount is not disk enforcement; if the
+  appliance cannot enforce a required limit, the affected samples are
+  non-poolable and the program advances to W6 rather than pretending they match.
   Arms in one comparison block use the same class and actual limits unless the
   campaign explicitly studies resources. Missing or mismatched readback makes
   the block non-poolable.
 - Provenance hard-gates: no attempt is pooled or arm-attributed without the
   campaign registration hash; resolved Superpowers, evals, and Gauntlet SHAs;
   scenario/check digest; public credential and credential-bundle identity;
-  explicit quota-pool identity; driver/grader configuration; harness/CLI and
-  normalizer versions; and harness-specific observed parent-model readback.
-  Intended credential labels are not model readback.
+  explicit quota-pool identity; driver/grader prompt, configuration, build,
+  provider route, and observed model readback for every model-mediated drive or
+  assessment; harness/CLI and normalizer versions; and harness-specific observed
+  Coding-Agent model readback. Intended credential or model labels are not
+  readback. A route that cannot supply immutable model identity is non-poolable
+  for confirmatory inference unless the plan registers and proves an equivalent
+  immutable routing mechanism.
 - Missing, dirty, inferred, or mismatched hard-gate evidence remains visible as
   typed non-poolable data. It never degrades to a warning or silently enters an
   aggregate.
 
 ## Canonical contracts shared by every workstream
 
-The child specs may add fields and implementation detail, but they may not
-invent parallel definitions of campaign identity, retries, admission, or
-terminality.
+The child specs may add implementation detail and namespaced `extensions`, but
+they may not invent parallel definitions of campaign identity, retries,
+admission, terminality, or artifact selection. Every artifact has one exact
+top-level discriminator such as `quorum.campaign/v1`; required core objects are
+strict, semantic or required-field changes increment the version, readers
+reject unknown major versions, and the child specs publish a reader/writer
+compatibility matrix.
 
 ### Campaign, sample, execution, and assessment identity
 
-A campaign is one immutable plan plus an append-only event ledger. Generated
-reports and filesystem views are projections, never sources of truth.
+A campaign is one immutable plan plus one authoritative append-only logical
+event stream. During Stage-2 live execution, a SQLite campaign-event table is
+the sole authoritative ledger and shares transactions with sample/job state,
+permit and lease mutations, artifact selection, and a materialization outbox.
+Stage 3 may replace the store only with equivalent transactional and replay
+semantics. Workers never append a second canonical ledger.
 
-- `campaign.json` (`quorum.campaign/v1`) is frozen before the first scored
-  execution and names every primary and bounded reserve sample.
-- `events.jsonl` (`quorum.campaign-events/v1`) records monotonically sequenced,
-  idempotent lifecycle, disposition, assessment, and artifact events.
+- `campaign.json` (`quorum.campaign/v1`) is an immutable input naming every
+  primary slot, bounded reserve slot, comparison, completeness rule, and
+  assessment selector. It freezes before any campaign-bound provider call or
+  inspection of campaign outcome evidence. Smokes and calibration use separate
+  fixtures and can never be relabeled into the campaign.
+- The live event table records one monotonically sequenced, idempotent stream.
+  `events.jsonl` (`quorum.campaign-events/v1`) is a sealed checksummed export at
+  a recorded database sequence, not a second live authority.
 - `report.json` (`quorum.campaign-report/v1`) is a deterministic projection at
-  a recorded event sequence. `report.html` renders exactly the same data.
-- `batch.json` v2 identifies one execution shard and references the campaign
-  and plan digest. A batch is not independently inferential.
+  an `as_of_seq`; `report.html` renders exactly the same data.
+- `batch.json` (`quorum.batch/v2`) identifies one execution shard and references
+  the campaign and plan digest. A batch is not independently inferential.
+- `verdict.json` (`quorum.verdict/v2`) is immutable per-run execution evidence
+  linked to canonical identities. Assessments are separate append-only records.
 - `results.jsonl` may remain a compatibility projection, but it is not the
-  canonical campaign ledger.
+  campaign ledger and repeated cell keys do not acquire replicate semantics.
+
+The exported event slice is exactly `1..as_of_seq`; gaps, conflicting event IDs,
+or conflicting duplicate sequence numbers fail closed. `campaign.json` is
+never edited after registration. Protocol deviations and analysis amendments
+are append-only events recording author, rationale, affected comparisons,
+prior/new digest, event sequence, and whether outcomes had been observed. A
+post-outcome amendment produces only a labeled sensitivity/counterfactual
+report unless the original plan contained that exact amendment mechanism.
 
 These identifiers are distinct:
 
 | Identifier | Meaning |
 |---|---|
 | `cell_id` | scenario × agent/harness × credential × OS × resource class, shared across arms |
-| `pair_block_id` | contemporaneous scheduling block linking corresponding arm samples |
-| `sample_id` | one pre-registered statistical observation: cell + arm + replicate |
-| `execution_attempt_id` | one supervisor invocation or matched backfill invocation |
-| `run_id` | canonical run artifact produced by an execution attempt |
-| `runner_attempt_id` | W1 retry nested inside one run |
-| `assessment_id` | one live or offline grading pass over frozen evidence |
+| `pair_block_id` | one registered contemporaneous scheduling or analysis block |
+| `sample_id` | one registered statistical observation: cell + arm + replicate/slot |
+| `execution_attempt_id` | one supervisor invocation for exactly one `sample_id`; produces at most one `run_id` |
+| `run_id` | canonical run artifact allocated by one execution attempt |
+| `runner_attempt_id` | W1 component retry nested inside one run |
+| `assessment_id` | one live or offline assessment over frozen evidence |
 
-No identity is reconstructed from a filename or timestamp. The supervisor
-persists the planned sample and execution identity before process spawn; the
-runner binds `run_id` immediately after allocation rather than waiting for
-process completion.
+Activating a matched reserve block creates one block event and one execution
+attempt per arm; it is not one multi-arm execution. No identity is reconstructed
+from a filename or timestamp. The supervisor persists sample and attempt
+identity before spawn. Immediately after allocation, the runner durably emits
+the `execution_attempt_id`→`run_id` binding; the supervisor persists and
+acknowledges it before provider spend. Stdout observed only at process exit is
+not an identity protocol.
+
+Each immutable assessment carries at least its IDs; `live|offline` mode and
+parent assessment; creation event sequence; criterion-set and frozen-input
+manifest digests; grader prompt/configuration/build/provider/model and observed
+readback; per-criterion `pass|fail|unresolved|not_assessed`, evidence references,
+and rationale; aggregate outcome; and completion status. The frozen campaign
+selects the assessment eligible for each headline outcome—normally the primary
+live assessment unless offline grading was registered. Creation order never
+selects a headline, and a regrade or normalizer correction never overwrites or
+implicitly supersedes an earlier assessment.
 
 ### Lifecycle, failure, and retry doctrine
 
-The supervisor is authoritative for the durable execution lifecycle:
+The attempt lifecycle is distinct from job and campaign lifecycle:
 
 ```text
-planned → queued → leased → starting → running → artifact_committed → classified
+planned → queued → leased → starting → ready_to_drive → running
+running → artifact_committed → classified → completed
 ```
 
-`cancelled`, `lost`, `broken`, and `deferred` are explicit terminal exits where
-applicable. Every transition is durable and idempotent. Restart reconciliation
-checks leases, process identity, run artifacts, and the artifact store before
-dispatching more work.
+The canonical record preserves orthogonal axes rather than one display enum:
 
-Evaluation outcome, lifecycle, and artifact health are separate:
+- `evaluation_outcome = pass | fail | unresolved | not_assessed`;
+- `attempt_terminal = completed | cancelled | lost | infrastructure_failed`;
+- `artifact_state = none | staged | committed | missing | orphaned | quarantined`;
+- `analysis_disposition = pending | included | excluded | void`; and
+- `sample_state = available_reserve | activated | not_run`.
 
-- `pass` and `fail` are valid behavioral determinations and are never retried.
-- `unresolved` means a valid drive did not support a pass/fail determination. A
-  clean Gauntlet `investigate` is unresolved and is not automatically retried
-  or replaced.
-- `infrastructure_failed` names a component, phase, stable cause code, evidence,
-  retryability, and retry-policy version. Only causes explicitly marked
-  retryable may retry.
-- `cancelled` records an accepted stop request; it is not a fabricated
-  behavioral verdict.
-- `lost` records an admitted attempt with no live owner and no valid terminal
-  artifact after bounded reconciliation.
-- `orphaned` records an artifact without a durable sample/attempt link. The
-  system reconciles it from embedded identity or quarantines and surfaces it;
-  it never renders as `not_run`.
-- `not_run` is reserved for a planned cell that was never admitted.
+`pass` and `fail` are behavioral determinations. `unresolved` means a valid
+drive or schema-valid assessment did not support pass/fail; a clean Gauntlet
+`investigate` is unresolved. `infrastructure_failed` additionally names the
+component, phase, stable cause, evidence, retryability, and retry-policy
+version. `lost` means no authoritative live owner and no selected terminal
+artifact after bounded reconciliation. `orphaned` means artifact bytes lack a
+durable link; reconciliation either restores that link or quarantines them.
+`not_run` is an activated sample with no admitted execution at abort/invalid
+finalization; unused reserve remains `available_reserve`, not missing or
+not-run. `broken` is a pair-block state, and `deferred` is a visible scheduling
+state with a reason and next eligibility time, not an evaluation outcome.
 
-Retry the smallest failed component. A grader failure with a valid frozen
-drive artifact creates another assessment over that artifact, not another
-Coding-Agent drive. A drive retry is permitted only when a typed transient
-cause invalidated the drive artifact. In fused mode, an unattributed
-`investigate` remains unresolved. Every attempt is bounded by count, elapsed
-deadline, and cost, and every attempt remains visible and charged.
+`excluded` preserves an observation that the frozen plan makes ineligible for a
+named analysis. `void` means a positively identified, outcome-independent
+instrument failure produced no usable observation and the frozen rule permits
+replacement. Behavioral or ambiguous non-completion is never voided merely to
+restore power. Renderers may derive a convenience label but may not discard any
+axis or present counts from different axes as one summable partition.
 
-Raw outcome is immutable. Analysis disposition is separately one of
-`included`, `excluded`, `void`, or `pending`, with a closed reason code and the
-pre-registered rule that authorized it. Only outcome-independent, positively
-identified instrument failures may be excluded and replaced. Behavioral or
-ambiguous non-completion follows the frozen decision rule or leaves the cell
-underpowered; it is never silently removed from the denominator.
+Retry the smallest failed component. A grading retry is permitted only when a
+registered typed, outcome-independent instrument failure produced no
+schema-valid assessment; `unresolved` is never retry evidence. With a valid
+frozen drive artifact, grading retry creates another assessment, not another
+Coding-Agent drive. A drive retry requires a typed transient cause that
+invalidated the drive artifact under the frozen rule. A 429 does not by itself
+authorize whole-execution retry. Fused mode uses component
+`fused_driver_grader` and never infers driver versus grader from free text.
+Every attempt is bounded by count, elapsed deadline, and cost; every failed and
+retry-resolved attempt remains visible and charged.
 
-The realizable completion invariant is: **every admitted execution has exactly
-one durable terminal lifecycle record and an explicit artifact pointer or
-artifact-missing reason.** Power loss is not required to synthesize a
-`verdict.json`.
+The canonical projections enforce at least:
+
+```text
+registered_slots = primary_slots + reserve_slots
+reserve_slots = available_reserve + activated_reserve
+activated_samples = open_samples + terminal_samples
+closed_analysis = included + excluded + void
+```
+
+Dimensions remain orthogonal even when their counts differ. Every admitted
+execution, nested runner attempt, and assessment has exactly one logical
+terminal disposition; idempotent replay of the same event does not create
+another terminal. Every execution has an artifact pointer or explicit missing
+reason. Power loss is not required to synthesize a `verdict.json`.
 
 ### Pairing, top-up, and analysis
 
 Every paired campaign declares whether `pair_block_id` is:
 
-- a **scheduling block** controlling contemporaneous launch while independent
+- a **scheduling block** controlling contemporaneous exposure while independent
   eligible arm observations remain the analysis unit; or
 - an **analysis block** whose complete matched outcomes are the inferential
   unit.
 
-The campaign freezes a maximum arm-start skew, equivalent instrument/resource
-requirements, missingness policy, minimum n, and sample-selection rule. If a
-whole-drive sample needs replacement, the scheduler activates a new reserve
-block for every arm. An independent delayed arm top-up cannot manufacture a
-valid pair. Unmatched outcomes and all spend remain visible.
+`-n` sets `target_n`, the primary sample slots per registered arm/cell. The plan
+declares `reserve_n` separately. Primary slots start activated; reserve slots
+start available, become activated only through the frozen whole-block rule, and
+never return to available. `analysis_n` counts eligible included outcomes, not
+registered identities or attempts. At most one execution outcome is selected
+per sample; retries and backfill never erase original evidence or spend.
 
-`-n` counts pre-registered sample identities, not only determinate final
-attempts. At most one execution is included per sample. Additional observations
-are labeled reserve/backfill samples linked to what they replace; retry and
-backfill never erase the original evidence.
+Corresponding arms complete local provisioning, fixture setup, and deterministic
+prechecks before entering durable `ready_to_drive`. The supervisor atomically
+reserves a feasible launch plan across all arms, then acquires runtime permits
+only for each actual launch; a reservation never consumes simultaneous capacity
+the pool does not own. `analysis_exposure_started_at` is the first Coding-Agent
+generation request. Permit acquisition, lease issue, process spawn, and
+Gauntlet startup are not arm start. The registered `max_start_skew` compares
+these exposure events. If aggregate pool/resource demand, launch spacing, or a
+serial critical path cannot meet the skew, registration rejects the block or
+marks it descriptive before spend.
+
+Reserve activation and outcome selection depend only on registration order,
+slot role, and typed outcome-independent exclusion state—never behavioral
+outcome, criterion status, cost, duration, or tokens. A matched replacement
+activates the whole reserve block before any reserve outcome is observed. The
+plan declares whether an otherwise valid arm from a skew-broken scheduling
+block remains independently eligible; an analysis block requires complete
+matched outcomes. Reports show complete, incomplete, skew-invalid,
+resource-invalid, and unschedulable blocks even when independent-arm Fisher is
+the registered analysis.
 
 Inferential `quorum report --vs` resolves only to a named comparison in one
-frozen campaign. Each outcome or metric pre-registers its estimand, analysis
-unit, eligible classes, strata/blocks, inclusion and missingness rules, test,
-sidedness, alpha, multiplicity policy, effect/interval method, minimum n, and
-permitted decision language. Fisher is permitted only for declared independent
-binary arm observations; analytically matched outcomes use a matched method.
-Raw pooling across strata is descriptive only.
+frozen campaign. Each outcome or metric registers its estimand, analysis unit,
+eligible classes, strata/blocks, inclusion and missingness rules, assessment
+selector, test, sidedness, alpha, multiplicity policy, effect/interval method,
+minimum n, and permitted decision language. Fisher is permitted only for
+declared independent binary arm observations; analytically matched outcomes use
+a matched method. Raw pooling across strata is descriptive only.
 
 ### Supervisor and operator contract
 
 The supervisor is the only normal write front door for Stage 2 and Stage 3;
-the dashboard remains read-only. The stable operator surface provides:
+the dashboard remains read-only. The stable operator surface provides
+idempotent `submit`; `list`, `status`, and sequenced `events`; idempotent
+`cancel`; `show`, `costs`, `report`, and artifact references; and read-only
+`doctor`, `inspect`, and `capacity --json`.
 
-- idempotent `submit` with an operator-scoped request ID and canonical request
-  digest;
-- `list`, `status`, and sequenced `events` so a lost submit response does not
-  lose the job;
-- idempotent `cancel` from every nonterminal state; and
-- `show`, `costs`, report, and artifact references.
+Submit uniqueness is `(enrolled_operator_id, request_id)`. The same canonical
+request digest returns the original job and current revision; a different
+digest returns typed `idempotency_conflict`. Lookup accepts request ID, and
+idempotency tombstones outlive artifact/job pruning and the maximum retry
+horizon. Operator identity is unique and server-derived from the enrolled
+trusted access path, never optional caller environment. For this Drew/Jesse
+trusted deployment, both enrolled operators may discover, inspect, and cancel
+all jobs; owner remains recorded for coordination and audit. This is not an
+untrusted-user authorization model.
 
-The supervisor records the enrolled operator identity supplied by the trusted
-access path for ownership, discovery, and audit. This is an operational
-multi-user contract for Drew and Jesse, not an untrusted-user security model.
-
-Job state is materialized from append-only events:
+Job orchestration, attempt execution, and campaign completion use distinct
+namespaces. Job state is:
 
 ```text
 accepted → queued → preflighting → running
 running → waiting(reason, next_retry_at) → queued
-any nonterminal → cancelling → cancelled
-any nonterminal → failed
+pre-commit nonterminal → cancelling → cancelled
 running → completed
+control-plane terminal → failed
 ```
 
-Status reports owner, exact refs, state revision, queue position or blocker,
-next retry time, progress, and artifact/report IDs. Supervisor startup repairs
-the durable state; merely deriving `done` or `lost` at read time is not
-recovery.
+A job is `completed` only when every execution it owns is terminal and its
+terminal projection is durable; behavioral fail/unresolved does not make the
+orchestration fail. `failed` means the supervisor cannot continue or produce
+that projection. Campaign state is
+`registered → running → sealing → sealed | aborted | invalid`. A campaign seals
+only when all activated samples are terminal, pair/replacement rules are
+resolved, and its frozen completeness predicate passes. `aborted` and `invalid`
+preserve partial evidence and cannot emit a release decision. A sealed campaign
+separately reports decision eligibility; `sealed` does not fabricate adequate
+power.
 
-Workers use renewable, fenced leases naming the attempt, generation, resource
-claims, issue time, and expiry. Only the current generation may launch, renew,
-or commit a selected artifact. A missed heartbeat never overrides a valid
-terminal artifact. Host PIDs remain local diagnostics rather than shared-store
+Every terminal job response and status includes attempt counts by canonical
+axis, artifact health, campaign state, report seal and decision eligibility,
+owner, exact refs, state revision, queue position or blocker, next retry time,
+progress, and artifact/report IDs. `doctor`/`inspect`/`capacity` expose supervisor
+build/schema and migration revision, drain/reconciliation state, exact executor
+image/capabilities, host allocatable/reserved resources, and quota cooldowns.
+The supervisor exposes health distinctly from job status. Startup repairs
+durable state; merely deriving `done` or `lost` at read time is not recovery.
+
+Workers use renewable, fenced leases naming attempt, generation, resource and
+cost claims, issue time, and expiry. Only the current generation may launch,
+renew, or select an artifact. Lease expiry alone moves a running attempt to
+`uncertain` and fences commit; it does not release execution/quota/cost claims
+or authorize redispatch until the executor is authoritatively terminated by
+process group/cgroup/container/VM identity or the registered maximum billing
+horizon expires. Host PIDs remain local diagnostics rather than shared-store
 liveness.
+
+`cancel_requested` records accepted intent. Cancellation fencing and selected-
+artifact commit linearize through the same compare-and-swap. If commit wins,
+the attempt completes and later cancel is an idempotent no-op. If cancellation
+wins, the attempt is cancelled and later artifacts remain visible but cannot
+be selected. Campaign/job cancellation fences each pre-commit attempt and does
+not relabel already committed results.
 
 ### Admission, quotas, resources, and cost
 
-The supervisor is the sole admission authority for supervisor-managed work.
-`--jobs` is a per-job ceiling, not an independent host slot pool. Before
-launch, it atomically acquires every applicable permit:
+The supervisor is the sole admission authority for managed work. `--jobs` is a
+per-job ceiling, not an independent host slot pool. It atomically accounts for:
 
-- host or fleet execution capacity;
+- host/fleet allocatable CPU, memory, writable disk, and process vectors after
+  reserved system headroom;
 - per-job ceiling and per-operator share;
 - harness/runtime seat;
 - Coding-Agent quota pool;
 - Gauntlet driver/grader quota pool while fused;
-- pinned resource class;
-- paired-block launch reservation; and
-- campaign cost reservation.
+- paired-block launch plan; and
+- hierarchical campaign → sample/backfill → attempt cost commitment.
 
-Queued, backoff-blocked, cap-blocked, or pair-waiting attempts hold no runtime
-permit. Durable fenced leases recover capacity exactly once after owner loss.
-For a confirmatory block, every arm's permits are acquired in one transaction
-with a short launch TTL. If any arm cannot start within the registered skew,
-the block becomes broken and all unconsumed claims are released.
+Queued, cooldown-blocked, cap-blocked, or pair-waiting attempts hold no runtime
+permit. Impossible resource profiles and infeasible pair plans fail before
+launch. Permit release follows authoritative execution fencing above, not lease
+expiry alone.
 
 Endpoint routing is not quota identity. Every credential names an explicit,
-non-secret `quota_pool_id`. One pool record owns its concurrency, launch
-spacing, enforceable RPM/TPM windows, durable cooldown, account/seat/model/
-region scope, and dated supporting evidence. Harness caps are separate
-intersecting resources. Credentials sharing a pool cannot independently
-override its limits, and every OAuth/subscription path declares an explicit
-seat pool and cap; missing policy is an error, not “unbounded.”
+non-secret `quota_pool_id`. One pool record owns concurrency, launch spacing,
+account/seat/model/region scope, dated evidence, and one declared enforcement
+mode: linearizable per-request proxy; conservative per-attempt request/input/
+output-token reservation; or concurrency/spacing only. Opaque CLI/OAuth routes
+may not claim enforceable RPM/TPM without a proxy. Consumed window units are not
+refunded because an attempt fails. Harness caps remain separate intersecting
+resources; missing seat or pool policy is an error, not “unbounded.”
 
-W1 owns provider-specific rate-limit detection and classification. W2 alone
-owns durable pool cooldown and scheduler retry. A retryable 429 records one
-monotonic pool `blocked_until` using provider `Retry-After` and bounded backoff;
-waiting work releases permits, cooldown survives restart, and recovery is
-paced rather than a stampede. Exhausted windows become explicit deferred or
-terminal outcomes, never silent skips.
+W1 owns provider-specific rate-limit detection and classification. W2 owns
+durable pool cooldown and schedules only the component retry authorized above.
+A retryable 429 stores provider `Retry-After`, receipt time, cooldown generation,
+and a store-authoritative UTC `blocked_until`, updated transactionally as
+`max(existing, candidate)` with bounded backoff. Processes convert remaining
+time to local monotonic timers after reading it. Waiting work holds no runtime
+permit; cooldown survives restart and concurrent 429s without a stampede.
+Exhausted windows become visible deferred or terminal sample states, never
+silent skips.
 
-Admission uses bounded fairness across operators and jobs. Longest-first
-priority applies only within an equivalent ready fairness/pair class; across
-heterogeneous pools, the child spec uses remaining predicted work divided by
-effective bottleneck capacity. Paid running work is never preempted.
+Admission uses bounded fairness across operators/jobs. The W2 child spec freezes
+weights, the charged unit for multi-arm blocks, `eligible_since`, and a numeric
+maximum eligible-bypass or start-lag bound, then proves it under continuous
+arrival. Blocked work accrues no active-service entitlement. Longest-first
+applies only inside an equivalent ready fairness/pair class; paid work is never
+preempted.
 
-A cost cap is an admission-time commitment cap unless a provider/proxy can
-enforce actual dollars. The supervisor reserves a frozen upper-bound estimate
-covering Coding-Agent, driver/grader, runner retries, scheduler retries, and
-matched backfill, then reconciles against captured actual cost. Unpriceable
-work cannot enter a hard-capped campaign without an explicit pre-registered
-override.
+The hard cost invariant is maximum outstanding commitment, not unknowable final
+provider billing. The supervisor reserves a frozen upper bound once through the
+hierarchical ledger, covering Coding-Agent, driver/grader, retries, and matched
+backfill, then reconciles actual spend. Uncertain attempts retain reservations
+until billing exposure closes. Unpriceable work cannot enter a hard-capped
+campaign without an explicit registered override.
 
 ### Executor and artifact-commit contract
 
-The supervisor owns planning, admission, pairing, quotas, cancellation intent,
-and attempt selection. An executor owns one leased attempt in an immutable,
-job-scoped environment and reports structured lifecycle and artifact identity.
+For supervisor-managed `run-all`/campaign work, the supervisor expands the
+frozen plan and dispatches exactly one `execution_attempt_id` per lease. The
+current self-scheduling `quorum run-all` is local/break-glass compatibility and
+is never nested behind supervisor admission.
+
+The supervisor owns planning, admission, pairing, quotas, cancellation, and
+attempt selection. An executor owns one leased attempt in an immutable,
+job-scoped environment. W2 owns versioned northbound and executor schemas plus
+canonical transition/error semantics. Minimum executor messages cover lease
+claim/renew/release, cancellation observation, lifecycle event, allocation
+binding, artifact manifest/completion, and commit result.
 
 Before dispatch, the supervisor assigns a staging destination. The executor
-uploads a checksum manifest and completion marker; the supervisor atomically
-commits the staged artifact and compare-and-swaps the selected attempt.
-Replaying identical bytes is idempotent, conflicting bytes fail closed,
-partial uploads never become terminal truth, and late attempts remain visible
-without silently replacing the selected result.
+writes immutable bytes plus a checksum manifest and completion marker. One
+database transaction records the selected-attempt CAS, terminal event, permit/
+reservation effects, and materialization outbox. Identical replay is idempotent,
+conflicting bytes fail closed, partial uploads never become terminal truth, and
+late attempts remain visible without replacing selected evidence. Crash repair
+replays the outbox and reconciles immutable staging rather than creating a
+second truth.
 
 Stage 2 supplies an appliance executor with immutable checkout, container or
 process, temporary, and results namespaces. Stage 3 supplies a baked
-Firecracker executor. Workers never self-admit; the operator and executor
-contracts remain the same.
+Firecracker executor. Workers never self-admit. The same protocol-conformance
+corpus runs against both executors, covering stale generation, reordered event,
+duplicate/partial/late upload, lost acknowledgement, cancellation races, and
+restart.
 
 ## Workstreams
 
@@ -409,13 +562,19 @@ Recover instrument waste without converting ambiguous behavior into passes.
 - Retain the 2026-07-09 startup-hang detector, nested runner-attempt evidence,
   summed economics, and flaked-green visibility. Replace that design's broad
   clean-`investigate` retry predicate with the typed failure doctrine above.
-- Split preparation into static validation, local provisioning and fixture
-  setup, deterministic pre-checks, live credential/model validation, then
-  drive. Fixture and deterministic pre-check failures occur before any provider
-  call; live smoke calls are recorded as spend.
-- Apply bounded deadlines and descendant-process teardown to provisioning,
-  setup, checks, drive, and capture. Record the failed component and stable
-  cause instead of a generic indeterminate.
+- Split every adapter into static validation, `provisionLocal`, fixture setup,
+  deterministic prechecks, `validateLive`, then drive. The first three phases
+  have no provider credentials; `setup.sh` receives a secret-minimized
+  environment and its contract forbids provider calls. `validateLive` is the
+  first Quorum-owned provider call and its spend is recorded. An adapter that
+  cannot separate local setup from live validation cannot claim zero precheck
+  spend.
+- Introduce one async, process-group-aware, cancellable subprocess seam before
+  applying deadlines to provisioning, setup, checks, drive, and capture. Each
+  deadline requests graceful stop, waits for terminal evidence, then kills the
+  descendant tree after a bounded grace period. The current blocking
+  `spawnSync`, default-SIGTERM timeout, and exit-only run-ID paths are not a W2
+  cancellation substrate.
 - Make Gauntlet emit or preserve a structured terminal failure for adapter,
   driver, grader, provider, shutdown, and protocol errors. Quorum carries it
   through composition; free-text `run_error` remains diagnostic evidence, not
@@ -425,30 +584,49 @@ Recover instrument waste without converting ambiguous behavior into passes.
 - Re-classify the audited OpenCode indeterminates against the current
   snapshot/export implementation and harness revision, then fix only verified
   remaining causes. The historical 48% outcome is not current root-cause proof.
-- Persist execution identity before child launch, bind `run_id` on allocation,
-  and surface cancelled, lost, orphaned, and skipped work through the canonical
-  ledger and read side.
+- W2 persists `sample_id` and `execution_attempt_id` before spawn. W1 accepts
+  them, binds `run_id` on allocation through the acknowledged protocol, and
+  emits typed runner-attempt and terminal evidence. W3 owns the schemas and
+  projections; W2 owns cancellation/loss/orphan reconciliation; W5 renders the
+  read side.
 
 Exit: on two consecutive registered sentinel executions, zero silently omitted
-cells, zero hidden orphans, every admitted execution has one terminal lifecycle
-record, and `infrastructure_failed + lost` is below 5% of all admitted samples.
-`unresolved` is reported separately and is never reduced by outcome-dependent
-retry.
+cells and zero unreported allocated run directories. Report both (a)
+failed-or-lost attempts / admitted attempts and (b) unique samples experiencing
+at least one failed-or-lost attempt / admitted samples. Retry-resolved failures
+remain in both metrics and all-attempt spend; the <5% gate applies to (b).
+Final unresolved infrastructure and behavioral `unresolved` are reported
+separately and are never reduced by outcome-dependent retry. The no-hidden-
+orphan invariant is an integrated W1/W2/W3/W5 gate.
 
 ### W2 — Scheduling and throughput (Stages 1–2)
 
 The parallelism lever and the stable front door for both execution substrates.
 
-- Upgrade the existing Phase-1 file-backed run/run-all/status/cancel job layer
-  to the approved Phase-2 durable supervisor. Add request idempotency, queue and
-  event discovery, state revisions, restart reconciliation, all-state cancel,
-  named credential bundles, and enrolled operator identity.
-- Define and test the migration of existing terminal, lost, and imported job
-  receipts before retiring `run.lock`; legacy execution semantics do not become
-  Stage-2 semantics.
-- Replace the singleton mutable execution namespace with job-scoped immutable
-  evals/Superpowers/Gauntlet snapshots, runtime/process identity, temporary and
-  results namespaces, and the pinned resource classes defined above.
+- Package the supervisor as a versioned release outside managed job evals
+  snapshots, owned by the host service manager. Provide atomic install/rollback,
+  health, submission drain, and old-writer fencing; preflight of a job's evals
+  ref may never replace the running control plane.
+- Upgrade the existing Phase-1 file-backed run/run-all/status/cancel layer to
+  the transactional Phase-2 supervisor and stable operator surface above.
+  Supervisor-managed campaigns expand into one attempt per lease; they never
+  shell one appliance job into a privately scheduling `quorum run-all`.
+- Cut over behind a durable maintenance barrier. Snapshot state/results, prove
+  no Phase-1 `preflighting|queued|running|stopping` job remains—or reconcile
+  each against locks, process identity, and artifacts—then migrate terminal,
+  lost, quarantined, and imported receipts with count/digest validation. Fence
+  old writers, start and reconcile the new service, run a canary, define how
+  post-cutover writes roll back or roll forward, and remove `run.lock` last.
+- Implement the authoritative SQLite event/state/permit/lease/artifact-CAS
+  transaction and materialization outbox. Add request idempotency, queue/event
+  discovery, revisions, durable repair, the cancel/commit race rule, named
+  credential bundles, and a unique server-derived operator identity that keeps
+  Drew and Jesse distinct through the installed entrypoint.
+- Replace the singleton mutable execution namespace with attempt-scoped
+  immutable evals/Superpowers/Gauntlet and dependency snapshots, runtime/process
+  identity, temporary/results namespaces, and pinned resource classes. Select
+  and prove hard CPU/memory/PID/disk enforcement and actual readback under
+  concurrency.
 - Make the supervisor the authoritative atomic admission controller across
   host/fleet, job, operator, harness, subject, driver/grader, resource, pair,
   cooldown, and cost constraints. `--jobs` remains a per-job ceiling.
@@ -460,77 +638,111 @@ The parallelism lever and the stable front door for both execution substrates.
   an equivalent ready class; use pool-aware remaining critical work across
   heterogeneous quotas. Freeze prediction inputs and conservative tail-derived
   time caps in the campaign; a cap is not simply historical p90.
-- Add fenced worker leases, structured artifact identity, atomic artifact
-  commit, and restart/cancel fault handling behind the stable operator API.
+- Add fenced worker leases without unsafe expiry release, structured artifact
+  identity, transactional artifact selection, and restart/cancel fault handling
+  behind the stable API. Ship `doctor`/`inspect`/`capacity` and the shared
+  Stage-2/Stage-3 executor conformance suite.
 
 Exit: deterministic multi-process and fault-injection tests prove no admission,
 spacing, cooldown, resource, pairing, ownership, or reservation violation and
-no silent cell. W2 then participates with W1, W3, and W7 in the real paired
-campaign for success criterion 1; it cannot claim that criterion alone.
+no silent cell. Cutover/rollback receipts prove one writer and stable artifact
+digests. W2 then participates with W1, W3, and W7 in the real paired campaign
+for success criterion 1; it cannot claim that criterion alone.
 
 ### W3 — Canonical campaign artifact and report (Stages 1–2)
 
 Kill tea-leaf reading by making the planned denominator, evidence lineage,
 missingness policy, comparison, and decision rule machine-enforced.
 
-- Implement the canonical campaign, event, batch v2, verdict v2, assessment,
-  and report contracts above. Persist the complete planned cohort before
+- Land the shared TypeScript schema module for campaign, event, batch v2,
+  verdict v2, assessment, and report first; W1, W2, and W5 import it rather than
+  defining local variants. Check in and validate the initial acceptance and
+  sentinel fixtures before their numeric criteria become active. Persist the
+  complete primary/reserve cohort and campaign-specific matrix digest before
   dispatch. An unsealed report is visibly **IN PROGRESS** and cannot emit a
   release decision.
-- Make `n > 1` first-class. `results.jsonl` already preserves duplicate rows,
-  but lacks sample/attempt identity and the current matrix displays only the
-  last row while tallying every row. All display and statistics derive from
-  the canonical sample ledger instead.
+- Make `n > 1` first-class. The current `results.jsonl` writer can append
+  repeated cell-key rows, but current `run-all` does not schedule supported
+  replicates and those rows have no sample/attempt identity; the matrix displays
+  the last row while tallying every row. New display and statistics derive only
+  from the canonical sample ledger.
 - `quorum report <batch>` is descriptive. Inferential campaign reporting only
   evaluates named pre-registered comparisons and the declared independent or
   matched method; it rejects arbitrary historical baselines.
-- Every report shows target/reserve, planned, activated, started, terminal,
-  included, excluded, void, pending, missing, skipped, orphaned, import-failed,
-  and complete/broken pair counts. It preserves both intention-to-run and
-  retained-analysis denominators.
-- Move Gauntlet's optional v5 per-criterion verdict/evidence projection into
-  the canonical immutable assessment contract. Regrades append assessments and
-  never overwrite live results. W5 renders this data.
+- Every report shows each canonical axis separately plus complete, incomplete,
+  skew-invalid, resource-invalid, and unschedulable block counts. It proves the
+  conservation rules and preserves both intention-to-run and retained-analysis
+  denominators; unused reserve is neither missing nor part of `analysis_n`.
+- At the pinned Gauntlet revision, `result.json` may carry optional `criteria[]`
+  verdict/evidence entries; schema v5 does not guarantee that field. Pin and
+  parse the exact upstream field contract, project available entries into the
+  immutable assessment, and preserve `not_assessed`. Regrades append and never
+  overwrite live results. W5 renders this data.
 - Give deterministic checks stable criterion IDs, typed tags, and metrics with
   units for faceted reading and triage.
-- Report measurement coverage. Null tokens or costs never aggregate as zero;
-  totals distinguish measured, estimated, unpriceable, and missing data and
-  separate all-attempt spend, retained-cohort subject cost, and grader overhead.
+- Add deterministic, versioned classification for the four verdict-shape atlas
+  patterns that are mechanically derivable. Label the other three as requiring
+  human attribution; never guess them from free text.
+- Every cost/token/duration aggregate carries value or `known_subtotal`, unit,
+  eligible denominator, measured/estimated/unpriceable/missing n, authority,
+  and coverage-gate result. Null never becomes zero or “total.” Separate
+  campaign elapsed time, queue delay, execution wall time, Coding-Agent
+  duration, and grader duration; summed parallel execution durations are not
+  campaign turnaround.
 - Record plan, event-head, artifact, analyzer, statistics implementation, and
   schema digests. Identical frozen inputs regenerate byte-identical report JSON
-  and HTML independent of filesystem order, host, time zone, or absolute path.
+  and HTML independent of discovery order, host, time zone, or absolute path;
+  volatile delivery metadata is outside canonical files.
 - Keep v1 artifacts immutable. Any backward-compatibility adapter is a
   separately approved decision and may expose legacy runs descriptively, but
   cannot invent a planned denominator, pair identity, model readback, or
   inferential eligibility.
 
 Exit: the frozen fresh-gate fixture regenerates the same report bytes and
-decision on two clean environments; every planned sample has an explicit
-state; incomplete evidence and invalid comparisons fail closed; and a real
-paired release-gate readout needs no hand-computed statistic or denominator
-repair.
+decision on two clean environments, and independent-oracle goldens prove
+correct Fisher, matched exact, fixed-strata, exact token-rank, minimum-n,
+multiplicity, missingness, reserve-selection, and rounding behavior. Property
+tests cover event/input permutation, arm swap, and analytically excluded runs.
+Every registered sample has an explicit state; incomplete evidence and invalid
+comparisons fail closed; and a real paired release-gate readout needs no
+hand-computed statistic or denominator repair.
 
 ### W4 — Runner/grader split and rubric-blind driver (Stage 2-adjacent; Gauntlet upstream)
 
 Decisions 4 and 5 require two distinct gates:
 
 - **Gate A — frozen-evidence grader parity.** Regrade a pre-stratified,
-  content-addressed corpus spanning pass, fail, unresolved, and instrument
-  failures. Pre-register overall and per-criterion agreement, evidence-quality,
-  failure-classification, and non-inferiority thresholds. The frozen drive
-  artifact contains trajectory, workspace snapshot, deterministic probe
-  outputs, driver script/prompt/model/provider/build identity, and completion
-  reason; grading never probes a later mutable workspace.
+  content-addressed corpus spanning pass, fail, unresolved, and invalid or
+  incomplete artifacts. Independently adjudicate criterion labels and evidence
+  validity; agreement with the historical fused grade is a continuity metric,
+  not ground truth. Invalid evidence must yield `not_assessed`. Typed
+  infrastructure cause remains W1/supervisor truth and is never reclassified by
+  the LLM grader. Pre-register overall/per-criterion agreement, evidence-quality,
+  abstention, and non-inferiority thresholds. The frozen artifact contains the
+  canonical trajectory, workspace snapshot, probe outputs, prompt/model/build
+  identity, and completion reason; grading never probes a mutable workspace.
 - **Gate B — rubric-blind driver canary.** After Gate A passes, run
   contemporaneous rubric-aware versus rubric-blind drivers with a fixed offline
   grader. Pre-register behavioral, evidence-completeness, unresolved,
-  interaction-adherence, cost, and duration thresholds.
+  interaction-adherence, cost, and duration thresholds. The grader receives an
+  arm-blinded canonical trajectory: treatment assignment and driver
+  prompt/script identity remain in an external provenance manifest unavailable
+  to the grader, while still permitting source reconstruction.
 
-Add scenario-declared grader-model selection over the existing per-run
-`--grader-model` plumbing. A deterministic-checks-only mode requires an
-upstream drive-only API and a manifest mapping every acceptance criterion to
-deterministic post-check evidence; it cannot avoid fused grading merely by
-ignoring the final report.
+Before the split, `--grader-model` selects the one fused Gauntlet-Agent and
+therefore changes both driving and grading; it is not grader-only routing. W4
+introduces distinct driver/grader configuration only with the upstream split
+and migrates scenarios from one `story.md` containing interaction directions
+plus ACs to separate immutable driver-script and grader-rubric inputs, including
+scaffolding, validation, authoring docs, and all scenarios.
+
+A deterministic-checks-only mode requires the upstream drive-only API, W3's
+criterion-ID mapping, and a dedicated deterministic assessment path. Every AC
+must map to post-check evidence before admission; missing coverage is a
+pre-spend configuration error. Checks-only does not validate, reserve, invoke,
+or retry a grader. The W4 child spec must name owners and coordination for the
+Gauntlet structured-failure, frozen-evidence, and drive-only changes; fused mode
+is the schedule-slip fallback.
 
 Exit: separate Gate A and Gate B experiment-log verdicts meet their frozen
 thresholds; grader routing ships; and checks-only ships only if its drive-only
@@ -547,42 +759,67 @@ fallback if either cutover gate fails.
   paginated cell-history routes show planned, queued, running, included,
   replaced, excluded, cancelled, lost, orphaned, and missing samples, plus
   criterion evidence, provenance, measurement coverage, and all-attempt cost.
-- Replace PID-based shared-store liveness with supervisor lease heartbeats and
-  terminal-artifact precedence. Every page carries an event sequence; SSE gap
-  detection resynchronizes from a snapshot so bounded queues cannot leave a
-  slow client permanently stale.
-- Store an immutable matrix manifest with each batch/campaign. The global suite
-  manifest remains only a versioned coverage catalogue and cannot be overwritten
-  into describing a different concurrent campaign.
+- Replace PID-based shared-store liveness with the authoritative supervisor read
+  model. Initial load obtains snapshot sequence S and subscribes from S through
+  one gap-free snapshot/replay-cursor protocol. Every SSE frame is sequenced; a
+  non-contiguous frame or bounded-queue overflow emits `reset` and replaces the
+  whole projection from a fresh snapshot. Initial-load races, reconnects,
+  deletions, bursts, slow consumers, and dashboard restart must converge.
+- Consume the immutable campaign-specific matrix W2/W3 persist before dispatch.
+  The global suite manifest is only a versioned coverage catalogue and cannot
+  be overwritten into describing a concurrent campaign.
 - Define three artifact classes: raw operational, scrubbed internal analysis,
   and publishable static bundle. The existing import bundle is an internal
   donor, not the share object: publication excludes raw sessions, internal
   workdirs/logs, credentials, run homes, and machine-local paths.
-- Static export contains the frozen plan, event slice, report, selected safe
-  evidence/ATIF, relative viewer assets, provenance, and checksums. Planned but
-  missing or failed samples remain represented; partial imports never become a
-  smaller “complete” campaign.
+- Static export contains the frozen plan, exact event slice, report, selected
+  safe evidence/ATIF, relative viewer assets, provenance, and sorted checksums.
+  Every report link digest-resolves to bundled content or explicitly says
+  `not_published`; canonical files exclude generation time, hostname, absolute
+  paths, random delivery IDs, and discovery order. Planned but missing or failed
+  samples remain represented; partial imports never become a smaller complete
+  campaign. Tailnet-scoped live access remains the deployment boundary.
 - W5 owns the ATIF v1.7/Harbor viewer spike. Its child spec defines required
   trajectory features, acceptance threshold, and the fallback built-in viewer.
-- Repair internal import semantics before using that archive operationally:
-  stage, verify, and atomically rename payloads; preserve an existing good
-  destination until commit; and return typed per-entry errors rather than only
-  a failed count.
-- Render W2's list/filter data and add artifact archive and dry-run prune flows
-  with separate retention for raw, internal, and published artifacts.
-  Report/provenance remain readable after allowed raw-payload expiry.
+- Repair internal import before using it operationally. Persist an
+  `import_attempt` keyed by source-manifest digest with one durable typed outcome
+  per declared entry and preserved campaign/plan/sample/attempt/report/event-head
+  digests. Stage, verify, and atomically materialize. Identical committed bytes
+  are an idempotent no-op; conflicting bytes for a committed `run_id` are
+  rejected or quarantined under the import attempt. `--force` may retry staging
+  or metadata repair but can never overwrite committed evidence. Legacy
+  run-only imports remain descriptive and partial imports cannot seal.
+- Render W2's list/filter/archive/prune results. Mutations stay on the supervisor
+  API, not the dashboard. Separate raw/internal/published retention and protect
+  active leases, staging, unsealed campaigns, publication/retention holds, and
+  artifacts referenced by retained reports. Require dry-run/apply parity,
+  atomic tombstones, archive checksum verification, restore, resumable
+  interruption, and visible admission refusal under disk pressure. Published
+  report/provenance and retained safe evidence remain readable after allowed
+  raw expiry.
 
 Joint W2/W5 exit: Jesse completes the registered end-to-end UAT without an
-appliance shell: recover a lost submit response, interpret queue/backoff/retry
-state, cancel one queued and one running job, survive a supervisor restart,
-read the sealed campaign, and open an offline static bundle whose counts match
-the report.
+appliance shell: inspect exact control-plane/executor/capacity state; lose and
+recover a submit response; prove same-digest replay returns one job and changed-
+digest replay conflicts; remain distinct from Drew during concurrent work;
+interpret queue/backoff/retry state; cancel queued/running work; survive a
+supervisor restart; read the sealed campaign; and open an offline static bundle
+whose counts match the report. A separate archive/checksum/restore drill proves
+reference-safe retention. This UAT is the Stage-2 multi-user/sharing gate, not a
+retroactive owner of criterion 1's throughput-to-report measurement.
 
 ### W6 — Fleet (Stage 3)
 
 - Adapt the digest-pinned `everyharness-container` base already used by the
   evals Docker image into a bootable, immutable-identity Stockyard Firecracker
   guest; one VM executes one fenced attempt under a pinned resource class.
+- Treat W6 as a coordinated `superpowers-evals` and Stockyard change. Stockyard
+  must persist and report requested and actual CPU, memory, writable disk/PID
+  limits, and immutable image generation/digest across create, restart, and
+  reconciliation; define immutable job-spec transport despite the currently
+  reserved command field; and implement artifact upload/commit acknowledgement
+  plus late-worker fencing. Until then only the appliance executor can claim
+  conformance.
 - Use the W2 leased-executor protocol. The guest reads an immutable job spec,
   uploads a staged checksum manifest and completion marker, waits for or safely
   tolerates commit acknowledgement, and powers off. Duplicate, reordered,
@@ -604,9 +841,11 @@ passes.
 ### W7 — Quota and credentials (cross-cutting; critical path for criterion 1)
 
 - Build the evidence-backed quota-pool registry and joint capacity model,
-  including subject, fused driver/grader, harness, account/seat, RPM/TPM,
-  resource, and cost constraints. Model each serial critical path as well as
-  aggregate ≥7× throughput.
+  including subject, fused driver/grader, harness, account/seat, each declared
+  RPM/TPM enforcement mode, resource, and cost constraints. Model every serial
+  critical path and the full registered primary + reserve/retry/cooldown/report
+  allowance. ≥7× is the initial lower bound, not a substitute for the derived
+  makespan requirement.
 - De-single-point the grader through a key pool or calibrated Bedrock grader
   (PRI-2524). A model/provider change goes through W4 and provenance gates.
 - Size Bedrock raises from the frozen workload model; convert OAuth to API-key
@@ -614,17 +853,24 @@ passes.
   Antigravity is capped at 1, Codex subscription currently has no explicit cap,
   and Copilot credentials are capped at 4. An unpooled account is serial unless
   live evidence and an explicit account-scoped budget approve otherwise.
+- Registration proves each confirmatory block's minimum feasible exposure skew
+  against serial/cap-1 pools. Such a route runs corresponding arms consecutively
+  only when that fits the bound; otherwise the block is rejected or descriptive
+  before spend.
 - Implement campaign/operator/pool commitment reservations covering both LLMs,
   all retry layers, and matched backfill; preserve visible unpriceable coverage.
-- Before any redesign code reaches the appliance, fix PRI-2833: `prepare`
-  performs a frozen evals dependency install for the exact resolved evals ref,
-  does not depend on a pre-existing bind-mounted `node_modules`, and runs
-  `quorum check` from that installed environment.
+- Fix PRI-2833 first for Phase 1: `prepare` runs a frozen-lockfile dependency
+  install for the exact resolved evals SHA, never accidental bind-mounted
+  `node_modules`, and runs `quorum check` from that installation. W2 then
+  materializes dependency state inside each immutable attempt snapshot keyed by
+  evals SHA and lockfile digest; a repaired shared install is not Stage-2
+  isolation.
 
 Exit: a versioned capacity artifact plus controlled saturation receipt proves
-the joint pool/resource graph supports sustained ≥7× for the acceptance
-fixture without cap, spacing, cooldown, model, resource, or cost-reservation
-violations. A documented nominal budget alone does not clear W7.
+the joint pool/resource graph supports the acceptance fixture's derived
+capacity floor (never below ≥7×) including registered allowances, without cap,
+spacing, cooldown, model, resource, or cost-reservation violations. A documented
+nominal budget alone does not clear W7.
 
 ## Program-wide acceptance evidence
 
@@ -634,10 +880,22 @@ minimum the integrated program must prove:
 - crash/restart/cancel behavior at every boundary from durable plan write
   through permit acquisition, spawn, run allocation, verdict write, artifact
   upload, commit, and report projection;
+- the Stage-2 event/state/permit/lease/artifact-selection transaction and outbox
+  recover from crashes at each write boundary without two authorities;
+- cancel versus selected-artifact commit deterministically honors both CAS
+  orders, including replayed cancel, late upload, and restart;
+- a real child interrupted after allocation still leaves the supervisor with
+  the acknowledged `execution_attempt_id`→`run_id` binding;
+- same-principal/same-digest concurrent submit creates one job and one spend,
+  changed-digest replay conflicts, and idempotency survives restart and pruning;
 - two concurrent OS processes and two operators cannot exceed any shared slot,
   spacing, cooldown, resource, quota-pool, or cost-reservation limit;
-- stale lease generations and duplicate/late uploads cannot publish a winning
-  artifact or increase statistical n;
+- a lost heartbeat cannot release claims or launch a duplicate spender before
+  authoritative executor termination/billing-horizon closure; stale generations
+  and duplicate/late uploads cannot publish a winner or increase statistical n;
+- asymmetric starts/failures, serial pools, and continuous arrivals satisfy
+  exposure-skew, outcome-blind reserve selection, and numeric fairness bounds or
+  fail registration before spend;
 - truncating the campaign event stream at any prefix cannot manufacture a
   complete campaign, valid pair, or release decision;
 - a missing/mismatched ref, model readback, scenario digest, grader
@@ -645,20 +903,27 @@ minimum the integrated program must prove:
   its corresponding inference gate;
 - retry and backfill fixtures preserve raw outcomes and all-attempt spend and
   never discard a behavioral or ambiguous non-completion;
+- state-matrix and conservation fixtures cover completed+unresolved,
+  lost+orphaned, cancelled+late-quarantined, dormant reserve, not-run primary,
+  broken pair, underpowered sealed report, and aborted campaign;
+- identical and conflicting import replays, partial import/restart, dashboard
+  snapshot/SSE races, archive/restore, and Phase-1→2 cutover/rollback preserve
+  canonical digests and visible incompleteness;
 - identical frozen inputs regenerate identical report data and static-bundle
   checksums; and
 - the live Stage-2 receipt demonstrates the registered acceptance campaign only
-  after all deterministic, migration, reconciliation, and operator-UAT gates
-  pass.
+  after W1/W2/W3/W7 deterministic, migration, reconciliation, and capacity gates
+  pass. The W2/W5 Jesse UAT remains a separate required Stage-2 readiness gate.
 
 ## Sequencing
 
 The workstreams may develop in parallel, but integration follows these gates:
 
-1. **Contract gate first.** The campaign/sample/attempt/assessment contracts,
-   failure taxonomy, and provenance/resource schemas are the first shared slice
-   of W1, W2, and W3. No multi-job scheduling, top-up, central reporting, or
-   fleet work may invent a different identity or lifecycle.
+1. **Contract gate first.** W3 lands the shared campaign/sample/attempt/
+   assessment and provenance/resource schema module; W1 and W2 land typed
+   failure and supervisor protocol slices against it. No multi-job scheduling,
+   top-up, central reporting, or fleet integration may invent a different
+   identity or lifecycle.
 2. **Reliability and quota inputs.** W1's typed failure/rate-limit
    classification and W7's measured quota-pool budgets gate W2 cooldown,
    cross-process admission, and throughput proof. W1 and W2 are not independent
@@ -669,9 +934,13 @@ The workstreams may develop in parallel, but integration follows these gates:
 4. **Grading and retained artifacts.** W4 may run Gate A once canonical frozen
    evidence exists. W5's capture-finalization and retained-artifact contract
    lands before static sharing or any W6 upload to a central artifact sink.
-5. **Fleet last.** W6 starts only after the northbound supervisor and internal
-   executor contracts stabilize and Stage 2 passes restart/reconciliation
-   tests. Stage 3 preserves those contracts while changing the executor.
+5. **Fleet integration last.** A bounded Stockyard feasibility slice for
+   bootable image construction, immutable image identity, resource readback,
+   job-spec transport, and artifact transport may start after the contract gate
+   so a Stage-2 capacity failure does not start cross-repo discovery from zero.
+   W6 integration/rollout waits for stable northbound/executor contracts and
+   Stage-2 restart/reconciliation tests; Stage 3 preserves those contracts while
+   changing the executor.
 
 ## Non-goals
 
@@ -715,6 +984,13 @@ The workstreams may develop in parallel, but integration follows these gates:
 - **A durable row is not durable execution.** Lost supervisor responses,
   owner death, PID reuse, partial uploads, and late workers can duplicate or
   misattribute paid work without fencing, reconciliation, and atomic commit.
+- **A lease fence is not an execution fence.** A partitioned worker may continue
+  spending after heartbeat loss. Claims remain reserved until authoritative
+  termination or the registered billing horizon, even when that reduces
+  availability.
+- **Control-plane rollout can create two writers.** The current helper runs from
+  a mutable evals checkout. Service packaging, drain, migration validation,
+  writer fencing, canary, and rollback precede `run.lock` removal.
 - **Campaign freezes collide with rollout.** Evals main freezes during gates;
   redesign work lands between campaigns. Exact per-job snapshots remove the
   mutable-checkout freeze only after their identity and isolation gates pass.
@@ -725,11 +1001,11 @@ This program retains and supersedes prior decisions explicitly:
 
 | Prior design | Retained | Superseded or amended here |
 |---|---|---|
-| 2026-06-12 scheduler | one true per-scheduler slot pool, limiter caps/spacing, injectable clock, and one terminal scheduler event per scheduled attempt | for supervisor-managed work: per-process caps/spacing, arbitrary/no-priority dispatch, no-fairness doctrine, and batch-lifetime latch-and-skip; W2 adds shared admission, block-aware priority, bounded fairness, durable cooldown/retry, and explicit quota-pool identity |
-| 2026-06-18 shared appliance | Phase-2 durable job store and northbound submit/status/cancel/show/costs surface | Phase-1 single active `run.lock`, shared mutable checkout/container execution, and a job row without the canonical sample/attempt ledger; W2 adds immutable namespaces, leases, reconciliation, list/events, and artifact commit |
+| 2026-06-12 scheduler | limiter caps/spacing, injectable clock, and one terminal scheduler event per scheduled attempt remain for local/break-glass `quorum run-all` | for supervisor-managed work: nested self-scheduling, per-process caps/spacing, arbitrary/no-priority dispatch, no-fairness doctrine, and batch-lifetime latch-and-skip; W2 adds one transactional shared admission authority, block-aware priority, bounded fairness, durable cooldown/retry, and explicit quota-pool identity |
+| 2026-06-18 shared appliance | Phase-2 SQLite durable store and northbound operator direction | Phase-1 single active `run.lock`, shared mutable checkout/container execution, mutable-checkout control plane, and a job row without the canonical sample/attempt ledger; this design defines the full stable surface, one-attempt leases, transactional event authority, cutover, immutable namespaces, reconciliation, and artifact commit |
 | 2026-06-18 dashboard decoupling | dashboard remains a read-only consumer | nothing; W5 may materialize campaign state into a filesystem read model but may not launch or cancel work |
 | 2026-07-09 retry design | startup-liveness detector, one canonical run dir with nested runner-attempt evidence, bounded attempt structure, summed economics, and flaked-green visibility | the `investigate + error == null` retry predicate and last-attempt headline semantics; clean/ambiguous investigates are unresolved, retry targets the smallest failed component, and campaign backfill is a separate matched-sample operation |
-| 2026-08-09 import design | allowlisted payloads, checksums, provenance uncertainty, and resumable internal transfer | its internal raw-session/workdir bundle is not the static share object; W5 adds capture-finalization retention classes, typed atomic import repair, and a narrower publication projection |
+| 2026-08-09 import design | allowlisted payloads, checksums, provenance uncertainty, and resumable internal transfer | `--force` replacement of committed evidence; conflicting bytes now reject/quarantine and identical bytes are idempotent. Its internal raw-session/workdir bundle is not the static share object; W5 adds durable import receipts, capture-finalization retention classes, atomic repair, and a narrower publication projection |
 
 All unaffected portions remain binding. “No prior spec is retired” does not
 preserve the specific decisions this table replaces.
