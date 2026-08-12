@@ -575,10 +575,13 @@ writes immutable bytes plus a checksum manifest and completion marker. One
 database transaction records the selected-attempt CAS,
 `artifact_committed` event, and materialization outbox; it fences cancellation
 but is not terminal completion. Classification then commits `classified →
-completed | infrastructure_failed` plus terminal permit/reservation effects.
-Classifier retries are component-local and bounded; exhausted classifier error
-selects `infrastructure_failed`, retains the committed artifact and typed cause,
-and releases claims in that terminal transaction. Identical replay is
+completed | infrastructure_failed` plus only ledger effects whose release fences
+are already authoritative. It records release intent for every remaining host/
+provider claim; each claim releases later, transactionally, only when its
+corresponding execution or no-further-billing fence is established. Classifier
+retries are component-local and bounded; exhausted classifier error selects
+`infrastructure_failed`, retains the committed artifact and typed cause, and
+follows the same fenced release process. Identical replay is
 idempotent, conflicting bytes fail closed, partial uploads never become terminal
 truth, and late attempts remain visible without replacing selected evidence.
 Crash repair replays the outbox and reconciles immutable staging rather than
