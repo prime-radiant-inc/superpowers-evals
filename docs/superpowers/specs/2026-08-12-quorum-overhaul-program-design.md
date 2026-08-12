@@ -987,12 +987,14 @@ passes.
   samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
   6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
   itself. Research (2026-08-12): OpenAI enforces quota per organization and
-  per model; project keys add attribution, never throughput. The route is one
-  dedicated Tier-5 eval org — start its $1,000 + 30-day tier clock
-  immediately, since advancement is calendar-gated — with auto-recharge on,
-  Scale Tier purchases for genuine increases, and a warmed second org as
-  insurance. Tier-5 per-model buckets (~40M TPM sol-class, ~180M TPM luna)
-  cover 12–15 concurrent runs. Model quota pools as org|model identities (a
+  per model; project keys add attribution, never throughput. The org is
+  already Tier 5 (Drew, 2026-08-12), so no tier clock applies: turn on
+  auto-recharge (the historical hangs were billing exhaustion), run the
+  saturation probe on the existing org now, raise pool caps to the probed
+  value, and buy Scale Tier quota for genuine increases. A separate eval org
+  remains an optional spend-isolation choice — it would start at Tier 1, so
+  it warms in the background and never gates. Tier-5 per-model buckets
+  (~40M TPM sol-class, ~180M TPM luna) cover 12–15 concurrent runs. Model quota pools as org|model identities (a
   CredentialSchema `pool` override): today's limiterKey both merges OpenAI's
   per-model buckets into one pool and splits protocols that share a bucket,
   and the opencode/pi columns silently draw the same org quota. Then probe
@@ -1003,13 +1005,15 @@ passes.
   bypasses Copilot premium-request quotas, so copilot graduates to tier 1 on
   DEDICATED provider orgs (never silently pooled with the claude/codex
   quota) after an A/B smoke proves behavioral comparability with GitHub
-  routing and zero credit consumption. The GitHub-routed credential stays
-  tier 2 as the product-routing observation cell; MAI-model cells have no
-  key path. Antigravity: consumer API keys remain unsupported, but agy
+  routing and zero credit consumption — the BYOK credentials ARE the tier-1
+  copilot cells. The GitHub-routed credential is an optional tier-2
+  observation cell retained to watch GitHub's own serving stack; it does not
+  gate copilot's tier-1 membership. MAI-model cells have no key path.
+  Antigravity: consumer API keys remain unsupported, but agy
   1.1.10 (2026-08-03) added ADC / Gemini Enterprise Agent Platform sign-in —
   per-GCP-project Dynamic Shared Quota with purchasable Provisioned
-  Throughput and an official headless mode. That is the designated tier-1
-  route; the feature is days old, so a registered concurrency smoke is
+  Throughput and an official headless mode. That route is approved (Drew,
+  2026-08-12); the feature is days old, so a registered concurrency smoke is
   load-bearing, and until it passes the column stays tier-2 serial. Paid
   consumer-account pooling is rejected (2026-02 suspension wave;
   keyring/token-rotation ops burden).
