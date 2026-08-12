@@ -96,9 +96,11 @@ feature**.
      terminal state;
    - every primary slot has an included outcome or a replacement authorized by
      the frozen outcome-independent rule;
-   - no pending, missing, `not_run`, broken-pair, unclassified, unreconciled
-     duplicate, orphan, provenance failure, or silently omitted activated
+   - no pending, missing, `not_run`, unclassified, or silently omitted activated
      sample remains;
+   - every broken pair, duplicate, orphan, and provenance failure has a terminal
+     typed disposition and every replacement required by the frozen
+     outcome-independent rule is resolved;
    - every headline sample passes the provenance and resource-equivalence
      gates;
    - the report applies the frozen decision rule without hand-computed
@@ -277,6 +279,12 @@ These identifiers are distinct:
 | `runner_attempt_id` | W1 component retry nested inside one run |
 | `assessment_id` | one live or offline assessment over frozen evidence |
 
+`run_id` is reserved exclusively for the Quorum-allocated artifact. Gauntlet's
+internal identifier is `gauntlet_run_id` and is provenance only. Legacy
+`verdict.gauntlet.run_id` maps to `gauntlet_run_id`; it never satisfies the
+`execution_attempt_id`→`run_id` binding. Verdict v2 carries both under distinct
+fields.
+
 Activating a matched reserve block creates one block event and one execution
 attempt per arm; it is not one multi-arm execution. No identity is reconstructed
 from a filename or timestamp. The supervisor persists sample and attempt
@@ -301,6 +309,7 @@ The attempt lifecycle is distinct from job and campaign lifecycle:
 
 ```text
 planned → queued → leased → starting → ready_to_drive → running
+running → uncertain → running | cancelled | lost | infrastructure_failed
 running → artifact_committed → classified → completed
 ```
 
@@ -311,6 +320,13 @@ The canonical record preserves orthogonal axes rather than one display enum:
 - `artifact_state = none | staged | committed | missing | orphaned | quarantined`;
 - `analysis_disposition = pending | included | excluded | void`; and
 - `sample_state = available_reserve | activated | not_run`.
+
+Each work identity also carries its own required terminal field:
+`execution_terminal`, `runner_attempt_terminal`, and `assessment_terminal` each
+use `completed|cancelled|lost|infrastructure_failed`. Assessment
+`completion_status` is exactly `assessment_terminal`; only a completed
+assessment may provide a schema-valid evaluation outcome. Every other
+assessment outcome is `not_assessed` with a typed failure or missing reason.
 
 `pass` and `fail` are behavioral determinations. `unresolved` means a valid
 drive or schema-valid assessment did not support pass/fail; a clean Gauntlet
@@ -407,8 +423,12 @@ a matched method. Raw pooling across strata is descriptive only.
 The supervisor is the only normal write front door for Stage 2 and Stage 3;
 the dashboard remains read-only. The stable operator surface provides
 idempotent `submit`; `list`, `status`, and sequenced `events`; idempotent
-`cancel`; `show`, `costs`, `report`, and artifact references; and read-only
-`doctor`, `inspect`, and `capacity --json`.
+`cancel`; typed `import`, `archive`, `restore`, and `prune --dry-run|--apply`;
+`show`, `costs`, `report`, and artifact references; and read-only `doctor`,
+`inspect`, and `capacity --json`. Mutations use request idempotency and return a
+new state revision. Static export is a pure build from a sealed scrubbed
+snapshot; publishing that bundle, if automated, is a separate idempotent
+supervisor operation.
 
 Submit uniqueness is `(enrolled_operator_id, request_id)`. The same canonical
 request digest returns the original job and current revision; a different
@@ -455,17 +475,23 @@ Workers use renewable, fenced leases naming attempt, generation, resource and
 cost claims, issue time, and expiry. Only the current generation may launch,
 renew, or select an artifact. Lease expiry alone moves a running attempt to
 `uncertain` and fences commit; it does not release execution/quota/cost claims
-or authorize redispatch until the executor is authoritatively terminated by
-process group/cgroup/container/VM identity or the registered maximum billing
-horizon expires. Host PIDs remain local diagnostics rather than shared-store
-liveness.
+or authorize redispatch. `uncertain` is nonterminal, retains every claim, cannot
+launch or select artifacts, and returns to `running` only after authoritative
+same-executor reconciliation plus durable lease re-establishment. Otherwise it
+terminalizes only after authoritative process-group/cgroup/container/VM
+termination. Host resources are never released on a timestamp alone. Provider
+quota/cost claims may close earlier only when an independently enforced fence—a
+proxy, expiring credential, or trusted out-of-process watchdog—proves further
+billable calls impossible. Host PIDs remain local diagnostics rather than
+shared-store liveness.
 
 `cancel_requested` records accepted intent. Cancellation fencing and selected-
 artifact commit linearize through the same compare-and-swap. If commit wins,
-the attempt completes and later cancel is an idempotent no-op. If cancellation
-wins, the attempt is cancelled and later artifacts remain visible but cannot
-be selected. Campaign/job cancellation fences each pre-commit attempt and does
-not relabel already committed results.
+the attempt enters `artifact_committed`, is permanently non-cancellable, and
+proceeds through `classified → completed`; later cancel is an idempotent no-op.
+If cancellation wins, the attempt is cancelled and later artifacts remain
+visible but cannot be selected. Campaign/job cancellation fences each
+pre-commit attempt and does not relabel already committed results.
 
 ### Admission, quotas, resources, and cost
 
@@ -535,12 +561,14 @@ binding, artifact manifest/completion, and commit result.
 
 Before dispatch, the supervisor assigns a staging destination. The executor
 writes immutable bytes plus a checksum manifest and completion marker. One
-database transaction records the selected-attempt CAS, terminal event, permit/
-reservation effects, and materialization outbox. Identical replay is idempotent,
-conflicting bytes fail closed, partial uploads never become terminal truth, and
-late attempts remain visible without replacing selected evidence. Crash repair
-replays the outbox and reconciles immutable staging rather than creating a
-second truth.
+database transaction records the selected-attempt CAS,
+`artifact_committed` event, and materialization outbox; it fences cancellation
+but is not terminal completion. Classification then commits `classified →
+completed` plus terminal permit/reservation effects. Identical replay is
+idempotent, conflicting bytes fail closed, partial uploads never become terminal
+truth, and late attempts remain visible without replacing selected evidence.
+Crash repair replays the outbox and reconciles immutable staging rather than
+creating a second truth.
 
 Stage 2 supplies an appliance executor with immutable checkout, container or
 process, temporary, and results namespaces. Stage 3 supplies a baked
@@ -563,12 +591,12 @@ Recover instrument waste without converting ambiguous behavior into passes.
   summed economics, and flaked-green visibility. Replace that design's broad
   clean-`investigate` retry predicate with the typed failure doctrine above.
 - Split every adapter into static validation, `provisionLocal`, fixture setup,
-  deterministic prechecks, `validateLive`, then drive. The first three phases
-  have no provider credentials; `setup.sh` receives a secret-minimized
-  environment and its contract forbids provider calls. `validateLive` is the
-  first Quorum-owned provider call and its spend is recorded. An adapter that
-  cannot separate local setup from live validation cannot claim zero precheck
-  spend.
+  deterministic prechecks, `validateLive`, then drive. The first four phases
+  have no provider credentials or provider-capable auth material; `setup.sh`
+  receives a secret-minimized environment and its contract forbids provider
+  calls. `validateLive` is the first phase permitted to receive such material
+  or call an LLM provider, and its spend is recorded. An adapter that cannot
+  separate local setup from live validation cannot claim zero precheck spend.
 - Introduce one async, process-group-aware, cancellable subprocess seam before
   applying deadlines to provisioning, setup, checks, drive, and capture. Each
   deadline requests graceful stop, waits for terminal evidence, then kills the
@@ -702,10 +730,13 @@ Exit: the frozen fresh-gate fixture regenerates the same report bytes and
 decision on two clean environments, and independent-oracle goldens prove
 correct Fisher, matched exact, fixed-strata, exact token-rank, minimum-n,
 multiplicity, missingness, reserve-selection, and rounding behavior. Property
-tests cover event/input permutation, arm swap, and analytically excluded runs.
-Every registered sample has an explicit state; incomplete evidence and invalid
-comparisons fail closed; and a real paired release-gate readout needs no
-hand-computed statistic or denominator repair.
+tests cover physical event-row/input enumeration permutations while preserving
+canonical event sequence, arm swap, and analytically excluded runs. Separate
+tests prove that sequence-sensitive cancel/commit and pre/post-outcome amendment
+order produces the registered result. Every registered sample has an explicit
+state; incomplete evidence and invalid comparisons fail closed; and a real
+paired release-gate readout needs no hand-computed statistic or denominator
+repair.
 
 ### W4 — Runner/grader split and rubric-blind driver (Stage 2-adjacent; Gauntlet upstream)
 
@@ -890,9 +921,11 @@ minimum the integrated program must prove:
   changed-digest replay conflicts, and idempotency survives restart and pruning;
 - two concurrent OS processes and two operators cannot exceed any shared slot,
   spacing, cooldown, resource, quota-pool, or cost-reservation limit;
-- a lost heartbeat cannot release claims or launch a duplicate spender before
-  authoritative executor termination/billing-horizon closure; stale generations
-  and duplicate/late uploads cannot publish a winner or increase statistical n;
+- a lost heartbeat cannot release host claims or launch a duplicate spender
+  before authoritative executor termination, and cannot release provider claims
+  before an enforced no-further-billing fence; advancing a timestamp alone
+  releases nothing. Stale generations and duplicate/late uploads cannot publish
+  a winner or increase statistical n;
 - asymmetric starts/failures, serial pools, and continuous arrivals satisfy
   exposure-skew, outcome-blind reserve selection, and numeric fairness bounds or
   fail registration before spend;
@@ -985,9 +1018,10 @@ The workstreams may develop in parallel, but integration follows these gates:
   owner death, PID reuse, partial uploads, and late workers can duplicate or
   misattribute paid work without fencing, reconciliation, and atomic commit.
 - **A lease fence is not an execution fence.** A partitioned worker may continue
-  spending after heartbeat loss. Claims remain reserved until authoritative
-  termination or the registered billing horizon, even when that reduces
-  availability.
+  spending after heartbeat loss. Host claims remain reserved until authoritative
+  termination; provider claims remain reserved until termination or an
+  independently enforced no-further-billing fence, even when that reduces
+  availability. Elapsed time alone is never a fence.
 - **Control-plane rollout can create two writers.** The current helper runs from
   a mutable evals checkout. Service packaging, drain, migration validation,
   writer fencing, canary, and rollback precede `run.lock` removal.
