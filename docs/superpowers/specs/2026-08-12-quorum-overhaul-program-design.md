@@ -309,24 +309,27 @@ The attempt lifecycle is distinct from job and campaign lifecycle:
 
 ```text
 planned → queued → leased → starting → ready_to_drive → running
-running → uncertain → running | cancelled | lost | infrastructure_failed
-running → artifact_committed → classified → completed
+running → uncertain → running | cancelling | lost | infrastructure_failed
+pre-commit nonterminal → cancelling → cancelled
+running → artifact_committed → classified → completed | infrastructure_failed
 ```
 
 The canonical record preserves orthogonal axes rather than one display enum:
 
 - `evaluation_outcome = pass | fail | unresolved | not_assessed`;
-- `attempt_terminal = completed | cancelled | lost | infrastructure_failed`;
+- `execution_terminal = completed | cancelled | lost | infrastructure_failed`;
 - `artifact_state = none | staged | committed | missing | orphaned | quarantined`;
-- `analysis_disposition = pending | included | excluded | void`; and
-- `sample_state = available_reserve | activated | not_run`.
+- `analysis_disposition = pending | included | excluded | void`;
+- `sample_activation = primary | available_reserve | activated_reserve`;
+- `sample_lifecycle = open | terminal` for activated samples; and
+- `sample_resolution = pending | selected_execution | exhausted | not_run`.
 
-Each work identity also carries its own required terminal field:
-`execution_terminal`, `runner_attempt_terminal`, and `assessment_terminal` each
-use `completed|cancelled|lost|infrastructure_failed`. Assessment
-`completion_status` is exactly `assessment_terminal`; only a completed
-assessment may provide a schema-valid evaluation outcome. Every other
-assessment outcome is `not_assessed` with a typed failure or missing reason.
+`runner_attempt_terminal` and `assessment_terminal` use the same terminal enum
+for their own identities; they are not alternate execution-terminal fields.
+Assessment `completion_status` is exactly `assessment_terminal`; only a
+completed assessment may provide a schema-valid evaluation outcome. Every
+other assessment outcome is `not_assessed` with a typed failure or missing
+reason.
 
 `pass` and `fail` are behavioral determinations. `unresolved` means a valid
 drive or schema-valid assessment did not support pass/fail; a clean Gauntlet
@@ -335,10 +338,15 @@ component, phase, stable cause, evidence, retryability, and retry-policy
 version. `lost` means no authoritative live owner and no selected terminal
 artifact after bounded reconciliation. `orphaned` means artifact bytes lack a
 durable link; reconciliation either restores that link or quarantines them.
-`not_run` is an activated sample with no admitted execution at abort/invalid
-finalization; unused reserve remains `available_reserve`, not missing or
-not-run. `broken` is a pair-block state, and `deferred` is a visible scheduling
-state with a reason and next eligibility time, not an evaluation outcome.
+`not_run` is a terminal activated-sample resolution with no admitted execution
+at abort/invalid finalization. `exhausted` means every authorized attempt is
+terminal but no execution was selected. Unused reserve remains
+`available_reserve`, not missing or not-run. `open_samples` and
+`terminal_samples` partition primary plus activated-reserve samples;
+`activated_reserve` is the registered reserve subset that left
+`available_reserve`. `broken` is a pair-block state. `deferred` is a nonterminal
+scheduling substate of an open sample, with a reason and next eligibility time;
+it is not an evaluation outcome or a separate sample terminal.
 
 `excluded` preserves an observation that the frozen plan makes ineligible for a
 named analysis. `void` means a positively identified, outcome-independent
@@ -488,10 +496,13 @@ shared-store liveness.
 `cancel_requested` records accepted intent. Cancellation fencing and selected-
 artifact commit linearize through the same compare-and-swap. If commit wins,
 the attempt enters `artifact_committed`, is permanently non-cancellable, and
-proceeds through `classified → completed`; later cancel is an idempotent no-op.
-If cancellation wins, the attempt is cancelled and later artifacts remain
-visible but cannot be selected. Campaign/job cancellation fences each
-pre-commit attempt and does not relabel already committed results.
+proceeds through classification to its selected terminal; later cancel is an
+idempotent no-op. If cancellation fencing wins, the attempt enters
+`cancelling`, selected-artifact commit is permanently fenced, and later
+artifacts remain visible but cannot be selected. A launched attempt becomes
+`cancelled` only after authoritative executor termination; permit and
+reservation effects follow the execution-fencing rules above. Campaign/job
+cancellation does not relabel already committed results.
 
 ### Admission, quotas, resources, and cost
 
@@ -564,7 +575,10 @@ writes immutable bytes plus a checksum manifest and completion marker. One
 database transaction records the selected-attempt CAS,
 `artifact_committed` event, and materialization outbox; it fences cancellation
 but is not terminal completion. Classification then commits `classified →
-completed` plus terminal permit/reservation effects. Identical replay is
+completed | infrastructure_failed` plus terminal permit/reservation effects.
+Classifier retries are component-local and bounded; exhausted classifier error
+selects `infrastructure_failed`, retains the committed artifact and typed cause,
+and releases claims in that terminal transaction. Identical replay is
 idempotent, conflicting bytes fail closed, partial uploads never become terminal
 truth, and late attempts remain visible without replacing selected evidence.
 Crash repair replays the outbox and reconciles immutable staging rather than
