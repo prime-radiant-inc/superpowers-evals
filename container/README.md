@@ -34,6 +34,17 @@ toolchains — live in
 Adding or bumping a harness CLI happens there, not here (see
 [docs/adding-a-coding-agent.md](../docs/adding-a-coding-agent.md)).
 
+## Architecture
+
+The base image is published for **`linux/amd64` only** (consistent with
+everyharness-container's own documented design), so the eval image is amd64-only
+too. On an arm64 host (Apple Silicon) it builds and runs under emulation rather
+than natively. This is a change from the previous `FROM ubuntu:26.04`, which was
+multi-arch and built natively on arm64. If a native arm64 eval image is ever
+needed, everyharness-container has to publish an arm64 variant first — the
+`TARGETARCH` plumbing (e.g. goose's architecture-specific download) already
+lives in its Dockerfile.
+
 ## Version reporting
 
 The base image ships `harness-versions` on `PATH`, which reports the harness
@@ -44,6 +55,13 @@ for that shared inventory, then reports the evals-specific tools (`quorum`,
 ```bash
 scripts/evals-container exec evals-tool-versions
 ```
+
+Because the shared inventory is delegated, `evals-tool-versions` only produces a
+full report when run on an image that carries the base's `harness-versions`
+(i.e. the main image). On an image without it, the harness/toolchain section
+collapses to a single `harness-versions: missing (base image not detected)` line
+and only the evals-specific tools are reported — see the `Dockerfile.claude-slim`
+note below.
 
 ## Bumping the base-image pin
 
@@ -81,3 +99,13 @@ build on everyharness-container — building on the full base would defeat its
 purpose — so it still carries its own minimal base + Claude install inline. See
 the header comment in that file and
 [docs/experiments/2026-07-sdd-fix-loop-redesign.md](../docs/experiments/2026-07-sdd-fix-loop-redesign.md).
+
+**Version report on the slim image is evals-only.** The slim image copies the
+same `bin/evals-tool-versions`, but it has no `harness-versions` (that ships with
+the base image, which slim does not use). So on slim the report is
+`harness-versions: missing (base image not detected)` followed by just the evals
+tools (`quorum`, `serf`, `gauntlet`) — the claude/node/bun/python inventory the
+old inline script printed is not reported. This is an accepted limitation of the
+throwaway slim variant; use the full image when a complete harness inventory is
+needed. Re-adding an inventory to slim is intentionally avoided because it would
+reintroduce exactly the duplication this base-image split removes.
