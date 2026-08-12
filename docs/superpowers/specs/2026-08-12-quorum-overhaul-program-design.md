@@ -1,8 +1,9 @@
 # Quorum overhaul program: fast, interpretable, multi-user evals
 
 **Date:** 2026-08-12
-**Status:** direction approved (Drew, 2026-08-12); adversarial redline awaiting
-Drew's review; child specs blocked on this parent contract
+**Status:** direction approved (Drew, 2026-08-12); adversarial review,
+contract redline, and coherence passes applied; awaiting Drew's final read;
+child specs blocked on this parent contract
 **Tracking:** PRI-2874
 **Research brief:** https://claude.ai/code/artifact/c3794032-07aa-405f-88d0-c0587efaa766
 **Review basis:** `superpowers-evals@ee570dd106fdc3cc2a7cabdf4ce25ab6413c1999`,
@@ -17,6 +18,22 @@ experiment logs, and read-only live appliance inspections on 2026-08-12
 selected mechanics; amends retry predicate),
 `2026-08-09-appliance-results-import-design.md` (retains internal transfer;
 does not adopt it as the publication shape)
+
+## How to read this document
+
+Orientation for a reader who was not in the room: quorum's eval results
+arrive too slowly to gate superpowers releases (Problem). The fix is judged
+by four criteria — the critical one is a full paired release gate, submission
+to machine-generated report, inside eight hours (Success criteria). Ten
+recorded decisions and a set of binding constraints shape the design. The
+canonical-contracts section defines the shared vocabulary every workstream
+implements (campaign/sample/attempt identity, lifecycle, admission, executor
+protocol) — skim it first and return as needed. Seven workstreams carry the
+work: W1 reliability, W2 supervisor/scheduling, W3 campaign artifact and
+report, W4 runner/grader split, W5 dashboard/sharing, W6 VM fleet, W7 quota
+and credentials. "Stage 1" is pre-supervisor work inside today's appliance,
+"Stage 2" is the supervisor era on one host, "Stage 3" is the fleet.
+Sequencing lists the five integration gates that order it all.
 
 ## Problem
 
@@ -95,8 +112,9 @@ feature**.
    definition. A changed grid is a new fixture and registration hash; “~390
    runs” is never an acceptance definition. The historical design contains only
    Linux-container Claude/Codex credentials; fixture validation nevertheless
-   recomputes managed-substrate eligibility and rejects any Windows,
-   Antigravity, or otherwise unmanaged primary column. Criterion 4 runs this
+   recomputes managed-substrate eligibility and tier-1 membership (decision
+   9), and rejects any primary column that is not tier 1 on a managed
+   substrate — today that excludes Windows and Antigravity. Criterion 4 runs this
    same registered Linux/amd64 workload, not a silently reduced fleet subset.
 
    The clock starts when the supervisor durably accepts the campaign and ends
@@ -146,7 +164,8 @@ feature**.
 
 Preliminary capacity math for criterion 1: 388 arm-samples × mean ~476s ≈ 51.3
 serial hours. Primaries alone require ≈6.41× effective parallelism over eight
-hours. W7 starts at ≥7× but must derive the actual acceptance floor from the
+hours. W7 starts at the ≥9× fixture-composition working floor below but must
+derive the actual acceptance floor from the
 frozen primary workload plus registered reserve/backfill, retry, cooldown, and
 reporting allowances; 7× is not enough merely because it exceeds 6.41×. Priced
 from the fixture's own cell composition rather than the corpus mean, the same
@@ -211,8 +230,9 @@ Recorded from the 2026-08-12 discussion; each binds the child specs.
    requires a positively identified, typed, retryable instrument cause; a bare
    clean `investigate` is an unresolved outcome, not retry evidence.
 9. **Key-backed columns gate; seat-backed columns inform (Drew, 2026-08-12).**
-   Tier 1 is the set of columns on API-key credentials whose quota can be
-   pooled; the acceptance campaign and criterion 1 are defined over tier 1.
+   Tier 1 is the set of columns on API-key or service-credential (ADC)
+   auth whose quota can be pooled or purchased; the acceptance campaign and
+   criterion 1 are defined over tier 1.
    Seat/subscription-auth columns are tier 2: scheduled contemporaneously as
    capacity allows, reported separately, and never gating the eight-hour
    window. Codex moves to API-key credentials as its gating path. Copilot's
@@ -659,7 +679,10 @@ restart.
 
 Each workstream gets its own child spec and Linear issue before
 implementation. Scope lines below bound the child specs; they do not replace
-them.
+them. Under decision 10's counterpart rule, a child spec may propose
+descoping any obligation in this document that does not serve the four
+success criteria; a descope is an explicit recorded amendment with rationale,
+never a silent omission.
 
 ### W1 — Reliability and waste (Stage 1)
 
@@ -702,7 +725,7 @@ Recover instrument waste without converting ambiguous behavior into passes.
   read side.
 
 Exit: on two consecutive registered sentinel executions, zero silently omitted
-cells and zero unreported allocated run directories. Report both (a)
+registered arm-samples and zero unreported allocated run directories. Report both (a)
 failed-or-lost attempts / admitted attempts and (b) unique samples experiencing
 at least one failed-or-lost attempt / admitted samples. Retry-resolved failures
 remain in both metrics and all-attempt spend; the <5% gate applies to (b).
@@ -756,7 +779,7 @@ The parallelism lever and the stable front door for both execution substrates.
 
 Exit: deterministic multi-process and fault-injection tests prove no admission,
 spacing, cooldown, resource, pairing, ownership, or reservation violation and
-no silent cell. Cutover/rollback receipts prove one writer and stable artifact
+no silent arm-sample. Cutover/rollback receipts prove one writer and stable artifact
 digests. W2 then participates with W1, W3, and W7 in the real paired campaign
 for success criterion 1; it cannot claim that criterion alone.
 
@@ -791,8 +814,8 @@ missingness policy, comparison, and decision rule machine-enforced.
   overwrite live results. W5 renders this data.
 - Give deterministic checks stable criterion IDs, typed tags, and metrics with
   units for faceted reading and triage.
-- Add deterministic, versioned classification for the four verdict-shape atlas
-  patterns that are mechanically derivable. Label the other three as requiring
+- Add deterministic, versioned classification for the three verdict-shape atlas
+  patterns that are mechanically derivable. Label the other four as requiring
   human attribution; surface them explicitly in the report's residual-triage
   queue and never guess them from free text. Automating those residual patterns
   is not a release gate for this program.
@@ -937,6 +960,11 @@ whose counts match the report. A separate archive/checksum/restore drill proves
 reference-safe retention. This UAT is the Stage-2 multi-user/sharing gate, not a
 retroactive owner of criterion 1's throughput-to-report measurement.
 
+W5-specific exit, independent of the UAT: the retroactive scrub of both
+corpora passes the value-based secret scan; the archive/prune drill passes;
+and static-bundle regeneration is byte-deterministic. The Jesse UAT does not
+substitute for these.
+
 ### W6 — Fleet (Stage 3)
 
 - Adapt the digest-pinned `everyharness-container` base already used by the
@@ -981,24 +1009,32 @@ passes.
   including subject, fused driver/grader, harness, account/seat, each declared
   RPM/TPM enforcement mode, resource, and cost constraints. Model every serial
   critical path and the full registered primary + reserve/retry/cooldown/report
-  allowance. ≥7× is the initial lower bound, not a substitute for the derived
-  makespan requirement.
+  allowance. ≥9× (the fixture-composition working floor) is the initial lower
+  bound, not a substitute for the derived makespan requirement.
 - Dissolve the binding OpenAI floor first: 236 of the 388 acceptance-fixture
   samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
   6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
   itself. Research (2026-08-12): OpenAI enforces quota per organization and
   per model; project keys add attribution, never throughput. The org is
-  already Tier 5 (Drew, 2026-08-12), so no tier clock applies: turn on
+  already usage Tier 5 (Drew, 2026-08-12), so no tier clock applies: turn on
   auto-recharge (the historical hangs were billing exhaustion), run the
   saturation probe on the existing org now, raise pool caps to the probed
   value, and buy Scale Tier quota for genuine increases. A separate eval org
-  remains an optional spend-isolation choice — it would start at Tier 1, so
-  it warms in the background and never gates. Tier-5 per-model buckets
-  (~40M TPM sol-class, ~180M TPM luna) cover 12–15 concurrent runs. Model quota pools as org|model identities (a
-  CredentialSchema `pool` override): today's limiterKey both merges OpenAI's
-  per-model buckets into one pool and splits protocols that share a bucket,
-  and the opencode/pi columns silently draw the same org quota. Then probe
-  the measured ceiling — cap 5 was a billing misdiagnosis, not a limit.
+  remains an optional spend-isolation choice — it would start at usage Tier
+  1, so it warms in the background and never gates. Usage-Tier-5 per-model
+  buckets (~40M TPM sol-class, ~180M TPM luna) carry the target concurrency
+  with roughly an order of magnitude of headroom; the probe confirms the
+  measured ceiling. (OpenAI "usage tiers" are unrelated to this program's
+  column tiers.) Model quota pools as org|model identities (the
+  CredentialSchema `quota_pool_id` override from the canonical admission
+  contract): today's limiterKey both merges OpenAI's per-model buckets into
+  one pool and splits protocols that share a bucket, and the opencode/pi
+  columns silently draw the same org quota. Then probe the measured ceiling
+  — cap 5 was a billing misdiagnosis, not a limit. The probe protocol, the
+  capacity artifact (`quorum.capacity/v1`), and the saturation receipt's
+  shape are defined in the W7 child spec; the graduation smokes are
+  registered experiments with named owners and experiment-log entries,
+  defined there too.
 - Column graduation routes (research 2026-08-12). Copilot: the CLI ships
   native BYOK (2026-04-07) through the `COPILOT_PROVIDER_*` seam the adapter
   already forwards; BYOK traffic bills the byo provider org directly and
@@ -1010,13 +1046,18 @@ passes.
   observation cell retained to watch GitHub's own serving stack; it does not
   gate copilot's tier-1 membership. MAI-model cells have no key path.
   Antigravity: consumer API keys remain unsupported, but agy
-  1.1.10 (2026-08-03) added ADC / Gemini Enterprise Agent Platform sign-in —
-  per-GCP-project Dynamic Shared Quota with purchasable Provisioned
-  Throughput and an official headless mode. That route is approved (Drew,
-  2026-08-12); the feature is days old, so a registered concurrency smoke is
-  load-bearing, and until it passes the column stays tier-2 serial. Paid
-  consumer-account pooling is rejected (2026-02 suspension wave;
-  keyring/token-rotation ops burden).
+  1.1.10 (2026-08-03) added ADC / Gemini Enterprise Agent Platform sign-in,
+  billing inference to a GCP project under Dynamic Shared Quota — a shared
+  pool with no fixed per-project caps and no per-project floor; purchasable
+  Provisioned Throughput is the guarantee mechanism — with an official
+  headless mode. That route is approved (Drew, 2026-08-12); the feature is
+  days old, so a registered concurrency smoke is load-bearing, and until it
+  passes the column stays tier-2 serial. Paid consumer-account pooling is
+  rejected (2026-02 suspension wave; keyring/token-rotation ops burden).
+  Both graduation routes require real adapter work, owned by their smoke's
+  child spec: per-credential BYOK wiring for copilot (today's seam forwards
+  host env, which the redesign eliminates) and ADC credential seeding into
+  the per-run throwaway home for antigravity.
 - De-single-point the grader through a key pool or calibrated Bedrock grader
   (PRI-2524). A model/provider change goes through W4 and provenance gates.
 - Size Bedrock raises from the frozen workload model; convert OAuth to API-key
@@ -1039,7 +1080,8 @@ passes.
 
 Exit: a versioned capacity artifact plus controlled saturation receipt proves
 the joint pool/resource graph supports the acceptance fixture's derived
-capacity floor (never below ≥7×) including registered allowances, without cap,
+capacity floor (never below the ≥9× working floor) including registered
+allowances, without cap,
 spacing, cooldown, model, resource, or cost-reservation violations. A documented
 nominal budget alone does not clear W7.
 
@@ -1102,13 +1144,17 @@ The workstreams may develop in parallel, but integration follows these gates:
    classification and W7's measured quota-pool budgets gate W2 cooldown,
    cross-process admission, and throughput proof. W1's async cancellable process
    seam also gates W2 cancellation/deadline work. W1 and W2 are not independent
-   at either boundary.
+   at either boundary. The registered sentinel fixture (a W3 deliverable) is a
+   prerequisite for measuring W1's exit, not for W1 implementation.
 3. **Stage-2 release gate.** W2 scheduling and W3 reporting may implement in
    parallel, but both land before success criterion 1 is attempted. The result
    belongs jointly to W1, W2, W3, and W7.
 4. **Grading and retained artifacts.** W4 may run Gate A once canonical frozen
    evidence exists. W5's capture-finalization and retained-artifact contract
    lands before static sharing or any W6 upload to a central artifact sink.
+   The retroactive corpus scrub precedes any route or export serving file
+   content, and any grader model/provider change — including W7's Bedrock
+   grader — passes W4 calibration before campaign use.
 5. **Fleet integration last.** A bounded Stockyard feasibility slice for
    bootable image construction, immutable image identity, resource readback,
    job-spec transport, and artifact transport may start after the contract gate
@@ -1119,8 +1165,10 @@ The workstreams may develop in parallel, but integration follows these gates:
 
 ## Non-goals
 
-- Windows and Antigravity columns stay on their separate trusted-maintainer
-  paths; the fleet is Linux/amd64.
+- Windows stays on its separate trusted-maintainer path; the fleet is
+  Linux/amd64. Antigravity stays on its separate path unless and until its
+  ADC route passes the W7 registered smoke AND it gains managed-substrate
+  support; only then may a regenerated fixture admit it.
 - No self-serve access for untrusted users; multi-user means enrolled,
   trusted operators.
 - No security audit or adversarial tenant model for Drew/Jesse appliance use.
