@@ -254,12 +254,14 @@ for every acknowledged mutation, event, idempotency record, permit/lease, and
 artifact CAS. A host-loss restore from an older durable prefix may resume normal
 service only in a new fenced recovery epoch: submissions stay drained; the old
 campaign/event streams are permanently closed; event identity includes the new
-epoch so sequence space is never reused; retries of old or unknown request IDs
-return typed `recovery_unknown` rather than creating work; and all external
-attempts/artifacts beyond the restored prefix are terminated, reconciled, and
-quarantined before new work. Backup/restore fault tests prove that neither path
-duplicates spend nor manufactures permits, selected artifacts, or a sealed
-report.
+epoch so sequence space is never reused; and all external attempts/artifacts
+beyond the restored prefix are terminated, reconciled, and quarantined before
+new work. Every mutation request carries the supervisor recovery epoch. A
+restored known ID keeps normal replay semantics; an unknown ID tagged with a
+closed/prior epoch returns typed `recovery_unknown`; a fresh never-reused ID
+tagged with the current epoch may create work. IDs cannot be retagged across
+epochs. Backup/restore fault tests prove that neither path duplicates spend nor
+manufactures permits, selected artifacts, or a sealed report.
 
 - `campaign.json` (`quorum.campaign/v1`) is an immutable input naming every
   primary slot, bounded reserve slot, comparison, completeness rule, and
@@ -457,9 +459,10 @@ new state revision. Static export is a pure build from a sealed scrubbed
 snapshot; publishing that bundle, if automated, is a separate idempotent
 supervisor operation.
 
-Submit uniqueness is `(enrolled_operator_id, request_id)`. The same canonical
-request digest returns the original job and current revision; a different
-digest returns typed `idempotency_conflict`. Lookup accepts request ID, and
+Submit uniqueness is `(recovery_epoch, enrolled_operator_id, request_id)`, with
+the cross-epoch non-retagging rule above. The same canonical request digest
+returns the original job and current revision; a different digest returns typed
+`idempotency_conflict`. Lookup accepts epoch plus request ID, and
 idempotency tombstones outlive artifact/job pruning and the maximum retry
 horizon. The W2 child spec sets a retention floor and compaction protocol; an
 expired key is never silently reusable and requires a fresh `request_id`.
