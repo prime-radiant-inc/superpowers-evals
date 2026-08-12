@@ -53,6 +53,15 @@ historical corpus claims, not assertions about every path in current HEAD:
 - The Gauntlet-Agent adds a median 75s per run (34% of drive) and dominates
   short scenarios.
 
+The appliance corpus (3,601 verdicts through 2026-08-12) — the corpus the
+program actually operates on — shifts several of these figures: median batch
+parallelism there is 2.96× with a 10.28× maximum at `--jobs 12`; indeterminate
+is 10.8% overall; OpenCode currently runs ~8% indeterminate post-fix; grader
+`investigate` verdicts number 223; verdict-less dirs are 0.6%; and sdd-\* is
+~35% of corpus-wide wall (74% within the gate battery itself). The local
+figures above stand as the audited historical baseline; child specs size
+against the appliance corpus.
+
 Before a child spec uses any corpus number as sizing or root-cause evidence,
 the sanitized corpus manifest, selection/exclusion rules, query or script, and
 output digest must be checked in. The external research brief remains useful
@@ -139,7 +148,13 @@ Preliminary capacity math for criterion 1: 388 arm-samples × mean ~476s ≈ 51.
 serial hours. Primaries alone require ≈6.41× effective parallelism over eight
 hours. W7 starts at ≥7× but must derive the actual acceptance floor from the
 frozen primary workload plus registered reserve/backfill, retry, cooldown, and
-reporting allowances; 7× is not enough merely because it exceeds 6.41×. The 388
+reporting allowances; 7× is not enough merely because it exceeds 6.41×. Priced
+from the fixture's own cell composition rather than the corpus mean, the same
+battery is ~70 serial hours (~645s/run), implying **≥9× before allowances** —
+the working planning floor until the frozen fixture computes the exact number.
+The target has an existence proof: the appliance corpus records 10.28×
+effective parallelism (2026-06-25, `--jobs 12`), and the 08-08 gate's own
+failure mode was campaign-level scheduling at 1.65×, not batch fan-out. The 388
 historical samples already include both arms. Concurrent arms concentrate
 demand on the same quota domains; they do not double that workload again. The
 capacity model proves the makespan of every serial or constrained quota path,
@@ -195,6 +210,21 @@ Recorded from the 2026-08-12 discussion; each binds the child specs.
    execution lifecycle, and artifact health remain distinct. Automatic retry
    requires a positively identified, typed, retryable instrument cause; a bare
    clean `investigate` is an unresolved outcome, not retry evidence.
+9. **Key-backed columns gate; seat-backed columns inform (Drew, 2026-08-12).**
+   Tier 1 is the set of columns on API-key credentials whose quota can be
+   pooled; the acceptance campaign and criterion 1 are defined over tier 1.
+   Seat/subscription-auth columns are tier 2: scheduled contemporaneously as
+   capacity allows, reported separately, and never gating the eight-hour
+   window. Codex moves to API-key credentials as its gating path. Copilot's
+   key path and Antigravity's key-or-Vertex path are open W7 research items;
+   a column graduates to tier 1 only when a poolable path is proven. Purchased
+   seats may widen a tier-2 column, weighed per column against the ops
+   overhead and provider-ToS exposure of pooled human accounts.
+10. **Resources are not the constrained variable (Drew, 2026-08-12).** Key
+    pools, quota raises, larger hosts, and disk are in scope whenever they are
+    the cheapest path to the criteria; the constrained variables are validity
+    and avoiding product work the goal does not need. Sizing decisions still
+    require the capacity model's evidence, not headroom by assumption.
 
 ## Constraints that bind every workstream
 
@@ -644,6 +674,11 @@ Recover instrument waste without converting ambiguous behavior into passes.
   calls. `validateLive` is the first phase permitted to receive such material
   or call an LLM provider, and its spend is recorded. An adapter that cannot
   separate local setup from live validation cannot claim zero precheck spend.
+- Scope the drive phase to the run's own credential: extend the `env -i`
+  allowlist launch pattern (PRI-2494) to the gemini, kimi, pi, antigravity,
+  hermes, and claude-windows launchers, and give Gauntlet a per-agent scoped
+  subprocess env, so no agent or driver process inherits the full credential
+  bundle. Secrets that never enter a transcript need no scrubbing.
 - Introduce one async, process-group-aware, cancellable subprocess seam before
   applying deadlines to provisioning, setup, checks, drive, and capture. Each
   deadline requests graceful stop, waits for terminal evidence, then kills the
@@ -841,6 +876,13 @@ fallback if either cutover gate fails.
   economics, model attestations, and frozen-evidence capture. Retain the
   analytical projection; remove credential-bearing homes rather than treating
   them as the long-term artifact.
+- Retroactively scrub both existing corpora (941 local and ~3,628 appliance
+  run dirs; the review census found live credential material in at least six
+  artifact classes the export denylist misses, including `.claude-env`,
+  `codex-api.env`, `pi.env`, and `api-key-helper.sh`), verify with a
+  value-based secret scan keyed on the live bundle's values, and rotate or
+  revoke exposed token classes. This gates every route or export that serves
+  file content.
 - Render the canonical plan/ledger/report: run, batch, campaign, and complete
   paginated cell-history routes show planned, queued, running, included,
   replaced, excluded, cancelled, lost, orphaned, and missing samples, plus
@@ -914,6 +956,14 @@ retroactive owner of criterion 1's throughput-to-report measurement.
   self-admit and the operator does not learn a fleet-specific submission path.
 - Extend enrollment from the Stage-2 trusted operator path; do not defer Jesse's
   basic multi-user workflow until the fleet.
+- Scope credentials to the VM's blast radius: a guest receives only its
+  attempt's subject credential (plus the grader key only while fused mode
+  persists — the W4 split removes grader keys from guests entirely), never the
+  full bundle. Job-spec/dotenv material is invalidated after init and is not
+  readable by the agent-visible user once the drive starts, where the platform
+  allows. The child spec records an explicit egress decision (accept full NAT
+  in writing, or a per-VM provider-endpoint allowlist) and never exposes
+  artifact-sink or tailnet credentials to the guest user the agent runs as.
 - Fault-inject worker loss before upload, during upload, and after upload before
   acknowledgement. One sample retains every execution attempt and selects at
   most one outcome.
@@ -932,6 +982,14 @@ passes.
   critical path and the full registered primary + reserve/retry/cooldown/report
   allowance. ≥7× is the initial lower bound, not a substitute for the derived
   makespan requirement.
+- Dissolve the binding OpenAI floor first: 236 of the 388 acceptance-fixture
+  samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
+  6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
+  itself. Provision an OpenAI key pool with independent quota scopes (or a
+  measured raised-limit single scope) per the codex key research, split the
+  sol/luna credentials off the shared limiterKey, and run a saturation probe
+  per pool: the historical cap 5 was a billing misdiagnosis, not a measured
+  ceiling.
 - De-single-point the grader through a key pool or calibrated Bedrock grader
   (PRI-2524). A model/provider change goes through W4 and provenance gates.
 - Size Bedrock raises from the frozen workload model; convert OAuth to API-key
@@ -1067,10 +1125,15 @@ The workstreams may develop in parallel, but integration follows these gates:
   W7 must reconcile configuration with measured account-level evidence;
   constrained cells are marked rather than allowed to gate a campaign they
   cannot complete.
-- **Stage-2 isolation may not fit the current box.** The live appliance has
-  finite CPU and memory. Admission must refuse resource claims it cannot honor;
-  if the registered acceptance workload cannot achieve valid ≥7× Stage 2, the
-  result is evidence to advance W6, not permission to run unpinned.
+- **Stage-2 isolation may not fit the current box.** The live appliance is
+  8 vCPU / 30 GB — undersized for pinned criterion-1 concurrency. Admission
+  must refuse resource claims it cannot honor. Under decision 10 the expected
+  first response is a larger host: W2's child spec owns the resize/migration
+  plan (results move, downtime against active campaigns) before concluding W6
+  is required; running unpinned is never the fallback. Storage has the same
+  shape: results/ grows ~140 dirs/day at ~199MB each against ~217GB free —
+  grow the volume now, and W5 retention lands before sustained criterion-1
+  cadence.
 - **A durable row is not durable execution.** Lost supervisor responses,
   owner death, PID reuse, partial uploads, and late workers can duplicate or
   misattribute paid work without fencing, reconciliation, and atomic commit.
