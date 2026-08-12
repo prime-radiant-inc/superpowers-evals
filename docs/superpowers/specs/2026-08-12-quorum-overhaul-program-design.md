@@ -84,7 +84,11 @@ feature**.
    comparisons, and registration digest. Until that fixture is checked in and
    validated, 388 is sizing evidence rather than an executable acceptance
    definition. A changed grid is a new fixture and registration hash; “~390
-   runs” is never an acceptance definition.
+   runs” is never an acceptance definition. The historical design contains only
+   Linux-container Claude/Codex credentials; fixture validation nevertheless
+   recomputes managed-substrate eligibility and rejects any Windows,
+   Antigravity, or otherwise unmanaged primary column. Criterion 4 runs this
+   same registered Linux/amd64 workload, not a silently reduced fleet subset.
 
    The clock starts when the supervisor durably accepts the campaign and ends
    when it durably commits the machine-generated report. The campaign clears
@@ -119,6 +123,8 @@ feature**.
    scenarios, per-pool distribution, measured mean duration, and implied
    capacity. The fixture is invalid if it silently demands a higher capacity
    floor than criterion 1 without declaring the extra provisioning.
+   W1's two-run reliability exit uses this same registered sentinel fixture;
+   reliability and throughput remain separately reported gates.
 3. **Stage-2 full-grid target.** The runnable arm-sample count in a frozen
    matrix manifest generated from registered evals, credential, agent, OS, tier,
    and filter inputs completes through durable report commit in ≤12 elapsed
@@ -241,6 +247,12 @@ the sole authoritative ledger and shares transactions with sample/job state,
 permit and lease mutations, artifact selection, and a materialization outbox.
 Stage 3 may replace the store only with equivalent transactional and replay
 semantics. Workers never append a second canonical ledger.
+
+The W2 child spec defines online backup cadence, restore point objective,
+integrity checks, and corruption/host-loss recovery for this sole authority.
+Backup and restore are tested with active campaigns and must never manufacture
+permits, selected artifacts, or a sealed report absent from the restored event
+prefix.
 
 - `campaign.json` (`quorum.campaign/v1`) is an immutable input naming every
   primary slot, bounded reserve slot, comparison, completeness rule, and
@@ -442,7 +454,9 @@ Submit uniqueness is `(enrolled_operator_id, request_id)`. The same canonical
 request digest returns the original job and current revision; a different
 digest returns typed `idempotency_conflict`. Lookup accepts request ID, and
 idempotency tombstones outlive artifact/job pruning and the maximum retry
-horizon. Operator identity is unique and server-derived from the enrolled
+horizon. The W2 child spec sets a retention floor and compaction protocol; an
+expired key is never silently reusable and requires a fresh `request_id`.
+Operator identity is unique and server-derived from the enrolled
 trusted access path, never optional caller environment. For this Drew/Jesse
 trusted deployment, both enrolled operators may discover, inspect, and cancel
 all jobs; owner remains recorded for coordination and audit. This is not an
@@ -727,7 +741,9 @@ missingness policy, comparison, and decision rule machine-enforced.
   units for faceted reading and triage.
 - Add deterministic, versioned classification for the four verdict-shape atlas
   patterns that are mechanically derivable. Label the other three as requiring
-  human attribution; never guess them from free text.
+  human attribution; surface them explicitly in the report's residual-triage
+  queue and never guess them from free text. Automating those residual patterns
+  is not a release gate for this program.
 - Every cost/token/duration aggregate carries value or `known_subtotal`, unit,
   eligible denominator, measured/estimated/unpriceable/missing n, authority,
   and coverage-gate result. Null never becomes zero or “total.” Separate
@@ -783,6 +799,12 @@ introduces distinct driver/grader configuration only with the upstream split
 and migrates scenarios from one `story.md` containing interaction directions
 plus ACs to separate immutable driver-script and grader-rubric inputs, including
 scaffolding, validation, authoring docs, and all scenarios.
+
+The W4 child spec splits delivery into independently reviewable tranches:
+structured/frozen upstream protocol, local routing, scenario-format migration,
+Gate A, then Gate B. The format migration lands only with the split; an upstream
+slip retains fused mode and legacy `story.md` rather than partially migrating
+the corpus.
 
 A deterministic-checks-only mode requires the upstream drive-only API, W3's
 criterion-ID mapping, and a dedicated deterministic assessment path. Every AC
@@ -976,8 +998,9 @@ The workstreams may develop in parallel, but integration follows these gates:
    identity or lifecycle.
 2. **Reliability and quota inputs.** W1's typed failure/rate-limit
    classification and W7's measured quota-pool budgets gate W2 cooldown,
-   cross-process admission, and throughput proof. W1 and W2 are not independent
-   at the rate-limit boundary.
+   cross-process admission, and throughput proof. W1's async cancellable process
+   seam also gates W2 cancellation/deadline work. W1 and W2 are not independent
+   at either boundary.
 3. **Stage-2 release gate.** W2 scheduling and W3 reporting may implement in
    parallel, but both land before success criterion 1 is attempted. The result
    belongs jointly to W1, W2, W3, and W7.
