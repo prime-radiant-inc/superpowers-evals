@@ -216,10 +216,11 @@ Recorded from the 2026-08-12 discussion; each binds the child specs.
    Seat/subscription-auth columns are tier 2: scheduled contemporaneously as
    capacity allows, reported separately, and never gating the eight-hour
    window. Codex moves to API-key credentials as its gating path. Copilot's
-   key path and Antigravity's key-or-Vertex path are open W7 research items;
-   a column graduates to tier 1 only when a poolable path is proven. Purchased
-   seats may widen a tier-2 column, weighed per column against the ops
-   overhead and provider-ToS exposure of pooled human accounts.
+   designated route is CLI BYOK on dedicated provider orgs; Antigravity's is
+   ADC via the Gemini Enterprise Agent Platform (details in W7). A column
+   graduates to tier 1 only when its route passes a registered smoke.
+   Purchased seats may widen a tier-2 column, weighed per column against the
+   ops overhead and provider-ToS exposure of pooled human accounts.
 10. **Resources are not the constrained variable (Drew, 2026-08-12).** Key
     pools, quota raises, larger hosts, and disk are in scope whenever they are
     the cheapest path to the criteria; the constrained variables are validity
@@ -985,11 +986,33 @@ passes.
 - Dissolve the binding OpenAI floor first: 236 of the 388 acceptance-fixture
   samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
   6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
-  itself. Provision an OpenAI key pool with independent quota scopes (or a
-  measured raised-limit single scope) per the codex key research, split the
-  sol/luna credentials off the shared limiterKey, and run a saturation probe
-  per pool: the historical cap 5 was a billing misdiagnosis, not a measured
-  ceiling.
+  itself. Research (2026-08-12): OpenAI enforces quota per organization and
+  per model; project keys add attribution, never throughput. The route is one
+  dedicated Tier-5 eval org — start its $1,000 + 30-day tier clock
+  immediately, since advancement is calendar-gated — with auto-recharge on,
+  Scale Tier purchases for genuine increases, and a warmed second org as
+  insurance. Tier-5 per-model buckets (~40M TPM sol-class, ~180M TPM luna)
+  cover 12–15 concurrent runs. Model quota pools as org|model identities (a
+  CredentialSchema `pool` override): today's limiterKey both merges OpenAI's
+  per-model buckets into one pool and splits protocols that share a bucket,
+  and the opencode/pi columns silently draw the same org quota. Then probe
+  the measured ceiling — cap 5 was a billing misdiagnosis, not a limit.
+- Column graduation routes (research 2026-08-12). Copilot: the CLI ships
+  native BYOK (2026-04-07) through the `COPILOT_PROVIDER_*` seam the adapter
+  already forwards; BYOK traffic bills the byo provider org directly and
+  bypasses Copilot premium-request quotas, so copilot graduates to tier 1 on
+  DEDICATED provider orgs (never silently pooled with the claude/codex
+  quota) after an A/B smoke proves behavioral comparability with GitHub
+  routing and zero credit consumption. The GitHub-routed credential stays
+  tier 2 as the product-routing observation cell; MAI-model cells have no
+  key path. Antigravity: consumer API keys remain unsupported, but agy
+  1.1.10 (2026-08-03) added ADC / Gemini Enterprise Agent Platform sign-in —
+  per-GCP-project Dynamic Shared Quota with purchasable Provisioned
+  Throughput and an official headless mode. That is the designated tier-1
+  route; the feature is days old, so a registered concurrency smoke is
+  load-bearing, and until it passes the column stays tier-2 serial. Paid
+  consumer-account pooling is rejected (2026-02 suspension wave;
+  keyring/token-rotation ops burden).
 - De-single-point the grader through a key pool or calibrated Bedrock grader
   (PRI-2524). A model/provider change goes through W4 and provenance gates.
 - Size Bedrock raises from the frozen workload model; convert OAuth to API-key
