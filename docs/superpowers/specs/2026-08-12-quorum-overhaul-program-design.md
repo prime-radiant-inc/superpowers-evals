@@ -248,11 +248,18 @@ permit and lease mutations, artifact selection, and a materialization outbox.
 Stage 3 may replace the store only with equivalent transactional and replay
 semantics. Workers never append a second canonical ledger.
 
-The W2 child spec defines online backup cadence, restore point objective,
-integrity checks, and corruption/host-loss recovery for this sole authority.
-Backup and restore are tested with active campaigns and must never manufacture
-permits, selected artifacts, or a sealed report absent from the restored event
-prefix.
+The W2 child spec defines online backup, integrity checks, and corruption/host-
+loss recovery for this sole authority. Ordinary process/host restart has RPO=0
+for every acknowledged mutation, event, idempotency record, permit/lease, and
+artifact CAS. A host-loss restore from an older durable prefix may resume normal
+service only in a new fenced recovery epoch: submissions stay drained; the old
+campaign/event streams are permanently closed; event identity includes the new
+epoch so sequence space is never reused; retries of old or unknown request IDs
+return typed `recovery_unknown` rather than creating work; and all external
+attempts/artifacts beyond the restored prefix are terminated, reconciled, and
+quarantined before new work. Backup/restore fault tests prove that neither path
+duplicates spend nor manufactures permits, selected artifacts, or a sealed
+report.
 
 - `campaign.json` (`quorum.campaign/v1`) is an immutable input naming every
   primary slot, bounded reserve slot, comparison, completeness rule, and
@@ -598,8 +605,9 @@ retries are component-local and bounded; exhausted classifier error selects
 follows the same fenced release process. Identical replay is
 idempotent, conflicting bytes fail closed, partial uploads never become terminal
 truth, and late attempts remain visible without replacing selected evidence.
-Crash repair replays the outbox and reconciles immutable staging rather than
-creating a second truth.
+The same startup-repair/outbox reconciler re-observes fences and advances every
+durable release intent after a crash, so terminal attempts cannot leak claims.
+It also reconciles immutable staging rather than creating a second truth.
 
 Stage 2 supplies an appliance executor with immutable checkout, container or
 process, temporary, and results namespaces. Stage 3 supplies a baked
