@@ -100,6 +100,9 @@ feature**.
      terminal state;
    - every primary slot has an included outcome or a replacement authorized by
      the frozen outcome-independent rule;
+   - `exhausted` never counts toward target completion or analysis n; it may
+     remain as terminal evidence only after another frozen-rule replacement
+     has supplied the included outcome for its primary slot;
    - no pending, missing, `not_run`, unclassified, or silently omitted activated
      sample remains;
    - every broken pair, duplicate, orphan, and provenance failure has a terminal
@@ -361,7 +364,9 @@ artifact after bounded reconciliation. `orphaned` means artifact bytes lack a
 durable link; reconciliation either restores that link or quarantines them.
 `not_run` is a terminal activated-sample resolution with no admitted execution
 at abort/invalid finalization. `exhausted` means every authorized attempt is
-terminal but no execution was selected. Unused reserve remains
+terminal but no execution was selected. `selected_execution` means exactly one
+execution supplies the sample's raw evidence; the separate analysis disposition
+still decides whether that evidence is included. Unused reserve remains
 `available_reserve`, not missing or not-run. `open_samples` and
 `terminal_samples` partition primary plus activated-reserve samples;
 `activated_reserve` is the registered reserve subset that left
@@ -988,6 +993,7 @@ minimum the integrated program must prove:
   never discard a behavioral or ambiguous non-completion;
 - state-matrix and conservation fixtures cover completed+unresolved,
   lost+orphaned, cancelled+late-quarantined, dormant reserve, not-run primary,
+  exhausted primary, exhausted reserve followed by a selected replacement,
   broken pair, underpowered sealed report, and aborted campaign;
 - identical and conflicting import replays, partial import/restart, dashboard
   snapshot/SSE races, archive/restore, and Phase-1→2 cutover/rollback preserve
