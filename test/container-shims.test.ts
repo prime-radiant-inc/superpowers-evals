@@ -161,7 +161,9 @@ test('evals-tool-versions probes gauntlet via config since it has no --version f
     expect(proc.stderr).toBe('');
     // Reported as present without dumping gauntlet's usage text.
     expect(proc.stdout).toContain('gauntlet: present');
-    expect(proc.stdout).not.toContain('gauntlet: present (config check failed)');
+    expect(proc.stdout).not.toContain(
+      'gauntlet: present (config check failed)',
+    );
     expect(proc.stdout).not.toContain('Unknown command');
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -9,10 +9,11 @@
 #
 # Pinned by digest per everyharness-container's version-pin policy (`latest`
 # moves; pin by sha tag or digest for reproducibility). This digest is the
-# first published build — human-readable tag
-# ghcr.io/prime-radiant-inc/everyharness-container:8034359 (commit 8034359,
-# 2026-08-11). To bump: pull the newer base, then replace the digest below and
-# update this comment's tag/commit to match.
+# first published build (commit 8034359, 2026-08-11), also pullable as the
+# full-commit-SHA tag
+# ghcr.io/prime-radiant-inc/everyharness-container:80343595da91f739fb1042a817a49519ab301d6a
+# (the registry has no short-SHA tags). To bump: pull the newer base, then
+# replace the digest below and update this comment's commit/tag to match.
 FROM ghcr.io/prime-radiant-inc/everyharness-container@sha256:de1026a0580ce2956ab4b181407110f2cbc37660c7bf0f3d5a0a1d3cc6051d7f
 
 # The base image already sets the toolchain env vars (BUN_INSTALL, CARGO_HOME,
