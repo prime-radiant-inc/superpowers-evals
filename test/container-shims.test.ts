@@ -141,3 +141,79 @@ test('evals-tool-versions reports the real exit status for failing evals-tool ve
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('evals-tool-versions probes gauntlet via config since it has no --version flag', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+
+  try {
+    writeFakeTool(bin, 'harness-versions', 'claude: claude 2.0.0');
+    // A working gauntlet: `config --json` exits 0.
+    writeFakeTool(bin, 'gauntlet', '{}');
+
+    const proc = spawnSync('/bin/bash', [TOOL_VERSIONS], {
+      env: { PATH: bin },
+      encoding: 'utf8',
+    });
+
+    expect(proc.status).toBe(0);
+    expect(proc.stderr).toBe('');
+    // Reported as present without dumping gauntlet's usage text.
+    expect(proc.stdout).toContain('gauntlet: present');
+    expect(proc.stdout).not.toContain('gauntlet: present (config check failed)');
+    expect(proc.stdout).not.toContain('Unknown command');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('evals-tool-versions flags gauntlet when its config probe fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+
+  try {
+    writeFakeTool(bin, 'harness-versions', 'claude: claude 2.0.0');
+    // A broken gauntlet: present on PATH but `config --json` exits nonzero.
+    const gauntlet = join(bin, 'gauntlet');
+    writeFileSync(gauntlet, ['#!/bin/sh', 'exit 1', ''].join('\n'));
+    chmodSync(gauntlet, 0o755);
+
+    const proc = spawnSync('/bin/bash', [TOOL_VERSIONS], {
+      env: { PATH: bin },
+      encoding: 'utf8',
+    });
+
+    expect(proc.status).toBe(0);
+    expect(proc.stderr).toBe('');
+    expect(proc.stdout).toContain('gauntlet: present (config check failed)');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('evals-tool-versions reports a clear diagnostic when the base image harness-versions is absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evals-tool-versions-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+
+  try {
+    // No harness-versions on PATH — the eval image is expected to inherit it
+    // from the base image, so its absence is a meaningful diagnostic.
+    const proc = spawnSync('/bin/bash', [TOOL_VERSIONS], {
+      env: { PATH: bin },
+      encoding: 'utf8',
+    });
+
+    expect(proc.status).toBe(0);
+    expect(proc.stderr).toBe('');
+    expect(proc.stdout).toContain(
+      'harness-versions: missing (base image not detected)',
+    );
+    // Evals-specific tools are still reported.
+    expect(proc.stdout).toContain('quorum: missing');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
