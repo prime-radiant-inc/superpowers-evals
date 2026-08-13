@@ -76,8 +76,12 @@ parallelism there is 2.96× with a 10.28× maximum at `--jobs 12`; indeterminate
 is 10.8% overall; OpenCode currently runs ~8% indeterminate post-fix; grader
 `investigate` verdicts number 223; verdict-less dirs are 0.6%; and sdd-\* is
 ~35% of corpus-wide wall (74% within the gate battery itself). The local
-figures above stand as the audited historical baseline; child specs size
-against the appliance corpus.
+figures above stand as the audited historical baseline. Child specs size
+non-acceptance work (waste targets, retention, host footprint) against the
+appliance corpus; every criterion-1 and capacity number derives solely from
+the frozen acceptance fixture and `quorum.capacity/v1` artifact (sequencing
+gate 1) — the corpus is context, never a second sizing authority for the
+acceptance path.
 
 Before a child spec uses any corpus number as sizing or root-cause evidence,
 the sanitized corpus manifest, selection/exclusion rules, query or script, and
@@ -141,7 +145,9 @@ feature**.
    - every headline sample passes the provenance and resource-equivalence
      gates;
    - the report applies the frozen decision rule without hand-computed
-     statistics; and
+     statistics, and that rule is a frozen COMPUTABLE predicate — fixture
+     validation rejects a rule whose ship/no-ship output requires human
+     judgment to evaluate; and
    - maximum outstanding commitment never exceeds the pre-registered hard
      commitment cap; reconciled actual spend, retry, and backfill are reported
      against their separately registered qualification bounds. An actual-dollar
@@ -185,15 +191,21 @@ fan-out. The 388
 historical samples already include both arms. Concurrent arms concentrate
 demand on the same quota domains; they do not double that workload again. The
 capacity model proves the makespan of every serial or constrained quota path,
-not only aggregate throughput — including the longest cell-chain per pool:
-replicates of the slowest cells plus activated reserves inside one capped
-pool are the binding serial path, not the single longest cell. Stage 3
+not only aggregate throughput — including the longest cell-chain per pool,
+computed as total pool workload ÷ cap across BOTH subject and fused
+driver/grader pools, under worst-case reserve activation plus cooldown and
+launch spacing: that chain is the binding serial path, not the single
+longest cell. The ≥9× working floor is a mean-derived aggregate lower
+bound; fixture-derived per-pool makespans and tail-derived caps govern. Stage 3
 separately sizes nominal capacity so the full registered workload still
 clears after 20% of worker slots are withheld.
 
-If Stage 2 slips, the dated interim bar is the same acceptance campaign in
-≤12 elapsed hours — an explicit stair-step toward criterion 1, never a
-silent substitute for it.
+The interim bar is bound, not aspirational: it activates when the first
+real acceptance attempt after the W1/W2/W3/W7 exit gates fails the 8-hour
+clock, uses the identical fixture and sealing predicate at ≤12 elapsed
+hours, is owned by the program (Drew) like criterion 1 itself, and retires
+permanently on the first ≤8h pass. It is a stair-step toward criterion 1 —
+distinct from criterion 3's full-grid workload — never a silent substitute.
 
 Wall-clock is an operational service objective, not a behavioral comparison
 metric. Tokens and dollars remain the primary treatment/control efficiency
@@ -334,7 +346,9 @@ The W2 child spec defines online backup, integrity checks, and corruption/host-
 loss recovery for this sole authority. Ordinary process/host restart has RPO=0
 for every acknowledged mutation, event, idempotency record, permit/lease, and
 artifact CAS. A host-loss restore from an older durable prefix may resume normal
-service only in a new fenced recovery epoch: submissions stay drained; the old
+service only in a new fenced recovery epoch, whose anchor is durable OUTSIDE
+the restored authority store — restoring the store can never roll the epoch
+marker back with it: submissions stay drained; the old
 campaign/event streams are permanently closed; event identity includes the new
 epoch so sequence space is never reused; and all external attempts/artifacts
 beyond the restored prefix are terminated, reconciled, and quarantined before
@@ -601,7 +615,9 @@ renew, or select an artifact. Lease expiry alone moves a running attempt to
 `uncertain` and fences commit; it does not release execution/quota/cost claims
 or authorize redispatch. `uncertain` is nonterminal, retains every claim, cannot
 launch or select artifacts, and returns to `running` only after authoritative
-same-executor reconciliation plus durable lease re-establishment. Otherwise it
+same-executor reconciliation — proven by the launch-issued boot
+nonce/runtime identity, never by self-asserted liveness — plus durable
+lease re-establishment. Otherwise it
 terminalizes only after authoritative process-group/cgroup/container/VM
 termination. Host resources are never released on a timestamp alone. Provider
 quota/cost claims may close earlier only when an independently enforced fence—a
@@ -698,8 +714,10 @@ claim/renew/release, cancellation observation, lifecycle event, allocation
 binding, artifact manifest/completion, and commit result.
 
 Before dispatch, the supervisor assigns a staging destination. The executor
-writes immutable bytes plus a checksum manifest and completion marker. One
-database transaction records the selected-attempt CAS,
+writes immutable bytes plus a checksum manifest and completion marker; the
+staged bytes, manifest, and their directory entries are fsync-durable
+BEFORE the commit transaction may proceed — RPO=0 spans both stores, not
+only SQLite. One database transaction records the selected-attempt CAS,
 `artifact_committed` event, and materialization outbox; it fences cancellation
 but is not terminal completion. Classification then commits `classified →
 completed | infrastructure_failed` plus only ledger effects whose release fences
@@ -803,9 +821,15 @@ The parallelism lever and the stable front door for both execution substrates.
   against locks, process identity, and artifacts), then the final-sequence
   snapshot with count/digest validation of migrated terminal, lost,
   quarantined, and imported receipts, then promotion, canary, a defined
-  rollback boundary, and `run.lock` removal last. The same sequence governs
-  every relocation of the SQLite authority — including the expected Stage-2
-  move to a larger host.
+  rollback boundary, and `run.lock` removal last. The fence binds every
+  supervisor-managed entrypoint; the documented break-glass paths (raw
+  `quorum run`, `scripts/evals-container exec`) cannot be mechanically
+  fenced and are procedurally barred during cutover and relocation windows
+  — a stated residual, not a guarantee. The same sequence governs every
+  relocation of the SQLite authority — including the expected Stage-2 move
+  to a larger host — and relocation additionally terminates or reconciles
+  every outstanding lease before promotion, because termination authority
+  does not transfer across hosts.
 - Implement the authoritative SQLite event/state/permit/lease/artifact-CAS
   transaction and materialization outbox. Add request idempotency, queue/event
   discovery, revisions, durable repair, the cancel/commit race rule, named
@@ -844,8 +868,14 @@ Kill tea-leaf reading by making the planned denominator, evidence lineage,
 missingness policy, comparison, and decision rule machine-enforced.
 
 - Land the shared TypeScript schema module for campaign, event, batch v2,
-  verdict v2, assessment, and report first; W1, W2, and W5 import it rather than
-  defining local variants. Check in and validate the initial acceptance and
+  verdict v2, assessment, report, and `quorum.capacity/v1` first; W1 and W2
+  import it rather than defining local variants. The dashboard keeps its
+  deliberate zero-dependency schema (2026-06-18 decoupling) and MIRRORS the
+  module under a published reader/writer compatibility matrix — a version
+  bump that blinds the dashboard is a release error, not a dashboard bug.
+  The gate-1 acceptance fixture is authored under W3 with W7 supplying the
+  capacity inputs; verdict-v2 ships with an explicit reader-migration gate
+  for existing consumers. Check in and validate the initial acceptance and
   sentinel fixtures before their numeric criteria become active. Persist the
   complete primary/reserve cohort and campaign-specific matrix digest before
   dispatch. An unsealed report is visibly **IN PROGRESS** and cannot emit a
@@ -963,9 +993,22 @@ fallback if either cutover gate fails.
   only — historical raw file content is never reachable by construction;
   rotate or revoke the long-lived token classes the census found (OAuth
   refresh tokens outlive the 2026-08-05 bundle rotation); retention/prune
-  retires historical homes on schedule. Any future scrub of retained
-  artifacts is copy-on-write with an atomic projection switch; committed
-  bytes are never rewritten in place.
+  retires historical homes on a NAMED retention horizon. "Never reachable"
+  is enforced by mechanism, not assertion: capture finalization stamps a
+  scrub-era marker (W3 schema) on every new run; a closed manifest
+  enumerates every content-serving route and export path, each gated on
+  that marker (unmarked runs = pre-era = metadata only); and
+  canary-planted construction tests — fake credential files planted in
+  pre-era dirs — prove no route or export can serve them. Existing
+  surfaces that read raw homes today (dashboard scan, `show`, export-runs
+  raw sessions, import, archive/restore) join that manifest before any of
+  them becomes multi-user-reachable. Secrets that were echoed into
+  transcripts before W1's env scoping ride into ATIF and static bundles:
+  the W5 export path therefore runs a pattern-plus-value secret scan over
+  every bundled transcript/evidence file, and this scan is scoped to
+  bundles — it is not the reachability proof, the canary tests are. Any
+  future scrub of retained artifacts is copy-on-write with an atomic
+  projection switch; committed bytes are never rewritten in place.
 - Render the canonical plan/ledger/report: run, batch, campaign, and complete
   paginated cell-history routes show planned, queued, running, included,
   replaced, excluded, cancelled, lost, orphaned, and missing samples, plus
@@ -1019,11 +1062,13 @@ whose counts match the report. A separate archive/checksum/restore drill proves
 reference-safe retention. This UAT is the Stage-2 multi-user/sharing gate, not a
 retroactive owner of criterion 1's throughput-to-report measurement.
 
-W5-specific exit, independent of the UAT: a value-based secret scan proves
-no historical raw file content is reachable through any serving route or
-export; the long-lived-token rotation checklist is complete; the
-archive/prune drill passes; and static-bundle regeneration is
-byte-deterministic. The Jesse UAT does not substitute for these.
+W5-specific exit, independent of the UAT: the canary-planted construction
+tests prove no serving route or export can reach pre-era raw file content
+(a value scan cannot prove reachability — rotation kills the very values
+it would match); the bundle secret scan passes on every published export;
+the long-lived-token rotation checklist is complete; the archive/prune
+drill passes; and static-bundle regeneration is byte-deterministic. The
+Jesse UAT does not substitute for these.
 
 ### W6 — Fleet (Stage 3)
 
@@ -1079,9 +1124,11 @@ passes.
   allowance. ≥9× (the fixture-composition working floor) is the initial lower
   bound, not a substitute for the derived makespan requirement.
 - Dissolve the binding OpenAI floor first: 236 of the 388 acceptance-fixture
-  samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
-  6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
-  itself. Research (2026-08-12): OpenAI enforces quota per organization and
+  samples share one cap-5 `api.openai.com/v1|openai-responses` pool, whose
+  serial floor (pool workload ÷ cap) defeats criterion 1 by itself:
+  column-specific cell pricing gave 6.8–7.5h; the battery-wide 645s mean
+  gives ~8.5h. The capacity artifact publishes each pool's workload and
+  mean so every floor is auditable rather than asserted. Research (2026-08-12): OpenAI enforces quota per organization and
   per model; project keys never add throughput (and a configured project
   cap can subtract it — leave project limits unset or at org max). The org is
   already usage Tier 5 (Drew, 2026-08-12), so no tier clock applies: turn on
@@ -1095,9 +1142,9 @@ passes.
   buckets (~40M TPM sol-class, ~180M TPM luna) carry the target concurrency
   with roughly an order of magnitude of headroom; the probe confirms the
   measured ceiling. (OpenAI "usage tiers" are unrelated to this program's
-  column tiers.) Model quota pools as org|model identities (the
-  CredentialSchema `quota_pool_id` override from the canonical admission
-  contract): today's limiterKey both merges OpenAI's per-model buckets into
+  column tiers.) Model quota pools as org|model identities (via
+  `quota_pool_id`, the NEW mandatory CredentialSchema field defined by the
+  canonical admission contract — it has no code counterpart yet): today's limiterKey both merges OpenAI's per-model buckets into
   one pool and splits protocols that share a bucket, and the opencode/pi
   columns silently draw the same org quota. Then probe the measured ceiling
   — cap 5 was a billing misdiagnosis, not a limit. The probe protocol, the
