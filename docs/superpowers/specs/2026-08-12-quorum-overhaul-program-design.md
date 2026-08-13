@@ -185,8 +185,15 @@ fan-out. The 388
 historical samples already include both arms. Concurrent arms concentrate
 demand on the same quota domains; they do not double that workload again. The
 capacity model proves the makespan of every serial or constrained quota path,
-not only aggregate throughput. Stage 3 separately sizes nominal capacity so the
-full registered workload still clears after 20% of worker slots are withheld.
+not only aggregate throughput — including the longest cell-chain per pool:
+replicates of the slowest cells plus activated reserves inside one capped
+pool are the binding serial path, not the single longest cell. Stage 3
+separately sizes nominal capacity so the full registered workload still
+clears after 20% of worker slots are withheld.
+
+If Stage 2 slips, the dated interim bar is the same acceptance campaign in
+≤12 elapsed hours — an explicit stair-step toward criterion 1, never a
+silent substitute for it.
 
 Wall-clock is an operational service objective, not a behavioral comparison
 metric. Tokens and dollars remain the primary treatment/control efficiency
@@ -948,14 +955,17 @@ fallback if either cutover gate fails.
   economics, model attestations, and frozen-evidence capture. Retain the
   analytical projection; remove credential-bearing homes rather than treating
   them as the long-term artifact.
-- Retroactively scrub both existing corpora (941 local and ~3,628 appliance
-  run dirs; the review census found live credential material in at least six
-  artifact classes the export denylist misses, including `.claude-env`,
-  `codex-api.env`, `pi.env`, and `api-key-helper.sh`), verify with a
-  value-based secret scan keyed on the live bundle's values, and rotate or
-  revoke exposed token classes. This gates every route or export that serves
-  file content. Scrubbing is copy-on-write with an atomic projection
-  switch; committed artifact bytes are never rewritten in place.
+- Historical run dirs keep live credential material (the review census found
+  six artifact classes the export denylist misses, including `.claude-env`,
+  `codex-api.env`, `pi.env`, and `api-key-helper.sh`). A bulk retroactive
+  rewrite of both corpora is DESCOPED (Drew, 2026-08-13); the policy
+  instead: content-serving routes and exports cover capture-scrubbed runs
+  only — historical raw file content is never reachable by construction;
+  rotate or revoke the long-lived token classes the census found (OAuth
+  refresh tokens outlive the 2026-08-05 bundle rotation); retention/prune
+  retires historical homes on schedule. Any future scrub of retained
+  artifacts is copy-on-write with an atomic projection switch; committed
+  bytes are never rewritten in place.
 - Render the canonical plan/ledger/report: run, batch, campaign, and complete
   paginated cell-history routes show planned, queued, running, included,
   replaced, excluded, cancelled, lost, orphaned, and missing samples, plus
@@ -1009,13 +1019,20 @@ whose counts match the report. A separate archive/checksum/restore drill proves
 reference-safe retention. This UAT is the Stage-2 multi-user/sharing gate, not a
 retroactive owner of criterion 1's throughput-to-report measurement.
 
-W5-specific exit, independent of the UAT: the retroactive scrub of both
-corpora passes the value-based secret scan; the archive/prune drill passes;
-and static-bundle regeneration is byte-deterministic. The Jesse UAT does not
-substitute for these.
+W5-specific exit, independent of the UAT: a value-based secret scan proves
+no historical raw file content is reachable through any serving route or
+export; the long-lived-token rotation checklist is complete; the
+archive/prune drill passes; and static-bundle regeneration is
+byte-deterministic. The Jesse UAT does not substitute for these.
 
 ### W6 — Fleet (Stage 3)
 
+- The child spec re-derives W6's case from what survives a Stage-2 success:
+  per-run hermetic isolation (retiring cross-run leak policing and the
+  host-contamination class) and multi-user scale — not throughput, which
+  the rate-limit probe and per-model quota pools may already satisfy at
+  Stage 2. Until Stage-2 capacity results land, only the bounded
+  feasibility slice from the sequencing gates spends.
 - Adapt the digest-pinned `everyharness-container` base already used by the
   evals Docker image into a bootable, immutable-identity Stockyard Firecracker
   guest; one VM executes one fenced attempt under a pinned resource class.
@@ -1134,7 +1151,8 @@ passes.
   before spend.
 - Implement campaign/operator/pool commitment reservations covering both LLMs,
   all retry layers, and matched backfill; preserve visible unpriceable coverage.
-- Fix PRI-2833 first for Phase 1: `prepare` runs a frozen-lockfile dependency
+- PRI-2833 ships immediately as a standalone fix, ahead of and independent
+  of this workstream: `prepare` runs a frozen-lockfile dependency
   install for the exact resolved evals SHA, never accidental bind-mounted
   `node_modules`, and runs `quorum check` from that installation. W2 then
   materializes dependency state inside each immutable attempt snapshot keyed by
@@ -1202,7 +1220,10 @@ The workstreams may develop in parallel, but integration follows these gates:
    assessment and provenance/resource schema module; W1 and W2 land typed
    failure and supervisor protocol slices against it. No multi-job scheduling,
    top-up, central reporting, or fleet integration may invent a different
-   identity or lifecycle.
+   identity or lifecycle. This gate's exit also includes the checked-in,
+   validated acceptance fixture and the initial `quorum.capacity/v1`
+   artifact — everything numeric in this document derives from them, and no
+   scheduling throughput work builds against an unfixed denominator.
 2. **Reliability and quota inputs.** W1's typed failure/rate-limit
    classification and W7's measured quota-pool budgets gate W2 cooldown,
    cross-process admission, and throughput proof. W1's async cancellable process
@@ -1215,9 +1236,10 @@ The workstreams may develop in parallel, but integration follows these gates:
 4. **Grading and retained artifacts.** W4 may run Gate A once canonical frozen
    evidence exists. W5's capture-finalization and retained-artifact contract
    lands before static sharing or any W6 upload to a central artifact sink.
-   The retroactive corpus scrub precedes any route or export serving file
-   content, and any grader model/provider change — including W7's Bedrock
-   grader — passes W4 calibration before campaign use.
+   Serving routes and exports exclude historical (pre-scrub-era) raw file
+   content by construction, the long-lived-token rotation precedes any
+   content-serving route, and any grader model/provider change — including
+   W7's Bedrock grader — passes W4 calibration before campaign use.
 5. **Fleet integration last.** A bounded Stockyard feasibility slice for
    bootable image construction, immutable image identity, resource readback,
    job-spec transport, and artifact transport may start after the contract gate
