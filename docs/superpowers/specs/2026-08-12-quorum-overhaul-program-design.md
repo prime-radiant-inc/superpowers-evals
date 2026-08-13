@@ -1,9 +1,9 @@
 # Quorum overhaul program: fast, interpretable, multi-user evals
 
 **Date:** 2026-08-12
-**Status:** direction approved (Drew, 2026-08-12); adversarial review,
-contract redline, and coherence passes applied; awaiting Drew's final read;
-child specs blocked on this parent contract
+**Status:** approved (Drew, 2026-08-12) after adversarial review, contract
+redline, coherence pass, reviewer P1 redlines, and the OpenAI rate-limit
+probe; child specs proceed against this parent contract
 **Tracking:** PRI-2874
 **Research brief:** https://claude.ai/code/artifact/c3794032-07aa-405f-88d0-c0587efaa766
 **Review basis:** `superpowers-evals@ee570dd106fdc3cc2a7cabdf4ce25ab6413c1999`,
