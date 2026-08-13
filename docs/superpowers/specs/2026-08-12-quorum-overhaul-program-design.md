@@ -112,9 +112,12 @@ feature**.
    definition. A changed grid is a new fixture and registration hash; “~390
    runs” is never an acceptance definition. The historical design contains only
    Linux-container Claude/Codex credentials; fixture validation nevertheless
-   recomputes managed-substrate eligibility and tier-1 membership (decision
-   9), and rejects any primary column that is not tier 1 on a managed
-   substrate — today that excludes Windows and Antigravity. Criterion 4 runs this
+   recomputes managed-substrate eligibility and gating admission class
+   (decision 9), and rejects any primary column that is not gating-class on
+   a managed substrate — today that excludes Windows and Antigravity.
+   Validation also asserts equality with the frozen `acceptance_columns`
+   and the expected sample total, so a graduated column cannot be silently
+   omitted from an unchanged fixture. Criterion 4 runs this
    same registered Linux/amd64 workload, not a silently reduced fleet subset.
 
    The clock starts when the supervisor durably accepts the campaign and ends
@@ -156,11 +159,14 @@ feature**.
    W1's two-run reliability exit uses this same registered sentinel fixture;
    reliability and throughput remain separately reported gates.
 3. **Stage-2 full-grid target.** The runnable arm-sample count in a frozen
-   matrix manifest generated from registered evals, credential, agent, OS, tier,
-   and filter inputs completes through durable report commit in ≤12 elapsed
+   matrix manifest generated from registered evals, credential, agent, OS,
+   scenario-tier, admission-class, and filter inputs completes through
+   durable report commit in ≤12 elapsed
    hours. Historical “504 cells” is not a frozen current-grid definition.
 4. **Stage-3 headroom.** The critical acceptance campaign still completes in
-   ≤8 elapsed hours with 20% of declared worker slots withheld.
+   ≤8 elapsed hours with `ceil(20%)` of declared worker slots withheld for
+   the entire campaign, drawn per qualified resource class and failure
+   domain.
 
 Preliminary capacity math for criterion 1: 388 arm-samples × mean ~476s ≈ 51.3
 serial hours. Primaries alone require ≈6.41× effective parallelism over eight
@@ -171,9 +177,11 @@ reporting allowances; 7× is not enough merely because it exceeds 6.41×. Priced
 from the fixture's own cell composition rather than the corpus mean, the same
 battery is ~70 serial hours (~645s/run), implying **≥9× before allowances** —
 the working planning floor until the frozen fixture computes the exact number.
-The target has an existence proof: the appliance corpus records 10.28×
-effective parallelism (2026-06-25, `--jobs 12`), and the 08-08 gate's own
-failure mode was campaign-level scheduling at 1.65×, not batch fan-out. The 388
+Historical unpinned fan-out reached 10.28× (2026-06-25, `--jobs 12`) —
+evidence the substrate can exceed the floor raw, not proof of the
+allowance-inclusive requirement under pinned resources — and the 08-08
+gate's own failure mode was campaign-level scheduling at 1.65×, not batch
+fan-out. The 388
 historical samples already include both arms. Concurrent arms concentrate
 demand on the same quota domains; they do not double that workload again. The
 capacity model proves the makespan of every serial or constrained quota path,
@@ -230,9 +238,22 @@ Recorded from the 2026-08-12 discussion; each binds the child specs.
    requires a positively identified, typed, retryable instrument cause; a bare
    clean `investigate` is an unresolved outcome, not retry evidence.
 9. **Key-backed columns gate; seat-backed columns inform (Drew, 2026-08-12).**
-   Tier 1 is the set of columns on API-key or service-credential (ADC)
-   auth whose quota can be pooled or purchased; the acceptance campaign and
-   criterion 1 are defined over tier 1.
+   A versioned column registry classifies every column with an explicit
+   `column_admission_class: gating | observational`. Gating requires an auth
+   class from the registry's enum — `api_key`, `bedrock-bearer`, and `adc`
+   are gating-eligible; `subscription`/seat auth is observational — plus
+   managed-substrate capability receipts and quota that can be pooled or
+   purchased. ("Tier 1"/"tier 2" elsewhere in this document are aliases for
+   gating/observational and never refer to scenario tiers.) The acceptance
+   fixture freezes `acceptance_columns` and asserts its expected sample
+   total (initially 388) against fixture equality, so a newly graduated
+   column can never be silently omitted — a registry change is a new fixture
+   registration. The acceptance campaign and criterion 1 are defined over
+   the gating class. Observational work runs as a separately registered,
+   separately sealed campaign linked to the acceptance campaign: admission
+   reserves gating capacity first, observational work admits only from
+   proven residual capacity, and the acceptance campaign's sealing and
+   decision never wait on it.
    Seat/subscription-auth columns are tier 2: scheduled contemporaneously as
    capacity allows, reported separately, and never gating the eight-hour
    window. Codex moves to API-key credentials as its gating path. Copilot's
@@ -394,7 +415,11 @@ The canonical record preserves orthogonal axes rather than one display enum:
 - `evaluation_outcome = pass | fail | unresolved | not_assessed`;
 - `execution_terminal = completed | cancelled | lost | infrastructure_failed`;
 - `artifact_state = none | staged | committed | missing | orphaned | quarantined`;
-- `analysis_disposition = pending | included | excluded | void`;
+- `analysis_disposition = pending | included | excluded | void`, keyed by
+  `(analysis_id, arm/stratum)` — one sample may be included in one named
+  analysis and excluded from another (a binary-outcome analysis and a token
+  analysis legitimately retain different cohorts), and `analysis_n` counts
+  per `analysis_id`;
 - `sample_activation = primary | available_reserve | activated_reserve`;
 - `sample_lifecycle = open | terminal` for activated samples; and
 - `sample_resolution = pending | selected_execution | exhausted | not_run`.
@@ -473,6 +498,10 @@ start available, become activated only through the frozen whole-block rule, and
 never return to available. `analysis_n` counts eligible included outcomes, not
 registered identities or attempts. At most one execution outcome is selected
 per sample; retries and backfill never erase original evidence or spend.
+Every activated reserve sample names `replaces_primary_sample_id` (and its
+`pair_block_id`); exactly one included outcome exists per primary slot per
+named analysis, so `analysis_n` can never exceed `target_n` or drift
+arm-imbalanced.
 
 Corresponding arms complete local provisioning, fixture setup, and deterministic
 prechecks before entering durable `ready_to_drive`. The supervisor atomically
@@ -603,8 +632,15 @@ permit. Impossible resource profiles and infeasible pair plans fail before
 launch. Permit release follows authoritative execution fencing above, not lease
 expiry alone.
 
-Endpoint routing is not quota identity. Every credential names an explicit,
-non-secret `quota_pool_id`. One pool record owns concurrency, launch spacing,
+Endpoint routing is not quota identity, and provider limits form a graph,
+not a scalar. Every credential names an explicit, non-secret, mandatory
+`quota_pool_id` (no heuristic fallback for managed work); managed admission
+acquires atomic `quota_claim_ids[]` — one claim per intersecting limit the
+capacity model names (organization, project, model family, region,
+purchased-capacity product). Every observed model, including subagent
+models invoked inside one attempt, is recorded; an unregistered submodel is
+a typed admission error, never a silent draw. One pool record owns
+concurrency, launch spacing,
 account/seat/model/region scope, dated evidence, and one declared enforcement
 mode: linearizable per-request proxy; conservative per-attempt request/input/
 output-token reservation; or concurrency/spacing only. Opaque CLI/OAuth routes
@@ -625,9 +661,13 @@ silent skips.
 Admission uses bounded fairness across operators/jobs. The W2 child spec freezes
 weights, the charged unit for multi-arm blocks, `eligible_since`, and a numeric
 maximum eligible-bypass or start-lag bound, then proves it under continuous
-arrival. Blocked work accrues no active-service entitlement. Longest-first
-applies only inside an equivalent ready fairness/pair class; paid work is never
-preempted.
+arrival. Blocked work accrues no active-service entitlement, with one
+exception: a structurally feasible pair block retains its original
+`eligible_since`, and admission provides bounded atomic multi-slot
+reservation (drain) so a feasible block eventually launches even under a
+continuous stream of single-slot arrivals — the child spec tests exactly
+that adversarial arrival pattern. Longest-first applies only inside an
+equivalent ready fairness/pair class; paid work is never preempted.
 
 The hard cost invariant is maximum outstanding commitment, not unknowable final
 provider billing. The supervisor reserves a frozen upper bound once through the
@@ -679,10 +719,10 @@ restart.
 
 Each workstream gets its own child spec and Linear issue before
 implementation. Scope lines below bound the child specs; they do not replace
-them. Under decision 10's counterpart rule, a child spec may propose
-descoping any obligation in this document that does not serve the four
-success criteria; a descope is an explicit recorded amendment with rationale,
-never a silent omission.
+them. A child spec may propose descoping any obligation in this document
+that does not serve the four success criteria; a descope requires Drew's
+explicit approval and lands as a recorded amendment to this parent with
+rationale, never a silent omission.
 
 ### W1 — Reliability and waste (Stage 1)
 
@@ -700,9 +740,13 @@ Recover instrument waste without converting ambiguous behavior into passes.
   separate local setup from live validation cannot claim zero precheck spend.
 - Scope the drive phase to the run's own credential: extend the `env -i`
   allowlist launch pattern (PRI-2494) to the gemini, kimi, pi, antigravity,
-  hermes, and claude-windows launchers, and give Gauntlet a per-agent scoped
-  subprocess env, so no agent or driver process inherits the full credential
-  bundle. Secrets that never enter a transcript need no scrubbing.
+  hermes, and claude-windows launchers, constrain the OpenCode launcher's
+  allowlist (it currently forwards every ambient provider key), and give
+  Gauntlet a per-agent scoped subprocess env, so no agent or driver process
+  inherits the full credential bundle. A black-box test per agent proves
+  only the resolved subject and driver routes are visible from inside the
+  run — this is route correctness, provenance, and billing, not attacker
+  modeling. Secrets that never enter a transcript need no scrubbing.
 - Introduce one async, process-group-aware, cancellable subprocess seam before
   applying deadlines to provisioning, setup, checks, drive, and capture. Each
   deadline requests graceful stop, waits for terminal evidence, then kills the
@@ -745,12 +789,16 @@ The parallelism lever and the stable front door for both execution substrates.
   the transactional Phase-2 supervisor and stable operator surface above.
   Supervisor-managed campaigns expand into one attempt per lease; they never
   shell one appliance job into a privately scheduling `quorum run-all`.
-- Cut over behind a durable maintenance barrier. Snapshot state/results, prove
-  no Phase-1 `preflighting|queued|running|stopping` job remains—or reconcile
-  each against locks, process identity, and artifacts—then migrate terminal,
-  lost, quarantined, and imported receipts with count/digest validation. Fence
-  old writers, start and reconcile the new service, run a canary, define how
-  post-cutover writes roll back or roll forward, and remove `run.lock` last.
+- Cut over behind a durable maintenance barrier, in this order: fence old
+  writers FIRST — every installed entrypoint honors the fence, and the
+  helper gains a drain command — then idle reconciliation (prove no Phase-1
+  `preflighting|queued|running|stopping` job remains, or reconcile each
+  against locks, process identity, and artifacts), then the final-sequence
+  snapshot with count/digest validation of migrated terminal, lost,
+  quarantined, and imported receipts, then promotion, canary, a defined
+  rollback boundary, and `run.lock` removal last. The same sequence governs
+  every relocation of the SQLite authority — including the expected Stage-2
+  move to a larger host.
 - Implement the authoritative SQLite event/state/permit/lease/artifact-CAS
   transaction and materialization outbox. Add request idempotency, queue/event
   discovery, revisions, durable repair, the cancel/commit race rule, named
@@ -906,7 +954,8 @@ fallback if either cutover gate fails.
   `codex-api.env`, `pi.env`, and `api-key-helper.sh`), verify with a
   value-based secret scan keyed on the live bundle's values, and rotate or
   revoke exposed token classes. This gates every route or export that serves
-  file content.
+  file content. Scrubbing is copy-on-write with an atomic projection
+  switch; committed artifact bytes are never rewritten in place.
 - Render the canonical plan/ledger/report: run, batch, campaign, and complete
   paginated cell-history routes show planned, queued, running, included,
   replaced, excluded, cancelled, lost, orphaned, and missing samples, plus
@@ -986,9 +1035,10 @@ substitute for these.
 - Extend enrollment from the Stage-2 trusted operator path; do not defer Jesse's
   basic multi-user workflow until the fleet.
 - Scope credentials to the VM's blast radius: a guest receives only its
-  attempt's subject credential (plus the grader key only while fused mode
-  persists — the W4 split removes grader keys from guests entirely), never the
-  full bundle. Job-spec/dotenv material is invalidated after init and is not
+  attempt's subject credential plus the live driver credential — the driver
+  remains an in-guest LLM after the W4 split; fused mode may share one
+  driver/grader credential, and the split removes only the grader
+  credential — never the full bundle. Job-spec/dotenv material is invalidated after init and is not
   readable by the agent-visible user once the drive starts, where the platform
   allows. The child spec records an explicit egress decision (accept full NAT
   in writing, or a per-VM provider-endpoint allowlist) and never exposes
@@ -1015,11 +1065,14 @@ passes.
   samples share one cap-5 `api.openai.com/v1|openai-responses` pool — a
   6.8–7.5h serial floor at perfect utilization that defeats criterion 1 by
   itself. Research (2026-08-12): OpenAI enforces quota per organization and
-  per model; project keys add attribution, never throughput. The org is
+  per model; project keys never add throughput (and a configured project
+  cap can subtract it — leave project limits unset or at org max). The org is
   already usage Tier 5 (Drew, 2026-08-12), so no tier clock applies: turn on
   auto-recharge (the historical hangs were billing exhaustion), run the
   saturation probe on the existing org now, raise pool caps to the probed
-  value, and buy Scale Tier quota for genuine increases. A separate eval org
+  value, and buy the provider's current committed-capacity product for
+  genuine increases (Reserved Tier for GPT-5.6-class models at time of
+  writing; Scale Tier covers pre-5.6 — verify the product at purchase). A separate eval org
   remains an optional spend-isolation choice — it would start at usage Tier
   1, so it warms in the background and never gates. Usage-Tier-5 per-model
   buckets (~40M TPM sol-class, ~180M TPM luna) carry the target concurrency
@@ -1047,17 +1100,27 @@ passes.
   gate copilot's tier-1 membership. MAI-model cells have no key path.
   Antigravity: consumer API keys remain unsupported, but agy
   1.1.10 (2026-08-03) added ADC / Gemini Enterprise Agent Platform sign-in,
-  billing inference to a GCP project under Dynamic Shared Quota — a shared
-  pool with no fixed per-project caps and no per-project floor; purchasable
-  Provisioned Throughput is the guarantee mechanism — with an official
-  headless mode. That route is approved (Drew, 2026-08-12); the feature is
-  days old, so a registered concurrency smoke is load-bearing, and until it
-  passes the column stays tier-2 serial. Paid consumer-account pooling is
+  billing inference to a GCP project (Standard PayGo by default) under
+  Dynamic Shared Quota — a shared pool with no fixed per-project caps and no
+  per-project floor; purchasable Provisioned Throughput is the
+  assured-capacity mechanism — with an official headless mode. That route is
+  approved (Drew, 2026-08-12); the feature is days old, and the registered
+  smoke must show billed consumption on the project and observed model
+  readback, not merely successful authentication. Until it passes the
+  column stays observational and serial. Paid consumer-account pooling is
   rejected (2026-02 suspension wave; keyring/token-rotation ops burden).
-  Both graduation routes require real adapter work, owned by their smoke's
-  child spec: per-credential BYOK wiring for copilot (today's seam forwards
-  host env, which the redesign eliminates) and ADC credential seeding into
-  the per-run throwaway home for antigravity.
+  Graduation to gating CONJOINS: operational smoke, immutable serving
+  provenance (observed model readback — Antigravity currently emits none
+  and Copilot records intended configuration rather than served models, so
+  both need readback work), managed-executor capability receipts, and
+  saturation/capacity evidence. A BYOK copilot column is a DISTINCT column:
+  valid for gating via its own paired arms from day one, but any claim of
+  equivalence or continuity with the GitHub-routed history additionally
+  requires a powered, pre-registered calibration. Both routes require real
+  adapter work, owned by their smoke's child spec: per-credential BYOK
+  wiring for copilot (today's seam forwards host env, which the redesign
+  eliminates) and ADC credential seeding into the per-run throwaway home
+  for antigravity.
 - De-single-point the grader through a key pool or calibrated Bedrock grader
   (PRI-2524). A model/provider change goes through W4 and provenance gates.
 - Size Bedrock raises from the frozen workload model; convert OAuth to API-key
@@ -1206,9 +1269,10 @@ The workstreams may develop in parallel, but integration follows these gates:
   first response is a larger host: W2's child spec owns the resize/migration
   plan (results move, downtime against active campaigns) before concluding W6
   is required; running unpinned is never the fallback. Storage has the same
-  shape: results/ grows ~140 dirs/day at ~199MB each against ~217GB free —
-  grow the volume now, and W5 retention lands before sustained criterion-1
-  cadence.
+  shape: results/ grew ~140 dirs/day averaged over August's active weeks
+  (quiet days see ~12; criterion-1 cadence implies 390+), at ~199MB each
+  against ~217GB free — grow the volume now, and W5 retention lands before
+  sustained criterion-1 cadence.
 - **A durable row is not durable execution.** Lost supervisor responses,
   owner death, PID reuse, partial uploads, and late workers can duplicate or
   misattribute paid work without fencing, reconciliation, and atomic commit.
