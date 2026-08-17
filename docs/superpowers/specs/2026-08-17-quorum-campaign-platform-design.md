@@ -143,7 +143,7 @@ There is deliberately no `model:` field — see "Known coupling" below.
 ```yaml
 # suites/harness-compare.yaml
 kind: exploratory                 # exploratory | gating
-budget_usd: 150                   # all-in soft ceiling (subject + grader); see Budget
+budget_usd: 150                   # all-in soft ceiling (subject + grader + reserves); see Execution: Budget
 comparisons:
   - baseline: claude-superpowers
     treatment: codex-superpowers
@@ -169,8 +169,11 @@ comparisons:
   comparisons are unaffected, so asymmetric grids survive.
 - Gating suites additionally carry `profile:` + numeric profile
   parameters, `reserve:` (spare blocks per cell), and
-  `max_start_skew:` (see Execution). Exploratory suites may omit
-  `reserve:` (default 0).
+  `max_exposure_skew:` (see Execution; the name reflects that skew is
+  measured at exposure, not process start). Exploratory suites may also
+  set `max_exposure_skew:` (breach = rendered caveat) and may omit
+  `reserve:` (default 0). (Example documents in this section elide the
+  `schema_version` and `name` fields Appendix B requires.)
 
 `kind` is the campaign's evidence class:
 
@@ -181,8 +184,10 @@ comparisons:
   is a gating suite.
 
 (Naming lineage: drafted as `rigor: exploratory | confirmatory`; "rigor"
-and "confirmatory" dropped as jargon (Drew, 2026-08-17). "Gating" aligns
-with the superseded program's credential classes, gating | observational.)
+and "confirmatory" were dropped as the suite-kind vocabulary (Drew,
+2026-08-17) — "confirmatory" is retained only as the 08-08 cell-class
+name, a different axis. "Gating" aligns with the superseded program's
+credential classes, gating | observational.)
 
 The v1 `scenarios:` selector is an explicit list or
 `tier=<sentinel|full|adhoc>` (the existing story.md tier label read by
@@ -193,8 +198,10 @@ v1.
 registered identically; gating additionally validates profile parameters
 and reserve pricing. `quorum campaign register <suite>`:
 
-- expands each comparison into cells (scenario × arm) and samples
-  (× replicate); applies the eligibility filters below; resolves every
+- expands each comparison into **cells** (scenario × comparison — a cell
+  holds both arms) and **samples** (cell × arm × replicate); duration and
+  cost estimates attach per arm-within-cell (keyed scenario × agent);
+  applies the eligibility filters below; resolves every
   ref (superpowers per arm, evals, gauntlet) to SHAs; records the
   campaign's grader credential and model (see Execution);
 - **rejects** at registration: arms whose adapter lacks per-arm
@@ -202,7 +209,7 @@ and reserve pricing. `quorum campaign register <suite>`:
   obol-unpriced models (an operator-declared per-token override, recorded
   in `campaign.json`, is the only escape); usd-denominated profile
   parameters when any arm is unpriceable; comparisons whose minimum
-  feasible launch cannot meet the registered skew bound (cap-1 pools,
+  feasible launch cannot meet the registered exposure-skew bound (cap-1 pools,
   spacing that cannot co-launch — infeasible-by-construction pairs are
   refused pre-spend); arm `os` unsupported by the agent, credential, or
   scenario directives; seat/subscription-auth credentials in gating
@@ -221,8 +228,11 @@ and reserve pricing. `quorum campaign register <suite>`:
 - prints the priced grid, exclusions, flags, and digest to stdout and
   asks for confirmation;
 - hashes the canonical form (Appendix B defines the canonical bytes —
-  estimates are NOT part of the digest; the frozen grid, refs, arms,
-  profile, parameters, reserve, and skew bound are). The digest is the
+  estimates and estimate-derived pricing fields are NOT part of the
+  digest; the frozen grid, refs, arms, profile, parameters, reserve,
+  skew bound, and the registered `budget_usd` are — runtime raises live
+  only in the journal, so the effective budget is registered + journaled
+  raises). The digest is the
   campaign's identity; a changed grid is a new campaign. Re-registering
   an unchanged suite with an unchanged resolution is idempotent (same
   digest → same campaign directory).
@@ -237,8 +247,9 @@ The chain, as zod schemas in `src/contracts/` (Appendix B):
 ```
 campaign_id (registration digest)
   └─ comparison_id
-       └─ block_id        the contemporaneity unit: one replicate of the
-          │               comparison's arm(s), co-admitted and co-launched
+       └─ block_id        the contemporaneity unit: one replicate of ONE
+          │               CELL of the comparison (both arms), co-admitted
+          │               and co-launched
           └─ sample_id    one arm's slot within the block
                └─ execution_attempt_id   journaled BEFORE spawn
                     └─ run_id            bound at run-dir allocation
@@ -262,8 +273,9 @@ this is the one required runner change, `src/cli/run-command.ts` /
   never graded, excluded from analysis n, its slot refilled by the frozen
   outcome-independent replacement rule (both kinds). `indeterminate`
   remains distinct: evidence ambiguity, reported in full, never silently
-  replaced. The exact mapping from the code's real outcomes to
-  {instrument, evidence} is a kernel deliverable — see Typed failures.
+  replaced. The exact four-way mapping from the code's real outcomes to
+  {instrument (replace), evidence, aborted, shortfall} is a kernel
+  deliverable — see Typed failures.
 - A campaign directory (`campaigns/<digest-prefix>-<suite>/`) holds
   `campaign.json`, the journal, and the sealed reports, referencing runs
   by `run_id`. Nothing moves; "quarantine" is a journal classification,
@@ -298,7 +310,7 @@ fixtures AND transcript verbs via mutated ATIF trajectories (drop calls,
 insert prohibited calls, reorder) — 65 of 85 scenarios use transcript
 checks; fs fixtures alone close a third of the hole.
 
-### Decision profiles (replaces the v1 predicate grammar)
+### Decision profiles (replaces revision 1's draft predicate grammar)
 
 There is **no user-authored predicate language**. A gating suite names a
 **decision profile**: a versioned, code-reviewed TypeScript module in the
@@ -318,25 +330,35 @@ v1 ships two profiles:
   two-sided, on confirmatory cells; RED on any treatment-unfavorable
   significant confirmatory cell; per-cell determinate-n floors (a cell
   below floor reads UNDERPOWERED and joins the cannot-answer list — it
-  cannot RED the gate); tripwire cells that fire produce a typed
-  `investigate` terminal that **blocks SHIP until a recorded append-only
-  adjudication amendment resolves it** (the human step made visible in
-  the journal, not laundered); probe and descriptive cells never gate;
-  missing or unevaluable quantities are fail-closed (never silently
-  false). The sealed verdict is three-valued: **SHIP / NO-SHIP /
-  UNDERPOWERED-or-INVESTIGATE** — a behavioral failure and a dead
-  instrument are never conflated. Every SHIP renders the pre-registered
-  minimum-detectable-effect per confirmatory cell ("what this gate cannot
-  answer", as schema) — the gate ships on absence of unfavorable
-  evidence, and the MDE line is what makes that honest at n≤10, where
-  equivalence testing would be vacuous.
+  cannot RED the gate); tripwire-class rules evaluated at seal — both
+  fired tripwire cells and the 08-08 completion-collapse rule (cross-arm
+  completion divergence beyond its registered threshold), which is
+  encoded as a tripwire-family profile check; probe and descriptive
+  cells never gate; missing or unevaluable quantities are fail-closed
+  (never silently false). **The profile mints `investigate` at seal**: a
+  fired tripwire seals the campaign with the verdict
+  UNDERPOWERED-or-INVESTIGATE; SHIP can appear only in a superseding
+  report (the erratum/supersedes chain) after a recorded append-only
+  **adjudication entry** — a journal event distinct from amendments —
+  resolves the fire. The human step is visible in the journal, never
+  laundered, and never blocks sealing. The sealed verdict is
+  three-valued: **SHIP / NO-SHIP / UNDERPOWERED-or-INVESTIGATE** — a
+  behavioral failure and a dead instrument are never conflated. Every
+  SHIP renders the pre-registered minimum-detectable-effect per
+  confirmatory cell ("what this gate cannot answer", as schema) — the
+  gate ships on absence of unfavorable evidence, and the MDE line is
+  what makes that honest at n≤10, where equivalence testing would be
+  vacuous.
 - **`descriptive_v1`** — the exploratory report: rates, token/dollar
-  medians, tags/metrics, accounting; DESCRIPTIVE stamp; no verdict slot.
+  medians, tags/metrics, accounting; DESCRIPTIVE stamp; the report
+  schema's verdict slot is structurally absent for this profile.
 
 ### Execution
 
-**The block is one replicate of one comparison** — baseline + treatment
-co-admitted and co-launched (single-arm units degenerate to one sample).
+**The block is one replicate of one cell of a comparison** — the
+baseline and treatment samples of one scenario, co-admitted and
+co-launched (single-arm units degenerate to one sample). A cell with
+n=5 is five blocks.
 Contemporaneity is per-comparison; cross-comparison transitivity was
 never same-moment and is not claimed.
 
@@ -422,9 +444,11 @@ never same-moment and is not claimed.
 
 **Sealing:** the completeness predicate runs over the journal — every
 registered sample terminal; every primary slot included, replaced by
-rule, or in a typed terminal state (`exhausted`, budget-stopped,
-skew-excluded, `investigate`) that the report names; nothing pending or
-silently omitted — then the profile evaluates, and `report.json` is
+rule, or in a typed terminal state (`exhausted`, `budget_stopped`,
+`skew_excluded`) that the report names; nothing pending or
+silently omitted — then the profile evaluates (minting `investigate` in
+the verdict where its tripwire rules fire — a verdict state, not a
+pre-seal slot state), and `report.json` is
 written last (temp + fsync + atomic rename; `report.md` first, JSON
 last) as the completion marker. `campaign report` on an unsealed
 campaign prints exactly which samples block sealing and why.
@@ -651,7 +675,10 @@ only.
 - No user-authored decision language, ever, in gating campaigns.
 - No k-arm atomic blocks.
 - No amendments other than raise-only budget (grid, profile, parameters,
-  reserve, skew are digest-frozen; changing them is a new campaign).
+  reserve, skew, and the registered budget figure are digest-frozen;
+  changing them is a new campaign; raises accumulate in the journal
+  only). Tripwire **adjudications** are a distinct permitted append-only
+  journal record, not an amendment.
 - No per-attempt dollar kill (no live metering exists; time/count bounds
   cover runaway attempts) — recorded drop, Appendix A.
 - No dashboard changes; no dashboard launch UI (standing decision).
@@ -722,7 +749,9 @@ can TDD against; zod is the source of truth once written. Compact form:
 - **Arm** `{schema_version, name, agent, credential, superpowers:
   sha|tag|"none", os?, labels?}`
 - **Suite** `{schema_version, name, kind, budget_usd, profile?,
-  profile_params?, reserve?, max_start_skew?, declared_metrics?,
+  profile_params?, reserve?, max_exposure_skew?, attempt_bounds?:
+  {max_time_s?, max_attempts?} (defaults from scenario `quorum_max_time`),
+  declared_metrics?,
   comparisons: [{baseline|arm, treatment?, scenarios, n, cells?:
   {scenario: {n?, class?}}}]}`
 - **Campaign** (`campaign.json`) `{schema_version, campaign_id, suite
@@ -730,16 +759,23 @@ can TDD against; zod is the source of truth once written. Compact form:
   grader: {credential, model}, cells[] (scenario, comparison, arms,
   n, class, coupling, estimates{duration_s, cost_usd, confidence}),
   excluded_cells[] (cell, reason), samples[] (sample_id, cell,
-  arm, replicate), blocks[] (block_id, comparison, sample_ids[]),
+  arm, replicate), comparisons[] (comparison_id — minted at registration
+  as the digest-scoped ordinal — baseline, treatment|arm),
+  blocks[] (block_id, comparison_id, sample_ids[]),
   budget: {usd_all_in, surcharge_applied, priced_coverage},
   registered_at, registered_by, digest}` — **digest canonical form**:
   JCS-canonicalized JSON of the campaign minus `estimates`,
-  `registered_at`, `registered_by`; estimates are advisory and re-derivable.
+  `budget.surcharge_applied`, `budget.priced_coverage`,
+  `registered_at`, `registered_by`; estimates and estimate-derived
+  pricing fields are advisory and re-derivable; `budget.usd_all_in`
+  (the registered figure) stays in the digest.
 - **Journal events** (SQLite; `schema_version` row; fsync per event):
   `campaign_opened, block_admitted(pools[]), attempt_created(sample,
   attempt), run_allocated(attempt, run_id, pgid), exposure_started(
   sample, ts), run_completed(attempt, outcome), instrument_failure(
   attempt, cause), block_replaced(block, replacement_block, cause),
+  sample_disposition(sample, disposition, superseded_by?),
+  slot_exhausted(sample), budget_stopped(sample_ids[]),
   skew_excluded(block), pool_blocked(pool, until), budget_event(kind,
   amount), amendment(kind=budget_raise, amount, ts), adjudication(
   cell, disposition, rationale), aborted(block), storage_paused,
@@ -747,7 +783,9 @@ can TDD against; zod is the source of truth once written. Compact form:
   reconstructs state; materialized tables are rebuildable.
 - **Block/attempt state machine:** `planned → admitted → spawned →
   exposed → terminal{completed | instrument_failed | aborted |
-  skew_excluded}`; campaign: `registered → running → {sealing → sealed |
+  skew_excluded | excluded_block_replaced}`; a `planned` sample reaches
+  terminal without admission via `slot_exhausted` or `budget_stopped`;
+  campaign: `registered → running → {sealing → sealed |
   cancelled | storage_paused → running}`. Crash windows resolve by:
   pre-`run_allocated` → attempt void, re-admit; post-`run_allocated`
   without terminal → kill pgid, block rerun; post-seal-predicate
@@ -758,9 +796,12 @@ can TDD against; zod is the source of truth once written. Compact form:
   unaffected).
 - **CheckRecord extension:** optional `score, metrics, tags, notes` as
   defined under Checks.
-- **Report** (`report.json`) `{schema_version, campaign_id, profile?,
-  verdict?: SHIP|NO_SHIP|UNDERPOWERED_OR_INVESTIGATE, comparisons[]
-  (per-cell tables, deltas, fisher_p, mde), accounting{...}, provenance
+- **Report** (`report.json`) `{schema_version, campaign_id, profile,
+  stamp: DESCRIPTIVE?, verdict?: SHIP|NO_SHIP|UNDERPOWERED_OR_INVESTIGATE
+  (present iff the profile is gating; structurally absent for
+  descriptive_v1), cannot_answer[] (underpowered cells + MDEs),
+  comparisons[] (per-cell tables, deltas, fisher_p, mde),
+  accounting{...}, provenance
   {arms: registered vs observed_set, grader}, supersedes?, errata[]}` —
   numeric rendering: shortest round-trip doubles, keys sorted, LF line
   endings (the byte-stability contract).
