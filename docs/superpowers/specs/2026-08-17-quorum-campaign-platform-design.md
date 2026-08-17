@@ -648,7 +648,11 @@ decided after Phase 0 and the first gate, from measurements.
    token rotation (named owner) **as a hard gate before** the smevals
    static-site export adapter → suite registry + the self-running
    single-arm sentinel suite (the merge-time lane) → offline regrade →
-   diff-driven scenario selection → dashboard campaign views.
+   diff-driven scenario selection. (Dashboard campaign views:
+   deliberately absent — decision, Drew 2026-08-17: campaign-reading
+   surfaces build on the export-adapter side, in smevals' vocabulary,
+   not on the legacy dashboard, which stays a passive grid; revisit only
+   if operator appetite appears after the adapter ships.)
 
 ## Testing
 
