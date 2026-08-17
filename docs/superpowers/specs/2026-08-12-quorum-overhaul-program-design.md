@@ -1,10 +1,11 @@
 # Quorum overhaul program: fast, interpretable, multi-user evals
 
 **Date:** 2026-08-12
-**Status:** SUPERSEDED as the governing plan (direction decision, Drew,
-2026-08-17) by `2026-08-17-quorum-campaign-platform-design.md` (successor
-in review; decision record in
-`docs/experiments/2026-08-17-platform-direction-panel.md`). The validity
+**Status:** SUPERSEDED as the governing plan (Drew, 2026-08-17) by
+`2026-08-17-quorum-campaign-platform-design.md` (successor APPROVED
+2026-08-17; decision records in
+`docs/experiments/2026-08-17-platform-direction-panel.md` and
+`docs/experiments/2026-08-17-platform-spec-adversarial-review.md`). The validity
 doctrine here (pairing, provenance, typed outcomes, quota truth, scrub) is
 carried forward into the successor; the staging, gates, supervisor, and
 fleet scope no longer direct work. This document remains the canonical

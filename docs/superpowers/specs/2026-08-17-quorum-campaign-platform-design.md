@@ -1,10 +1,11 @@
 # Quorum campaign platform: comparative evals as configuration
 
 **Date:** 2026-08-17 (revision 2, same day)
-**Status:** draft — awaiting Drew's review. Revision 2 incorporates the
-seven-seat, two-round adversarial review of revision 1 (record:
-`docs/experiments/2026-08-17-platform-spec-adversarial-review.md`); zero
-convergent findings were vetoed and all are folded in.
+**Status:** APPROVED (Drew, 2026-08-17) — the governing plan for
+PRI-2874. Revision 2 incorporates the seven-seat, two-round adversarial
+review of revision 1 (record:
+`docs/experiments/2026-08-17-platform-spec-adversarial-review.md`; zero
+convergent findings vetoed, all folded in) plus two verification passes.
 **Tracking:** PRI-2874 (umbrella; child stubs PRI-2875/PRI-2876 to be
 re-scoped at kernel-build kickoff)
 **Supersedes:** `2026-08-12-quorum-overhaul-program-design.md` — see
