@@ -1,49 +1,57 @@
 # Quorum campaign platform: comparative evals as configuration
 
-**Date:** 2026-08-17
-**Status:** draft — awaiting Drew's review (direction approved in discussion,
-2026-08-17)
+**Date:** 2026-08-17 (revision 2, same day)
+**Status:** draft — awaiting Drew's review. Revision 2 incorporates the
+seven-seat, two-round adversarial review of revision 1 (record:
+`docs/experiments/2026-08-17-platform-spec-adversarial-review.md`); zero
+convergent findings were vetoed and all are folded in.
 **Tracking:** PRI-2874 (umbrella; child stubs PRI-2875/PRI-2876 to be
 re-scoped at kernel-build kickoff)
 **Supersedes:** `2026-08-12-quorum-overhaul-program-design.md` — see
-"Relationship to the superseded program" for exactly what that means.
-**Review basis:** the 2026-08-17 seven-seat multi-model design panel and
-smevals gap analysis (`prime-radiant-inc/smevals@0c28dc6`), both recorded in
-`docs/experiments/2026-08-17-platform-direction-panel.md`; the PRI-2874
-review record; and the corpus/experiment evidence cited inline.
+"Relationship to the superseded program" and Appendix A for exactly what
+that means, mechanism by mechanism.
+**Review basis:** the 2026-08-17 direction panel + smevals gap analysis
+(`docs/experiments/2026-08-17-platform-direction-panel.md`), the
+2026-08-17 spec adversarial review (record above), the PRI-2874 review
+record, and the corpus/experiment evidence cited inline.
 
 ## How to read this document
 
 Quorum can answer one shape of question well (scenario × agent pass/fail)
 and answers every other shape — harness vs harness, superpowers vs stock,
-model vs model, PR vs base — with bespoke dev work per campaign. This design
-turns those questions into configuration. The whole operator surface is
-three commands:
+model vs model, PR vs base — with bespoke dev work per campaign. This
+design turns those questions into configuration. The operator surface:
 
 ```
 quorum campaign register suites/harness-compare.yaml
-    # expands the suite into a priced, hashed list of runs
-    # → campaigns/2026-08-17-harness-compare-3f9c/campaign.json
-quorum campaign run campaigns/2026-08-17-harness-compare-3f9c/
-    # buys the list in contemporaneous blocks; resumable after any crash
-quorum campaign report campaigns/2026-08-17-harness-compare-3f9c/
-    # machine-computed comparison; SHIP/NO-SHIP only for gating campaigns
+    # expands the suite into a priced, hashed list of runs; prints the
+    # priced grid, exclusions, and digest; asks for confirmation
+quorum campaign run campaigns/<id>/
+    # buys the list in contemporaneous two-arm blocks; resumable after
+    # any crash by re-running the same command
+quorum campaign report campaigns/<id>/
+    # machine-computed comparison; SHIP/NO-SHIP only from a named
+    # decision profile on a gating campaign
+quorum campaign list | status <id> | cancel <id>
+    # discovery, mid-run progress (progress and spend ONLY — never
+    # outcome data before seal), and cancellation
 ```
 
-An **arm** names a setup, a **suite** names a question over arms,
-**registration** freezes a suite into that priced list, the **dispatcher**
-executes it, and the **report engine** answers the question. The release
-gate stops being architecturally special: it is one saved suite with
-`kind: gating`. Wall-clock and cost are platform properties, not goals: the
-8-hour gate falls out of scheduling and configuration, not new
-infrastructure (see Background, finding 3).
+An **arm** names a setup, a **suite** names a question as a set of
+**comparisons** over arms, **registration** freezes a suite into a priced
+list, the **dispatcher** executes it in paired blocks, and a **decision
+profile** answers the gating question with reviewed, golden-tested
+statistics. The release gate stops being architecturally special: it is
+one saved suite binding `release_gate_v1`. Wall-clock and cost are
+platform properties, not goals: the 8-hour gate falls out of scheduling
+and configuration, not new infrastructure (see Background, finding 3).
 
 ## Goal
 
 One platform where any comparative question about superpowers is a
 configuration change, runnable at any scale, with validity enforced by
-schema instead of operator discipline. Motivating questions, all currently
-requiring per-campaign engineering:
+schema instead of operator discipline. Motivating questions, all
+currently requiring per-campaign engineering:
 
 - Did this superpowers PR regress anything? (PR ref vs base ref)
 - How does superpowers-on-claude compare to superpowers-on-codex?
@@ -52,64 +60,66 @@ requiring per-campaign engineering:
 
 Success criteria:
 
-1. Each question above is expressible as arm + suite documents and runs
-   without writing TypeScript.
-2. A gating campaign at release-gate scale (~388 samples — a sample is one
-   scenario × arm × replicate slot; defined under Identity) completes,
-   registration-accept to sealed report, inside 8 elapsed hours.
-3. Every campaign report is machine-generated: no hand-computed statistics
-   anywhere in a readout. (This retires the `bc104d0` class of failure — a
-   published readout whose by-hand statistics were wrong and had to be
-   retracted.)
+1. **Expressibility.** Each question above is expressible as arm + suite
+   documents and runs without writing TypeScript. A checked-in example
+   suite exists for each of the four questions.
+2. **Ceremony.** Posing a new comparative question — from blank editor to
+   accepted registration — takes a maintainer under 30 minutes and zero
+   changes under `src/`. This is the criterion that measures the actual
+   diagnosis (campaigns were bespoke engineering projects); speed without
+   it rebuilds a faster ceremony.
+3. **The gate.** The checked-in `suites/release-gate.yaml` — which must
+   reproduce the 2026-08-08 gate's real structure (per-cell n, per-arm
+   participation, cell classes) and is the acceptance workload; its
+   registration digest, not "~388 runs", is the acceptance definition —
+   completes, registration-accept to sealed report, inside 8 elapsed
+   hours.
+4. **Machine reports.** Every published readout links its sealed
+   `report.json`; a published number not derivable from a sealed report
+   is a defect. (This retires the `bc104d0` class — a readout whose
+   by-hand statistics were wrong and had to be retracted.)
 
 ## Background: why this replaces the 2026-08-12 program
 
-The 08-12 program correctly diagnosed the problems (campaign-level
-scheduling at 1.65× effective parallelism, quota caps that were our own
-artifact, hand-read campaigns) and then prescribed a durable multi-operator
-supervisor and a VM fleet. A seven-seat multi-model panel (2026-08-17,
-recorded in `docs/experiments/2026-08-17-platform-direction-panel.md`)
-re-examined it with adversarial briefs and converged, across all four model
-families, on three findings:
+Unchanged from revision 1 in substance; kept brief. The 08-12 program
+correctly diagnosed the problems and prescribed a durable multi-operator
+supervisor and a VM fleet. The 2026-08-17 direction panel (seven seats,
+four model families, adversarial briefs) converged on three findings:
 
-1. **The validity spine is the product and stays.** Every validity mechanism
-   exists because we paid for a specific failure: the 08-06 gate went GREEN
-   and was discredited ($650; wrong codex model, answer-key leak, cross-run
-   leak), forcing an $850 re-gate; two published readouts carried
-   retractions; check holes produced false passes; a 429 latch silently
-   dropped 30 cells from a battery. The lab's failure mode is never "down
-   for a day" — it is "up and lying."
-2. **The availability machinery was padding for this lab's shape.** Lease
-   fencing, recovery epochs, boot-nonce identity, RPO=0 barriers,
+1. **The validity spine is the product and stays.** Every validity
+   mechanism exists because we paid for a specific failure: the 08-06
+   gate went GREEN and was discredited ($650; wrong codex model,
+   answer-key leak, cross-run leak), forcing an $850 re-gate; two
+   published readouts carried retractions; check holes produced false
+   passes; a 429 latch silently dropped 30 cells. The lab's failure mode
+   is never "down for a day" — it is "up and lying."
+2. **The availability machinery was padding for this lab's shape.**
+   Lease fencing, recovery epochs, boot-nonce identity, RPO=0 barriers,
    multi-operator fairness proofs, and the fleet defend against failures
-   whose cheapest handling for two trusted operators is "rerun the affected
-   blocks" (a block is the two-or-more-arm contemporaneous unit defined
-   under Execution; worst case is one campaign, ~$850, one night — the
+   whose cheapest handling for two trusted operators is "rerun the
+   affected blocks" (worst case one campaign, ~$850, one night — the
    08-08 gate survived a mid-battery laptop reboot on run-dir durability
    alone).
-3. **The program was build-first where it should be probe-first.** Its own
-   evidence implies the 8-hour gate needs scheduling and configuration, not
-   a control plane: the 2026-08-12 OpenAI probe showed the observed 5-way
-   concurrency ceiling was our harness's own configured limit, not provider
-   throttling (zero 429s at 20-way); 10.28× parallelism was already
-   achieved at `--jobs 12`; and the 08-08 gate's slowness came from running
-   66 sequential lock-holding jobs, not from batch fan-out. Independent
-   estimates from three panel seats: ~4.5–7 elapsed hours without any
+3. **Probe-first.** The 2026-08-12 OpenAI probe showed the observed 5-way
+   concurrency ceiling was our harness's own configured limit (zero 429s
+   at 20-way); 10.28× parallelism was already achieved at `--jobs 12`;
+   the 08-08 slowness was 66 sequential lock-holding jobs. Three panel
+   seats independently estimated the gate at ~4.5–7 elapsed hours with no
    supervisor.
 
-Separately, the operator-experience finding: the reason evals run only
-before releases is **ceremony, not speed** — every campaign is a bespoke,
-hand-authored experimental design with a scratchpad driver script. A faster
-harness that still requires that authoring stays a pre-release-only tool.
-The platform removes the authoring, not just the waiting.
+The operator-experience finding: evals run only before releases because
+of **ceremony, not speed** — hence success criterion 2. The smevals gap
+analysis confirmed "contracts donor, not a dependency"; four smevals
+designs are adopted near-verbatim (Config-as-arm, failed-run doctrine,
+immutable-run-dir storage semantics, the check-result extension).
 
-The smevals gap analysis (2026-08-17, same experiment entry) confirmed the
-standing "contracts donor, not a dependency" decision and upgraded it:
-smevals' execution model (strictly serial) and data model (task × config ×
-model, pooled all-time statistics) cannot carry this workload, but four of
-its designs are adopted near-verbatim below (Config-as-arm, the failed-run
-doctrine, immutable-run-dir storage semantics, and its check-result
-extension contract).
+The revision-1 adversarial review (seven seats, two rounds) established
+that revision 1's kernel shape was sound but its schema could not express
+the real release gate, its admission model omitted the Gauntlet-Agent,
+its two headline questions had no provisioning path, and roughly a dozen
+receipt-backed mechanisms from the superseded spec had been dropped
+without disposition. All of that is repaired below; Appendix A records
+every disposition.
 
 ## Design
 
@@ -122,431 +132,641 @@ extension contract).
 agent: claude              # coding-agent name (coding-agents/<name>.yaml)
 credential: opus_bedrock   # names a credentials.yaml entry; model rides here
 superpowers: v6.1.0        # tag or SHA, or `none` for the stock agent
-os: linux                  # optional; defaults per agent config
+os: linux                  # optional; validated against agent/credential/scenario os support
 labels: {}                 # optional, free-form, reporting only
 ```
 
 There is deliberately no `model:` field — see "Known coupling" below.
 
-**Suite** — a named, reusable question over arms:
+**Suite** — a named, reusable question, expressed as **comparisons**:
 
 ```yaml
 # suites/harness-compare.yaml
-scenarios: tier=sentinel        # selector or explicit list; see below
-arms: [claude-superpowers, codex-superpowers]
-baseline: claude-superpowers    # optional; defaults to the first-listed arm
-n: 5                            # replicates per scenario per arm
-kind: exploratory               # exploratory | gating
-budget_usd: 150
+kind: exploratory                 # exploratory | gating
+budget_usd: 150                   # all-in soft ceiling (subject + grader); see Budget
+comparisons:
+  - baseline: claude-superpowers
+    treatment: codex-superpowers
+    scenarios: tier=sentinel      # selector or explicit list, per comparison
+    n: 5                          # default replicates per cell in this comparison
+    cells:                        # optional per-cell overrides
+      sdd-escalates: { n: 10, class: confirmatory }
+      fractals-smoke: { n: 2, class: descriptive }
 ```
 
-A gating suite additionally carries `predicate:` and `reserve:` keys
-(defined under "Report engine" and "Execution").
-
-The v1 `scenarios:` selector is either an explicit list of scenario names
-or `tier=<sentinel|full|adhoc>`, reading the tier label that scenarios
-already declare and `run-all` already filters on (`readQuorumTier` in
-`src/run-all/matrix.ts`). No other selector syntax exists in v1.
+- A **comparison** names one `baseline` and one `treatment` arm (two-arm),
+  or a single arm (`arm:` instead — descriptive/qualification units, the
+  future sentinel lane). There are no k-arm blocks: a "which model is
+  best" suite is several two-arm comparisons against one baseline (or an
+  exploratory set of single-arm units ranked descriptively, confirmed
+  pairwise if needed). This mirrors the real 08-08 gate, which was four
+  credential-stratified two-arm comparisons — not one 8-arm cohort.
+- Per-comparison scenario participation + per-cell `n` and `class`
+  (`confirmatory | probe | tripwire | descriptive`, the 08-08 vocabulary)
+  make the real gate's heterogeneous, asymmetric grid expressible. A
+  scenario dropped by a `# coding-agents:` directive is dropped **within
+  its comparison** for both arms (loudly, in `excluded_cells`) — other
+  comparisons are unaffected, so asymmetric grids survive.
+- Gating suites additionally carry `profile:` + numeric profile
+  parameters, `reserve:` (spare blocks per cell), and
+  `max_start_skew:` (see Execution). Exploratory suites may omit
+  `reserve:` (default 0).
 
 `kind` is the campaign's evidence class:
 
-- `exploratory` — "what's going on?" The report is stamped DESCRIPTIVE and
-  the schema has no slot for a ship/no-ship verdict, so an exploratory
-  result cannot be quoted as one.
-- `gating` — "do we ship?" Requires a frozen registration before any run
-  starts, a registered reserve, and a machine-checkable decision
-  predicate. The release gate is a gating suite.
+- `exploratory` — "what's going on?" The report is stamped DESCRIPTIVE;
+  the schema has no slot for a ship/no-ship verdict.
+- `gating` — "do we ship?" Frozen registration before any run, a
+  registered reserve, and a named **decision profile**. The release gate
+  is a gating suite.
 
-(Naming lineage: this field was drafted as `rigor: exploratory |
-confirmatory`; "rigor" and "confirmatory" were dropped as jargon
-(Drew, 2026-08-17). "Gating" also aligns with the superseded program's
-credential classes, gating | observational.)
+(Naming lineage: drafted as `rigor: exploratory | confirmatory`; "rigor"
+and "confirmatory" dropped as jargon (Drew, 2026-08-17). "Gating" aligns
+with the superseded program's credential classes, gating | observational.)
 
-**Registered campaign** — a frozen instance of a suite. **Both kinds are
-registered**; registration is the same expansion for each, and only gating
-suites additionally require predicate and reserve validation.
-`quorum campaign register <suite>`:
+The v1 `scenarios:` selector is an explicit list or
+`tier=<sentinel|full|adhoc>` (the existing story.md tier label read by
+`readQuorumTier`, `src/run-all/matrix.ts`). No other selector syntax in
+v1.
 
-- expands the selector into an explicit cell list (scenario × arm), then
-  into samples (× replicate). A scenario whose `# coding-agents:`
-  restriction excludes any arm's agent is **dropped for all arms** and
-  listed in `campaign.json` under `excluded_cells` with the reason —
-  loudly, never silently;
-- resolves every ref (superpowers, evals, gauntlet) to SHAs;
-- attaches per-cell duration estimates from the corpus; a cell with no
-  history falls back to its scenario's median, then the corpus median, and
-  is flagged `estimate_confidence: low`;
-- records the baseline arm (explicit `baseline:` or first-listed);
-- for gating suites, validates the decision predicate (below) and prices
-  the reserve into the budget;
-- hashes the canonical form. The digest is the campaign's identity; a
-  changed grid is a new campaign.
+**Registered campaign** — a frozen instance of a suite. Both kinds are
+registered identically; gating additionally validates profile parameters
+and reserve pricing. `quorum campaign register <suite>`:
+
+- expands each comparison into cells (scenario × arm) and samples
+  (× replicate); applies the eligibility filters below; resolves every
+  ref (superpowers per arm, evals, gauntlet) to SHAs; records the
+  campaign's grader credential and model (see Execution);
+- **rejects** at registration: arms whose adapter lacks per-arm
+  superpowers / `none` support (see Provisioning); gating cells on
+  obol-unpriced models (an operator-declared per-token override, recorded
+  in `campaign.json`, is the only escape); usd-denominated profile
+  parameters when any arm is unpriceable; comparisons whose minimum
+  feasible launch cannot meet the registered skew bound (cap-1 pools,
+  spacing that cannot co-launch — infeasible-by-construction pairs are
+  refused pre-spend); arm `os` unsupported by the agent, credential, or
+  scenario directives; seat/subscription-auth credentials in gating
+  suites (the carried-forward admission class, enforced mechanically);
+- **filters with loud records**: scenarios whose `requires_superpowers`
+  metadata conflicts with a `superpowers: none` arm (dropped for that
+  comparison, named in `excluded_cells`); for PR-ref arms, each scenario's
+  registered `coupling` class (`pins-skill-names`,
+  `embeds-skill-fixtures`, `arm-independent`) — coupled cells are flagged
+  so the report can segregate "the check pins what the PR changed" from
+  "the PR regressed behavior";
+- attaches per-cell duration and cost estimates from the estimate
+  artifact (fallback: scenario×agent median → scenario median → corpus
+  median, each tagged `estimate_confidence`); low-confidence estimates
+  take a declared surcharge in budget pricing;
+- prints the priced grid, exclusions, flags, and digest to stdout and
+  asks for confirmation;
+- hashes the canonical form (Appendix B defines the canonical bytes —
+  estimates are NOT part of the digest; the frozen grid, refs, arms,
+  profile, parameters, reserve, and skew bound are). The digest is the
+  campaign's identity; a changed grid is a new campaign. Re-registering
+  an unchanged suite with an unchanged resolution is idempotent (same
+  digest → same campaign directory).
 
 Registration is the entire ceremony — no design doc, no power tables, no
 scratchpad driver.
 
 ### Identity
 
-The chain the current `MatrixEntry` lacks, as zod schemas in
-`src/contracts/` (extending, not replacing, the verdict contracts):
+The chain, as zod schemas in `src/contracts/` (Appendix B):
 
 ```
 campaign_id (registration digest)
-  └─ block_id             the contemporaneity unit: one replicate of EVERY
-     │                    arm of one cell, launched together (see Execution)
-     └─ sample_id         one arm's slot within the block
-          │               (scenario × arm × replicate index)
-          └─ execution_attempt_id   journaled BEFORE spawn
-               └─ run_id            bound when the runner emits it
+  └─ comparison_id
+       └─ block_id        the contemporaneity unit: one replicate of the
+          │               comparison's arm(s), co-admitted and co-launched
+          └─ sample_id    one arm's slot within the block
+               └─ execution_attempt_id   journaled BEFORE spawn
+                    └─ run_id            bound at run-dir allocation
 ```
 
-Cardinality: every sample belongs to exactly one block; a two-arm suite's
-block holds two samples, a k-arm suite's block holds k, a single-arm
-suite's block holds one. Every verdict gains a campaign identity block.
-Attempt identity is durably journaled before any provider spend, so no
-paid work can ever be unattributable.
+Cardinality: a two-arm comparison's block holds two samples; a single-arm
+unit's block holds one; every sample belongs to exactly one block. Every
+verdict gains a campaign identity sub-block (campaign, comparison, block,
+sample, attempt ids), stamped by the runner **before the first provider
+token** — the runner emits `run_allocated: <run_id>` on its child
+protocol at run-dir allocation (today it prints run-id only at exit;
+this is the one required runner change, `src/cli/run-command.ts` /
+`src/runner/index.ts` `onRunDir` seam).
 
 ### Storage semantics (adopted from smevals, near-verbatim)
 
-- Run dirs stay immutable and stay where they are (`results/`); the
-  completion marker is written last.
-- Anything assessment-shaped added after a run completes is append-only
-  under the run dir. This leaves the offline-regrade door open without
-  building regrade now.
-- **Failed-run doctrine:** a typed instrument failure (staged `RunError`:
-  setup, capture, infra, grader-credential) is never evidence — never
-  graded, excluded from analysis n, its slot refilled by the frozen
-  outcome-independent replacement rule (both kinds; see Execution).
-  `indeterminate` remains distinct: it is evidence ambiguity, reported in
-  full, never silently replaced. This promotes the fail-vs-indeterminate
-  triage distinction from docs into schema.
-- A campaign directory (`campaigns/<id>/`) holds `campaign.json`, the
-  journal, and the sealed `report.json`/`report.md`, referencing runs by
-  `run_id`. Nothing moves; the dashboard and the appliance archive keep
-  working unchanged.
+- Run dirs stay immutable, in `results/`, completion marker written last.
+- Post-completion additions are append-only under the run dir (the
+  regrade door, not built now).
+- **Failed-run doctrine:** a typed instrument failure is never evidence —
+  never graded, excluded from analysis n, its slot refilled by the frozen
+  outcome-independent replacement rule (both kinds). `indeterminate`
+  remains distinct: evidence ambiguity, reported in full, never silently
+  replaced. The exact mapping from the code's real outcomes to
+  {instrument, evidence} is a kernel deliverable — see Typed failures.
+- A campaign directory (`campaigns/<digest-prefix>-<suite>/`) holds
+  `campaign.json`, the journal, and the sealed reports, referencing runs
+  by `run_id`. Nothing moves; "quarantine" is a journal classification,
+  never a filesystem move.
+- **Erratum path:** a sealed report is never edited. Corrections are
+  append-only errata in the campaign directory; a regenerated report
+  carries a `supersedes:` chain with the original preserved — the 08-09
+  inline-CORRECTION convention, mechanized. (The last two published
+  corrections were instrument blindness, not arithmetic; sealing does not
+  retire that class, so the platform must accommodate honest correction.)
 
 ### Checks: adopting smevals' check-result extensions
 
-`CheckRecord` keeps `{check, args, negated, passed, detail}` and gains four
-optional keys from smevals' check-result contract: `score` (0–1),
-`metrics` (name → number|bool), `tags` (open-vocabulary, snake_case), and
-`notes`; unknown keys fold into `detail`. Verbs stay boolean for verdict
-composition; metrics and tags become aggregatable by the report engine
-(mean ± stderr, tag shares). This is what makes "how does superpowers
-impact performance" answerable in numbers rather than pass rates alone.
+`CheckRecord` keeps `{phase, check, args, negated, passed, detail}` (note
+`phase` is load-bearing and retained) and gains optional `score`,
+`metrics`, `tags`, `notes`; unknown keys fold into `detail` (a write-side
+rule, implemented, not a zod default). Metric aggregation is
+registration-scoped: only metrics declared in the suite (name, unit,
+aggregation) are pooled; undeclared metrics render per-check only —
+open-vocabulary pooling of identically-named metrics from different
+checks is not meaningful.
+
+**Expected-check manifest (fix-now, prerequisite for gating):** per
+scenario used in any gating suite, a frozen exact multiset of
+`{phase, check, args, negated, multiplicity}`; conditional check paths
+must be declared as alternates (audit `checks.sh` files for shell
+conditionals before freezing the format). The composer returns a typed
+instrument failure — never `pass` — unless actual records match. An empty
+expected post-check set is illegal for gating scenarios. Planted-negative
+fixtures must cover **both families**: filesystem verbs via known-bad
+fixtures AND transcript verbs via mutated ATIF trajectories (drop calls,
+insert prohibited calls, reorder) — 65 of 85 scenarios use transcript
+checks; fs fixtures alone close a third of the hole.
+
+### Decision profiles (replaces the v1 predicate grammar)
+
+There is **no user-authored predicate language**. A gating suite names a
+**decision profile**: a versioned, code-reviewed TypeScript module in the
+platform, with golden-oracle tests, that consumes the sealed campaign
+data and emits the decision. Suites bind a profile and its declared
+numeric parameters (alphas, floors, deltas); registration validates the
+parameters against the profile's schema. Growing the profile list — or a
+profile's vocabulary — is a platform PR with test coverage, never a
+campaign-time extension. (The adversarial review was unanimous here: a
+closed grammar rich enough for the real gate is a statistics package
+authored in YAML, which is how hand-computed statistics return.)
+
+v1 ships two profiles:
+
+- **`release_gate_v1`** — scope: a campaign of two-arm comparisons.
+  Semantics (all pre-registered as parameters): per-cell Fisher exact,
+  two-sided, on confirmatory cells; RED on any treatment-unfavorable
+  significant confirmatory cell; per-cell determinate-n floors (a cell
+  below floor reads UNDERPOWERED and joins the cannot-answer list — it
+  cannot RED the gate); tripwire cells that fire produce a typed
+  `investigate` terminal that **blocks SHIP until a recorded append-only
+  adjudication amendment resolves it** (the human step made visible in
+  the journal, not laundered); probe and descriptive cells never gate;
+  missing or unevaluable quantities are fail-closed (never silently
+  false). The sealed verdict is three-valued: **SHIP / NO-SHIP /
+  UNDERPOWERED-or-INVESTIGATE** — a behavioral failure and a dead
+  instrument are never conflated. Every SHIP renders the pre-registered
+  minimum-detectable-effect per confirmatory cell ("what this gate cannot
+  answer", as schema) — the gate ships on absence of unfavorable
+  evidence, and the MDE line is what makes that honest at n≤10, where
+  equivalence testing would be vacuous.
+- **`descriptive_v1`** — the exploratory report: rates, token/dollar
+  medians, tags/metrics, accounting; DESCRIPTIVE stamp; no verdict slot.
 
 ### Execution
 
-**The block is the contemporaneity unit**: one replicate of *every* arm of
-one scenario cell, launched together. For a two-arm suite that is a pair;
-for a k-arm suite all k arms launch side by side (so no arm needs
-duplicated baseline replicates, and every pairwise comparison inside the
-block is contemporaneous); for a single-arm suite the block degenerates to
-one sample (no skew fields; report comparison types 2–4 only — this is the
-case the future self-running sentinel suite uses). Contemporaneity is the
-point: base rates drift ±25 points within hours, so only same-moment
-comparisons are fair. The block is therefore also the rerun and
-replacement unit. A cell with n=5 is five blocks.
+**The block is one replicate of one comparison** — baseline + treatment
+co-admitted and co-launched (single-arm units degenerate to one sample).
+Contemporaneity is per-comparison; cross-comparison transitivity was
+never same-moment and is not claimed.
 
-- All arms of a block are admitted **atomically** — slots reserved in every
-  needed quota pool, or the block waits — and launched together; the
-  journal records per-arm start times against a registered
-  `max_start_skew` (default tuned from Phase 0 simulation, not invented in
-  this document). A skew breach does not invalidate the block in v1; it is
-  recorded and rendered in the report's accounting block as a named
-  validity caveat.
-- Dispatch is longest-expected-first from the frozen per-cell estimates
-  (sdd-*/fractals cells start at t=0, not last), greedy under per-pool caps
-  plus a global slot cap, via the existing `src/scheduler/`.
-- **Quota pools, v1 derivation:** a pool's identity is the credential's
-  optional `quota_pool` key if set, else `base_url|api|model`. This splits
-  pools per model — the old scheme keyed limits by endpoint alone, so
-  distinct models sharing `api.openai.com` shared one cap of 5, discarding
-  ~3× of available capacity (2026-08-12 probe) — while never merging
-  distinct endpoints (`opus` direct and `opus_bedrock` remain separate
-  pools). The explicit key exists for entries that genuinely share one
-  provider bucket.
-- A 429 puts its pool into a journaled `blocked_until` cooldown; queued
-  blocks wait and resume. The terminal-skip latch (which once silently
-  dropped 30 cells) is retired on this path.
+- **Admission is atomic per block**: slots reserved in the baseline arm's
+  pool, the treatment arm's pool, AND the campaign's **grader pool**, or
+  the block waits. The Gauntlet-Agent is the second LLM in every run
+  (median 75s/run, 34% of drive; ~$149 of the $850 gate) — 388 samples ×
+  75s ≈ 8.1 serial grader-hours, so an unmodeled grader pool defeats the
+  8-hour criterion by itself. The campaign's grader credential and model
+  are registered, pooled, capped, admitted, simulated in Phase 0, priced
+  into `budget_usd` (which is **all-in**: subject + grader + reserves),
+  and recorded in provenance. `--grader-model` overrides are rejected on
+  campaign runs.
+- **Skew** (three rules, all from the review): (1) measured from each
+  arm's **first Coding-Agent generation request** (`analysis_exposure_
+  started_at`, restored from the superseded spec) — spawn and Gauntlet
+  boot are not arm start; (2) registration rejects structurally
+  infeasible pairs pre-spend; (3) at runtime in a **gating** campaign, a
+  block whose exposure skew exceeds the registered bound is **excluded
+  from the paired comparison and refilled from reserve** (the runs are
+  retained as evidence — the data isn't broken, it's validity-compromised
+  for pairing), reaching typed shortfall if reserve exhausts; in
+  **exploratory** campaigns a breach is a rendered caveat. The registered
+  bound derives from the drift timescale (±25 pts over *hours* ⇒ bounds
+  in tens of minutes are conservative), with Phase 0 informing the
+  achievable floor. One review seat dissents (breach-as-caveat
+  everywhere); recorded in the review record.
+- Dispatch is longest-expected-first from the frozen estimates (sdd/
+  fractals at t=0); greedy under per-pool caps + a global slot cap.
+- **Quota pools, v1 derivation:** `quota_pool` key if set, else
+  `(base_url ?? credential-name)|api|model` — per-model splitting (the
+  probe's conclusion) without merging distinct endpoints or orgs; the
+  explicit key covers entries genuinely sharing one provider bucket.
+- A 429 puts its pool into a journaled `blocked_until` cooldown; blocks
+  wait and resume; the terminal-skip latch is retired. **Sensor reality:**
+  rate-limit detection today exists for exactly one harness (the
+  Antigravity marker); provider-broad 429 classification — subject CLIs
+  AND the gauntlet child's stderr/result — is named kernel work, without
+  which the cooldown has nothing to trip it and grader exhaustion burns
+  reserves silently.
 - A typed instrument failure activates the **replacement rule** (both
-  kinds): a fresh full block, never a single arm, never conditioned on
-  outcomes. Gating suites pre-register a **reserve** — `reserve: <count>`
-  spare blocks per cell, priced into the budget at registration — and
-  replacement draws only from it; a cell whose reserve is exhausted
-  reaches the typed terminal state `exhausted` and is named in the report
-  (the predicate sees the reduced `determinate_n`, so an underpowered cell
-  fails the decision rule rather than being silently absorbed).
-  Exploratory suites may omit `reserve:` (default 0); their instrument
-  failures then simply report as shortfall.
-- **Budget is enforced at admission**: the dispatcher stops admitting new
-  blocks when journaled actual spend plus the estimated cost of in-flight
-  blocks would exceed `budget_usd` (which registration priced to cover
-  primaries plus reserve). A budget stop is a typed terminal state,
-  named at seal. Raising the budget is an operator amendment recorded
-  append-only in the journal.
-- Cancellation kills the process group and marks in-flight blocks aborted;
-  resume reruns them whole.
+  kinds): a fresh full block, never a single arm, never
+  outcome-conditioned. Gating suites pre-register `reserve:` blocks per
+  cell, priced into the budget; exhaustion is the typed terminal
+  `exhausted`, visible to the profile as reduced determinate n. The
+  **innocent arm** of a replaced block gets the typed disposition
+  `excluded (block_replaced)`; its run dir is retained on disk and
+  journal-referenced as `superseded_by` — one included outcome per
+  primary slot is a conservation rule the report proves.
+- **Budget: counts are the hard bound; dollars are soft.** Registration
+  fixes primary + reserve block counts and per-attempt time/count bounds
+  exactly — that is the enforceable cap. `budget_usd` is an all-in
+  advisory admission threshold: the dispatcher stops admitting new blocks
+  when journaled actual spend + estimated in-flight would exceed it;
+  overshoot is bounded ≈ one in-flight wave and named at seal. A
+  **budget amendment** exists, narrowly: raise-only (toward completing
+  the registered plan — the frozen grid cannot be altered), pre-seal
+  only, append-only in the journal, rendered in the sealed accounting
+  block; and `campaign status` never displays outcome data before seal,
+  so an amendment cannot be conditioned on rendered evidence. Truncation
+  needs no amendment: cancel exists and a cancelled campaign seals no
+  decision. (Review split 3–2 on amendments; Drew ruled raise-only-with-
+  guards, 2026-08-17. The superseded hard-commitment-cap invariant is
+  consciously not carried — Appendix A.)
+- **Cross-process enforcement:** the journal writer holds an exclusive
+  flock on the campaign dir; a **host-wide live-spend lock** is shared by
+  `campaign run`, `run-all`, and direct `quorum run` (children inherit
+  ownership) — pool caps are meaningless across processes without it;
+  v1 gating campaigns run on **one designated host** with the blessed
+  bundle, and workstation use of that bundle during a gate is forbidden.
+  Cross-host pool leases are explicitly deferred until simultaneous
+  multi-host campaigns exist.
+- **Contention guard (replaces the superseded per-run resource classes):**
+  the designated host's fingerprint (CPU/mem/disk shape) and the fixed
+  global concurrency are registered; a resource-floor preflight gates
+  launch; campaign-level CPU/mem/swap/PID/disk telemetry is recorded with
+  declared invalidation thresholds. Per-run cgroup classes return only if
+  qualification shows contention-induced drift or a campaign studies
+  resources deliberately.
+- Cancellation (SIGINT/SIGTERM/SIGHUP) kills the process group, marks
+  in-flight blocks aborted; `campaign run` is the idempotent resume verb
+  and reruns them whole.
 
 **Sealing:** the completeness predicate runs over the journal — every
-registered sample terminal; every primary slot included, replaced by rule,
-or in a typed terminal state (`exhausted`, budget-stopped) that the report
-must name; nothing pending, missing, or silently omitted — and only then is
-the report generated, with `report.json` written last as the campaign's
-completion marker. An unsealable campaign names exactly which samples
-block it and why.
+registered sample terminal; every primary slot included, replaced by
+rule, or in a typed terminal state (`exhausted`, budget-stopped,
+skew-excluded, `investigate`) that the report names; nothing pending or
+silently omitted — then the profile evaluates, and `report.json` is
+written last (temp + fsync + atomic rename; `report.md` first, JSON
+last) as the completion marker. `campaign report` on an unsealed
+campaign prints exactly which samples block sealing and why.
 
 ### Journal and recovery
 
-A SQLite sidecar in the campaign directory; one dispatcher process is the
-only writer; fsync per state transition; rows for block/attempt state,
-attempt→run bindings, pool cooldowns, spend, and amendments.
+SQLite, in the campaign directory (the review converged: once early
+binding, pgid state, cooldowns, status queries, and errata references
+exist, SQLite is simpler than a checksummed-JSONL replay reducer; the
+store is nevertheless subordinate to the **journal contract** in
+Appendix B — event vocabulary, state machine, fsync-per-transition,
+`schema_version` row, single writer under flock). Rows: block/attempt
+state, attempt→run bindings, **process-group ids**, pool cooldowns,
+spend, amendments, adjudications.
 
-Recovery is the entire durability story: crash → restart → reconcile
-journal against run dirs on disk → keep completed blocks → rerun in-flight
-blocks whole → quarantine orphaned run dirs as evidence. Host loss → new
-host, rerun incomplete blocks. Worst case is a full campaign rerun (~$850
-at release-gate scale, one night — the measured 08-09 cost). No leases, no
-fences, no recovery epochs, no boot nonces, no outbox: the recovery unit
-equals the validity unit, so exactly-once machinery buys nothing.
+Recovery: crash → restart → **kill journaled pgids first** (an orphaned
+child keeps spending and races its replacement) → reconcile journal
+against run dirs → keep completed blocks → rerun in-flight blocks whole →
+quarantine (journal-classify) late or orphaned run dirs by attempt-id
+mismatch. Host loss → new host, rerun incomplete blocks. Worst case is a
+full campaign rerun (~$850, one night). No leases, no fences, no epochs,
+no boot nonces: the recovery unit equals the validity unit. Crash-window
+behavior (mid-registration staging, pre-spawn, pre-run-allocated,
+mid-seal, ENOSPC → `storage_paused`) is specified in Appendix B's state
+machine; registration builds in a staging dir and publishes
+`campaign.json` atomically last.
 
 ### Report engine
 
-`quorum campaign report` reads the journal **plus the immutable run dirs it
-references** (verdicts, check records, token/cost captures) and is
-deterministic over those inputs. The v1 vocabulary is **fixed and closed**
-— four comparison types, chosen because they are the ones past campaigns
-actually used:
+`quorum campaign report` reads the journal **plus the referenced
+immutable run dirs** and is deterministic over those inputs (per-host
+byte-stability; golden-oracle tests over synthetic journal + run-dir
+fixtures; the Fisher implementation cross-checked against an independent
+implementation; rounding and key order specified in Appendix B). The
+descriptive vocabulary is fixed and closed:
 
-1. Pass-rate delta per (arm, baseline) pair: Fisher exact over the pooled
-   2×2 counts of matched cells. Pairing here is **operational, not
-   analytic**: blocks guarantee the compared runs were collected
-   contemporaneously; the test itself pools counts. (Naming a matched-pairs
-   test instead is a platform change, not a per-campaign choice.)
-2. Token and dollar medians over matched determinate cells.
-3. The accounting block: instrument errors, indeterminates, replacements,
-   reserve draws, skew caveats, budget stops, and denominators — always
-   rendered, never elidable.
-4. Tag and metric aggregation (mean ± stderr, tag shares), descriptive
-   only.
+1. Per-comparison pass-rate deltas — per-cell Fisher exact (two-sided)
+   plus the profile's aggregation; raw cross-cell pooling renders as
+   descriptive only (the superseded doctrine, kept).
+2. Token and dollar medians over matched determinate cells (per
+   comparison).
+3. The accounting block — instrument errors, indeterminates,
+   replacements, reserve draws, skew exclusions and caveats, budget
+   events and amendments, denominators — always rendered, never
+   elidable.
+4. Declared-metric aggregation and tag shares, descriptive only.
 
-Every rendered number carries its n, denominator, measurement coverage, and
-cell class. A question needing a comparison type that does not exist is a
-platform PR, not a per-campaign escape hatch — escape hatches are how
-hand-computed statistics come back.
+Every number carries n, denominator, coverage, and cell class.
+**Provenance:** registered vs **observed** model per arm — where observed
+is the recorded *set* of models in the trajectory (codex parents
+routinely invoke sol/terra/luna subagents; a singular field would lie) —
+plus the campaign's registered grader credential/model and the observed
+grader identity. A mismatch is a loud provenance failure of the affected
+cells. Unpriced arms render tokens-only with a named coverage caveat
+(exploratory only; gating rejected them at registration).
 
-**Gating campaigns** carry a `predicate:` in the suite document. The v1
-predicate language is deliberately tiny: boolean combinations (`&&`, `||`,
-`!`, parentheses) of atomic comparisons `<quantity> <op> <number>` with
-ops `< <= > >= == !=`, over a **closed list of engine-defined quantities**:
-`fisher_p(arm)`, `pass_rate(arm)`, `pass_delta(arm)` (vs baseline),
-`determinate_n(arm)`, `determinate_n(arm, cell_class)`,
-`instrument_error_rate`, `median_usd_delta(arm)`,
-`median_tokens_delta(arm)`. Example:
+The dashboard is untouched by this design; campaign runs appear as bare
+cells and new-credential arms may be invisible under a loaded manifest —
+`campaign status` is the mid-run surface of record. Teaching the
+dashboard campaigns is backlog-eligible, not committed.
 
-```yaml
-predicate: >
-  fisher_p(codex-superpowers) >= 0.05 &&
-  pass_delta(codex-superpowers) > -0.05 &&
-  determinate_n(codex-superpowers) >= 60
-```
+## Provisioning: per-arm superpowers materialization (named kernel scope)
 
-Registration validates the predicate — unknown quantities or operators are
-rejected at register time, which is the superseded spec's "no
-human-judgment ship calls" made mechanical. The sealed report of a gating
-campaign says SHIP or NO-SHIP because the predicate evaluated. Exploratory
-reports have no predicate slot and a DESCRIPTIVE stamp in the header.
-Growing the quantity list is a platform change with golden-test coverage,
-not a campaign-time extension.
+The platform's two headline questions (PR-vs-base, superpowers-vs-stock)
+require what no adapter can do today: every adapter reads host-global
+`SUPERPOWERS_ROOT` and hard-fails without it. Kernel work item, sized
+honestly (it touches all 9 adapters):
 
-**Determinism bar:** byte-stable regeneration on the same host from the
-same journal + run dirs (golden-oracle tests over synthetic fixtures of
-both); cross-host byte-identity is deliberately not required — same data,
-same decision is the bar. The Fisher implementation is cross-checked
-against an independent implementation in tests (retraction insurance).
-Output: `report.json` for machines, `report.md` for humans. (The dashboard
-is untouched by this design; teaching it to read `report.json` is
-backlog-eligible future work, not committed here.)
+- Registration resolves each arm's `superpowers:` to a SHA; the
+  dispatcher materializes **one immutable worktree per distinct SHA**
+  under the campaign directory and passes its root per child (env
+  injection through the existing `command-runner` seam) — two arms of one
+  block run from two different checkouts on one host, contemporaneously.
+- `superpowers: none` is a first-class adapter mode that suppresses
+  skill/plugin/hook staging entirely.
+- Registration **rejects** `none`/ref arms for agents whose adapter has
+  not implemented the mode.
+- Black-box test per adapter: the run's provenance readback
+  (`verdict.json .provenance.superpowers_rev`) equals the arm's
+  registered SHA — or is absent for `none`.
 
-**Provenance in every report:** registered model (from the credential)
-next to the **observed** model read back from the transcript. A mismatch is
-a loud provenance failure of the affected cells, never a silent finding
-about the wrong model — the 08-06 lesson, kept mechanical.
+## Instrument snapshot (campaign-local)
+
+Registration pinning names is not pinning the instrument: the runner
+reads `story.md`, `checks.sh`, and the prelude from mutable paths at run
+time, so a mid-campaign edit can yield old pre-checks and new post-checks
+under a report claiming the registered SHA. The dispatcher, scenarios,
+checks, prelude, agent configs, dependency lockfile, and Gauntlet build
+execute from a **campaign-local materialization of the registered evals
+SHA**; drift detected against registered digests halts admission and
+invalidates the affected block. This retires the procedural freeze rule
+for campaign runs (it remains for legacy `run-all` use).
+
+## Typed failures (named kernel scope with an acceptance bar)
+
+The failed-run doctrine's plumbing does not exist yet and is scheduled
+work, not an assumption: the spec's failure classes must map onto the
+**real** `RunError` enum (`setup | gauntlet | capture | checks | compose
+| qa-agent-misconfigured | stopped | unknown` — "infra" and
+"grader-credential" are not stages today); the closed map
+composer-outcome → {instrument (replace), evidence (indeterminate/pass/
+fail), aborted, shortfall} is a published kernel deliverable; grader
+billing-exhaustion and grader 429s — which today compose to
+`indeterminate` with no error and hit 2 of the last 3 batteries — become
+typed instrument causes; provider-broad rate-limit classification covers
+subject CLIs and the gauntlet child. Unknown causes remain `indeterminate`
+and are **never** replaced (outcome-independence lives or dies on this
+trigger set). **Acceptance bar:** the first gating campaign's accounting
+block shows instrument-error and indeterminate rates; an indeterminate
+share above 5% triggers a reliability fix before any campaign is relied
+on for a release (the superseded W1 exit, restored as a live bar).
 
 ## Known coupling: model ⇔ credential (documented punt)
 
-**What is coupled today:** a `credentials.yaml` entry binds model id,
-endpoint/API dialect, auth, quota cap, and (via obol) pricing into one
-name. Arms therefore select a model *indirectly* by naming a credential;
-"which model is best" is arms differing only on `credential:`.
-
-**Why this design leans on it anyway:** the credential registry is the
-single authority for quota pools and pricing; an arm-level `model:`
-override would bypass it and reintroduce the drift class that put the
-wrong codex model into the 08-06 gate. Observed-model readback (above)
-guards the residual risk.
-
-**The cost accepted:** adding a model = adding a credential entry (a few
-lines of YAML). The same model on two endpoints = two entries (this
-already exists: `opus` vs `opus_bedrock`).
-
-**The someday fix (explicitly punted, 2026-08-17, Drew):** split the
-registry into endpoint/auth documents and a first-class model axis, with
-quota pools keyed (endpoint org × model) and arms saying
-`endpoint: + model:`. Half of this already lands with the kernel: the
-per-model pool derivation above removes the *scheduling* half of the
-coupling. The arm schema is versioned so `credential:` can later become
-`endpoint:` + `model:` without touching any suite or campaign document.
-
-**Revisit trigger:** the first time someone needs an arm-level model
-override, or the two-entries-per-model pattern becomes a real maintenance
-burden. Until then this is two lines of YAML per model.
-
-A pointer comment at the top of `credentials.yaml` references this
-section.
+Unchanged from revision 1: model rides in the credential; no arm-level
+`model:`; single quota/pricing authority; the 08-06 wrong-model receipt;
+observed-model readback as the guard; two-YAML-lines cost per model;
+revisit triggers (arm-level override need, or two-entries-per-model
+burden); the arm schema versioned so `credential:` can become
+`endpoint:` + `model:` without touching suites. Pointer comment lives at
+the top of `credentials.yaml`.
 
 ## Phase 0: the free capacity simulation
 
-No live spend. A paid live capacity probe (~$850, a rented large host
-rerunning the 388-sample battery) was considered and **explicitly rejected
-(Drew, 2026-08-17)** — recorded here so it is not re-proposed. The corpus
-already contains the answer material: the 08-08/09 gate's 388 runs with
-measured durations, pool assignments, and timestamps, plus the 06-25 batch
-(10.28× at `--jobs 12`).
+No live spend; the ~$850 live probe remains rejected (Drew, 2026-08-17).
+Replay the 08-08/09 gate's recorded durations through the dispatch
+policy — **including the grader pool as a first-class dimension** (its
+absence would understate the critical path of every configuration) —
+across pool caps {5, 15, 20} × global jobs {8, 12, 20, 24}, publishing
+predicted makespans and per-pool critical paths as a checked-in
+experiment entry. Phase 0 also emits the **estimate artifact** (per
+scenario×agent durations and costs, with a refresh rule) that
+registration consumes, and informs the skew bound's achievable floor.
+What simulation cannot prove is validated live by the qualification
+campaign and the first real gate.
 
-Phase 0 is a scheduler simulation: replay the recorded durations through
-the proposed dispatch policy — blocks, longest-first, per-model pool caps
-at {5, 15, 20}, global jobs at {8, 12, 20, 24} — and publish predicted
-makespans and per-pool critical paths per configuration, as a checked-in
-experiment entry. This is the superseded spec's `quorum.capacity/v1` idea
-made concrete against data we already own. It sets the `max_start_skew`
-default and the target host size.
+## Qualification before the first gate
 
-What simulation cannot prove — real high-concurrency agent traffic against
-provider throttles (the 08-12 probe used short synthetic requests), host
-contention at 20+ concurrent runs — is validated by **the first real
-gating campaign**, which superpowers pays for when it next needs a release
-gate anyway. Zero marginal spend; that campaign is itself the recorded
-live evidence.
+Between kernel completion and the first release-blocking 388-sample
+gate, a **bounded qualification campaign** (~⅓ gate scale, registered
+like any gating campaign but not release-binding) exercises every arm
+kind (ref, `none`), every credential/pool including the grader, the
+slow-cell families, replacement and reserve draw, skew measurement and
+exclusion, model readback, the contention guard, provider 429 handling,
+cancellation, and crash-resume — and must clear the <5% indeterminate
+bar and the planted-negative proofs. It does not prove the 8-hour
+makespan (the 388 is that proof); it proves the instrument is safe
+enough to buy the 388. The $650 discredited gate followed by the $850
+re-gate is the receipt for exactly this sequencing.
 
 ## Coexistence and sequencing
 
-Everything lands **additively**. `run-all`, the appliance, and the
-dashboard are untouched; any future decision to retire `run-all` waits
-until the campaign path has demonstrably replaced its jobs, and is not
-made by this document. The appliance's long-term fate (freeze-as-archive
-vs upgrade) is decided after Phase 0 and the first real gate, from
-measurements.
-
-**The freeze rule survives:** evals main stays frozen during a gating
-campaign — the appliance fast-forwards its checkout per job, so a
-mid-campaign merge swaps the instrument. Registration already resolves
-evals/gauntlet/superpowers to SHAs; the freeze becomes mechanical when the
-dispatcher runs from that pinned checkout, and stays procedural until then.
+Everything lands additively. `run-all`, the appliance, and the dashboard
+are untouched; any future retirement decision for `run-all` waits until
+the campaign path has demonstrably replaced its jobs and is not made
+here. The executor boundary (review-settled): a **thin campaign
+dispatcher** sharing the existing execution/provisioning primitives
+(clock, credential snapshot, child-arg construction, run spawn) — two
+schedulers, one execution primitive; `runSchedule` is not generalized in
+v1; unification is a post-first-seal decision. The appliance's fate is
+decided after Phase 0 and the first gate, from measurements.
 
 **Order of operations:**
 
 1. **Fix-now items** (independent PRs, this week, any direction):
-   - Per-agent env *and filesystem* credential scoping — finding F13 of
-     the 2026-08-12 adversarial review (6 of 12 launchers inherit host
-     env; the Gauntlet subprocess env carries the full provider bundle;
-     `env -i` alone is insufficient while the container's credential env
-     file and OAuth mounts are readable under the agent's UID). Done when
-     a per-agent black-box test proves the agent can reach only its own
-     credential, by env *and* by filesystem.
-   - The composer false-pass hole: a Gauntlet pass with zero deterministic
-     post-checks composes to `pass` (`src/composer.ts`). Closed by an
-     expected-check manifest per scenario used in any gating suite, plus
-     planted-negative fixtures proving each deterministic check fails on
-     its target defect.
-   - The appliance results-import command's `--force` flag currently
-     performs an unconditional recursive delete of the destination run dir
-     before copying (`src/appliance/import.ts`); it loses that behavior in
-     favor of reject-or-quarantine on conflict.
-   - Results-volume growth: grow the volume now and add a guarded
-     `prune --dry-run/--apply` that never touches runs referenced by an
-     unsealed campaign (~140 dirs/day at ~199MB against ~217GB free is
-     3–8 days of headroom at gate cadence).
-2. **Phase 0 simulation** (~days).
-3. **Kernel build** (~4–6 weeks): contracts → dispatcher + journal →
-   report engine, TDD throughout.
-4. **First registered gating campaign** on the kernel — the live
-   validation and the first ≤8h attempt.
-5. The **ranked backlog**, gated on that first ≤8h pass: smevals
-   static-site export adapter (campaigns rendered into smevals' documented
-   site contract — readable by non-operator stakeholders, Jesse being the
-   prototype, without any quorum context; severable if smevals drifts) →
-   suite registry + a self-running single-arm sentinel suite (the
-   merge-time lane) → offline regrade → diff-driven scenario selection.
-
-**Where campaigns execute:** the dispatcher is a process; it runs anywhere
-quorum runs today. The gating-campaign host is chosen from Phase 0's
-simulation plus the first gate's measurements.
+   - Per-agent env **and filesystem** credential scoping (F13, 2026-08-12
+     adversarial review: 6/12 launchers inherit host env; the Gauntlet
+     subprocess env carries the full provider bundle; the container's
+     credential env file and OAuth mounts are readable under the agent's
+     UID). Done when a per-agent black-box test proves the agent reaches
+     only its own credential, by env and by filesystem.
+   - The composer false-pass hole (`src/composer.ts`: Gauntlet pass +
+     zero post-checks → `pass`), closed by the expected-check manifest +
+     both planted-negative families (see Checks).
+   - `import --force`'s unconditional recursive destination delete
+     (`src/appliance/import.ts`) replaced by the exact contract: absent →
+     stage/verify/atomic-rename; byte-identical → idempotent skip;
+     conflict → typed rejection, committed evidence untouched; quarantine
+     applies only to the incoming staged payload.
+   - Results volume growth + guarded `prune --dry-run/--apply` that never
+     touches runs referenced by **any campaign, sealed or unsealed**
+     (sealed reports are deterministic over their run dirs; pruning them
+     kills regeneration and the post-hoc re-inspection the 08-06
+     discreditation required). Campaign-run deletion waits for an
+     explicit archive/retention contract.
+2. **Phase 0 simulation** (~days) + the estimate artifact.
+3. **Kernel build** (~5–7 weeks; grown honestly by the provisioning and
+   typed-failure scope): contracts appendix schemas → provisioning +
+   instrument snapshot → dispatcher + journal + locks → profiles + report
+   engine. TDD throughout.
+4. **Qualification campaign**, then the **first registered gating
+   campaign** — the live validation and first ≤8h attempt.
+5. The **ranked backlog**, gated on **kernel shipped + first campaign
+   sealed** (not the ≤8h pass — the daily-driver lane needs the
+   dispatcher, not the throughput proof): scrub-at-capture + long-lived
+   token rotation (named owner) **as a hard gate before** the smevals
+   static-site export adapter → suite registry + the self-running
+   single-arm sentinel suite (the merge-time lane) → offline regrade →
+   diff-driven scenario selection → dashboard campaign views.
 
 ## Testing
 
-The repo's existing culture, no mocked-behavior tests:
-
-- Dispatcher and journal unit-tested against the injectable clock and a
-  fake runner subprocess seam.
-- Crash-recovery tests: kill mid-block, restart, assert whole-block rerun
-  and no double-spend in the journal.
-- Golden-oracle report tests: synthetic journal + run-dir fixtures in,
-  byte-stable reports out; Fisher numbers cross-checked against an
-  independent implementation.
-- Planted-negative fixtures for the deterministic checks of every scenario
-  used in a gating suite: each check must demonstrably fail on its target
-  defect.
-- Schema round-trips for arm/suite/campaign/journal documents;
-  `quorum check` learns to validate arm and suite files, including
-  predicate validation for gating suites.
-- One standing 2-scenario live exploratory campaign as the pre-gate smoke
-  (trusted-maintainer only, as all live evals are).
+The repo's culture, no mocked-behavior tests: dispatcher/journal against
+the injectable clock and a fake runner seam; crash-recovery tests that
+kill mid-block and assert pgid-kill-before-rerun and no-double-spend; an
+adversarial-arrival scheduler test (mixed-size comparisons sharing
+pools); golden-oracle profile and report tests (synthetic journal +
+run-dir fixtures; independent Fisher cross-check; MDE rendering); the
+planted-negative fixtures of both families; schema round-trips for every
+Appendix B document; `quorum check` validates arm and suite files
+including profile parameters; the standing 2-scenario live exploratory
+smoke, named suite, run before every gating campaign, trusted-maintainer
+only.
 
 ## Non-goals
 
-- **No supervisor, no fleet** — unless a named gate fails (the first real
-  gating campaign misses 8h for control-plane reasons, or per-attempt
-  credential isolation becomes a hard requirement). If that happens, the
-  superseded spec's W2/W6 material is the starting point; if it does not,
-  the disproof is recorded in the experiment log at equal billing.
-- No multi-operator admission control: a lock file, FIFO, and two humans
-  who talk. Operator identity is a recorded label, not auth.
-- No dashboard changes, including reading `report.json` (backlog-eligible,
-  not committed). No dashboard launch UI (standing decision, 2026-06-18).
-- No retroactive migration of historical results into campaign identity;
-  legacy batches remain descriptive-only, per the superseded spec's own
-  non-goal.
-- No regrade, export, or diff-driven selection in the first release
-  (ranked backlog above).
+- No supervisor, no fleet — unless a named gate fails (a gating campaign
+  misses 8h for control-plane reasons, or per-attempt credential
+  isolation becomes a hard requirement). The superseded spec's W2/W6
+  material is the recorded restart point; otherwise the disproof lands in
+  the experiment log at equal billing.
+- No multi-operator admission control: the host locks above, FIFO, and
+  two humans who talk. Operator identity is a recorded label.
+- No user-authored decision language, ever, in gating campaigns.
+- No k-arm atomic blocks.
+- No amendments other than raise-only budget (grid, profile, parameters,
+  reserve, skew are digest-frozen; changing them is a new campaign).
+- No per-attempt dollar kill (no live metering exists; time/count bounds
+  cover runaway attempts) — recorded drop, Appendix A.
+- No dashboard changes; no dashboard launch UI (standing decision).
+- No retroactive migration of historical results into campaign identity.
+- No regrade, export, or diff-driven selection in the first release.
 - Live evals remain trusted-boundary; nothing here goes to public CI.
 - Windows and Antigravity remain on their separate trusted-maintainer
-  paths.
+  paths (arm `os: windows` is a registration error until then).
 
 ## Relationship to the superseded program
 
-`2026-08-12-quorum-overhaul-program-design.md` is **superseded as the
-governing plan**: its staging (Stages 1–3), five sequencing gates, four
-success criteria, program-wide acceptance machinery, and the W2
-supervisor / W6 fleet scope no longer direct work.
+Unchanged in substance from revision 1: `2026-08-12-quorum-overhaul-
+program-design.md` is superseded as the governing plan (staging, gates,
+criteria, supervisor/fleet scope); its validity doctrine is carried
+forward — now with the mechanism-level accounting the revision-1 review
+demanded in **Appendix A**, which records every sub-supervisor mechanism
+the old spec carried, whether it had a receipt, and its disposition here
+(carried / replaced-by / consciously dropped with reason). Restored by
+the review, for the record: `analysis_exposure_started_at`, registration
+skew-feasibility rejection, the fused driver/grader pool, per-cell
+determinate floors, cell classes, the typed-failure work with the W1
+exit bar, the qualification step, grader identity provenance, the
+observational-column note (one line: linked-campaign scheduling and
+graduation smokes live in re-scoped PRI-2876), and the C/P/T/D
+vocabulary. W4 (runner/grader split, rubric-blind driver) continues as
+an orthogonal Gauntlet track.
 
-**Carried forward into this design** (the spec remains the canonical
-record of their derivation and evidence): the nonstationarity/pairing
-doctrine; provenance hard gates including observed-model readback; typed
-outcome axes and the no-silent-skip rule; the outcome-independent
-replacement doctrine (its Decision 8); quota-pool truth and per-pool
-critical paths (W7); scrub-at-capture, token rotation, and
-never-serve-historical-raw (W5 core — still a prerequisite for any sharing
-feature); the W1 reliability items (env scoping, typed failures,
-cancellable subprocess seam); the approved-credentials classification that
-gating campaigns must select from (the superseded spec's "column admission
-registry", its Decision 9 — gating campaigns admit key/service-credential
-arms, never seat/subscription arms); and the fixture-first principle,
-generalized into registration. W4 (runner/grader split, rubric-blind
-driver) continues as an orthogonal instrument-quality track in Gauntlet,
-unaffected by this document.
+The direction-panel record, the smevals analysis, and the two-round
+adversarial review of this document are checked in at
+`docs/experiments/2026-08-17-platform-direction-panel.md` and
+`docs/experiments/2026-08-17-platform-spec-adversarial-review.md`.
 
-The panel's findings, the smevals gap analysis, and this supersession's
-decision record are checked in at
-`docs/experiments/2026-08-17-platform-direction-panel.md`; the experiment
-log receives the Phase 0 simulation entry when it runs.
+## Appendix A — dropped mechanisms and dispositions
+
+The supersession diff, mechanism by mechanism (review seat K3 B's audit,
+adopted). Format: mechanism — receipt — disposition.
+
+| Mechanism (superseded spec) | Receipt | Disposition here |
+|---|---|---|
+| Skew pre-spend feasibility gate + `analysis_exposure_started_at` | nonstationarity doctrine | **Restored** (Execution: skew rules 1–2) |
+| Per-run resource classes / equivalence gates | infra-noise 6pp | **Replaced** by designated-host fingerprint + fixed concurrency + telemetry w/ thresholds; per-run classes return if qualification shows drift |
+| Hard commitment cap; unpriceable-work bar | 08-08 estimate 2.1× off | **Replaced** by counts-hard/dollars-soft + unpriced-model registration rejection + surcharge; "never exceeds" invariant consciously dropped |
+| W1 exit (<5% indeterminate, zero silent omissions) | 17.5% waste corpus | **Restored** as first-gate acceptance bar; zero-silent-omission via sealing + `excluded_cells` |
+| Sentinel ≤2h qualification | $650 invalid gate | **Replaced** by the bounded qualification campaign (different shape, same purpose) |
+| Provider-broad rate-limit classification | 30 dropped cells | **Restored** (Typed failures) |
+| Gauntlet structured terminal failures | grader-billing masquerade ×2 | **Restored** (Typed failures) |
+| Grader pool in admission + longest-chain across both pools; PRI-2524 de-SPOF | grader = 34% of drive | **Restored** (Execution: grader pool); PRI-2524 remains a named dependency |
+| Grader identity provenance | 07-09 grader-drift screen | **Restored** (Report engine provenance) |
+| Real-workload saturation receipt | probe self-declared synthetic | **Replaced**: qualification campaign + first gate are the live receipts (recorded) |
+| Scrub/rotation sequencing gate before sharing | live OAuth in run homes | **Restored** as a hard backlog gate with named owner |
+| Observational-column machinery (linked campaigns, graduation smokes) | column-auth research | **Deferred to PRI-2876** (recorded) |
+| Interim ≤12h bar | slippage insurance | **Dropped with reason**: the qualification campaign is the stair-step; a capacity miss re-plans against Phase 0 data |
+| Registered multiplicity/sidedness/alpha | stats doctrine | **Subsumed by profiles** (two-sided named in `release_gate_v1`; two-arm scope moots cross-arm multiplicity) |
+| Pair-block starvation guard + adversarial-arrival test | review P1 #6 | **Test restored** (Testing); mechanism simplified by two-arm blocks |
+| Cell-class vocabulary (C/P/T/D) | retraction class | **Restored** (suite `class:` + profile semantics) |
+| Per-attempt cost bound | runaway batteries | **Dropped with reason**: no live metering; time/count bounds cover it |
+| Adapter phase split (spend attribution half) | F13 | **Dropped with reason**: env+fs scoping covers the credential half; precheck spend attribution not carried |
+| Subagent-model registration | 08-06 wrong model | **Restored** (observed model = recorded set) |
+| OpenCode indeterminate re-classification | 48% → 8% | **Dropped with reason**: accounting block keeps the rate visible; the <5% bar forces work if it regresses |
+| Conservation equations in reports | silent drift | **Partially carried**: one-included-outcome-per-slot proven; full equation set not required |
+| Analysis-disposition axes (`analysis_disposition`, `replaces_primary_sample_id`) | P1 #5 | **Carried, minimal form**: `excluded (block_replaced)` + `superseded_by` + the conservation rule |
+
+## Appendix B — contracts (schema sketches, kernel deliverable 1)
+
+Field lists, state machines, and the digest definition an implementer
+can TDD against; zod is the source of truth once written. Compact form:
+
+- **Arm** `{schema_version, name, agent, credential, superpowers:
+  sha|tag|"none", os?, labels?}`
+- **Suite** `{schema_version, name, kind, budget_usd, profile?,
+  profile_params?, reserve?, max_start_skew?, declared_metrics?,
+  comparisons: [{baseline|arm, treatment?, scenarios, n, cells?:
+  {scenario: {n?, class?}}}]}`
+- **Campaign** (`campaign.json`) `{schema_version, campaign_id, suite
+  (embedded resolved copy), refs: {superpowers_by_arm, evals, gauntlet},
+  grader: {credential, model}, cells[] (scenario, comparison, arms,
+  n, class, coupling, estimates{duration_s, cost_usd, confidence}),
+  excluded_cells[] (cell, reason), samples[] (sample_id, cell,
+  arm, replicate), blocks[] (block_id, comparison, sample_ids[]),
+  budget: {usd_all_in, surcharge_applied, priced_coverage},
+  registered_at, registered_by, digest}` — **digest canonical form**:
+  JCS-canonicalized JSON of the campaign minus `estimates`,
+  `registered_at`, `registered_by`; estimates are advisory and re-derivable.
+- **Journal events** (SQLite; `schema_version` row; fsync per event):
+  `campaign_opened, block_admitted(pools[]), attempt_created(sample,
+  attempt), run_allocated(attempt, run_id, pgid), exposure_started(
+  sample, ts), run_completed(attempt, outcome), instrument_failure(
+  attempt, cause), block_replaced(block, replacement_block, cause),
+  skew_excluded(block), pool_blocked(pool, until), budget_event(kind,
+  amount), amendment(kind=budget_raise, amount, ts), adjudication(
+  cell, disposition, rationale), aborted(block), storage_paused,
+  sealed(report_digest)` — replay of the event stream deterministically
+  reconstructs state; materialized tables are rebuildable.
+- **Block/attempt state machine:** `planned → admitted → spawned →
+  exposed → terminal{completed | instrument_failed | aborted |
+  skew_excluded}`; campaign: `registered → running → {sealing → sealed |
+  cancelled | storage_paused → running}`. Crash windows resolve by:
+  pre-`run_allocated` → attempt void, re-admit; post-`run_allocated`
+  without terminal → kill pgid, block rerun; post-seal-predicate
+  pre-report → regenerate report (idempotent).
+- **Verdict extension:** existing `FinalVerdictSchema` (v1) gains an
+  optional `campaign: {campaign_id, comparison_id, block_id, sample_id,
+  execution_attempt_id}` block; readers tolerate absence (dashboard
+  unaffected).
+- **CheckRecord extension:** optional `score, metrics, tags, notes` as
+  defined under Checks.
+- **Report** (`report.json`) `{schema_version, campaign_id, profile?,
+  verdict?: SHIP|NO_SHIP|UNDERPOWERED_OR_INVESTIGATE, comparisons[]
+  (per-cell tables, deltas, fisher_p, mde), accounting{...}, provenance
+  {arms: registered vs observed_set, grader}, supersedes?, errata[]}` —
+  numeric rendering: shortest round-trip doubles, keys sorted, LF line
+  endings (the byte-stability contract).
+- **credentials.yaml:** `CredentialSchema` (strict) gains optional
+  `quota_pool: string` — a schema PR, not just a comment.
+- **Scenario metadata:** story.md frontmatter gains `requires_superpowers:
+  bool` (default from static scan) and `coupling: pins-skill-names |
+  embeds-skill-fixtures | arm-independent` (default from static scan;
+  overridable).
