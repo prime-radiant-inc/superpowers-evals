@@ -1,9 +1,17 @@
 # Quorum overhaul program: fast, interpretable, multi-user evals
 
 **Date:** 2026-08-12
-**Status:** approved (Drew, 2026-08-12) after adversarial review, contract
+**Status:** SUPERSEDED as the governing plan (direction decision, Drew,
+2026-08-17) by `2026-08-17-quorum-campaign-platform-design.md` (successor
+in review; decision record in
+`docs/experiments/2026-08-17-platform-direction-panel.md`). The validity
+doctrine here (pairing, provenance, typed outcomes, quota truth, scrub) is
+carried forward into the successor; the staging, gates, supervisor, and
+fleet scope no longer direct work. This document remains the canonical
+record of the recon evidence, the ten decisions, and seven review rounds.
+Was: approved (Drew, 2026-08-12) after adversarial review, contract
 redline, coherence pass, reviewer P1 redlines, and the OpenAI rate-limit
-probe; child specs proceed against this parent contract
+probe
 **Tracking:** PRI-2874
 **Research brief:** https://claude.ai/code/artifact/c3794032-07aa-405f-88d0-c0587efaa766
 **Review basis:** `superpowers-evals@ee570dd106fdc3cc2a7cabdf4ce25ab6413c1999`,
