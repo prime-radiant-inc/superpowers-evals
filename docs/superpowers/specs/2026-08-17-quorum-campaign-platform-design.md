@@ -221,10 +221,10 @@ and reserve pricing. `quorum campaign register <suite>`:
   `embeds-skill-fixtures`, `arm-independent`) — coupled cells are flagged
   so the report can segregate "the check pins what the PR changed" from
   "the PR regressed behavior";
-- attaches per-cell duration and cost estimates from the estimate
-  artifact (fallback: scenario×agent median → scenario median → corpus
-  median, each tagged `estimate_confidence`); low-confidence estimates
-  take a declared surcharge in budget pricing;
+- attaches per-arm-within-cell duration and cost estimates from the
+  estimate artifact (fallback: scenario×agent median → scenario median →
+  corpus median, each tagged `estimate_confidence`); low-confidence
+  estimates take a declared surcharge in budget pricing;
 - prints the priced grid, exclusions, flags, and digest to stdout and
   asks for confirmation;
 - hashes the canonical form (Appendix B defines the canonical bytes —
@@ -380,7 +380,8 @@ never same-moment and is not claimed.
   block whose exposure skew exceeds the registered bound is **excluded
   from the paired comparison and refilled from reserve** (the runs are
   retained as evidence — the data isn't broken, it's validity-compromised
-  for pairing), reaching typed shortfall if reserve exhausts; in
+  for pairing), reaching the typed `exhausted` terminal if reserve
+  exhausts; in
   **exploratory** campaigns a breach is a rendered caveat. The registered
   bound derives from the drift timescale (±25 pts over *hours* ⇒ bounds
   in tens of minutes are conservative), with Phase 0 informing the
@@ -756,17 +757,19 @@ can TDD against; zod is the source of truth once written. Compact form:
   {scenario: {n?, class?}}}]}`
 - **Campaign** (`campaign.json`) `{schema_version, campaign_id, suite
   (embedded resolved copy), refs: {superpowers_by_arm, evals, gauntlet},
-  grader: {credential, model}, cells[] (scenario, comparison, arms,
-  n, class, coupling, estimates{duration_s, cost_usd, confidence}),
+  grader: {credential, model}, cells[] (scenario, comparison_id, arms,
+  n, class, coupling, estimates_by_arm: {arm: {duration_s, cost_usd,
+  confidence}}),
   excluded_cells[] (cell, reason), samples[] (sample_id, cell,
   arm, replicate), comparisons[] (comparison_id — minted at registration
   as the digest-scoped ordinal — baseline, treatment|arm),
   blocks[] (block_id, comparison_id, sample_ids[]),
   budget: {usd_all_in, surcharge_applied, priced_coverage},
   registered_at, registered_by, digest}` — **digest canonical form**:
-  JCS-canonicalized JSON of the campaign minus `estimates`,
+  JCS-canonicalized JSON of the campaign minus `estimates_by_arm`,
   `budget.surcharge_applied`, `budget.priced_coverage`,
-  `registered_at`, `registered_by`; estimates and estimate-derived
+  `registered_at`, `registered_by`, `campaign_id`, and `digest` itself
+  (the hash cannot contain itself); estimates and estimate-derived
   pricing fields are advisory and re-derivable; `budget.usd_all_in`
   (the registered figure) stays in the digest.
 - **Journal events** (SQLite; `schema_version` row; fsync per event):
@@ -783,8 +786,10 @@ can TDD against; zod is the source of truth once written. Compact form:
   reconstructs state; materialized tables are rebuildable.
 - **Block/attempt state machine:** `planned → admitted → spawned →
   exposed → terminal{completed | instrument_failed | aborted |
-  skew_excluded | excluded_block_replaced}`; a `planned` sample reaches
-  terminal without admission via `slot_exhausted` or `budget_stopped`;
+  skew_excluded | excluded_block_replaced | exhausted |
+  budget_stopped}`; a `planned` sample reaches the `exhausted` or
+  `budget_stopped` terminal without admission via the `slot_exhausted`
+  or `budget_stopped` journal events;
   campaign: `registered → running → {sealing → sealed |
   cancelled | storage_paused → running}`. Crash windows resolve by:
   pre-`run_allocated` → attempt void, re-admit; post-`run_allocated`
