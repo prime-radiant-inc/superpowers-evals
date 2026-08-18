@@ -212,21 +212,39 @@ evals-appliance import --json <bundle-dir>
 
 Import verifies every checksum in the manifest and re-runs the credential
 denylist against what is actually on disk before anything lands, so a tampered
-or mis-built bundle is rejected whole. It holds `run.lock` for the duration; if
-a live job holds it, import returns `lock_busy` and does nothing. Each run then
-lands by staging the payload beside the results root and atomically renaming it
-into place — import never modifies or deletes a landed run directory.
+or mis-built bundle is rejected whole. The bundle is also validated
+structurally without following symlinks: the bundle root, `runs/`, and every
+payload directory must be real directories holding only regular files, every
+manifest path must be a plain relative path, and the files on disk must be
+exactly the files the manifest lists — a symlink or special file anywhere in
+the payload, an unlisted extra file, or a `run_id` in the reserved
+`batches`/`batch-*` namespace (those names belong to batch artifacts and could
+never be addressed by `status`/`show` again) rejects the bundle whole. The
+appliance's own `state/` namespace and results root must likewise be real
+directories, or import refuses before writing anything. It holds `run.lock`
+for the duration; if a live job holds it, import returns `lock_busy` and does
+nothing. Each run then lands by staging the payload beside the results root
+and atomically renaming it into place — import never modifies or deletes a
+landed run directory.
 Re-running is safe: a run whose landed content already matches the bundle is
 skipped, and if the run dir predates appliance job records — or a previous
 recording was left incomplete — the record is healed in `state/` only (never
-by writing inside the landed run) so `status`/`show` see it. If the landed run
+by writing inside the landed run) so `status`/`show` see it. Only a missing
+state provenance marker is healed this way; a malformed one (a symlink,
+directory, corrupt record, or one recorded for a different job) fails the
+entry closed for manual repair. If the landed run
 differs from the bundle, that
 entry is rejected as `import_conflict`: the landed run stays byte-for-byte
 untouched and the incoming payload is moved to `state/quarantine/` for
-comparison. An entry whose `run_id` equals an unrelated job's id is rejected
+comparison — and if that quarantine move itself fails, the staged conflict
+payload is retained beside the results root and the failure message names its
+path so you can recover it. An entry whose `run_id` equals an unrelated job's
+id is rejected
 (`config_invalid`) so `status`/`show` stay unambiguous, and corrupt job
 records under `state/jobs` fail entries closed for manual repair. Per-entry
-failures are reported with `run_id`, code, and message in the JSON result; a
+failures are reported with `run_id`, code, and message in the JSON result,
+and any failed entry makes the command itself fail: `ok: false` and a nonzero
+exit, with the full result payload preserved. A
 failed entry never leaves a job record claiming success — its record stays
 visibly incomplete for the next import to reuse. There is no `--force`: if a
 landed run is wrong, move the bad directory aside yourself after inspection
@@ -274,8 +292,9 @@ guess: a batch dir missing its canonical `batch.json` or `results.jsonl`
 (an empty `results.jsonl` is a valid zero-row file), an unparseable or
 non-canonical `results.jsonl` record, a corrupt job record under
 `state/jobs`, any symlink or unreadable entry inside the batches, jobs, or
-campaigns namespaces, or a results root that is not itself a real
-directory. Repair the state and rerun.
+campaigns namespaces, or a results root or `state/`
+jobs/locks/provenance/quarantine root that is not itself a real directory.
+Repair the state and rerun.
 
 `--apply` holds `run.lock` (it refuses with `lock_busy` while a batch or import
 is live) and **moves** candidates to `state/quarantine/` — it never deletes.
