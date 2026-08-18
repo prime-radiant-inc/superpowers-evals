@@ -510,8 +510,9 @@ wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
 
 Every scenario commits a `checks-manifest.json` next to its `checks.sh`: the
 **frozen multiset of check records `checks.sh` is expected to emit**. Each entry
-is `{phase, check, args, negated, count}` — same key shape as a record, plus a
-`count` for repeats. The composer enforces it: a run whose emitted records do
+is `{phase, check, args, negated, count}` — the same identity fields the
+matcher keys on, plus a `count` for repeats (records carry `passed`/`detail`
+too; manifests don't). The composer enforces it: a run whose emitted records do
 not match the manifest composes **`indeterminate`** with a `checks`-stage error
 (`expected-check manifest mismatch (missing: … | unexpected: …)`), never
 `pass`. A check that silently stops emitting — the classic false-pass — is now
@@ -533,11 +534,19 @@ Two rules worth knowing:
   wildcards can't steal exact matches.
 - **The extractor refuses what it can't model** (`src/check/manifest.ts`).
   Unquoted control operators and metacharacters (`;`, `&`, `|`, `(`, `)`, `<`,
-  `>`, backquote), word-start `#` comments, line continuations, `{` on its own
-  line, and unknown verbs all make extraction fail — reported by
+  `>`, backquote), inline comments (a `#` at the start of a word **after
+  code** — full-line comments are skipped before tokenization and are fine),
+  line continuations, `{` on its own line, and unknown verbs all make
+  extraction fail — reported by
   `quorum check --update-manifests` as `manifest extraction: …`. A check that
   can't be extracted exactly is never silently mis-frozen. The bare `:` no-op
-  (`post() { : }`) emits no record and contributes no entry.
+  as a body line emits no record and contributes no entry:
+
+  ```bash
+  post() {
+      :
+  }
+  ```
 
 At run time the runner reads the manifest once (an absent file = legacy
 composition with no enforcement; an unparseable committed file is repository
@@ -629,11 +638,14 @@ this is precedence, not voting:
 3. no Gauntlet verdict → **indeterminate**.
 4. Gauntlet `investigate` or `errored` → **indeterminate**.
 5. empty capture **and** any `TRACE_PRIMITIVES` post-check ran → **indeterminate**.
-6. Gauntlet `pass` **and** zero failed post-checks → **pass**.
-7. otherwise → **fail** (Gauntlet non-pass, or ≥1 failed post-check).
+6. expected-check manifest mismatch (emitted records ≠ the committed
+   `checks-manifest.json` multiset) → **indeterminate**, stage `checks`
+   (`src/check/manifest.ts` `compareRecords`).
+7. Gauntlet `pass` **and** zero failed post-checks → **pass**.
+8. otherwise → **fail** (Gauntlet non-pass, or ≥1 failed post-check).
 
 Key consequence: **`gauntlet.status == pass` can co-occur with
-`final == indeterminate`** (rows 1–5). Read `final` and `final_reason`, not just
+`final == indeterminate`** (rows 1–6). Read `final` and `final_reason`, not just
 the Gauntlet pane.
 
 ### Then the attribution atlas
