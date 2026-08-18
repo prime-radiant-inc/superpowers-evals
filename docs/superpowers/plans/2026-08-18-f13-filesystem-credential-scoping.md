@@ -4,128 +4,67 @@
 
 **Goal:** Close the filesystem half of F13 — the container's shared credential env file and OAuth mounts are readable under the agent's UID — by scoping the appliance container's mounts and env file to the credential scope of the job it serves, so an agent under test can reach only its own credential material by filesystem.
 
-**Architecture:** Compute a **credential scope** per job (the union of the api_key_env names and OAuth mounts its agents' credentials require), write a subsetted credentials env file, and mount only the scoped OAuth dirs. The appliance already recreates the container when the mount signature changes (`containerMountSignature`, `reconcileContainer`), so scoping rides the existing recreate path. Unscoped behavior stays the default outside job flow; a scoped container refuses to serve a wider job (fail-closed).
+**Architecture:** Compute a **credential scope** per job (the union of the environment names and OAuth mounts its runnable cells require). For an asserted scope, write an agent-only env file that is mounted read-only with only the selected OAuth dirs, plus a separate grader-only env file that remains on the host and is injected only into the live Quorum process through `docker exec --env-file`. The appliance's existing reconcile path recreates the container for every job; the mount signature records the asserted scope, omission alone preserves legacy direct-wrapper behavior, and a supplied empty scope means zero agent credential material.
 
 **Tech Stack:** TypeScript on Bun ≥1.3, zod contracts, `bun test`, biome. No new dependencies.
 
 **Spec:** `docs/superpowers/specs/2026-08-17-quorum-campaign-platform-design.md` — "Order of operations", fix-now item 1, bullet 1 (lines 618–624). Sibling plan (env half, same bullet): `docs/superpowers/plans/2026-08-18-f13-env-credential-scoping.md`.
 
+**Revision checkpoint (before Task 2):** Task 1's original implementation was task-reviewed at `034e980`; its unrelated gate-flake repair was reviewed at `dc6e89a`. This redline's end-to-end adapter trace found one pre-Task-2 correction still required for Claude/Copilot OAuth delivery, documented inside Task 1 below. That correction and Tasks 2–5 have not started. Nothing in this plan authorizes a push.
+
+**Compatibility decision for Drew's review:** Task 4 intentionally keeps existing schema-version-1 appliance job/provenance records readable by defaulting a missing top-level `credential_scope` field to `null` during parsing. New records always persist the field explicitly. This is the smallest safe migration for already-landed appliance state; approving this plan explicitly approves that narrow backward-compatibility behavior.
+
 ## Global Constraints
 
 - Bun ≥ 1.3; `bun run check` (biome + tsc + bun test) must be green at every commit.
-- All tests hermetic: `bun test` only — no Docker, no live appliance, no network. Container-level verification of the real mounts is a documented manual step (Task 4), not a test.
+- All tests hermetic: `bun test` only — no Docker, no live appliance, no network. Container-level verification of the real mounts is a documented manual step (Task 5), not a test.
 - Repo rule: never weaken an existing test; test output must be pristine.
 - Commit after every task; conventional-commit style (`feat:`, `fix:`, `test:`, `docs:`).
 - **Fail closed:** a scoped container that cannot determine a job's scope — or is asked to serve a job wider than its scope — must refuse, never silently serve with the wrong credentials visible.
-- **The subsetted env file is secret material:** written mode 0600 via the existing `writePrivateText` (`src/appliance/fs.ts:47-73`), under `state/` (never under the results root or any run dir).
+- **Both derived env files are secret material:** write them mode 0600 via `writePrivateText` under no-follow-validated `<root>/state/credentials-scoped/` (never under the results root or a run dir). The agent file may be mounted; the grader file must never be mounted.
+- **No secret values in argv, logs, errors, hashes, or provenance.** The wrapper receives only the grader env-file path; Docker reads the values from that host file for the one exec process.
+- **The grader contract is one shared exact list:** `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and optional routing value `ANTHROPIC_BASE_URL`. The runner and appliance projection must import the same constant; no duplicated frozen lists.
 - Spec text binding this plan, verbatim (`2026-08-17-quorum-campaign-platform-design.md:618–624`):
   > - Per-agent env **and filesystem** credential scoping (F13, 2026-08-12 adversarial review: 6/12 launchers inherit host env; the Gauntlet subprocess env carries the full provider bundle; the container's credential env file and OAuth mounts are readable under the agent's UID). Done when a per-agent black-box test proves the agent reaches only its own credential, by env and by filesystem.
 
 ## Recon facts this plan is built on (verified against source)
 
-1. **The mounts:** `scripts/evals-container:393-407` bind-mounts `--env-file` read-only at `/run/evals/credentials.env` and each `--auth name=<dir>` read-only at `/auth/<name>`; the container runs as the host UID (`:416`), so read-only mounts are still fully READABLE by the agent under test. `container/bin/quorum:8-13` sources the whole env file into the quorum process env; `:17-33` exports per-mount `*_OAUTH_HOME` vars conditionally on the mount's presence (so a subset just works — no shim change needed).
+1. **The mounts:** `scripts/evals-container:393-407` bind-mounts `--env-file` read-only at `/run/evals/credentials.env` and each `--auth name=<dir>` read-only at `/auth/<name>`; the container runs as the host UID (`:416`), so read-only mounts are still fully READABLE by the agent under test. `container/bin/quorum:8-13` sources that mounted agent file into the Quorum process; `:17-33` exports per-mount `*_OAUTH_HOME` vars conditionally on mount presence.
 2. **The appliance mounts the whole blessed bundle for every job:** `baseContainerArgs` (`src/appliance/container.ts:70-84`) passes the full `credentials.env` + every discovered auth dir (`discoveredAuthDirs`, `:63-68`; `AUTH_DIRS` at `:21-29` maps mount names to bundle subdirs: codex→codex, gemini→gemini, kimi→kimi-code, pi→pi).
-3. **The recreate path exists:** `containerMountSignature` (`container.ts:115-119+`) is recorded in preflight provenance (`preflight.ts:265`); `reconcileContainer` (`container.ts:192+`) recreates on drift (`container_recreate_required`, `errors.ts:12`). Preflight calls reconcile per job (`preflight.ts:233`).
-4. **The job's scope is known at submission:** `cli.ts:251-264` requires and parses `--coding-agents` for run-all; `--credential`/`--credentials` and each agent's `default_credential` (e.g. `coding-agents/codex.yaml:14`) resolve via `resolveCredentialNameForAgent` (`src/credentials/resolve.ts`).
+3. **The recreate path exists, but it is unconditional:** `containerMountSignature` (`container.ts:115-119+`) is recorded in preflight provenance; `reconcileContainer` downs any existing container and brings it up again. Scope must be applied to that up call. This plan does not invent an observed-signature comparator.
+4. **The job's scope is known at submission:** `cli.ts:251-264` requires and parses `--coding-agents` for run-all, whose Quorum args may also carry `--credentials`; a single appliance `run` uses the named agent's `default_credential` (e.g. `coding-agents/codex.yaml:14`). Defaults resolve through `resolveCredentialNameForAgent` (`src/credentials/resolve.ts`).
 5. **Credential entries carry the needed fields:** `credentials.yaml` entries have `api_key_env` (e.g. `ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GLM_API_KEY`) and optional `auth:` (values in the registry: `oauth`, `subscription`, `bedrock-bearer`, `api-key`).
 6. **Agent → OAuth mount map** (from the adapters' credential-copy code): codex→`codex` (`codex.ts:191-242`), gemini→`gemini` (`gemini.ts:40-44,143-160`), antigravity→`gemini` (`antigravity.ts:60-113`), kimi→`kimi` (`kimi.ts:410-467`), pi→`pi` (`pi.ts:169-214`). claude, opencode, serf, copilot, hermes → no bundle OAuth mount (their credentials arrive via env-file keys or host-tool auth).
-7. **Exec-path mounts are inert:** `evals-container exec` is a plain `docker exec` (`scripts/evals-container:465-470`) — mounts are fixed at `up` time. The scope must therefore be applied at container bring-up (`up`/reconcile), with exec-time mismatch detection as the fail-closed backstop.
+7. **Exec-path mounts are inert, but exec environments are process-local:** `evals-container exec` is currently plain `docker exec` (`scripts/evals-container:465-470`). Docker supports `docker exec --env-file`; those variables apply to the new exec process rather than changing container mounts or the container's configured environment. That is the grader channel. Only the actual live Quorum exec receives it; status, health, cancellation, and shell probes do not.
 8. **Multi-agent batches** get the UNION of their cells' scopes — still a real reduction (a claude+codex batch mounts no gemini/kimi/pi OAuth homes) — and consecutive mixed batches may recreate the container as the signature changes. Accepted trade-off, recorded here so reviewers don't flag it.
+9. **The grader credential cannot ride in the agent mount:** OAuth-only Coding-Agent jobs can legitimately have an empty agent env file, but Gauntlet still needs its Anthropic grader credential. Keeping the grader names in the mount would leave the filesystem leak open; omitting them entirely would strand Gauntlet. Split delivery is therefore required, not an optional hardening.
+10. **The original Task 1 review missed two env-delivered OAuth paths:** `claude` with `opus5_sub` needs `CLAUDE_CODE_OAUTH_TOKEN` (`src/agents/index.ts:246-263`), and every Copilot OAuth credential needs the adapter's canonical `COPILOT_GITHUB_TOKEN` (`src/agents/copilot.ts:264-307`). Neither credential declares `api_key_env`, and neither family has an OAuth mount, so the current resolver returns asserted-empty and would strand both on the appliance. Every other current OAuth/subscription pair resolves to a mapped auth directory.
 
 ## File Structure
 
-- `src/credentials/scope.ts` — NEW: `CredentialScope` + `credentialScopeForAgents` (Task 1).
-- `src/appliance/credential-scope.ts` — NEW: `writeScopedCredentialsEnv` + `scopedContainerArgs` (Task 2).
-- `src/appliance/container.ts` — MODIFY: optional scope params on `baseContainerArgs` / `upContainerArgs` / `execContainerArgs`; signature includes the scope (Task 2).
-- `src/appliance/cli.ts` — MODIFY: compute the scope at `run`/`run-all` submission, thread it into preflight (Task 3).
-- `src/appliance/preflight.ts` — MODIFY: accept + apply the scope; fail-closed mismatch check (Task 3).
-- `test/credential-scope.test.ts` — NEW (Task 1). `test/appliance-container.test.ts` — MODIFY or create (Task 2). Preflight wiring test wherever preflight is covered today (Task 3 — locate with `grep -l preflight test/`).
-- `docs/appliance-runbook.md` — MODIFY (Task 4).
+- `src/credentials/scope.ts` — EXISTING from Task 1: `CredentialScope` + `credentialScopeForAgents`; add env-delivered OAuth mapping before Task 2.
+- `src/credentials/grader.ts` — NEW: the shared exact grader credential/routing name contract (Task 2).
+- `src/runner/gauntlet-env.ts` — MODIFY: consume the shared grader-name constant instead of owning a duplicate list (Task 2).
+- `src/appliance/credential-scope.ts` — NEW: isolated bundle evaluation plus mode-0600 agent/grader projections (Task 2).
+- `src/appliance/container.ts` — MODIFY: asserted-scope up args, exec-only grader-file args, and scope-bearing signature (Task 3).
+- `scripts/evals-container` — MODIFY: add `--no-default-auth` for asserted mount scopes and `--exec-env-file` for the one grader-bearing exec; never mount the grader file (Task 3).
+- `src/appliance/types.ts`, `src/appliance/cli.ts`, `src/appliance/preflight.ts`, `src/appliance/process.ts` — MODIFY: persist the scope, recreate with it, and inject the grader file only into the live Quorum exec (Task 4).
+- `test/credential-scope.test.ts` — Task 1 coverage. `test/appliance-credential-scope.test.ts` — NEW in Task 2. `test/appliance-container.test.ts` — NEW in Task 3. `test/evals-container.test.ts` — Task 3. Existing appliance CLI/preflight/process suites — Task 4.
+- `docs/appliance-runbook.md` — MODIFY (Task 5).
 
 ---
 
-### Task 1: Credential scope resolution
+### Task 1: Credential scope resolution — REVIEWED FOUNDATION; OAUTH CORRECTION REQUIRED
 
-**Files:**
-- Create: `src/credentials/scope.ts`
+**Reviewed commits:** `ce3906e`, `d1efcc7`, `aa144c9`, `034e980`. Separate gate repair: `dc6e89a`. Task report: `.superpowers/sdd/2026-08-18-f13-filesystem-credential-scoping/task-1-report.md`.
+
+**Corrective files:**
+- Modify: `src/credentials/scope.ts`
 - Test: `test/credential-scope.test.ts`
 
-**Interfaces:**
-- Consumes: `resolveCredentialNameForAgent` (`src/credentials/resolve.ts`), the credential registry loader (`src/credentials/index.ts`), `CredentialSchema` fields (`src/contracts/credential.ts`: `api_key_env`, `auth`).
-- Produces (Tasks 2–3 rely on these exact shapes):
-  - `CredentialScope = { readonly envNames: readonly string[]; readonly authMounts: readonly string[] }` — both sorted, deduped; empty = unconscoped (see semantics below).
-  - `credentialScopeForAgents(agents: readonly string[], credentials: readonly string[] | null): CredentialScope` — `credentials` null = each agent's default credential. Throws a plain `Error` naming the agent/credential on an unknown name. **Empty-agents → `{ envNames: [], authMounts: [] }` (means "unscoped"; the container layer treats empty as the legacy full bundle — the fail-closed rule applies only when a scope is asserted).**
-  - `AGENT_OAUTH_MOUNT: Readonly<Record<string, string>>` — `{ codex: 'codex', gemini: 'gemini', antigravity: 'gemini', kimi: 'kimi', pi: 'pi' }`.
-
-Semantics: `envNames` = the union of `api_key_env` for every selected credential (regardless of auth type — it names the env var the credential needs when present). `authMounts` = the union of `AGENT_OAUTH_MOUNT[agent]` over agents whose selected credential's `auth` contains `oauth` or `subscription` AND the agent has a map entry.
-
-- [ ] **Step 1: Write the failing tests**
+**Accepted interface (Tasks 2–4 consume this exact contract):**
 
 ```typescript
-// test/credential-scope.test.ts
-import { expect, test } from 'bun:test';
-import { AGENT_OAUTH_MOUNT, credentialScopeForAgents } from '../src/credentials/scope.ts';
-
-test('single agent, api-key credential → env name only, no mounts', () => {
-  // codex with an api-key credential (openai_responses_* family per credentials.yaml)
-  const scope = credentialScopeForAgents(['codex'], ['openai_responses_56sol']);
-  expect(scope.envNames).toEqual(['OPENAI_API_KEY']);
-  expect(scope.authMounts).toEqual([]);
-});
-
-test('single agent, subscription credential → its OAuth mount only', () => {
-  const scope = credentialScopeForAgents(['codex'], ['codex_sub']);
-  expect(scope.authMounts).toEqual(['codex']);
-});
-
-test('antigravity maps to the gemini mount; kimi/pi to their own', () => {
-  expect(AGENT_OAUTH_MOUNT['antigravity']).toBe('gemini');
-  expect(AGENT_OAUTH_MOUNT['kimi']).toBe('kimi');
-  expect(AGENT_OAUTH_MOUNT['pi']).toBe('pi');
-});
-
-test('multi-agent batch unions and dedupes; claude contributes no mount', () => {
-  const scope = credentialScopeForAgents(['claude', 'codex'], null); // default credentials
-  expect(scope.authMounts).toEqual(['codex']); // claude has none; sorted+deduped
-  expect(scope.envNames.length).toBeGreaterThan(0);
-  expect(new Set(scope.envNames).size).toBe(scope.envNames.length);
-});
-
-test('empty agent list means unscoped', () => {
-  expect(credentialScopeForAgents([], null)).toEqual({ envNames: [], authMounts: [] });
-});
-
-test('unknown agent or credential throws a named error', () => {
-  expect(() => credentialScopeForAgents(['nosuchagent'], null)).toThrow(/nosuchagent/);
-  expect(() => credentialScopeForAgents(['codex'], ['nosuchcred'])).toThrow(/nosuchcred/);
-});
-```
-
-(Adjust the concrete credential names above to the real registry entries the implementation reads — the assertions on semantics must stand. If `codex_sub`'s `auth` is `subscription`, the second test stands as written; verify against `credentials.yaml` and say what you verified in the report.)
-
-- [ ] **Step 2: Run to verify failure** — `bun test test/credential-scope.test.ts` → FAIL (module missing).
-
-- [ ] **Step 3: Implement `src/credentials/scope.ts`**
-
-```typescript
-// src/credentials/scope.ts
-// Per-job credential scoping (F13 filesystem half): which env-var names and
-// bundle OAuth mounts does a job's agent/credential set actually need? The
-// appliance container mounts only these, so the agent under test can reach
-// only its own credential material by filesystem. Empty scope = unscoped
-// (legacy full-bundle behavior); the container layer fails closed only when
-// a scope is asserted.
-import { loadCredentials } from './index.ts'; // verify the real export name
-import { resolveCredentialNameForAgent } from './resolve.ts'; // verify signature
-
-export const AGENT_OAUTH_MOUNT: Readonly<Record<string, string>> = {
-  codex: 'codex',
-  gemini: 'gemini',
-  antigravity: 'gemini',
-  kimi: 'kimi',
-  pi: 'pi',
-};
-
 export interface CredentialScope {
   readonly envNames: readonly string[];
   readonly authMounts: readonly string[];
@@ -134,203 +73,419 @@ export interface CredentialScope {
 export function credentialScopeForAgents(
   agents: readonly string[],
   credentials: readonly string[] | null,
-): CredentialScope {
-  const envNames = new Set<string>();
-  const authMounts = new Set<string>();
-  const registry = loadCredentials(); // however src/credentials/index.ts exposes it
-  for (const agent of agents) {
-    const credName = resolveCredentialNameForAgent(agent, credentials); // per existing resolver semantics: explicit list or the agent's default_credential
-    const entry = registry[credName];
-    if (entry === undefined) {
-      throw new Error(`credential scope: unknown credential ${credName} for agent ${agent}`);
-    }
-    if (entry.api_key_env !== undefined) envNames.add(entry.api_key_env);
-    const auth = entry.auth ?? 'api-key';
-    if ((auth.includes('oauth') || auth.includes('subscription')) && AGENT_OAUTH_MOUNT[agent] !== undefined) {
-      authMounts.add(AGENT_OAUTH_MOUNT[agent]);
-    }
-  }
-  return { envNames: [...envNames].sort(), authMounts: [...authMounts].sort() };
-}
+): CredentialScope;
 ```
 
-The resolver/loader call shapes above are sketches against the documented exports — read `src/credentials/resolve.ts` and `index.ts` and call them the way they actually work (including how `--credentials` csv interacts with per-agent resolution in `run-all` today; mirror that). Do not change their behavior.
+- Both arrays are sorted and deduped. A supplied empty shape is asserted zero-material; only an omitted optional scope in later container APIs means legacy/unscoped.
+- `credentials === null` resolves each agent's real default. An explicit list is validated using own-property lookups, then unions only agent/credential pairs runnable under the current harness-family matrix.
+- API-key credentials use explicit `api_key_env` first, then the reviewed conventional adapter mapping; OAuth/subscription credentials add only their mapped OAuth source.
+- Unknown names, prototype-property names, missing API-key mappings, and nonempty selections with zero compatible cells fail closed with named errors.
 
-- [ ] **Step 4: Run tests to verify they pass** — `bun test test/credential-scope.test.ts` → PASS.
+**Required corrective addendum (not started):** Add this frozen adapter contract:
 
-- [ ] **Step 5: Full check and commit**
-
-```bash
-git add src/credentials/scope.ts test/credential-scope.test.ts
-git commit -m "feat: per-job credential scope resolution (F13 filesystem)"
+```typescript
+export const CONVENTIONAL_OAUTH_ENV: Readonly<Record<string, string>> = {
+  claude: 'CLAUDE_CODE_OAUTH_TOKEN',
+  copilot: 'COPILOT_GITHUB_TOKEN',
+};
 ```
+
+For an OAuth/subscription pair, contribute its explicit `api_key_env`, mapped OAuth directory, and mapped conventional OAuth env name as applicable; if none of those three delivery channels exists, throw a named fail-closed error instead of returning zero material.
+
+- [ ] Add RED tests proving `credentialScopeForAgents(['claude'], ['opus5_sub'])` returns only `CLAUDE_CODE_OAUTH_TOKEN`, Copilot default and every explicit Copilot credential return only `COPILOT_GITHUB_TOKEN`, and every current compatible OAuth/subscription pair has at least one delivery channel.
+- [ ] Add an exact-map assertion for `CONVENTIONAL_OAUTH_ENV`. Do not edit the credential corpus or add injection hooks merely to reach the guard for a hypothetical future OAuth family; record that presently unreachable branch in the task receipt.
+- [ ] Implement the two-name map and delivery-channel guard in `src/credentials/scope.ts`; run `bun test test/credential-scope.test.ts`, `bun run check`, and `bun run quorum check`.
+- [ ] Commit only `src/credentials/scope.ts` and `test/credential-scope.test.ts` as `fix: include env-delivered OAuth credentials in job scope (F13)`, append the receipt to the Task 1 report, and obtain a scoped Sol re-review before Task 2 begins.
 
 ---
 
-### Task 2: Scoped container args + the subsetted env file
+### Task 2: Derive agent-only and grader-only credential files
 
 **Files:**
+- Create: `src/credentials/grader.ts`
 - Create: `src/appliance/credential-scope.ts`
-- Modify: `src/appliance/container.ts`
-- Test: `test/appliance-container.test.ts` (create, or modify the existing file covering `baseContainerArgs` — locate with `grep -l baseContainerArgs test/`)
+- Modify: `src/runner/gauntlet-env.ts`
+- Test: `test/appliance-credential-scope.test.ts`
+- Test: `test/gauntlet-env.test.ts`
 
 **Interfaces:**
-- Consumes: `CredentialScope` (Task 1); `AUTH_DIRS`/`discoveredAuthDirs`/`baseContainerArgs` (`src/appliance/container.ts:21-84`); `writePrivateText` (`src/appliance/fs.ts:47-73`); `loaded.config.credential_bundle.path`, `loaded.config.root`.
+- Consumes: Task 1 `CredentialScope`, the blessed `<bundle>/credentials.env`, `ensurePrivateDirNoFollow`, and `writePrivateText`.
 - Produces:
-  - `writeScopedCredentialsEnv(loaded: LoadedApplianceConfig, scope: CredentialScope): string` — reads `<bundle>/credentials.env`, keeps only `KEY=...` lines whose key is in `scope.envNames` (comments/blank lines dropped; unparseable lines dropped — they are not env assignments), writes mode-0600 via `writePrivateText` to `<root>/state/credentials-scoped/<sha256-of-sorted-envNames>.env` (idempotent: same scope, same path), returns the path.
-  - `scopedContainerArgs(loaded, scope): string[]` — like `baseContainerArgs` but the `--env-file` is the scoped file and `--auth` only for `discoveredAuthDirs()` whose `name ∈ scope.authMounts`.
-  - `baseContainerArgs(loaded, scope?: CredentialScope)` — optional param; absent or empty scope = exactly today's behavior (full bundle). `upContainerArgs` / `execContainerArgs` gain the same optional param and pass it through.
-  - `containerMountSignature` — when a non-empty scope is supplied, the signature payload gains `{ credential_scope: { envNames, authMounts } }` so a scope change reads as drift and the existing reconcile path recreates the container.
-
-- [ ] **Step 1: Write the failing tests**
 
 ```typescript
-// test/appliance-container.test.ts (or the existing covering file)
-import { expect, test } from 'bun:test';
-// reuse the loaded() fixture pattern from test/appliance-import.test.ts, plus a
-// credentials.env fixture in a fake bundle dir:
-//   OPENAI_API_KEY=sk-openai\nANTHROPIC_API_KEY=sk-anth\nGEMINI_API_KEY=sk-gem\n
+export const GRADER_CREDENTIAL_ENV_NAMES = [
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+] as const;
 
-test('writeScopedCredentialsEnv keeps only scoped keys, mode 0600, idempotent path', () => {
-  const p1 = writeScopedCredentialsEnv(loaded, { envNames: ['OPENAI_API_KEY'], authMounts: [] });
-  const body = readFileSync(p1, 'utf8');
-  expect(body).toContain('OPENAI_API_KEY=sk-openai');
-  expect(body).not.toContain('ANTHROPIC_API_KEY');
-  expect(body).not.toContain('GEMINI_API_KEY');
-  expect(statSync(p1).mode & 0o777).toBe(0o600);
-  expect(writeScopedCredentialsEnv(loaded, { envNames: ['OPENAI_API_KEY'], authMounts: [] })).toBe(p1);
-});
+export interface ScopedCredentialFiles {
+  readonly agentEnvFile: string;
+  readonly graderExecEnvFile: string;
+}
 
-test('scopedContainerArgs mounts the scoped env file and only the scoped auth dirs', () => {
-  const args = scopedContainerArgs(loaded, { envNames: ['OPENAI_API_KEY'], authMounts: ['codex'] });
-  const envFileIdx = args.indexOf('--env-file');
-  expect(args[envFileIdx + 1]).toContain('credentials-scoped');
-  const authArgs = args.filter((_a, i) => args[i - 1] === '--auth');
-  expect(authArgs).toEqual([expect.stringContaining('codex=')]);
-});
-
-test('absent or empty scope preserves the legacy full-bundle args byte-for-byte', () => {
-  expect(baseContainerArgs(loaded)).toEqual(baseContainerArgs(loaded, { envNames: [], authMounts: [] }));
-});
-
-test('a non-empty scope changes the mount signature (recreate on scope change)', () => {
-  expect(containerMountSignature(loaded, scopeA)).not.toBe(containerMountSignature(loaded, scopeB));
-  expect(containerMountSignature(loaded, scopeA)).not.toBe(containerMountSignature(loaded)); // unscoped
-});
-```
-
-- [ ] **Step 2: Run to verify failure** — `bun test test/appliance-container.test.ts` → FAIL.
-
-- [ ] **Step 3: Implement**
-
-`src/appliance/credential-scope.ts`:
-
-```typescript
-// src/appliance/credential-scope.ts
-// Applies a job's CredentialScope to the container surface: a subsetted
-// credentials env file (0600, under state/, never the results root) and a
-// reduced --auth mount set. Empty scope = legacy full-bundle behavior.
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { CredentialScope } from '../credentials/scope.ts';
-import { writePrivateText } from './fs.ts';
-import type { LoadedApplianceConfig } from './types.ts';
-
-export function writeScopedCredentialsEnv(
+export function writeScopedCredentialFiles(
   loaded: LoadedApplianceConfig,
   scope: CredentialScope,
-): string {
-  const source = join(loaded.config.credential_bundle.path, 'credentials.env');
-  const wanted = new Set(scope.envNames);
-  const kept: string[] = [];
-  for (const line of readFileSync(source, 'utf8').split('\n')) {
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
-    if (match !== null && wanted.has(match[1] as string)) kept.push(line);
-  }
-  const key = createHash('sha256')
-    .update(JSON.stringify([...scope.envNames].sort()))
-    .digest('hex')
-    .slice(0, 16);
-  const dest = join(loaded.config.root, 'state', 'credentials-scoped', `${key}.env`);
-  writePrivateText(dest, `${kept.join('\n')}\n`);
-  return dest;
-}
+): ScopedCredentialFiles;
 ```
 
-`src/appliance/container.ts` — add the optional `scope` param to `baseContainerArgs`/`upContainerArgs`/`execContainerArgs`/`containerMountSignature`; when `scope` is present AND non-empty, use `writeScopedCredentialsEnv` for the `--env-file` and filter `discoveredAuthDirs()` to `scope.authMounts`; when absent/empty, byte-identical behavior to today. (Circular-import note: `credential-scope.ts` imports nothing from `container.ts`, so `container.ts` importing `credential-scope.ts` is acyclic.)
+`GRADER_CREDENTIAL_ENV_NAMES` lives in `src/credentials/grader.ts`. `GAUNTLET_ENV_ALLOWLIST` imports and spreads it so runner and appliance cannot drift.
 
-- [ ] **Step 4: Run tests to verify they pass** — `bun test test/appliance-container.test.ts` → PASS; then the full appliance suite.
+`writeScopedCredentialFiles` evaluates the trusted shell dotenv in an isolated `/bin/bash --noprofile --norc` child with a minimal non-secret environment, returning only requested names as NUL-delimited name/value pairs. It never prints values. This preserves the existing `source credentials.env` semantics—including quoted values—without passing unrelated host variables or reimplementing shell parsing.
 
-- [ ] **Step 5: Full check and commit**
+The function then:
+
+1. fails closed if any `scope.envNames` value is missing or empty;
+2. fails closed unless at least one of the three grader auth names is nonempty (`ANTHROPIC_BASE_URL` alone is not auth);
+3. rejects CR/LF in a grader value because Docker env files are line-oriented;
+4. creates `<root>/state/credentials-scoped/` through `ensurePrivateDirNoFollow(loaded.config.root, target, 'state/credentials-scoped')` before either write;
+5. writes `<hash-of-sorted-agent-names>.agent.env` as shell-single-quoted assignments for exactly `scope.envNames` (an asserted empty scope produces an empty file);
+6. writes `grader.exec.env` in Docker `KEY=value` form for only defined `GRADER_CREDENTIAL_ENV_NAMES`;
+7. uses `writePrivateText` for atomic mode-0600 files. Paths/hashes contain names only, never values.
+
+- [ ] **Step 1: Write the failing behavior tests**
+
+Use a fake blessed bundle containing plain, single-quoted, and double-quoted assignments. Add tests proving:
+
+```typescript
+test('agent file contains exactly scope.envNames and normalizes shell quoting', () => {
+  const files = writeScopedCredentialFiles(loaded, {
+    envNames: ['OPENAI_API_KEY'],
+    authMounts: [],
+  });
+  expect(sourceEnvFile(files.agentEnvFile)).toEqual({
+    OPENAI_API_KEY: 'agent value with spaces=#',
+  });
+  expect(readFileSync(files.agentEnvFile, 'utf8')).not.toContain('grader-secret');
+  expect(statSync(files.agentEnvFile).mode & 0o777).toBe(0o600);
+});
+
+test('grader file contains only the shared grader contract', () => {
+  const files = writeScopedCredentialFiles(loaded, {
+    envNames: [],
+    authMounts: ['codex'],
+  });
+  expect(parseDockerEnvFile(files.graderExecEnvFile)).toEqual({
+    ANTHROPIC_API_KEY: 'grader value with spaces=#',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+  });
+  expect(readFileSync(files.agentEnvFile, 'utf8')).toBe('');
+  expect(statSync(files.graderExecEnvFile).mode & 0o777).toBe(0o600);
+});
+```
+
+Define `sourceEnvFile` as a test-only isolated Bash subprocess that sources the generated file and emits only the specifically requested test key as a NUL-delimited value. Define `parseDockerEnvFile` as a strict test-only parser that splits each nonempty line at its first `=`. Neither helper may dump the child environment or any non-test key.
+
+Also cover: missing requested agent key; no grader auth; CR/LF grader rejection without echoing the value; deterministic paths; repeated writes; exact shared grader-name list; and a symlinked `state/credentials-scoped` directory rejected with external victim bytes/mode/mtime unchanged.
+
+- [ ] **Step 2: Run RED**
 
 ```bash
-git add src/appliance/credential-scope.ts src/appliance/container.ts test/appliance-container.test.ts
-git commit -m "feat: scoped container mounts — subsetted credentials.env + selected OAuth dirs (F13)"
+bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts
 ```
 
----
+Expected: module/export missing failures.
 
-### Task 3: Job-flow wiring with fail-closed mismatch
+- [ ] **Step 3: Implement the shared contract and projections**
 
-**Files:**
-- Modify: `src/appliance/cli.ts` (run/run-all submission, ~lines 238-270 and the `run` parser)
-- Modify: `src/appliance/preflight.ts` (reconcile call at :233; provenance record at :261-267)
-- Test: append to the preflight/CLI coverage located via `grep -l 'preflight\|run-all' test/ | head`
+Use one private bundle-evaluation helper; do not expose a generic arbitrary-env API. The Bash child gets only the source path and the finite requested-name union. Parse its NUL output by pairs; any malformed output, nonzero status, missing file, or missing required name becomes `ApplianceError('config_invalid', 'credential-scope', ...)` naming keys/paths but never values.
 
-**Interfaces:**
-- Consumes: `credentialScopeForAgents` (Task 1), scoped `container.ts` params (Task 2).
-- Produces: `run`/`run-all` submission computes the scope from its parsed `--coding-agents` + `--credential`/`--credentials`, passes it into preflight's container calls, and records it in the job record (new optional field `credential_scope`, nullable; schema in `src/appliance/types.ts` — additive, defaults null = unscoped legacy). Preflight passes the scope to `reconcileContainer`/`upContainerArgs` and records `credential_scope` in the provenance container block alongside `mount_signature`. **Fail-closed:** when a job asserts a non-empty scope and the running container's identity shows a different scope, the job must NOT proceed against the mismatched container — reuse the existing `container_recreate_required` flow (reconcile on signature drift) rather than adding a new error path; if reconcile cannot converge, that existing error surfaces.
+- [ ] **Step 4: Run GREEN and the appliance suite**
 
-- [ ] **Step 1: Write the failing test** — in the located test file: a `run-all --coding-agents claude,codex` submission (fake actions / fake runner per that file's pattern) results in preflight receiving scope `{ authMounts: ['codex'], … }`; a submission with no resolvable scope fails before any container call. Write it against the file's existing harness.
-
-- [ ] **Step 2: Run to verify failure** — FAIL (no scope threading).
-
-- [ ] **Step 3: Implement** the wiring above. Keep the threading narrow: submission computes once; the job record carries it; preflight consumes it from the job (not re-parsed). `process.ts`'s `execContainerArgs` calls are mount-inert (docker exec) and need no changes — verify that claim and state the evidence in the report.
-
-- [ ] **Step 4: Run tests to verify they pass, then `bun run check`** → green.
+```bash
+bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts
+bun test test/appliance-*.test.ts test/evals-container.test.ts
+bun run check
+bun run quorum check
+```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/appliance/cli.ts src/appliance/preflight.ts src/appliance/types.ts test/
-git commit -m "feat: appliance jobs mount only their credential scope (F13)"
+git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
+  src/appliance/credential-scope.ts test/appliance-credential-scope.test.ts \
+  test/gauntlet-env.test.ts
+git commit -m "feat: derive separate agent and grader credential files (F13)"
 ```
 
 ---
 
-### Task 4: Docs, manual verification, and the residual record
+### Task 3: Scoped container mounts and exec-only grader delivery
+
+**Files:**
+- Modify: `src/appliance/container.ts`
+- Modify: `scripts/evals-container`
+- Create: `test/appliance-container.test.ts`
+- Test: `test/evals-container.test.ts`
+
+**Interfaces:**
+- Consumes: Task 1 `CredentialScope`; Task 2 `ScopedCredentialFiles`.
+- Produces:
+
+```typescript
+export interface ScopedContainerMounts {
+  readonly scope: CredentialScope;
+  readonly agentEnvFile: string;
+}
+
+export function baseContainerArgs(
+  loaded: LoadedApplianceConfig,
+  scoped?: ScopedContainerMounts,
+): string[];
+
+export function upContainerArgs(
+  loaded: LoadedApplianceConfig,
+  scoped?: ScopedContainerMounts,
+): string[];
+
+export function execContainerArgs(
+  loaded: LoadedApplianceConfig,
+  command: readonly string[],
+  options?: {
+    readonly execEnvFile?: string;
+  },
+): string[];
+
+export function containerMountSignature(
+  loaded: LoadedApplianceConfig,
+  scoped?: ScopedContainerMounts,
+): string;
+```
+
+- Omitted `scoped` preserves today's direct/legacy full-bundle args byte-for-byte.
+- Any supplied `scoped`, including a scope with empty arrays, uses `agentEnvFile`, emits `--no-default-auth`, and adds only `scope.authMounts`; it never falls back to the full bundle or the wrapper's host-home auth discovery. A requested mount with no corresponding blessed-bundle directory fails closed. Argument builders remain pure: Task 2/preflight creates the file before calling them.
+- Signature payload includes `credential_scope: scoped?.scope ?? null` and the selected agent-file mount source, so omitted legacy and asserted empty differ without hashing secret values.
+- New wrapper option: `--exec-env-file <host-file>`. It is valid only with `exec`, must be an existing readable regular file, and every existing path component must pass a no-follow check before physical normalization. It is never passed to `docker run` and is never a bind mount.
+- New wrapper flag: `--no-default-auth`. It suppresses all `$HOME/.codex`, `$HOME/.gemini`, `$HOME/.kimi-code`, and `$HOME/.pi` fallback discovery while still accepting explicit `--auth name=dir` values. It is valid for `up` and inert-but-accepted on `exec`; scoped TypeScript args always include it. Omission preserves legacy discovery.
+- On `exec`, the wrapper emits `docker exec --env-file "$exec_env_file" "$container_name" ...`. Without the option, existing exec behavior is byte-identical. `shell`, health, status, kill, and cancellation calls never receive it.
+
+- [ ] **Step 1: Write the failing argument and real-wrapper tests**
+
+Add structured assertions for:
+
+```typescript
+test('asserted empty scope mounts an empty agent file and no auth dirs', () => {
+  const args = upContainerArgs(loaded, {
+    scope: { envNames: [], authMounts: [] },
+    agentEnvFile: join(loaded.config.root, 'state/credentials-scoped/empty.agent.env'),
+  });
+  const envFlag = args.indexOf('--env-file');
+  expect(args[envFlag + 1]).toContain('credentials-scoped');
+  expect(args).toContain('--no-default-auth');
+  expect(args).not.toContain('--auth');
+  expect(args).not.toContain(join(bundle, 'credentials.env'));
+});
+
+test('omitted scope keeps legacy args but differs in mount signature', () => {
+  expect(baseContainerArgs(loaded)).toEqual([
+    '--name',
+    loaded.config.container.name,
+    '--superpowers-root',
+    loaded.config.superpowers.path,
+    '--env-file',
+    join(bundle, 'credentials.env'),
+    ...expectedDiscoveredAuthArgs,
+  ]);
+  expect(containerMountSignature(loaded)).not.toBe(
+    containerMountSignature(loaded, {
+      scope: { envNames: [], authMounts: [] },
+      agentEnvFile: join(loaded.config.root, 'state/credentials-scoped/empty.agent.env'),
+    }),
+  );
+});
+```
+
+In the new test file, build `expectedDiscoveredAuthArgs` explicitly from the auth directories created by that fixture; do not derive the expected value by calling production `discoveredAuthDirs`.
+
+Through the existing fake-Docker wrapper harness, prove:
+
+1. `up` mounts the agent file and selected auth dirs, and its Docker argv contains no grader path;
+2. asserted-empty `up` emits no auth mounts even when all four fallback auth directories exist under hostile `HOME`; selected scope mounts exactly its named blessed directories;
+3. a requested auth mount missing from the blessed bundle fails before Docker;
+4. scoped `exec` places `--env-file <grader-path>` after Docker's `exec` subcommand and before the container name;
+5. the grader path never appears inside `--mount`, the container filesystem, or `docker run` args;
+6. no secret value appears in the Docker argv log—only the file path;
+7. `--exec-env-file` with `up`, `shell`, or a relative/missing/symlinked/unreadable file fails before Docker;
+8. ordinary legacy exec and shell tests remain unchanged, including legacy auth auto-discovery.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+bun test test/appliance-container.test.ts test/evals-container.test.ts
+```
+
+Expected: missing scope parameters/flag behavior.
+
+- [ ] **Step 3: Implement the wrapper and container arg contracts**
+
+Keep mount selection and exec injection separate. In `baseContainerArgs`, map each asserted `authMounts` name through the existing `AUTH_DIRS` table, require its blessed source directory to exist, and emit `--no-default-auth` before the explicit `--auth` pairs. In the wrapper, guard all four fallback-discovery branches with `no_default_auth != true`. Do not pass the grader file to `baseContainerArgs` or `docker run`; only `execContainerArgs(..., { execEnvFile })` may emit `--exec-env-file`. Require that exec-env path to be absolute, then add a small lexical component walker: starting at `/`, reject `-L` at every existing component, and finally require a regular readable file. Do not use `realpath`/`readlink -f` to hide an alias before validation.
+
+- [ ] **Step 4: Run GREEN and gates**
+
+```bash
+bun test test/appliance-container.test.ts test/evals-container.test.ts
+bun test test/appliance-*.test.ts
+bun run check
+bun run quorum check
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/appliance/container.ts scripts/evals-container \
+  test/appliance-container.test.ts test/evals-container.test.ts
+git commit -m "feat: mount agent scope and inject grader only at exec (F13)"
+```
+
+---
+
+### Task 4: Persist and apply scope through the appliance job flow
+
+**Files:**
+- Modify: `src/appliance/types.ts`
+- Modify: `src/appliance/cli.ts`
+- Modify: `src/appliance/preflight.ts`
+- Modify: `src/appliance/process.ts`
+- Modify: `src/appliance/provenance.ts`
+- Test: `test/appliance-contracts.test.ts`
+- Test: `test/appliance-cli.test.ts`
+- Test: `test/appliance-preflight.test.ts`
+- Test: `test/appliance-process.test.ts`
+
+**Interfaces:**
+- Consumes: Task 1 scope resolver, Task 2 file writer, Task 3 scoped up/exec args.
+- Produces:
+  - `CredentialScopeSchema` matching Task 1 exactly;
+  - top-level `credential_scope: CredentialScopeSchema.nullable().default(null)` on schema-version-1 `JobRecordSchema` and `ProvenanceRecordSchema`, so old records parse as legacy while every newly written record persists the field explicitly;
+  - nullable `job.credential_scope` (`null` only for legacy/import/prepare records; every new live `run`/`run-all` job writes a non-null asserted scope, including empty);
+  - preflight's internal `credential_files: ScopedCredentialFiles | null` result;
+  - `liveCommandArgs(..., { execEnvFile })` for the one credentialed live exec; all other `execContainerArgs` callers remain uncredentialed;
+  - provenance/container evidence containing the asserted `credential_scope` and matching `mount_signature`—never paths or values.
+
+- [ ] **Step 1: Write the failing contract and flow tests**
+
+Cover all of these behaviors against existing fake action/runner seams:
+
+1. `run` and `run-all` compute scope once from parsed agents/credentials and persist it in the job before worker spawn.
+2. `run` resolves its agent default; `run-all` parses the single required `--coding-agents` value and optional single `--credentials` value, passing `null` when the latter is omitted. Duplicate `--credentials`, explicit incompatible selections, and unknown selections fail before job creation or any container command.
+3. Copilot's default scope persists `COPILOT_GITHUB_TOKEN` with no auth mount; Claude's explicit `opus5_sub` scope persists `CLAUDE_CODE_OAUTH_TOKEN`. Neither may collapse to asserted-empty.
+4. Preflight reads the job's stored scope, writes both files, and calls `reconcileContainer(loaded, runner, { scope, agentEnvFile })`; legacy null records keep the existing unscoped path.
+5. The live job call uses `liveCommandArgs(..., { execEnvFile: graderExecEnvFile })` and produces `--exec-env-file`; cancellation, liveness, tool-version, and `quorum check` probes do not.
+6. A scoped job with missing grader-file preparation fails before the live child spawns.
+7. Provenance records names/mounts and signature only; it contains no secret file path or value.
+8. A schema-version-1 job/provenance fixture with no `credential_scope` parses to `null`, while newly created prepare/import records persist `null` and live records persist the asserted object. No other missing or malformed field is relaxed.
+
+Pin the core live command contract:
+
+```typescript
+const args = liveCommandArgs(loaded, 'job-1', ['quorum', 'run-all'], {
+  execEnvFile: '/state/credentials-scoped/grader.exec.env',
+});
+expect(args).toContain('--exec-env-file');
+expect(args).toContain('/state/credentials-scoped/grader.exec.env');
+
+const probeArgs = execContainerArgs(loaded, ['quorum', 'check']);
+expect(probeArgs).not.toContain('--exec-env-file');
+```
+
+For cancellation, drive the existing `cancelJob` fake-runner test and assert that none of its recorded wrapper calls contains `--exec-env-file`; do not add a test-only production export.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-preflight.test.ts test/appliance-process.test.ts
+```
+
+Expected: missing schema/threading and live exec-env assertions.
+
+- [ ] **Step 3: Implement narrow one-way threading**
+
+Submission computes once; the record is authoritative afterward. Preflight prepares files and recreates the container with the stored scope. `runWorker` takes the grader path from its own successful preflight result and gives it only to the live Quorum exec. Do not reparse CLI strings, derive an observed mount identity, add a generic environment channel, or inject grader env into probes.
+
+- [ ] **Step 4: Run GREEN and gates**
+
+```bash
+bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-preflight.test.ts test/appliance-process.test.ts
+bun test test/appliance-*.test.ts test/evals-container.test.ts
+bun run check
+bun run quorum check
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/appliance/types.ts src/appliance/cli.ts \
+  src/appliance/preflight.ts src/appliance/process.ts \
+  src/appliance/provenance.ts test/appliance-contracts.test.ts \
+  test/appliance-cli.test.ts test/appliance-preflight.test.ts \
+  test/appliance-process.test.ts
+git commit -m "feat: apply credential scope across appliance jobs (F13)"
+```
+
+---
+
+### Task 5: Runbook, manual proof, and residuals
 
 **Files:**
 - Modify: `docs/appliance-runbook.md`
 
-- [ ] **Step 1: Runbook section** — add to the security/credential material: jobs mount only their credential scope (`credentials.env` subsetted to the job's `api_key_env` names; only the scoped OAuth bundle dirs mounted); scope changes recreate the container via the existing signature/reconcile path; consecutive mixed-scope jobs may recreate more often (accepted trade-off); the scoped env files live mode-0600 under `state/credentials-scoped/` and are pruned with the bundle on rotation.
+- [ ] **Step 1: Document the operator contract**
 
-- [ ] **Step 2: Manual verification checklist** (to run at the next appliance job — paste into the runbook as an operator step):
+State that new appliance live jobs always assert a scope; `/run/evals/credentials.env` contains only the job's Coding-Agent keys; `/auth` contains only selected OAuth sources; the grader file remains mode 0600 under host appliance state and is injected only into the live Quorum exec; direct wrapper calls that omit scope remain explicitly legacy/unscoped.
+
+- [ ] **Step 2: Add the no-value manual verification gate**
+
+The checklist must not print secrets:
 
 ```bash
-# After the next appliance run-all with scope {codex}:
-scripts/evals-container exec -- ls /auth            # expect: only codex
-scripts/evals-container exec -- cat /run/evals/credentials.env   # expect: only the scoped key names
+# On the configured appliance after a scoped Codex-subscription job:
+appliance_config=${EVALS_APPLIANCE_CONFIG:-/srv/quorum/config/appliance.json}
+container_name=$(bun -e \
+  'const config = await Bun.file(process.argv[1]).json(); console.log(config.container.name)' \
+  "$appliance_config")
+
+docker exec "$container_name" sh -lc \
+  'find /auth -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort'
+# expect: codex only
+
+docker exec "$container_name" sh -lc \
+  'sed -n "s/=.*//p" /run/evals/credentials.env | sort'
+# expect: no agent env names for the subscription-only cell
+
+docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' \
+  "$container_name" | sort
+# expect: /run/evals/credentials.env and scoped /auth entries; no grader file
 ```
 
-- [ ] **Step 3: The residual record** — add to the runbook: env scoping bounds what quorum's children *inherit*, but same-UID process inspection is not bounded by it — the gauntlet child's grader credential AND the quorum parent / run-all child's full host provider bundle both remain readable by a same-UID agent via `/proc/<pid>/environ` (env plan, final-wave residual correction); full closure needs parent env scoping plus UID separation, deferred to the post-Phase-0 appliance decision. claude-windows guest-side isolation and the SSH-password-on-argv residual remain owned by the Windows trusted-maintainer path.
+Then run one real scoped job through the appliance helper. A successful Gauntlet drive plus the mount inspection is the physical proof that grader auth arrived through exec while its file stayed off the container filesystem. Record the job ID, exact commit, bundle ID, observed key names/mount destinations, and result in the experiment log. Never print values.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Record the honest residual**
+
+The Quorum parent/run-all child now carries only the job's scoped Coding-Agent values plus the grader contract—not the full provider bundle. Because Coding-Agent and Quorum still share a UID, the Coding-Agent can inspect those parent/grader values through `/proc/<pid>/environ`; UID separation remains required for full process-boundary closure. Run-home retention remains separate, and claude-windows password/guest isolation remains owned by the Windows trusted-maintainer path.
+
+- [ ] **Step 4: Run docs/static gates and commit**
 
 ```bash
+bun run check
+bun run quorum check
 git add docs/appliance-runbook.md
-git commit -m "docs: appliance credential scoping — operator contract, verification, residuals (F13)"
+git commit -m "docs: verify appliance credential scope without exposing values (F13)"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage** (fix-now item 1, bullet 1 — the "by filesystem" half): "the container's credential env file and OAuth mounts are readable under the agent's UID" → Tasks 1–3 (scope resolution, subsetted env file + selected mounts, job wiring with recreate-on-scope-change); "Done when a per-agent black-box test proves the agent reaches only its own credential, by … filesystem" → the hermetic arg-construction/env-subset tests (Tasks 1–3) plus the in-container manual verification step (Task 4) — a fully automated in-container proof would require Docker in tests, which the hermetic constraint forbids; this is the honest split and is stated as such. The env half is the sibling plan; both together close the bullet.
+**Spec coverage:** Task 1 resolves the exact per-job scope. Task 2 creates two disjoint filesystem artifacts and one shared grader-name contract. Task 3 ensures only the agent artifact and selected OAuth dirs become container mounts while the grader artifact is exec-only. Task 4 makes every live appliance job assert and apply that contract. Task 5 supplies the required real-container filesystem proof without printing values.
 
-**Placeholder scan:** Task 1's resolver/loader call shapes are marked as read-then-call-correctly (the exports exist per AGENTS.md's architecture notes; their exact signatures must be read — same accepted pattern as prior plans' harness steps); Task 3's test step targets the located preflight/CLI test file by grep. No TBDs; all implementation code blocks complete.
+**Failure-mode coverage:** supplied-empty versus omitted scope; unknown/incompatible cells; missing agent key; missing grader auth; quoted bundle values; CR/LF rejection; symlinked secret directory; grader path accidentally mounted or passed to `docker run`; grader env accidentally injected into probes; scope/provenance disagreement; and no-value operator verification all have named tests or gates.
 
-**Type consistency:** `CredentialScope` shape identical across Tasks 1–3; `AGENT_OAUTH_MOUNT` values are container mount names (matching `AUTH_DIRS` `name` field — kimi→`kimi`, NOT the bundle subdir `kimi-code`); `writeScopedCredentialsEnv(loaded, scope): string` and `scopedContainerArgs(loaded, scope): string[]` used consistently; optional-scope back-compat (absent/empty = legacy) asserted byte-for-byte in Task 2's tests.
+**Type consistency:** `CredentialScope` is unchanged from reviewed Task 1. `ScopedCredentialFiles` is created in Task 2, consumed by preflight in Task 4, and never persisted. `GRADER_CREDENTIAL_ENV_NAMES` is shared by runner and appliance. `credential_scope: null` means omitted legacy only; `{envNames:[], authMounts:[]}` means asserted zero-material everywhere.
 
-**Deliberate scope exclusions (recorded so reviewers don't flag them):** no `evals-container` UX flags for direct local use (the appliance computes scopes; direct users can already pass explicit `--auth` flags); no UID separation (deferred to the post-Phase-0 appliance decision, recorded as the residual); no run-home credential retention policy (owned by the scrub-at-capture backlog item); no changes to `process.ts` exec probes (mount-inert per recon fact 7).
+**Placeholder scan:** every remaining task names exact files, interfaces, RED/GREEN commands, failure expectations, and commit boundaries. No dynamic test-file discovery, implementation placeholders, or invented observed-signature API remains.
+
+**Deliberate exclusions:** no UID separation; no run-home retention policy; no automatic Docker test in `bun test`; no grader values in container metadata at `docker run`; no new generic env passthrough; no push. The manual Docker/appliance proof remains a required post-implementation gate before Drew considers publication.
