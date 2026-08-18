@@ -1136,3 +1136,54 @@ test('opencode.json is mode 0600 and carries the api key', () => {
     cleanup();
   }
 });
+
+// F13 env scoping: the staged-plugin `node --check` subprocess (the only
+// CommandRunner call in opencode provisioning) must run on the non-secret
+// allowlist projection with NO extras — neither the provider bundle nor the
+// credential env the adapter just resolved (TEST_OPENCODE_API_KEY via the
+// credential's api_key_env) may leak into it. (The opencode preflight itself
+// already runs through the separately-allowlisted opencodeRunEnv path.)
+test('provision node --check env drops host credentials (base allowlist only)', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+  const { spawn } = makeHappySpawn();
+  const cred = makeCredential();
+
+  const HOSTILE = [
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'KIMI_MODEL_API_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+    'TEST_OPENCODE_API_KEY',
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const name of HOSTILE) {
+    saved[name] = process.env[name];
+    process.env[name] = `hostile-${name}`;
+  }
+
+  try {
+    withEnv(spRoot, 'test-api-key-value', () => {
+      new OpenCodeAgent(OPENCODE_CONFIG, spawn).provision(home, runner, cred);
+    });
+    const nodeCheck = runner.calls.find((c) => c.command === 'node');
+    expect(nodeCheck).toBeDefined();
+    const env = nodeCheck?.options?.env ?? {};
+    for (const name of HOSTILE) {
+      expect(env[name]).toBeUndefined();
+    }
+    // No opencode extras: the base projection (PATH here) is all it gets.
+    expect(env['PATH']).toBe(process.env['PATH']);
+    expect(env['OPENCODE_CONFIG_DIR']).toBeUndefined();
+  } finally {
+    for (const name of HOSTILE) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+    cleanup();
+  }
+});

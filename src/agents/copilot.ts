@@ -15,6 +15,7 @@ import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Copilot provisioning adapter. provision() is SETUP: it verifies the copilot
 // binary is on PATH, stages the isolated COPILOT_HOME, writes a mode-0600 secret
@@ -247,12 +248,16 @@ interface CopilotAuthEnv {
 // and a non-zero exit (both yield no token). The presence check uses Bun.which
 // (a real PATH lookup); a `command -v gh` probe ENOENTs through the no-shell
 // spawnSync seam and false-fails on Linux. The `gh auth token` call itself
-// routes through the injectable runner so the hermetic gate stubs it.
+// routes through the injectable runner so the hermetic gate stubs it, and runs
+// on the non-secret provision allowlist (F13): gh resolves its stored auth from
+// its config files, not from the host provider bundle.
 function ghAuthToken(runner: CommandRunner): string | undefined {
   if (Bun.which('gh', { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     return undefined;
   }
-  const result = runner.run('gh', ['auth', 'token'], { env: envSnapshot() });
+  const result = runner.run('gh', ['auth', 'token'], {
+    env: provisionSubprocessEnv(),
+  });
   if (result.status !== 0) {
     return undefined;
   }

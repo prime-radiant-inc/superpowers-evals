@@ -15,6 +15,7 @@ import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Hermes support files a usable SUPERPOWERS_ROOT must contain. The plugin dir
 // and the using-superpowers skill + hermes-tools reference are what make a
@@ -217,12 +218,17 @@ export class HermesAgent implements CodingAgent {
 
     // Enable through the CLI (documented: `hermes plugins enable <name>`),
     // with HOME pinned to the run home so it edits the throwaway config.
+    // The subprocess runs on the non-secret provision allowlist plus these
+    // pinned extras (F13): no host credentials reach the third-party CLI.
     const runHomeDir = dirname(configDir);
     const result = runner.run(
       this.config.binary,
       ['plugins', 'enable', 'superpowers'],
       {
-        env: { ...envSnapshot(), HOME: runHomeDir, HERMES_HOME: configDir },
+        env: provisionSubprocessEnv({
+          HOME: runHomeDir,
+          HERMES_HOME: configDir,
+        }),
       },
     );
     if (result.status !== 0) {

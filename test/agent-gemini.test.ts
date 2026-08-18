@@ -962,3 +962,58 @@ test('provision expands a ~-prefixed SUPERPOWERS_ROOT under HOME', () => {
     path.cleanup();
   }
 });
+
+// F13 env scoping: the gemini provisioning subprocesses (extensions link/list)
+// must run on the non-secret allowlist projection plus the gemini extras — the
+// full provider bundle never reaches the third-party CLI. GEMINI_API_KEY is set
+// to a hostile value AND read by provisioning (it seeds the secret env file), so
+// this also proves the subprocess env does not echo the very secret the adapter
+// just handled.
+test('provision subprocess env drops host credentials, carries gemini extras', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: spHome, cleanup: spCleanup } = makeTempHome();
+  const superpowersRoot = spHome.configDir;
+  mkdirSync(superpowersRoot, { recursive: true });
+  seedSuperpowersRoot(superpowersRoot);
+
+  const HOSTILE = [
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'KIMI_MODEL_API_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+  ];
+
+  try {
+    withEnv(
+      {
+        GEMINI_API_KEY: 'hostile-gemini-key',
+        SUPERPOWERS_ROOT: superpowersRoot,
+        OPENAI_API_KEY: 'hostile-openai',
+        ANTHROPIC_API_KEY: 'hostile-anthropic',
+        KIMI_MODEL_API_KEY: 'hostile-kimi',
+        AWS_SECRET_ACCESS_KEY: 'hostile-aws',
+      },
+      () => {
+        const runner = new FakeCommandRunner(successResponder(home.configDir));
+        new GeminiAgent(CONFIG).provision(home, runner);
+        expect(runner.calls.length).toBe(2);
+        for (const call of runner.calls) {
+          const env = call.options?.env ?? {};
+          for (const name of HOSTILE) {
+            expect(env[name]).toBeUndefined();
+          }
+          // Gemini extras arrive: the isolated config dir plus the
+          // trust/auth knobs the link/list need.
+          expect(env['GEMINI_CLI_HOME']).toBe(home.configDir);
+          expect(env['GEMINI_CLI_TRUST_WORKSPACE']).toBe('true');
+          expect(env['GEMINI_DEFAULT_AUTH_TYPE']).toBe('gemini-api-key');
+          expect(env['PATH']).toBe(process.env['PATH']);
+        }
+      },
+    );
+  } finally {
+    cleanup();
+    spCleanup();
+  }
+});

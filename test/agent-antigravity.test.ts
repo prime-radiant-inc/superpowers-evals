@@ -1038,3 +1038,48 @@ test('provision seeds the C1 OAuth creds (incl. agy token) into configDir/.gemin
     srcCleanup();
   }
 });
+
+// F13 env scoping: both agy provisioning subprocesses (auth preflight + plugin
+// install) must run on the non-secret allowlist projection plus the agy extra —
+// the full provider bundle never reaches the third-party CLI.
+test('provision subprocess env drops host credentials, carries the agy extra', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const runner = new FakeCommandRunner(happyResponder);
+  const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
+
+  const HOSTILE = [
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'KIMI_MODEL_API_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const name of HOSTILE) {
+    saved[name] = process.env[name];
+    process.env[name] = `hostile-${name}`;
+  }
+
+  try {
+    withRoot(spRoot, () => {
+      agent.provision(home, runner);
+      expect(runner.calls.length).toBe(2);
+      for (const call of runner.calls) {
+        const env = call.options?.env ?? {};
+        for (const name of HOSTILE) {
+          expect(env[name]).toBeUndefined();
+        }
+        // The agy extra arrives; PATH proves the base projection happened.
+        expect(env['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe('true');
+        expect(env['PATH']).toBe(process.env['PATH']);
+      }
+    });
+  } finally {
+    for (const name of HOSTILE) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+    cleanup();
+  }
+});

@@ -16,11 +16,12 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
-import { envSnapshot, getEnv } from '../env.ts';
+import { getEnv } from '../env.ts';
 import { stageSuperpowersPlugin } from '../setup-helpers/plugin-stage.ts';
 import { agyLogShowsRateLimit } from './agy-watch.ts';
 import type { CommandResult, CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Antigravity-family provisioning. provision() is SETUP ONLY: it seeds the
 // per-run ANTIGRAVITY_CONFIG_DIR/.gemini tree so the agy CLI boots against an
@@ -185,7 +186,9 @@ export class AntigravityAgent implements CodingAgent {
         [`--gemini_dir=${geminiDir}`, 'plugin', 'install', stagedPlugin],
         {
           cwd: configDir,
-          env: { ...envSnapshot(), AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+          env: provisionSubprocessEnv({
+            AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+          }),
         },
       );
     } finally {
@@ -265,7 +268,9 @@ export class AntigravityAgent implements CodingAgent {
         ],
         {
           cwd,
-          env: { ...envSnapshot(), AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+          env: provisionSubprocessEnv({
+            AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+          }),
         },
       );
 

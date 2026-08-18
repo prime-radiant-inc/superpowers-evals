@@ -26,6 +26,7 @@ import {
   runOpencodeCommand,
   type SpawnFn,
 } from './opencode-capture.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // OpenCode-family provisioning. provision() is SETUP ONLY: it stages Superpowers
 // into an XDG-isolated OpenCode home, builds the provider config from the
@@ -395,8 +396,10 @@ export class OpenCodeAgent implements CodingAgent {
     // binary. A non-zero check when node IS present is a hard ProvisionError.
     if (binaryOnPath('node')) {
       const node = getEnv('OPENCODE_NODE_BIN') ?? 'node';
+      // The syntax check runs on the non-secret provision allowlist (F13),
+      // no extras: node needs no credentials to parse a plugin file.
       const nodeCheck = runner.run(node, ['--check', stagedPlugin], {
-        env: envSnapshot(),
+        env: provisionSubprocessEnv(),
       });
       if (nodeCheck.status !== 0) {
         throw new ProvisionError(

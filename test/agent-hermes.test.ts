@@ -263,3 +263,50 @@ test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME,
   // cd into the prepared workdir before launch, like every other launcher.
   expect(launcher).toContain('cd "$QUORUM_AGENT_CWD"');
 });
+
+// F13 env scoping: the `hermes plugins enable` subprocess must run on the
+// non-secret allowlist projection plus the pinned HOME/HERMES_HOME extras —
+// neither the provider bundle nor the credential env the adapter just read
+// (OPENROUTER_API_KEY, used to write config-dir .env) may leak into it.
+test('provision subprocess env drops host credentials, keeps pinned HOME/HERMES_HOME', () => {
+  const { home, cleanup } = makeTempHome();
+  const sproot = join(home.workdir, 'superpowers-src');
+  stageSuperpowers(sproot);
+  const runner = new FakeCommandRunner();
+  const agent = new HermesAgent(HERMES_CONFIG);
+
+  const HOSTILE = [
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
+    'KIMI_MODEL_API_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+    'OPENROUTER_API_KEY',
+  ];
+  withEnvVars(
+    {
+      SUPERPOWERS_ROOT: sproot,
+      OPENROUTER_API_KEY: 'or-key-123',
+      OPENAI_API_KEY: 'hostile-openai',
+      ANTHROPIC_API_KEY: 'hostile-anthropic',
+      GEMINI_API_KEY: 'hostile-gemini',
+      KIMI_MODEL_API_KEY: 'hostile-kimi',
+      AWS_SECRET_ACCESS_KEY: 'hostile-aws',
+    },
+    () => {
+      agent.provision(home, runner, OPENROUTER_CRED);
+    },
+  );
+
+  expect(runner.calls.length).toBe(1);
+  const env = runner.calls[0]?.options?.env ?? {};
+  for (const name of HOSTILE) {
+    expect(env[name]).toBeUndefined();
+  }
+  // Hermes extras arrive: HOME pinned to the run home, HERMES_HOME at the
+  // throwaway config dir (the adapter's isolation seam).
+  expect(env['HOME']).toBe(dirname(home.configDir));
+  expect(env['HERMES_HOME']).toBe(home.configDir);
+  expect(env['PATH']).toBe(process.env['PATH']);
+  cleanup();
+});

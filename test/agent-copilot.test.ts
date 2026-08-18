@@ -823,3 +823,54 @@ test('scanCopilotSecretLeaks does not descend into a symlinked directory', () =>
     rmSync(outsideDir, { recursive: true, force: true });
   }
 });
+
+// F13 env scoping: the `gh auth token` fallback subprocess must run on the
+// non-secret allowlist projection with NO extras — the provider bundle never
+// reaches the third-party gh CLI. (gh's own token envs are already cleared by
+// clearedAuthEnv so the fallback path runs at all.)
+test('gh auth token subprocess env drops host credentials (base allowlist only)', () => {
+  const sp = makeSuperpowersRoot();
+  const { home, cleanup } = makeTempHome();
+  try {
+    const runner = new FakeCommandRunner((command, args) => {
+      if (command === 'gh' && args[0] === 'auth' && args[1] === 'token') {
+        return { status: 0, stdout: 'gho_from_gh_cli\n', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    withProvisionEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: sp.root,
+        OPENAI_API_KEY: 'hostile-openai',
+        ANTHROPIC_API_KEY: 'hostile-anthropic',
+        GEMINI_API_KEY: 'hostile-gemini',
+        KIMI_MODEL_API_KEY: 'hostile-kimi',
+        AWS_SECRET_ACCESS_KEY: 'hostile-aws',
+      },
+      () => {
+        new CopilotAgent(CONFIG).provision(home, runner);
+      },
+    );
+    const ghCall = runner.calls.find((c) => c.command === 'gh');
+    expect(ghCall).toBeDefined();
+    const env = ghCall?.options?.env ?? {};
+    for (const name of [
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'KIMI_MODEL_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+    ]) {
+      expect(env[name]).toBeUndefined();
+    }
+    // No copilot extras: the base projection is all gh gets. PATH proves it
+    // carries the (allowlisted) mutated host PATH including the fake-bin dir;
+    // the resolved token itself must not be echoed into the subprocess env.
+    expect(env['PATH']).toContain(FAKE_BIN_DIR);
+    expect(env['COPILOT_GITHUB_TOKEN']).toBeUndefined();
+  } finally {
+    cleanup();
+    sp.cleanup();
+  }
+});
