@@ -477,6 +477,20 @@ function parseOlderThanDays(value: string): number {
   return days;
 }
 
+// An import with any failed entry is a failed command: the full result
+// (successes AND per-entry failures) is preserved verbatim, but the CLI
+// must not exit 0 over entries that did not land.
+function importFailed(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const result = value as { failed?: unknown; failures?: unknown };
+  return (
+    (typeof result.failed === 'number' && result.failed > 0) ||
+    (Array.isArray(result.failures) && result.failures.length > 0)
+  );
+}
+
 // An apply that could not move every candidate is a failed command even
 // though the partial result (successes AND failures) is preserved verbatim:
 // the CLI must not exit 0 over unquarantined candidates. Dry-run and
@@ -647,7 +661,12 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
     .argument('<bundle-dir>')
     .action((bundleDir: string, options: JsonOption) => {
       const args = { ...commandOptions(options), bundleDir };
-      return handleAction(args, resolvedDeps, () => actions.import(args));
+      return handleAction(
+        args,
+        resolvedDeps,
+        () => actions.import(args),
+        importFailed,
+      );
     });
 
   program

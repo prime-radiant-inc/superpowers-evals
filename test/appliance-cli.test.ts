@@ -209,6 +209,94 @@ test('import forwards the bundle dir with no force flag', async () => {
   expect(calls).toEqual([{ json: true, bundleDir: '/srv/bundles/lane-b' }]);
 });
 
+test('import renders ok:false and exit 1 for all-failed and mixed results', async () => {
+  const failure = {
+    run_id: 'r-bad',
+    code: 'import_conflict',
+    message: 'destination exists with different content',
+  };
+  const cases: {
+    result: {
+      imported: number;
+      skipped: number;
+      healed: number;
+      failed: number;
+      failures: (typeof failure)[];
+      run_ids: string[];
+    };
+    ok: boolean;
+    exits: number[];
+  }[] = [
+    {
+      result: {
+        imported: 1,
+        skipped: 0,
+        healed: 0,
+        failed: 0,
+        failures: [],
+        run_ids: ['r-good'],
+      },
+      ok: true,
+      exits: [],
+    },
+    {
+      result: {
+        imported: 0,
+        skipped: 0,
+        healed: 0,
+        failed: 2,
+        failures: [failure, { ...failure, run_id: 'r-worse' }],
+        run_ids: [],
+      },
+      ok: false,
+      exits: [1],
+    },
+    {
+      result: {
+        imported: 1,
+        skipped: 0,
+        healed: 0,
+        failed: 1,
+        failures: [failure],
+        run_ids: ['r-good'],
+      },
+      ok: false,
+      exits: [1],
+    },
+  ];
+  for (const { result, ok, exits } of cases) {
+    const stdout: string[] = [];
+    const seenExits: number[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: (code) => seenExits.push(code),
+      actions: noopActions({ import: async () => result }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'import',
+      '--json',
+      '/srv/bundles/lane-b',
+    ]);
+    const payload = JSON.parse(stdout.join('')) as {
+      ok: boolean;
+      imported: number;
+      failed: number;
+      failures: unknown[];
+      run_ids: unknown[];
+    };
+    expect(payload.ok).toBe(ok);
+    // The full result payload survives either way.
+    expect(payload.imported).toBe(result.imported);
+    expect(payload.failed).toBe(result.failed);
+    expect(payload.failures).toEqual(result.failures);
+    expect(payload.run_ids).toEqual(result.run_ids);
+    expect(seenExits).toEqual(exits);
+  }
+});
+
 test('the removed --force option is rejected loudly by the actual CLI', () => {
   // Real subprocess: commander's option parsing rejects --force before any
   // config is loaded or any action runs — the loud failure we want.
