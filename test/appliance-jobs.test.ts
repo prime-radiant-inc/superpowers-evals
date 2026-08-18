@@ -1,8 +1,23 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
+import {
+  ApplianceError,
+  type ApplianceErrorCode,
+} from '../src/appliance/errors.ts';
+import {
+  createJob,
+  readJob,
+  readJobByRunId,
+  updateJob,
+} from '../src/appliance/jobs.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
@@ -38,6 +53,37 @@ function loaded(): LoadedApplianceConfig {
       provenance: join(root, 'state/provenance'),
     },
   };
+}
+
+function importJob(cfg: LoadedApplianceConfig) {
+  return createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import'],
+    requester: { agent: null, thread: null, task: null },
+  });
+}
+
+function claimRun(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  runId: string,
+): void {
+  updateJob(cfg, jobId, (current) => ({
+    ...current,
+    artifacts: { ...current.artifacts, run_id: runId },
+  }));
+}
+
+function expectCode(fn: () => void, code: ApplianceErrorCode): void {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApplianceError);
+    expect((error as ApplianceError).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected ApplianceError ${code}`);
 }
 
 test('createJob writes a preflighting job with private log paths', () => {
@@ -96,4 +142,51 @@ test('updateJob applies atomic patches and preserves immutable ids', () => {
       job_id: 'job-other',
     })),
   ).toThrow(/job_id/);
+});
+
+test('readJobByRunId resolves the single job claiming the run_id', () => {
+  const cfg = loaded();
+  importJob(cfg); // an unrelated job that never claims the run
+  const claimant = importJob(cfg);
+  claimRun(cfg, claimant.job_id, 'run-under-import');
+
+  expect(readJobByRunId(cfg, 'run-under-import').job_id).toBe(claimant.job_id);
+});
+
+test('readJobByRunId never resolves by job id: a run_id equal to an unrelated job id is job_not_found', () => {
+  const cfg = loaded();
+  // artifacts.run_id stays null, so nothing claims this id as a run — even
+  // though a job directory of exactly that name exists.
+  const job = importJob(cfg);
+
+  expectCode(() => readJobByRunId(cfg, job.job_id), 'job_not_found');
+});
+
+test('readJobByRunId fails closed when two jobs claim one run_id', () => {
+  const cfg = loaded();
+  const first = importJob(cfg);
+  const second = importJob(cfg);
+  claimRun(cfg, first.job_id, 'contested-run');
+  claimRun(cfg, second.job_id, 'contested-run');
+
+  expectCode(() => readJobByRunId(cfg, 'contested-run'), 'config_invalid');
+  try {
+    readJobByRunId(cfg, 'contested-run');
+  } catch (error) {
+    const message = (error as ApplianceError).message;
+    expect(message).toContain(first.job_id);
+    expect(message).toContain(second.job_id);
+  }
+});
+
+test('readJobByRunId fails closed on an unreadable job record even when a valid claimant exists', () => {
+  const cfg = loaded();
+  const claimant = importJob(cfg);
+  claimRun(cfg, claimant.job_id, 'target-run');
+  // An unreadable sibling record could claim the same run; absence cannot be
+  // proven, so resolution must refuse rather than guess.
+  const corrupt = importJob(cfg);
+  writeFileSync(join(cfg.paths.jobs, corrupt.job_id, 'job.json'), 'not json');
+
+  expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
 });

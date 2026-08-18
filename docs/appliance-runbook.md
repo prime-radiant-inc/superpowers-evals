@@ -224,8 +224,10 @@ differs from the bundle, that
 entry is rejected as `import_conflict`: the landed run stays byte-for-byte
 untouched and the incoming payload is moved to `state/quarantine/` for
 comparison. Per-entry failures are reported with `run_id`, code, and message in
-the JSON result. There is no `--force`: if a landed run is wrong, move the bad
-directory aside yourself after inspection and re-import.
+the JSON result; a failed entry never leaves a job record claiming success —
+its record stays visibly incomplete for the next import to reuse. There is no
+`--force`: if a landed run is wrong, move the bad directory aside yourself
+after inspection and re-import.
 
 Imported runs are visible to the normal read commands:
 

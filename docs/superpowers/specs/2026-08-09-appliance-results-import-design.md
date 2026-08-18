@@ -209,11 +209,14 @@ Lives in `src/appliance/import.ts`, wired into the appliance CLI alongside
    backstop that makes the guarantee checkable at the boundary rather than
    trusted from the sender.
 4. For each entry, stages the payload to a sibling `.importing-*` directory,
-   records the job and provenance in `state/` (run-side provenance is prepared
-   on the staged payload before the atomic rename), and lands it with a
-   `rename` into `<results_root>/<run-id>/`. A landed run directory is never
-   modified or deleted. *(Supersedes the 2026-08-09 “writes a job record and
-   provenance, then moves the payload” ordering.)*
+   reserves a nonterminal job record claiming the `run_id` in `state/`
+   (run-side provenance is prepared on the staged payload), lands it with a
+   `rename` into `<results_root>/<run-id>/`, and only then marks the record
+   done and writes the state-side provenance — a failed landing stays visibly
+   incomplete instead of falsely done, and a retry reuses the reserved
+   record. A landed run directory is never modified or deleted. *(Supersedes
+   the 2026-08-09 “writes a job record and provenance, then moves the
+   payload” ordering.)*
 5. Is idempotent on `run_id`: a run whose landed content already matches the
    bundle is skipped; if its job record is missing or incomplete the record is
    healed in `state/` only; if the landed content differs the entry is

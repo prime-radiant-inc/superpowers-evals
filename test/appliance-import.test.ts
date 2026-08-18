@@ -16,7 +16,12 @@ import {
   type ApplianceErrorCode,
 } from '../src/appliance/errors.ts';
 import { type ImportResult, importBundle } from '../src/appliance/import.ts';
-import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
+import {
+  createJob,
+  readJob,
+  readJobByRunId,
+  updateJob,
+} from '../src/appliance/jobs.ts';
 import { acquireLock } from '../src/appliance/locks.ts';
 import {
   ImportedProvenanceRecordSchema,
@@ -68,17 +73,37 @@ function sha256(body: string): string {
 }
 
 // Every job record under state/jobs claiming this run_id — the duplicate
-// detector: recording must repair in place, never mint a second job.
+// detector: recording must repair in place, never mint a second job. Records
+// that don't parse are skipped: they can't claim the run.
 function countJobsForRun(cfg: LoadedApplianceConfig, runId: string): number {
   let count = 0;
   for (const entry of readdirSync(cfg.paths.jobs, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const jobPath = join(cfg.paths.jobs, entry.name, 'job.json');
     if (!existsSync(jobPath)) continue;
-    const job = JSON.parse(readFileSync(jobPath, 'utf8')) as JobRecord;
+    let job: JobRecord;
+    try {
+      job = JSON.parse(readFileSync(jobPath, 'utf8')) as JobRecord;
+    } catch {
+      continue;
+    }
     if (job.artifacts.run_id === runId) count += 1;
   }
   return count;
+}
+
+function importJobClaiming(cfg: LoadedApplianceConfig, runId: string) {
+  const job = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import', runId],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    artifacts: { ...current.artifacts, run_id: runId },
+  }));
+  return job;
 }
 
 interface BundleOverrides {
@@ -353,7 +378,7 @@ test('re-landing after the run dir disappeared reuses the existing job instead o
   ).toBe(true);
 });
 
-test('a failed landing after complete records is recovered on retry without a duplicate job', () => {
+test('a failed landing leaves no durable success claim; retry reuses the reserved record and finishes it', () => {
   const cfg = loaded();
   const bundle = makeBundle();
   const resultsRoot = cfg.config.container.results_root;
@@ -383,14 +408,27 @@ test('a failed landing after complete records is recovered on retry without a du
   }
   expect(first.imported).toBe(0);
   expect(first.failed).toBe(1);
+  expect(first.failures[0]?.run_id).toBe(RUN_ID);
+  expect(first.failures[0]?.code).toBe('unknown');
+  expect(first.failures[0]?.message).toContain('EPERM');
   expect(existsSync(destRun)).toBe(false);
-  // The recording completed before the landing failed, so the job resolves:
-  const jobAfterFailure = readJob(cfg, RUN_ID);
+  // Durable state does not claim success: the reserved record is nonterminal,
+  // carries no exit code, and no terminal state provenance exists.
+  const reserved = readJobByRunId(cfg, RUN_ID);
+  expect(reserved.status).toBe('running');
+  expect(reserved.result.exit_code).toBeNull();
+  expect(existsSync(reserved.artifacts.provenance)).toBe(false);
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
 
   const retry = importBundle(cfg, { bundleDir: bundle });
   expect(retry.imported).toBe(1);
   expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
-  expect(readJob(cfg, RUN_ID).job_id).toBe(jobAfterFailure.job_id);
+  const finished = readJobByRunId(cfg, RUN_ID);
+  expect(finished.job_id).toBe(reserved.job_id);
+  expect(finished.status).toBe('done');
+  expect(finished.result.exit_code).toBe(0);
+  expect(existsSync(finished.artifacts.provenance)).toBe(true);
+  expect(existsSync(join(destRun, 'verdict.json'))).toBe(true);
 });
 
 test('a stage cleanup failure is best-effort: the original failure is kept and later entries still land', () => {
@@ -471,6 +509,96 @@ test('a non-import job claiming the run_id with no landed dir fails closed inste
   // The foreign job is untouched and no import duplicate was minted:
   expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
   expect(readJob(cfg, RUN_ID).kind).toBe('run');
+});
+
+test('two jobs claiming one run_id fail that entry closed while later entries continue', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  // Two legacy records both claiming the same run — ambiguous, ours to
+  // surface, never to resolve by minting a third:
+  importJobClaiming(cfg, RUN_ID);
+  importJobClaiming(cfg, RUN_ID);
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  // The ambiguous entry fails closed with full identity:
+  expect(result.failed).toBe(1);
+  expect(result.failures[0]?.run_id).toBe(RUN_ID);
+  expect(result.failures[0]?.code).toBe('config_invalid');
+  expect(result.failures[0]?.message).toContain('claimed by 2 jobs');
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(2);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  // The unambiguous later entry still lands:
+  expect(result.imported).toBe(1);
+  expect(result.run_ids).toEqual([RUN_ID_B]);
+  expect(
+    existsSync(
+      join(cfg.config.container.results_root, RUN_ID_B, 'verdict.json'),
+    ),
+  ).toBe(true);
+});
+
+test('a run_id equal to an unrelated job id lands its own record and leaves that job byte-for-byte intact', () => {
+  const cfg = loaded();
+  // An unrelated import job that never claims this run — but whose job_id is
+  // exactly the incoming run_id:
+  const unrelated = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import', 'some-other-run'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const unrelatedPath = join(cfg.paths.jobs, unrelated.job_id, 'job.json');
+  const unrelatedBytes = readFileSync(unrelatedPath, 'utf8');
+  const bundle = makeBundle({ runIds: [unrelated.job_id] });
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  expect(result.imported).toBe(1);
+  // The unrelated job was not rewritten:
+  expect(readFileSync(unrelatedPath, 'utf8')).toBe(unrelatedBytes);
+  // The import got its own record, associated by artifacts.run_id:
+  const importJob = readJobByRunId(cfg, unrelated.job_id);
+  expect(importJob.job_id).not.toBe(unrelated.job_id);
+  expect(importJob.kind).toBe('import');
+  expect(importJob.status).toBe('done');
+  expect(importJob.artifacts.run_id).toBe(unrelated.job_id);
+  expect(countJobsForRun(cfg, unrelated.job_id)).toBe(1);
+  expect(
+    existsSync(
+      join(cfg.config.container.results_root, unrelated.job_id, 'verdict.json'),
+    ),
+  ).toBe(true);
+});
+
+test('a corrupt job record fails entries closed with a typed failure instead of minting duplicates', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  const corrupt = createJob(cfg, {
+    kind: 'run',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  writeFileSync(join(cfg.paths.jobs, corrupt.job_id, 'job.json'), 'not json');
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  // Absence can't be proven over corrupt state, so every entry fails closed —
+  // as its own typed failure, without aborting the loop:
+  expect(result.imported).toBe(0);
+  expect(result.failed).toBe(2);
+  expect(result.failures.map((f) => f.run_id)).toEqual([RUN_ID, RUN_ID_B]);
+  for (const failure of result.failures) {
+    expect(failure.code).toBe('config_invalid');
+    expect(failure.message).toContain('job record');
+  }
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(0);
 });
 
 test('a manifest run_id with path traversal is rejected before anything lands', () => {

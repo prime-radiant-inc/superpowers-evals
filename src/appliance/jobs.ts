@@ -217,6 +217,62 @@ export function readJob(
   );
 }
 
+// Exact artifacts.run_id resolution. Unlike readJob, this never consults job
+// ids, so a run_id that happens to equal an unrelated job's id cannot resolve
+// that job. Zero claimants throw job_not_found — the only error that means
+// absence. Multiple claimants or an unreadable record fail closed as
+// config_invalid: absence cannot be proven over ambiguous or corrupt state,
+// which needs manual repair, not a guess.
+export function readJobByRunId(
+  loaded: LoadedApplianceConfig,
+  runId: string,
+): JobRecord {
+  const matches: JobRecord[] = [];
+  if (existsSync(loaded.paths.jobs)) {
+    for (const entry of readdirSync(loaded.paths.jobs, {
+      withFileTypes: true,
+    })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const candidatePath = jobPath(loaded, entry.name);
+      if (!existsSync(candidatePath)) {
+        continue;
+      }
+      let job: JobRecord;
+      try {
+        job = readJobPath(candidatePath);
+      } catch (error) {
+        throw new ApplianceError(
+          'config_invalid',
+          'job',
+          `while resolving run_id ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (job.artifacts.run_id === runId) {
+        matches.push(job);
+      }
+    }
+  }
+  if (matches.length > 1) {
+    const ids = matches.map((job) => job.job_id).join(', ');
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      `run_id ${runId} is claimed by ${matches.length} jobs (${ids}); refusing to resolve — repair state/jobs manually`,
+    );
+  }
+  const match = matches[0];
+  if (match === undefined) {
+    throw new ApplianceError(
+      'job_not_found',
+      'job',
+      `no job claims run_id ${runId}`,
+    );
+  }
+  return match;
+}
+
 export function updateJob(
   loaded: LoadedApplianceConfig,
   jobId: string,
