@@ -381,6 +381,96 @@ test('a conflicting destination is rejected: landed run untouched, payload quara
   ).not.toBe('STALE');
 });
 
+// --- A conflict whose quarantine move fails keeps its stage: the stage is
+// --- the only inspectable copy of the rejected payload.
+
+// Fault the quarantine rename for entry A's stage with `code`, run the
+// import, and return the result. Landed RUN_ID is modified first so entry A
+// classifies as a conflict; RUN_ID_B stays clean so continuation is provable.
+function importWithQuarantineFault(
+  cfg: LoadedApplianceConfig,
+  code: string,
+): { result: ImportResult; staged: string; landed: string } {
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const landed = join(
+    cfg.config.container.results_root,
+    RUN_ID,
+    'verdict.json',
+  );
+  writeFileSync(landed, 'STALE');
+  const staged = join(
+    cfg.config.container.results_root,
+    `.importing-${RUN_ID}.${process.pid}.tmp`,
+  );
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, 'renameSync').mockImplementation(
+    (
+      from: Parameters<typeof fs.renameSync>[0],
+      to: Parameters<typeof fs.renameSync>[1],
+    ) => {
+      if (
+        from === staged &&
+        typeof to === 'string' &&
+        to.includes(join('state', 'quarantine'))
+      ) {
+        const err = new Error(
+          `${code}: quarantine move refused`,
+        ) as NodeJS.ErrnoException;
+        err.code = code;
+        throw err;
+      }
+      return realRename(from, to);
+    },
+  );
+  try {
+    return { result: importBundle(cfg, { bundleDir: bundle }), staged, landed };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+function expectConflictStageRetained(
+  cfg: LoadedApplianceConfig,
+  outcome: { result: ImportResult; staged: string; landed: string },
+): void {
+  const { result, staged, landed } = outcome;
+  expect(result.imported).toBe(1); // RUN_ID_B continued and landed
+  expect(result.failed).toBe(1);
+  const failure = result.failures[0];
+  expect(failure?.run_id).toBe(RUN_ID);
+  expect(failure?.code).toBe('import_conflict');
+  // The message names the retained stage so an operator can recover it:
+  expect(failure?.message).toContain(staged);
+  expect(failure?.message).toContain('retained');
+  // The exact incoming payload is still in the stage:
+  expect(readFileSync(join(staged, 'verdict.json'), 'utf8')).toBe(
+    JSON.stringify({ schema: 1, final: 'pass' }),
+  );
+  // The landed run is untouched:
+  expect(readFileSync(landed, 'utf8')).toBe('STALE');
+  // No partial quarantine entry exists:
+  const qroot = join(cfg.config.root, 'state', 'quarantine');
+  expect(existsSync(qroot) ? readdirSync(qroot) : []).toEqual([]);
+  expect(
+    existsSync(
+      join(cfg.config.container.results_root, RUN_ID_B, 'verdict.json'),
+    ),
+  ).toBe(true);
+}
+
+test('an EXDEV quarantine failure retains the conflict stage and later entries continue', () => {
+  const cfg = loaded();
+  expectConflictStageRetained(cfg, importWithQuarantineFault(cfg, 'EXDEV'));
+});
+
+test('an ordinary quarantine rename failure retains the conflict stage too', () => {
+  const cfg = loaded();
+  const outcome = importWithQuarantineFault(cfg, 'EPERM');
+  expectConflictStageRetained(cfg, outcome);
+  expect(outcome.result.failures[0]?.message).toContain('EPERM');
+});
+
 test('a pre-existing identical run dir with no job record is record-healed, not overwritten', () => {
   const cfg = loaded();
   const bundle = makeBundle();

@@ -578,11 +578,25 @@ function importLocked(
         continue;
       }
 
-      const quarantined = moveToQuarantine(
-        loaded,
-        staged,
-        `import-conflict-${entry.run_id}`,
-      );
+      // From here the payload is a classified conflict, and the stage is the
+      // only copy an operator can inspect: a failed quarantine move must
+      // retain it — never fall through to the generic stage cleanup below.
+      let quarantined: string;
+      try {
+        quarantined = moveToQuarantine(
+          loaded,
+          staged,
+          `import-conflict-${entry.run_id}`,
+        );
+      } catch (error) {
+        failures.push({
+          run_id: entry.run_id,
+          code: 'import_conflict',
+          message: `destination exists with different content; quarantine move failed (${error instanceof Error ? error.message : String(error)}); conflicting payload retained at ${staged}; landed run untouched`,
+        });
+        failed += 1;
+        continue;
+      }
       failures.push({
         run_id: entry.run_id,
         code: 'import_conflict',
