@@ -1,9 +1,9 @@
 // Per-job credential scoping (F13 filesystem half): which env-var names and
 // bundle OAuth mounts does a job's agent/credential set actually need? The
 // appliance container mounts only these, so the agent under test can reach
-// only its own credential material by filesystem. Empty scope = unscoped
-// (legacy full-bundle behavior); the container layer fails closed only when a
-// scope is asserted.
+// only its own credential material by filesystem. The empty shape is an
+// ASSERTED zero-material scope; "unscoped/legacy full bundle" exists only as
+// an omitted scope at the future container API, which Task 1 does not choose.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -50,6 +50,20 @@ export const CONVENTIONAL_API_KEY_ENV: Readonly<Record<string, string>> = {
 export interface CredentialScope {
   readonly envNames: readonly string[];
   readonly authMounts: readonly string[];
+}
+
+// Own-property credential lookup: inherited Object.prototype members
+// ('constructor', '__proto__', 'toString', ...) must never be treated as
+// registry entries — `name in registry` and bare `registry[name]` both see
+// them (registry['constructor'] is the Object constructor), which historically
+// turned a typo'd name into "TypeError: entry.harnesses.includes" instead of
+// the named unknown-credential error. Every registry read goes through here so
+// refactors cannot reintroduce the inherited-property read.
+function lookupCredential(
+  registry: Record<string, Credential>,
+  name: string,
+): Credential | undefined {
+  return Object.hasOwn(registry, name) ? registry[name] : undefined;
 }
 
 // Load an agent's config or fail with an error naming the agent. A missing
@@ -107,7 +121,10 @@ function contribute(
  * credential `harnesses` include the agent's runtime family contribute —
  * mirroring run-all matrix eligibility. A nonempty selection with zero
  * compatible pairs throws (fail closed) rather than returning an ambiguous
- * empty scope. An empty `agents` list returns the unscoped (empty) scope.
+ * empty scope. An empty `agents` list returns an asserted zero-material scope
+ * (empty arrays); whether the caller treats a supplied empty scope as
+ * zero-material or legacy is the future container API's decision, not this
+ * function's.
  */
 export function credentialScopeForAgents(
   agents: readonly string[],
@@ -137,7 +154,7 @@ export function credentialScopeForAgents(
         undefined,
       );
       if (credName === undefined) continue; // no default: no bundle material
-      const entry = registry[credName];
+      const entry = lookupCredential(registry, credName);
       if (entry === undefined) {
         throw new Error(
           `credential scope: unknown default credential '${credName}' for agent '${agent}'`,
@@ -152,7 +169,7 @@ export function credentialScopeForAgents(
   }
 
   for (const name of credentials) {
-    if (!(name in registry)) {
+    if (lookupCredential(registry, name) === undefined) {
       throw new Error(
         `credential scope: unknown credential '${name}' (available: ${Object.keys(registry).sort().join(', ')})`,
       );
@@ -163,7 +180,7 @@ export function credentialScopeForAgents(
   for (const agent of agents) {
     const family = agentRuntimeFamily(loadAgentOrThrow(codingAgentsDir, agent));
     for (const name of credentials) {
-      const entry = registry[name];
+      const entry = lookupCredential(registry, name);
       if (entry === undefined || !entry.harnesses.includes(family)) continue;
       pairs += 1;
       contribute(name, entry, agent, family, envNames, authMounts);

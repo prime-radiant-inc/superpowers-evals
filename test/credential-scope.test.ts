@@ -165,7 +165,10 @@ describe('credentialScopeForAgents', () => {
     expect(scope.envNames).toEqual(['OPENAI_API_KEY']);
   });
 
-  test('empty agent list means unscoped (legacy full bundle)', () => {
+  test('empty agent list returns an asserted zero-material scope', () => {
+    // The empty shape is an asserted zero-material scope when supplied;
+    // "unscoped / legacy full bundle" is only the omitted-scope case at the
+    // future container API, which this function does not decide.
     expect(credentialScopeForAgents([], null)).toEqual({
       envNames: [],
       authMounts: [],
@@ -188,6 +191,21 @@ describe('credentialScopeForAgents', () => {
   test('unknown credential throws an error naming the credential', () => {
     expect(() => credentialScopeForAgents(['codex'], ['nosuchcred'])).toThrow(
       /nosuchcred/,
+    );
+  });
+
+  test('Object.prototype property names are unknown credentials, not TypeErrors', () => {
+    // `in` and bare [] both see inherited properties: registry['constructor']
+    // is the Object constructor and registry['__proto__'] is Object.prototype,
+    // neither of which has .harnesses — the historical bug surfaced as
+    // "TypeError: undefined is not an object (entry.harnesses.includes)"
+    // instead of the named unknown-credential error. Both must fail closed
+    // with the required named error.
+    expect(() => credentialScopeForAgents(['codex'], ['constructor'])).toThrow(
+      /unknown credential 'constructor'/,
+    );
+    expect(() => credentialScopeForAgents(['codex'], ['__proto__'])).toThrow(
+      /unknown credential '__proto__'/,
     );
   });
 });
