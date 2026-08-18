@@ -148,27 +148,38 @@ function validateBundle(bundleDir: string, manifest: BundleManifest): void {
   }
 }
 
-// An imported run already has a job when a previous import landed it; readJob
-// resolves by run_id, so absence is the only signal we need.
-function alreadyImported(
+// An imported run's recording is complete only when the job record finished
+// AND the state-side provenance file it points at exists. A job's mere
+// existence is not sufficient: a crash between the job update and the
+// provenance write leaves a done-looking job with no provenance, which a
+// retry must repair rather than skip.
+function resolveJobForRun(
   loaded: LoadedApplianceConfig,
   runId: string,
-): boolean {
+): JobRecord | null {
   try {
-    readJob(loaded, runId);
-    return true;
+    return readJob(loaded, runId);
   } catch {
-    return false;
+    return null;
   }
 }
 
-function writeImportedProvenance(
-  loaded: LoadedApplianceConfig,
-  job: JobRecord,
-  origin: Origin,
-  runDir: string,
-): string {
-  const record = ImportedProvenanceRecordSchema.parse({
+function importRecordingComplete(job: JobRecord): boolean {
+  // A non-import job claiming the run (a live run/run-all record) is not
+  // ours to repair; treat it as recorded so healing never rewrites it.
+  if (job.kind !== 'import') {
+    return true;
+  }
+  return (
+    job.status === 'done' &&
+    job.origin?.kind === 'imported' &&
+    job.artifacts.run_id !== null &&
+    existsSync(job.artifacts.provenance)
+  );
+}
+
+function importedProvenanceRecord(job: JobRecord, origin: Origin): unknown {
+  return ImportedProvenanceRecordSchema.parse({
     schema_version: 1,
     kind: 'imported',
     job_id: job.job_id,
@@ -177,20 +188,40 @@ function writeImportedProvenance(
     requester: job.requester,
     command_argv: [...job.command.argv],
   });
+}
+
+// State-side provenance: the sanctioned visibility record under state/. This
+// is the only provenance write healing is allowed to make.
+function writeStateProvenance(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+  origin: Origin,
+): string {
   const path = provenancePath(loaded, job.job_id);
-  atomicWriteJson(path, record);
-  atomicWriteJson(join(runDir, 'appliance-provenance.json'), record);
+  atomicWriteJson(path, importedProvenanceRecord(job, origin));
   return path;
 }
 
-function recordImportJob(
-  loaded: LoadedApplianceConfig,
-  entry: BundleManifest['entries'][number],
-  manifest: BundleManifest,
-  importedAt: string,
-  destRun: string,
+// Run-side provenance: prepared on the STAGED payload, so the only write a
+// landed run dir ever receives from import is the atomic rename that creates
+// it. Never call this against a landed (destRun) directory.
+function writeStagedProvenance(
+  job: JobRecord,
+  origin: Origin,
+  staged: string,
 ): void {
-  const origin: Origin = {
+  atomicWriteJson(
+    join(staged, 'appliance-provenance.json'),
+    importedProvenanceRecord(job, origin),
+  );
+}
+
+function buildOrigin(
+  manifest: BundleManifest,
+  entry: BundleManifest['entries'][number],
+  importedAt: string,
+): Origin {
+  return {
     kind: 'imported',
     imported_at: importedAt,
     source_host: manifest.source_host,
@@ -204,17 +235,18 @@ function recordImportJob(
     coding_agent: entry.coding_agent,
     credential: entry.credential,
   };
+}
 
-  const created = createJob(loaded, {
-    kind: 'import',
-    // An imported run's ref is whatever we could establish about it, which
-    // origin carries; the request field records the same for readability.
-    superpowersRef: entry.superpowers_sha ?? 'unknown',
-    argv: ['evals-appliance', 'import', entry.run_id],
-    requester: { agent: null, thread: null, task: null },
-  });
-
-  const job = updateJob(loaded, created.job_id, (current) => ({
+// Bring a job record to its finished imported form and write the state-side
+// provenance. Idempotent: repairing an already-finished job rewrites the same
+// bytes, so a retry after a partial failure converges without duplicates.
+function finishImportJob(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+  entry: BundleManifest['entries'][number],
+  origin: Origin,
+): JobRecord {
+  const updated = updateJob(loaded, job.job_id, (current) => ({
     ...current,
     status: 'done' as const,
     started_at: entry.started_at,
@@ -226,8 +258,44 @@ function recordImportJob(
       summary: `imported ${entry.final} run ${entry.run_id}`,
     },
   }));
+  writeStateProvenance(loaded, updated, origin);
+  return updated;
+}
 
-  writeImportedProvenance(loaded, job, origin, destRun);
+// Create or complete the import recording for one entry in the STATE dir
+// only — never inside a run directory. Reuses an existing (possibly partial)
+// job instead of minting a duplicate.
+function ensureImportRecording(
+  loaded: LoadedApplianceConfig,
+  entry: BundleManifest['entries'][number],
+  manifest: BundleManifest,
+  importedAt: string,
+  existing: JobRecord | null,
+): { readonly job: JobRecord; readonly origin: Origin } {
+  const origin = buildOrigin(manifest, entry, importedAt);
+  const job =
+    existing ??
+    createJob(loaded, {
+      kind: 'import',
+      // An imported run's ref is whatever we could establish about it, which
+      // origin carries; the request field records the same for readability.
+      superpowersRef: entry.superpowers_sha ?? 'unknown',
+      argv: ['evals-appliance', 'import', entry.run_id],
+      requester: { agent: null, thread: null, task: null },
+    });
+  return { job: finishImportJob(loaded, job, entry, origin), origin };
+}
+
+// Best-effort stage cleanup: a cleanup fault must never mask or replace the
+// entry's original failure, and must never abort later entries. Returns a
+// context note to append after the original message, or null on success.
+function cleanupStageBestEffort(staged: string): string | null {
+  try {
+    rmSync(staged, { recursive: true, force: true });
+    return null;
+  } catch (error) {
+    return `; stage cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 export function importBundle(
@@ -283,9 +351,31 @@ function importLocked(
         recursive: true,
       });
 
+      const existingJob = resolveJobForRun(loaded, entry.run_id);
+
       if (!existsSync(destRun)) {
+        if (existingJob !== null && existingJob.kind !== 'import') {
+          // Fail closed rather than rewrite a live job into an import record
+          // or mint a second job claiming the same run.
+          throw new ApplianceError(
+            'config_invalid',
+            'import',
+            `run_id ${entry.run_id} is claimed by ${existingJob.kind} job ${existingJob.job_id} but its run dir is absent; refusing to conflate records — resolve manually`,
+          );
+        }
+        // Record first, then land: a landing failure leaves a complete,
+        // reusable recording, and the retry below re-lands reusing this job.
+        const { job, origin } = ensureImportRecording(
+          loaded,
+          entry,
+          manifest,
+          importedAt,
+          existingJob,
+        );
+        // Provenance is prepared while the payload is still staged, so the
+        // atomic rename is the only write a landed run dir ever receives.
+        writeStagedProvenance(job, origin, staged);
         renameSync(staged, destRun);
-        recordImportJob(loaded, entry, manifest, importedAt, destRun);
         runIds.push(entry.run_id);
         imported += 1;
         continue;
@@ -297,12 +387,19 @@ function importLocked(
         })
       ) {
         rmSync(staged, { recursive: true, force: true });
-        if (alreadyImported(loaded, entry.run_id)) {
+        if (existingJob !== null && importRecordingComplete(existingJob)) {
           skipped += 1;
         } else {
-          // The run dir predates appliance records: heal the record so
-          // status/show see it. The dir's bytes are already correct.
-          recordImportJob(loaded, entry, manifest, importedAt, destRun);
+          // The landed bytes are already correct; healing repairs/creates the
+          // state-side records only and never writes inside destRun — a
+          // pre-existing sidecar (or none at all) survives as-is.
+          ensureImportRecording(
+            loaded,
+            entry,
+            manifest,
+            importedAt,
+            existingJob,
+          );
           healed += 1;
         }
         continue;
@@ -320,11 +417,12 @@ function importLocked(
       });
       failed += 1;
     } catch (error) {
-      rmSync(staged, { recursive: true, force: true });
+      const cleanupNote = cleanupStageBestEffort(staged);
+      const message = error instanceof Error ? error.message : String(error);
       failures.push({
         run_id: entry.run_id,
         code: error instanceof ApplianceError ? error.code : 'unknown',
-        message: error instanceof Error ? error.message : String(error),
+        message: `${message}${cleanupNote ?? ''}`,
       });
       failed += 1;
     }

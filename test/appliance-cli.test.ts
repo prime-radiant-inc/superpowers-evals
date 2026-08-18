@@ -205,6 +205,18 @@ test('import forwards the bundle dir with no force flag', async () => {
   expect(calls).toEqual([{ json: true, bundleDir: '/srv/bundles/lane-b' }]);
 });
 
+test('the removed --force option is rejected loudly by the actual CLI', () => {
+  // Real subprocess: commander's option parsing rejects --force before any
+  // config is loaded or any action runs — the loud failure we want.
+  const proc = spawnSync(
+    'bun',
+    ['src/appliance/cli.ts', 'import', '--force', '/tmp/no-such-bundle'],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(`${proc.stderr}${proc.stdout}`).toContain("unknown option '--force'");
+});
+
 test('run forwards scenario and coding agent with appliance options', async () => {
   const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
   writeScenario(evalsPath, 'writing-plans');

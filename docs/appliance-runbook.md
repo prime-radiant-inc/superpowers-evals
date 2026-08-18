@@ -217,8 +217,10 @@ a live job holds it, import returns `lock_busy` and does nothing. Each run then
 lands by staging the payload beside the results root and atomically renaming it
 into place — import never modifies or deletes a landed run directory.
 Re-running is safe: a run whose landed content already matches the bundle is
-skipped, and if the run dir predates appliance job records the record is healed
-so `status`/`show` see it. If the landed run differs from the bundle, that
+skipped, and if the run dir predates appliance job records — or a previous
+recording was left incomplete — the record is healed in `state/` only (never
+by writing inside the landed run) so `status`/`show` see it. If the landed run
+differs from the bundle, that
 entry is rejected as `import_conflict`: the landed run stays byte-for-byte
 untouched and the incoming payload is moved to `state/quarantine/` for
 comparison. Per-entry failures are reported with `run_id`, code, and message in
