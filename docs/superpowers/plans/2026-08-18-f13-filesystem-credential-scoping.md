@@ -20,6 +20,15 @@
 
 **Revision checkpoint:** Task 1's initial foundation is committed through 034e980; the unrelated focused-test timeout repair is dc6e89a. The 2026-08-18 five-seat adversarial review rejected plan-redline 1c0bd6f. This revision supersedes that plan text; Tasks 2-6 and the reopened Task 1 interface correction have not started. Nothing authorizes a push.
 
+**Compatibility decision requiring Drew's approval before execution:** Trusted
+local Quorum runs outside the appliance currently supply canonical grader
+environment names directly. Preserve that supported path behind an explicit
+source-mode branch: an absent mode uses the existing local canonical contract;
+`QUORUM_GRADER_SOURCE_MODE=appliance-scoped` reads only the distinct appliance
+aliases and never falls back to canonical values. This is not a null/optional
+appliance scope path. Task 2 must not begin until Drew approves this narrowly
+scoped compatibility behavior while reviewing the plan.
+
 ## Global Constraints
 
 - Bun >=1.3; bun run check and bun run quorum check must pass at each task boundary.
@@ -221,9 +230,11 @@ Append the receipt to task-1-report.md and obtain a scoped Sol review before Tas
 **Files:**
 - Create: src/credentials/grader.ts
 - Create: src/appliance/credential-scope.ts
+- Modify: src/appliance/safe-fs.ts
 - Modify: src/runner/gauntlet-env.ts
 - Modify: src/agents/copilot.ts
 - Test: test/appliance-credential-scope.test.ts
+- Test: test/appliance-safe-fs.test.ts
 - Test: test/gauntlet-env.test.ts
 - Test: test/agent-copilot.test.ts
 
@@ -236,6 +247,9 @@ export const GRADER_SOURCE_ENV_BY_RUNTIME_NAME = {
   ANTHROPIC_API_KEY: 'QUORUM_GRADER_ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL: 'QUORUM_GRADER_ANTHROPIC_BASE_URL',
 } as const;
+
+export const QUORUM_GRADER_SOURCE_MODE = 'QUORUM_GRADER_SOURCE_MODE';
+export const APPLIANCE_SCOPED_GRADER_MODE = 'appliance-scoped';
 
 export const SUPERVISOR_NETWORK_ENV_NAMES = [
   'HTTP_PROXY',
@@ -293,7 +307,19 @@ export function activateScopedCredentialMaterial(
   staged: StagedCredentialMaterial,
 ): ActiveCredentialMaterial;
 
+export function recoverScopedCredentialActivation(
+  loaded: LoadedApplianceConfig,
+): void;
+
 export function retireScopedCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+): void;
+
+export function assertScopedCredentialStateBoundary(
+  loaded: LoadedApplianceConfig,
+): void;
+
+export function assertCredentialBundleBoundary(
   loaded: LoadedApplianceConfig,
 ): void;
 ~~~
@@ -304,7 +330,22 @@ The active paths are fixed:
 - state/credentials-scoped/active/supervisor.exec.env for live scopes only
 - state/credentials-scoped/active/auth/<mount-name>/...
 
-Stage beneath a fresh sibling directory whose name carries no secret or scope data. stageProbeCredentialMaterial writes only an empty agent.env and never evaluates the blessed bundle. Activation cannot rename over a nonempty directory: if active exists, rename it to one fixed recovery slot, rename the complete stage to the now-absent active path, then remove the recovery slot. If the second rename fails, restore the old active directory before returning the error. On startup, a recovery helper resolves an interrupted swap before staging new material; it never guesses between two complete generations and fails closed on an ambiguous shape.
+Stage beneath a fresh sibling directory whose name carries no secret or scope
+data. `assertScopedCredentialStateBoundary` validates every existing component
+no-follow and rejects any ancestor/descendant overlap between
+`state/credentials-scoped` and evals, Superpowers, Gauntlet, or results; probe
+staging calls only this helper and never inspects the blessed bundle.
+`assertCredentialBundleBoundary` separately requires a real no-follow bundle
+directory and rejects the same code/results overlaps; live staging calls both
+helpers before evaluation. Activation cannot rename over a nonempty directory:
+if active exists, rename it to one fixed recovery slot, rename the complete
+stage to the now-absent active path, then remove the recovery slot. If the
+second rename fails, restore the old active directory before returning the
+error. Staging never mutates `active` or the recovery slot.
+`recoverScopedCredentialActivation` may run only from
+`reconcileScopedContainer` after the configured container is confirmed down;
+it resolves an interrupted swap before the new activation, never guesses
+between two complete generations, and fails closed on an ambiguous shape.
 
 Exact OAuth projections:
 
@@ -325,7 +366,7 @@ Agent env behavior:
 
 Supervisor behavior:
 
-- Read grader credentials only from QUORUM_GRADER_* aliases and emit those aliases into supervisor.exec.env. Canonical grader names never appear in the host file.
+- Emit `QUORUM_GRADER_SOURCE_MODE=appliance-scoped`, read grader credentials only from QUORUM_GRADER_* aliases, and emit those aliases into supervisor.exec.env. Canonical grader names never appear in the host file.
 - Require at least one nonempty grader auth source; base URL alone is not auth.
 - Include defined network/TLS names, and include Copilot routing names only for a Copilot scope.
 - Reject CR/LF in Docker env-file values.
@@ -337,7 +378,13 @@ Supervisor behavior:
 
 Runner behavior:
 
-- gauntletEnvBase projects the existing non-secret contract, reads each QUORUM_GRADER_* source, and writes only its mapped canonical name into the returned Gauntlet child env.
+- In `appliance-scoped` mode, gauntletEnvBase projects the existing non-secret
+  contract, reads each QUORUM_GRADER_* source, and writes only its mapped
+  canonical name into the returned Gauntlet child env. Missing aliases fail;
+  canonical values are never a fallback in this mode.
+- With the source-mode marker absent, gauntletEnvBase preserves the existing
+  trusted-local canonical grader input contract. Unknown or empty explicit
+  mode values fail closed rather than choosing a source implicitly.
 - Canonical agent credentials in the Quorum parent are ignored by the grader projection.
 - Copilot's projection begins with gauntletEnvBase(hostEnv), then adds only its evidenced routing names and retains credentialed-proxy rejection. It does not loop over canonical grader names itself.
 - QUORUM_GRADER_* aliases remain absent from the child env.
@@ -360,6 +407,9 @@ expect(JSON.parse(readFileSync(piAuthPath, 'utf8'))).toEqual({
 ~~~
 
 Cover each projection, ordered Copilot aliases, separate grader aliases,
+the exact appliance mode marker, the unchanged local canonical mode, refusal
+of unknown/empty explicit modes, and absence of canonical fallback in scoped
+mode. Also cover
 all-pairs distinct-value enforcement (including differently named agent and
 grader auth channels), hostile unrelated provider/AWS names, missing values,
 contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi
@@ -370,11 +420,18 @@ agent adapter input remains the agent value, gauntletEnvBase returns the grader
 value under ANTHROPIC_API_KEY, and neither child projection contains the
 alias. The second-rename failure must restore the prior active tree
 byte-for-byte and metadata-for-metadata; an interrupted-swap fixture must
-recover deterministically before any new stage is accepted.
+recover deterministically before a new stage is activated.
+
+Add hostile topology fixtures for final and intermediate symlinks plus every
+ancestor/descendant overlap. Probe fixtures prove an invalid or unreadable
+blessed bundle is not touched; live fixtures prove the same bundle fault is
+typed before shell evaluation or file creation.
 
 - [ ] **Step 2: Run RED**
 
-Run: bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts test/agent-copilot.test.ts
+Run: bun test test/appliance-credential-scope.test.ts \
+  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
+  test/agent-copilot.test.ts
 
 Expected: modules and shared constants are missing.
 
@@ -385,7 +442,8 @@ Use no-follow helpers and writePrivateText. Project source files through regular
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
-bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts \
+bun test test/appliance-credential-scope.test.ts \
+  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 bun test test/appliance-*.test.ts
 bun run check
@@ -396,9 +454,10 @@ bun run quorum check
 
 ~~~bash
 git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
-  src/agents/copilot.ts \
-  src/appliance/credential-scope.ts test/appliance-credential-scope.test.ts \
-  test/gauntlet-env.test.ts test/agent-copilot.test.ts
+  src/agents/copilot.ts src/appliance/credential-scope.ts \
+  src/appliance/safe-fs.ts test/appliance-credential-scope.test.ts \
+  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
+  test/agent-copilot.test.ts
 git commit -m "feat: project exact agent and supervisor credentials (F13)"
 ~~~
 
@@ -470,7 +529,7 @@ reconcileScopedContainer always:
 
 1. inspects the existing configured container;
 2. downs it when present;
-3. activates the staged generation;
+3. recovers any interrupted prior activation, then activates the staged generation;
 4. ups with active agent.env, --no-default-auth, and only exact projected auth directories;
 5. captures a non-null container ID and mount signature;
 6. returns a lease containing the asserted scope.
@@ -811,6 +870,9 @@ Document:
 - docker exec --env-file capability diagnostics;
 - fixed active generation lifecycle, interrupted-swap recovery, and bundle-retirement procedure: down the container, then remove state/credentials-scoped;
 - the required bundle migration to distinct QUORUM_GRADER_* sources, with no fallback to the agent's canonical secret names and a named error when the migration is incomplete;
+- the explicit grader source-mode boundary: appliance-scoped mode is
+  alias-only, while trusted local runs with no marker retain the canonical
+  host contract; unknown or empty explicit modes are errors;
 - no-follow/disjointness errors and repair guidance;
 - mount signatures are not comparable across this upgrade;
 - same-UID /proc inspection remains outside filesystem closure.
