@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
-import { atomicWriteJson, mkdirPrivate } from './fs.ts';
+import { atomicWriteJson } from './fs.ts';
+import { ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
   type ApplianceCommandKind,
   type LoadedApplianceConfig,
@@ -84,7 +85,14 @@ export function inspectLock(path: string): LockInspection {
 
 export function acquireLock(args: AcquireLockArgs): LockHandle {
   const lockDir = join(args.loaded.paths.locks, args.name);
-  mkdirPrivate(args.loaded.paths.locks);
+  // The locks root is a mutable namespace boundary: a symlinked component
+  // would place the lock (and its later recursive release) wherever the
+  // link points, so it is validated no-follow before anything is created.
+  ensurePrivateDirNoFollow(
+    args.loaded.config.root,
+    args.loaded.paths.locks,
+    'state/locks',
+  );
 
   try {
     mkdirSync(lockDir, { mode: 0o700 });

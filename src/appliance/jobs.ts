@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
 import { atomicWriteJson, mkdirPrivate, readJsonFile } from './fs.ts';
 import { provenancePath } from './provenance.ts';
+import { assertNoFollowDirChain, ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
   type ApplianceCommandKind,
   type JobRecord,
@@ -88,7 +89,9 @@ function allocateJobDir(
   id: string;
   dir: string;
 } {
-  mkdirPrivate(loaded.paths.jobs);
+  // The jobs root is a mutable namespace boundary: creating a job through a
+  // symlinked component would file the record wherever the link points.
+  ensurePrivateDirNoFollow(loaded.config.root, loaded.paths.jobs, 'state/jobs');
 
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const id = newJobId(now);
@@ -303,6 +306,13 @@ export function readJobById(
   loaded: LoadedApplianceConfig,
   jobId: string,
 ): JobRecord | null {
+  // The jobs root itself is part of the boundary: an entry probed through a
+  // symlinked root would come from outside the namespace.
+  if (
+    !assertNoFollowDirChain(loaded.config.root, loaded.paths.jobs, 'state/jobs')
+  ) {
+    return null;
+  }
   const stats = lstatSync(jobDir(loaded, jobId), { throwIfNoEntry: false });
   if (stats === undefined) {
     return null;
@@ -324,7 +334,13 @@ export function readJobById(
 // collection.
 export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
   const jobs: JobRecord[] = [];
-  if (existsSync(loaded.paths.jobs)) {
+  // A symlinked jobs root would enumerate records from outside the
+  // namespace and hide the real ones — including the reference that makes a
+  // run ineligible for prune. Validated no-follow before enumeration; a
+  // missing root is provable absence.
+  if (
+    assertNoFollowDirChain(loaded.config.root, loaded.paths.jobs, 'state/jobs')
+  ) {
     for (const entry of readdirSync(loaded.paths.jobs, {
       withFileTypes: true,
     })) {

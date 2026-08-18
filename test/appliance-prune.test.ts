@@ -356,7 +356,66 @@ test('symlinked entries under the results root are never candidates', () => {
   expect(existsSync(join(outside, 'trajectory.json'))).toBe(true);
 });
 
-// --- Critical 1: unsafe age values must never erase the eligibility floor ---
+// --- The state namespace is a no-follow boundary: a symlinked root must
+// --- never hide references or redirect the quarantine move.
+
+test('a symlinked state/jobs root cannot hide a reference: prune fails closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'referenced-run', { verdict: false, ageDays: 30 });
+  // The real record claiming the run:
+  const job = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'x',
+    argv: ['test'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (cur) => ({
+    ...cur,
+    artifacts: { ...cur.artifacts, run_id: 'referenced-run' },
+  }));
+  // The namespace name redirected at an empty decoy that hides it:
+  const decoy = join(cfg.config.root, 'decoy-jobs');
+  mkdirSync(decoy);
+  renameSync(cfg.paths.jobs, join(cfg.config.root, 'real-jobs'));
+  symlinkSync(decoy, cfg.paths.jobs);
+
+  expectCode(
+    () => prune(cfg, { apply: false, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'referenced-run', 'trajectory.json'))).toBe(
+    true,
+  );
+});
+
+test('a symlinked state/quarantine root fails prune apply closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'victim-run', { verdict: true, ageDays: 90 });
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  symlinkSync(
+    join(root, 'victim-run'),
+    join(cfg.config.root, 'state', 'quarantine'),
+  );
+
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  // The candidate was not moved into the victim, and the victim is intact:
+  expect(existsSync(join(root, 'old-partial', 'trajectory.json'))).toBe(true);
+  expect(readFileSync(join(root, 'victim-run', 'verdict.json'), 'utf8')).toBe(
+    '{"final":"pass"}',
+  );
+  expect(existsSync(join(root, 'victim-run', 'trajectory.json'))).toBe(true);
+});
+
+// --- Age floor: unsafe values must never erase the eligibility floor ---
 
 test('non-positive or non-integer age floors fail closed before any mutation', () => {
   const cfg = loaded();

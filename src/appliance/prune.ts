@@ -16,7 +16,7 @@ import { readJsonFile } from './fs.ts';
 import { isImportStageName } from './import.ts';
 import { readAllJobsStrict } from './jobs.ts';
 import { acquireLock } from './locks.ts';
-import { moveToQuarantine } from './safe-fs.ts';
+import { assertApplianceNamespaces, moveToQuarantine } from './safe-fs.ts';
 import type { LoadedApplianceConfig } from './types.ts';
 
 export interface PruneArgs {
@@ -248,16 +248,12 @@ export function planPrune(
       `age floor must be a positive integer number of days, got: ${olderThanDays}`,
     );
   }
+  // Read-only no-follow validation of every namespace this plan reads and a
+  // later apply mutates: a symlinked results_root would let apply move
+  // directories living OUTSIDE the appliance's results volume, a symlinked
+  // state component would hide references or redirect the quarantine move.
+  assertApplianceNamespaces(loaded);
   const resultsRoot = loaded.config.container.results_root;
-  // The results root is where candidates are enumerated and renamed from; a
-  // symlinked root would pass assertInsideRoot's realpath check and let apply
-  // move directories that live OUTSIDE the appliance's results volume.
-  const rootStats = lstatNoFollow(resultsRoot);
-  if (rootStats === undefined || !rootStats.isDirectory()) {
-    throw pruneFault(
-      `results_root must be a real directory (not a symlink): ${resultsRoot}`,
-    );
-  }
   const cutoff = Date.now() - olderThanDays * 86_400_000;
   const refs = collectReferencedRunIds(loaded);
   const candidates: PruneCandidate[] = [];

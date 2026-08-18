@@ -16,7 +16,11 @@ import { atomicWriteJson } from './fs.ts';
 import { createJob, readJobById, readJobByRunId, updateJob } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { provenancePath } from './provenance.ts';
-import { dirsEquivalent, moveToQuarantine } from './safe-fs.ts';
+import {
+  assertApplianceNamespaces,
+  dirsEquivalent,
+  moveToQuarantine,
+} from './safe-fs.ts';
 import {
   ImportedProvenanceRecordSchema,
   type JobRecord,
@@ -444,6 +448,11 @@ export function importBundle(
   loaded: LoadedApplianceConfig,
   args: ImportArgs,
 ): ImportResult {
+  // Every mutable namespace this command writes through — results root,
+  // jobs, locks, provenance, quarantine — must be the real directory tree
+  // it claims to be, validated no-follow before the first mkdir, lock
+  // write, or landing.
+  assertApplianceNamespaces(loaded);
   // Import writes into the results root, so it must not interleave with a live
   // batch writing there. Held for the whole import, including validation, so a
   // job cannot start against a half-landed corpus.

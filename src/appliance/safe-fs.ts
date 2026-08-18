@@ -1,5 +1,7 @@
-// Path-validated, delete-free filesystem moves for landed evidence. The only
-// mutation primitive here is renameSync: into place, or into quarantine.
+// Path-validated, delete-free filesystem moves for landed evidence, plus the
+// no-follow boundary every mutable appliance namespace root must pass. The
+// only mutation primitives here are renameSync (into place, or into
+// quarantine) and the private mkdir of a validated missing namespace dir.
 import {
   existsSync,
   lstatSync,
@@ -7,8 +9,17 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  type Stats,
 } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate } from './fs.ts';
 import type { LoadedApplianceConfig } from './types.ts';
@@ -63,6 +74,113 @@ export function assertInsideRoot(root: string, target: string): void {
       `refusing symlink escape: ${target}`,
     );
   }
+}
+
+function namespaceFault(
+  label: string,
+  path: string,
+  detail: string,
+): ApplianceError {
+  return new ApplianceError(
+    'config_invalid',
+    'safe-fs',
+    `${label} ${detail}: ${path}`,
+  );
+}
+
+function lstatNoFollow(path: string, label: string): Stats | undefined {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    throw namespaceFault(
+      label,
+      path,
+      `is unreadable (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+}
+
+function assertRealDirStats(
+  stats: Stats | undefined,
+  path: string,
+  label: string,
+): void {
+  if (stats === undefined) {
+    throw namespaceFault(label, path, 'does not exist');
+  }
+  if (stats.isSymbolicLink()) {
+    throw namespaceFault(label, path, 'is a symlink; repair it manually');
+  }
+  if (!stats.isDirectory()) {
+    throw namespaceFault(label, path, 'must be a real directory');
+  }
+}
+
+// One no-follow probe: the entry must exist and be a real directory —
+// symlinks and every other file type are config faults, and an unreadable
+// probe fails closed.
+export function assertRealDirNoFollow(path: string, label: string): void {
+  assertRealDirStats(lstatNoFollow(path, label), path, label);
+}
+
+// The namespace chain: every EXISTING component from base down to target
+// must be a real directory reached without following a symlink. Missing
+// tail components are allowed — mutating callers create them via
+// ensurePrivateDirNoFollow, read-only callers treat the target as absent.
+// Returns whether the target itself exists.
+export function assertNoFollowDirChain(
+  base: string,
+  target: string,
+  label: string,
+): boolean {
+  const b = resolve(base);
+  const t = resolve(target);
+  const rel = relative(b, t);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw namespaceFault(label, target, `escapes its namespace base ${base}`);
+  }
+  assertRealDirNoFollow(b, label);
+  let cursor = b;
+  for (const segment of rel === '' ? [] : rel.split(sep)) {
+    cursor = join(cursor, segment);
+    const stats = lstatNoFollow(cursor, label);
+    if (stats === undefined) {
+      return false;
+    }
+    assertRealDirStats(stats, cursor, label);
+  }
+  return true;
+}
+
+// Mutating ensure over the same boundary: validate the existing chain,
+// create any missing tail components private, then revalidate.
+export function ensurePrivateDirNoFollow(
+  base: string,
+  target: string,
+  label: string,
+): void {
+  assertNoFollowDirChain(base, target, label);
+  mkdirPrivate(target);
+  assertNoFollowDirChain(base, target, label);
+}
+
+export function quarantineRoot(loaded: LoadedApplianceConfig): string {
+  return join(loaded.config.root, 'state', 'quarantine');
+}
+
+// Read-only validation of every mutable appliance namespace root: the
+// configured root, the results root, and the state jobs/locks/provenance/
+// quarantine roots. Creates and chmods nothing — missing state dirs are
+// fine (mutation paths ensure them); symlinked or non-directory ones are
+// config faults that need manual repair.
+export function assertApplianceNamespaces(loaded: LoadedApplianceConfig): void {
+  const root = loaded.config.root;
+  assertRealDirNoFollow(root, 'appliance root');
+  assertRealDirNoFollow(loaded.config.container.results_root, 'results_root');
+  assertNoFollowDirChain(root, loaded.paths.jobs, 'state/jobs');
+  assertNoFollowDirChain(root, loaded.paths.locks, 'state/locks');
+  assertNoFollowDirChain(root, loaded.paths.provenance, 'state/provenance');
+  assertNoFollowDirChain(root, quarantineRoot(loaded), 'state/quarantine');
 }
 
 interface TreeScan {
@@ -140,8 +258,8 @@ export function moveToQuarantine(
       `refusing unsafe quarantine name: ${name}`,
     );
   }
-  const qroot = join(loaded.config.root, 'state', 'quarantine');
-  mkdirPrivate(qroot);
+  const qroot = quarantineRoot(loaded);
+  ensurePrivateDirNoFollow(loaded.config.root, qroot, 'state/quarantine');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   let dest = join(qroot, `${stamp}-${name}`);
   for (let n = 2; existsSync(dest); n += 1) {

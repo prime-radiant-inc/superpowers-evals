@@ -16,7 +16,10 @@ import { join, sep } from 'node:path';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import {
   assertInsideRoot,
+  assertNoFollowDirChain,
+  assertRealDirNoFollow,
   dirsEquivalent,
+  ensurePrivateDirNoFollow,
   moveToQuarantine,
 } from '../src/appliance/safe-fs.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
@@ -284,4 +287,81 @@ test('moveToQuarantine refuses a source outside the results root', () => {
   const outside = mkdtempSync(join(tmpdir(), 'not-results-'));
   expect(() => moveToQuarantine(loaded, outside, 'x')).toThrow(ApplianceError);
   expect(realExistsSync(outside)).toBe(true); // untouched
+});
+
+// --- The no-follow namespace boundary: existing components must be real
+// --- directories; missing tails are allowed and safely creatable.
+
+test('assertRealDirNoFollow accepts a real dir and rejects symlink, file, and absence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'chain-'));
+  assertRealDirNoFollow(root, 'probe'); // does not throw
+  writeFileSync(join(root, 'file'), 'x');
+  symlinkSync(root, join(root, 'link'));
+  for (const target of [
+    join(root, 'file'),
+    join(root, 'link'),
+    join(root, 'missing'),
+  ]) {
+    const caught = captureError(() => assertRealDirNoFollow(target, 'probe'));
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+  }
+});
+
+test('assertNoFollowDirChain allows a missing tail but rejects symlinked or file components', () => {
+  const root = mkdtempSync(join(tmpdir(), 'chain-'));
+  expect(
+    assertNoFollowDirChain(root, join(root, 'state', 'jobs'), 'jobs'),
+  ).toBe(false);
+  mkdirSync(join(root, 'state', 'jobs'), { recursive: true });
+  expect(
+    assertNoFollowDirChain(root, join(root, 'state', 'jobs'), 'jobs'),
+  ).toBe(true);
+  // A symlinked intermediate:
+  const other = mkdtempSync(join(tmpdir(), 'chain-other-'));
+  mkdirSync(join(root, 'linked'));
+  symlinkSync(other, join(root, 'linked', 'state'));
+  expect(() =>
+    assertNoFollowDirChain(root, join(root, 'linked', 'state', 'jobs'), 'jobs'),
+  ).toThrow(ApplianceError);
+  // A file where a directory belongs:
+  writeFileSync(join(root, 'flat'), 'x');
+  expect(() =>
+    assertNoFollowDirChain(root, join(root, 'flat', 'jobs'), 'jobs'),
+  ).toThrow(ApplianceError);
+  // A target outside the base is never a valid namespace:
+  expect(() =>
+    assertNoFollowDirChain(root, join(root, '..', 'escape'), 'jobs'),
+  ).toThrow(ApplianceError);
+});
+
+test('ensurePrivateDirNoFollow creates a missing chain private and rejects a symlinked one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ensure-'));
+  const target = join(root, 'state', 'quarantine');
+  ensurePrivateDirNoFollow(root, target, 'quarantine');
+  expect(statSync(target).mode & 0o777).toBe(0o700);
+  // Redirected component: nothing may be created or chmodded through it.
+  const other = mkdtempSync(join(tmpdir(), 'ensure-other-'));
+  const root2 = mkdtempSync(join(tmpdir(), 'ensure2-'));
+  symlinkSync(other, join(root2, 'state'));
+  expect(() =>
+    ensurePrivateDirNoFollow(root2, join(root2, 'state', 'quarantine'), 'q'),
+  ).toThrow(ApplianceError);
+  expect(readdirSync(other)).toEqual([]);
+});
+
+test('moveToQuarantine refuses a symlinked quarantine root and leaves the source in place', () => {
+  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const loaded = fakeLoaded(root);
+  const src = join(loaded.config.container.results_root, 'run-1');
+  tree(src, { 'v.txt': 'v' });
+  const victim = join(root, 'victim');
+  mkdirSync(victim);
+  mkdirSync(join(root, 'state'), { recursive: true });
+  symlinkSync(victim, join(root, 'state', 'quarantine'));
+  const caught = captureError(() => moveToQuarantine(loaded, src, 'slot'));
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  expect(realExistsSync(join(src, 'v.txt'))).toBe(true);
+  expect(readdirSync(victim)).toEqual([]);
 });

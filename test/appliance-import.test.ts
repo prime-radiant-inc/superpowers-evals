@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1166,6 +1167,113 @@ test('the staged copy is revalidated no-follow before any provenance write', () 
   expect(result.imported).toBe(0);
   expect(result.failed).toBe(1);
   expect(result.failures[0]?.code).toBe('config_invalid');
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+// --- Mutable appliance namespace roots are a no-follow boundary: a
+// --- symlinked state component must fail import closed before any write.
+
+test('a symlinked state/jobs root fails import closed and hides nothing', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  // The real jobs dir (with its records) moved aside; the namespace name
+  // now points at an empty decoy — the shape that hides every real
+  // reference and redirects every job write.
+  const decoy = join(cfg.config.root, 'decoy-jobs');
+  mkdirSync(decoy);
+  renameSync(cfg.paths.jobs, join(cfg.config.root, 'real-jobs'));
+  symlinkSync(decoy, cfg.paths.jobs);
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
+  expect(snapshotTree(victim)).toBe(before);
+  // Nothing was written through the link:
+  expect(readdirSync(decoy)).toEqual([]);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+test('a symlinked state/locks root fails import closed with zero victim change', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  rmdirSync(cfg.paths.locks);
+  symlinkSync(victim, cfg.paths.locks);
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+test('a symlinked state/provenance root fails import closed with zero victim change', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  renameSync(cfg.paths.provenance, join(cfg.config.root, 'real-provenance'));
+  symlinkSync(victim, cfg.paths.provenance);
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+test('a symlinked state/quarantine root fails import closed instead of quarantining into the victim', () => {
+  const cfg = loaded();
+  const bundle = makeBundle();
+  importBundle(cfg, { bundleDir: bundle });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  // A conflicting destination for a second run, so the quarantine path is
+  // what the entry would exercise:
+  const conflictDir = join(cfg.config.container.results_root, RUN_ID_B);
+  mkdirSync(conflictDir);
+  writeFileSync(join(conflictDir, 'verdict.json'), 'DIFFERENT');
+  symlinkSync(victim, join(cfg.config.root, 'state', 'quarantine'));
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
+  expect(snapshotTree(victim)).toBe(before);
+  // The conflicting landed dir is untouched too:
+  expect(readFileSync(join(conflictDir, 'verdict.json'), 'utf8')).toBe(
+    'DIFFERENT',
+  );
+});
+
+test('a symlinked state/ component fails import closed with zero victim change', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  const stateDir = join(cfg.config.root, 'state');
+  renameSync(stateDir, join(cfg.config.root, 'real-state'));
+  symlinkSync(victim, stateDir);
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
   expect(snapshotTree(victim)).toBe(before);
   expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
     false,
