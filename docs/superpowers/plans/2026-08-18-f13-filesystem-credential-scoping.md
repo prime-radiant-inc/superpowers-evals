@@ -16,7 +16,7 @@
 2. Missing schema-version-1 scope fields remain readable by status, show, costs, and safe cancellation, but a live run/run-all record with a missing/null scope cannot resume or execute. It fails with a resubmit-required error. Prepare uses an explicit empty scope; import is non-executing and records null.
 3. OAuth sources are projected by exact adapter-owned files or structured entries. Whole shared bundle directories are never mounted by scoped appliance jobs.
 4. Submission records the source evals SHA and normalized selection. After fast-forward, any SHA drift fails before credential evaluation or Docker; when the SHA matches, preflight recomputes the scope and requires exact equality.
-5. Grader credentials come from distinct QUORUM_GRADER_* bundle source names. The host-only supervisor exec file retains those aliases; gauntletEnvBase translates them to canonical runtime names only while constructing the Gauntlet child environment, so the Quorum parent can simultaneously retain the Coding-Agent's canonical credential. If a selected agent secret equals the corresponding grader secret, projection fails closed instead of falsely claiming separation.
+5. Grader credentials come from distinct QUORUM_GRADER_* bundle source names. The host-only supervisor exec file retains those aliases; gauntletEnvBase translates them to canonical runtime names only while constructing the Gauntlet child environment, so the Quorum parent can simultaneously retain the Coding-Agent's canonical credential. If any selected agent secret value equals any nonempty grader auth secret value, projection fails closed regardless of their environment-variable names instead of falsely claiming separation. Endpoint and network-routing values are not secret values for this comparison.
 
 **Revision checkpoint:** Task 1's initial foundation is committed through 034e980; the unrelated focused-test timeout repair is dc6e89a. The 2026-08-18 five-seat adversarial review rejected plan-redline 1c0bd6f. This revision supersedes that plan text; Tasks 2-6 and the reopened Task 1 interface correction have not started. Nothing authorizes a push.
 
@@ -329,7 +329,10 @@ Supervisor behavior:
 - Require at least one nonempty grader auth source; base URL alone is not auth.
 - Include defined network/TLS names, and include Copilot routing names only for a Copilot scope.
 - Reject CR/LF in Docker env-file values.
-- If the agent receives a canonical Anthropic secret, require its selected value to differ from the corresponding QUORUM_GRADER_* value.
+- Compare every emitted agent secret value against every nonempty grader auth
+  value. Any equality fails closed even when the source/destination names
+  differ. Do not include base URLs, proxies, TLS paths, or routing values in
+  this secret-equality comparison.
 - Never emit QUORUM_GRADER_* aliases into agent.env.
 
 Runner behavior:
@@ -356,7 +359,18 @@ expect(JSON.parse(readFileSync(piAuthPath, 'utf8'))).toEqual({
 });
 ~~~
 
-Cover each projection, ordered Copilot aliases, separate grader aliases, distinct-value enforcement, hostile unrelated provider/AWS names, missing values, contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi JSON, traversal, permissions, rotation, and forced first/second rename failures. Add a parent-env test containing distinct agent ANTHROPIC_API_KEY and QUORUM_GRADER_ANTHROPIC_API_KEY values: the ordinary agent adapter input remains the agent value, gauntletEnvBase returns the grader value under ANTHROPIC_API_KEY, and neither child projection contains the alias. The second-rename failure must restore the prior active tree byte-for-byte and metadata-for-metadata; an interrupted-swap fixture must recover deterministically before any new stage is accepted.
+Cover each projection, ordered Copilot aliases, separate grader aliases,
+all-pairs distinct-value enforcement (including differently named agent and
+grader auth channels), hostile unrelated provider/AWS names, missing values,
+contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi
+JSON, traversal, permissions, rotation, and forced first/second rename
+failures. Add a parent-env test containing distinct agent
+ANTHROPIC_API_KEY and QUORUM_GRADER_ANTHROPIC_API_KEY values: the ordinary
+agent adapter input remains the agent value, gauntletEnvBase returns the grader
+value under ANTHROPIC_API_KEY, and neither child projection contains the
+alias. The second-rename failure must restore the prior active tree
+byte-for-byte and metadata-for-metadata; an interrupted-swap fixture must
+recover deterministically before any new stage is accepted.
 
 - [ ] **Step 2: Run RED**
 
@@ -420,25 +434,25 @@ export interface ContainerLease {
   readonly credentialScope: CredentialScope;
 }
 
-export function upContainerArgs(
+export function scopedUpContainerArgs(
   loaded: LoadedApplianceConfig,
   active: ActiveCredentialMaterial,
 ): string[];
 
-export function reconcileContainer(
+export function reconcileScopedContainer(
   loaded: LoadedApplianceConfig,
   runner: CommandRunner,
   scoped: ScopedContainerMounts,
 ): ContainerLease;
 
-export function execContainerArgs(
+export function scopedExecContainerArgs(
   loaded: LoadedApplianceConfig,
   lease: ContainerLease,
   command: readonly string[],
   options?: { readonly execEnvFile?: string },
 ): string[];
 
-export function runInContainer(
+export function runInLeasedContainer(
   loaded: LoadedApplianceConfig,
   runner: CommandRunner,
   lease: ContainerLease,
@@ -452,7 +466,7 @@ export function requireDockerExecEnvFile(
 ): void;
 ~~~
 
-reconcileContainer always:
+reconcileScopedContainer always:
 
 1. inspects the existing configured container;
 2. downs it when present;
@@ -472,6 +486,15 @@ container/bin/quorum first unsets CODEX_AUTH_HOME, GEMINI_OAUTH_HOME, AGY_OAUTH_
 
 requireDockerExecEnvFile inspects docker exec --help for --env-file. Doctor reports the capability; preflight later requires it before credential evaluation, build, or container mutation.
 
+Task 3 adds these closed scoped primitives beside the current production
+helpers; it does not change the existing `preflight.ts` or `process.ts` call
+sites and does not add overloads or optional-scope fallbacks. That keeps this
+commit type-correct without pretending the migration is complete. Task 5 owns
+the single caller cutover and deletes the old TypeScript full-bundle
+`baseContainerArgs` / `upContainerArgs` / `execContainerArgs` /
+`reconcileContainer` / `runInContainer` path in the same commit. No appliance
+live job or manual Docker gate may run from the intermediate Task 3 commit.
+
 - [ ] **Step 1: Write RED argument, wrapper, shim, and capability tests**
 
 Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; configured-name replacement fails before child execution; and absent projected mounts remove hostile image-baked OAuth vars.
@@ -488,7 +511,13 @@ bun test test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
 
 - [ ] **Step 3: Implement the boundary**
 
-Keep up-time mount construction separate from exec-time process injection. Validate exact projected paths under the active credential root. mountSignature describes the asserted scope and active destinations, never secret values. Existing direct wrapper invocation without --no-default-auth remains legacy; appliance TypeScript never uses it.
+Keep up-time mount construction separate from exec-time process injection.
+Validate exact projected paths under the active credential root.
+mountSignature describes the asserted scope and active destinations, never
+secret values. Existing direct wrapper invocation without --no-default-auth
+remains legacy. The existing appliance TypeScript production path remains
+unchanged only until Task 5's atomic cutover; the new scoped primitives do not
+offer an omission mode.
 
 - [ ] **Step 4: Run GREEN and gates**
 
@@ -639,10 +668,12 @@ git commit -m "feat: persist one authoritative credential request (F13)"
 **Files:**
 - Modify: src/appliance/preflight.ts
 - Modify: src/appliance/process.ts
+- Modify: src/appliance/container.ts
 - Modify: src/appliance/provenance.ts
 - Modify: src/appliance/types.ts
 - Test: test/appliance-preflight.test.ts
 - Test: test/appliance-process.test.ts
+- Test: test/appliance-container.test.ts
 - Test: test/appliance-provenance.test.ts
 
 **Interfaces:**
@@ -700,6 +731,14 @@ runWorker passes supervisorExecEnvFile only to the live Quorum exec. live, liven
 - a readable legacy record may cancel only when its recorded immutable container ID can be verified;
 - null-scope live jobs cannot preflight or resume.
 
+This task switches every production container call site to
+`reconcileScopedContainer`, `runInLeasedContainer`, and
+`scopedExecContainerArgs`, then deletes the superseded TypeScript full-bundle
+helpers named in Task 3. A repository-wide call-site test/grep must show no
+appliance production import can construct a container exec without a
+`ContainerLease`. The shell wrapper's explicitly documented direct legacy mode
+is not a TypeScript fallback and remains outside appliance execution.
+
 - [ ] **Step 1: Write RED ordering, freshness, privacy, and replacement tests**
 
 Use FakeRunner to prove:
@@ -716,18 +755,21 @@ Add separate failures for SHA drift and recomputed-scope mismatch, both with zer
 
 ~~~bash
 bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-container.test.ts test/appliance-provenance.test.ts
 ~~~
 
 - [ ] **Step 3: Implement one-way private threading**
 
-Do not expose a generic env map or arbitrary exec options. Do not serialize private credential paths. Keep plan-time empty/live scope distinctions explicit and require a lease at every container exec call site.
+Do not expose a generic env map or arbitrary exec options. Do not serialize
+private credential paths. Keep plan-time empty/live scope distinctions
+explicit, require a lease at every container exec call site, and delete the
+old TypeScript full-bundle helpers rather than leaving two production paths.
 
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
 bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-container.test.ts test/appliance-provenance.test.ts
 bun test test/appliance-*.test.ts test/evals-container.test.ts
 bun run check
 bun run quorum check
@@ -737,9 +779,10 @@ bun run quorum check
 
 ~~~bash
 git add src/appliance/preflight.ts src/appliance/process.ts \
-  src/appliance/provenance.ts src/appliance/types.ts \
+  src/appliance/container.ts src/appliance/provenance.ts \
+  src/appliance/types.ts \
   test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-container.test.ts test/appliance-provenance.test.ts
 git commit -m "feat: run live jobs through scoped container leases (F13)"
 ~~~
 
@@ -824,7 +867,13 @@ No push without Drew's explicit approval after he reviews the final evidence.
 
 **Failure-mode coverage:** Unknown/prototype names; missing defaults; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal agent/grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs; staging interruption; stale active generation; missing Docker capability; replacement containers; private path serialization; null live records; and probe credential exposure all have explicit behavior tests.
 
-**Type consistency:** Task 1 defines CredentialSelection and CredentialScope. Task 2 produces staged/active material. Task 3 consumes staged material and produces ContainerLease. Task 4 persists selection/scope/source SHA atomically. Task 5 produces a private LivePreflightResult and never serializes credential paths.
+**Type consistency:** Task 1 defines CredentialSelection and CredentialScope.
+Task 2 produces staged/active material. Task 3 adds independently testable
+scoped container primitives that consume staged material and produce
+ContainerLease without changing production callers. Task 4 persists
+selection/scope/source SHA atomically. Task 5 performs the one-time production
+cutover, deletes the old TypeScript full-bundle path, and produces a private
+LivePreflightResult without serializing credential paths.
 
 **Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
 
