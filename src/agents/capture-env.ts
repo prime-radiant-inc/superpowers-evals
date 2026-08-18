@@ -16,7 +16,11 @@ import { getEnv } from '../env.ts';
 // has no consumer on the local capture path and is deliberately absent. A
 // future need fails the capture loudly (a capture error surfaces in the
 // verdict) and is added here with evidence; a leaked var is silent.
-export const CAPTURE_ENV_ALLOWLIST: readonly string[] = ['PATH', 'TERM', 'LANG'];
+export const CAPTURE_ENV_ALLOWLIST: readonly string[] = [
+  'PATH',
+  'TERM',
+  'LANG',
+];
 
 // Project the host env onto CAPTURE_ENV_ALLOWLIST with the standard fallbacks
 // (PATH falls back to the POSIX default "/bin:/usr/bin").

@@ -99,7 +99,11 @@ function versionLine(binary: string): string | null {
 // Probes are best-effort by design (a failure nulls one field, never the run),
 // so a too-tight list degrades a provenance field silently rather than loudly —
 // which is why the routing trio stays in while everything else stays out.
-const PROBE_ENV_ALLOWLIST: readonly string[] = ['PATH', 'HOME', 'XDG_CONFIG_HOME'];
+const PROBE_ENV_ALLOWLIST: readonly string[] = [
+  'PATH',
+  'HOME',
+  'XDG_CONFIG_HOME',
+];
 
 function probeEnv(): Record<string, string> {
   const env: Record<string, string> = {};

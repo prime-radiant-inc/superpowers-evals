@@ -18,13 +18,13 @@ import {
   copilotGauntletEnv,
   scanCopilotSecretLeaks,
 } from '../src/agents/copilot.ts';
-import { GAUNTLET_ENV_ALLOWLIST } from '../src/runner/gauntlet-env.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import {
   type AgentConfig,
   agentConfigDir,
   resolveSessionLogDir,
 } from '../src/contracts/agent-config.ts';
+import { GAUNTLET_ENV_ALLOWLIST } from '../src/runner/gauntlet-env.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -726,9 +726,10 @@ test('COPILOT_GAUNTLET_ENV_ALLOWLIST secret-shaped names are exactly the grader 
 // a hand-maintained fork that can drift below the base again.
 test('COPILOT_GAUNTLET_ENV_ALLOWLIST is a superset of the standard grader contract', () => {
   for (const name of GAUNTLET_ENV_ALLOWLIST) {
-    expect({ name, present: COPILOT_GAUNTLET_ENV_ALLOWLIST.includes(name) }).toEqual(
-      { name, present: true },
-    );
+    expect({
+      name,
+      present: COPILOT_GAUNTLET_ENV_ALLOWLIST.includes(name),
+    }).toEqual({ name, present: true });
   }
 });
 
