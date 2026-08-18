@@ -162,6 +162,10 @@ Binding adapter contracts:
 
 Any missing default, incompatible pair, missing Pi provider, unsupported auth form, or pair without an audited delivery channel fails with a named credential-scope error.
 
+Adapter delivery maps key on `agentRuntimeFamily`, not the configured agent
+alias. Tests include every current agent-to-family mapping so a future alias
+cannot silently lose its conventional environment or OAuth projector.
+
 - [ ] **Step 1: Replace the stale tests and write RED coverage**
 
 Replace the existing "copilot default is a valid zero-material default scope" assertion; it freezes the bug. Add table-driven tests for every current compatible agent/credential pair and exact tests for:
@@ -536,7 +540,9 @@ reconcileScopedContainer always:
 
 The wrapper adds --no-default-auth, --exec-env-file, and --expected-container-id:
 
-- --no-default-auth is valid for up, joins mount_config_explicit(), and disables every host-home fallback.
+- --no-default-auth is accepted for every wrapper command, is behaviorally
+  inert outside `up`, joins `mount_config_explicit()` for reuse validation, and
+  disables every host-home fallback during `up`.
 - exec args do not call baseContainerArgs and do not rediscover bundle paths. They contain only configured name, expected immutable ID, optional exec env file, exec, and the command.
 - Before exec, the wrapper requires the configured name to resolve to the expected ID, then targets that immutable ID.
 - --exec-env-file is valid only for exec, validated no-follow as an absolute readable regular file, and emitted after docker exec and before the immutable ID.
@@ -671,6 +677,13 @@ The appliance CLI restriction is exact:
 - raw Quorum argv remains preserved separately.
 
 The program action computes LiveCredentialRequest using the configured evals checkout and its current HEAD. It passes the request through ApplianceActions so fake-action tests observe it. submitLiveJob and createJob only persist the request; they never reparse argv or patch scope after worker spawn.
+
+The asserted scope is the normalized single `(agent, credential)` request, not
+a union re-derived from scenario eligibility. A run-all that later has zero
+runnable scenarios may do no useful work, but cannot widen into another
+agent/credential because mixed selections are rejected before job creation;
+this safe-direction behavior is explicit and is not described as a
+"runnable-cell union."
 
 writeProvenance rereads the authoritative job and derives scope plus lease evidence from it. Callers cannot pass an independent scope. ImportedProvenanceRecordSchema and its writer persist credential_scope: null explicitly.
 
