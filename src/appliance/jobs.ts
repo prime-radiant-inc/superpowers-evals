@@ -234,11 +234,21 @@ function readJobDirStrict(
   dirName: string,
 ): JobRecord {
   const path = jobPath(loaded, dirName);
-  if (!existsSync(path)) {
+  const recordStats = lstatSync(path, { throwIfNoEntry: false });
+  if (recordStats === undefined) {
     throw new ApplianceError(
       'config_invalid',
       'job',
       `job directory ${dirName} has no job.json; repair state/jobs manually`,
+    );
+  }
+  // A symlinked (or otherwise non-regular) record is content from outside the
+  // integrity boundary wearing this job's name; it can prove nothing.
+  if (!recordStats.isFile()) {
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      `job directory ${dirName} job.json is not a regular file; repair state/jobs manually`,
     );
   }
   let job: JobRecord;
@@ -307,10 +317,11 @@ export function readJobById(
 }
 
 // Strict enumeration of every job record in the directory namespace, under
-// the same integrity boundary as the exact lookups: symlinked entries and
-// malformed job directories fail closed as config_invalid, because a record
-// that cannot be read may have claimed anything. Shared by exact run-id
-// resolution and prune's reference collection.
+// the same integrity boundary as the exact lookups: symlinked entries,
+// non-directory entries, and malformed job directories fail closed as
+// config_invalid, because state that cannot be read may have claimed
+// anything. Shared by exact run-id resolution and prune's reference
+// collection.
 export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
   const jobs: JobRecord[] = [];
   if (existsSync(loaded.paths.jobs)) {
@@ -321,7 +332,11 @@ export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
         rejectSymlinkedJobDir(entry.name);
       }
       if (!entry.isDirectory()) {
-        continue;
+        throw new ApplianceError(
+          'config_invalid',
+          'job',
+          `state/jobs entry ${entry.name} is not a job directory; repair state/jobs manually`,
+        );
       }
       jobs.push(readJobDirStrict(loaded, entry.name));
     }

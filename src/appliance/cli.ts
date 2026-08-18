@@ -392,7 +392,10 @@ function defaultActions(): ApplianceActions {
       return importBundle(loaded, { bundleDir: args.bundleDir });
     },
     prune: async (args) => {
-      const loaded = loadApplianceConfig(undefined, { ensureState: true });
+      // No ensureState: a default dry-run is read-only and must not create
+      // or re-chmod state dirs; apply's own mutation helpers (lock acquire,
+      // quarantine move) create exactly what they own.
+      const loaded = loadApplianceConfig();
       return pruneResults(loaded, {
         apply: args.apply,
         olderThanDays: args.olderThanDays,
@@ -432,9 +435,18 @@ async function handleAction(
   args: BaseCommandArgs,
   deps: Required<Pick<ApplianceCliDeps, 'stdout' | 'stderr' | 'setExitCode'>>,
   action: () => ApplianceActionResult | Promise<ApplianceActionResult>,
+  resultFailed?: (value: unknown) => boolean,
 ): Promise<void> {
   try {
-    deps.stdout(renderResult(await action(), args.json));
+    const value = await action();
+    if (resultFailed?.(value) === true) {
+      // A structured partial failure: preserve the full payload, but the
+      // command did not succeed — ok:false and a nonzero exit.
+      deps.stdout(renderResult({ ...(value as object), ok: false }, args.json));
+      deps.setExitCode(1);
+      return;
+    }
+    deps.stdout(renderResult(value, args.json));
   } catch (error) {
     if (args.json) {
       deps.stdout(`${JSON.stringify(toErrorJson(error), null, 2)}\n`);
@@ -448,6 +460,35 @@ async function handleAction(
 
 function commandOptions(options: JsonOption): BaseCommandArgs {
   return { json: options.json ?? false };
+}
+
+// The age floor is prune's only eligibility dial; anything but a positive
+// safe-integer string (0, negatives, fractions, '7days', non-numbers) is
+// rejected before the action runs. planPrune revalidates independently.
+function parseOlderThanDays(value: string): number {
+  const days = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(days) || days <= 0) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `--older-than-days must be a positive integer, got: ${value}`,
+    );
+  }
+  return days;
+}
+
+// An apply that could not move every candidate is a failed command even
+// though the partial result (successes AND failures) is preserved verbatim:
+// the CLI must not exit 0 over unquarantined candidates. Dry-run and
+// all-success apply carry an empty failures list and stay successful.
+function pruneApplyFailed(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'failures' in value &&
+    Array.isArray((value as { failures: unknown }).failures) &&
+    (value as { failures: unknown[] }).failures.length > 0
+  );
 }
 
 function commandDetachOptions(options: JsonDetachOptions): {
@@ -621,18 +662,25 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
     )
     .option(
       '--older-than-days <days>',
-      'only consider directories untouched for at least this many days',
-      (v: string) => Number.parseInt(v, 10),
-      7,
+      'only consider directories untouched for at least this many days (positive integer)',
+      '7',
     )
     .action(
-      (options: JsonOption & { apply?: boolean; olderThanDays?: number }) => {
-        const args = {
+      (options: JsonOption & { apply?: boolean; olderThanDays?: string }) => {
+        const base = {
           ...commandOptions(options),
           apply: options.apply ?? false,
-          olderThanDays: options.olderThanDays ?? 7,
         };
-        return handleAction(args, resolvedDeps, () => actions.prune(args));
+        return handleAction(
+          base,
+          resolvedDeps,
+          () =>
+            actions.prune({
+              ...base,
+              olderThanDays: parseOlderThanDays(options.olderThanDays ?? '7'),
+            }),
+          pruneApplyFailed,
+        );
       },
     );
 

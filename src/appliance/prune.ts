@@ -2,10 +2,18 @@
 // renamed into state/quarantine/ for operator inspection. Completed runs
 // (verdict.json present) are never candidates — their retention waits for the
 // explicit archive/retention contract (2026-08-17 platform spec, fix-now).
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { BatchHeaderSchema, ResultRecordSchema } from '../contracts/batch.ts';
 import { ApplianceError } from './errors.ts';
+import { readJsonFile } from './fs.ts';
+import { IMPORT_STAGE_NAME_RE } from './import.ts';
 import { readAllJobsStrict } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { moveToQuarantine } from './safe-fs.ts';
@@ -39,35 +47,88 @@ export interface PruneResult {
   }[];
 }
 
-const BatchResultLineSchema = z
-  .object({ run_id: z.string().nullable() })
-  .passthrough();
+function pruneFault(message: string): ApplianceError {
+  return new ApplianceError('config_invalid', 'prune', message);
+}
+
+// lstat that never follows links: absent → undefined; caller decides.
+function lstatNoFollow(path: string) {
+  return lstatSync(path, { throwIfNoEntry: false });
+}
+
+// A reference-metadata file must be exactly a regular, non-symlink file: a
+// link would read content from outside the namespace under this file's name.
+function requireRegularFile(path: string, label: string): void {
+  const stats = lstatNoFollow(path);
+  if (stats === undefined) {
+    throw pruneFault(`${label} is missing: ${path}; repair it manually`);
+  }
+  if (!stats.isFile()) {
+    throw pruneFault(
+      `${label} is not a regular file (symlink?): ${path}; repair it manually`,
+    );
+  }
+}
 
 // Everything that can legally point at a run dir: batch cell records and
 // appliance job artifacts. (verdict.json, capture sidecars, provenance live
 // INSIDE the run dir and move with it; grid-manifest references cells, not
 // runs.) Reference metadata that cannot be read proves nothing about what it
 // references, so it fails closed as config_invalid — a malformed record must
-// never make a run eligible. Job records go through the same strict
-// integrity-boundary reader as the exact lookups.
+// never make a run eligible. Every batch dir must carry a canonical
+// batch.json (written at batch start); results.jsonl may be legitimately
+// absent before a batch's first cell finishes, but when present must be a
+// regular file of canonical ResultRecord rows. Job records go through the
+// same strict integrity-boundary reader as the exact lookups.
 export function collectReferencedRunIds(
   loaded: LoadedApplianceConfig,
 ): Set<string> {
   const refs = new Set<string>();
   const resultsRoot = loaded.config.container.results_root;
   const batches = join(resultsRoot, 'batches');
-  if (existsSync(batches)) {
+  const batchesStats = lstatNoFollow(batches);
+  if (batchesStats !== undefined) {
+    if (!batchesStats.isDirectory()) {
+      throw pruneFault(
+        `batches must be a real directory (not a symlink): ${batches}; repair it manually`,
+      );
+    }
     for (const entry of readdirSync(batches, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
-        throw new ApplianceError(
-          'config_invalid',
-          'prune',
+        throw pruneFault(
           `batches entry ${entry.name} is a symlink; repair it manually`,
         );
       }
-      if (!entry.isDirectory()) continue;
-      const jsonl = join(batches, entry.name, 'results.jsonl');
-      if (!existsSync(jsonl)) continue;
+      if (!entry.isDirectory()) {
+        throw pruneFault(
+          `batches entry ${entry.name} is not a batch directory; repair it manually`,
+        );
+      }
+      const batchDir = join(batches, entry.name);
+      const headerPath = join(batchDir, 'batch.json');
+      requireRegularFile(headerPath, `batch ${entry.name} batch.json`);
+      try {
+        readJsonFile(
+          headerPath,
+          BatchHeaderSchema,
+          `batch header ${headerPath}`,
+        );
+      } catch (error) {
+        throw pruneFault(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      const jsonl = join(batchDir, 'results.jsonl');
+      const jsonlStats = lstatNoFollow(jsonl);
+      if (jsonlStats === undefined) {
+        // A live batch before its first cell record; nothing referenced yet.
+        continue;
+      }
+      if (!jsonlStats.isFile()) {
+        throw pruneFault(
+          `batch ${entry.name} results.jsonl is not a regular file (symlink?); repair it manually`,
+        );
+      }
       for (const line of readFileSync(jsonl, 'utf8').split('\n')) {
         const s = line.trim();
         if (!s) continue;
@@ -75,18 +136,14 @@ export function collectReferencedRunIds(
         try {
           raw = JSON.parse(s);
         } catch (error) {
-          throw new ApplianceError(
-            'config_invalid',
-            'prune',
+          throw pruneFault(
             `${jsonl}: unparseable record — cannot prove which runs are referenced; repair the batch record manually (${error instanceof Error ? error.message : String(error)})`,
           );
         }
-        const parsed = BatchResultLineSchema.safeParse(raw);
+        const parsed = ResultRecordSchema.safeParse(raw);
         if (!parsed.success) {
-          throw new ApplianceError(
-            'config_invalid',
-            'prune',
-            `${jsonl}: record without a readable run_id — cannot prove which runs are referenced; repair the batch record manually`,
+          throw pruneFault(
+            `${jsonl}: non-canonical result record — cannot prove which runs are referenced; repair the batch record manually`,
           );
         }
         if (parsed.data.run_id !== null) {
@@ -105,19 +162,48 @@ export function collectReferencedRunIds(
 // parsing a format that would drift, substring-scan every file under
 // <evals.path>/campaigns/ (when it exists) for each candidate name. A hit
 // protects the run regardless of how the kernel ends up storing references.
+// The scan itself is a strict boundary: the root, every directory, and every
+// file must be real (no symlinks, no fifos/sockets/devices) and readable —
+// an entry the scan cannot honestly read could be hiding a reference, so it
+// fails closed rather than being skipped.
 export function collectCampaignProtected(
   loaded: LoadedApplianceConfig,
   names: readonly string[],
 ): Set<string> {
   const protectedNames = new Set<string>();
   const campaignsRoot = join(loaded.config.evals.path, 'campaigns');
-  if (names.length === 0 || !existsSync(campaignsRoot)) return protectedNames;
+  const rootStats = lstatNoFollow(campaignsRoot);
+  if (rootStats === undefined) return protectedNames;
+  if (!rootStats.isDirectory()) {
+    throw pruneFault(
+      `campaigns must be a real directory (not a symlink): ${campaignsRoot}; repair it manually`,
+    );
+  }
+  if (names.length === 0) return protectedNames;
   const texts: string[] = [];
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name);
-      if (entry.isDirectory()) visit(p);
-      else if (entry.isFile()) texts.push(readFileSync(p, 'utf8'));
+      if (entry.isSymbolicLink()) {
+        throw pruneFault(
+          `campaigns entry is a symlink: ${p}; repair it manually`,
+        );
+      }
+      if (entry.isDirectory()) {
+        visit(p);
+      } else if (entry.isFile()) {
+        try {
+          texts.push(readFileSync(p, 'utf8'));
+        } catch (error) {
+          throw pruneFault(
+            `campaigns file unreadable: ${p}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      } else {
+        throw pruneFault(
+          `campaigns entry is not a regular file or directory: ${p}; repair it manually`,
+        );
+      }
     }
   };
   visit(campaignsRoot);
@@ -144,7 +230,23 @@ export function planPrune(
   loaded: LoadedApplianceConfig,
   olderThanDays: number,
 ): PruneResult {
+  // Independent of any CLI validation: a non-positive, fractional, or NaN
+  // floor would erase the eligibility floor (NaN makes every mtime pass).
+  if (!Number.isSafeInteger(olderThanDays) || olderThanDays <= 0) {
+    throw pruneFault(
+      `age floor must be a positive integer number of days, got: ${olderThanDays}`,
+    );
+  }
   const resultsRoot = loaded.config.container.results_root;
+  // The results root is where candidates are enumerated and renamed from; a
+  // symlinked root would pass assertInsideRoot's realpath check and let apply
+  // move directories that live OUTSIDE the appliance's results volume.
+  const rootStats = lstatNoFollow(resultsRoot);
+  if (rootStats === undefined || !rootStats.isDirectory()) {
+    throw pruneFault(
+      `results_root must be a real directory (not a symlink): ${resultsRoot}`,
+    );
+  }
   const cutoff = Date.now() - olderThanDays * 86_400_000;
   const refs = collectReferencedRunIds(loaded);
   const candidates: PruneCandidate[] = [];
@@ -162,8 +264,14 @@ export function planPrune(
     const p = join(resultsRoot, entry.name);
     const stat = statSync(p);
     if (stat.mtimeMs >= cutoff) continue;
-    if (entry.name.startsWith('.importing-')) {
-      entries.push({ name: entry.name, path: p, reason: 'stale_stage' });
+    // Only the exact stage-slot grammar import creates counts as a stage; a
+    // near-miss is an ordinary run dir with every ordinary protection
+    // (verdict, references, campaigns). Both classes stay excluded when
+    // batch/job records reference them by name.
+    if (IMPORT_STAGE_NAME_RE.test(entry.name)) {
+      if (!refs.has(entry.name)) {
+        entries.push({ name: entry.name, path: p, reason: 'stale_stage' });
+      }
     } else if (!existsSync(join(p, 'verdict.json')) && !refs.has(entry.name)) {
       entries.push({ name: entry.name, path: p, reason: 'incomplete' });
     }

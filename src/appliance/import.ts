@@ -96,6 +96,13 @@ function allBundleFiles(runDir: string): string[] {
 // bundle leaves the results root untouched rather than half-populated.
 const RUN_ID_SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+// The exact stage-slot grammar `.importing-<run-id>.<pid>.tmp` this command
+// stages into (run-id alphabet = RUN_ID_SAFE above; keep them in sync). Prune
+// recognizes stale stages by this and nothing looser, so a run dir whose name
+// merely starts with `.importing-` keeps every ordinary run protection.
+export const IMPORT_STAGE_NAME_RE =
+  /^\.importing-[A-Za-z0-9][A-Za-z0-9._-]*\.\d+\.tmp$/;
+
 function validateBundle(bundleDir: string, manifest: BundleManifest): void {
   for (const entry of manifest.entries) {
     // Safety first: the run_id becomes a path component under the results

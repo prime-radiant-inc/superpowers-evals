@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
+  rmdirSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -80,13 +83,30 @@ function makeRunDir(
   utimesSync(dir, past, past);
 }
 
+// Canonical batch.json header (BatchHeaderSchema shape, written at batch
+// start by src/run-all/batch-index.ts) — prune requires it per batch dir.
+function writeBatchHeaderFixture(dir: string, batchId: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'batch.json'),
+    JSON.stringify({
+      schema_version: 1,
+      id: batchId,
+      started_at: '2026-08-01T00:00:00Z',
+      finished_at: null,
+      coding_agents: ['a'],
+      jobs: 1,
+    }),
+  );
+}
+
 function makeBatch(
   resultsRoot: string,
   batchId: string,
   runIds: readonly string[],
 ): void {
   const dir = join(resultsRoot, 'batches', batchId);
-  mkdirSync(dir, { recursive: true });
+  writeBatchHeaderFixture(dir, batchId);
   const lines = runIds.map(
     (id) =>
       `{"scenario": "s", "coding_agent": "a", "run_id": ${JSON.stringify(id)}}`,
@@ -241,7 +261,7 @@ test('an unparseable batch results.jsonl line fails prune closed', () => {
   const root = cfg.config.container.results_root;
   makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
   const dir = join(root, 'batches', 'b-bad');
-  mkdirSync(dir, { recursive: true });
+  writeBatchHeaderFixture(dir, 'b-bad');
   writeFileSync(join(dir, 'results.jsonl'), 'not json at all\n');
   expectCode(
     () => prune(cfg, { apply: false, olderThanDays: 7 }),
@@ -267,7 +287,7 @@ test('a batch record without a readable run_id fails prune closed', () => {
   const root = cfg.config.container.results_root;
   makeRunDir(root, '42', { verdict: false, ageDays: 30 });
   const dir = join(root, 'batches', 'b-typed');
-  mkdirSync(dir, { recursive: true });
+  writeBatchHeaderFixture(dir, 'b-typed');
   writeFileSync(
     join(dir, 'results.jsonl'),
     '{"scenario": "s", "coding_agent": "a", "run_id": 42}\n',
@@ -333,4 +353,340 @@ test('symlinked entries under the results root are never candidates', () => {
   expect(result.candidates).toHaveLength(0);
   expect(result.quarantined).toHaveLength(0);
   expect(existsSync(join(outside, 'trajectory.json'))).toBe(true);
+});
+
+// --- Critical 1: unsafe age values must never erase the eligibility floor ---
+
+test('non-positive or non-integer age floors fail closed before any mutation', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  for (const days of [0, -1, 1.5, Number.NaN]) {
+    expectCode(
+      () => prune(cfg, { apply: true, olderThanDays: days }),
+      'config_invalid',
+    );
+  }
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+// --- Critical 2: campaign symlinks / non-regular entries hide references ---
+
+test('a symlinked file under campaigns/ fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const mention = join(cfg.config.root, 'mention.md');
+  writeFileSync(mention, 'campaign sample: old-partial\n');
+  const camp = join(cfg.config.evals.path, 'campaigns', 'camp-a');
+  mkdirSync(camp, { recursive: true });
+  symlinkSync(mention, join(camp, 'link.md'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked directory under campaigns/ fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const outsideDir = join(cfg.config.root, 'outside-campaign');
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, 'report.md'), 'mentions old-partial\n');
+  const camp = join(cfg.config.evals.path, 'campaigns', 'camp-b');
+  mkdirSync(camp, { recursive: true });
+  symlinkSync(outsideDir, join(camp, 'sub'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a non-regular entry (fifo) under campaigns/ fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const camp = join(cfg.config.evals.path, 'campaigns', 'camp-c');
+  mkdirSync(camp, { recursive: true });
+  const mkfifo = spawnSync('mkfifo', [join(camp, 'pipe')]);
+  expect(mkfifo.status).toBe(0);
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked campaigns/ root fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const outsideCampaigns = join(cfg.config.root, 'outside-campaigns');
+  mkdirSync(outsideCampaigns, { recursive: true });
+  writeFileSync(
+    join(outsideCampaigns, 'c.json'),
+    '{"samples":["old-partial"]}',
+  );
+  symlinkSync(outsideCampaigns, join(cfg.config.evals.path, 'campaigns'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+// --- Critical 3: a symlinked results_root must never move outside dirs ---
+
+test('a symlinked results_root fails closed and moves nothing outside', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  const outside = join(cfg.config.root, 'outside-results');
+  mkdirSync(outside, { recursive: true });
+  makeRunDir(outside, 'old-partial', { verdict: false, ageDays: 30 });
+  rmdirSync(root);
+  symlinkSync(outside, root);
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(outside, 'old-partial', 'trajectory.json'))).toBe(
+    true,
+  );
+});
+
+test('a results_root symlinked to a file fails closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  const outsideFile = join(cfg.config.root, 'not-a-dir');
+  writeFileSync(outsideFile, 'x');
+  rmdirSync(root);
+  symlinkSync(outsideFile, root);
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+});
+
+test('a results_root that is a plain file fails closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  rmdirSync(root);
+  writeFileSync(root, 'x');
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+});
+
+// --- Important 2: exact stage grammar; references protect stages too ---
+
+test('a completed near-miss .importing dir keeps verdict protection', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  // No `.<pid>.tmp` tail — not a stage slot import would ever create, so it
+  // is an ordinary (completed) run dir.
+  makeRunDir(root, '.importing-x.tmp', { verdict: true, ageDays: 30 });
+  const result = prune(cfg, { apply: true, olderThanDays: 7 });
+  expect(result.candidates).toHaveLength(0);
+  expect(result.quarantined).toHaveLength(0);
+  expect(existsSync(join(root, '.importing-x.tmp', 'verdict.json'))).toBe(true);
+});
+
+test('an incomplete near-miss .importing dir classifies as incomplete, not stale_stage', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, '.importing-y.tmp', { verdict: false, ageDays: 30 });
+  const result = prune(cfg, { apply: false, olderThanDays: 7 });
+  expect(result.candidates.map((c) => c.name)).toEqual(['.importing-y.tmp']);
+  expect(result.candidates[0]?.reason).toBe('incomplete');
+});
+
+test('a batch-referenced exact stage dir is protected', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, '.importing-run-9.123.tmp', { verdict: false, ageDays: 10 });
+  makeBatch(root, 'b1', ['.importing-run-9.123.tmp']);
+  const result = prune(cfg, { apply: true, olderThanDays: 7 });
+  expect(result.candidates).toHaveLength(0);
+  expect(result.quarantined).toHaveLength(0);
+  expect(existsSync(join(root, '.importing-run-9.123.tmp'))).toBe(true);
+});
+
+test('a campaign-mentioned exact stage dir is protected', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, '.importing-run-9.123.tmp', { verdict: false, ageDays: 10 });
+  const camp = join(cfg.config.evals.path, 'campaigns', 'camp-d');
+  mkdirSync(camp, { recursive: true });
+  writeFileSync(join(camp, 'note.md'), 'stage .importing-run-9.123.tmp held\n');
+  const result = prune(cfg, { apply: true, olderThanDays: 7 });
+  expect(result.candidates).toHaveLength(0);
+  expect(existsSync(join(root, '.importing-run-9.123.tmp'))).toBe(true);
+});
+
+// --- Important 3: canonical, uniformly strict batch/job scanning ---
+
+test('a batch dir without batch.json fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const dir = join(root, 'batches', 'b-headless');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'results.jsonl'),
+    '{"scenario": "s", "coding_agent": "a", "run_id": "old-partial"}\n',
+  );
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a non-canonical batch.json fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const dir = join(root, 'batches', 'b-badheader');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'batch.json'), '{"schema_version": 2}');
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked batch.json fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const outside = join(cfg.config.root, 'real-batch.json');
+  writeFileSync(
+    outside,
+    JSON.stringify({
+      schema_version: 1,
+      id: 'b-linkjson',
+      started_at: '2026-08-01T00:00:00Z',
+      finished_at: null,
+      coding_agents: ['a'],
+      jobs: 1,
+    }),
+  );
+  const dir = join(root, 'batches', 'b-linkjson');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(outside, join(dir, 'batch.json'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked results.jsonl fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const outside = join(cfg.config.root, 'real-results.jsonl');
+  writeFileSync(
+    outside,
+    '{"scenario": "s", "coding_agent": "a", "run_id": "old-partial"}\n',
+  );
+  const dir = join(root, 'batches', 'b-linkrows');
+  writeBatchHeaderFixture(dir, 'b-linkrows');
+  symlinkSync(outside, join(dir, 'results.jsonl'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a results.jsonl row failing the canonical record schema fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const dir = join(root, 'batches', 'b-thin');
+  writeBatchHeaderFixture(dir, 'b-thin');
+  // Parses as JSON and has a string run_id, but is not a canonical
+  // ResultRecord (scenario/coding_agent missing).
+  writeFileSync(join(dir, 'results.jsonl'), '{"run_id": "old-partial"}\n');
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a batch dir with batch.json but no results.jsonl yet contributes no refs and no error', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  writeBatchHeaderFixture(join(root, 'batches', 'b-live'), 'b-live');
+  const result = prune(cfg, { apply: false, olderThanDays: 7 });
+  expect(result.candidates.map((c) => c.name)).toEqual(['old-partial']);
+});
+
+test('a stray regular file under batches/ fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  mkdirSync(join(root, 'batches'), { recursive: true });
+  writeFileSync(join(root, 'batches', 'stray.txt'), 'x');
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked batches/ root fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const outside = join(cfg.config.root, 'outside-batches');
+  makeBatch(join(cfg.config.root, 'outside-batches-parent'), 'b-x', []);
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(root, 'batches'));
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a stray regular file under state/jobs fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  writeFileSync(join(cfg.paths.jobs, 'stray.txt'), 'x');
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('a symlinked job.json fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const job = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'x',
+    argv: ['test'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const recordPath = join(cfg.paths.jobs, job.job_id, 'job.json');
+  const outside = join(cfg.config.root, 'outside-job.json');
+  renameSync(recordPath, outside);
+  symlinkSync(outside, recordPath);
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
