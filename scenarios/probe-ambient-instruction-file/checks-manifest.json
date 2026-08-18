@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-exists",
+      "args": [
+        "hello.txt"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-contains",
+      "args": [
+        "hello.txt",
+        "hi"
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

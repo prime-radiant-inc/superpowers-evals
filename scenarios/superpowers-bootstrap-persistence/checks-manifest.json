@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "bootstrap-installed",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "skill-called",
+      "args": [
+        "superpowers:brainstorming"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "skill-before-tool",
+      "args": [
+        "superpowers:brainstorming",
+        "Write"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "skill-before-tool",
+      "args": [
+        "superpowers:brainstorming",
+        "Edit"
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

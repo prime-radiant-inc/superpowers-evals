@@ -10,6 +10,11 @@ import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
+import {
+  extractManifest,
+  ManifestExtractionError,
+  writeManifest,
+} from '../check/manifest.ts';
 import type { FinalVerdict } from '../contracts/verdict.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
@@ -181,6 +186,11 @@ program
   .command('check')
   .argument('[names...]', 'scenario names (default: all)')
   .option('--fix', 'chmod +x scripts missing the bit', false)
+  .option(
+    '--update-manifests',
+    "write/refresh every scenario's checks-manifest.json, then validate",
+    false,
+  )
   .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
   .option('--credentials-file <path>', 'credentials YAML path')
   .option('--coding-agents-dir <dir>', 'coding-agents dir', 'coding-agents')
@@ -189,6 +199,7 @@ program
       names: string[],
       opts: {
         fix: boolean;
+        updateManifests: boolean;
         scenariosRoot: string;
         credentialsFile?: string;
         codingAgentsDir: string;
@@ -217,6 +228,28 @@ program
         targets = scenarioNames(resolve(root)).map((n) =>
           join(resolve(root), n),
         );
+      }
+
+      // Regenerate expected-check manifests before validation: the authoring
+      // flow is edit checks.sh → quorum check --update-manifests → commit both
+      // files. A scenario whose checks.sh cannot be extracted is reported here
+      // and again (as a FAIL) by the validation pass below.
+      if (opts.updateManifests) {
+        for (const dir of targets) {
+          if (!existsSync(join(dir, 'checks.sh'))) continue; // 'checks.sh missing' below
+          try {
+            writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
+          } catch (e) {
+            if (e instanceof ManifestExtractionError) {
+              process.stdout.write(
+                `error: ${basename(dir)}: manifest extraction: ${e.message}\n`,
+              );
+              continue;
+            }
+            throw e;
+          }
+          process.stdout.write(`wrote ${basename(dir)}/checks-manifest.json\n`);
+        }
       }
 
       let failed = 0;

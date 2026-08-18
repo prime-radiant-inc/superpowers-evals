@@ -60,6 +60,7 @@ import {
   diagnoseKimiUnmatchedLogs,
   snapshotDir,
 } from '../capture/index.ts';
+import { readManifest } from '../check/manifest.ts';
 import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
 import {
@@ -68,6 +69,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
+import type { CheckManifest } from '../contracts/check-manifest.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
@@ -960,6 +962,13 @@ export async function runScenario(
   };
   let verdict: FinalVerdict;
   let selectedCredentialLabels: Credential['labels'];
+  // Memo for the run's ONE expected-check manifest read. The runner body
+  // performs that single load; this catch composes error verdicts from the
+  // cached outcome instead of re-reading the file — a parse failure must not
+  // be attempted twice, and error composition must observe the same on-disk
+  // bytes the run did. Stays null when a run fails before reaching the load
+  // (early guards); it is never read late.
+  const expectedChecksCache: ExpectedChecksCache = { manifest: null };
   try {
     // Freeze the parsed credentials before selecting the named credential. This
     // makes direct runs reproducible and ensures later runner code never
@@ -980,6 +989,7 @@ export async function runScenario(
       runDir,
       identity,
       credentials,
+      expectedChecksCache,
     );
   } catch (err: unknown) {
     const stage = errorStage(err);
@@ -989,6 +999,10 @@ export async function runScenario(
       checks: [],
       captureEmpty: false,
       error: { stage, message },
+      // The cached outcome of the run's single manifest load — reused, never
+      // re-read (the load's own failure is the error being composed here).
+      // Inert anyway: compose short-circuits on `error` before `expected`.
+      expected: expectedChecksCache.manifest,
     });
   }
   // Best-effort provenance stamp (PRI-2494). The binary name comes from the
@@ -1059,6 +1073,15 @@ function errorStage(err: unknown): RunErrorStage {
     return 'setup';
   }
   return 'unknown';
+}
+
+// Shared state for the run's single expected-check manifest load: created in
+// runScenario, filled once by the runner body, consumed by runScenario's
+// catch. `manifest` is the parsed value on success (null for an absent file =
+// legacy composition) and stays null when the load threw — the staged parse
+// error itself travels as the exception, so nothing re-reads the file.
+interface ExpectedChecksCache {
+  manifest: CheckManifest | null;
 }
 
 // The context dir an agent installs into <runDir>/gauntlet-agent/context/.
@@ -1134,11 +1157,19 @@ async function runInner(
   runDir: string,
   identity: RunIdentity,
   credentials: Record<string, Credential>,
+  expectedChecksCache: ExpectedChecksCache,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
   try {
-    return await runInnerBody(a, runDir, cleanupDirs, identity, credentials);
+    return await runInnerBody(
+      a,
+      runDir,
+      cleanupDirs,
+      identity,
+      credentials,
+      expectedChecksCache,
+    );
   } finally {
     cleanupAgentRuntime(cleanupDirs);
     // Windows runtime: best-effort removal of the per-run guest directory.
@@ -1164,6 +1195,7 @@ async function runInnerBody(
   cleanupDirs: string[],
   identity: RunIdentity,
   credentials: Record<string, Credential>,
+  expectedChecksCache: ExpectedChecksCache,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -1231,6 +1263,26 @@ async function runInnerBody(
       error: { stage: 'setup', message: 'checks.sh not found' },
     });
   }
+
+  // Expected-check manifest: THE run's single read, memoized into
+  // expectedChecksCache so every later compose site — including
+  // runScenario's catch — reuses this one outcome and never re-reads the
+  // file. A run whose emitted records drift from the scenario's committed
+  // manifest can never compose pass (the composer turns any mismatch into a
+  // checks-stage indeterminate). Absent file = null = legacy composition. A
+  // committed-but-unparseable manifest is repository misconfiguration and
+  // stages as setup — distinct from a runtime record mismatch, which stays
+  // checks-stage in the composer.
+  let expectedChecks: CheckManifest | null;
+  try {
+    expectedChecks = readManifest(a.scenarioDir);
+  } catch (err: unknown) {
+    throw new RunnerError(
+      `checks-manifest.json unparseable in ${a.scenarioDir}: ${err instanceof Error ? err.message : String(err)}`,
+      'setup',
+    );
+  }
+  expectedChecksCache.manifest = expectedChecks;
 
   // 5. Coding-agent gating: honor the `# coding-agents:` directive before any
   //    side effect, so a direct `quorum run` against an excluded agent skips.
@@ -1346,6 +1398,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `pre-checks crashed (exit ${pre.exitCode})${crashHint(pre.stderr)}`,
       },
+      expected: expectedChecks,
     });
   }
   if (pre.records.some((r) => !r.passed)) {
@@ -1354,6 +1407,7 @@ async function runInnerBody(
       checks: [...pre.records],
       captureEmpty: false,
       error: null,
+      expected: expectedChecks,
     });
   }
 
@@ -1923,6 +1977,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `post-checks crashed (exit ${post.exitCode})${crashHint(post.stderr)}`,
       },
+      expected: expectedChecks,
     });
   }
 
@@ -1949,6 +2004,7 @@ async function runInnerBody(
     checks: [...pre.records, ...post.records],
     captureEmpty,
     error: null,
+    expected: expectedChecks,
   });
   // Economics is measurement, never worth losing a verdict over: a wrong-typed
   // artifact (version skew, tampering, a legacy pre-obol usage file) degrades to

@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "src/slugkit/slugify.py"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "tests/test_slugify.py"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-contains",
+      "args": [
+        "docs/plans/2026-06-08-slugify.md",
+        "all tests pass"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "./.venv/bin/pytest -q tests/test_slugify.py"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-match-before-tool-match",
+      "args": [
+        "Bash",
+        "pytest",
+        "Bash",
+        "git[[:space:]]+commit"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "./.venv/bin/pytest -q tests/test_slugify.py"
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

@@ -1,8 +1,16 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { newScenario } from '../src/scaffold.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const CAMPAIGN_CREDENTIALS = resolve(
@@ -292,6 +300,32 @@ test('check rejects intrinsic errors in an explicit external credentials file', 
   expect(proc.stdout).toContain(
     "credential 'campaign' has api: mantle but no region",
   );
+});
+
+test('check --update-manifests writes each manifest and validates green', () => {
+  const root = mkdtempSync(join(tmpdir(), 'scn-'));
+  const dir = newScenario(join(root, 'fresh'));
+  const proc = spawnSync(
+    'bun',
+    [CLI, 'check', '--update-manifests', '--scenarios-root', root],
+    { encoding: 'utf8' },
+  );
+
+  expect(proc.status).toBe(0);
+  expect(proc.stdout).toContain('wrote fresh/checks-manifest.json');
+  expect(existsSync(join(dir, 'checks-manifest.json'))).toBe(true);
+  expect(proc.stdout).toContain('ok   fresh');
+
+  // The written manifest matches a fresh extraction and a plain re-run stays
+  // green (the scaffolded pre() body carries git-repo + git-branch entries).
+  const manifest = readFileSync(join(dir, 'checks-manifest.json'), 'utf8');
+  expect(manifest).toContain('"check": "git-repo"');
+  const plain = spawnSync('bun', [CLI, 'check', '--scenarios-root', root], {
+    encoding: 'utf8',
+  });
+  expect(plain.status).toBe(0);
+
+  rmSync(root, { recursive: true, force: true });
 });
 
 test('check without --credentials-file still enforces canonical agent defaults', () => {

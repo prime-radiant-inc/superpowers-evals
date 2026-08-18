@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "baseline-manifest",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/specs/2026-07-01-fractals-cli-design.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/plans/2026-07-01-fractals-cli.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "requires-tool",
+      "args": [
+        "go"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "skill-called",
+      "args": [
+        "superpowers:subagent-driven-development"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-called",
+      "args": [
+        "Agent"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-exists",
+      "args": [
+        "**/*_test.go"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-exists",
+      "args": [
+        "cmd/fractals/main.go"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "go test ./..."
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": false,
+      "count": 8
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-count",
+      "args": [
+        "commits",
+        "gte",
+        "15"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-clean",
+      "args": [],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

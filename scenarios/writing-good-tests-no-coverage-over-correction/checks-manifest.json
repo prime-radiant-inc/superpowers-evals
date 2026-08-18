@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "requires-tool",
+      "args": [
+        "node"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "src/cart.js"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "**/*.test.*"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "node -e \"const m=require(\\\"./src/cart.js\\\"); if(typeof m.addItem!==\\\"function\\\"){process.exit(1);} const reset=()=>{if(typeof m.clear===\\\"function\\\")m.clear();}; reset(); let rejected=false; try{const r=m.addItem(\\\"over\\\",101); rejected=(r===false||r===null||r===undefined||(typeof r===\\\"number\\\"&&r<0));}catch(e){rejected=true;} process.exit(rejected?0:1);\""
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-exists",
+      "args": [
+        "**/*.test.*"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "node -e \"const m=require(\\\"./src/cart.js\\\"); if(typeof m.addItem!==\\\"function\\\"){console.error(\\\"addItem is not a function; cart API changed\\\");process.exit(1);} const reset=()=>{if(typeof m.clear===\\\"function\\\")m.clear();}; reset(); let accepted=false; try{const r=m.addItem(\\\"boundary\\\",100); accepted=(r!==false&&r!==null&&r!==undefined);}catch(e){accepted=false;} if(!accepted){console.error(\\\"boundary value 100 was not accepted\\\");process.exit(1);} reset(); let rejected=false; try{const r=m.addItem(\\\"over\\\",101); rejected=(r===false||r===null||r===undefined||(typeof r===\\\"number\\\"&&r<0));}catch(e){rejected=true;} if(!rejected){console.error(\\\"over-limit value 101 was not rejected\\\");process.exit(1);} process.exit(0);\""
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

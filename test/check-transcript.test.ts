@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallView } from '../src/atif/project.ts';
 import type { AtifTrajectory } from '../src/atif/types.ts';
+import { TRANSCRIPT_VERBS } from '../src/check/transcript-dispatch.ts';
 import {
   verbImplementationToolNotCalled,
   verbInvestigated,
@@ -24,6 +25,11 @@ import {
   verbToolNotCalled,
   verbWorktreeCreated,
 } from '../src/check/verbs.ts';
+import {
+  coverageProblems,
+  NEGATIVE_COVERED,
+  NEGATIVE_EXEMPT,
+} from './helpers/planted-negative-registry.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -171,7 +177,11 @@ test('tool-called: pass (E2E)', async () => {
 test('tool-called: fail (E2E)', async () => {
   const r = await runCLI(['tool-called', 'EnterWorktree'], [call('Bash')]);
   expect(r.exitCode).toBe(1);
-  expect(r.lastRecord!['passed']).toBe(false);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-called',
+    negated: false,
+    passed: false,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -366,7 +376,11 @@ test('skill-called: fail (E2E)', async () => {
     [call('Bash')],
   );
   expect(r.exitCode).toBe(1);
-  expect(r.lastRecord!['passed']).toBe(false);
+  expect(r.lastRecord).toMatchObject({
+    check: 'skill-called',
+    negated: false,
+    passed: false,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -724,6 +738,27 @@ test('tool-arg-match fallback keys skip a present-but-null first key (jq // pari
   expect(r.lastRecord?.['passed']).toBe(true);
 });
 
+test('tool-arg-match (planted negative): calls with the wrong arg value fail, not broken', async () => {
+  // Insertion mutation: the tool ran, but never with the expected argument
+  // value — exactly the defect tool-arg-match exists to catch. A verb wired
+  // to the wrong boolean would turn this into a silent GREEN. Driven through
+  // the real CLI so the emitted record's negated:false is observed.
+  const r = await runCLI(
+    ['tool-arg-match', 'Edit', '--eq', 'file_path=src/wrong.ts'],
+    [
+      call('Edit', { file_path: 'src/a.ts' }),
+      call('Edit', { file_path: 'src/b.ts' }),
+    ],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-arg-match',
+    negated: false,
+    passed: false,
+    detail: 'no Edit call matches all 1 matcher(s)',
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Unknown verb
 // ---------------------------------------------------------------------------
@@ -817,4 +852,189 @@ test('crash on invalid regex emits fail record and exits non-zero (E2E)', async 
   expect(r.lastRecord).not.toBeNull();
   expect(r.lastRecord!['passed']).toBe(false);
   expect(String(r.lastRecord!['detail'] ?? '')).toContain('tool error');
+});
+
+// ---------------------------------------------------------------------------
+// E2E planted negatives — transcript verbs (runCLI = the real CLI record path)
+//
+// Every registered transcript verb must be proven able to FAIL here, through
+// the real check-transcript CLI that emits {check,args,negated,passed,detail},
+// asserting passed:false AND negated:false on the emitted record. Mutations
+// follow the spec's three classes (reorder / insertion / deletion).
+// ---------------------------------------------------------------------------
+
+test('E2E planted negative: tool-not-called fails when the prohibited call is present (insertion)', async () => {
+  const r = await runCLI(['tool-not-called', 'Edit'], [call('Edit')]);
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-not-called',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: tool-count fails on a wrong expected count', async () => {
+  const r = await runCLI(['tool-count', 'Read', 'eq', '2'], [call('Read')]);
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-count',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: tool-before fails when the order is reversed (reorder)', async () => {
+  const r = await runCLI(
+    ['tool-before', 'Read', 'Edit'],
+    [call('Edit'), call('Read')],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-before',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: skill-not-called fails when the skill fired (insertion)', async () => {
+  const r = await runCLI(
+    ['skill-not-called', 'superpowers:brainstorming'],
+    [call('Skill', { skill: 'superpowers:brainstorming' })],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'skill-not-called',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: skill-before-tool fails when the tool precedes the skill (reorder)', async () => {
+  const r = await runCLI(
+    ['skill-before-tool', 'superpowers:writing-plans', 'Edit'],
+    [call('Edit'), call('Skill', { skill: 'superpowers:writing-plans' })],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'skill-before-tool',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: skill-before-implementation-tool fails when impl Edit precedes the skill (reorder)', async () => {
+  const r = await runCLI(
+    ['skill-before-implementation-tool', 'superpowers:writing-plans', 'Edit'],
+    [
+      call('Edit', {
+        file_path: '/run/coding-agent-workdir/src/main.ts',
+        old_string: 'a',
+        new_string: 'b',
+      }),
+      call('Skill', { skill: 'superpowers:writing-plans' }),
+    ],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'skill-before-implementation-tool',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: implementation-tool-not-called fails when an impl Edit is present (insertion)', async () => {
+  const r = await runCLI(
+    ['implementation-tool-not-called', 'Edit'],
+    [
+      call('Edit', {
+        file_path: '/run/coding-agent-workdir/src/foo.ts',
+        old_string: 'a',
+        new_string: 'b',
+      }),
+    ],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'implementation-tool-not-called',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: investigated fails when no investigation happened (deletion)', async () => {
+  const r = await runCLI(
+    ['investigated'],
+    [call('Bash', { command: 'ls' }), call('Edit')],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'investigated',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: worktree-created fails when no worktree call exists (deletion)', async () => {
+  const r = await runCLI(
+    ['worktree-created'],
+    [call('Bash', { command: 'ls' })],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'worktree-created',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: tool-match-before-tool-match fails when B precedes A (reorder)', async () => {
+  const r = await runCLI(
+    ['tool-match-before-tool-match', 'Bash', 'pytest', 'Bash', 'git commit'],
+    [
+      call('Bash', { command: "git commit -m 'wip'" }),
+      call('Bash', { command: 'pytest tests/' }),
+    ],
+  );
+  expect(r.exitCode).toBe(1);
+  expect(r.lastRecord).toMatchObject({
+    check: 'tool-match-before-tool-match',
+    negated: false,
+    passed: false,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Planted-negative coverage gate: every transcript verb must have a committed
+// test proving it FAILS (passed:false, negated:false, not broken) on its
+// target defect — a verb wired to the wrong boolean manufactures false GREENs
+// that no expected-check manifest can catch. Registrations (and any
+// documented always-pass exemptions) live in
+// test/helpers/planted-negative-registry.ts; the negatives live in this file.
+// ---------------------------------------------------------------------------
+
+test('coverage gate: every transcript verb has a planted negative or a documented exemption', () => {
+  const problems = coverageProblems({
+    family: 'transcript',
+    vocab: [...TRANSCRIPT_VERBS],
+    covered: NEGATIVE_COVERED.transcript,
+    exempt: NEGATIVE_EXEMPT.transcript,
+  });
+  // One assertion carrying the full work queue, so a red gate prints every
+  // gap at once instead of stopping at the first.
+  expect(problems.join('; ')).toBe('');
+});
+
+test('coverage gate rejects a verb registered in BOTH covered and exempt (overlap)', () => {
+  // A verb that gains a real planted negative must force its exemption out;
+  // silently keeping both would let an always-pass exemption hide behind a
+  // green gate. The gate's own problem collection must name the overlap.
+  const problems = coverageProblems({
+    family: 'transcript',
+    vocab: [...TRANSCRIPT_VERBS],
+    covered: ['tool-called'],
+    exempt: { 'tool-called': 'stale exemption that must now be removed' },
+  });
+  expect(problems).toContain(
+    'transcript verb is both covered and exempt: tool-called',
+  );
 });

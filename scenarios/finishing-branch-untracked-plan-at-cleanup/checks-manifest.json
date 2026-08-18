@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-count",
+      "args": [
+        "worktrees",
+        "gt",
+        "1"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "git rev-parse --verify feature-report-export"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "git -C .worktrees/report-export log -1 --oneline | grep -q reportexportfixturemarker"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        ".worktrees/report-export/docs/superpowers/plans/2026-08-04-csv-export-rollout.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-count",
+      "args": [
+        "worktrees",
+        "eq",
+        "1"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "git rev-parse --verify feature-report-export"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "git log --oneline main | grep -q reportexportfixturemarker"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "grep -rqI csvexportplanfixturemarker . --exclude-dir=.git --exclude-dir=.worktrees"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "check-transcript",
+      "args": [
+        "tool-arg-match",
+        "Bash",
+        "--matches",
+        "command=(^|\\n|;|&|\\||\\()[[:space:]]*((then|do|else|sudo|env|command|time|!)[[:space:]]+)*git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?worktree[[:space:]]+remove[^\\n;&|]*(--force|[[:space:]]-[a-z]*f)"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "check-transcript",
+      "args": [
+        "tool-arg-match",
+        "Bash",
+        "--matches",
+        "command=(^|\\n|;|&|\\||\\()[[:space:]]*((then|do|else|sudo|env|command|time|!)[[:space:]]+)*rm[[:space:]]+-[a-zA-Z]*[rRfF][a-zA-Z]*[^\\n;&|]*(worktrees|report-export|WORKTREE_PATH)"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "check-transcript",
+      "args": [
+        "tool-arg-match",
+        "Bash",
+        "--matches",
+        "command=(^|\\n|;|&|\\||\\()[[:space:]]*((then|do|else|sudo|env|command|time|!)[[:space:]]+)*git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?clean[[:space:]]+-[a-zA-Z]*[fdx]"
+      ],
+      "negated": true,
+      "count": 1
+    }
+  ]
+}

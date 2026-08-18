@@ -23,6 +23,7 @@ test('error -> indeterminate with stage in reason', () => {
     checks: [],
     captureEmpty: false,
     error: { stage: 'setup', message: 'boom' },
+    expected: null,
   });
   expect(v.final).toBe('indeterminate');
   expect(v.final_reason).toContain('quorum error (setup)');
@@ -43,6 +44,7 @@ test('failed pre-check -> indeterminate', () => {
       checks: [pre],
       captureEmpty: false,
       error: null,
+      expected: null,
     }).final,
   ).toBe('indeterminate');
 });
@@ -54,6 +56,7 @@ test('gauntlet investigate -> indeterminate', () => {
       checks: [],
       captureEmpty: false,
       error: null,
+      expected: null,
     }).final,
   ).toBe('indeterminate');
 });
@@ -65,6 +68,7 @@ test('gauntlet pass + no failed post -> pass', () => {
       checks: [post(true)],
       captureEmpty: false,
       error: null,
+      expected: null,
     }).final,
   ).toBe('pass');
 });
@@ -76,6 +80,7 @@ test('gauntlet pass + failed post -> fail', () => {
       checks: [post(false)],
       captureEmpty: false,
       error: null,
+      expected: null,
     }).final,
   ).toBe('fail');
 });
@@ -95,6 +100,7 @@ test('empty capture + trace check -> indeterminate', () => {
       checks: [trace],
       captureEmpty: true,
       error: null,
+      expected: null,
     }).final,
   ).toBe('indeterminate');
 });
@@ -136,6 +142,7 @@ for (const verb of CHECK_TRANSCRIPT_VERBS) {
         checks: [trace],
         captureEmpty: true,
         error: null,
+        expected: null,
       }).final,
     ).toBe('indeterminate');
   });
@@ -160,6 +167,7 @@ test('empty capture + negated check-transcript -> indeterminate', () => {
       checks: [trace],
       captureEmpty: true,
       error: null,
+      expected: null,
     }).final,
   ).toBe('indeterminate');
 });
@@ -173,6 +181,7 @@ test('empty capture + non-trace check (file-exists) -> not guarded', () => {
       checks: [post(true)],
       captureEmpty: true,
       error: null,
+      expected: null,
     }).final,
   ).toBe('pass');
 });

@@ -7,10 +7,17 @@
 
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { negate, runVerb } from '../src/check/dispatch.ts';
+import { FS_VERBS, negate, runVerb } from '../src/check/dispatch.ts';
 import type { CheckContext } from '../src/check/fs-verbs.ts';
 import {
   verbAssertCheckoutClean,
@@ -26,6 +33,11 @@ import {
   verbGitRepo,
   verbRequiresTool,
 } from '../src/check/fs-verbs.ts';
+import {
+  coverageProblems,
+  NEGATIVE_COVERED,
+  NEGATIVE_EXEMPT,
+} from './helpers/planted-negative-registry.ts';
 
 const REPO = resolve(import.meta.dir, '..');
 const PRELUDE = resolve(REPO, 'src', 'checks', 'prelude.sh');
@@ -479,6 +491,8 @@ test('E2E: file-exists miss exits 1 with a detail string', () => {
   const r = runShim('file-exists', ['nope.txt'], wd);
   expect(r.exitCode).toBe(1);
   expect(r.record).toMatchObject({
+    check: 'file-exists',
+    negated: false,
     passed: false,
     detail: 'no path matched: nope.txt',
   });
@@ -770,4 +784,346 @@ test('codex-session-start-hook-executes: always pass with note (no bootstrap by 
   expect(outcome.passed).toBe(true);
   expect(outcome.detail).toContain('hook-less');
   expect(outcome.detail).toContain('no SessionStart bootstrap');
+});
+
+// ---------------------------------------------------------------------------
+// E2E planted negatives — fs verbs (runShim = the real CLI record path)
+//
+// Every registered fs verb must be proven able to FAIL here, through the same
+// prelude→check-tool.ts path scenario checks.sh use, asserting the emitted
+// record carries passed:false AND negated:false (a `negated` the dispatch
+// layer — not the verb — sets). Direct verbX calls above cannot observe it.
+// ---------------------------------------------------------------------------
+
+test('E2E planted negative: file-contains fails on a file lacking the needle', () => {
+  const wd = workdir();
+  writeFile(wd, 'm.js', 'export function add(){}\n');
+  const r = runShim('file-contains', ['m.js', 'function divide'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'file-contains',
+    negated: false,
+    passed: false,
+    detail: 'pattern not found in m.js',
+  });
+});
+
+test('E2E planted negative: command-succeeds fails on a false command', () => {
+  const wd = workdir();
+  const r = runShim('command-succeeds', ['false'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'command-succeeds',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: git-repo fails outside a work tree', () => {
+  const wd = workdir(); // never git-init'ed
+  const r = runShim('git-repo', [], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'git-repo',
+    negated: false,
+    passed: false,
+    detail: 'not a git work tree',
+  });
+});
+
+test('E2E planted negative: git-branch fails on a branch mismatch', () => {
+  const wd = workdir();
+  gitInit(wd);
+  gitCommit(wd, 'a');
+  const r = runShim('git-branch', ['other'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'git-branch',
+    negated: false,
+    passed: false,
+    detail: "branch is 'main', expected 'other'",
+  });
+});
+
+test('E2E planted negative: git-clean fails on a dirty tree', () => {
+  const wd = workdir();
+  gitInit(wd);
+  gitCommit(wd, 'a');
+  writeFileSync(join(wd, 'dirty'), 'x');
+  const r = runShim('git-clean', [], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'git-clean',
+    negated: false,
+    passed: false,
+    detail: 'working tree dirty',
+  });
+});
+
+test('E2E planted negative: git-count fails on a wrong expected count', () => {
+  const wd = workdir();
+  gitInit(wd);
+  gitCommit(wd, 'a');
+  gitCommit(wd, 'b');
+  const r = runShim('git-count', ['commits', 'eq', '3'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'git-count',
+    negated: false,
+    passed: false,
+    detail: 'commits count 2 not eq 3',
+  });
+});
+
+test('E2E planted negative: assert-checkout-clean fails on real drift', () => {
+  const wd = workdir();
+  gitInit(wd);
+  gitCommit(wd, 'a');
+  writeFileSync(join(wd, 'drift'), 'x');
+  const r = runShim('assert-checkout-clean', ['.'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'assert-checkout-clean',
+    negated: false,
+    passed: false,
+  });
+  expect(String(r.record?.['detail'])).toContain('not clean');
+});
+
+test('E2E planted negative: requires-tool fails when the tool is missing', () => {
+  const wd = workdir();
+  const r = runShim('requires-tool', ['nope_tool_xyz'], wd, {
+    PATH: process.env['PATH'] ?? '',
+  });
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'requires-tool',
+    negated: false,
+    passed: false,
+    detail: 'required tool(s) not on PATH: nope_tool_xyz',
+  });
+});
+
+test('E2E planted negative: files-exist fails when a rel is missing', () => {
+  const wd = workdir();
+  writeFile(wd, 'root/a');
+  const r = runShim('files-exist', ['root', 'a', 'missing'], wd);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'files-exist',
+    negated: false,
+    passed: false,
+    detail: 'missing',
+  });
+});
+
+test('E2E planted negative: baseline-manifest fails on a drifted worktree', () => {
+  const files = [
+    { path: 'docs/superpowers/plans/plan.md', content: 'PLAN\n' },
+    { path: 'docs/superpowers/specs/spec.md', content: 'SPEC\n' },
+  ];
+  const scenarioDir = workdir();
+  writeFileSync(
+    join(scenarioDir, 'baseline-manifest.json'),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        roles: {
+          spec: 'docs/superpowers/specs/spec.md',
+          plan: 'docs/superpowers/plans/plan.md',
+        },
+        files: files.map((f) => ({
+          path: f.path,
+          mode: '100644',
+          sha256: createHash('sha256').update(f.content).digest('hex'),
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const wd = workdir();
+  for (const f of files) {
+    writeFile(wd, f.path, f.content);
+    chmodSync(join(wd, f.path), 0o644);
+  }
+  const env = { QUORUM_SCENARIO_DIR: scenarioDir };
+  // Sanity: the seeded tree verifies clean before the defect is planted —
+  // guards against a vacuous negative from a broken fixture.
+  expect(runShim('baseline-manifest', [], wd, env).exitCode).toBe(0);
+  // Planted defect: an extra file the agent left behind. Exit 1 (not the 127
+  // crash band) + a negated:false fail record on the real emission path.
+  writeFile(wd, 'drift.txt', 'unexpected\n');
+  const r = runShim('baseline-manifest', [], wd, env);
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'baseline-manifest',
+    args: [],
+    negated: false,
+    passed: false,
+  });
+  expect(String(r.record?.['detail'])).toContain('extra file: drift.txt');
+});
+
+// Stage every file of a per-harness plugin set EXCEPT the last one — the
+// planted defect for the *-installed/-staged/-linked verbs.
+const BOOTSTRAP_SETS: ReadonlyArray<{
+  readonly verb: string;
+  readonly subpath: string;
+  readonly files: readonly string[];
+}> = [
+  {
+    verb: 'antigravity-plugin-installed',
+    subpath: '.gemini/config/plugins/superpowers',
+    files: ['plugin.json', 'hooks.json', 'skills/using-superpowers/SKILL.md'],
+  },
+  {
+    verb: 'copilot-plugin-installed',
+    subpath: 'plugins/superpowers',
+    files: [
+      '.claude-plugin/plugin.json',
+      'hooks/hooks.json',
+      'hooks/run-hook.cmd',
+      'hooks/session-start',
+      'skills/using-superpowers/SKILL.md',
+      'skills/brainstorming/SKILL.md',
+    ],
+  },
+  {
+    verb: 'opencode-plugin-installed',
+    subpath: '.config/opencode',
+    files: [
+      'plugins/superpowers.js',
+      'superpowers/skills/using-superpowers/SKILL.md',
+    ],
+  },
+  {
+    verb: 'gemini-extension-linked',
+    subpath: '.gemini',
+    files: [
+      'extensions/superpowers/.gemini-extension-install.json',
+      'extensions/extension-enablement.json',
+      'extension_integrity.json',
+    ],
+  },
+  {
+    verb: 'hermes-plugin-staged',
+    subpath: 'plugins/superpowers',
+    files: [
+      '.hermes-plugin/plugin.yaml',
+      '.hermes-plugin/__init__.py',
+      'skills/using-superpowers/SKILL.md',
+    ],
+  },
+];
+
+for (const { verb, subpath, files } of BOOTSTRAP_SETS) {
+  test(`E2E planted negative: ${verb} fails when a staged file is missing`, () => {
+    const cfg = workdir();
+    for (const rel of files.slice(0, -1)) {
+      writeFile(cfg, join(subpath, rel));
+    }
+    const r = runShim(verb, [], cfg, { QUORUM_AGENT_CONFIG_DIR: cfg });
+    expect(r.exitCode).toBe(1);
+    expect(r.record).toMatchObject({
+      check: verb,
+      negated: false,
+      passed: false,
+    });
+  });
+}
+
+test('E2E planted negative: kimi-plugin-installed fails when installed.json is missing', () => {
+  const cfg = workdir();
+  const pluginRoot = workdir();
+  writeFile(pluginRoot, '.kimi-plugin/plugin.json', '{"name":"superpowers"}\n');
+  writeFile(pluginRoot, 'skills/using-superpowers/SKILL.md', '# s\n');
+  const r = runShim('kimi-plugin-installed', [], cfg, {
+    QUORUM_AGENT_CONFIG_DIR: cfg,
+    SUPERPOWERS_ROOT: pluginRoot,
+  });
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'kimi-plugin-installed',
+    negated: false,
+    passed: false,
+  });
+});
+
+test('E2E planted negative: codex-native-hook-configured fails when the staged manifest is missing', () => {
+  const cfg = workdir();
+  writeFile(
+    cfg,
+    '.codex/config.toml',
+    [
+      '[features]',
+      'plugins = true',
+      '',
+      '[plugins."superpowers@debug"]',
+      'enabled = true',
+      '',
+    ].join('\n'),
+  );
+  const r = runShim('codex-native-hook-configured', [], cfg, {
+    QUORUM_AGENT_CONFIG_DIR: join(cfg, '.codex'),
+  });
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'codex-native-hook-configured',
+    negated: false,
+    passed: false,
+    detail: 'missing staged Codex plugin manifest',
+  });
+});
+
+test('E2E planted negative: bootstrap-installed fails when the harness install is absent', () => {
+  // gemini routing with an unstaged config: the delegate's real defect
+  // (extension not linked) surfaces through the dispatcher.
+  const cfg = workdir();
+  const r = runShim('bootstrap-installed', [], cfg, {
+    QUORUM_AGENT_CONFIG_DIR: cfg,
+    QUORUM_CODING_AGENT: 'gemini',
+  });
+  expect(r.exitCode).toBe(1);
+  expect(r.record).toMatchObject({
+    check: 'bootstrap-installed',
+    negated: false,
+    passed: false,
+  });
+  expect(String(r.record?.['detail'])).toContain('Gemini');
+});
+
+// ---------------------------------------------------------------------------
+// Planted-negative coverage gate: every fs verb must have a committed test
+// proving it FAILS (passed:false, negated:false, not broken) on its target
+// defect — a verb wired to the wrong boolean manufactures false GREENs that
+// no expected-check manifest can catch. Registrations (and any documented
+// always-pass exemptions) live in test/helpers/planted-negative-registry.ts;
+// the CLI-path negatives live in the E2E section above, the direct-verb
+// variants throughout this file and in test/fs-verbs-bootstrap.test.ts.
+// ---------------------------------------------------------------------------
+
+test('coverage gate: every fs verb has a planted negative or a documented exemption', () => {
+  const problems = coverageProblems({
+    family: 'fs',
+    vocab: Object.keys(FS_VERBS),
+    covered: NEGATIVE_COVERED.fs,
+    exempt: NEGATIVE_EXEMPT.fs,
+  });
+  // One assertion carrying the full work queue, so a red gate prints every
+  // gap at once instead of stopping at the first.
+  expect(problems.join('; ')).toBe('');
+});
+
+test('coverage gate rejects a verb registered in BOTH covered and exempt (overlap)', () => {
+  // A verb that gains a real planted negative must force its exemption out;
+  // silently keeping both would let an always-pass exemption hide behind a
+  // green gate. The gate's own problem collection must name the overlap.
+  const problems = coverageProblems({
+    family: 'fs',
+    vocab: Object.keys(FS_VERBS),
+    covered: ['file-exists'],
+    exempt: { 'file-exists': 'stale exemption that must now be removed' },
+  });
+  expect(problems).toContain('fs verb is both covered and exempt: file-exists');
 });

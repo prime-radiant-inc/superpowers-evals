@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-count",
+      "args": [
+        "worktrees",
+        "gt",
+        "1"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "git rev-parse --verify feature-report-export"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "git -C .worktrees/report-export log -1 --oneline | grep -q reportexportfixturemarker"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-count",
+      "args": [
+        "worktrees",
+        "eq",
+        "1"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "git rev-parse --verify feature-report-export"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "git log --oneline main | grep -q reportexportfixturemarker"
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}

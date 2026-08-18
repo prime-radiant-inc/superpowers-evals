@@ -1,3 +1,5 @@
+import { compareRecords } from './check/manifest.ts';
+import type { CheckManifest } from './contracts/check-manifest.ts';
 import type {
   CheckRecord,
   FinalVerdict,
@@ -37,6 +39,8 @@ export interface ComposeArgs {
   checks: CheckRecord[];
   captureEmpty: boolean;
   error: RunError | null;
+  /** Frozen expected-check manifest; null = no manifest (legacy behavior). */
+  expected: CheckManifest | null;
 }
 
 export function compose({
@@ -44,6 +48,7 @@ export function compose({
   checks,
   captureEmpty,
   error,
+  expected,
 }: ComposeArgs): FinalVerdict {
   const base = { schema: 1 as const, gauntlet, checks, economics: null };
 
@@ -87,6 +92,24 @@ export function compose({
       final_reason: 'tool-call capture was empty; trace checks meaningless',
       error: null,
     };
+  }
+  if (expected) {
+    const diff = compareRecords(expected, checks);
+    if (diff.missing.length || diff.unexpected.length) {
+      const parts = [
+        diff.missing.length ? `missing: ${diff.missing.join('; ')}` : null,
+        diff.unexpected.length
+          ? `unexpected: ${diff.unexpected.join('; ')}`
+          : null,
+      ].filter((x): x is string => x !== null);
+      const reason = `expected-check manifest mismatch (${parts.join(' | ')})`;
+      return {
+        ...base,
+        final: 'indeterminate',
+        final_reason: reason,
+        error: { stage: 'checks', message: reason },
+      };
+    }
   }
   const failedPost = checks.filter((c) => c.phase === 'post' && !c.passed);
   if (gauntlet.status === 'pass' && failedPost.length === 0) {

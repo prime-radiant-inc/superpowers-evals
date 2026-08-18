@@ -503,8 +503,57 @@ waiting to happen.
 Every verb emits **one** JSON record to `QUORUM_RECORD_SINK`
 (`src/check/record.ts`): `{check, args, negated, passed, detail}`. The `phase`
 (`pre`/`post`) comes from quorum, not the verb (`src/checks/index.ts`). The
-record's `check` field is the **sub-verb** name (e.g. `skill-called`), never the
-wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
+record's `check` field is the **sub-verb** name (e.g. `skill-called`), not the
+wrapper `check-transcript` — with one exception: `not check-transcript <verb>`
+records under the **wrapper** name `check-transcript` with `negated: true` and
+the inner verb as `args[0]`. An empty detail (`''`) is normalized to `null`.
+
+### Expected-check manifests
+
+Every scenario commits a `checks-manifest.json` next to its `checks.sh`: the
+**frozen multiset of check records `checks.sh` is expected to emit**. Each entry
+is `{phase, check, args, negated, count}` — the same identity fields the
+matcher keys on, plus a `count` for repeats (records carry `passed`/`detail`
+too; manifests don't). The composer enforces it: a run whose emitted records do
+not match the manifest composes **`indeterminate`** with a `checks`-stage error
+(`expected-check manifest mismatch (missing: … | unexpected: …)`), never
+`pass`. A check that silently stops emitting — the classic false-pass — is now
+unrepresentable in a verdict.
+
+The authoring loop is three steps: **edit `checks.sh` → `bun run quorum check
+--update-manifests` → commit both files.** `quorum check` fails on a missing
+manifest (`checks-manifest.json missing`) or a stale one (`checks-manifest.json
+stale — checks.sh changed`), so the two cannot drift apart unnoticed. Only a
+scenario whose `checks.sh` fails validation (e.g. unparseable, unknown verb)
+skips the manifest gate — fix the `checks.sh` problems first.
+
+Two rules worth knowing:
+
+- **`$`-bearing args are wildcards.** The extractor cannot predict runtime
+  expansion, so a check line whose raw text contains `$` freezes with
+  `args: null`, which matches records with *any* args (phase/check/negated
+  still must match). Literal-arg entries consume their records first, so
+  wildcards can't steal exact matches.
+- **The extractor refuses what it can't model** (`src/check/manifest.ts`).
+  Unquoted control operators and metacharacters (`;`, `&`, `|`, `(`, `)`, `<`,
+  `>`, backquote), inline comments (a `#` at the start of a word **after
+  code** — full-line comments are skipped before tokenization and are fine),
+  line continuations, `{` on its own line, and unknown verbs all make
+  extraction fail — reported by
+  `quorum check --update-manifests` as `manifest extraction: …`. A check that
+  can't be extracted exactly is never silently mis-frozen. The bare `:` no-op
+  as a body line emits no record and contributes no entry:
+
+  ```bash
+  post() {
+      :
+  }
+  ```
+
+At run time the runner reads the manifest once (an absent file = legacy
+composition with no enforcement; an unparseable committed file is repository
+misconfiguration and stages as **`setup`**). The corpus carries no manifest-less
+scenarios — keep it that way; every new scenario ships one.
 
 ### Exit codes: assertion-fail (1) vs broken-check (127)
 
@@ -591,11 +640,14 @@ this is precedence, not voting:
 3. no Gauntlet verdict → **indeterminate**.
 4. Gauntlet `investigate` or `errored` → **indeterminate**.
 5. empty capture **and** any `TRACE_PRIMITIVES` post-check ran → **indeterminate**.
-6. Gauntlet `pass` **and** zero failed post-checks → **pass**.
-7. otherwise → **fail** (Gauntlet non-pass, or ≥1 failed post-check).
+6. expected-check manifest mismatch (emitted records ≠ the committed
+   `checks-manifest.json` multiset) → **indeterminate**, stage `checks`
+   (`src/check/manifest.ts` `compareRecords`).
+7. Gauntlet `pass` **and** zero failed post-checks → **pass**.
+8. otherwise → **fail** (Gauntlet non-pass, or ≥1 failed post-check).
 
 Key consequence: **`gauntlet.status == pass` can co-occur with
-`final == indeterminate`** (rows 1–5). Read `final` and `final_reason`, not just
+`final == indeterminate`** (rows 1–6). Read `final` and `final_reason`, not just
 the Gauntlet pane.
 
 ### Then the attribution atlas

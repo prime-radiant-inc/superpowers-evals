@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        ".agents/skills/superpowers/using-superpowers/references/codex-tools.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-contains",
+      "args": [
+        ".agents/skills/superpowers/using-superpowers/references/codex-tools.md",
+        "spawn_agent"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-contains",
+      "args": [
+        ".agents/skills/superpowers/using-superpowers/references/codex-tools.md",
+        "wait_agent"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-called",
+      "args": [
+        "Agent"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-called",
+      "args": [
+        "wait_agent"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-not-called",
+      "args": [
+        "wait"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "tool-before",
+      "args": [
+        "Agent",
+        "wait_agent"
+      ],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}
