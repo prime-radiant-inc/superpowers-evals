@@ -223,11 +223,14 @@ by writing inside the landed run) so `status`/`show` see it. If the landed run
 differs from the bundle, that
 entry is rejected as `import_conflict`: the landed run stays byte-for-byte
 untouched and the incoming payload is moved to `state/quarantine/` for
-comparison. Per-entry failures are reported with `run_id`, code, and message in
-the JSON result; a failed entry never leaves a job record claiming success —
-its record stays visibly incomplete for the next import to reuse. There is no
-`--force`: if a landed run is wrong, move the bad directory aside yourself
-after inspection and re-import.
+comparison. An entry whose `run_id` equals an unrelated job's id is rejected
+(`config_invalid`) so `status`/`show` stay unambiguous, and corrupt job
+records under `state/jobs` fail entries closed for manual repair. Per-entry
+failures are reported with `run_id`, code, and message in the JSON result; a
+failed entry never leaves a job record claiming success — its record stays
+visibly incomplete for the next import to reuse. There is no `--force`: if a
+landed run is wrong, move the bad directory aside yourself after inspection
+and re-import.
 
 Imported runs are visible to the normal read commands:
 

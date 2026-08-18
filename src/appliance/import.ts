@@ -12,7 +12,7 @@ import type { BundleManifest } from '../export-runs/manifest.ts';
 import { BundleManifestSchema, denylistHit } from '../export-runs/manifest.ts';
 import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
 import { atomicWriteJson } from './fs.ts';
-import { createJob, readJobByRunId, updateJob } from './jobs.ts';
+import { createJob, readJobById, readJobByRunId, updateJob } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { provenancePath } from './provenance.ts';
 import { dirsEquivalent, moveToQuarantine } from './safe-fs.ts';
@@ -268,8 +268,15 @@ function reserveImportJob(
       // origin carries; the request field records the same for readability.
       superpowersRef: entry.superpowers_sha ?? 'unknown',
       argv: ['evals-appliance', 'import', entry.run_id],
+      // Associated from the very first durable write — see CreateJobRequest.
+      runId: entry.run_id,
       requester: { agent: null, thread: null, task: null },
     });
+  // Retire any terminal provenance BEFORE the demotion below: a nonterminal
+  // record must never sit next to terminal success evidence. State-only —
+  // landed run bytes are never touched — and finishImportJob rewrites the
+  // provenance after a successful landing.
+  rmSync(base.artifacts.provenance, { force: true });
   const job = updateJob(loaded, base.job_id, (current) => ({
     ...current,
     status: 'running' as const,
@@ -374,6 +381,20 @@ function importLocked(
       });
 
       const existingJob = resolveJobForRun(loaded, entry.run_id);
+
+      // Documented consumers (status/show) resolve direct job ids before
+      // artifact ids, so a run_id that names an unrelated job's directory
+      // would make them show that job instead of this run. Reject the entry
+      // before anything lands or is reserved — unless the direct job IS the
+      // record already claiming the run, where both lookups agree.
+      const directJob = readJobById(loaded, entry.run_id);
+      if (directJob !== null && directJob.artifacts.run_id !== entry.run_id) {
+        throw new ApplianceError(
+          'config_invalid',
+          'import',
+          `run_id ${entry.run_id} collides with unrelated job ${directJob.job_id}; status/show would resolve the job, not the run — rename the run or repair state/jobs manually`,
+        );
+      }
 
       if (!existsSync(destRun)) {
         if (existingJob !== null && existingJob.kind !== 'import') {

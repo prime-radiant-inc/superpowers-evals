@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,6 +16,7 @@ import {
 import {
   createJob,
   readJob,
+  readJobById,
   readJobByRunId,
   updateJob,
 } from '../src/appliance/jobs.ts';
@@ -187,6 +189,63 @@ test('readJobByRunId fails closed on an unreadable job record even when a valid 
   // proven, so resolution must refuse rather than guess.
   const corrupt = importJob(cfg);
   writeFileSync(join(cfg.paths.jobs, corrupt.job_id, 'job.json'), 'not json');
+
+  expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
+});
+
+test('readJobByRunId fails closed on a job directory with no job.json', () => {
+  const cfg = loaded();
+  const claimant = importJob(cfg);
+  claimRun(cfg, claimant.job_id, 'target-run');
+  // A directory whose record is gone may have claimed any run before the
+  // record vanished; skipping it would turn corruption into false absence.
+  mkdirSync(join(cfg.paths.jobs, 'job-20260818T000000Z-dead'));
+
+  expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
+});
+
+test('readJobById returns null for an absent directory and the record for a well-formed one', () => {
+  const cfg = loaded();
+  const job = importJob(cfg);
+
+  expect(readJobById(cfg, 'job-20260818T000000Z-none')).toBeNull();
+  expect(readJobById(cfg, job.job_id)?.job_id).toBe(job.job_id);
+});
+
+test('readJobById fails closed on a directory missing its job.json or holding a mismatched record', () => {
+  const cfg = loaded();
+  mkdirSync(join(cfg.paths.jobs, 'job-20260818T000000Z-dead'));
+  expectCode(
+    () => readJobById(cfg, 'job-20260818T000000Z-dead'),
+    'config_invalid',
+  );
+
+  const original = importJob(cfg);
+  const mismatchDir = join(cfg.paths.jobs, 'job-20260818T000000Z-beef');
+  mkdirSync(mismatchDir);
+  writeFileSync(
+    join(mismatchDir, 'job.json'),
+    readFileSync(join(cfg.paths.jobs, original.job_id, 'job.json')),
+  );
+  expectCode(
+    () => readJobById(cfg, 'job-20260818T000000Z-beef'),
+    'config_invalid',
+  );
+});
+
+test('readJobByRunId fails closed on a record whose job_id mismatches its directory name', () => {
+  const cfg = loaded();
+  const claimant = importJob(cfg);
+  claimRun(cfg, claimant.job_id, 'target-run');
+  // A schema-valid record filed under the wrong directory would make any
+  // updateJob against its job_id write into a DIFFERENT directory.
+  const original = importJob(cfg);
+  const mismatchDir = join(cfg.paths.jobs, 'job-20260818T000000Z-beef');
+  mkdirSync(mismatchDir);
+  writeFileSync(
+    join(mismatchDir, 'job.json'),
+    readFileSync(join(cfg.paths.jobs, original.job_id, 'job.json')),
+  );
 
   expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
 });

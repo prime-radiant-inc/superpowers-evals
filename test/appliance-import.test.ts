@@ -92,6 +92,14 @@ function countJobsForRun(cfg: LoadedApplianceConfig, runId: string): number {
   return count;
 }
 
+// Every directory under state/jobs — the mint detector: a fix that resolves
+// corruption or crash states by creating fresh jobs is itself a defect.
+function countJobDirs(cfg: LoadedApplianceConfig): number {
+  return readdirSync(cfg.paths.jobs, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  ).length;
+}
+
 function importJobClaiming(cfg: LoadedApplianceConfig, runId: string) {
   const job = createJob(cfg, {
     kind: 'import',
@@ -378,6 +386,65 @@ test('re-landing after the run dir disappeared reuses the existing job instead o
   ).toBe(true);
 });
 
+test('a crash right after job creation still leaves a reservation the retry finds and reuses', () => {
+  const cfg = loaded();
+  const bundle = makeBundle();
+  // Scoped fake: the reservation takes one atomic job.json write to create
+  // and one to demote/associate; faulting the SECOND simulates a crash
+  // between them. Everything else hits the real fs. Restored in finally.
+  let jobJsonWrites = 0;
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, 'renameSync').mockImplementation(
+    (
+      from: Parameters<typeof fs.renameSync>[0],
+      to: Parameters<typeof fs.renameSync>[1],
+    ) => {
+      if (
+        typeof to === 'string' &&
+        to.startsWith(cfg.paths.jobs) &&
+        to.endsWith('/job.json')
+      ) {
+        jobJsonWrites += 1;
+        if (jobJsonWrites === 2) {
+          const err = new Error(
+            'EIO: crashed before the reservation update',
+          ) as NodeJS.ErrnoException;
+          err.code = 'EIO';
+          throw err;
+        }
+      }
+      return realRename(from, to);
+    },
+  );
+  let first: ImportResult;
+  try {
+    first = importBundle(cfg, { bundleDir: bundle });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(first.imported).toBe(0);
+  expect(first.failed).toBe(1);
+  expect(countJobDirs(cfg)).toBe(1);
+  // The INITIAL atomic write already carries the association, so exact
+  // run-id lookup finds the interrupted reservation:
+  const orphan = readJobByRunId(cfg, RUN_ID);
+  expect(orphan.kind).toBe('import');
+  expect(orphan.artifacts.run_id).toBe(RUN_ID);
+  expect(existsSync(orphan.artifacts.provenance)).toBe(false);
+
+  const retry = importBundle(cfg, { bundleDir: bundle });
+  expect(retry.imported).toBe(1);
+  // Reused, not re-minted — one directory, one claimant, same job:
+  expect(countJobDirs(cfg)).toBe(1);
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
+  const finished = readJobByRunId(cfg, RUN_ID);
+  expect(finished.job_id).toBe(orphan.job_id);
+  expect(finished.status).toBe('done');
+  expect(
+    existsSync(join(cfg.config.container.results_root, RUN_ID, 'verdict.json')),
+  ).toBe(true);
+});
+
 test('a failed landing leaves no durable success claim; retry reuses the reserved record and finishes it', () => {
   const cfg = loaded();
   const bundle = makeBundle();
@@ -429,6 +496,58 @@ test('a failed landing leaves no durable success claim; retry reuses the reserve
   expect(finished.result.exit_code).toBe(0);
   expect(existsSync(finished.artifacts.provenance)).toBe(true);
   expect(existsSync(join(destRun, 'verdict.json'))).toBe(true);
+});
+
+test('re-landing a previously complete job retires its terminal provenance before demotion', () => {
+  const cfg = loaded();
+  const bundle = makeBundle();
+  const resultsRoot = cfg.config.container.results_root;
+  const destRun = join(resultsRoot, RUN_ID);
+  const staged = join(resultsRoot, `.importing-${RUN_ID}.${process.pid}.tmp`);
+  importBundle(cfg, { bundleDir: bundle });
+  const first = readJobByRunId(cfg, RUN_ID);
+  expect(existsSync(first.artifacts.provenance)).toBe(true);
+  // The landed dir vanishes (operator removal), then the re-landing rename
+  // fails. Scoped fake: only the staged→destRun landing rename faults.
+  rmSync(destRun, { recursive: true, force: true });
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, 'renameSync').mockImplementation(
+    (
+      from: Parameters<typeof fs.renameSync>[0],
+      to: Parameters<typeof fs.renameSync>[1],
+    ) => {
+      if (from === staged && to === destRun) {
+        const err = new Error('EPERM: cannot land') as NodeJS.ErrnoException;
+        err.code = 'EPERM';
+        throw err;
+      }
+      return realRename(from, to);
+    },
+  );
+  let second: ImportResult;
+  try {
+    second = importBundle(cfg, { bundleDir: bundle });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(second.imported).toBe(0);
+  expect(second.failed).toBe(1);
+  // The demoted record retains no terminal success evidence: nonterminal
+  // status, no exit code, and the previous state provenance is retired.
+  const demoted = readJobByRunId(cfg, RUN_ID);
+  expect(demoted.job_id).toBe(first.job_id);
+  expect(demoted.status).toBe('running');
+  expect(demoted.result.exit_code).toBeNull();
+  expect(existsSync(first.artifacts.provenance)).toBe(false);
+
+  // Retry restores terminal state only after a successful rename:
+  const retry = importBundle(cfg, { bundleDir: bundle });
+  expect(retry.imported).toBe(1);
+  const finished = readJobByRunId(cfg, RUN_ID);
+  expect(finished.job_id).toBe(first.job_id);
+  expect(finished.status).toBe('done');
+  expect(existsSync(finished.artifacts.provenance)).toBe(true);
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
 });
 
 test('a stage cleanup failure is best-effort: the original failure is kept and later entries still land', () => {
@@ -539,10 +658,11 @@ test('two jobs claiming one run_id fail that entry closed while later entries co
   ).toBe(true);
 });
 
-test('a run_id equal to an unrelated job id lands its own record and leaves that job byte-for-byte intact', () => {
+test('a run_id equal to an unrelated job id is rejected closed: consumers stay unambiguous, the job intact', () => {
   const cfg = loaded();
   // An unrelated import job that never claims this run — but whose job_id is
-  // exactly the incoming run_id:
+  // exactly the incoming run_id. status/show resolve direct job ids first,
+  // so landing this run would make them show the job instead of the run:
   const unrelated = createJob(cfg, {
     kind: 'import',
     superpowersRef: 'unknown',
@@ -551,24 +671,55 @@ test('a run_id equal to an unrelated job id lands its own record and leaves that
   });
   const unrelatedPath = join(cfg.paths.jobs, unrelated.job_id, 'job.json');
   const unrelatedBytes = readFileSync(unrelatedPath, 'utf8');
-  const bundle = makeBundle({ runIds: [unrelated.job_id] });
+  const bundle = makeBundle({ runIds: [unrelated.job_id, RUN_ID_B] });
+  const dirsBefore = countJobDirs(cfg);
 
   const result = importBundle(cfg, { bundleDir: bundle });
-  expect(result.imported).toBe(1);
-  // The unrelated job was not rewritten:
-  expect(readFileSync(unrelatedPath, 'utf8')).toBe(unrelatedBytes);
-  // The import got its own record, associated by artifacts.run_id:
-  const importJob = readJobByRunId(cfg, unrelated.job_id);
-  expect(importJob.job_id).not.toBe(unrelated.job_id);
-  expect(importJob.kind).toBe('import');
-  expect(importJob.status).toBe('done');
-  expect(importJob.artifacts.run_id).toBe(unrelated.job_id);
-  expect(countJobsForRun(cfg, unrelated.job_id)).toBe(1);
+  expect(result.failed).toBe(1);
+  expect(result.failures[0]?.run_id).toBe(unrelated.job_id);
+  expect(result.failures[0]?.code).toBe('config_invalid');
+  expect(result.failures[0]?.message).toContain('collides');
+  // No payload landed and no reservation was minted for the rejected entry:
   expect(
-    existsSync(
-      join(cfg.config.container.results_root, unrelated.job_id, 'verdict.json'),
-    ),
-  ).toBe(true);
+    existsSync(join(cfg.config.container.results_root, unrelated.job_id)),
+  ).toBe(false);
+  expect(countJobsForRun(cfg, unrelated.job_id)).toBe(0);
+  // The unrelated job is byte-for-byte intact, and status/show stay
+  // unambiguous: the direct id resolves that job alone, with no rival
+  // claimant in the artifact namespace:
+  expect(readFileSync(unrelatedPath, 'utf8')).toBe(unrelatedBytes);
+  expect(readJob(cfg, unrelated.job_id).artifacts.run_id).toBeNull();
+  // Later entries continue:
+  expect(result.imported).toBe(1);
+  expect(result.run_ids).toEqual([RUN_ID_B]);
+  expect(countJobDirs(cfg)).toBe(dirsBefore + 1);
+});
+
+test('a direct job that is itself the record claiming the run does not count as a collision', () => {
+  const cfg = loaded();
+  // The one permitted overlap: the job named run_id IS the claimant, so
+  // job-id-first consumers and the artifact namespace resolve the same
+  // record. (An interrupted reservation repaired by hand could look like
+  // this.)
+  const job = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    artifacts: { ...current.artifacts, run_id: job.job_id },
+  }));
+  const bundle = makeBundle({ runIds: [job.job_id] });
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  expect(result.failed).toBe(0);
+  expect(result.imported).toBe(1);
+  const finished = readJobByRunId(cfg, job.job_id);
+  expect(finished.job_id).toBe(job.job_id);
+  expect(finished.status).toBe('done');
+  expect(countJobsForRun(cfg, job.job_id)).toBe(1);
 });
 
 test('a corrupt job record fails entries closed with a typed failure instead of minting duplicates', () => {
@@ -599,6 +750,76 @@ test('a corrupt job record fails entries closed with a typed failure instead of 
     false,
   );
   expect(countJobsForRun(cfg, RUN_ID)).toBe(0);
+});
+
+test('a job directory with no job.json fails entries closed instead of becoming false absence', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  mkdirSync(join(cfg.paths.jobs, 'job-20260818T000000Z-dead'));
+  const dirsBefore = countJobDirs(cfg);
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  // The vanished record may have claimed any run, so absence is not provable
+  // for any entry; each fails as its own typed failure, without aborting:
+  expect(result.imported).toBe(0);
+  expect(result.failed).toBe(2);
+  expect(result.failures.map((f) => f.run_id)).toEqual([RUN_ID, RUN_ID_B]);
+  for (const failure of result.failures) {
+    expect(failure.code).toBe('config_invalid');
+    expect(failure.message).toContain('job.json');
+  }
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+  // No job was minted:
+  expect(countJobDirs(cfg)).toBe(dirsBefore);
+});
+
+test('a mismatched record claiming the run cannot redirect recording into another job', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  // A real job that claims nothing…
+  const original = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const originalPath = join(cfg.paths.jobs, original.job_id, 'job.json');
+  const originalBytes = readFileSync(originalPath, 'utf8');
+  // …and a schema-valid copy of its record, filed under the wrong directory
+  // name and claiming RUN_ID. Resolving it would hand original.job_id to
+  // updateJob and mutate the real job's directory.
+  const record = JSON.parse(originalBytes) as JobRecord;
+  const mismatchDir = join(cfg.paths.jobs, 'job-20260818T000000Z-beef');
+  mkdirSync(mismatchDir);
+  writeFileSync(
+    join(mismatchDir, 'job.json'),
+    JSON.stringify({
+      ...record,
+      artifacts: { ...record.artifacts, run_id: RUN_ID },
+    }),
+  );
+  const dirsBefore = countJobDirs(cfg);
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  expect(result.imported).toBe(0);
+  expect(result.failed).toBe(2);
+  for (const failure of result.failures) {
+    expect(failure.code).toBe('config_invalid');
+  }
+  // The real job was neither mutated nor duplicated, and nothing landed:
+  expect(readFileSync(originalPath, 'utf8')).toBe(originalBytes);
+  expect(countJobDirs(cfg)).toBe(dirsBefore);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
 });
 
 test('a manifest run_id with path traversal is rejected before anything lands', () => {

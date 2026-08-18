@@ -221,7 +221,9 @@ Lives in `src/appliance/import.ts`, wired into the appliance CLI alongside
    bundle is skipped; if its job record is missing or incomplete the record is
    healed in `state/` only; if the landed content differs the entry is
    rejected as `import_conflict` with the staged payload quarantined and the
-   landed run untouched. There is no `--force`. *(Supersedes the 2026-08-09
+   landed run untouched. An entry whose `run_id` equals an unrelated job's id
+   is rejected (`config_invalid`) so job-id-first consumers (`status`/`show`)
+   stay unambiguous. There is no `--force`. *(Supersedes the 2026-08-09
    “`--force` replaces it” semantics.)*
 
 ### Schema Changes

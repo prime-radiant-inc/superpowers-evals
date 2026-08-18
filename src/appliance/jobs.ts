@@ -22,6 +22,11 @@ export interface CreateJobRequest {
   readonly kind: ApplianceCommandKind;
   readonly superpowersRef: string;
   readonly argv: readonly string[];
+  // Present when the job is born already associated with a run (import
+  // reservations): carried in the INITIAL atomic job.json write, so a crash
+  // right after creation still leaves a record that exact run-id lookup can
+  // find and reuse instead of minting a duplicate.
+  readonly runId?: string;
   readonly requester: {
     readonly agent: string | null;
     readonly thread?: string | null;
@@ -151,7 +156,7 @@ export function createJob(
     container: null,
     process: null,
     artifacts: {
-      run_id: null,
+      run_id: request.runId ?? null,
       batch_id: null,
       stdout_log: stdoutLog,
       stderr_log: stderrLog,
@@ -217,10 +222,60 @@ export function readJob(
   );
 }
 
+// A job directory is part of the state integrity boundary: it must hold a
+// readable job.json whose job_id equals the directory name. A missing or
+// unreadable record may have claimed anything, and a mismatched one would
+// send updateJob writing into a DIFFERENT directory — none of them can prove
+// absence, so all fail closed as config_invalid for manual repair.
+function readJobDirStrict(
+  loaded: LoadedApplianceConfig,
+  dirName: string,
+): JobRecord {
+  const path = jobPath(loaded, dirName);
+  if (!existsSync(path)) {
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      `job directory ${dirName} has no job.json; repair state/jobs manually`,
+    );
+  }
+  let job: JobRecord;
+  try {
+    job = readJobPath(path);
+  } catch (error) {
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  if (job.job_id !== dirName) {
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      `job directory ${dirName} holds a record for job_id ${job.job_id}; repair state/jobs manually`,
+    );
+  }
+  return job;
+}
+
+// Exact job-id lookup in the directory namespace — no artifact scan, no
+// generic fallback. An absent directory is null; a directory that exists but
+// is malformed fails closed as config_invalid, because it can prove nothing.
+export function readJobById(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+): JobRecord | null {
+  if (!existsSync(jobDir(loaded, jobId))) {
+    return null;
+  }
+  return readJobDirStrict(loaded, jobId);
+}
+
 // Exact artifacts.run_id resolution. Unlike readJob, this never consults job
 // ids, so a run_id that happens to equal an unrelated job's id cannot resolve
 // that job. Zero claimants throw job_not_found — the only error that means
-// absence. Multiple claimants or an unreadable record fail closed as
+// absence. Multiple claimants or any malformed job directory fail closed as
 // config_invalid: absence cannot be proven over ambiguous or corrupt state,
 // which needs manual repair, not a guess.
 export function readJobByRunId(
@@ -235,20 +290,7 @@ export function readJobByRunId(
       if (!entry.isDirectory()) {
         continue;
       }
-      const candidatePath = jobPath(loaded, entry.name);
-      if (!existsSync(candidatePath)) {
-        continue;
-      }
-      let job: JobRecord;
-      try {
-        job = readJobPath(candidatePath);
-      } catch (error) {
-        throw new ApplianceError(
-          'config_invalid',
-          'job',
-          `while resolving run_id ${runId}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+      const job = readJobDirStrict(loaded, entry.name);
       if (job.artifacts.run_id === runId) {
         matches.push(job);
       }
