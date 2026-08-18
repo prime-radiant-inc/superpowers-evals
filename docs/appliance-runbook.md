@@ -270,11 +270,12 @@ campaign kernel lands). Stale import stage dirs — exactly the
 reference protection — are candidates too; anything merely resembling that
 name is treated as an ordinary run dir. Reference state that cannot be read
 honestly makes prune refuse to plan at all (`config_invalid`) rather than
-guess: a batch dir without a canonical `batch.json`, an unparseable or
+guess: a batch dir missing its canonical `batch.json` or `results.jsonl`
+(an empty `results.jsonl` is a valid zero-row file), an unparseable or
 non-canonical `results.jsonl` record, a corrupt job record under
-`state/jobs`, any symlink inside the batches, jobs, or campaigns namespaces,
-or a results root that is not itself a real directory. Repair the state and
-rerun.
+`state/jobs`, any symlink or unreadable entry inside the batches, jobs, or
+campaigns namespaces, or a results root that is not itself a real
+directory. Repair the state and rerun.
 
 `--apply` holds `run.lock` (it refuses with `lock_busy` while a batch or import
 is live) and **moves** candidates to `state/quarantine/` — it never deletes.

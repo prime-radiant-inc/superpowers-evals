@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { BatchHeaderSchema, ResultRecordSchema } from '../contracts/batch.ts';
 import { ApplianceError } from './errors.ts';
 import { readJsonFile } from './fs.ts';
-import { IMPORT_STAGE_NAME_RE } from './import.ts';
+import { isImportStageName } from './import.ts';
 import { readAllJobsStrict } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { moveToQuarantine } from './safe-fs.ts';
@@ -76,10 +76,10 @@ function requireRegularFile(path: string, label: string): void {
 // runs.) Reference metadata that cannot be read proves nothing about what it
 // references, so it fails closed as config_invalid — a malformed record must
 // never make a run eligible. Every batch dir must carry a canonical
-// batch.json (written at batch start); results.jsonl may be legitimately
-// absent before a batch's first cell finishes, but when present must be a
-// regular file of canonical ResultRecord rows. Job records go through the
-// same strict integrity-boundary reader as the exact lookups.
+// batch.json AND a regular results.jsonl of canonical ResultRecord rows
+// (empty = zero rows; absence is stale/crashed state, not a live batch —
+// apply re-plans under run.lock). Job records go through the same strict
+// integrity-boundary reader as the exact lookups.
 export function collectReferencedRunIds(
   loaded: LoadedApplianceConfig,
 ): Set<string> {
@@ -119,16 +119,11 @@ export function collectReferencedRunIds(
         );
       }
       const jsonl = join(batchDir, 'results.jsonl');
-      const jsonlStats = lstatNoFollow(jsonl);
-      if (jsonlStats === undefined) {
-        // A live batch before its first cell record; nothing referenced yet.
-        continue;
-      }
-      if (!jsonlStats.isFile()) {
-        throw pruneFault(
-          `batch ${entry.name} results.jsonl is not a regular file (symlink?); repair it manually`,
-        );
-      }
+      // Every batch dir must carry its record file: apply re-plans under
+      // run.lock, so no live batch can be racing its first append — absence
+      // means stale/crashed/ambiguous state. An empty regular file is a
+      // valid zero-row record.
+      requireRegularFile(jsonl, `batch ${entry.name} results.jsonl`);
       for (const line of readFileSync(jsonl, 'utf8').split('\n')) {
         const s = line.trim();
         if (!s) continue;
@@ -172,7 +167,14 @@ export function collectCampaignProtected(
 ): Set<string> {
   const protectedNames = new Set<string>();
   const campaignsRoot = join(loaded.config.evals.path, 'campaigns');
-  const rootStats = lstatNoFollow(campaignsRoot);
+  let rootStats: ReturnType<typeof lstatNoFollow>;
+  try {
+    rootStats = lstatNoFollow(campaignsRoot);
+  } catch (error) {
+    throw pruneFault(
+      `campaigns root unreadable: ${campaignsRoot}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   if (rootStats === undefined) return protectedNames;
   if (!rootStats.isDirectory()) {
     throw pruneFault(
@@ -181,8 +183,17 @@ export function collectCampaignProtected(
   }
   if (names.length === 0) return protectedNames;
   const texts: string[] = [];
+  const readCampaignDir = (dir: string) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      throw pruneFault(
+        `campaigns directory unreadable: ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
   const visit = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of readCampaignDir(dir)) {
       const p = join(dir, entry.name);
       if (entry.isSymbolicLink()) {
         throw pruneFault(
@@ -264,11 +275,11 @@ export function planPrune(
     const p = join(resultsRoot, entry.name);
     const stat = statSync(p);
     if (stat.mtimeMs >= cutoff) continue;
-    // Only the exact stage-slot grammar import creates counts as a stage; a
-    // near-miss is an ordinary run dir with every ordinary protection
-    // (verdict, references, campaigns). Both classes stay excluded when
-    // batch/job records reference them by name.
-    if (IMPORT_STAGE_NAME_RE.test(entry.name)) {
+    // Only a stage slot import could actually have created (safe run-id,
+    // canonical pid) counts as a stage; a near-miss is an ordinary run dir
+    // with every ordinary protection (verdict, references, campaigns). Both
+    // classes stay excluded when batch/job records reference them by name.
+    if (isImportStageName(entry.name)) {
       if (!refs.has(entry.name)) {
         entries.push({ name: entry.name, path: p, reason: 'stale_stage' });
       }

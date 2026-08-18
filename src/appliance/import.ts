@@ -96,18 +96,39 @@ function allBundleFiles(runDir: string): string[] {
 // bundle leaves the results root untouched rather than half-populated.
 const RUN_ID_SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-// The exact stage-slot grammar `.importing-<run-id>.<pid>.tmp` this command
-// stages into (run-id alphabet = RUN_ID_SAFE above; keep them in sync). Prune
-// recognizes stale stages by this and nothing looser, so a run dir whose name
-// merely starts with `.importing-` keeps every ordinary run protection.
-export const IMPORT_STAGE_NAME_RE =
-  /^\.importing-[A-Za-z0-9][A-Za-z0-9._-]*\.\d+\.tmp$/;
+// The complete run-id validity contract: the manifest alphabet plus the `..`
+// exclusion (a run_id becomes a path component under the results root).
+// validateBundle enforces it on every entry; the stage-name predicate below
+// reuses it so nothing looser can pass for a name import created.
+export function isSafeRunId(runId: string): boolean {
+  return RUN_ID_SAFE.test(runId) && !runId.includes('..');
+}
+
+// Recognize exactly a stage slot this command could have created:
+// `.importing-<run-id>.<pid>.tmp` where the run-id passes isSafeRunId and the
+// pid text is a canonical positive decimal — process.pid never renders as 0
+// or with a leading zero. The pid segment is the final all-digits component,
+// so dotted run-ids parse unambiguously. Prune recognizes stale stages by
+// this and nothing looser: any near-miss is an ordinary run dir with every
+// ordinary run protection.
+const STAGE_NAME_PARSE = /^\.importing-(.+)\.([0-9]+)\.tmp$/;
+const CANONICAL_PID = /^[1-9][0-9]*$/;
+
+export function isImportStageName(name: string): boolean {
+  const match = STAGE_NAME_PARSE.exec(name);
+  const runId = match?.[1];
+  const pidText = match?.[2];
+  if (runId === undefined || pidText === undefined) {
+    return false;
+  }
+  return isSafeRunId(runId) && CANONICAL_PID.test(pidText);
+}
 
 function validateBundle(bundleDir: string, manifest: BundleManifest): void {
   for (const entry of manifest.entries) {
     // Safety first: the run_id becomes a path component under the results
     // root, so traversal is a config fault, never an artifact probe.
-    if (!RUN_ID_SAFE.test(entry.run_id) || entry.run_id.includes('..')) {
+    if (!isSafeRunId(entry.run_id)) {
       throw new ApplianceError(
         'config_invalid',
         'import',

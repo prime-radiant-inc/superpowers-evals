@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -621,11 +622,31 @@ test('a results.jsonl row failing the canonical record schema fails prune closed
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
 
-test('a batch dir with batch.json but no results.jsonl yet contributes no refs and no error', () => {
+test('a batch dir without results.jsonl fails prune closed', () => {
+  // Supersedes the round-1 live-batch tolerance (controller ruling): apply's
+  // re-plan owns run.lock, so no batch can be racing its first append —
+  // a batch dir with no record file is stale/crashed/ambiguous state.
   const cfg = loaded();
   const root = cfg.config.container.results_root;
   makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
-  writeBatchHeaderFixture(join(root, 'batches', 'b-live'), 'b-live');
+  writeBatchHeaderFixture(
+    join(root, 'batches', 'b-recordless'),
+    'b-recordless',
+  );
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('an empty results.jsonl is a valid zero-row record file', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const dir = join(root, 'batches', 'b-empty');
+  writeBatchHeaderFixture(dir, 'b-empty');
+  writeFileSync(join(dir, 'results.jsonl'), '');
   const result = prune(cfg, { apply: false, olderThanDays: 7 });
   expect(result.candidates.map((c) => c.name)).toEqual(['old-partial']);
 });
@@ -689,4 +710,120 @@ test('a symlinked job.json fails prune closed', () => {
     'config_invalid',
   );
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+// --- Fix round 2, Critical: unreadable campaign state must fail typed ---
+
+test('an unreadable nested campaigns/ directory fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const sub = join(cfg.config.evals.path, 'campaigns', 'camp-e', 'sealed');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, 'note.md'), 'mentions old-partial\n');
+  chmodSync(sub, 0o000);
+  try {
+    expectCode(
+      () => prune(cfg, { apply: true, olderThanDays: 7 }),
+      'config_invalid',
+    );
+  } finally {
+    chmodSync(sub, 0o700);
+  }
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('an unreadable campaigns/ root fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const campaignsRoot = join(cfg.config.evals.path, 'campaigns');
+  mkdirSync(campaignsRoot, { recursive: true });
+  chmodSync(campaignsRoot, 0o000);
+  try {
+    expectCode(
+      () => prune(cfg, { apply: true, olderThanDays: 7 }),
+      'config_invalid',
+    );
+  } finally {
+    chmodSync(campaignsRoot, 0o700);
+  }
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+test('an unreadable campaign file fails prune closed', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
+  const camp = join(cfg.config.evals.path, 'campaigns', 'camp-f');
+  mkdirSync(camp, { recursive: true });
+  const secret = join(camp, 'secret.md');
+  writeFileSync(secret, 'mentions old-partial\n');
+  chmodSync(secret, 0o000);
+  try {
+    expectCode(
+      () => prune(cfg, { apply: true, olderThanDays: 7 }),
+      'config_invalid',
+    );
+  } finally {
+    chmodSync(secret, 0o600);
+  }
+  expect(existsSync(join(root, 'old-partial'))).toBe(true);
+});
+
+// --- Fix round 2, Important: stage matcher must be exactly the importer's ---
+
+test('near-miss stage names with unsafe run ids or non-canonical pids keep verdict protection', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  // `..` run id (import's validateBundle rejects it), pid 0, leading-zero
+  // pid: none of these can be a name import created, so each is an ordinary
+  // (here: completed) run dir.
+  const nearMisses = [
+    '.importing-a..b.123.tmp',
+    '.importing-run-9.0.tmp',
+    '.importing-run-9.0123.tmp',
+  ];
+  for (const name of nearMisses) {
+    makeRunDir(root, name, { verdict: true, ageDays: 30 });
+  }
+  const result = prune(cfg, { apply: true, olderThanDays: 7 });
+  expect(result.candidates).toHaveLength(0);
+  expect(result.quarantined).toHaveLength(0);
+  for (const name of nearMisses) {
+    expect(existsSync(join(root, name, 'verdict.json'))).toBe(true);
+  }
+});
+
+test('incomplete near-miss stage names classify as incomplete and honor references', () => {
+  const cfg = loaded();
+  const root = cfg.config.container.results_root;
+  makeRunDir(root, '.importing-a..b.123.tmp', { verdict: false, ageDays: 30 });
+  makeRunDir(root, '.importing-run-9.0.tmp', { verdict: false, ageDays: 30 });
+  makeRunDir(root, '.importing-run-9.0123.tmp', {
+    verdict: false,
+    ageDays: 30,
+  });
+  // A referenced near-miss is protected like any ordinary run dir.
+  makeBatch(root, 'b1', ['.importing-run-9.0.tmp']);
+  const result = prune(cfg, { apply: false, olderThanDays: 7 });
+  expect(new Set(result.candidates.map((c) => c.name))).toEqual(
+    new Set(['.importing-a..b.123.tmp', '.importing-run-9.0123.tmp']),
+  );
+  for (const candidate of result.candidates) {
+    expect(candidate.reason).toBe('incomplete');
+  }
+});
+
+test('an exact stage name with a dotted run id is still recognized', () => {
+  const cfg = loaded();
+  makeRunDir(cfg.config.container.results_root, '.importing-run.12.34.tmp', {
+    verdict: false,
+    ageDays: 10,
+  });
+  const result = prune(cfg, { apply: false, olderThanDays: 7 });
+  expect(result.candidates.map((c) => c.name)).toEqual([
+    '.importing-run.12.34.tmp',
+  ]);
+  expect(result.candidates[0]?.reason).toBe('stale_stage');
 });
