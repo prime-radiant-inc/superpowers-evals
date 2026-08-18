@@ -212,6 +212,16 @@ test('the spawned gauntlet child gets the projection, not the host env', async (
 // run; the child env must carry the three fake grader auth names + the base
 // url, and never the OpenAI block or copilot's own GitHub token (env-file-
 // only). All secrets are fakes — no real credential can reach the capture.
+//
+// WHAT: this test needs a 10s budget, not the 5s default.
+// WHY: the mock gauntlet drops no session-log artifact, so the run walks
+// production captureToolCallsWithRetry's deliberate empty-capture path:
+// CAPTURE_RETRY_ATTEMPTS=3 with CAPTURE_RETRY_DELAY_MS=2000 sleeps a defined
+// (3-1)*2000 = 4000ms before setup/provision/spawn/capture overhead
+// (measured ~4.7-4.8s in isolation). The default 5000ms ceiling leaves only
+// a few hundred ms of headroom, which full-suite contention reproducibly
+// consumes. 10s bounds the wait while keeping the budget honest; it does not
+// alter production retry behavior or the assertions.
 test('the copilot gauntlet child gets the grader contract, not the OpenAI block', async () => {
   const scenarioDir = makeScenario();
   const outRoot = mkdtempSync(join(tmpdir(), 'out-genv-'));
@@ -301,7 +311,7 @@ test('the copilot gauntlet child gets the grader contract, not the OpenAI block'
       rmSync(dir, { recursive: true, force: true });
     }
   }
-});
+}, 10_000);
 
 // F13 corrective round (provenance defect): a whole runScenario whose
 // provisioning fails before the Coding-Agent became runnable — here the
