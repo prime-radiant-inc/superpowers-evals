@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -288,6 +289,99 @@ test('the copilot gauntlet child gets the grader contract, not the OpenAI block'
   } finally {
     restore();
     for (const dir of [shimDir, binDir, outRoot, scenarioDir, sproot]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+// F13 corrective round (provenance defect): a whole runScenario whose
+// provisioning fails before the Coding-Agent became runnable — here the
+// missing nested Antigravity runtime token — must (a) still compose the
+// expected setup-stage indeterminate verdict, (b) run ZERO agy invocations,
+// including the post-failure `agy --version` provenance probe, and (c) keep
+// the non-agent provenance (git rev, gauntlet version) running under
+// run-local HOME/XDG routing — never the operator's home. Fakes only: no
+// real agy, no auth, no network.
+test('missing antigravity token: setup stays indeterminate, zero agy calls, version children run-local', async () => {
+  const scenarioDir = makeScenario();
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-genv-'));
+  const sproot = mkdtempSync(join(tmpdir(), 'sproot-'));
+  // A fake agy that RECORDS every invocation (including --version) — the
+  // regression's core assertion is that this log stays empty.
+  const binDir = mkdtempSync(join(tmpdir(), 'bin-genv-'));
+  const agyLog = join(binDir, 'agy-invocations.log');
+  const fakeAgy = join(binDir, 'agy');
+  writeFileSync(
+    fakeAgy,
+    `#!/bin/sh\necho "agy $@" >> '${agyLog}'\necho "agy FAKE 1.2.3"\n`,
+  );
+  chmodSync(fakeAgy, 0o755);
+  // A fake gauntlet that dumps its env + prints a version: the gauntlet
+  // --version probe still runs on a setup-failed run, and its child env
+  // proves the run-local routing (and the operator sentinels' absence).
+  const gauntletDump = join(binDir, 'gauntlet-version-env.txt');
+  const fakeGauntlet = join(binDir, 'gauntlet');
+  writeFileSync(
+    fakeGauntlet,
+    `#!/bin/sh\nenv > '${gauntletDump}'\necho "gauntlet FAKE 9.9.9"\n`,
+  );
+  chmodSync(fakeGauntlet, 0o755);
+  // AGY_OAUTH_HOME with NO nested runtime token -> seedAgyRuntimeToken fails
+  // -> ProvisionError BEFORE any agy subprocess.
+  const emptyOauthHome = mkdtempSync(join(tmpdir(), 'agy-oauth-empty-'));
+  const restore = swapEnv({
+    PATH: `${binDir}:${process.env['PATH'] ?? ''}`,
+    AGY_OAUTH_HOME: emptyOauthHome,
+    SUPERPOWERS_ROOT: sproot,
+    // Operator home/config sentinels: must never reach a version child.
+    HOME: '/operator-sentinel-home',
+    XDG_CONFIG_HOME: '/operator-sentinel-xdg',
+  });
+  let runDir: string | undefined;
+  try {
+    const { verdict } = await runScenario({
+      scenarioDir,
+      codingAgent: 'antigravity',
+      codingAgentsDir: REAL_CODING_AGENTS,
+      outRoot,
+      onRunDir: (dir) => {
+        runDir = dir;
+      },
+    });
+    if (runDir === undefined) {
+      throw new Error('onRunDir never fired');
+    }
+    // (a) The final state remains the expected setup-stage indeterminate —
+    // the missing-token fix from the prior wave is unchanged.
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('setup');
+    expect(verdict.final_reason).toContain('antigravity-oauth-token');
+    // (b) ZERO agy invocations — provisioning never ran one, and the
+    // post-failure provenance probe SKIPPED the agent version child.
+    const agyCalls = existsSync(agyLog)
+      ? readFileSync(agyLog, 'utf8')
+          .split('\n')
+          .filter((l) => l !== '')
+      : [];
+    expect(agyCalls).toEqual([]);
+    // (c) Non-agent provenance preserved: the git rev probe still resolved,
+    // the agent version is null (skipped), and the gauntlet version child
+    // ran under run-local routing.
+    expect(verdict.provenance?.harness_rev).toBeTruthy();
+    expect(verdict.provenance?.agent_cli_version).toBe(null);
+    expect(verdict.provenance?.gauntlet_version).toBe('gauntlet FAKE 9.9.9');
+    const dumped: Record<string, string> = {};
+    for (const line of readFileSync(gauntletDump, 'utf8').split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) dumped[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    expect(dumped['HOME']).toBe(join(runDir, 'home'));
+    expect(dumped['XDG_CONFIG_HOME']).toBe(join(runDir, 'home', '.config'));
+    expect(dumped['HOME']).not.toContain('operator-sentinel');
+    expect(dumped['XDG_CONFIG_HOME']).not.toContain('operator-sentinel');
+  } finally {
+    restore();
+    for (const dir of [binDir, outRoot, scenarioDir, sproot, emptyOauthHome]) {
       rmSync(dir, { recursive: true, force: true });
     }
   }

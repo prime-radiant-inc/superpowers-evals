@@ -8,7 +8,9 @@
 // as launcher substitutions and cleanup registration and have no channel into
 // the child env. The credential names below are therefore the only
 // secret-shaped names in this non-Copilot host-base projection; copilot's
-// copilotGauntletEnv is stricter still. The claude-windows SSH password
+// copilotGauntletEnv is this standard list PLUS copilot routing (a superset
+// with credentialed-proxy rejection), not a smaller list. The claude-windows
+// SSH password
 // residual lives in the generated launcher file / sshpass argv on the Windows
 // trusted-maintainer path (Task 4), not in the child env.
 //
@@ -96,8 +98,9 @@ export const GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
 /**
  * Project the host env onto {@link GAUNTLET_ENV_ALLOWLIST}. Undefined host
  * values are omitted, never passed through as empty strings. Copilot does not
- * use this: it keeps its stricter copilotGauntletEnv (smaller list plus
- * credentialed-proxy rejection).
+ * use this: it keeps its copilotGauntletEnv — this standard list PLUS
+ * copilot's evidenced routing names (a superset, never smaller), with
+ * credentialed-proxy rejection.
  */
 export function gauntletEnvBase(
   host: Readonly<Record<string, string | undefined>>,

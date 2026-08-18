@@ -19,6 +19,8 @@
 // (non-evals-container) invocations and normal, non-worktree checkouts.
 
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { captureBaseEnv } from '../agents/capture-env.ts';
 import { getEnv } from '../env.ts';
 
 export interface RunProvenance {
@@ -37,14 +39,19 @@ export interface RunProvenance {
 export function collectProvenance(args: {
   repoRoot: string;
   agentBinary: string | null;
+  // The run-local throwaway home (<run>/home). The version-probe children's
+  // HOME/XDG_CONFIG_HOME are pinned to it — never the operator's home.
+  runHomeDir: string;
 }): RunProvenance {
   const sproot = getEnv('SUPERPOWERS_ROOT');
   return {
     superpowers_rev: sproot ? (hostRev() ?? gitRev(sproot)) : null,
     superpowers_dirty: sproot ? (hostDirty() ?? gitDirty(sproot)) : null,
     harness_rev: gitRev(args.repoRoot),
-    agent_cli_version: args.agentBinary ? versionLine(args.agentBinary) : null,
-    gauntlet_version: versionLine('gauntlet'),
+    agent_cli_version: args.agentBinary
+      ? versionLine(args.agentBinary, args.runHomeDir)
+      : null,
+    gauntlet_version: versionLine('gauntlet', args.runHomeDir),
     host_platform: process.platform,
   };
 }
@@ -68,60 +75,79 @@ function hostDirty(): boolean | null {
 }
 
 function gitRev(cwd: string): string | null {
-  const out = run('git', ['-C', cwd, 'rev-parse', 'HEAD']);
+  const out = run('git', ['-C', cwd, 'rev-parse', 'HEAD'], gitProbeEnv());
   return out === null ? null : out.trim() || null;
 }
 
 function gitDirty(cwd: string): boolean | null {
-  const out = run('git', ['-C', cwd, 'status', '--porcelain']);
+  const out = run('git', ['-C', cwd, 'status', '--porcelain'], gitProbeEnv());
   return out === null ? null : out.trim() !== '';
 }
 
 // First line of `<binary> --version`; null when the binary is missing,
 // exits nonzero, or prints nothing.
-function versionLine(binary: string): string | null {
-  const out = run(binary, ['--version']);
+function versionLine(binary: string, runHomeDir: string): string | null {
+  const out = run(binary, ['--version'], versionProbeEnv(runHomeDir));
   if (out === null) return null;
   const line = out.split('\n')[0]?.trim() ?? '';
   return line === '' ? null : line;
 }
 
-// The probe children's env (F13): git plus the agent/gauntlet version binaries
-// are real subprocesses, so they get a non-secret projection, never the host
-// provider bundle. The retained names are the probes' own routing:
-//   PATH — structural: spawnSync resolves the bare binary name through the
+// The GIT-probe child's env (F13 corrective round): git is quorum's own
+// probe of repository state, and its actual path needs exactly these names:
+//   PATH — structural: spawnSync resolves the bare `git` name through the
 //     child env's PATH.
 //   HOME / XDG_CONFIG_HOME — git's documented config resolution runs on every
 //     command (~/.gitconfig and $XDG_CONFIG_HOME/git/config carry
 //     safe.directory / includeIf, which container hosts rely on for the
-//     rev/dirty probes), and the version binaries read their own config the
-//     same way.
-// Probes are best-effort by design (a failure nulls one field, never the run),
-// so a too-tight list degrades a provenance field silently rather than loudly —
-// which is why the routing trio stays in while everything else stays out.
-const PROBE_ENV_ALLOWLIST: readonly string[] = [
+//     rev/dirty probes), so the OPERATOR's routing legitimately stays.
+// Git never receives provider/AWS names. Probes are best-effort by design (a
+// failure nulls one field, never the run), so a too-tight list degrades a
+// provenance field silently rather than loudly — which is why the routing
+// trio stays in while everything else stays out.
+const GIT_PROBE_ENV_ALLOWLIST: readonly string[] = [
   'PATH',
   'HOME',
   'XDG_CONFIG_HOME',
 ];
 
-function probeEnv(): Record<string, string> {
+function gitProbeEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const name of PROBE_ENV_ALLOWLIST) {
+  for (const name of GIT_PROBE_ENV_ALLOWLIST) {
     const value = getEnv(name);
     if (value !== undefined) env[name] = value;
   }
   return env;
 }
 
+// The VERSION-probe children's env (F13 corrective round): the agent CLI and
+// gauntlet `--version` are THIRD-PARTY binaries — a separate, stricter
+// contract than the git probe. They receive an explicit non-secret projection
+// (the shared capture base: PATH/TERM/LANG only, so the provider/AWS bundle is
+// absent by construction) with HOME and XDG_CONFIG_HOME pinned to the
+// run-local throwaway home — never the operator's home-relative auth state
+// (keyring routing, ~/.gemini, ~/.config). A version probe on a FAILED run
+// must not hand operator routing to a binary the run never authorized.
+function versionProbeEnv(runHomeDir: string): Record<string, string> {
+  return {
+    ...captureBaseEnv(),
+    HOME: runHomeDir,
+    XDG_CONFIG_HOME: join(runHomeDir, '.config'),
+  };
+}
+
 // Run a probe; null on spawn error or nonzero exit. 10s timeout so a hung
 // probe cannot stall the verdict write.
-function run(cmd: string, args: string[]): string | null {
+function run(
+  cmd: string,
+  args: string[],
+  env: Record<string, string>,
+): string | null {
   try {
     const p = spawnSync(cmd, args, {
       encoding: 'utf8',
       timeout: 10_000,
-      env: probeEnv(),
+      env,
     });
     if (p.error || (p.status ?? 1) !== 0) return null;
     return p.stdout ?? '';

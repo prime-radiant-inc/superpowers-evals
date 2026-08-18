@@ -1018,9 +1018,19 @@ export async function runScenario(
   } catch {
     agentBinary = null;
   }
+  // F13 corrective round: the version-probe children route HOME/XDG to the
+  // run-local throwaway home — ensure it exists even when the run failed
+  // before creating it — and a setup-stage failure means the Coding-Agent
+  // never became runnable, so its version probe is skipped entirely (zero
+  // agent-binary invocations post-failure). The git and gauntlet probes
+  // still run, under the same run-local routing.
+  const provenanceRunHome = join(runDir, 'home');
+  mkdirSync(provenanceRunHome, { recursive: true });
+  const agentRunnable = verdict.error?.stage !== 'setup';
   const provenance = collectProvenance({
     repoRoot: repoRoot(),
-    agentBinary,
+    agentBinary: agentRunnable ? agentBinary : null,
+    runHomeDir: provenanceRunHome,
   });
   const identified: FinalVerdict = {
     ...verdict,

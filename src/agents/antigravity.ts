@@ -303,7 +303,7 @@ export class AntigravityAgent implements CodingAgent {
         }
         if (result.status !== 0) {
           throw new ProvisionError(
-            `antigravity auth preflight failed (exit ${result.status}); check agy browser/keyring auth. stderr: ${result.stderr.trim().slice(0, 300)}`,
+            `antigravity auth preflight failed (exit ${result.status}); the preflight runs under the isolated run home seeded with the explicit per-run token — check that ~/.gemini/antigravity-cli/antigravity-oauth-token (under AGY_OAUTH_HOME) is fresh and re-mint it with a local agy browser login if expired. stderr: ${result.stderr.trim().slice(0, 300)}`,
           );
         }
         throw new ProvisionError(
