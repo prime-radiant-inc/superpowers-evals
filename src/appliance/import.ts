@@ -292,22 +292,76 @@ function resolveJobForRun(
   }
 }
 
+// No-follow classification of a job's state provenance marker at its
+// canonical derived path. Missing is recoverable — the retry re-creates
+// it. Anything else that is not exactly a readable regular file holding
+// THIS job's imported provenance record is corrupt state for manual
+// repair: never skipped over, healed around, followed, or deleted.
+function classifyProvenanceMarker(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+): 'missing' | 'valid' {
+  const path = provenancePath(loaded, jobId);
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  if (stats === undefined) {
+    return 'missing';
+  }
+  if (!stats.isFile()) {
+    throw new ApplianceError(
+      'config_invalid',
+      'import',
+      `state provenance for ${jobId} is not a regular file (symlink or directory?): ${path}; repair state/provenance manually`,
+    );
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new ApplianceError(
+      'config_invalid',
+      'import',
+      `state provenance for ${jobId} is unreadable or not JSON: ${path}: ${error instanceof Error ? error.message : String(error)}; repair state/provenance manually`,
+    );
+  }
+  const parsed = ImportedProvenanceRecordSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ApplianceError(
+      'config_invalid',
+      'import',
+      `state provenance for ${jobId} does not parse as an imported provenance record: ${path}; repair state/provenance manually`,
+    );
+  }
+  if (parsed.data.job_id !== jobId) {
+    throw new ApplianceError(
+      'config_invalid',
+      'import',
+      `state provenance at ${path} belongs to job ${parsed.data.job_id}, not ${jobId}; repair state/provenance manually`,
+    );
+  }
+  return 'valid';
+}
+
 // An imported run's recording is complete only when the job record finished
-// AND the state-side provenance file it points at exists. A job's mere
-// existence is not sufficient: a crash between the job update and the
-// provenance write leaves a done-looking job with no provenance, which a
-// retry must repair rather than skip.
-function importRecordingComplete(job: JobRecord): boolean {
+// AND the state-side provenance marker is exactly this job's valid record.
+// A job's mere existence is not sufficient: a crash between the job update
+// and the provenance write leaves a done-looking job with no provenance,
+// which a retry must repair rather than skip — and a marker of any other
+// shape is corrupt state that must fail typed, never pass as complete.
+function importRecordingComplete(
+  loaded: LoadedApplianceConfig,
+  job: JobRecord,
+): boolean {
   // A non-import job claiming the run (a live run/run-all record) is not
   // ours to repair; treat it as recorded so healing never rewrites it.
   if (job.kind !== 'import') {
     return true;
   }
+  const marker = classifyProvenanceMarker(loaded, job.job_id);
   return (
     job.status === 'done' &&
     job.origin?.kind === 'imported' &&
     job.artifacts.run_id !== null &&
-    existsSync(job.artifacts.provenance)
+    marker === 'valid'
   );
 }
 
@@ -401,8 +455,12 @@ function reserveImportJob(
   // landed run bytes are never touched — and finishImportJob rewrites the
   // provenance after a successful landing. The path is DERIVED, never taken
   // from the record: a stored field is record-controlled and must not steer
-  // a delete (exact lookup also rejects noncanonical fields upstream).
-  rmSync(provenancePath(loaded, base.job_id), { force: true });
+  // a delete (exact lookup also rejects noncanonical fields upstream). Only
+  // a marker classified as this job's own regular-file record may be
+  // retired; any other shape is corrupt state that fails typed here.
+  if (classifyProvenanceMarker(loaded, base.job_id) === 'valid') {
+    rmSync(provenancePath(loaded, base.job_id), { force: true });
+  }
   const job = updateJob(loaded, base.job_id, (current) => ({
     ...current,
     status: 'running' as const,
@@ -568,7 +626,10 @@ function importLocked(
         })
       ) {
         rmSync(staged, { recursive: true, force: true });
-        if (existingJob !== null && importRecordingComplete(existingJob)) {
+        if (
+          existingJob !== null &&
+          importRecordingComplete(loaded, existingJob)
+        ) {
           skipped += 1;
         } else {
           // The landed bytes are already correct; healing repairs/creates the

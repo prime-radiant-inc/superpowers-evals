@@ -533,6 +533,113 @@ test('a partial recording (done job, missing state provenance) is repaired on re
   expect(countJobsForRun(cfg, RUN_ID)).toBe(1);
 });
 
+// --- The state provenance marker is classified no-follow: missing heals,
+// --- every other malformed shape is manual-repair territory.
+
+// Land RUN_ID, corrupt its state provenance marker via `corrupt`, retry the
+// import, and return everything needed to prove fail-closed behavior.
+function retryWithCorruptMarker(
+  cfg: LoadedApplianceConfig,
+  bundle: string,
+  corrupt: (markerPath: string) => void,
+): {
+  result: ImportResult;
+  markerPath: string;
+  jobPath: string;
+  jobBytes: string;
+} {
+  importBundle(cfg, { bundleDir: bundle });
+  const job = readJobByRunId(cfg, RUN_ID);
+  const markerPath = job.artifacts.provenance;
+  rmSync(markerPath, { force: true });
+  corrupt(markerPath);
+  const jobPath = join(cfg.paths.jobs, job.job_id, 'job.json');
+  const jobBytes = readFileSync(jobPath, 'utf8');
+  return {
+    result: importBundle(cfg, { bundleDir: bundle }),
+    markerPath,
+    jobPath,
+    jobBytes,
+  };
+}
+
+function expectMarkerFailClosed(outcome: {
+  result: ImportResult;
+  jobPath: string;
+  jobBytes: string;
+}): void {
+  const { result, jobPath, jobBytes } = outcome;
+  expect(result.imported).toBe(0);
+  expect(result.skipped).toBe(0);
+  expect(result.healed).toBe(0);
+  expect(result.failed).toBe(1);
+  expect(result.failures[0]?.run_id).toBe(RUN_ID);
+  expect(result.failures[0]?.code).toBe('config_invalid');
+  expect(result.failures[0]?.message).toContain('provenance');
+  // Nothing mutated around the corruption: the job record is byte-identical.
+  expect(readFileSync(jobPath, 'utf8')).toBe(jobBytes);
+}
+
+test('a directory where the provenance marker belongs fails closed, never skips', () => {
+  const cfg = loaded();
+  const outcome = retryWithCorruptMarker(cfg, makeBundle(), (markerPath) => {
+    mkdirSync(markerPath);
+  });
+  expectMarkerFailClosed(outcome);
+  // The directory was not deleted or replaced:
+  expect(lstatSync(outcome.markerPath).isDirectory()).toBe(true);
+});
+
+test('a symlinked provenance marker fails closed and is never followed or deleted', () => {
+  const cfg = loaded();
+  const landedVerdict = join(
+    cfg.config.container.results_root,
+    RUN_ID,
+    'verdict.json',
+  );
+  const outcome = retryWithCorruptMarker(cfg, makeBundle(), (markerPath) => {
+    symlinkSync(landedVerdict, markerPath);
+  });
+  expectMarkerFailClosed(outcome);
+  expect(lstatSync(outcome.markerPath).isSymbolicLink()).toBe(true);
+  // The link target — landed evidence — is untouched:
+  expect(readFileSync(landedVerdict, 'utf8')).toBe(
+    JSON.stringify({ schema: 1, final: 'pass' }),
+  );
+});
+
+test('an unparseable or schema-invalid provenance marker fails closed with bytes intact', () => {
+  for (const body of ['not json', '{"schema_version": 1}']) {
+    const cfg = loaded();
+    const outcome = retryWithCorruptMarker(cfg, makeBundle(), (markerPath) => {
+      writeFileSync(markerPath, body);
+    });
+    expectMarkerFailClosed(outcome);
+    expect(readFileSync(outcome.markerPath, 'utf8')).toBe(body);
+  }
+});
+
+test('a provenance marker recorded for a different job fails closed', () => {
+  const cfg = loaded();
+  let crafted = '';
+  const outcome = retryWithCorruptMarker(cfg, makeBundle(), (markerPath) => {
+    const job = readJobByRunId(cfg, RUN_ID);
+    const record = ImportedProvenanceRecordSchema.parse({
+      schema_version: 1,
+      kind: 'imported',
+      job_id: 'job-20260818T000000Z-dead',
+      created_at: '2026-08-18T00:00:00Z',
+      origin: job.origin,
+      requester: job.requester,
+      command_argv: [...job.command.argv],
+    });
+    crafted = JSON.stringify(record);
+    writeFileSync(markerPath, crafted);
+  });
+  expectMarkerFailClosed(outcome);
+  expect(readFileSync(outcome.markerPath, 'utf8')).toBe(crafted);
+});
+
 test('re-landing after the run dir disappeared reuses the existing job instead of duplicating it', () => {
   const cfg = loaded();
   const bundle = makeBundle();
