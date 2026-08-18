@@ -18,15 +18,19 @@
 // expectations, then fix the extractor — never the other way around.
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   compareRecords,
   extractManifest,
   ManifestExtractionError,
+  manifestPath,
+  readManifest,
+  writeManifest,
 } from '../src/check/manifest.ts';
 import { runPhase } from '../src/checks/index.ts';
+import type { CheckManifest } from '../src/contracts/check-manifest.ts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -171,27 +175,29 @@ describe('extractManifest', () => {
       'pre() {\n    git-repo\n}\n\npost() {\n    file-exists a.txt\n    file-exists a.txt\n    file-contains a.txt hello\n}\n',
     );
     const m = extractManifest(p);
-    expect(m.entries).toContainEqual({
-      phase: 'pre',
-      check: 'git-repo',
-      args: [],
-      negated: false,
-      count: 1,
-    });
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'file-exists',
-      args: ['a.txt'],
-      negated: false,
-      count: 2,
-    });
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'file-contains',
-      args: ['a.txt', 'hello'],
-      negated: false,
-      count: 1,
-    });
+    expect(m.entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'file-exists',
+        args: ['a.txt'],
+        negated: false,
+        count: 2,
+      },
+      {
+        phase: 'post',
+        check: 'file-contains',
+        args: ['a.txt', 'hello'],
+        negated: false,
+        count: 1,
+      },
+    ]);
   });
 
   test('encodes `not` and transcript naming per the Task 1 characterization', () => {
@@ -199,28 +205,37 @@ describe('extractManifest', () => {
       'pre() {\n    git-repo\n}\n\npost() {\n    not file-exists gone.txt\n    check-transcript skill-called superpowers:brainstorming\n    not check-transcript tool-called Bash\n}\n',
     );
     const m = extractManifest(p);
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'file-exists',
-      args: ['gone.txt'],
-      negated: true,
-      count: 1,
-    });
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'skill-called',
-      args: ['superpowers:brainstorming'],
-      negated: false,
-      count: 1,
-    });
-    // Wrapper-name rule from Task 1 characterization:
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'check-transcript',
-      args: ['tool-called', 'Bash'],
-      negated: true,
-      count: 1,
-    });
+    expect(m.entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'file-exists',
+        args: ['gone.txt'],
+        negated: true,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'skill-called',
+        args: ['superpowers:brainstorming'],
+        negated: false,
+        count: 1,
+      },
+      // Wrapper-name rule from Task 1 characterization:
+      {
+        phase: 'post',
+        check: 'check-transcript',
+        args: ['tool-called', 'Bash'],
+        negated: true,
+        count: 1,
+      },
+    ]);
   });
 
   test('any token containing $ makes args a wildcard (null)', () => {
@@ -228,13 +243,22 @@ describe('extractManifest', () => {
       `pre() {\n    git-repo\n}\n\npost() {\n    command-succeeds 'test -n "$PWD"'\n}\n`,
     );
     const m = extractManifest(p);
-    expect(m.entries).toContainEqual({
-      phase: 'post',
-      check: 'command-succeeds',
-      args: null,
-      negated: false,
-      count: 1,
-    });
+    expect(m.entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'command-succeeds',
+        args: null,
+        negated: false,
+        count: 1,
+      },
+    ]);
   });
 
   test('unknown verb throws ManifestExtractionError', () => {
@@ -249,6 +273,142 @@ describe('extractManifest', () => {
       'pre() {\n    setup-helpers run init_repo\n}\n\npost() {\n    git-repo\n}\n',
     );
     expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  // --- corpus acceptance: constructs real scenarios/*/checks.sh files use ---
+
+  test('double-quoted backslash is retained before non-special chars (corpus: cost-trivial-task-review-fanout)', () => {
+    // Bash keeps \\ inside double quotes except before $ ` " \\ — so this
+    // scenario's arg must extract with every backslash intact, exactly as
+    // bash passes it to check-tool at runtime.
+    const p = writeChecksSh(
+      `pre() {\n    git-repo\n}\n\npost() {\n    file-contains 'src/app.js' "console\\.log\\('app started'\\)"\n}\n`,
+    );
+    const m = extractManifest(p);
+    expect(m.entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'file-contains',
+        args: ['src/app.js', "console\\.log\\('app started'\\)"],
+        negated: false,
+        count: 1,
+      },
+    ]);
+  });
+
+  test('mid-word # stays literal (bash: # only starts a comment at word start)', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    file-contains a.txt x#y\n}\n',
+    );
+    expect(extractManifest(p).entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'post',
+        check: 'file-contains',
+        args: ['a.txt', 'x#y'],
+        negated: false,
+        count: 1,
+      },
+    ]);
+  });
+
+  test('the bare bash no-op `:` placeholder emits no entry (corpus: pure-AC scenarios)', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n    git-branch main\n}\n\npost() {\n    :\n}\n',
+    );
+    // `:` is a bash builtin, not a check verb: it records nothing at runtime,
+    // so the manifest carries only the pre entries — zero post entries.
+    expect(extractManifest(p).entries).toEqual([
+      {
+        phase: 'pre',
+        check: 'git-repo',
+        args: [],
+        negated: false,
+        count: 1,
+      },
+      {
+        phase: 'pre',
+        check: 'git-branch',
+        args: ['main'],
+        negated: false,
+        count: 1,
+      },
+    ]);
+  });
+
+  // --- rejection: unmodelable constructs (none appear in the 85-file corpus) ---
+
+  test('inline comments are rejected, not silently eaten into args', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    file-exists a.txt # trailing note\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test.each([
+    ';',
+    '&&',
+    '||',
+    '|',
+    '>',
+    '`',
+    '(',
+  ])('unquoted control operator %p is rejected', (op) => {
+    const body =
+      op === ';'
+        ? 'file-exists a.txt; file-contains a.txt x'
+        : `git-clean ${op} git-repo`;
+    const p = writeChecksSh(
+      `pre() {\n    git-repo\n}\n\npost() {\n    ${body}\n}\n`,
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('one-line function bodies are rejected, not silently skipped', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() { file-exists a.txt; }\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+});
+
+describe('writeManifest', () => {
+  test('serializes canonical key order + trailing newline regardless of caller insertion order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'manifest-wm-'));
+    // Same value as the expected bytes below, but every object's keys are in
+    // scrambled insertion order — writeManifest must project them canonically.
+    const scrambled: CheckManifest = {
+      entries: [
+        {
+          count: 2,
+          negated: false,
+          args: ['a.txt'],
+          check: 'file-exists',
+          phase: 'post',
+        },
+      ],
+      schema_version: 1,
+    };
+    writeManifest(dir, scrambled);
+    const expected = `{\n  "schema_version": 1,\n  "entries": [\n    {\n      "phase": "post",\n      "check": "file-exists",\n      "args": [\n        "a.txt"\n      ],\n      "negated": false,\n      "count": 2\n    }\n  ]\n}\n`;
+    const bytes = readFileSync(manifestPath(dir), 'utf8');
+    expect(bytes).toEqual(expected);
+    expect(bytes.endsWith('\n')).toBe(true);
+    // Round-trip: the bytes parse back to the same manifest value.
+    expect(readManifest(dir)).toEqual(scrambled);
   });
 });
 
