@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { FinalVerdictSchema } from '../src/contracts/verdict.ts';
+import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 // Receiver side of the graceful-stop chain (the dashboard Stop button's
 // load-bearing path): `quorum run` under SIGINT must forward the signal to the
@@ -118,13 +119,15 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
     {
       env: {
         ...process.env,
-        PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
+        // The `hang` selection rides in the generated gauntlet shim (the
+        // runner's gauntlet-env projection strips a host-exported
+        // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
+        PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         // claude.yaml's default_credential is opus_bedrock (Mantle); its
         // provision resolves this bearer (mock-gauntlet makes no real call).
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
-        MOCK_GAUNTLET_FIXTURE: 'hang',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -250,11 +253,10 @@ test('quorum run stopped during agent phase keeps parsed credential labels', asy
     {
       env: {
         ...process.env,
-        PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
+        PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
-        MOCK_GAUNTLET_FIXTURE: 'hang',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

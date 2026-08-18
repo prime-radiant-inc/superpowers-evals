@@ -9,6 +9,7 @@ import {
   contextDirName,
   runScenario,
 } from '../src/runner/index.ts';
+import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 test('allocateRunDir names <scenario>-<agent>-<credential>-<os>-<stamp>-<nonce> and creates it', () => {
   const out = mkdtempSync(join(tmpdir(), 'out-'));
@@ -217,14 +218,13 @@ async function runWithMockGauntlet(
     'ANTHROPIC_API_KEY',
     'AWS_BEARER_TOKEN_BEDROCK',
     'SUPERPOWERS_ROOT',
-    'MOCK_GAUNTLET_FIXTURE',
   ] as const;
   const saved = keys.map((k) => [k, process.env[k]] as const);
-  process.env['PATH'] = `${MOCK_GAUNTLET_DIR}:${process.env['PATH'] ?? ''}`;
+  process.env['PATH'] =
+    `${mockGauntletDir(fixture)}:${MOCK_GAUNTLET_DIR}:${process.env['PATH'] ?? ''}`;
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
   process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
-  process.env['MOCK_GAUNTLET_FIXTURE'] = fixture;
   try {
     return await runScenario({
       scenarioDir,

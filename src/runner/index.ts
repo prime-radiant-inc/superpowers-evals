@@ -105,6 +105,7 @@ import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
+import { gauntletEnvBase } from './gauntlet-env.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
 
@@ -290,11 +291,12 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // drives the agent can locate the agent's collapsed config dir.
   readonly runHomeDir: string;
   readonly extraEnv: Record<string, string>;
-  // Base env gauntlet inherits. Defaults to the full host snapshot; copilot
-  // passes a tightly-scoped allowlist (copilotGauntletEnv) so the host
-  // environment (other provider keys, credentialed proxies) is not leaked into
-  // the agent subprocess.
-  readonly envBase?: Readonly<Record<string, string | undefined>> | undefined;
+  // Base env gauntlet inherits: an allowlist projection of the host env, never
+  // the full snapshot (the agent under test shares the child's UID and can
+  // read a peer's environment). Every agent gets the GAUNTLET_ENV_ALLOWLIST
+  // projection (gauntletEnvBase); copilot passes its stricter
+  // copilotGauntletEnv, which also rejects credentialed proxy URLs.
+  readonly envBase: Readonly<Record<string, string | undefined>>;
 }
 
 // The gauntlet child currently in flight for this process (one run per process),
@@ -321,7 +323,7 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   return new Promise<GauntletExit>((resolvePromise, rejectPromise) => {
     const child = spawn('gauntlet', buildGauntletArgv(a), {
       env: {
-        ...(a.envBase ?? envSnapshot()),
+        ...a.envBase,
         QUORUM_AGENT_CWD: a.launchCwd,
         QUORUM_AGENT_HOME: a.runHomeDir,
         ...a.extraEnv,
@@ -354,9 +356,10 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
 // when no parseable result exists (a gauntlet that exited non-zero but wrote a
 // valid result still yields that pass/fail; a non-zero exit with no/garbled
 // result becomes investigate -> composer indeterminate, not a gauntlet-stage
-// error). The subprocess env is the sanctioned snapshot overlaid with the launch
-// cwd and the agent's extra env. A spawn-level failure (gauntlet not on PATH)
-// still rejects from spawnGauntlet and surfaces as an 'unknown'-stage crash.
+// error). The subprocess env is the caller's allowlist projection overlaid with
+// the launch cwd and the agent's extra env. A spawn-level failure (gauntlet not
+// on PATH) still rejects from spawnGauntlet and surfaces as an 'unknown'-stage
+// crash.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
@@ -1591,12 +1594,15 @@ async function runInnerBody(
             : [],
   });
 
-  // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full
-  // host env, and a proxy var carrying credentialed userinfo is rejected.
-  // copilotGauntletEnv can throw a ProvisionError (credentialed proxy) -> mapped
-  // to a setup indeterminate.
-  const gauntletEnvBase =
-    cfg.name === 'copilot' ? copilotGauntletEnv(envSnapshot()) : undefined;
+  // The gauntlet child env base: every agent gets the GAUNTLET_ENV_ALLOWLIST
+  // projection of the host env; copilot keeps its stricter allowlist, where a
+  // proxy var carrying credentialed userinfo is additionally rejected
+  // (copilotGauntletEnv can throw a ProvisionError -> mapped to a setup
+  // indeterminate).
+  const gauntletEnvBaseValue =
+    cfg.name === 'copilot'
+      ? copilotGauntletEnv(envSnapshot())
+      : gauntletEnvBase(envSnapshot());
 
   writePhase(runDir, 'agent', identity);
 
@@ -1637,7 +1643,7 @@ async function runInnerBody(
       launchCwd,
       runHomeDir,
       extraEnv,
-      envBase: gauntletEnvBase,
+      envBase: gauntletEnvBaseValue,
     }));
   } finally {
     if (watcher !== null) {

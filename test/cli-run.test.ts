@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
@@ -56,7 +57,10 @@ function runCli(
     {
       env: {
         ...process.env,
-        PATH: `${MOCK}:${process.env['PATH'] ?? ''}`,
+        // The fixture selection rides in the generated gauntlet shim (the
+        // runner's gauntlet-env projection strips a host-exported
+        // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
+        PATH: `${mockGauntletDir(fixture)}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         // claude.yaml's default_credential is opus_bedrock (Mantle), whose
         // provision resolves this bearer; the mock-gauntlet never makes a real
@@ -65,7 +69,6 @@ function runCli(
         // The real claude.yaml lists SUPERPOWERS_ROOT in required_env and the
         // $SUPERPOWERS_ROOT context substitution reads it.
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
-        MOCK_GAUNTLET_FIXTURE: fixture,
       },
       encoding: 'utf8',
     },

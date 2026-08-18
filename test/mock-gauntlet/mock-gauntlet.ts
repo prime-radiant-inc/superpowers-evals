@@ -43,6 +43,13 @@ if (fixture === 'hang') {
 } else {
   const fixtureDir = join(import.meta.dir, 'fixtures', fixture);
 
+  // 0) the exact env this child received, so tests can assert what the
+  // runner's gauntlet-env projection let through (test/gauntlet-env.test.ts).
+  writeFileSync(
+    join(projectDir, 'mock-gauntlet-env.json'),
+    `${JSON.stringify(process.env, null, 2)}\n`,
+  );
+
   // 1) gauntlet result artifacts: <project-dir>/gauntlet-agent/results/<runId>/.
   const runId = `mock_${fixture}_0000`;
   const resultsDir = join(projectDir, 'gauntlet-agent', 'results', runId);
