@@ -331,16 +331,83 @@ interface FakeBinFixture {
   cleanup: () => void;
 }
 
+// Single-quote a value for embedding in the generated /bin/sh script.
+function shSingleQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 function makeFakeBinFixture(): FakeBinFixture {
   const binDir = mkdtempSync(join(tmpdir(), 'bin-pin-'));
   const logPath = join(binDir, 'invocations.log');
+  // F13 micro corrective round 3: the recorder is FINITE and NON-SECRET — it
+  // never serializes the environment. Per invocation it writes: the header
+  // line (call ordering / marker semantics), then, for the two routing
+  // names, the VALUE only when it is a known-safe test path (under the OS
+  // tmpdir — where every run-local home lives — or the routing sentinel
+  // constants; anything else, e.g. the operator's real HOME, degrades to a
+  // presence boolean), then presence booleans for the secret-shaped names —
+  // never values. There is no fallback or full-dump path: the pre-run pin
+  // child legitimately inherits real process-start credentials, and this log
+  // must stay safe to leave on disk across a crash. Both fakes (agent and
+  // gauntlet) are generated from this one recorder.
+  const recordEnvLines = (tag: string) => {
+    const routingCases = ROUTING_VALUE_NAMES.map(
+      (name) =>
+        `for name in ${name}; do
+` +
+        '  eval "value=\\${$name-}"\n' +
+        `  case "$value" in
+` +
+        `    ${shSingleQuote(SAFE_VALUE_ROOT)}*|${KNOWN_SAFE_VALUES_LIST.map(
+          (v) => shSingleQuote(v),
+        ).join('|')})
+` +
+        `      echo "  ${tag}-ENV $name=$value" >> '${logPath}' ;;
+` +
+        `    *)
+` +
+        `      if [ -n "$value" ]; then
+` +
+        `        echo "  ${tag}-ENV PRESENT:$name=true" >> '${logPath}'
+` +
+        `      else
+` +
+        `        echo "  ${tag}-ENV PRESENT:$name=false" >> '${logPath}'
+` +
+        `      fi ;;
+` +
+        `  esac
+` +
+        `done
+`,
+    ).join('');
+    const presenceCases = SECRET_SHAPED_NAMES.map(
+      (name) =>
+        `for name in ${name}; do
+` +
+        '  eval "value=\\${$name-}"\n' +
+        `  if [ -n "$value" ]; then
+` +
+        `    echo "  ${tag}-ENV PRESENT:$name=true" >> '${logPath}'
+` +
+        `  else
+` +
+        `    echo "  ${tag}-ENV PRESENT:$name=false" >> '${logPath}'
+` +
+        `  fi
+` +
+        `done
+`,
+    ).join('');
+    return routingCases + presenceCases;
+  };
   const mk = (name: string, versionLine: string) => {
     const p = join(binDir, name);
     writeFileSync(
       p,
       `#!/bin/sh\n` +
         `echo "${name.toUpperCase()}-INVOCATION $*" >> '${logPath}'\n` +
-        `env | sed 's/^/  ${name.toUpperCase()}-ENV /' >> '${logPath}'\n` +
+        recordEnvLines(name.toUpperCase()) +
         `echo "${versionLine}"\n`,
     );
     chmodSync(p, 0o755);
@@ -361,26 +428,48 @@ function makeFakeBinFixture(): FakeBinFixture {
 }
 
 // Parse the shared invocation log into sections: each starts at an
-// *-INVOCATION line and carries the subsequent *-ENV lines (the child's env).
-function parseInvocationLog(
-  logPath: string,
-): { header: string; env: Record<string, string> }[] {
+// *-INVOCATION line and carries the subsequent *-ENV lines — routing VALUE
+// lines (`NAME=<safe path>`, recorded only for safe test paths) and
+// `PRESENT:NAME=true|false` presence booleans (the only representation
+// secret-shaped names ever get).
+function parseInvocationLog(logPath: string): {
+  header: string;
+  env: Record<string, string>;
+  present: Record<string, boolean>;
+}[] {
   if (!existsSync(logPath)) return [];
-  const sections: { header: string; env: Record<string, string> }[] = [];
+  const sections: {
+    header: string;
+    env: Record<string, string>;
+    present: Record<string, boolean>;
+  }[] = [];
   for (const line of readFileSync(logPath, 'utf8').split('\n')) {
     const inv = line.match(/^([A-Z]+)-INVOCATION (.*)$/);
     if (inv !== null) {
-      sections.push({ header: `${inv[1]} ${inv[2]}`, env: {} });
+      sections.push({ header: `${inv[1]} ${inv[2]}`, env: {}, present: {} });
       continue;
     }
-    const envLine = line.match(/^ {2}[A-Z]+-ENV (.+?)=(.*)$/);
+    const valueLine = line.match(
+      /^ {2}[A-Z]+-ENV (HOME|XDG_CONFIG_HOME)=(.*)$/,
+    );
     const current = sections.at(-1);
     if (
-      envLine?.[1] !== undefined &&
-      envLine[2] !== undefined &&
+      valueLine?.[1] !== undefined &&
+      valueLine[2] !== undefined &&
       current !== undefined
     ) {
-      current.env[envLine[1]] = envLine[2];
+      current.env[valueLine[1]] = valueLine[2];
+      continue;
+    }
+    const presentLine = line.match(
+      /^ {2}[A-Z]+-ENV PRESENT:([A-Z0-9_]+)=(true|false)$/,
+    );
+    if (
+      presentLine?.[1] !== undefined &&
+      presentLine[2] !== undefined &&
+      current !== undefined
+    ) {
+      current.present[presentLine[1]] = presentLine[2] === 'true';
     }
   }
   return sections;
@@ -394,6 +483,80 @@ const OPERATOR_SENTINELS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-host-anthropic',
   AWS_SECRET_ACCESS_KEY: 'host-aws-secret',
 };
+
+// F13 micro corrective round 3: the fake binaries' shared invocation log is a
+// disk artifact that can outlive a crashed/interrupted test, and the
+// legitimate pre-run pin child may inherit REAL process-start credentials —
+// so the harness must never serialize a full environment or any secret value.
+// The only env lines allowed are (a) HOME/XDG_CONFIG_HOME VALUES when they
+// are known-safe test paths (under the OS tmpdir, or the routing sentinel
+// constants), and (b) presence booleans for secret-shaped names — never
+// values. Every other line must be an invocation header or the setup-failure
+// marker; anything else is a full-dump (or value-leak) regression.
+const SAFE_VALUE_ROOT = `${tmpdir()}/`;
+const KNOWN_SAFE_VALUES: ReadonlySet<string> = new Set([
+  '/operator-sentinel-home',
+  '/operator-sentinel-xdg',
+]);
+const KNOWN_SAFE_VALUES_LIST = [...KNOWN_SAFE_VALUES];
+const SECRET_SHAPED_NAMES = [
+  'ANTHROPIC_API_KEY',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_BEARER_TOKEN_BEDROCK',
+] as const;
+const ROUTING_VALUE_NAMES = ['HOME', 'XDG_CONFIG_HOME'] as const;
+// Every fake secret value the tests seed (hostile in-process env or a
+// hostile-startup subprocess run): none may appear anywhere in the log.
+const SEEDED_SECRET_VALUES = [
+  'sk-host-anthropic',
+  'host-aws-secret',
+  'bedrock-key-test',
+] as const;
+
+function assertInvocationLogHygiene(log: string): void {
+  const lines = log.split('\n');
+  for (const line of lines) {
+    if (
+      line === '' ||
+      line === 'SETUP-FAILED-MARKER' ||
+      /^[A-Z]+-INVOCATION /.test(line)
+    ) {
+      continue;
+    }
+    // A value line is allowed ONLY for the two routing names, and its value
+    // must be a known-safe test path.
+    const valueLine = line.match(
+      /^ {2}[A-Z]+-ENV (HOME|XDG_CONFIG_HOME)=(.*)$/,
+    );
+    if (valueLine !== null) {
+      const value = valueLine[2] ?? '';
+      expect({
+        line,
+        safe: value.startsWith(SAFE_VALUE_ROOT) || KNOWN_SAFE_VALUES.has(value),
+      }).toEqual({ line, safe: true });
+      continue;
+    }
+    // Secret-shaped (and non-safe routing) names appear ONLY as presence
+    // booleans.
+    const presentLine = line.match(
+      /^ {2}[A-Z]+-ENV PRESENT:(HOME|XDG_CONFIG_HOME|[A-Z0-9_]+)=(true|false)$/,
+    );
+    if (presentLine !== null) {
+      continue;
+    }
+    // Anything else — a PATH=/PWD= line from a full dump, an unknown var, a
+    // secret value — fails loudly with the offending line.
+    expect({ line, allowed: false }).toEqual({ line, allowed: true });
+  }
+  // No seeded fake secret value may appear anywhere in the log, pre- or
+  // post-marker (presence booleans carry no value by construction).
+  for (const secret of SEEDED_SECRET_VALUES) {
+    expect({ secret, present: log.includes(secret) }).toEqual({
+      secret,
+      present: false,
+    });
+  }
+}
 
 // A scenario whose setup.sh FAILS, appending a marker to the shared
 // invocation log first so "post-failure" is a concrete position in call order.
@@ -483,6 +646,9 @@ test('pinned agent setup failure: zero agent invocations post-failure, no operat
     expect(verdict.provenance?.agent_cli_version).toBe(null);
     expect(verdict.provenance?.harness_rev).toBeTruthy();
     expect(verdict.provenance?.gauntlet_version).toBe('gauntlet FAKE-G 2.0');
+    // The log itself is hygienic: no full-environment serialization, no
+    // secret values, value lines only for safe test paths.
+    assertInvocationLogHygiene(log);
     const gauntletChildren = sections.filter((s) =>
       s.header.startsWith('GAUNTLET'),
     );
@@ -492,8 +658,12 @@ test('pinned agent setup failure: zero agent invocations post-failure, no operat
       expect(child.env['XDG_CONFIG_HOME']).toBe(
         join(runDir, 'home', '.config'),
       );
+      // Secret-shaped names never carry a value; on this run-local child
+      // they are not even PRESENT.
       expect(child.env['ANTHROPIC_API_KEY']).toBeUndefined();
       expect(child.env['AWS_SECRET_ACCESS_KEY']).toBeUndefined();
+      expect(child.present['ANTHROPIC_API_KEY']).toBe(false);
+      expect(child.present['AWS_SECRET_ACCESS_KEY']).toBe(false);
     }
   } finally {
     for (const [k, v] of saved) {
@@ -589,6 +759,9 @@ test('pinned agent success: agent version recorded with exactly pin + provenance
     );
     expect(provenanceCall.env['ANTHROPIC_API_KEY']).toBeUndefined();
     expect(provenanceCall.env['AWS_SECRET_ACCESS_KEY']).toBeUndefined();
+    expect(provenanceCall.present['ANTHROPIC_API_KEY']).toBe(false);
+    expect(provenanceCall.present['AWS_SECRET_ACCESS_KEY']).toBe(false);
+    assertInvocationLogHygiene(readFileSync(fx.logPath, 'utf8'));
   } finally {
     for (const [k, v] of saved) {
       if (v === undefined) {
@@ -637,6 +810,7 @@ test('pinned agent checks-stage failure: agent version still recorded, no extra 
       s.header.startsWith('FAKECLAUDE'),
     );
     expect(claudeCalls.length).toBe(2);
+    assertInvocationLogHygiene(readFileSync(fx.logPath, 'utf8'));
   } finally {
     for (const [k, v] of saved) {
       if (v === undefined) {
