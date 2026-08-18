@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,15 +51,14 @@ test('setup.sh never sees host credentials; quorum-owned and allowlisted vars su
   expect(env['QUORUM_SCENARIO_DIR']).toContain('setup-scn-');
   expect(env['QUORUM_REPO_ROOT']).toBeTruthy();
   expect(env['PATH']).toBeTruthy();
-  expect(env['HOME']).toBeTruthy();
+  // HOME is deliberately NOT projected: the Fix-1 drop sweep showed no active
+  // setup path needs it (git auto-detects identity; runGit injects its own),
+  // so an unevidenced re-add should fail here, loudly.
+  expect(env['HOME']).toBeUndefined();
 });
 
 test('SETUP_ENV_ALLOWLIST contains no credential-shaped names', () => {
   for (const name of SETUP_ENV_ALLOWLIST) {
     expect(name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i);
   }
-});
-
-afterEach(() => {
-  for (const name of HOSTILE) delete process.env[name];
 });
