@@ -989,6 +989,7 @@ export async function runScenario(
       checks: [],
       captureEmpty: false,
       error: { stage, message },
+      expected: null,
     });
   }
   // Best-effort provenance stamp (PRI-2494). The binary name comes from the
@@ -1346,6 +1347,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `pre-checks crashed (exit ${pre.exitCode})${crashHint(pre.stderr)}`,
       },
+      expected: null,
     });
   }
   if (pre.records.some((r) => !r.passed)) {
@@ -1354,6 +1356,7 @@ async function runInnerBody(
       checks: [...pre.records],
       captureEmpty: false,
       error: null,
+      expected: null,
     });
   }
 
@@ -1923,6 +1926,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `post-checks crashed (exit ${post.exitCode})${crashHint(post.stderr)}`,
       },
+      expected: null,
     });
   }
 
@@ -1949,6 +1953,7 @@ async function runInnerBody(
     checks: [...pre.records, ...post.records],
     captureEmpty,
     error: null,
+    expected: null,
   });
   // Economics is measurement, never worth losing a verdict over: a wrong-typed
   // artifact (version skew, tampering, a legacy pre-obol usage file) degrades to
