@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from '../src/appliance/errors.ts';
@@ -12,7 +12,10 @@ import {
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-summary-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-summary-')));
   for (const dir of [
     'state/jobs',
     'state/locks',

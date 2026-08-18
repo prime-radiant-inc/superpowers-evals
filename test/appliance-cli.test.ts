@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -382,7 +383,9 @@ test('prune rejects unsafe --older-than-days values before the action runs', asy
 test('default dry-run prune creates and chmods no state dirs', () => {
   // Real subprocess against the DEFAULT actions: a dry-run report must not
   // materialize or re-chmod state/{jobs,locks,provenance}.
-  const root = mkdtempSync(join(tmpdir(), 'appliance-cli-dryrun-'));
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-cli-dryrun-')),
+  );
   for (const sub of [
     'evals/results',
     'superpowers',

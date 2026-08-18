@@ -220,8 +220,13 @@ exactly the files the manifest lists — a symlink or special file anywhere in
 the payload, an unlisted extra file, or a `run_id` in the reserved
 `batches`/`batch-*` namespace (those names belong to batch artifacts and could
 never be addressed by `status`/`show` again) rejects the bundle whole. The
-appliance's own `state/` namespace and results root must likewise be real
-directories, or import refuses before writing anything. It holds `run.lock`
+appliance's own configured root, results root, and `state/` namespace are
+validated no-follow across **every existing path component from the
+filesystem root down** — an intermediate symlink anywhere in those paths
+(say, `<root>/evals` pointing elsewhere) is rejected the same as a symlinked
+final directory. Configure real paths, not symlink aliases; the appliance
+never silently canonicalizes your configuration. Import refuses before
+writing anything if any of this fails. It holds `run.lock`
 for the duration; if a live job holds it, import returns `lock_busy` and does
 nothing. Each run then lands by staging the payload beside the results root
 and atomically renaming it into place — import never modifies or deletes a
@@ -292,9 +297,12 @@ guess: a batch dir missing its canonical `batch.json` or `results.jsonl`
 (an empty `results.jsonl` is a valid zero-row file), an unparseable or
 non-canonical `results.jsonl` record, a corrupt job record under
 `state/jobs`, any symlink or unreadable entry inside the batches, jobs, or
-campaigns namespaces, or a results root or `state/`
-jobs/locks/provenance/quarantine root that is not itself a real directory.
-Repair the state and rerun.
+campaigns namespaces, or a configured root, results root, or `state/`
+jobs/locks/provenance/quarantine root whose path is not real directories all
+the way down — every existing component from the filesystem root is checked
+no-follow, so an intermediate symlink (e.g. `<root>/evals` pointing at
+another volume's results) refuses the plan just like a symlinked final
+directory. Repair the state and rerun.
 
 `--apply` holds `run.lock` (it refuses with `lock_busy` while a batch or import
 is live) and **moves** candidates to `state/quarantine/` — it never deletes.

@@ -3,8 +3,10 @@
 // only mutation primitives here are renameSync (into place, or into
 // quarantine) and the private mkdir of a validated missing namespace dir.
 import {
+  chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -16,12 +18,12 @@ import {
   dirname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep,
 } from 'node:path';
 import { ApplianceError } from './errors.ts';
-import { mkdirPrivate } from './fs.ts';
 import type { LoadedApplianceConfig } from './types.ts';
 
 // Resolve target against root and refuse the root itself or any escape —
@@ -116,11 +118,21 @@ function assertRealDirStats(
   }
 }
 
-// One no-follow probe: the entry must exist and be a real directory —
-// symlinks and every other file type are config faults, and an unreadable
-// probe fails closed.
+// One namespace probe, walked from the FILESYSTEM root: every component of
+// the absolute path — intermediate and final — must be a real directory
+// reached without following a symlink. A final-component-only lstat would
+// happily traverse an intermediate link (<root>/evals -> elsewhere) and
+// vouch for a directory living outside the configured tree, so the walk is
+// component-by-component. Operators must configure real paths, not symlink
+// aliases; nothing here realpath-normalizes configuration silently.
 export function assertRealDirNoFollow(path: string, label: string): void {
-  assertRealDirStats(lstatNoFollow(path, label), path, label);
+  const target = resolve(path);
+  let cursor = parse(target).root;
+  const rel = relative(cursor, target);
+  for (const segment of rel === '' ? [] : rel.split(sep)) {
+    cursor = join(cursor, segment);
+    assertRealDirStats(lstatNoFollow(cursor, label), cursor, label);
+  }
 }
 
 // The namespace chain: every EXISTING component from base down to target
@@ -152,16 +164,39 @@ export function assertNoFollowDirChain(
   return true;
 }
 
-// Mutating ensure over the same boundary: validate the existing chain,
-// create any missing tail components private, then revalidate.
+// Mutating ensure over the same boundary: validate the existing prefix,
+// then create AT MOST ONE missing component at a time — never a recursive
+// mkdir across an unvalidated path — revalidating each component no-follow
+// right after creating it. The final target ends private (0o700).
 export function ensurePrivateDirNoFollow(
   base: string,
   target: string,
   label: string,
 ): void {
-  assertNoFollowDirChain(base, target, label);
-  mkdirPrivate(target);
-  assertNoFollowDirChain(base, target, label);
+  assertRealDirNoFollow(base, label);
+  const b = resolve(base);
+  const t = resolve(target);
+  const rel = relative(b, t);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw namespaceFault(label, target, `escapes its namespace base ${base}`);
+  }
+  let cursor = b;
+  for (const segment of rel === '' ? [] : rel.split(sep)) {
+    cursor = join(cursor, segment);
+    let stats = lstatNoFollow(cursor, label);
+    if (stats === undefined) {
+      try {
+        mkdirSync(cursor, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw error;
+        }
+      }
+      stats = lstatNoFollow(cursor, label);
+    }
+    assertRealDirStats(stats, cursor, label);
+  }
+  chmodSync(t, 0o700);
 }
 
 export function quarantineRoot(loaded: LoadedApplianceConfig): string {

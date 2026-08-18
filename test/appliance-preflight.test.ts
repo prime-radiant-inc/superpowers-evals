@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -102,7 +103,12 @@ class FakeRunner implements CommandRunner {
 }
 
 function loaded(): LoadedApplianceConfig {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-preflight-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-preflight-')),
+  );
   for (const dir of [
     'superpowers-evals/scripts',
     'superpowers-evals/results',

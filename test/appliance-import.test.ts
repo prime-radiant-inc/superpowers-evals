@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -36,7 +37,10 @@ import {
 } from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-import-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-import-')));
   mkdirSync(join(root, 'state/jobs'), { recursive: true });
   mkdirSync(join(root, 'state/locks'), { recursive: true });
   mkdirSync(join(root, 'state/provenance'), { recursive: true });
@@ -1527,6 +1531,41 @@ test('a symlinked state/quarantine root fails import closed instead of quarantin
   // The conflicting landed dir is untouched too:
   expect(readFileSync(join(conflictDir, 'verdict.json'), 'utf8')).toBe(
     'DIFFERENT',
+  );
+});
+
+test('an intermediate symlink in the configured appliance root cannot redirect namespace mutation into a landed victim', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  // A config whose root path traverses a symlink pointing INTO landed
+  // evidence: hop -> results root, so root = hop/<RUN_ID> is the victim
+  // itself, reached through an intermediate link whose FINAL component is a
+  // perfectly real directory. Its state namespace (state/jobs, state/locks,
+  // ...) would be created inside the victim.
+  const hop = join(cfg.config.root, 'hop');
+  symlinkSync(cfg.config.container.results_root, hop);
+  const aliasedRoot = join(hop, RUN_ID);
+  const cfg2: LoadedApplianceConfig = {
+    ...cfg,
+    config: { ...cfg.config, root: aliasedRoot },
+    paths: {
+      jobs: join(aliasedRoot, 'state/jobs'),
+      locks: join(aliasedRoot, 'state/locks'),
+      provenance: join(aliasedRoot, 'state/provenance'),
+    },
+  };
+  const before = snapshotTree(victim);
+
+  expectCode(
+    () => importBundle(cfg2, { bundleDir: makeBundle({ runIds: [RUN_ID_B] }) }),
+    'config_invalid',
+  );
+  // The victim — bytes, modes, mtimes — is untouched; nothing landed and
+  // nothing was reserved through the alias:
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
   );
 });
 

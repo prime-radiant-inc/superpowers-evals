@@ -3,11 +3,15 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmdirSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -24,7 +28,10 @@ import { prune } from '../src/appliance/prune.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-prune-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-prune-')));
   mkdirSync(join(root, 'state/jobs'), { recursive: true });
   mkdirSync(join(root, 'state/locks'), { recursive: true });
   mkdirSync(join(root, 'state/provenance'), { recursive: true });
@@ -68,6 +75,33 @@ function expectCode(fn: () => void, code: ApplianceErrorCode): void {
     return;
   }
   throw new Error(`expected ApplianceError ${code}`);
+}
+
+// Full recursive fingerprint of a dir — names, entry types, modes, sizes,
+// mtimes, and file bytes. Two equal snapshots prove zero byte or metadata
+// change.
+function snapshotTree(dir: string): string {
+  const lines: string[] = [];
+  const record = (path: string, rel: string): void => {
+    const stats = lstatSync(path);
+    const kind = stats.isSymbolicLink()
+      ? 'link'
+      : stats.isDirectory()
+        ? 'dir'
+        : 'file';
+    const hash =
+      kind === 'file' ? Bun.SHA256.hash(readFileSync(path), 'hex') : '';
+    lines.push(
+      `${rel}|${kind}|${(stats.mode & 0o777).toString(8)}|${stats.size}|${stats.mtimeMs}|${hash}`,
+    );
+    if (kind === 'dir') {
+      for (const entry of readdirSync(path).sort()) {
+        record(join(path, entry), `${rel}/${entry}`);
+      }
+    }
+  };
+  record(dir, '.');
+  return lines.join('\n');
 }
 
 function makeRunDir(
@@ -391,6 +425,40 @@ test('a symlinked state/jobs root cannot hide a reference: prune fails closed', 
   expect(existsSync(join(root, 'referenced-run', 'trajectory.json'))).toBe(
     true,
   );
+});
+
+test('an intermediate symlink inside results_root cannot make prune move an outside run', () => {
+  const cfg = loaded();
+  const root = cfg.config.root;
+  // The configured results_root is <root>/evals/results, but <root>/evals is
+  // a symlink at an external directory whose results/ holds a run this
+  // appliance does not own. The FINAL path component resolves to a real
+  // directory only by traversing the intermediate link, so a final-component
+  // probe alone would accept it — and apply would pull the external run into
+  // this appliance's quarantine.
+  const external = join(root, 'external');
+  mkdirSync(join(external, 'results'), { recursive: true });
+  makeRunDir(join(external, 'results'), 'outside-run', {
+    verdict: false,
+    ageDays: 30,
+  });
+  rmSync(join(root, 'evals'), { recursive: true, force: true });
+  symlinkSync(external, join(root, 'evals'));
+  const before = snapshotTree(external);
+
+  expectCode(
+    () => prune(cfg, { apply: false, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  expectCode(
+    () => prune(cfg, { apply: true, olderThanDays: 7 }),
+    'config_invalid',
+  );
+  // The external tree — bytes, modes, mtimes — is untouched, and nothing
+  // was quarantined:
+  expect(snapshotTree(external)).toBe(before);
+  const qroot = join(root, 'state', 'quarantine');
+  expect(existsSync(qroot) ? readdirSync(qroot) : []).toEqual([]);
 });
 
 test('a symlinked state/quarantine root fails prune apply closed', () => {

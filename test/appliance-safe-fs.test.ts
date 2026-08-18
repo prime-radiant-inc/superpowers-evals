@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   existsSync as realExistsSync,
+  realpathSync,
   renameSync as realRenameSync,
   statSync,
   symlinkSync,
@@ -152,7 +153,7 @@ test('dirsEquivalent refuses symlink-bearing trees instead of ignoring the links
 });
 
 test('moveToQuarantine renames (never copies) into state/quarantine and returns the path', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const src = join(loaded.config.container.results_root, 'run-1');
   tree(src, { 'verdict.json': 'v' });
@@ -165,7 +166,7 @@ test('moveToQuarantine renames (never copies) into state/quarantine and returns 
 });
 
 test('moveToQuarantine suffixes on collision', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const mk = (name: string) => {
     const src = join(loaded.config.container.results_root, name);
@@ -231,7 +232,7 @@ test('moveToQuarantine suffixes on collision', () => {
 });
 
 test('moveToQuarantine maps rename EXDEV to a typed error, never a copy-delete fallback', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const src = join(loaded.config.container.results_root, 'run-x');
   tree(src, { 'v.txt': 'v' });
@@ -265,7 +266,7 @@ test('moveToQuarantine maps rename EXDEV to a typed error, never a copy-delete f
 });
 
 test('moveToQuarantine rejects a traversal name and leaves the source in place', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const src = join(loaded.config.container.results_root, 'run-1');
   tree(src, { 'v.txt': 'v' });
@@ -282,7 +283,7 @@ test('moveToQuarantine rejects a traversal name and leaves the source in place',
 });
 
 test('moveToQuarantine refuses a source outside the results root', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const outside = mkdtempSync(join(tmpdir(), 'not-results-'));
   expect(() => moveToQuarantine(loaded, outside, 'x')).toThrow(ApplianceError);
@@ -293,7 +294,7 @@ test('moveToQuarantine refuses a source outside the results root', () => {
 // --- directories; missing tails are allowed and safely creatable.
 
 test('assertRealDirNoFollow accepts a real dir and rejects symlink, file, and absence', () => {
-  const root = mkdtempSync(join(tmpdir(), 'chain-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'chain-')));
   assertRealDirNoFollow(root, 'probe'); // does not throw
   writeFileSync(join(root, 'file'), 'x');
   symlinkSync(root, join(root, 'link'));
@@ -309,7 +310,7 @@ test('assertRealDirNoFollow accepts a real dir and rejects symlink, file, and ab
 });
 
 test('assertNoFollowDirChain allows a missing tail but rejects symlinked or file components', () => {
-  const root = mkdtempSync(join(tmpdir(), 'chain-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'chain-')));
   expect(
     assertNoFollowDirChain(root, join(root, 'state', 'jobs'), 'jobs'),
   ).toBe(false);
@@ -336,13 +337,13 @@ test('assertNoFollowDirChain allows a missing tail but rejects symlinked or file
 });
 
 test('ensurePrivateDirNoFollow creates a missing chain private and rejects a symlinked one', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ensure-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ensure-')));
   const target = join(root, 'state', 'quarantine');
   ensurePrivateDirNoFollow(root, target, 'quarantine');
   expect(statSync(target).mode & 0o777).toBe(0o700);
   // Redirected component: nothing may be created or chmodded through it.
   const other = mkdtempSync(join(tmpdir(), 'ensure-other-'));
-  const root2 = mkdtempSync(join(tmpdir(), 'ensure2-'));
+  const root2 = realpathSync(mkdtempSync(join(tmpdir(), 'ensure2-')));
   symlinkSync(other, join(root2, 'state'));
   expect(() =>
     ensurePrivateDirNoFollow(root2, join(root2, 'state', 'quarantine'), 'q'),
@@ -351,7 +352,7 @@ test('ensurePrivateDirNoFollow creates a missing chain private and rejects a sym
 });
 
 test('moveToQuarantine refuses a symlinked quarantine root and leaves the source in place', () => {
-  const root = mkdtempSync(join(tmpdir(), 'app-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-')));
   const loaded = fakeLoaded(root);
   const src = join(loaded.config.container.results_root, 'run-1');
   tree(src, { 'v.txt': 'v' });
@@ -364,4 +365,31 @@ test('moveToQuarantine refuses a symlinked quarantine root and leaves the source
   expect((caught as ApplianceError).code).toBe('config_invalid');
   expect(realExistsSync(join(src, 'v.txt'))).toBe(true);
   expect(readdirSync(victim)).toEqual([]);
+});
+
+test('assertRealDirNoFollow rejects an intermediate symlink component', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'abs-')));
+  const real = join(root, 'real');
+  mkdirSync(join(real, 'child'), { recursive: true });
+  symlinkSync(real, join(root, 'hop'));
+  const caught = captureError(() =>
+    assertRealDirNoFollow(join(root, 'hop', 'child'), 'probe'),
+  );
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  // The same directory addressed by its real path is accepted:
+  assertRealDirNoFollow(join(real, 'child'), 'probe');
+});
+
+test('ensurePrivateDirNoFollow rejects a base reached through an intermediate symlink', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'abs-ensure-')));
+  const real = join(root, 'real');
+  mkdirSync(join(real, 'approot'), { recursive: true });
+  symlinkSync(real, join(root, 'hop'));
+  const base = join(root, 'hop', 'approot');
+  expect(() =>
+    ensurePrivateDirNoFollow(base, join(base, 'state'), 'state'),
+  ).toThrow(ApplianceError);
+  // Nothing was created through the link:
+  expect(realExistsSync(join(real, 'approot', 'state'))).toBe(false);
 });
