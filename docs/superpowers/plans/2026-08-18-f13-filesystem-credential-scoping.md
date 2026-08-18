@@ -554,6 +554,10 @@ export interface CreateJobRequest {
 }
 ~~~
 
+`RunCommandArgs` also gains `readonly credential: string | null`; the normalized
+value is part of the observable `ApplianceActions.run` input and the generated
+Quorum argv.
+
 Add exact zod schemas and these defaulted read fields to job and provenance:
 
 ~~~typescript
@@ -572,9 +576,10 @@ Missing fields remain read-compatible. Live preflight must reject null scope; th
 
 The appliance CLI restriction is exact:
 
-- run has one required agent and uses its default credential;
+- run has one required agent and accepts omitted --credential or exactly one
+  nonempty --credential; omission resolves and persists the agent default;
 - run-all requires exactly one CSV agent and accepts omitted --credentials or exactly one nonempty CSV credential;
-- duplicate flags, multiple CSV entries, bare/blank/comma-only/option-looking values, --credential, and --credentials-file fail before job creation;
+- duplicate selection flags, multiple CSV entries, bare/blank/comma-only/option-looking values, run with --credentials, run-all with --credential, and --credentials-file fail before job creation;
 - raw Quorum argv remains preserved separately.
 
 The program action computes LiveCredentialRequest using the configured evals checkout and its current HEAD. It passes the request through ApplianceActions so fake-action tests observe it. submitLiveJob and createJob only persist the request; they never reparse argv or patch scope after worker spawn.
@@ -583,7 +588,13 @@ writeProvenance rereads the authoritative job and derives scope plus lease evide
 
 - [ ] **Step 1: Write RED parser, initial-record, and provenance tests**
 
-Cover one-agent/default, one-agent/one-credential, every invalid optional-value shape, forbidden custom registry flags, initial on-disk record contents, old missing-field read compatibility, live-null refusal ownership, explicit-empty prepare, explicit-null import, and job-authoritative provenance.
+Cover direct-run default, direct-run explicit credential, run-all default,
+run-all one credential, every invalid optional-value shape, forbidden
+cross-command/custom-registry flags, initial on-disk record contents, old
+missing-field read compatibility, live-null refusal ownership, explicit-empty
+prepare, explicit-null import, and job-authoritative provenance. Prove the
+normalized direct-run credential reaches both `ApplianceActions.run` and the
+persisted Quorum argv; no later layer reparses it.
 
 Pin that serialized job/provenance/CLI output contains neither credential paths nor the string credentials-scoped.
 
