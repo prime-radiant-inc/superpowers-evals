@@ -8,8 +8,9 @@ AI agent; what appears on screen is its work.
 Your bash starts in a scratch directory, NOT the workdir quorum
 prepared. quorum has generated a launcher that handles everything — it
 cds into the prepared workdir, pins a throwaway `$HOME` for the run,
-scrubs OpenAI API-key environment variables so Codex uses the copied
-ChatGPT subscription auth, and starts codex with the bypass flag. Type
+walls off the host environment with an `env -i` allowlist (so no host
+API keys reach Codex and it uses the copied ChatGPT subscription
+auth), and starts codex with the bypass flag. Type
 **this one line, verbatim**
 as your first action:
 
@@ -21,7 +22,7 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && HOME=<per-run-throwaway-home> env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+cd <prepared-workdir> && env -i PATH=<path> HOME=<per-run-throwaway-home> <XDG+TMPDIR pins> codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust
 ```
 
 Because the `cd` and the flags live inside the launcher, you cannot skip

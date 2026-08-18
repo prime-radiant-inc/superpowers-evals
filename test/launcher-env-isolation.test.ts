@@ -48,7 +48,8 @@ interface LauncherFixture {
   readonly extraBinaries?: (ctx: FixtureCtx) => Record<string, string>;
 }
 
-// hermes/antigravity get entries when their launchers are converted (Task 4);
+// Every Linux-local launcher has an entry (claude-windows delegates its env to
+// the Windows guest's launch.cmd, so there is no local launcher to test);
 // installLauncher throws on a missing entry so an uncovered agent fails loudly.
 const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
   claude: {
@@ -114,6 +115,16 @@ const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
       mkdirSync(join(npmRoot, 'pi-subagents'), { recursive: true });
       return { npm: `#!/bin/sh\necho '${npmRoot}'\n` };
     },
+  },
+  // No env file: the provider key is a file at ~/.hermes/.env inside the
+  // throwaway home (seeded by provisioning), so nothing secret rides the env.
+  hermes: {
+    binary: 'hermes',
+  },
+  // No env file: OAuth creds are files in the throwaway home's .gemini. The
+  // template's $QUORUM_AGENT_HOME arrives via homeEnvSubstitutions.
+  antigravity: {
+    binary: 'agy',
   },
 };
 
@@ -467,4 +478,28 @@ test('pi launcher: missing pi.env fails loudly, never launches', () => {
   });
   expect(proc.status).not.toBe(0);
   expect(existsSync(envDump)).toBe(false);
+});
+
+test('hermes launcher: hostile host env never reaches the agent', () => {
+  const env = launchAndDump('hermes');
+  // hermes has no env file — its provider key is a file inside the throwaway
+  // home — so nothing beyond the base trio + home pins may survive the wall.
+  expectHostileScrubbed(env);
+  expect(env['HOME']).not.toBe('/host/home');
+  expect(env['HOME']).toContain('home');
+  expect(env['PATH']).toBeTruthy();
+});
+
+test('antigravity launcher: hostile host env never reaches the agent', () => {
+  const env = launchAndDump('antigravity');
+  // antigravity has no env file — OAuth creds are files in the throwaway
+  // home's .gemini — so only the launcher-pinned vars may ride the wall.
+  expectHostileScrubbed(env);
+  expect(env['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe('true');
+  // The config dir IS the throwaway home (antigravity.yaml home_config_subdir
+  // "."), so the pinned value must equal the launcher's HOME pin.
+  expect(env['ANTIGRAVITY_CONFIG_DIR']).toBe(env['HOME']);
+  expect(env['HOME']).not.toBe('/host/home');
+  expect(env['HOME']).toContain('home');
+  expect(env['PATH']).toBeTruthy();
 });

@@ -7,7 +7,8 @@ Antigravity is itself an AI agent; what appears on screen is its work.
 
 Your bash starts in a scratch directory, NOT the workdir quorum prepared.
 quorum has generated a launcher that handles everything: it cds into the
-prepared workdir, pins a throwaway `$HOME` for the run, sets the per-run
+prepared workdir, walls off the host environment with an `env -i` allowlist,
+pins a throwaway `$HOME` for the run, sets the per-run
 isolated `ANTIGRAVITY_CONFIG_DIR` (which equals that throwaway home),
 disables auto-update, points `agy` at the isolated `.gemini` directory,
 starts Antigravity with dangerous permissions, and registers the prepared
@@ -23,7 +24,7 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir-or-visible-alias> && HOME=<per-run-throwaway-home> ANTIGRAVITY_CONFIG_DIR=<per-run-throwaway-home> AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir=<per-run-throwaway-home>/.gemini --add-dir=<prepared-workdir-or-visible-alias> --dangerously-skip-permissions --log-file <per-run-throwaway-home>/agy.log
+cd <prepared-workdir-or-visible-alias> && env -i PATH=<path> HOME=<per-run-throwaway-home> <XDG+TMPDIR pins> ANTIGRAVITY_CONFIG_DIR=<per-run-throwaway-home> AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir=<per-run-throwaway-home>/.gemini --add-dir=<prepared-workdir-or-visible-alias> --dangerously-skip-permissions --log-file <per-run-throwaway-home>/agy.log
 ```
 
 Because the `cd`, throwaway `$HOME`, isolated config directory, `.gemini` path,

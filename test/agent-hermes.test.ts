@@ -244,22 +244,26 @@ test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME,
     ),
     'utf8',
   );
-  // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token.
+  // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token;
+  // hermes uses env -i + explicit allowlist like every converted launcher
+  // (F13 — the black-box hostile-env proof is launcher-env-isolation.test.ts).
   expect(launcher).toContain('$QUORUM_HOME_ENV');
+  expect(launcher).toContain('env -i');
+  expect(launcher).toContain('env_args=(');
   // HERMES_HOME is collapsed into $HOME — the launcher must NOT set it as an
   // env assignment on the exec line (the comment block may still mention it).
   expect(launcher).not.toContain('HERMES_HOME="$HERMES_HOME"');
   expect(launcher).not.toMatch(/\bHERMES_HOME=/);
-  // The exec line itself: launches hermes (not a bare, unisolated invocation)
-  // with the real approval-bypass flag, and the nonexistent --yes/--no-memory
-  // flags (which would crash the real CLI) must never appear on it — the
-  // comment block above may still mention them as history.
-  const execLine = launcher
+  // The invocation line itself: launches hermes with the real approval-bypass
+  // flag, and the nonexistent --yes/--no-memory flags (which would crash the
+  // real CLI) must never appear on it — the comment block above may still
+  // mention them as history.
+  const hermesLine = launcher
     .split('\n')
-    .find((line) => line.startsWith('exec '));
-  expect(execLine).toBe('exec env $QUORUM_HOME_ENV hermes --yolo "$@"');
-  expect(execLine).not.toContain('--yes');
-  expect(execLine).not.toContain('--no-memory');
+    .find((line) => line.trimStart().startsWith('hermes '));
+  expect(hermesLine).toContain('hermes --yolo "$@"');
+  expect(hermesLine).not.toContain('--yes');
+  expect(hermesLine).not.toContain('--no-memory');
   // cd into the prepared workdir before launch, like every other launcher.
   expect(launcher).toContain('cd "$QUORUM_AGENT_CWD"');
 });
