@@ -29,4 +29,33 @@ trap - EXIT HUP INT TERM
 unset KIMI_ENV_FILE
 unset -f cleanup_kimi_env
 
-exec env $QUORUM_HOME_ENV $KIMI_BINARY --yolo "$@"
+# Host-env isolation (F13): env -i + explicit allowlist. The env file is
+# allowlist-built by buildKimiSubprocessEnv (src/agents/kimi.ts) and already
+# sourced above (and deleted); forward exactly those names — keep this list in
+# sync with that builder: the forward list must name every var that file can
+# set. The base trio covers the builder's PATH/TERM/LANG passthrough; the
+# builder's open-ended LC_*/*_proxy host passthrough is frozen here to the
+# standard names (bash 3.2 has no safe prefix expansion) — an exotic host
+# locale/proxy name is dropped at the wall, never leaked.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+for name in SHELL LC_ALL LC_CTYPE \
+  http_proxy https_proxy all_proxy no_proxy \
+  HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+  KIMI_MODEL_NAME KIMI_MODEL_PROVIDER_TYPE KIMI_MODEL_BASE_URL \
+  KIMI_MODEL_MAX_CONTEXT_SIZE KIMI_MODEL_CAPABILITIES \
+  KIMI_MODEL_DEFAULT_THINKING KIMI_MODEL_API_KEY \
+  KIMI_DISABLE_TELEMETRY KIMI_DISABLE_CRON \
+  KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT; do
+  if [[ -n "${!name-}" ]]; then
+    env_args+=("$name=${!name}")
+  fi
+done
+
+exec env -i \
+  "${env_args[@]}" \
+  $QUORUM_HOME_ENV \
+  $KIMI_BINARY --yolo "$@"

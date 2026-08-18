@@ -745,6 +745,12 @@ interface SubprocessEnvContext {
 // Build an allow-listed, hermetic env for the kimi process. Pass through
 // PATH/TERM/LANG/SHELL plus LC_* and *_proxy from the host, overlay the model
 // env, then set HOME + the KIMI/XDG dirs under the kimi home.
+//
+// SYNC (F13): coding-agents/kimi-context/launch-agent forwards the runtime
+// env file this builder produces (pinHome=false) through its `env -i` wall as
+// a static name list — the launcher's forward list must name every var this
+// file can set. A name added here but not there is silently dropped at the
+// launch wall; update both together.
 function buildKimiSubprocessEnv(
   ctx: SubprocessEnvContext,
 ): Record<string, string> {

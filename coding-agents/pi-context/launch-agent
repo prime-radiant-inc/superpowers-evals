@@ -40,7 +40,25 @@ fi
 # the Superpowers bootstrap and any injected user-preference instructions live.
 # --no-extensions / --no-skills stay: those scope pi to ONLY the explicitly-loaded
 # Superpowers extension + skills, not ambient ones — a separate concern.
-exec env \
+# Host-env isolation (F13): env -i + explicit allowlist. The sourced pi.env
+# sets PI_PROVIDER/PI_MODEL (also passed as flags below), an optional
+# PI_API_KEY (api-key auth; OAuth keeps the credential in auth.json inside the
+# throwaway home), and a sorted extraEnv that every writePiEnvFile call site
+# (src/agents/pi.ts) currently passes empty — forward exactly those names, and
+# keep this list in sync with that writer.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+for name in PI_PROVIDER PI_MODEL PI_API_KEY; do
+  if [[ -n "${!name-}" ]]; then
+    env_args+=("$name=${!name}")
+  fi
+done
+
+exec env -i \
+  "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   PI_OFFLINE=1 \
   PI_TELEMETRY=0 \
