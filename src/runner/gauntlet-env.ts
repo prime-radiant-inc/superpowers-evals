@@ -12,11 +12,15 @@
 // residual lives in the generated launcher file / sshpass argv on the Windows
 // trusted-maintainer path (Task 4), not in the child env.
 //
-// KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan): the grader
-// credential itself (ANTHROPIC_API_KEY et al.) remains readable by a same-UID
-// agent via /proc — closing that needs UID separation in the container, not
-// env scoping. This list bounds the blast to the grader credential instead of
-// the whole provider bundle.
+// KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan / UID work):
+// the allowlist above bounds what quorum's own CHILDREN inherit — but same-UID
+// process inspection is not bounded by it. A same-UID agent can read a peer
+// process's environment (/proc/<pid>/environ on Linux, `ps eww` on macOS),
+// and the quorum parent (and the run-all child) still carry the operator's
+// FULL host provider bundle in-process until parent env scoping / UID
+// separation lands — so same-UID inspection can still surface every host
+// credential, not just the grader's. Technical closure needs UID separation
+// in the container, not env scoping alone.
 //
 // This list is the EXACT union of names with per-name evidence on the gauntlet
 // child's active path (`gauntlet run … --adapter tui` under Bun; audit method
