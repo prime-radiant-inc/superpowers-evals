@@ -962,6 +962,13 @@ export async function runScenario(
   };
   let verdict: FinalVerdict;
   let selectedCredentialLabels: Credential['labels'];
+  // Memo for the run's ONE expected-check manifest read. The runner body
+  // performs that single load; this catch composes error verdicts from the
+  // cached outcome instead of re-reading the file — a parse failure must not
+  // be attempted twice, and error composition must observe the same on-disk
+  // bytes the run did. Stays null when a run fails before reaching the load
+  // (early guards); it is never read late.
+  const expectedChecksCache: ExpectedChecksCache = { manifest: null };
   try {
     // Freeze the parsed credentials before selecting the named credential. This
     // makes direct runs reproducible and ensures later runner code never
@@ -982,6 +989,7 @@ export async function runScenario(
       runDir,
       identity,
       credentials,
+      expectedChecksCache,
     );
   } catch (err: unknown) {
     const stage = errorStage(err);
@@ -991,12 +999,10 @@ export async function runScenario(
       checks: [],
       captureEmpty: false,
       error: { stage, message },
-      // Best-effort read, guarded: this site only runs while composing an
-      // already-staged error (compose short-circuits on `error` before ever
-      // consulting `expected`), and the very manifest that caused the error —
-      // e.g. an unparseable file readManifest throws on — must not crash the
-      // error verdict itself.
-      expected: safeExpectedChecks(a.scenarioDir),
+      // The cached outcome of the run's single manifest load — reused, never
+      // re-read (the load's own failure is the error being composed here).
+      // Inert anyway: compose short-circuits on `error` before `expected`.
+      expected: expectedChecksCache.manifest,
     });
   }
   // Best-effort provenance stamp (PRI-2494). The binary name comes from the
@@ -1069,18 +1075,13 @@ function errorStage(err: unknown): RunErrorStage {
   return 'unknown';
 }
 
-// Best-effort manifest read for the runScenario catch's error compose. There
-// the manifest may itself be the reason the run failed (readManifest throws on
-// an unparseable file), so a plain read could throw while composing the error
-// verdict and lose it entirely; null (absent/unreadable = legacy semantics,
-// never a false pass) keeps error composition crash-free. The value is inert
-// anyway: compose short-circuits on `error` before consulting `expected`.
-function safeExpectedChecks(scenarioDir: string): CheckManifest | null {
-  try {
-    return readManifest(scenarioDir);
-  } catch {
-    return null;
-  }
+// Shared state for the run's single expected-check manifest load: created in
+// runScenario, filled once by the runner body, consumed by runScenario's
+// catch. `manifest` is the parsed value on success (null for an absent file =
+// legacy composition) and stays null when the load threw — the staged parse
+// error itself travels as the exception, so nothing re-reads the file.
+interface ExpectedChecksCache {
+  manifest: CheckManifest | null;
 }
 
 // The context dir an agent installs into <runDir>/gauntlet-agent/context/.
@@ -1156,11 +1157,19 @@ async function runInner(
   runDir: string,
   identity: RunIdentity,
   credentials: Record<string, Credential>,
+  expectedChecksCache: ExpectedChecksCache,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
   try {
-    return await runInnerBody(a, runDir, cleanupDirs, identity, credentials);
+    return await runInnerBody(
+      a,
+      runDir,
+      cleanupDirs,
+      identity,
+      credentials,
+      expectedChecksCache,
+    );
   } finally {
     cleanupAgentRuntime(cleanupDirs);
     // Windows runtime: best-effort removal of the per-run guest directory.
@@ -1186,6 +1195,7 @@ async function runInnerBody(
   cleanupDirs: string[],
   identity: RunIdentity,
   credentials: Record<string, Credential>,
+  expectedChecksCache: ExpectedChecksCache,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -1254,13 +1264,25 @@ async function runInnerBody(
     });
   }
 
-  // Expected-check manifest, loaded once for every later compose site: a run
-  // whose emitted records drift from the scenario's committed manifest can
-  // never compose pass (the composer turns any mismatch into a checks-stage
-  // indeterminate). Absent file = null = legacy composition. An unparseable
-  // manifest throws here and surfaces as a setup-stage error verdict via the
-  // runScenario catch — never a silent legacy compose.
-  const expectedChecks = readManifest(a.scenarioDir);
+  // Expected-check manifest: THE run's single read, memoized into
+  // expectedChecksCache so every later compose site — including
+  // runScenario's catch — reuses this one outcome and never re-reads the
+  // file. A run whose emitted records drift from the scenario's committed
+  // manifest can never compose pass (the composer turns any mismatch into a
+  // checks-stage indeterminate). Absent file = null = legacy composition. A
+  // committed-but-unparseable manifest is repository misconfiguration and
+  // stages as setup — distinct from a runtime record mismatch, which stays
+  // checks-stage in the composer.
+  let expectedChecks: CheckManifest | null;
+  try {
+    expectedChecks = readManifest(a.scenarioDir);
+  } catch (err: unknown) {
+    throw new RunnerError(
+      `checks-manifest.json unparseable in ${a.scenarioDir}: ${err instanceof Error ? err.message : String(err)}`,
+      'setup',
+    );
+  }
+  expectedChecksCache.manifest = expectedChecks;
 
   // 5. Coding-agent gating: honor the `# coding-agents:` directive before any
   //    side effect, so a direct `quorum run` against an excluded agent skips.

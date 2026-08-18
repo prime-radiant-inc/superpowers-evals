@@ -202,8 +202,15 @@ function makeManifestScenario(): string {
   return dir;
 }
 
-test('runner loads the scenario manifest and passes it to compose', async () => {
-  const scenarioDir = makeManifestScenario();
+// Drive runScenario with the mock-gauntlet shim first on PATH and the named
+// fixture selected, restoring every mutated env var afterwards (even on
+// throw). Uses the REAL coding-agents/ dir (same rationale as
+// test/runner-e2e.test.ts): the claude run requires HOWTO + launcher +
+// project-prompt + SUPERPOWERS_ROOT substitution, all present there.
+async function runWithMockGauntlet(
+  scenarioDir: string,
+  fixture: string,
+): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const keys = [
     'PATH',
@@ -217,20 +224,14 @@ test('runner loads the scenario manifest and passes it to compose', async () => 
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
   process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
-  process.env['MOCK_GAUNTLET_FIXTURE'] = 'pass';
+  process.env['MOCK_GAUNTLET_FIXTURE'] = fixture;
   try {
-    const { verdict } = await runScenario({
+    return await runScenario({
       scenarioDir,
       codingAgent: 'claude',
       codingAgentsDir: REAL_CODING_AGENTS,
       outRoot,
     });
-    // A vanished post-check record must not let a gauntlet pass compose pass.
-    expect(verdict.final).toBe('indeterminate');
-    expect(verdict.error?.stage).toBe('checks');
-    expect(verdict.final_reason).toContain('manifest');
-    // The mismatch is the vanished entry itself, not an unrelated gate.
-    expect(verdict.final_reason).toContain('vanished.txt');
   } finally {
     for (const [k, v] of saved) {
       if (v === undefined) {
@@ -240,4 +241,45 @@ test('runner loads the scenario manifest and passes it to compose', async () => 
       }
     }
   }
+}
+
+test('runner loads the scenario manifest and passes it to compose', async () => {
+  const { verdict } = await runWithMockGauntlet(makeManifestScenario(), 'pass');
+  // A vanished post-check record must not let a gauntlet pass compose pass.
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('checks');
+  expect(verdict.final_reason).toContain('manifest');
+  // The mismatch is the vanished entry itself, not an unrelated gate.
+  expect(verdict.final_reason).toContain('vanished.txt');
+});
+
+// A committed-but-unparseable manifest is repository misconfiguration: it
+// must triage as a setup-stage indeterminate — distinct from a runtime
+// record mismatch, which the composer correctly keeps checks-stage.
+function makeMalformedManifestScenario(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'scn-manifest-bad-'));
+  writeFileSync(
+    join(dir, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nDo the thing.\n',
+  );
+  writeFileSync(join(dir, 'setup.sh'), '#!/usr/bin/env bash\n:\n');
+  chmodSync(join(dir, 'setup.sh'), 0o755);
+  writeFileSync(
+    join(dir, 'checks.sh'),
+    'pre() {\n    :\n}\n\npost() {\n    :\n}\n',
+  );
+  writeFileSync(join(dir, 'checks-manifest.json'), '{ this is not json');
+  return dir;
+}
+
+test('runner stages an unparseable checks-manifest.json as a setup error', async () => {
+  const { verdict } = await runWithMockGauntlet(
+    makeMalformedManifestScenario(),
+    'pass',
+  );
+  // The load fails before gauntlet ever spawns; the verdict must carry the
+  // setup stage and name the offending file for triage.
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('setup');
+  expect(verdict.final_reason).toContain('checks-manifest.json');
 });

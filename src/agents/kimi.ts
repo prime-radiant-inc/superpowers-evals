@@ -911,7 +911,9 @@ function makeKimiRuntimeEnvSecretDir(opts: {
         join(parent, `quorum-kimi-env-${basename(opts.runDir)}-`),
       );
     } catch {
-      continue;
+      // A candidate that refuses the mkdtemp (e.g. read-only) simply falls
+      // through to the next candidate; nothing else to do at the end of the
+      // loop body.
     }
   }
   throw new ProvisionError(
