@@ -124,14 +124,11 @@ export function dirsEquivalent(
 // O(1) rename into state/quarantine/ — never a recursive copy, never a delete.
 // state/ sits beside the results root under the appliance root, so this is
 // same-volume by construction; a cross-volume surprise is a typed error, not a
-// copy-delete fallback. `deps` is a test-only seam (injectable rename failure
-// and clock); the defaults are the real primitives, so the public three-arg
-// behavior is unchanged.
+// copy-delete fallback.
 export function moveToQuarantine(
   loaded: LoadedApplianceConfig,
   sourcePath: string,
   name: string,
-  deps: { rename?: typeof renameSync; now?: () => Date } = {},
 ): string {
   assertInsideRoot(loaded.config.container.results_root, sourcePath);
   // The slot name becomes one path component of the destination; refuse
@@ -145,16 +142,13 @@ export function moveToQuarantine(
   }
   const qroot = join(loaded.config.root, 'state', 'quarantine');
   mkdirPrivate(qroot);
-  const stamp = (deps.now?.() ?? new Date())
-    .toISOString()
-    .replace(/[:.]/g, '-');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   let dest = join(qroot, `${stamp}-${name}`);
   for (let n = 2; existsSync(dest); n += 1) {
     dest = join(qroot, `${stamp}-${name}-${n}`);
   }
-  const rename = deps.rename ?? renameSync;
   try {
-    rename(sourcePath, dest);
+    renameSync(sourcePath, dest);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EXDEV') {
       throw new ApplianceError(

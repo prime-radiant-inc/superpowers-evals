@@ -1,16 +1,18 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  existsSync as realExistsSync,
+  renameSync as realRenameSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import {
   assertInsideRoot,
@@ -153,7 +155,7 @@ test('moveToQuarantine renames (never copies) into state/quarantine and returns 
   tree(src, { 'verdict.json': 'v' });
   const inodeBefore = statSync(src).ino;
   const dest = moveToQuarantine(loaded, src, 'prune-run-1');
-  expect(existsSync(src)).toBe(false);
+  expect(realExistsSync(src)).toBe(false);
   expect(statSync(dest).ino).toBe(inodeBefore); // same inode => rename, not copy+delete
   expect(readFileSync(join(dest, 'verdict.json'), 'utf8')).toBe('v');
   expect(dest).toContain(join('state', 'quarantine'));
@@ -167,17 +169,62 @@ test('moveToQuarantine suffixes on collision', () => {
     tree(src, { 'v.txt': name });
     return src;
   };
-  // Pinned clock: identical stamps force a real collision, so d2/d3 must come
-  // from the -2/-3 suffix loop, not from a fresh timestamp.
-  const now = () => new Date('2026-01-01T00:00:00.000Z');
-  const d1 = moveToQuarantine(loaded, mk('run-a'), 'prune-run-a', { now });
-  const d2 = moveToQuarantine(loaded, mk('run-b'), 'prune-run-a', { now });
-  const d3 = moveToQuarantine(loaded, mk('run-c'), 'prune-run-a', { now });
-  expect(d2).toBe(`${d1}-2`);
-  expect(d3).toBe(`${d1}-3`);
-  expect(existsSync(d1)).toBe(true);
-  expect(existsSync(d2)).toBe(true);
-  expect(existsSync(d3)).toBe(true);
+  const qroot = join(root, 'state', 'quarantine');
+  // The stamp comes from the wall clock, so a real same-millisecond collision
+  // cannot be forced deterministically. Instead, fake the filesystem fact a
+  // collision produces — "that slot is occupied" — for the loop's first
+  // existsSync(candidate) probes under qroot, scoped to this slot's path shape
+  // and restored in finally. Delegates everything else to the real fs.
+  //
+  // Two occupied slots -> suffix -3; one -> -2. `first` records the loop's
+  // own first candidate, so the assertions are exact, not pattern-based.
+  // (realExists is captured by value BEFORE spyOn: named imports are live
+  // namespace accesses in Bun, so delegating through an import inside the
+  // mock would recurse into the spy itself.)
+  const suffix = (occupiedSlots: number) => {
+    const realExists = fs.existsSync;
+    let occupied = 0;
+    let first = '';
+    const spy = spyOn(fs, 'existsSync').mockImplementation((p) => {
+      const s = String(p);
+      const rel = s.startsWith(qroot + sep) ? s.slice(qroot.length + 1) : null;
+      // Candidates look like `<stamp>-prune-run-a` then `-2`, `-3`, ...
+      if (rel !== null && /^.*-prune-run-a(-\d+)?$/.test(rel)) {
+        if (!first) first = s;
+        if (occupied < occupiedSlots) {
+          occupied += 1;
+          return true;
+        }
+      }
+      return realExists(p);
+    });
+    return {
+      dest: () => moveToQuarantine(loaded, mk('run-b'), 'prune-run-a'),
+      firstCandidate: () => first,
+      restore: () => spy.mockRestore(),
+    };
+  };
+
+  const two = suffix(2);
+  let d3: string;
+  try {
+    d3 = two.dest();
+  } finally {
+    two.restore();
+  }
+  expect(d3).toBe(`${two.firstCandidate()}-3`);
+  expect(realExistsSync(d3)).toBe(true);
+
+  const one = suffix(1);
+  let d2: string;
+  try {
+    d2 = one.dest();
+  } finally {
+    one.restore();
+  }
+  expect(d2).toBe(`${one.firstCandidate()}-2`);
+  expect(realExistsSync(d2)).toBe(true);
+  expect(d2).not.toBe(d3);
 });
 
 test('moveToQuarantine maps rename EXDEV to a typed error, never a copy-delete fallback', () => {
@@ -185,24 +232,33 @@ test('moveToQuarantine maps rename EXDEV to a typed error, never a copy-delete f
   const loaded = fakeLoaded(root);
   const src = join(loaded.config.container.results_root, 'run-x');
   tree(src, { 'v.txt': 'v' });
-  // Smallest seam: inject the rename failure itself. No module-wide mock.
-  const rename: typeof import('node:fs').renameSync = () => {
+  // Scoped fake fs: renameSync fails cross-volume for this one call; the spy
+  // is restored in finally, so nothing leaks to later tests.
+  const spy = spyOn(fs, 'renameSync').mockImplementation(() => {
     const err = new Error(
       'EXDEV: cross-device link not permitted',
     ) as NodeJS.ErrnoException;
     err.code = 'EXDEV';
     throw err;
-  };
-  const caught = captureError(() =>
-    moveToQuarantine(loaded, src, 'run-x', { rename }),
-  );
+  });
+  let caught: unknown;
+  try {
+    caught = captureError(() => moveToQuarantine(loaded, src, 'run-x'));
+  } finally {
+    spy.mockRestore();
+  }
   expect(caught).toBeInstanceOf(ApplianceError);
   const err = caught as ApplianceError;
   expect(err.code).toBe('config_invalid');
   expect(err.step).toBe('quarantine');
   expect(err.message).toContain('copy-delete');
-  expect(existsSync(src)).toBe(true); // evidence untouched
+  expect(realExistsSync(src)).toBe(true); // evidence untouched
   expect(readdirSync(join(root, 'state', 'quarantine'))).toEqual([]); // no partial slot
+  // Post-restore sanity: the real rename primitive works again.
+  const probe = join(loaded.config.container.results_root, 'probe');
+  tree(probe, { 'p.txt': 'p' });
+  realRenameSync(probe, `${probe}-moved`);
+  expect(realExistsSync(`${probe}-moved`)).toBe(true);
 });
 
 test('moveToQuarantine rejects a traversal name and leaves the source in place', () => {
@@ -217,8 +273,8 @@ test('moveToQuarantine rejects a traversal name and leaves the source in place',
   const err = caught as ApplianceError;
   expect(err.code).toBe('config_invalid');
   expect(err.step).toBe('quarantine');
-  expect(existsSync(src)).toBe(true); // untouched
-  expect(existsSync(join(root, 'outside'))).toBe(false); // no escape artifact
+  expect(realExistsSync(src)).toBe(true); // untouched
+  expect(realExistsSync(join(root, 'outside'))).toBe(false); // no escape artifact
   expect(() => moveToQuarantine(loaded, src, '')).toThrow(ApplianceError);
 });
 
@@ -227,5 +283,5 @@ test('moveToQuarantine refuses a source outside the results root', () => {
   const loaded = fakeLoaded(root);
   const outside = mkdtempSync(join(tmpdir(), 'not-results-'));
   expect(() => moveToQuarantine(loaded, outside, 'x')).toThrow(ApplianceError);
-  expect(existsSync(outside)).toBe(true); // untouched
+  expect(realExistsSync(outside)).toBe(true); // untouched
 });
