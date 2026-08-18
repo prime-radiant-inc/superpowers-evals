@@ -41,4 +41,5 @@ platform spec's Windows carve-out). The exception covers ONLY that guest-side
 launch path: the local subprocesses quorum runs against the guest are already
 scoped to the non-secret provisioning env allowlist. The wrapper also burns
 the SSH password into argv (`sshpass -p`) and into the installed launcher
-file — a known residual tracked by the F13 filesystem follow-up.
+file — a known residual owned by the Windows trusted-maintainer path; neither
+this env scoping nor the F13 filesystem work solves it.

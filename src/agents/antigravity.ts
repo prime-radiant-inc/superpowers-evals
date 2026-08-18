@@ -67,8 +67,12 @@ const REQUIRED_PLUGIN_FILES: readonly string[] = [
 // We keep oauth_creds.json + google_accounts.json in the list because they are
 // the shared .gemini auth layout for gemini.ts sibling and are harmless to
 // copy; but the nested antigravity-oauth-token is the one agy actually uses.
+export const AGY_RUNTIME_OAUTH_TOKEN = join(
+  'antigravity-cli',
+  'antigravity-oauth-token',
+);
 const AGY_OAUTH_CREDENTIAL_FILES: readonly string[] = [
-  join('antigravity-cli', 'antigravity-oauth-token'),
+  AGY_RUNTIME_OAUTH_TOKEN,
   'oauth_creds.json',
   'google_accounts.json',
 ];
@@ -77,21 +81,20 @@ const AGY_OAUTH_CREDENTIAL_FILES: readonly string[] = [
 // per-run .gemini at mode 0600. The source home is AGY_OAUTH_HOME (the test /
 // operator override) else ~/.gemini.
 //
-// The critical file is antigravity-cli/antigravity-oauth-token — the nested
-// ~500-byte token that agy actually reads for authentication. oauth_creds.json
-// and google_accounts.json are included because they are the shared .gemini
+// The critical file is AGY_RUNTIME_OAUTH_TOKEN — the nested ~500-byte token
+// that agy actually reads for authentication. oauth_creds.json and
+// google_accounts.json are included because they are the shared .gemini
 // Gemini-personal layout (copied by gemini.ts sibling) and harmless to carry,
 // but they do NOT authenticate agy on their own.
 //
-// UNLIKE gemini.ts we TOLERATE a missing source: a missing operator credential
-// is flagged (returned), not a ProvisionError, because seeding is a runtime-auth
-// convenience layered on top of the per-login-user keyring (which survives the
-// throwaway HOME), and provisioning must not hard-fail an otherwise-good setup
-// just because creds aren't seeded.
+// This helper only copies and reports: it returns the credential paths
+// (relative to AGY_OAUTH_HOME) absent at the source and never throws. The
+// criticality policy lives in provision(), which fails on a missing runtime
+// token (F13: launching without it would leave agy reaching for the
+// operator's per-login-user keyring — a host credential) and tolerates the
+// two incidental files.
 // Bun's homedir() snapshots the REAL $HOME at startup and ignores quorum's own
 // per-subprocess HOME pin, so this always reads the operator's real ~/.gemini.
-// Returns the list of credential paths (relative to AGY_OAUTH_HOME) that were
-// absent at the source.
 export function seedAgyOauthCredentials(configDir: string): string[] {
   const sourceHome = getEnv('AGY_OAUTH_HOME') ?? join(homedir(), '.gemini');
   const destDir = join(configDir, '.gemini');
@@ -216,17 +219,21 @@ export class AntigravityAgent implements CodingAgent {
 
     // 5. C1 OAuth-creds seed. With home_config_subdir ".", configDir IS the
     //    per-run throwaway home, so configDir/.gemini == $HOME/.gemini — exactly
-    //    where agy reads its live OAuth token at runtime. Copy the operator's
-    //    creds from the REAL home so auth survives the throwaway $HOME. Missing
-    //    source creds are tolerated (the keyring is per-login-user and may carry
-    //    auth on its own); a live agy smoke confirms whether the seed sufficed.
+    //    where agy reads its runtime credential (AGY_RUNTIME_OAUTH_TOKEN). Copy
+    //    the operator's creds from the REAL home so auth works under the
+    //    throwaway $HOME. The nested token is the credential agy actually
+    //    reads; launching without it would leave agy reaching for the
+    //    operator's per-login-user keyring — a host credential the agent under
+    //    test must never touch (F13) — so a missing source token fails
+    //    provisioning before launch. The two flat Gemini-layout files do not
+    //    authenticate agy and stay optional.
     const missingCreds = seedAgyOauthCredentials(configDir);
-    if (missingCreds.length > 0) {
-      // Not fatal: flag to stderr for triage but let provisioning succeed.
-      process.stderr.write(
-        `antigravity: OAuth creds not seeded (absent at source): ${missingCreds.join(', ')}; ` +
-          'agy will rely on the per-login-user keyring at runtime. A live agy ' +
-          'smoke is required to confirm auth survives the throwaway $HOME.\n',
+    if (missingCreds.includes(AGY_RUNTIME_OAUTH_TOKEN)) {
+      throw new ProvisionError(
+        `agy runtime OAuth token missing at source: ${AGY_RUNTIME_OAUTH_TOKEN} ` +
+          '(under AGY_OAUTH_HOME, else ~/.gemini). The per-run throwaway home ' +
+          'must carry this token; a keyring-only host must seed it explicitly ' +
+          'before running antigravity evals.',
       );
     }
 

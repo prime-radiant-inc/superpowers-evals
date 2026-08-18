@@ -30,9 +30,11 @@ cd <prepared-workdir-or-visible-alias> && env -i PATH=<path> HOME=<per-run-throw
 Because the `cd`, throwaway `$HOME`, isolated config directory, `.gemini` path,
 auto-update disable, log file, and dangerous permission flag live inside the
 launcher, do not hand-type a bare `agy` or reconstruct the command yourself.
-Just run the one line above. (agy reads its live OAuth token from
-`$HOME/.gemini/oauth_creds.json` at runtime, so the throwaway `$HOME` must hold
-the creds quorum seeded — keep the launcher's `HOME` pin.)
+Just run the one line above. (agy reads its runtime credential from
+`$HOME/.gemini/antigravity-cli/antigravity-oauth-token`, so the throwaway
+`$HOME` must hold the token quorum seeded — keep the launcher's `HOME` pin.
+The flat `oauth_creds.json`/`google_accounts.json` files are the incidental
+Gemini-personal layout and do not authenticate agy.)
 
 ## Observing what Antigravity is doing
 

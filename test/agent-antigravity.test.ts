@@ -35,10 +35,10 @@ import { makeTempHome } from './provision-helpers.ts';
 // stub the probe to "present" for the provisioning tests; the dedicated
 // which-guard test overrides it to "absent".
 //
-// Also pin AGY_OAUTH_HOME to an isolated dir seeded with both C1 OAuth creds, so
+// Also pin AGY_OAUTH_HOME to an isolated dir seeded with the C1 OAuth creds, so
 // provision tests exercise the seed WITHOUT reading the operator's real
-// ~/.gemini (which would be a test-isolation violation and emit the "creds not
-// seeded" warning -> non-pristine output). The dedicated C1 seed tests override
+// ~/.gemini (a test-isolation violation — and on a host without the nested agy
+// token, a spurious ProvisionError). The dedicated C1 seed tests override
 // AGY_OAUTH_HOME within their own bodies via withAgyOauthHome.
 let agyOauthHomeFixture: string | undefined;
 let prevAgyOauthHome: string | undefined;
@@ -541,10 +541,11 @@ test('provision throws ProvisionError when agy plugin install exits non-zero', (
 });
 
 test('settings.json secret-free config is a regular file (mode parity guard)', () => {
-  // antigravity has no quorum-written secret file (agy auth lives in the
-  // keyring / agy state, not a quorum-authored env file), so there is no
-  // 0o600 file to assert. This guards that settings.json is a normal config
-  // file; if a secret ever lands here, the mode contract becomes visible.
+  // antigravity has no quorum-authored secret ENV file (its runtime credential
+  // is the seeded token file, whose 0o600 mode the C1 seed tests assert), so
+  // there is no env file to check here. This guards that settings.json is a
+  // normal config file; if a secret ever lands here, the mode contract
+  // becomes visible.
   const { home, cleanup } = makeTempHome();
   const spRoot = makeSpRoot(home);
   const runner = new FakeCommandRunner(happyResponder);
@@ -918,9 +919,9 @@ test('seedAgyOauthCredentials tolerates missing sources (returns the absent name
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
   // Source dir exists but only carries oauth_creds.json (the nested token and
-  // google_accounts.json are absent). The token is the critical auth file; agy
-  // may still fall through to the per-login-user keyring, so missing creds are
-  // flagged, not fatal.
+  // google_accounts.json are absent). The helper itself only copies and
+  // reports — it never throws; the criticality policy (fail on a missing
+  // runtime token) lives in provision() and has its own tests in this file.
   const oauthSource = srcHome.configDir;
   mkdirSync(oauthSource, { recursive: true });
   writeFileSync(
@@ -1033,6 +1034,106 @@ test('provision seeds the C1 OAuth creds (incl. agy token) into configDir/.gemin
         }
       });
     });
+  } finally {
+    cleanup();
+    srcCleanup();
+  }
+});
+
+// F13: antigravity-cli/antigravity-oauth-token is the credential agy actually
+// reads at runtime. If it cannot be seeded into the per-run throwaway home,
+// agy would fall back to the operator's per-login-user keyring — a host
+// credential the agent under test must never reach — so provisioning fails
+// loudly before launch instead of warning and proceeding.
+test('provision throws ProvisionError when the agy runtime OAuth token is missing at source', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const oauthSource = srcHome.configDir;
+  mkdirSync(oauthSource, { recursive: true });
+  // Only the incidental Gemini-layout files are present; the nested token —
+  // the one file that authenticates agy — is absent at source.
+  writeFileSync(
+    join(oauthSource, 'oauth_creds.json'),
+    '{"access_token":"tok"}',
+  );
+  writeFileSync(
+    join(oauthSource, 'google_accounts.json'),
+    '{"active":"me@example.com"}',
+  );
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withRoot(spRoot, () => {
+      withAgyOauthHome(oauthSource, () => {
+        const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
+        let thrown: unknown;
+        try {
+          agent.provision(home, runner);
+        } catch (e: unknown) {
+          thrown = e;
+        }
+        expect(thrown).toBeInstanceOf(ProvisionError);
+        expect(String(thrown)).toContain('antigravity-oauth-token');
+      });
+    });
+  } finally {
+    cleanup();
+    srcCleanup();
+  }
+});
+
+// The two flat Gemini-layout files do not authenticate agy: their absence at
+// source must neither fail provisioning nor emit a fallback warning — the
+// seeded nested token is the whole runtime credential.
+test('provision succeeds (silently) when only the incidental Gemini files are missing at source', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const oauthSource = srcHome.configDir;
+  mkdirSync(join(oauthSource, 'antigravity-cli'), { recursive: true });
+  writeFileSync(
+    join(oauthSource, 'antigravity-cli', 'antigravity-oauth-token'),
+    'token-only-source',
+  );
+  const runner = new FakeCommandRunner(happyResponder);
+  // Capture stderr around provision() so a "creds not seeded" fallback
+  // warning fails this test instead of dirtying the output.
+  const stderrWrites: string[] = [];
+  const realStderrWrite = process.stderr.write.bind(process.stderr);
+
+  try {
+    withRoot(spRoot, () => {
+      withAgyOauthHome(oauthSource, () => {
+        const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
+        process.stderr.write = ((chunk: unknown) => {
+          stderrWrites.push(String(chunk));
+          return true;
+        }) as typeof process.stderr.write;
+        try {
+          agent.provision(home, runner);
+        } finally {
+          process.stderr.write = realStderrWrite;
+        }
+      });
+    });
+    // The runtime token landed at 0600; the absent incidental files were not
+    // fabricated; nothing was written to stderr.
+    const tokenDst = join(
+      home.configDir,
+      '.gemini',
+      'antigravity-cli',
+      'antigravity-oauth-token',
+    );
+    expect(readFileSync(tokenDst, 'utf8')).toBe('token-only-source');
+    expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
+    expect(
+      existsSync(join(home.configDir, '.gemini', 'oauth_creds.json')),
+    ).toBe(false);
+    expect(
+      existsSync(join(home.configDir, '.gemini', 'google_accounts.json')),
+    ).toBe(false);
+    expect(stderrWrites).toEqual([]);
   } finally {
     cleanup();
     srcCleanup();

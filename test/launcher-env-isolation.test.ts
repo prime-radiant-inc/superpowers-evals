@@ -48,9 +48,13 @@ interface LauncherFixture {
   readonly extraBinaries?: (ctx: FixtureCtx) => Record<string, string>;
 }
 
-// Every Linux-local launcher has an entry (claude-windows delegates its env to
-// the Windows guest's launch.cmd, so there is no local launcher to test);
-// installLauncher throws on a missing entry so an uncovered agent fails loudly.
+// Each agent in the LauncherAgent union has an entry — the launchers this
+// suite black-box-tests (claude/codex plus the F13-converted
+// gemini/kimi/pi/hermes/antigravity). opencode/serf/copilot carry env -i
+// walls of their own but have no coverage here yet, and claude-windows
+// delegates its env to the Windows guest's launch.cmd, so there is no local
+// launcher to test. installLauncher throws on a missing entry so an
+// uncovered agent fails loudly.
 const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
   claude: {
     binary: 'claude',

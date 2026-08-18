@@ -245,11 +245,10 @@ test('hermes launch-agent isolates HOME via $QUORUM_HOME_ENV, omits HERMES_HOME,
     'utf8',
   );
   // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token;
-  // hermes uses env -i + explicit allowlist like every converted launcher
-  // (F13 — the black-box hostile-env proof is launcher-env-isolation.test.ts).
+  // the env -i smoke check just proves the wall exists — the real hostile-env
+  // proof is the black-box test in launcher-env-isolation.test.ts.
   expect(launcher).toContain('$QUORUM_HOME_ENV');
   expect(launcher).toContain('env -i');
-  expect(launcher).toContain('env_args=(');
   // HERMES_HOME is collapsed into $HOME — the launcher must NOT set it as an
   // env assignment on the exec line (the comment block may still mention it).
   expect(launcher).not.toContain('HERMES_HOME="$HERMES_HOME"');
