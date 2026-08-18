@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  type Dirent,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -341,9 +342,20 @@ export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
   if (
     assertNoFollowDirChain(loaded.config.root, loaded.paths.jobs, 'state/jobs')
   ) {
-    for (const entry of readdirSync(loaded.paths.jobs, {
-      withFileTypes: true,
-    })) {
+    // An enumeration failure proves nothing about which runs job records
+    // reference, so it is the same typed manual-repair fault as any other
+    // unreadable state — never a raw fs error.
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(loaded.paths.jobs, { withFileTypes: true });
+    } catch (error) {
+      throw new ApplianceError(
+        'config_invalid',
+        'job',
+        `state/jobs is unreadable — cannot prove which runs are referenced: ${error instanceof Error ? error.message : String(error)}; repair state/jobs manually`,
+      );
+    }
+    for (const entry of entries) {
       if (entry.isSymbolicLink()) {
         rejectSymlinkedJobDir(entry.name);
       }

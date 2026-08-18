@@ -1,9 +1,11 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -16,6 +18,7 @@ import {
 } from '../src/appliance/errors.ts';
 import {
   createJob,
+  readAllJobsStrict,
   readJob,
   readJobById,
   readJobByRunId,
@@ -27,7 +30,10 @@ import type {
 } from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-jobs-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-jobs-')));
   mkdirSync(join(root, 'state/jobs'), { recursive: true });
   mkdirSync(join(root, 'state/locks'), { recursive: true });
   mkdirSync(join(root, 'state/provenance'), { recursive: true });
@@ -317,4 +323,40 @@ test('readJobByRunId fails closed on a record whose job_id mismatches its direct
   );
 
   expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
+});
+
+test('a jobs-root enumeration failure is typed config_invalid, never a raw fs error', () => {
+  const cfg = loaded();
+  importJob(cfg);
+  // Platform-independent fault seam: the enumeration itself fails (as EACCES
+  // would), scoped to exactly the jobs root. Everything else hits the real
+  // fs; the exact original method identity is restored afterwards.
+  const realReaddir = fs.readdirSync;
+  const spy = spyOn(fs, 'readdirSync').mockImplementation(((
+    path: Parameters<typeof fs.readdirSync>[0],
+    options?: unknown,
+  ) => {
+    if (path === cfg.paths.jobs) {
+      const err = new Error(
+        `EACCES: permission denied, scandir '${cfg.paths.jobs}'`,
+      ) as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    }
+    return realReaddir(path, options as Parameters<typeof fs.readdirSync>[1]);
+  }) as typeof fs.readdirSync);
+  let caught: unknown;
+  try {
+    readAllJobsStrict(cfg);
+  } catch (error) {
+    caught = error;
+  } finally {
+    spy.mockRestore();
+  }
+  expect(fs.readdirSync).toBe(realReaddir);
+  expect(caught).toBeInstanceOf(ApplianceError);
+  const err = caught as ApplianceError;
+  expect(err.code).toBe('config_invalid');
+  expect(err.step).toBe('job');
+  expect(err.message).toContain('EACCES');
 });
