@@ -1,11 +1,12 @@
 import {
   cpSync,
+  type Dirent,
   existsSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
 } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { BundleManifest } from '../export-runs/manifest.ts';
@@ -72,24 +73,82 @@ function readManifest(bundleDir: string): BundleManifest {
   return parsed.data;
 }
 
-// Walk what is actually on disk, not just what the manifest lists: a bundle
-// that smuggles an unlisted secret must be caught too.
-function allBundleFiles(runDir: string): string[] {
-  const out: string[] = [];
+function payloadFault(message: string): ApplianceError {
+  return new ApplianceError('config_invalid', 'import', message);
+}
+
+// Strict no-follow walk of a payload tree: the root and every nested
+// directory must be real directories, every leaf a regular file. Symlinks,
+// fifos, sockets, devices, and unreadable structure are config faults —
+// nothing is silently ignored. Returns every regular file's relative path,
+// so callers can also require the tree to be exactly what a manifest lists.
+function walkRealTree(root: string, label: string): Set<string> {
+  const rootStats = lstatSync(root, { throwIfNoEntry: false });
+  if (rootStats === undefined) {
+    throw payloadFault(`${label} does not exist: ${root}`);
+  }
+  if (!rootStats.isDirectory()) {
+    throw payloadFault(
+      `${label} must be a real directory (not a symlink): ${root}`,
+    );
+  }
+  const out = new Set<string>();
   const visit = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      throw payloadFault(
+        `${label} is unreadable at ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    for (const entry of entries) {
       const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw payloadFault(
+          `${label} contains a symlink: ${relative(root, path)}`,
+        );
+      }
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile()) {
-        out.push(relative(runDir, path));
+        out.add(relative(root, path));
+      } else {
+        throw payloadFault(
+          `${label} contains a non-regular entry: ${relative(root, path)}`,
+        );
       }
     }
   };
-  if (existsSync(runDir)) {
-    visit(runDir);
-  }
+  visit(root);
   return out;
+}
+
+// The bundle root is operator input: it must be exactly a real directory
+// before anything inside it is trusted or even read.
+function assertBundleRoot(bundleDir: string): void {
+  const stats = lstatSync(bundleDir, { throwIfNoEntry: false });
+  if (stats === undefined) {
+    throw payloadFault(`bundle directory does not exist: ${bundleDir}`);
+  }
+  if (!stats.isDirectory()) {
+    throw payloadFault(
+      `bundle root must be a real directory (not a symlink): ${bundleDir}`,
+    );
+  }
+}
+
+// Manifest paths share one grammar: nonempty, relative, '/'-separated, no
+// empty/./.. segments, no backslashes. Each names a regular file strictly
+// inside its run root; nothing here may resolve outside it.
+function assertSafeManifestPath(runId: string, rel: string): void {
+  const unsafe =
+    rel === '' ||
+    rel.includes('\\') ||
+    rel.split('/').some((s) => s === '' || s === '.' || s === '..');
+  if (unsafe) {
+    throw payloadFault(`${runId}: unsafe manifest path ${JSON.stringify(rel)}`);
+  }
 }
 
 // Validation runs over the whole bundle before a single run lands, so a bad
@@ -125,46 +184,70 @@ export function isImportStageName(name: string): boolean {
 }
 
 function validateBundle(bundleDir: string, manifest: BundleManifest): void {
+  const runsRoot = join(bundleDir, 'runs');
+  const runsStats = lstatSync(runsRoot, { throwIfNoEntry: false });
+  if (runsStats !== undefined && !runsStats.isDirectory()) {
+    throw payloadFault(
+      `bundle runs/ must be a real directory (not a symlink): ${runsRoot}`,
+    );
+  }
   for (const entry of manifest.entries) {
     // Safety first: the run_id becomes a path component under the results
     // root, so traversal is a config fault, never an artifact probe.
     if (!isSafeRunId(entry.run_id)) {
-      throw new ApplianceError(
-        'config_invalid',
-        'import',
+      throw payloadFault(
         `unsafe run_id in manifest: ${JSON.stringify(entry.run_id)}`,
       );
     }
-    const runDir = join(bundleDir, 'runs', entry.run_id);
-    if (!existsSync(runDir) || !statSync(runDir).isDirectory()) {
+    const runDir = join(runsRoot, entry.run_id);
+    const dirStats = lstatSync(runDir, { throwIfNoEntry: false });
+    if (dirStats === undefined) {
       throw new ApplianceError(
         'artifact_missing',
         'import',
         `manifest lists ${entry.run_id} but the bundle has no payload for it`,
       );
     }
+    if (!dirStats.isDirectory()) {
+      throw payloadFault(
+        `bundle payload for ${entry.run_id} must be a real directory (not a symlink)`,
+      );
+    }
 
-    for (const rel of allBundleFiles(runDir)) {
+    const onDisk = walkRealTree(runDir, `bundle payload for ${entry.run_id}`);
+
+    for (const rel of onDisk) {
       const hit = denylistHit(rel);
       if (hit !== null) {
-        throw new ApplianceError(
-          'config_invalid',
-          'import',
+        throw payloadFault(
           `refusing bundle: ${entry.run_id}/${rel} matches credential pattern ${hit}`,
         );
       }
     }
 
+    // The manifest's file set and the actual regular-file set must be
+    // exactly equal — no unlisted file may ride along into the results root.
+    const listed = new Set(Object.keys(entry.files));
+    for (const rel of listed) {
+      assertSafeManifestPath(entry.run_id, rel);
+    }
+    for (const rel of onDisk) {
+      if (!listed.has(rel)) {
+        throw payloadFault(
+          `${entry.run_id}: bundle contains ${rel} but the manifest does not list it`,
+        );
+      }
+    }
+
     for (const [rel, expected] of Object.entries(entry.files)) {
-      const path = join(runDir, rel);
-      if (!existsSync(path)) {
+      if (!onDisk.has(rel)) {
         throw new ApplianceError(
           'artifact_missing',
           'import',
           `${entry.run_id}: manifest lists ${rel} but it is not in the bundle`,
         );
       }
-      const actual = Bun.SHA256.hash(readFileSync(path), 'hex');
+      const actual = Bun.SHA256.hash(readFileSync(join(runDir, rel)), 'hex');
       if (actual !== expected) {
         throw new ApplianceError(
           'artifact_missing',
@@ -381,6 +464,7 @@ function importLocked(
   loaded: LoadedApplianceConfig,
   args: ImportArgs,
 ): ImportResult {
+  assertBundleRoot(args.bundleDir);
   const manifest = readManifest(args.bundleDir);
   validateBundle(args.bundleDir, manifest);
 
@@ -409,6 +493,10 @@ function importLocked(
       cpSync(join(args.bundleDir, 'runs', entry.run_id), staged, {
         recursive: true,
       });
+      // The stage must still be the validated shape — a real tree of
+      // regular files — before provenance is written beside it or any
+      // comparison vouches for it.
+      walkRealTree(staged, `staged payload for ${entry.run_id}`);
 
       const existingJob = resolveJobForRun(loaded, entry.run_id);
 

@@ -1,11 +1,14 @@
 import { expect, spyOn, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -101,6 +104,33 @@ function countJobDirs(cfg: LoadedApplianceConfig): number {
   ).length;
 }
 
+// Full recursive fingerprint of a landed dir — names, entry types, modes,
+// sizes, mtimes, and file bytes. Two equal snapshots prove the tree saw
+// zero byte or metadata change.
+function snapshotTree(dir: string): string {
+  const lines: string[] = [];
+  const record = (path: string, rel: string): void => {
+    const stats = lstatSync(path);
+    const kind = stats.isSymbolicLink()
+      ? 'link'
+      : stats.isDirectory()
+        ? 'dir'
+        : 'file';
+    const hash =
+      kind === 'file' ? Bun.SHA256.hash(readFileSync(path), 'hex') : '';
+    lines.push(
+      `${rel}|${kind}|${(stats.mode & 0o777).toString(8)}|${stats.size}|${stats.mtimeMs}|${hash}`,
+    );
+    if (kind === 'dir') {
+      for (const entry of readdirSync(path).sort()) {
+        record(join(path, entry), `${rel}/${entry}`);
+      }
+    }
+  };
+  record(dir, '.');
+  return lines.join('\n');
+}
+
 function importJobClaiming(cfg: LoadedApplianceConfig, runId: string) {
   const job = createJob(cfg, {
     kind: 'import',
@@ -175,6 +205,48 @@ function makeBundle(overrides: BundleOverrides = {}): string {
     }),
   );
   return dir;
+}
+
+// A manifest entry in makeBundle's shape for hand-crafted bundle layouts
+// (symlinked payload roots and the like that makeBundle never produces).
+function bundleEntry(
+  runId: string,
+  files: Record<string, string>,
+): Record<string, unknown> {
+  return {
+    run_id: runId,
+    source_path: `/Users/jesse/git/evals/results/cx-demo-rep1/${runId}`,
+    scenario: 'demo-scenario',
+    coding_agent: 'codex',
+    credential: 'codex_sub',
+    os: 'linux',
+    started_at: '2026-07-30T20:15:15.000Z',
+    finished_at: '2026-07-30T20:35:15.000Z',
+    final: 'pass',
+    harness_rev: 'abc123harness',
+    rev_recovery: 'recovered',
+    superpowers_sha: '3da65fb0da716305934940f0760376496defc4e7',
+    superpowers_tree_sha: '0df4d01f92fd50730641366288d54ee59561a30c',
+    inferred_superpowers_sha: null,
+    files,
+  };
+}
+
+function writeManifest(
+  dir: string,
+  entries: readonly Record<string, unknown>[],
+): void {
+  writeFileSync(
+    join(dir, 'manifest.json'),
+    JSON.stringify({
+      schema_version: 1,
+      created_at: '2026-08-09T00:00:00.000Z',
+      source_host: 'laptop',
+      source_results_dir: '/Users/jesse/git/evals/results',
+      entries,
+      skipped: [],
+    }),
+  );
 }
 
 function expectCode(fn: () => void, code: ApplianceErrorCode): void {
@@ -941,6 +1013,163 @@ test('a manifest run_id with path traversal is rejected before anything lands', 
   expect(existsSync(escapeTarget)).toBe(false);
   // Nothing landed, nothing staged:
   expect(readdirSync(cfg.config.container.results_root)).toEqual([]);
+});
+
+// --- Bundle trees are validated no-follow: only real directories and
+// --- regular files may land, and the manifest must name exactly them.
+
+test('a symlinked bundle payload root is rejected whole: landed evidence untouched, nothing reserved', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  // A bundle whose payload root for a NEW run id is a symlink at the landed
+  // victim. The manifest hashes what the link resolves to, so every
+  // follow-based check passes — while cpSync would preserve the link as the
+  // stage and the staged provenance write would land inside the victim.
+  const dir = mkdtempSync(join(tmpdir(), 'bundle-linkroot-'));
+  mkdirSync(join(dir, 'runs'));
+  symlinkSync(victim, join(dir, 'runs', RUN_ID_B));
+  const files: Record<string, string> = {};
+  for (const name of readdirSync(victim)) {
+    files[name] = sha256(readFileSync(join(victim, name), 'utf8'));
+  }
+  writeManifest(dir, [bundleEntry(RUN_ID_B, files)]);
+  const before = snapshotTree(victim);
+  const jobsBefore = countJobDirs(cfg);
+
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(snapshotTree(victim)).toBe(before);
+  expect(countJobDirs(cfg)).toBe(jobsBefore);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+test('a symlink nested inside a bundle payload is rejected, never silently ignored or landed', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  const dir = makeBundle({ runIds: [RUN_ID_B] });
+  const sub = join(dir, 'runs', RUN_ID_B, 'raw');
+  mkdirSync(sub);
+  symlinkSync(join(victim, 'verdict.json'), join(sub, 'link.json'));
+  const before = snapshotTree(victim);
+
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
+});
+
+test('a non-regular entry (fifo) inside a bundle payload is rejected', () => {
+  const cfg = loaded();
+  const dir = makeBundle();
+  const mkfifo = spawnSync('mkfifo', [join(dir, 'runs', RUN_ID, 'pipe')]);
+  expect(mkfifo.status).toBe(0);
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+});
+
+test('a symlinked bundle root is rejected', () => {
+  const cfg = loaded();
+  const real = makeBundle();
+  const holder = mkdtempSync(join(tmpdir(), 'bundle-rootlink-'));
+  const link = join(holder, 'bundle');
+  symlinkSync(real, link);
+  expectCode(() => importBundle(cfg, { bundleDir: link }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+});
+
+test('a symlinked runs/ directory is rejected', () => {
+  const cfg = loaded();
+  const dir = makeBundle();
+  renameSync(join(dir, 'runs'), join(dir, 'runs-real'));
+  symlinkSync(join(dir, 'runs-real'), join(dir, 'runs'));
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+});
+
+test('unsafe manifest paths are config faults, never followed outside the run root', () => {
+  for (const rel of [
+    '',
+    '.',
+    '../pwn.txt',
+    '/abs.txt',
+    'a//b.txt',
+    'a/../b.txt',
+    'a/./b.txt',
+    'a\\..\\b.txt',
+  ]) {
+    const cfg = loaded();
+    const dir = makeBundle();
+    const manifestPath = join(dir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      entries: { files: Record<string, string> }[];
+    };
+    const entry = manifest.entries[0] as { files: Record<string, string> };
+    entry.files[rel] = sha256('x');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+    expect(readdirSync(cfg.config.container.results_root)).toEqual([]);
+  }
+});
+
+test('a bundle file the manifest does not list is rejected, not silently landed', () => {
+  const cfg = loaded();
+  const dir = makeBundle();
+  writeFileSync(join(dir, 'runs', RUN_ID, 'unlisted.txt'), 'smuggled');
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+});
+
+test('the staged copy is revalidated no-follow before any provenance write', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const victim = join(cfg.config.container.results_root, RUN_ID);
+  const bundle = makeBundle({ runIds: [RUN_ID_B] });
+  const staged = join(
+    cfg.config.container.results_root,
+    `.importing-${RUN_ID_B}.${process.pid}.tmp`,
+  );
+  // Scoped fake: the real copy happens, then a symlink at the victim is
+  // planted in the stage — a stage whose content no longer matches what
+  // validation saw must fail before provenance is written beside it.
+  const realCp = fs.cpSync;
+  const spy = spyOn(fs, 'cpSync').mockImplementation(
+    (
+      src: Parameters<typeof fs.cpSync>[0],
+      dest: Parameters<typeof fs.cpSync>[1],
+      opts?: Parameters<typeof fs.cpSync>[2],
+    ) => {
+      realCp(src, dest, opts);
+      if (dest === staged) {
+        symlinkSync(join(victim, 'verdict.json'), join(staged, 'planted-link'));
+      }
+    },
+  );
+  const before = snapshotTree(victim);
+  let result: ImportResult;
+  try {
+    result = importBundle(cfg, { bundleDir: bundle });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(result.imported).toBe(0);
+  expect(result.failed).toBe(1);
+  expect(result.failures[0]?.code).toBe('config_invalid');
+  expect(snapshotTree(victim)).toBe(before);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
 });
 
 test('a failing verdict imports with a non-zero exit code', () => {
