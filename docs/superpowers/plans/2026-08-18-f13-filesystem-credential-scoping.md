@@ -1,491 +1,824 @@
 # F13 Filesystem Credential Scoping Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Close the filesystem half of F13 — the container's shared credential env file and OAuth mounts are readable under the agent's UID — by scoping the appliance container's mounts and env file to the credential scope of the job it serves, so an agent under test can reach only its own credential material by filesystem.
+**Goal:** Close the filesystem half of F13 for Phase 1 appliance jobs: one live job represents one Coding-Agent plus one resolved credential, and its container can read only that credential's exact env/file projection while the Gauntlet-Agent credential remains host-only until the live exec.
 
-**Architecture:** Compute a **credential scope** per job (the union of the environment names and OAuth mounts its runnable cells require). For an asserted scope, write an agent-only env file that is mounted read-only with only the selected OAuth dirs, plus a separate grader-only env file that remains on the host and is injected only into the live Quorum process through `docker exec --env-file`. The appliance's existing reconcile path recreates the container for every job; the mount signature records the asserted scope, omission alone preserves legacy direct-wrapper behavior, and a supplied empty scope means zero agent credential material.
+**Architecture:** Replace the former job-wide union with a single live credential selection, resolve that selection into a closed adapter-owned delivery contract, and project exact files or structured entries into one fixed active credential generation. Preflight first runs in an asserted-empty probe container, then recreates a scoped live container and returns an immutable container lease; live, liveness, and cancellation operations bind to that lease rather than the mutable container name.
 
-**Tech Stack:** TypeScript on Bun ≥1.3, zod contracts, `bun test`, biome. No new dependencies.
+**Tech Stack:** TypeScript on Bun >=1.3, zod contracts, Bash 3.2-compatible wrapper code, Docker CLI with docker exec --env-file support, bun test, biome. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-08-17-quorum-campaign-platform-design.md` — "Order of operations", fix-now item 1, bullet 1 (lines 618–624). Sibling plan (env half, same bullet): `docs/superpowers/plans/2026-08-18-f13-env-credential-scoping.md`.
+**Spec:** docs/superpowers/specs/2026-08-17-quorum-campaign-platform-design.md, fix-now item 1, F13 lines 618-624. Sibling env plan: docs/superpowers/plans/2026-08-18-f13-env-credential-scoping.md.
 
-**Revision checkpoint (before Task 2):** Task 1's original implementation was task-reviewed at `034e980`; its unrelated gate-flake repair was reviewed at `dc6e89a`. This redline's end-to-end adapter trace found one pre-Task-2 correction still required for Claude/Copilot OAuth delivery, documented inside Task 1 below. That correction and Tasks 2–5 have not started. Nothing in this plan authorizes a push.
+**Approved architecture and compatibility rulings (Drew, 2026-08-18):**
 
-**Compatibility decision for Drew's review:** Task 4 intentionally keeps existing schema-version-1 appliance job/provenance records readable by defaulting a missing top-level `credential_scope` field to `null` during parsing. New records always persist the field explicitly. This is the smallest safe migration for already-landed appliance state; approving this plan explicitly approves that narrow backward-compatibility behavior.
+1. Phase 1 appliance live jobs permit exactly one Coding-Agent and zero or one explicit credential. Omission selects that agent's default. Mixed-agent or multi-credential run-all requests are rejected until the execution layer supplies a separate container or mount namespace per cell.
+2. Missing schema-version-1 scope fields remain readable by status, show, costs, and safe cancellation, but a live run/run-all record with a missing/null scope cannot resume or execute. It fails with a resubmit-required error. Prepare uses an explicit empty scope; import is non-executing and records null.
+3. OAuth sources are projected by exact adapter-owned files or structured entries. Whole shared bundle directories are never mounted by scoped appliance jobs.
+4. Submission records the source evals SHA and normalized selection. After fast-forward, any SHA drift fails before credential evaluation or Docker; when the SHA matches, preflight recomputes the scope and requires exact equality.
+5. Grader credentials come from distinct QUORUM_GRADER_* bundle source names. The host-only supervisor exec file retains those aliases; gauntletEnvBase translates them to canonical runtime names only while constructing the Gauntlet child environment, so the Quorum parent can simultaneously retain the Coding-Agent's canonical credential. If a selected agent secret equals the corresponding grader secret, projection fails closed instead of falsely claiming separation.
+
+**Revision checkpoint:** Task 1's initial foundation is committed through 034e980; the unrelated focused-test timeout repair is dc6e89a. The 2026-08-18 five-seat adversarial review rejected plan-redline 1c0bd6f. This revision supersedes that plan text; Tasks 2-6 and the reopened Task 1 interface correction have not started. Nothing authorizes a push.
 
 ## Global Constraints
 
-- Bun ≥ 1.3; `bun run check` (biome + tsc + bun test) must be green at every commit.
-- All tests hermetic: `bun test` only — no Docker, no live appliance, no network. Container-level verification of the real mounts is a documented manual step (Task 5), not a test.
-- Repo rule: never weaken an existing test; test output must be pristine.
-- Commit after every task; conventional-commit style (`feat:`, `fix:`, `test:`, `docs:`).
-- **Fail closed:** a scoped container that cannot determine a job's scope — or is asked to serve a job wider than its scope — must refuse, never silently serve with the wrong credentials visible.
-- **Both derived env files are secret material:** write them mode 0600 via `writePrivateText` under no-follow-validated `<root>/state/credentials-scoped/` (never under the results root or a run dir). The agent file may be mounted; the grader file must never be mounted.
-- **No secret values in argv, logs, errors, hashes, or provenance.** The wrapper receives only the grader env-file path; Docker reads the values from that host file for the one exec process.
-- **The grader contract is one shared exact list:** `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and optional routing value `ANTHROPIC_BASE_URL`. The runner and appliance projection must import the same constant; no duplicated frozen lists.
-- Spec text binding this plan, verbatim (`2026-08-17-quorum-campaign-platform-design.md:618–624`):
-  > - Per-agent env **and filesystem** credential scoping (F13, 2026-08-12 adversarial review: 6/12 launchers inherit host env; the Gauntlet subprocess env carries the full provider bundle; the container's credential env file and OAuth mounts are readable under the agent's UID). Done when a per-agent black-box test proves the agent reaches only its own credential, by env and by filesystem.
+- Bun >=1.3; bun run check and bun run quorum check must pass at each task boundary.
+- Hermetic automated tests only: no Docker daemon, network, live eval, or real credential access. Real Docker/appliance proof is Task 6 and occurs only after code review.
+- Never print, serialize, persist, hash, or place secret values in paths, argv, logs, errors, job records, provenance, or experiment notes.
+- Every credential source and destination path is validated component-by-component with no-follow lstat checks before reading, writing, activation, or mounting. Do not realpath an alias before validating it.
+- Scoped credential state and the blessed bundle must be disjoint from every code/results source bind-mounted into the container.
+- Scoped appliance container APIs require an asserted CredentialScope. Omission remains a direct-wrapper legacy mode only; no appliance preflight path may invoke it.
+- Every appliance job recreates the container. No job inherits a previous job's mounts. Reconcile must down the old container before activating the next fixed credential generation.
+- Probe commands run only in an asserted-empty container. Agent credentials and grader credentials are introduced only after probes pass.
+- The live process, liveness probes, and cancellation target an immutable recorded container ID. A replacement under the configured name is never executed in or signalled.
+- All new secret files are mode 0600 and directories mode 0700. One fixed active generation is swapped through recoverable directory renames under run.lock; historical scope files do not accumulate.
+- The agent file is mounted read-only. The supervisor exec file is never mounted and is passed only as a host path to docker exec --env-file for the live Quorum process.
+- The supervisor file carries the source names below. gauntletEnvBase alone maps them to the canonical runtime names in the Gauntlet child:
+  - QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN -> CLAUDE_CODE_OAUTH_TOKEN
+  - QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN -> ANTHROPIC_AUTH_TOKEN
+  - QUORUM_GRADER_ANTHROPIC_API_KEY -> ANTHROPIC_API_KEY
+  - QUORUM_GRADER_ANTHROPIC_BASE_URL -> ANTHROPIC_BASE_URL
+- The same-UID process-inspection residual remains: filesystem isolation does not prevent /proc peer-environment inspection. This plan must not claim UID separation.
 
-## Recon facts this plan is built on (verified against source)
+## Verified Process Facts
 
-1. **The mounts:** `scripts/evals-container:393-407` bind-mounts `--env-file` read-only at `/run/evals/credentials.env` and each `--auth name=<dir>` read-only at `/auth/<name>`; the container runs as the host UID (`:416`), so read-only mounts are still fully READABLE by the agent under test. `container/bin/quorum:8-13` sources that mounted agent file into the Quorum process; `:17-33` exports per-mount `*_OAUTH_HOME` vars conditionally on mount presence.
-2. **The appliance mounts the whole blessed bundle for every job:** `baseContainerArgs` (`src/appliance/container.ts:70-84`) passes the full `credentials.env` + every discovered auth dir (`discoveredAuthDirs`, `:63-68`; `AUTH_DIRS` at `:21-29` maps mount names to bundle subdirs: codex→codex, gemini→gemini, kimi→kimi-code, pi→pi).
-3. **The recreate path exists, but it is unconditional:** `containerMountSignature` (`container.ts:115-119+`) is recorded in preflight provenance; `reconcileContainer` downs any existing container and brings it up again. Scope must be applied to that up call. This plan does not invent an observed-signature comparator.
-4. **The job's scope is known at submission:** `cli.ts:251-264` requires and parses `--coding-agents` for run-all, whose Quorum args may also carry `--credentials`; a single appliance `run` uses the named agent's `default_credential` (e.g. `coding-agents/codex.yaml:14`). Defaults resolve through `resolveCredentialNameForAgent` (`src/credentials/resolve.ts`).
-5. **Credential entries carry the needed fields:** `credentials.yaml` entries have `api_key_env` (e.g. `ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GLM_API_KEY`) and optional `auth:` (values in the registry: `oauth`, `subscription`, `bedrock-bearer`, `api-key`).
-6. **Agent → OAuth mount map** (from the adapters' credential-copy code): codex→`codex` (`codex.ts:191-242`), gemini→`gemini` (`gemini.ts:40-44,143-160`), antigravity→`gemini` (`antigravity.ts:60-113`), kimi→`kimi` (`kimi.ts:410-467`), pi→`pi` (`pi.ts:169-214`). claude, opencode, serf, copilot, hermes → no bundle OAuth mount (their credentials arrive via env-file keys or host-tool auth).
-7. **Exec-path mounts are inert, but exec environments are process-local:** `evals-container exec` is currently plain `docker exec` (`scripts/evals-container:465-470`). Docker supports `docker exec --env-file`; those variables apply to the new exec process rather than changing container mounts or the container's configured environment. That is the grader channel. Only the actual live Quorum exec receives it; status, health, cancellation, and shell probes do not.
-8. **Multi-agent batches** get the UNION of their cells' scopes — still a real reduction (a claude+codex batch mounts no gemini/kimi/pi OAuth homes) — and consecutive mixed batches may recreate the container as the signature changes. Accepted trade-off, recorded here so reviewers don't flag it.
-9. **The grader credential cannot ride in the agent mount:** OAuth-only Coding-Agent jobs can legitimately have an empty agent env file, but Gauntlet still needs its Anthropic grader credential. Keeping the grader names in the mount would leave the filesystem leak open; omitting them entirely would strand Gauntlet. Split delivery is therefore required, not an optional hardening.
-10. **The original Task 1 review missed two env-delivered OAuth paths:** `claude` with `opus5_sub` needs `CLAUDE_CODE_OAUTH_TOKEN` (`src/agents/index.ts:246-263`), and every Copilot OAuth credential needs the adapter's canonical `COPILOT_GITHUB_TOKEN` (`src/agents/copilot.ts:264-307`). Neither credential declares `api_key_env`, and neither family has an OAuth mount, so the current resolver returns asserted-empty and would strand both on the appliance. Every other current OAuth/subscription pair resolves to a mapped auth directory.
+1. scripts/evals-container currently mounts the complete credentials.env and every discovered OAuth directory; read-only is still readable by the agent UID.
+2. container/bin/quorum sources the mounted env file into every quorum subcommand and conditionally sets OAuth home variables, while the image can retain inherited OAuth-home variables unless the shim explicitly unsets absent mounts.
+3. reconcileContainer currently downs and ups unconditionally. containerMountSignature is descriptive evidence, not a reconcile comparator.
+4. credentialScopeForAgents currently returns a union and loses adapter/file identity. Gemini and Antigravity share the gemini bundle directory but consume disjoint files; Pi auth.json can carry multiple provider tokens.
+5. A mixed run-all uses one container for the whole batch. A union therefore cannot satisfy the spec's per-agent isolation requirement.
+6. Claude subscription requires CLAUDE_CODE_OAUTH_TOKEN; Copilot accepts COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN and canonicalizes to COPILOT_GITHUB_TOKEN. The current Task 1 resolver strands both.
+7. Gemini's current GEMINI_AUTH_TYPE host env can override credential.auth. The scoped contract must derive the mode from the selected credential and reject a contradictory bundle override.
+8. Submission executes from the current checkout; preflight then fast-forwards evals. A Bun process does not reload changed resolver code merely because files changed on disk.
+9. docker exec --env-file is process-local, but support must be capability-probed on the target Docker CLI before credential material is evaluated.
+10. Preflight probes currently run after the credential-bearing container is reconciled. This plan deliberately creates an empty probe container first and a scoped live container second.
 
 ## File Structure
 
-- `src/credentials/scope.ts` — EXISTING from Task 1: `CredentialScope` + `credentialScopeForAgents`; add env-delivered OAuth mapping before Task 2.
-- `src/credentials/grader.ts` — NEW: the shared exact grader credential/routing name contract (Task 2).
-- `src/runner/gauntlet-env.ts` — MODIFY: consume the shared grader-name constant instead of owning a duplicate list (Task 2).
-- `src/appliance/credential-scope.ts` — NEW: isolated bundle evaluation plus mode-0600 agent/grader projections (Task 2).
-- `src/appliance/container.ts` — MODIFY: asserted-scope up args, exec-only grader-file args, and scope-bearing signature (Task 3).
-- `scripts/evals-container` — MODIFY: add `--no-default-auth` for asserted mount scopes and `--exec-env-file` for the one grader-bearing exec; never mount the grader file (Task 3).
-- `src/appliance/types.ts`, `src/appliance/cli.ts`, `src/appliance/preflight.ts`, `src/appliance/process.ts` — MODIFY: persist the scope, recreate with it, and inject the grader file only into the live Quorum exec (Task 4).
-- `test/credential-scope.test.ts` — Task 1 coverage. `test/appliance-credential-scope.test.ts` — NEW in Task 2. `test/appliance-container.test.ts` — NEW in Task 3. `test/evals-container.test.ts` — Task 3. Existing appliance CLI/preflight/process suites — Task 4.
-- `docs/appliance-runbook.md` — MODIFY (Task 5).
+- src/credentials/scope.ts: single-selection CredentialScope and closed adapter delivery contracts.
+- src/credentials/grader.ts: distinct grader source-to-runtime mapping and supervisor operational-name contracts.
+- src/agents/copilot.ts: Copilot Gauntlet projection composes the shared alias translation before its extra routing projection.
+- src/appliance/credential-scope.ts: trusted bundle evaluation, exact OAuth projection, staging, activation, and retirement.
+- src/appliance/container.ts: scoped up args, immutable ContainerLease, identity-bound exec, and reconcile ordering.
+- src/appliance/safe-fs.ts: no-follow/disjoint path boundary helpers reused by credential state.
+- scripts/evals-container: no-default-auth, expected-container-id, and exec-env-file wrapper behavior.
+- container/bin/quorum: explicit absent-mount unsets before conditional OAuth-home exports.
+- src/appliance/types.ts, jobs.ts, cli.ts, git.ts: atomic normalized selection/scope/source-SHA persistence.
+- src/appliance/preflight.ts: scope freshness, empty probe container, live scoped container, private worker result.
+- src/appliance/process.ts: lease-bound live/liveness/cancellation.
+- src/appliance/provenance.ts and import.ts: job-authoritative live provenance and explicit null imported provenance.
+- docs/appliance-runbook.md and docs/experiments/2026-08-18-f13-filesystem-credential-scoping.md: operator contract and physical proof.
 
 ---
 
-### Task 1: Credential scope resolution — REVIEWED FOUNDATION; OAUTH CORRECTION REQUIRED
+### Task 1: Replace the union with one closed credential delivery contract
 
-**Reviewed commits:** `ce3906e`, `d1efcc7`, `aa144c9`, `034e980`. Separate gate repair: `dc6e89a`. Task report: `.superpowers/sdd/2026-08-18-f13-filesystem-credential-scoping/task-1-report.md`.
-
-**Corrective files:**
-- Modify: `src/credentials/scope.ts`
-- Test: `test/credential-scope.test.ts`
-
-**Accepted interface (Tasks 2–4 consume this exact contract):**
-
-```typescript
-export interface CredentialScope {
-  readonly envNames: readonly string[];
-  readonly authMounts: readonly string[];
-}
-
-export function credentialScopeForAgents(
-  agents: readonly string[],
-  credentials: readonly string[] | null,
-): CredentialScope;
-```
-
-- Both arrays are sorted and deduped. A supplied empty shape is asserted zero-material; only an omitted optional scope in later container APIs means legacy/unscoped.
-- `credentials === null` resolves each agent's real default. An explicit list is validated using own-property lookups, then unions only agent/credential pairs runnable under the current harness-family matrix.
-- API-key credentials use explicit `api_key_env` first, then the reviewed conventional adapter mapping; OAuth/subscription credentials add only their mapped OAuth source.
-- Unknown names, prototype-property names, missing API-key mappings, and nonempty selections with zero compatible cells fail closed with named errors.
-
-**Required corrective addendum (not started):** Add this frozen adapter contract:
-
-```typescript
-export const CONVENTIONAL_OAUTH_ENV: Readonly<Record<string, string>> = {
-  claude: 'CLAUDE_CODE_OAUTH_TOKEN',
-  copilot: 'COPILOT_GITHUB_TOKEN',
-};
-```
-
-For an OAuth/subscription pair, contribute its explicit `api_key_env`, mapped OAuth directory, and mapped conventional OAuth env name as applicable; if none of those three delivery channels exists, throw a named fail-closed error instead of returning zero material.
-
-- [ ] Add RED tests proving `credentialScopeForAgents(['claude'], ['opus5_sub'])` returns only `CLAUDE_CODE_OAUTH_TOKEN`, Copilot default and every explicit Copilot credential return only `COPILOT_GITHUB_TOKEN`, and every current compatible OAuth/subscription pair has at least one delivery channel.
-- [ ] Add an exact-map assertion for `CONVENTIONAL_OAUTH_ENV`. Do not edit the credential corpus or add injection hooks merely to reach the guard for a hypothetical future OAuth family; record that presently unreachable branch in the task receipt.
-- [ ] Implement the two-name map and delivery-channel guard in `src/credentials/scope.ts`; run `bun test test/credential-scope.test.ts`, `bun run check`, and `bun run quorum check`.
-- [ ] Commit only `src/credentials/scope.ts` and `test/credential-scope.test.ts` as `fix: include env-delivered OAuth credentials in job scope (F13)`, append the receipt to the Task 1 report, and obtain a scoped Sol re-review before Task 2 begins.
-
----
-
-### Task 2: Derive agent-only and grader-only credential files
+**Status:** Reopens the reviewed foundation. Preserve ce3906e, d1efcc7, aa144c9, 034e980, and dc6e89a; add one corrective commit.
 
 **Files:**
-- Create: `src/credentials/grader.ts`
-- Create: `src/appliance/credential-scope.ts`
-- Modify: `src/runner/gauntlet-env.ts`
-- Test: `test/appliance-credential-scope.test.ts`
-- Test: `test/gauntlet-env.test.ts`
+- Modify: src/credentials/scope.ts
+- Test: test/credential-scope.test.ts
 
 **Interfaces:**
-- Consumes: Task 1 `CredentialScope`, the blessed `<bundle>/credentials.env`, `ensurePrivateDirNoFollow`, and `writePrivateText`.
-- Produces:
 
-```typescript
-export const GRADER_CREDENTIAL_ENV_NAMES = [
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_BASE_URL',
-] as const;
-
-export interface ScopedCredentialFiles {
-  readonly agentEnvFile: string;
-  readonly graderExecEnvFile: string;
+~~~typescript
+export interface CredentialSelection {
+  readonly agent: string;
+  readonly credential: string | null;
 }
 
-export function writeScopedCredentialFiles(
-  loaded: LoadedApplianceConfig,
-  scope: CredentialScope,
-): ScopedCredentialFiles;
-```
-
-`GRADER_CREDENTIAL_ENV_NAMES` lives in `src/credentials/grader.ts`. `GAUNTLET_ENV_ALLOWLIST` imports and spreads it so runner and appliance cannot drift.
-
-`writeScopedCredentialFiles` evaluates the trusted shell dotenv in an isolated `/bin/bash --noprofile --norc` child with a minimal non-secret environment, returning only requested names as NUL-delimited name/value pairs. It never prints values. This preserves the existing `source credentials.env` semantics—including quoted values—without passing unrelated host variables or reimplementing shell parsing.
-
-The function then:
-
-1. fails closed if any `scope.envNames` value is missing or empty;
-2. fails closed unless at least one of the three grader auth names is nonempty (`ANTHROPIC_BASE_URL` alone is not auth);
-3. rejects CR/LF in a grader value because Docker env files are line-oriented;
-4. creates `<root>/state/credentials-scoped/` through `ensurePrivateDirNoFollow(loaded.config.root, target, 'state/credentials-scoped')` before either write;
-5. writes `<hash-of-sorted-agent-names>.agent.env` as shell-single-quoted assignments for exactly `scope.envNames` (an asserted empty scope produces an empty file);
-6. writes `grader.exec.env` in Docker `KEY=value` form for only defined `GRADER_CREDENTIAL_ENV_NAMES`;
-7. uses `writePrivateText` for atomic mode-0600 files. Paths/hashes contain names only, never values.
-
-- [ ] **Step 1: Write the failing behavior tests**
-
-Use a fake blessed bundle containing plain, single-quoted, and double-quoted assignments. Add tests proving:
-
-```typescript
-test('agent file contains exactly scope.envNames and normalizes shell quoting', () => {
-  const files = writeScopedCredentialFiles(loaded, {
-    envNames: ['OPENAI_API_KEY'],
-    authMounts: [],
-  });
-  expect(sourceEnvFile(files.agentEnvFile)).toEqual({
-    OPENAI_API_KEY: 'agent value with spaces=#',
-  });
-  expect(readFileSync(files.agentEnvFile, 'utf8')).not.toContain('grader-secret');
-  expect(statSync(files.agentEnvFile).mode & 0o777).toBe(0o600);
-});
-
-test('grader file contains only the shared grader contract', () => {
-  const files = writeScopedCredentialFiles(loaded, {
-    envNames: [],
-    authMounts: ['codex'],
-  });
-  expect(parseDockerEnvFile(files.graderExecEnvFile)).toEqual({
-    ANTHROPIC_API_KEY: 'grader value with spaces=#',
-    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
-  });
-  expect(readFileSync(files.agentEnvFile, 'utf8')).toBe('');
-  expect(statSync(files.graderExecEnvFile).mode & 0o777).toBe(0o600);
-});
-```
-
-Define `sourceEnvFile` as a test-only isolated Bash subprocess that sources the generated file and emits only the specifically requested test key as a NUL-delimited value. Define `parseDockerEnvFile` as a strict test-only parser that splits each nonempty line at its first `=`. Neither helper may dump the child environment or any non-test key.
-
-Also cover: missing requested agent key; no grader auth; CR/LF grader rejection without echoing the value; deterministic paths; repeated writes; exact shared grader-name list; and a symlinked `state/credentials-scoped` directory rejected with external victim bytes/mode/mtime unchanged.
-
-- [ ] **Step 2: Run RED**
-
-```bash
-bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts
-```
-
-Expected: module/export missing failures.
-
-- [ ] **Step 3: Implement the shared contract and projections**
-
-Use one private bundle-evaluation helper; do not expose a generic arbitrary-env API. The Bash child gets only the source path and the finite requested-name union. Parse its NUL output by pairs; any malformed output, nonzero status, missing file, or missing required name becomes `ApplianceError('config_invalid', 'credential-scope', ...)` naming keys/paths but never values.
-
-- [ ] **Step 4: Run GREEN and the appliance suite**
-
-```bash
-bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts
-bun test test/appliance-*.test.ts test/evals-container.test.ts
-bun run check
-bun run quorum check
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
-  src/appliance/credential-scope.ts test/appliance-credential-scope.test.ts \
-  test/gauntlet-env.test.ts
-git commit -m "feat: derive separate agent and grader credential files (F13)"
-```
-
----
-
-### Task 3: Scoped container mounts and exec-only grader delivery
-
-**Files:**
-- Modify: `src/appliance/container.ts`
-- Modify: `scripts/evals-container`
-- Create: `test/appliance-container.test.ts`
-- Test: `test/evals-container.test.ts`
-
-**Interfaces:**
-- Consumes: Task 1 `CredentialScope`; Task 2 `ScopedCredentialFiles`.
-- Produces:
-
-```typescript
-export interface ScopedContainerMounts {
-  readonly scope: CredentialScope;
-  readonly agentEnvFile: string;
+export interface AgentEnvProjection {
+  readonly destinationName: string;
+  readonly sourceNames: readonly string[];
 }
 
-export function baseContainerArgs(
-  loaded: LoadedApplianceConfig,
-  scoped?: ScopedContainerMounts,
-): string[];
+export type OAuthProjection =
+  | { readonly kind: 'codex'; readonly mountName: 'codex' }
+  | { readonly kind: 'gemini'; readonly mountName: 'gemini' }
+  | { readonly kind: 'antigravity'; readonly mountName: 'gemini' }
+  | { readonly kind: 'kimi'; readonly mountName: 'kimi' }
+  | {
+      readonly kind: 'pi';
+      readonly mountName: 'pi';
+      readonly provider: string;
+    };
 
-export function upContainerArgs(
-  loaded: LoadedApplianceConfig,
-  scoped?: ScopedContainerMounts,
-): string[];
+export interface EmptyCredentialScope {
+  readonly schemaVersion: 1;
+  readonly kind: 'empty';
+  readonly agent: null;
+  readonly runtimeFamily: null;
+  readonly credential: null;
+  readonly agentEnv: readonly [];
+  readonly geminiAuthType: null;
+  readonly oauth: null;
+}
 
-export function execContainerArgs(
-  loaded: LoadedApplianceConfig,
-  command: readonly string[],
-  options?: {
-    readonly execEnvFile?: string;
+export interface LiveCredentialScope {
+  readonly schemaVersion: 1;
+  readonly kind: 'live';
+  readonly agent: string;
+  readonly runtimeFamily: string;
+  readonly credential: string;
+  readonly agentEnv: readonly AgentEnvProjection[];
+  readonly geminiAuthType: 'gemini-api-key' | 'oauth-personal' | null;
+  readonly oauth: OAuthProjection | null;
+}
+
+export type CredentialScope = EmptyCredentialScope | LiveCredentialScope;
+
+export const EMPTY_CREDENTIAL_SCOPE: EmptyCredentialScope;
+
+export function credentialScopeForSelection(
+  evalsRoot: string,
+  selection: CredentialSelection,
+): LiveCredentialScope;
+~~~
+
+The schema later mirrors this discriminated union exactly. Persisted OAuth kinds are literals, never record-controlled source paths.
+
+Binding adapter contracts:
+
+| Agent/family and auth | Agent env projection | OAuth projection |
+|---|---|---|
+| API-key credential | explicit api_key_env, else reviewed conventional family destination; source is the same name | none |
+| Claude OAuth | CLAUDE_CODE_OAUTH_TOKEN from the same source name | none |
+| Copilot OAuth | destination COPILOT_GITHUB_TOKEN from ordered sources COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN | none |
+| Codex subscription | none | codex |
+| Gemini API key | GEMINI_API_KEY | none; geminiAuthType=gemini-api-key |
+| Gemini OAuth | none | gemini; geminiAuthType=oauth-personal |
+| Antigravity OAuth | none | antigravity |
+| Kimi OAuth | none | kimi |
+| Pi OAuth | none | pi with credential.provider |
+
+Any missing default, incompatible pair, missing Pi provider, unsupported auth form, or pair without an audited delivery channel fails with a named credential-scope error.
+
+- [ ] **Step 1: Replace the stale tests and write RED coverage**
+
+Replace the existing "copilot default is a valid zero-material default scope" assertion; it freezes the bug. Add table-driven tests for every current compatible agent/credential pair and exact tests for:
+
+~~~typescript
+expect(
+  credentialScopeForSelection(root, {
+    agent: 'copilot',
+    credential: 'copilot_default',
+  }).agentEnv,
+).toEqual([
+  {
+    destinationName: 'COPILOT_GITHUB_TOKEN',
+    sourceNames: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
   },
-): string[];
+]);
 
-export function containerMountSignature(
-  loaded: LoadedApplianceConfig,
-  scoped?: ScopedContainerMounts,
-): string;
-```
+expect(
+  credentialScopeForSelection(root, {
+    agent: 'claude',
+    credential: 'opus5_sub',
+  }).agentEnv,
+).toEqual([
+  {
+    destinationName: 'CLAUDE_CODE_OAUTH_TOKEN',
+    sourceNames: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  },
+]);
+~~~
 
-- Omitted `scoped` preserves today's direct/legacy full-bundle args byte-for-byte.
-- Any supplied `scoped`, including a scope with empty arrays, uses `agentEnvFile`, emits `--no-default-auth`, and adds only `scope.authMounts`; it never falls back to the full bundle or the wrapper's host-home auth discovery. A requested mount with no corresponding blessed-bundle directory fails closed. Argument builders remain pure: Task 2/preflight creates the file before calling them.
-- Signature payload includes `credential_scope: scoped?.scope ?? null` and the selected agent-file mount source, so omitted legacy and asserted empty differ without hashing secret values.
-- New wrapper option: `--exec-env-file <host-file>`. It is valid only with `exec`, must be an existing readable regular file, and every existing path component must pass a no-follow check before physical normalization. It is never passed to `docker run` and is never a bind mount.
-- New wrapper flag: `--no-default-auth`. It suppresses all `$HOME/.codex`, `$HOME/.gemini`, `$HOME/.kimi-code`, and `$HOME/.pi` fallback discovery while still accepting explicit `--auth name=dir` values. It is valid for `up` and inert-but-accepted on `exec`; scoped TypeScript args always include it. Omission preserves legacy discovery.
-- On `exec`, the wrapper emits `docker exec --env-file "$exec_env_file" "$container_name" ...`. Without the option, existing exec behavior is byte-identical. `shell`, health, status, kill, and cancellation calls never receive it.
-
-- [ ] **Step 1: Write the failing argument and real-wrapper tests**
-
-Add structured assertions for:
-
-```typescript
-test('asserted empty scope mounts an empty agent file and no auth dirs', () => {
-  const args = upContainerArgs(loaded, {
-    scope: { envNames: [], authMounts: [] },
-    agentEnvFile: join(loaded.config.root, 'state/credentials-scoped/empty.agent.env'),
-  });
-  const envFlag = args.indexOf('--env-file');
-  expect(args[envFlag + 1]).toContain('credentials-scoped');
-  expect(args).toContain('--no-default-auth');
-  expect(args).not.toContain('--auth');
-  expect(args).not.toContain(join(bundle, 'credentials.env'));
-});
-
-test('omitted scope keeps legacy args but differs in mount signature', () => {
-  expect(baseContainerArgs(loaded)).toEqual([
-    '--name',
-    loaded.config.container.name,
-    '--superpowers-root',
-    loaded.config.superpowers.path,
-    '--env-file',
-    join(bundle, 'credentials.env'),
-    ...expectedDiscoveredAuthArgs,
-  ]);
-  expect(containerMountSignature(loaded)).not.toBe(
-    containerMountSignature(loaded, {
-      scope: { envNames: [], authMounts: [] },
-      agentEnvFile: join(loaded.config.root, 'state/credentials-scoped/empty.agent.env'),
-    }),
-  );
-});
-```
-
-In the new test file, build `expectedDiscoveredAuthArgs` explicitly from the auth directories created by that fixture; do not derive the expected value by calling production `discoveredAuthDirs`.
-
-Through the existing fake-Docker wrapper harness, prove:
-
-1. `up` mounts the agent file and selected auth dirs, and its Docker argv contains no grader path;
-2. asserted-empty `up` emits no auth mounts even when all four fallback auth directories exist under hostile `HOME`; selected scope mounts exactly its named blessed directories;
-3. a requested auth mount missing from the blessed bundle fails before Docker;
-4. scoped `exec` places `--env-file <grader-path>` after Docker's `exec` subcommand and before the container name;
-5. the grader path never appears inside `--mount`, the container filesystem, or `docker run` args;
-6. no secret value appears in the Docker argv log—only the file path;
-7. `--exec-env-file` with `up`, `shell`, or a relative/missing/symlinked/unreadable file fails before Docker;
-8. ordinary legacy exec and shell tests remain unchanged, including legacy auth auto-discovery.
+Also assert exact Codex, Gemini, Antigravity, Kimi, and Pi OAuth kinds; Gemini mode derived from credential.auth; default resolution persists the concrete credential name; and prototype-property names retain named errors.
 
 - [ ] **Step 2: Run RED**
 
-```bash
-bun test test/appliance-container.test.ts test/evals-container.test.ts
-```
+Run: bun test test/credential-scope.test.ts
 
-Expected: missing scope parameters/flag behavior.
+Expected: old union interface and zero-material Copilot behavior fail.
 
-- [ ] **Step 3: Implement the wrapper and container arg contracts**
+- [ ] **Step 3: Implement the minimal closed resolver**
 
-Keep mount selection and exec injection separate. In `baseContainerArgs`, map each asserted `authMounts` name through the existing `AUTH_DIRS` table, require its blessed source directory to exist, and emit `--no-default-auth` before the explicit `--auth` pairs. In the wrapper, guard all four fallback-discovery branches with `no_default_auth != true`. Do not pass the grader file to `baseContainerArgs` or `docker run`; only `execContainerArgs(..., { execEnvFile })` may emit `--exec-env-file`. Require that exec-env path to be absolute, then add a small lexical component walker: starting at `/`, reject `-L` at every existing component, and finally require a regular readable file. Do not use `realpath`/`readlink -f` to hide an alias before validation.
+Remove credentialScopeForAgents, AGENT_OAUTH_MOUNT, and the array union behavior. Keep own-property lookup. Resolve exactly one selection from evalsRoot/coding-agents and evalsRoot/credentials.yaml. For Gemini, ignore ambient GEMINI_AUTH_TYPE and derive the mode from credential.auth. Do not add compatibility wrappers for the deleted API.
 
 - [ ] **Step 4: Run GREEN and gates**
 
-```bash
-bun test test/appliance-container.test.ts test/evals-container.test.ts
+Run:
+
+~~~bash
+bun test test/credential-scope.test.ts
+bun run check
+bun run quorum check
+~~~
+
+- [ ] **Step 5: Commit and review**
+
+~~~bash
+git add src/credentials/scope.ts test/credential-scope.test.ts
+git commit -m "fix: resolve one exact appliance credential scope (F13)"
+~~~
+
+Append the receipt to task-1-report.md and obtain a scoped Sol review before Task 2.
+
+---
+
+### Task 2: Stage one exact active credential generation
+
+**Files:**
+- Create: src/credentials/grader.ts
+- Create: src/appliance/credential-scope.ts
+- Modify: src/runner/gauntlet-env.ts
+- Modify: src/agents/copilot.ts
+- Test: test/appliance-credential-scope.test.ts
+- Test: test/gauntlet-env.test.ts
+- Test: test/agent-copilot.test.ts
+
+**Interfaces:**
+
+~~~typescript
+export const GRADER_SOURCE_ENV_BY_RUNTIME_NAME = {
+  CLAUDE_CODE_OAUTH_TOKEN: 'QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN',
+  ANTHROPIC_AUTH_TOKEN: 'QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN',
+  ANTHROPIC_API_KEY: 'QUORUM_GRADER_ANTHROPIC_API_KEY',
+  ANTHROPIC_BASE_URL: 'QUORUM_GRADER_ANTHROPIC_BASE_URL',
+} as const;
+
+export const SUPERVISOR_NETWORK_ENV_NAMES = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+] as const;
+
+export const COPILOT_SUPERVISOR_ENV_NAMES = [
+  'GH_HOST',
+  'COPILOT_GH_HOST',
+  'COPILOT_MODEL',
+  'COPILOT_OFFLINE',
+  'ALL_PROXY',
+  'all_proxy',
+  'REQUESTS_CA_BUNDLE',
+  'CURL_CA_BUNDLE',
+] as const;
+
+export interface ProjectedAuthMount {
+  readonly name: 'codex' | 'gemini' | 'kimi' | 'pi';
+  readonly path: string;
+}
+
+export interface StagedCredentialMaterial {
+  readonly stageDir: string;
+  readonly agentEnvFile: string;
+  readonly supervisorExecEnvFile: string | null;
+  readonly authMounts: readonly ProjectedAuthMount[];
+}
+
+export interface ActiveCredentialMaterial {
+  readonly root: string;
+  readonly agentEnvFile: string;
+  readonly supervisorExecEnvFile: string | null;
+  readonly authMounts: readonly ProjectedAuthMount[];
+}
+
+export function stageProbeCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+): StagedCredentialMaterial;
+
+export function stageLiveCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+  scope: LiveCredentialScope,
+): StagedCredentialMaterial;
+
+export function activateScopedCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+  staged: StagedCredentialMaterial,
+): ActiveCredentialMaterial;
+
+export function retireScopedCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+): void;
+~~~
+
+The active paths are fixed:
+
+- state/credentials-scoped/active/agent.env
+- state/credentials-scoped/active/supervisor.exec.env for live scopes only
+- state/credentials-scoped/active/auth/<mount-name>/...
+
+Stage beneath a fresh sibling directory whose name carries no secret or scope data. stageProbeCredentialMaterial writes only an empty agent.env and never evaluates the blessed bundle. Activation cannot rename over a nonempty directory: if active exists, rename it to one fixed recovery slot, rename the complete stage to the now-absent active path, then remove the recovery slot. If the second rename fails, restore the old active directory before returning the error. On startup, a recovery helper resolves an interrupted swap before staging new material; it never guesses between two complete generations and fails closed on an ambiguous shape.
+
+Exact OAuth projections:
+
+| Kind | Blessed source | Active destination |
+|---|---|---|
+| codex | codex/auth.json | auth/codex/auth.json |
+| gemini | gemini/oauth_creds.json and gemini/google_accounts.json | auth/gemini with exactly those files |
+| antigravity | gemini/antigravity-cli/antigravity-oauth-token | auth/gemini/antigravity-cli/antigravity-oauth-token only |
+| kimi | kimi-code/config.toml and kimi-code/credentials/kimi-code.json required; kimi-code/oauth/kimi-code optional | auth/kimi with the same relative paths |
+| pi | parse pi/agent/auth.json and select only the own-property scope.oauth.provider entry | auth/pi/agent/auth.json containing exactly that entry |
+
+Agent env behavior:
+
+- Evaluate the trusted bundle once in isolated /bin/bash --noprofile --norc with a minimal non-secret environment.
+- For each AgentEnvProjection, select the first nonempty source in order and emit only destinationName.
+- Emit GEMINI_AUTH_TYPE from scope.geminiAuthType; a nonempty contradictory bundle value is config_invalid.
+- Agent output is shell-single-quoted assignments. Supervisor output is Docker KEY=value lines.
+
+Supervisor behavior:
+
+- Read grader credentials only from QUORUM_GRADER_* aliases and emit those aliases into supervisor.exec.env. Canonical grader names never appear in the host file.
+- Require at least one nonempty grader auth source; base URL alone is not auth.
+- Include defined network/TLS names, and include Copilot routing names only for a Copilot scope.
+- Reject CR/LF in Docker env-file values.
+- If the agent receives a canonical Anthropic secret, require its selected value to differ from the corresponding QUORUM_GRADER_* value.
+- Never emit QUORUM_GRADER_* aliases into agent.env.
+
+Runner behavior:
+
+- gauntletEnvBase projects the existing non-secret contract, reads each QUORUM_GRADER_* source, and writes only its mapped canonical name into the returned Gauntlet child env.
+- Canonical agent credentials in the Quorum parent are ignored by the grader projection.
+- Copilot's projection begins with gauntletEnvBase(hostEnv), then adds only its evidenced routing names and retains credentialed-proxy rejection. It does not loop over canonical grader names itself.
+- QUORUM_GRADER_* aliases remain absent from the child env.
+
+- [ ] **Step 1: Write RED tests for projections and atomic generations**
+
+Use a synthetic hostile bundle. Pin:
+
+~~~typescript
+expect(readProjectedTree(gemini.authMounts[0].path)).toEqual([
+  'google_accounts.json',
+  'oauth_creds.json',
+]);
+expect(readProjectedTree(antigravity.authMounts[0].path)).toEqual([
+  'antigravity-cli/antigravity-oauth-token',
+]);
+expect(JSON.parse(readFileSync(piAuthPath, 'utf8'))).toEqual({
+  'openai-codex': sourcePiAuth['openai-codex'],
+});
+~~~
+
+Cover each projection, ordered Copilot aliases, separate grader aliases, distinct-value enforcement, hostile unrelated provider/AWS names, missing values, contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi JSON, traversal, permissions, rotation, and forced first/second rename failures. Add a parent-env test containing distinct agent ANTHROPIC_API_KEY and QUORUM_GRADER_ANTHROPIC_API_KEY values: the ordinary agent adapter input remains the agent value, gauntletEnvBase returns the grader value under ANTHROPIC_API_KEY, and neither child projection contains the alias. The second-rename failure must restore the prior active tree byte-for-byte and metadata-for-metadata; an interrupted-swap fixture must recover deterministically before any new stage is accepted.
+
+- [ ] **Step 2: Run RED**
+
+Run: bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts test/agent-copilot.test.ts
+
+Expected: modules and shared constants are missing.
+
+- [ ] **Step 3: Implement staging and activation**
+
+Use no-follow helpers and writePrivateText. Project source files through regular-file reads and destination writes; never recursive-copy a bundle directory. activateScopedCredentialMaterial is called only after the previous container is down and performs the recoverable active-to-recovery, stage-to-active swap above. gauntletEnvBase imports the source-to-runtime map from grader.ts; Copilot composes that function before its own routing projection.
+
+- [ ] **Step 4: Run GREEN and gates**
+
+~~~bash
+bun test test/appliance-credential-scope.test.ts test/gauntlet-env.test.ts \
+  test/agent-copilot.test.ts
 bun test test/appliance-*.test.ts
 bun run check
 bun run quorum check
-```
+~~~
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and review**
 
-```bash
-git add src/appliance/container.ts scripts/evals-container \
-  test/appliance-container.test.ts test/evals-container.test.ts
-git commit -m "feat: mount agent scope and inject grader only at exec (F13)"
-```
+~~~bash
+git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
+  src/agents/copilot.ts \
+  src/appliance/credential-scope.ts test/appliance-credential-scope.test.ts \
+  test/gauntlet-env.test.ts test/agent-copilot.test.ts
+git commit -m "feat: project exact agent and supervisor credentials (F13)"
+~~~
 
 ---
 
-### Task 4: Persist and apply scope through the appliance job flow
+### Task 3: Reconcile a scoped container and return an immutable lease
 
 **Files:**
-- Modify: `src/appliance/types.ts`
-- Modify: `src/appliance/cli.ts`
-- Modify: `src/appliance/preflight.ts`
-- Modify: `src/appliance/process.ts`
-- Modify: `src/appliance/provenance.ts`
-- Test: `test/appliance-contracts.test.ts`
-- Test: `test/appliance-cli.test.ts`
-- Test: `test/appliance-preflight.test.ts`
-- Test: `test/appliance-process.test.ts`
+- Modify: src/appliance/container.ts
+- Modify: src/appliance/safe-fs.ts
+- Modify: src/appliance/doctor.ts
+- Modify: scripts/evals-container
+- Modify: container/bin/quorum
+- Create: test/appliance-container.test.ts
+- Modify: test/appliance-safe-fs.test.ts
+- Modify: test/appliance-doctor.test.ts
+- Modify: test/evals-container.test.ts
+- Modify: test/container-shims.test.ts
 
 **Interfaces:**
-- Consumes: Task 1 scope resolver, Task 2 file writer, Task 3 scoped up/exec args.
-- Produces:
-  - `CredentialScopeSchema` matching Task 1 exactly;
-  - top-level `credential_scope: CredentialScopeSchema.nullable().default(null)` on schema-version-1 `JobRecordSchema` and `ProvenanceRecordSchema`, so old records parse as legacy while every newly written record persists the field explicitly;
-  - nullable `job.credential_scope` (`null` only for legacy/import/prepare records; every new live `run`/`run-all` job writes a non-null asserted scope, including empty);
-  - preflight's internal `credential_files: ScopedCredentialFiles | null` result;
-  - `liveCommandArgs(..., { execEnvFile })` for the one credentialed live exec; all other `execContainerArgs` callers remain uncredentialed;
-  - provenance/container evidence containing the asserted `credential_scope` and matching `mount_signature`—never paths or values.
 
-- [ ] **Step 1: Write the failing contract and flow tests**
+~~~typescript
+export interface ScopedContainerMounts {
+  readonly credentialScope: CredentialScope;
+  readonly material: StagedCredentialMaterial;
+}
 
-Cover all of these behaviors against existing fake action/runner seams:
+export interface ContainerLease {
+  readonly name: string;
+  readonly id: string;
+  readonly imageId: string | null;
+  readonly mountSignature: string;
+  readonly credentialScope: CredentialScope;
+}
 
-1. `run` and `run-all` compute scope once from parsed agents/credentials and persist it in the job before worker spawn.
-2. `run` resolves its agent default; `run-all` parses the single required `--coding-agents` value and optional single `--credentials` value, passing `null` when the latter is omitted. Duplicate `--credentials`, explicit incompatible selections, and unknown selections fail before job creation or any container command.
-3. Copilot's default scope persists `COPILOT_GITHUB_TOKEN` with no auth mount; Claude's explicit `opus5_sub` scope persists `CLAUDE_CODE_OAUTH_TOKEN`. Neither may collapse to asserted-empty.
-4. Preflight reads the job's stored scope, writes both files, and calls `reconcileContainer(loaded, runner, { scope, agentEnvFile })`; legacy null records keep the existing unscoped path.
-5. The live job call uses `liveCommandArgs(..., { execEnvFile: graderExecEnvFile })` and produces `--exec-env-file`; cancellation, liveness, tool-version, and `quorum check` probes do not.
-6. A scoped job with missing grader-file preparation fails before the live child spawns.
-7. Provenance records names/mounts and signature only; it contains no secret file path or value.
-8. A schema-version-1 job/provenance fixture with no `credential_scope` parses to `null`, while newly created prepare/import records persist `null` and live records persist the asserted object. No other missing or malformed field is relaxed.
+export function upContainerArgs(
+  loaded: LoadedApplianceConfig,
+  active: ActiveCredentialMaterial,
+): string[];
 
-Pin the core live command contract:
+export function reconcileContainer(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+  scoped: ScopedContainerMounts,
+): ContainerLease;
 
-```typescript
-const args = liveCommandArgs(loaded, 'job-1', ['quorum', 'run-all'], {
-  execEnvFile: '/state/credentials-scoped/grader.exec.env',
-});
-expect(args).toContain('--exec-env-file');
-expect(args).toContain('/state/credentials-scoped/grader.exec.env');
+export function execContainerArgs(
+  loaded: LoadedApplianceConfig,
+  lease: ContainerLease,
+  command: readonly string[],
+  options?: { readonly execEnvFile?: string },
+): string[];
 
-const probeArgs = execContainerArgs(loaded, ['quorum', 'check']);
-expect(probeArgs).not.toContain('--exec-env-file');
-```
+export function runInContainer(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+  lease: ContainerLease,
+  command: readonly string[],
+  code: ApplianceErrorCode,
+  action: string,
+): CommandResult;
 
-For cancellation, drive the existing `cancelJob` fake-runner test and assert that none of its recorded wrapper calls contains `--exec-env-file`; do not add a test-only production export.
+export function requireDockerExecEnvFile(
+  runner: CommandRunner,
+): void;
+~~~
+
+reconcileContainer always:
+
+1. inspects the existing configured container;
+2. downs it when present;
+3. activates the staged generation;
+4. ups with active agent.env, --no-default-auth, and only exact projected auth directories;
+5. captures a non-null container ID and mount signature;
+6. returns a lease containing the asserted scope.
+
+The wrapper adds --no-default-auth, --exec-env-file, and --expected-container-id:
+
+- --no-default-auth is valid for up, joins mount_config_explicit(), and disables every host-home fallback.
+- exec args do not call baseContainerArgs and do not rediscover bundle paths. They contain only configured name, expected immutable ID, optional exec env file, exec, and the command.
+- Before exec, the wrapper requires the configured name to resolve to the expected ID, then targets that immutable ID.
+- --exec-env-file is valid only for exec, validated no-follow as an absolute readable regular file, and emitted after docker exec and before the immutable ID.
+
+container/bin/quorum first unsets CODEX_AUTH_HOME, GEMINI_OAUTH_HOME, AGY_OAUTH_HOME, KIMI_OAUTH_HOME, and PI_OAUTH_HOME, then exports only variables whose projected mount exists. Extract only the auth-root selection into a sourceable shell helper if necessary for behavior testing; do not assert large rendered script strings.
+
+requireDockerExecEnvFile inspects docker exec --help for --env-file. Doctor reports the capability; preflight later requires it before credential evaluation, build, or container mutation.
+
+- [ ] **Step 1: Write RED argument, wrapper, shim, and capability tests**
+
+Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; configured-name replacement fails before child execution; and absent projected mounts remove hostile image-baked OAuth vars.
+
+Add hostile topology fixtures showing that symlinked/intermediate-symlink paths or credential state/bundle beneath code/results mounts fail with zero Docker calls.
 
 - [ ] **Step 2: Run RED**
 
-```bash
-bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
-  test/appliance-preflight.test.ts test/appliance-process.test.ts
-```
+~~~bash
+bun test test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-doctor.test.ts test/evals-container.test.ts \
+  test/container-shims.test.ts
+~~~
 
-Expected: missing schema/threading and live exec-env assertions.
+- [ ] **Step 3: Implement the boundary**
 
-- [ ] **Step 3: Implement narrow one-way threading**
-
-Submission computes once; the record is authoritative afterward. Preflight prepares files and recreates the container with the stored scope. `runWorker` takes the grader path from its own successful preflight result and gives it only to the live Quorum exec. Do not reparse CLI strings, derive an observed mount identity, add a generic environment channel, or inject grader env into probes.
+Keep up-time mount construction separate from exec-time process injection. Validate exact projected paths under the active credential root. mountSignature describes the asserted scope and active destinations, never secret values. Existing direct wrapper invocation without --no-default-auth remains legacy; appliance TypeScript never uses it.
 
 - [ ] **Step 4: Run GREEN and gates**
 
-```bash
-bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
-  test/appliance-preflight.test.ts test/appliance-process.test.ts
-bun test test/appliance-*.test.ts test/evals-container.test.ts
+~~~bash
+bun test test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-doctor.test.ts test/evals-container.test.ts \
+  test/container-shims.test.ts
+bun test test/appliance-*.test.ts
 bun run check
 bun run quorum check
-```
+~~~
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit and review**
 
-```bash
-git add src/appliance/types.ts src/appliance/cli.ts \
-  src/appliance/preflight.ts src/appliance/process.ts \
-  src/appliance/provenance.ts test/appliance-contracts.test.ts \
-  test/appliance-cli.test.ts test/appliance-preflight.test.ts \
-  test/appliance-process.test.ts
-git commit -m "feat: apply credential scope across appliance jobs (F13)"
-```
+~~~bash
+git add src/appliance/container.ts src/appliance/safe-fs.ts \
+  src/appliance/doctor.ts scripts/evals-container container/bin/quorum \
+  test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-doctor.test.ts test/evals-container.test.ts \
+  test/container-shims.test.ts
+git commit -m "feat: bind scoped containers to immutable leases (F13)"
+~~~
 
 ---
 
-### Task 5: Runbook, manual proof, and residuals
+### Task 4: Persist normalized selection, scope, and source identity atomically
 
 **Files:**
-- Modify: `docs/appliance-runbook.md`
+- Modify: src/appliance/types.ts
+- Modify: src/appliance/cli.ts
+- Modify: src/appliance/jobs.ts
+- Modify: src/appliance/git.ts
+- Modify: src/appliance/import.ts
+- Modify: src/appliance/provenance.ts
+- Test: test/appliance-contracts.test.ts
+- Test: test/appliance-cli.test.ts
+- Test: test/appliance-jobs.test.ts
+- Test: test/appliance-import.test.ts
+- Create: test/appliance-provenance.test.ts
 
-- [ ] **Step 1: Document the operator contract**
+**Interfaces:**
 
-State that new appliance live jobs always assert a scope; `/run/evals/credentials.env` contains only the job's Coding-Agent keys; `/auth` contains only selected OAuth sources; the grader file remains mode 0600 under host appliance state and is injected only into the live Quorum exec; direct wrapper calls that omit scope remain explicitly legacy/unscoped.
+~~~typescript
+export interface LiveCredentialRequest {
+  readonly selection: CredentialSelection;
+  readonly scope: LiveCredentialScope;
+  readonly sourceEvalsSha: string;
+}
 
-- [ ] **Step 2: Add the no-value manual verification gate**
+export interface CreateJobRequest {
+  readonly kind: ApplianceCommandKind;
+  readonly superpowersRef: string;
+  readonly argv: readonly string[];
+  readonly runId?: string;
+  readonly credentialSelection: CredentialSelection | null;
+  readonly credentialScope: CredentialScope | null;
+  readonly credentialScopeSourceEvalsSha: string | null;
+  readonly requester: {
+    readonly agent: string | null;
+    readonly thread?: string | null;
+    readonly task?: string | null;
+  };
+}
+~~~
 
-The checklist must not print secrets:
+Add exact zod schemas and these defaulted read fields to job and provenance:
 
-```bash
-# On the configured appliance after a scoped Codex-subscription job:
-appliance_config=${EVALS_APPLIANCE_CONFIG:-/srv/quorum/config/appliance.json}
-container_name=$(bun -e \
-  'const config = await Bun.file(process.argv[1]).json(); console.log(config.container.name)' \
-  "$appliance_config")
+~~~typescript
+credential_selection: CredentialSelectionSchema.nullable().default(null),
+credential_scope: CredentialScopeSchema.nullable().default(null),
+credential_scope_source_evals_sha: z.string().nullable().default(null),
+~~~
 
-docker exec "$container_name" sh -lc \
-  'find /auth -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort'
-# expect: codex only
+Every new writer supplies all three explicitly:
 
-docker exec "$container_name" sh -lc \
-  'sed -n "s/=.*//p" /run/evals/credentials.env | sort'
-# expect: no agent env names for the subscription-only cell
+- run/run-all: non-null selection, live scope, and source SHA;
+- prepare: null selection, EMPTY_CREDENTIAL_SCOPE, null source SHA;
+- import: all null.
 
-docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' \
-  "$container_name" | sort
-# expect: /run/evals/credentials.env and scoped /auth entries; no grader file
-```
+Missing fields remain read-compatible. Live preflight must reject null scope; this task does not provide a legacy execution path.
 
-Then run one real scoped job through the appliance helper. A successful Gauntlet drive plus the mount inspection is the physical proof that grader auth arrived through exec while its file stayed off the container filesystem. Record the job ID, exact commit, bundle ID, observed key names/mount destinations, and result in the experiment log. Never print values.
+The appliance CLI restriction is exact:
 
-- [ ] **Step 3: Record the honest residual**
+- run has one required agent and uses its default credential;
+- run-all requires exactly one CSV agent and accepts omitted --credentials or exactly one nonempty CSV credential;
+- duplicate flags, multiple CSV entries, bare/blank/comma-only/option-looking values, --credential, and --credentials-file fail before job creation;
+- raw Quorum argv remains preserved separately.
 
-The Quorum parent/run-all child now carries only the job's scoped Coding-Agent values plus the grader contract—not the full provider bundle. Because Coding-Agent and Quorum still share a UID, the Coding-Agent can inspect those parent/grader values through `/proc/<pid>/environ`; UID separation remains required for full process-boundary closure. Run-home retention remains separate, and claude-windows password/guest isolation remains owned by the Windows trusted-maintainer path.
+The program action computes LiveCredentialRequest using the configured evals checkout and its current HEAD. It passes the request through ApplianceActions so fake-action tests observe it. submitLiveJob and createJob only persist the request; they never reparse argv or patch scope after worker spawn.
 
-- [ ] **Step 4: Run docs/static gates and commit**
+writeProvenance rereads the authoritative job and derives scope plus lease evidence from it. Callers cannot pass an independent scope. ImportedProvenanceRecordSchema and its writer persist credential_scope: null explicitly.
 
-```bash
+- [ ] **Step 1: Write RED parser, initial-record, and provenance tests**
+
+Cover one-agent/default, one-agent/one-credential, every invalid optional-value shape, forbidden custom registry flags, initial on-disk record contents, old missing-field read compatibility, live-null refusal ownership, explicit-empty prepare, explicit-null import, and job-authoritative provenance.
+
+Pin that serialized job/provenance/CLI output contains neither credential paths nor the string credentials-scoped.
+
+- [ ] **Step 2: Run RED**
+
+~~~bash
+bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-jobs.test.ts test/appliance-import.test.ts \
+  test/appliance-provenance.test.ts
+~~~
+
+- [ ] **Step 3: Implement atomic request persistence**
+
+Add a current managed-checkout HEAD helper through CommandRunner in git.ts. Put all three fields in createJob's initial JobRecordSchema.parse call. Do not implement fallback from null live records. Preserve read-side parsing and safe cancellation compatibility only.
+
+- [ ] **Step 4: Run GREEN and gates**
+
+~~~bash
+bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-jobs.test.ts test/appliance-import.test.ts \
+  test/appliance-provenance.test.ts
+bun test test/appliance-*.test.ts
+bun run check
+bun run quorum check
+~~~
+
+- [ ] **Step 5: Commit and review**
+
+~~~bash
+git add src/appliance/types.ts src/appliance/cli.ts src/appliance/jobs.ts \
+  src/appliance/git.ts src/appliance/import.ts src/appliance/provenance.ts \
+  test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-jobs.test.ts test/appliance-import.test.ts \
+  test/appliance-provenance.test.ts
+git commit -m "feat: persist one authoritative credential request (F13)"
+~~~
+
+---
+
+### Task 5: Run empty probes, then bind live execution to the scoped lease
+
+**Files:**
+- Modify: src/appliance/preflight.ts
+- Modify: src/appliance/process.ts
+- Modify: src/appliance/provenance.ts
+- Modify: src/appliance/types.ts
+- Test: test/appliance-preflight.test.ts
+- Test: test/appliance-process.test.ts
+- Test: test/appliance-provenance.test.ts
+
+**Interfaces:**
+
+~~~typescript
+export interface PreflightResult {
+  readonly refs: RefSnapshot;
+  readonly credential_bundle: {
+    readonly name: 'blessed';
+    readonly bundle_id: string;
+  };
+  readonly container: ContainerLease;
+  readonly tool_versions_path: string;
+  readonly tool_versions_text: string;
+  readonly provenance_path: string;
+}
+
+export interface LivePreflightResult {
+  readonly evidence: PreflightResult;
+  readonly lease: ContainerLease;
+  readonly supervisorExecEnvFile: string;
+}
+
+export async function preflightLiveJob(
+  args: PreflightArgs,
+): Promise<LivePreflightResult>;
+
+export async function prepare(args: PrepareArgs): Promise<PreflightResult>;
+~~~
+
+Live ordering is binding:
+
+1. update status and verify clean repos;
+2. fetch and fast-forward;
+3. before credential evaluation or Docker, require persisted source SHA to equal evals_resolved_sha;
+4. recompute scope from persisted selection and require exact equality with the stored scope;
+5. require docker exec --env-file capability;
+6. build the image;
+7. stage asserted-empty probe material and reconcile the empty probe container;
+8. run evals-tool-versions and quorum check through the probe lease with no supervisor file;
+9. stage live material and reconcile again, which downs the probe before activating and mounting the live generation;
+10. atomically update the job with refs, bundle, live lease, and the unchanged authoritative scope;
+11. write provenance from the reread job;
+12. return the worker-only supervisor path.
+
+prepare stops after the empty probe evidence. It never evaluates the blessed env values, creates a supervisor file, or mounts OAuth material.
+
+PreflightResult is public evidence and contains no credential path. LivePreflightResult is private to runWorker and is never spread into CLI output, job JSON, or provenance.
+
+runWorker passes supervisorExecEnvFile only to the live Quorum exec. live, liveness, and cancellation reconstruct or consume the recorded immutable lease:
+
+- live name/ID mismatch fails before spawn;
+- liveness mismatch reports lost;
+- cancellation mismatch never signals a replacement container;
+- a readable legacy record may cancel only when its recorded immutable container ID can be verified;
+- null-scope live jobs cannot preflight or resume.
+
+- [ ] **Step 1: Write RED ordering, freshness, privacy, and replacement tests**
+
+Use FakeRunner to prove:
+
+~~~text
+fast-forward -> SHA/scope gates -> capability -> build ->
+empty up -> probe execs -> empty down -> scoped up -> identity ->
+job evidence -> provenance -> live exec with supervisor file
+~~~
+
+Add separate failures for SHA drift and recomputed-scope mismatch, both with zero credential evaluation and zero Docker calls. Replace the configured-name inspect result between preflight and live/liveness/cancel and assert no child execution or replacement-container signal. Fault provenance after job evidence; retry must heal from the job without changing scope.
+
+- [ ] **Step 2: Run RED**
+
+~~~bash
+bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-provenance.test.ts
+~~~
+
+- [ ] **Step 3: Implement one-way private threading**
+
+Do not expose a generic env map or arbitrary exec options. Do not serialize private credential paths. Keep plan-time empty/live scope distinctions explicit and require a lease at every container exec call site.
+
+- [ ] **Step 4: Run GREEN and gates**
+
+~~~bash
+bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-provenance.test.ts
+bun test test/appliance-*.test.ts test/evals-container.test.ts
+bun run check
+bun run quorum check
+~~~
+
+- [ ] **Step 5: Commit and final whole-branch review**
+
+~~~bash
+git add src/appliance/preflight.ts src/appliance/process.ts \
+  src/appliance/provenance.ts src/appliance/types.ts \
+  test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-provenance.test.ts
+git commit -m "feat: run live jobs through scoped container leases (F13)"
+~~~
+
+Run a fresh adversarial whole-branch review before any manual Docker or appliance action.
+
+---
+
+### Task 6: Document and physically prove the boundary
+
+**Files:**
+- Modify: docs/appliance-runbook.md
+- Create after the gate: docs/experiments/2026-08-18-f13-filesystem-credential-scoping.md
+
+- [ ] **Step 1: Update the operator contract**
+
+Document:
+
+- one agent and at most one credential per Phase 1 live job;
+- mixed-scope batches are rejected pending per-cell containers;
+- any missing selected env/file material refuses the whole single-scope job before live execution, with names/remediation but no values;
+- missing scope is read-compatible but not execution-compatible;
+- prepare is asserted-empty and import is non-executing/null;
+- the empty-probe then scoped-live recreate sequence;
+- exact OAuth projections rather than whole source directories;
+- immutable container-ID behavior for live/liveness/cancel;
+- docker exec --env-file capability diagnostics;
+- fixed active generation lifecycle, interrupted-swap recovery, and bundle-retirement procedure: down the container, then remove state/credentials-scoped;
+- the required bundle migration to distinct QUORUM_GRADER_* sources, with no fallback to the agent's canonical secret names and a named error when the migration is incomplete;
+- no-follow/disjointness errors and repair guidance;
+- mount signatures are not comparable across this upgrade;
+- same-UID /proc inspection remains outside filesystem closure.
+
+- [ ] **Step 2: Run a synthetic no-secret Docker canary matrix**
+
+After Drew explicitly authorizes the manual gate, use a temporary synthetic bundle containing unique non-secret marker names/files for every declared delivery class (including the currently trusted-maintainer-only Antigravity projector). For each scope, execute a fake agent reader in the real container and record only marker presence booleans:
+
+- API-key env projection;
+- Claude OAuth env projection;
+- Copilot alias canonicalization;
+- Codex auth.json only;
+- Gemini personal files without Antigravity token;
+- Antigravity token without Gemini personal files;
+- Kimi required files plus optional marker behavior;
+- Pi selected provider without the hostile second provider;
+- grader source marker present only in the Quorum supervisor process, translated to its runtime name only in the Gauntlet child, and absent from mounts/agent file.
+
+Every scope must observe its own marker and reject every disallowed marker by env and filesystem. Do not print file contents or real bundle values.
+
+- [ ] **Step 3: Run one real disjoint Codex-subscription appliance job**
+
+Verify doctor first. Run through evals-appliance, not raw quorum. Inspect resolved Docker mount sources/destinations and agent env key names only. Confirm:
+
+- only projected Codex auth is mounted;
+- agent.env has no grader runtime/source names;
+- supervisor.exec.env is absent from all container mounts;
+- the recorded immutable ID matches the running container during the live process;
+- Gauntlet drives the Coding-Agent successfully.
+
+- [ ] **Step 4: Record the experiment honestly**
+
+Create docs/experiments/2026-08-18-f13-filesystem-credential-scoping.md with hypothesis, exact commit, job ID, bundle ID, Docker client/server versions, container lease ID/signature, marker/key/mount names only, result, and negative findings at equal billing. Do not claim this file exists or the gate passed before the physical run occurs.
+
+- [ ] **Step 5: Run final gates and commit docs/evidence separately**
+
+~~~bash
 bun run check
 bun run quorum check
 git add docs/appliance-runbook.md
-git commit -m "docs: verify appliance credential scope without exposing values (F13)"
-```
+git commit -m "docs: define scoped appliance credential operations (F13)"
+
+git add docs/experiments/2026-08-18-f13-filesystem-credential-scoping.md
+git commit -m "docs: record F13 filesystem credential gate"
+~~~
+
+No push without Drew's explicit approval after he reviews the final evidence.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** Task 1 resolves the exact per-job scope. Task 2 creates two disjoint filesystem artifacts and one shared grader-name contract. Task 3 ensures only the agent artifact and selected OAuth dirs become container mounts while the grader artifact is exec-only. Task 4 makes every live appliance job assert and apply that contract. Task 5 supplies the required real-container filesystem proof without printing values.
+**Spec coverage:** The isolation unit now equals one agent plus one credential, so no cell shares a union with another. Env delivery is exact, OAuth delivery is exact by adapter file/entry, probes are empty, the grader file is host-only, and live execution binds to the scoped container that preflight recorded.
 
-**Failure-mode coverage:** supplied-empty versus omitted scope; unknown/incompatible cells; missing agent key; missing grader auth; quoted bundle values; CR/LF rejection; symlinked secret directory; grader path accidentally mounted or passed to `docker run`; grader env accidentally injected into probes; scope/provenance disagreement; and no-value operator verification all have named tests or gates.
+**Failure-mode coverage:** Unknown/prototype names; missing defaults; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal agent/grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs; staging interruption; stale active generation; missing Docker capability; replacement containers; private path serialization; null live records; and probe credential exposure all have explicit behavior tests.
 
-**Type consistency:** `CredentialScope` is unchanged from reviewed Task 1. `ScopedCredentialFiles` is created in Task 2, consumed by preflight in Task 4, and never persisted. `GRADER_CREDENTIAL_ENV_NAMES` is shared by runner and appliance. `credential_scope: null` means omitted legacy only; `{envNames:[], authMounts:[]}` means asserted zero-material everywhere.
+**Type consistency:** Task 1 defines CredentialSelection and CredentialScope. Task 2 produces staged/active material. Task 3 consumes staged material and produces ContainerLease. Task 4 persists selection/scope/source SHA atomically. Task 5 produces a private LivePreflightResult and never serializes credential paths.
 
-**Placeholder scan:** every remaining task names exact files, interfaces, RED/GREEN commands, failure expectations, and commit boundaries. No dynamic test-file discovery, implementation placeholders, or invented observed-signature API remains.
+**Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
 
-**Deliberate exclusions:** no UID separation; no run-home retention policy; no automatic Docker test in `bun test`; no grader values in container metadata at `docker run`; no new generic env passthrough; no push. The manual Docker/appliance proof remains a required post-implementation gate before Drew considers publication.
+**Secret lifecycle:** One fixed active generation exists. New material is staged while the old container may still reference active; after the container is down, a recoverable two-rename swap installs the staged tree and the new container mounts it. Interrupted or failed swaps restore/fail closed before a later job. Rotation downs the container before clearing active. No secret value or value-derived hash appears outside the files.
+
+**Deliberate exclusions:** No mixed-scope Phase 1 jobs, per-cell containers, UID separation, Windows guest/password remediation, or automated live eval in CI. These exclusions are stated as limitations, not claimed as F13 closure.
+
+**Placeholder scan:** Every task names files, interfaces, RED/GREEN commands, expected failures, and commit boundaries. No TODO/TBD, generic "add tests," source-string-heavy shell assertions, or invented optional legacy execution path remains.
