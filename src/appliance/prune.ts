@@ -316,6 +316,13 @@ export function prune(
     // guard against in-flight runs, which hold no artifacts yet).
     return planPrune(loaded, args.olderThanDays);
   }
+  // Namespace validity gates the lock itself: acquiring run.lock first
+  // would create/chmod state/locks (and churn its mtime with the lock
+  // slot) before rejecting an invalid configured tree — a mutation the
+  // typed refusal must precede. Read-only validation here, mirroring
+  // importBundle's ordering; the re-plan below revalidates under the held
+  // lock so apply stays protected against state changes in between.
+  assertApplianceNamespaces(loaded);
   // Apply mutates the results root, so it serializes with imports and live
   // batches exactly the way import does — and re-plans under the lock.
   const lock = acquireLock({

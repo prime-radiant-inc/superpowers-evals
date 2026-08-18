@@ -444,7 +444,14 @@ test('an intermediate symlink inside results_root cannot make prune move an outs
   });
   rmSync(join(root, 'evals'), { recursive: true, force: true });
   symlinkSync(external, join(root, 'evals'));
+  // Pre-existing appliance state, with state/locks deliberately at the
+  // non-private 0o755: a rejection that runs the lock machinery first would
+  // chmod it 0o700 (and churn its mtime creating/releasing run.lock) before
+  // the typed refusal lands. The full state tree — bytes, modes, mtimes —
+  // must be identical after BOTH rejections.
+  chmodSync(join(root, 'state/locks'), 0o755);
   const before = snapshotTree(external);
+  const stateBefore = snapshotTree(join(root, 'state'));
 
   expectCode(
     () => prune(cfg, { apply: false, olderThanDays: 7 }),
@@ -454,9 +461,11 @@ test('an intermediate symlink inside results_root cannot make prune move an outs
     () => prune(cfg, { apply: true, olderThanDays: 7 }),
     'config_invalid',
   );
-  // The external tree — bytes, modes, mtimes — is untouched, and nothing
-  // was quarantined:
+  // The external tree — bytes, modes, mtimes — is untouched, nothing was
+  // quarantined, and the appliance's own state (locks still 0o755) is
+  // exactly as it was: reject-before-lock/mkdir/chmod.
   expect(snapshotTree(external)).toBe(before);
+  expect(snapshotTree(join(root, 'state'))).toBe(stateBefore);
   const qroot = join(root, 'state', 'quarantine');
   expect(existsSync(qroot) ? readdirSync(qroot) : []).toEqual([]);
 });
