@@ -314,7 +314,7 @@ scripts/evals-container exec -- ls /auth            # expect: only codex
 scripts/evals-container exec -- cat /run/evals/credentials.env   # expect: only the scoped key names
 ```
 
-- [ ] **Step 3: The residual record** — add to the runbook: the gauntlet child's grader credential remains readable by a same-UID agent via `/proc/<pid>/environ` (env plan, Task 5 residual); full closure needs UID separation, deferred to the post-Phase-0 appliance decision. claude-windows guest-side isolation and the SSH-password-on-argv residual remain owned by the Windows trusted-maintainer path.
+- [ ] **Step 3: The residual record** — add to the runbook: env scoping bounds what quorum's children *inherit*, but same-UID process inspection is not bounded by it — the gauntlet child's grader credential AND the quorum parent / run-all child's full host provider bundle both remain readable by a same-UID agent via `/proc/<pid>/environ` (env plan, final-wave residual correction); full closure needs parent env scoping plus UID separation, deferred to the post-Phase-0 appliance decision. claude-windows guest-side isolation and the SSH-password-on-argv residual remain owned by the Windows trusted-maintainer path.
 
 - [ ] **Step 4: Commit**
 

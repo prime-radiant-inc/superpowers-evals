@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { ProvisionError } from '../src/agents/index.ts';
-import { SerfAgent } from '../src/agents/serf.ts';
+import { SERF_API_ENV_FILE_NAME, SerfAgent } from '../src/agents/serf.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
@@ -201,6 +201,80 @@ test('provision validates the selected Serf key without returning its value', ()
         expect(runner.calls).toEqual([]);
         expect(existsSync(join(home.configDir, 'providers.toml'))).toBe(false);
       });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision writes a private serf-api.env carrying exactly the selected name and value', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, 'superpowers');
+  const apiKey = `serf-file-${crypto.randomUUID()}`;
+  stageSuperpowers(spRoot);
+  try {
+    withEnv(spRoot, () => {
+      withEnvValue('TASK3A_SERF_OPENROUTER_KEY', apiKey, () => {
+        new SerfAgent(serfConfig()).provision(
+          home,
+          new FakeCommandRunner(),
+          openRouterCredential,
+        );
+        const envFile = join(home.configDir, SERF_API_ENV_FILE_NAME);
+        expect(existsSync(envFile)).toBe(true);
+        expect(statSync(envFile).mode & 0o777).toBe(0o600);
+        // Exactly the selected env name with the single-quoted value — the
+        // launcher sources this file and forwards only this name.
+        expect(readFileSync(envFile, 'utf8')).toBe(
+          `TASK3A_SERF_OPENROUTER_KEY='${apiKey}'\n`,
+        );
+      });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision serf-api.env uses the harness-conventional ANTHROPIC_API_KEY name when the credential does not override it', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, 'superpowers');
+  const apiKey = `serf-anthropic-${crypto.randomUUID()}`;
+  stageSuperpowers(spRoot);
+  const anthropicCredential: Credential = {
+    model: 'anthropic/claude-sonnet-4-6',
+    harnesses: ['serf'],
+    api: 'anthropic',
+    auth: 'api-key',
+    compat: {},
+  };
+  try {
+    withEnv(spRoot, () => {
+      withEnvValue('ANTHROPIC_API_KEY', apiKey, () => {
+        new SerfAgent(serfConfig()).provision(
+          home,
+          new FakeCommandRunner(),
+          anthropicCredential,
+        );
+        expect(
+          readFileSync(join(home.configDir, SERF_API_ENV_FILE_NAME), 'utf8'),
+        ).toBe(`ANTHROPIC_API_KEY='${apiKey}'\n`);
+      });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision without a credential writes no serf-api.env', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, 'superpowers');
+  stageSuperpowers(spRoot);
+  try {
+    withEnv(spRoot, () => {
+      new SerfAgent(serfConfig()).provision(home, new FakeCommandRunner());
+      expect(existsSync(join(home.configDir, SERF_API_ENV_FILE_NAME))).toBe(
+        false,
+      );
     });
   } finally {
     cleanup();

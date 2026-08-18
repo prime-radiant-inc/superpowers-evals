@@ -1,0 +1,114 @@
+// The gauntlet child is quorum's own QA driver, but the agent under test
+// shares its UID — and a same-UID process can read a peer's environment
+// (/proc/<pid>/environ on Linux, `ps eww` on macOS). The child therefore gets
+// an allowlist projection of the host env, never the full snapshot. The only
+// overlays spawnGauntlet applies after this base are the quorum-owned
+// QUORUM_AGENT_CWD / QUORUM_AGENT_HOME; adapter provision() env maps
+// (KIMI_ENV_FILE, the claude-windows $WIN_* values, …) are consumed pre-spawn
+// as launcher substitutions and cleanup registration and have no channel into
+// the child env. The credential names below are therefore the only
+// secret-shaped names in this non-Copilot host-base projection; copilot's
+// copilotGauntletEnv is this standard list PLUS copilot routing (a superset
+// with credentialed-proxy rejection), not a smaller list. The claude-windows
+// SSH password
+// residual lives in the generated launcher file / sshpass argv on the Windows
+// trusted-maintainer path (Task 4), not in the child env.
+//
+// KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan / UID work):
+// the allowlist above bounds what quorum's own CHILDREN inherit — but same-UID
+// process inspection is not bounded by it. A same-UID agent can read a peer
+// process's environment (/proc/<pid>/environ on Linux, `ps eww` on macOS),
+// and the quorum parent (and the run-all child) still carry the operator's
+// FULL host provider bundle in-process until parent env scoping / UID
+// separation lands — so same-UID inspection can still surface every host
+// credential, not just the grader's. Technical closure needs UID separation
+// in the container, not env scoping alone.
+//
+// This list is the EXACT union of names with per-name evidence on the gauntlet
+// child's active path (`gauntlet run … --adapter tui` under Bun; audit method
+// + raw observations in task-5-report.md). Fail-loud rule: a missing var
+// breaks the grader loudly (auth/network error) and is re-added only with
+// fresh evidence; a leaked var is silent.
+//
+//   PATH/HOME/USER/SHELL/LANG/LC_ALL/TERM/TMPDIR/TZ — the nine names
+//     gauntlet's own bash tool forwards to its inspection commands (gauntlet
+//     src/agent/bash-tool.ts BASE_ENV_KEYS); PATH additionally resolves the
+//     gauntlet/tmux/bash spawns, and PATH/TERM/LANG feed the launchers'
+//     host-fallback forwards inside the tmux pane.
+//   HTTP_PROXY/HTTPS_PROXY/NO_PROXY + lowercase — the grader's network layer
+//     is Bun fetch, which honors exactly these six names (hermetic localhost
+//     probe, Bun 1.3.14); the uppercase trio is also gauntlet's own bash-tool
+//     SDK passthrough set.
+//   SSL_CERT_FILE/SSL_CERT_DIR/NODE_EXTRA_CA_CERTS — the three CA-bundle
+//     names Bun fetch honors (hermetic self-signed-server probe with a
+//     rejected control).
+//   TMUX_TMPDIR — the TUI adapter's private `-L` tmux server and quorum's own
+//     socket-dir resolution (src/agents/agy-teardown.ts) must agree on where
+//     tmux sockets live.
+//
+// Deliberately absent (audited out; evidence in task-5-report.md): LC_CTYPE,
+// LOGNAME, CI, NO_COLOR (read only for gauntlet's own stdout stream
+// formatting, which the runner drains and discards), ALL_PROXY/all_proxy (not
+// honored by Bun fetch), REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE (no consumer on
+// the child's active path — gauntlet's bash tool scrubs them from inspection
+// commands), GAUNTLET_ROOT (read only by the host-side scripts/evals-container
+// wrapper, never by the gauntlet CLI), ANTHROPIC_LOG and GAUNTLET_DEBUG
+// (debug-only knobs). Coding-agent provider bundle names (OPENAI_API_KEY,
+// GEMINI_API_KEY, AWS_BEARER_TOKEN_BEDROCK, …) stay out by design:
+// the agent's credential travels via its per-run 0600 env file, never the
+// gauntlet child env.
+export const GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
+  // base system
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'TERM',
+  'TMPDIR',
+  'TZ',
+  // network proxies
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  // TLS trust
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  // tmux (the gauntlet TUI adapter drives the agent through a private server)
+  'TMUX_TMPDIR',
+  // The grader/driver model credential — the only secret-shaped names in this
+  // projection: exactly the names gauntlet's Anthropic auth resolution reads (gauntlet
+  // src/models/anthropic.ts resolveAnthropicAuth: CLAUDE_CODE_OAUTH_TOKEN ||
+  // ANTHROPIC_AUTH_TOKEN, else ANTHROPIC_API_KEY) plus the SDK's endpoint
+  // override (@anthropic-ai/sdk client constructor reads ANTHROPIC_BASE_URL).
+  // ANTHROPIC_BASE_URL must ride along with the key: dropping it would
+  // silently re-route a gateway-pinned grader to the default endpoint instead
+  // of failing loudly.
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+];
+
+/**
+ * Project the host env onto {@link GAUNTLET_ENV_ALLOWLIST}. Undefined host
+ * values are omitted, never passed through as empty strings. Copilot does not
+ * use this: it keeps its copilotGauntletEnv — this standard list PLUS
+ * copilot's evidenced routing names (a superset, never smaller), with
+ * credentialed-proxy rejection.
+ */
+export function gauntletEnvBase(
+  host: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const name of GAUNTLET_ENV_ALLOWLIST) {
+    const value = host[name];
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}

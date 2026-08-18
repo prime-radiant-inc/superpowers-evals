@@ -29,3 +29,17 @@ progress over polling.
 ## Shutdown
 
 Type `/exit` and press Enter to end the session cleanly.
+
+## Env isolation exception
+
+Every Linux-local launcher walls off the host environment with an `env -i`
+allowlist (F13). This agent is the documented exception: the local wrapper
+delegates the agent's environment to the Windows guest's `launch.cmd`, which
+applies additive `set` on top of the guest session env — host-env isolation on
+that path is guest-side work owned by the Windows trusted-maintainer path (the
+platform spec's Windows carve-out). The exception covers ONLY that guest-side
+launch path: the local subprocesses quorum runs against the guest are already
+scoped to the non-secret provisioning env allowlist. The wrapper also burns
+the SSH password into argv (`sshpass -p`) and into the installed launcher
+file — a known residual owned by the Windows trusted-maintainer path; neither
+this env scoping nor the F13 filesystem work solves it.

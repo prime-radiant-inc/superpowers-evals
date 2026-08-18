@@ -4,12 +4,13 @@ default_credential: antigravity_default
 # Collapse the antigravity config dir into the throwaway $HOME. agy defaults its
 # gemini state dir to $HOME/.gemini when --gemini_dir is omitted (verified
 # empirically: `HOME=<tmp> agy plugin list` creates <tmp>/.gemini/config), and it
-# reads its live, rotating OAuth token from $HOME/.gemini/oauth_creds.json at
-# runtime. With "." the config dir IS the run's throwaway home, so configDir ==
-# runHome: provisioning seeds .gemini (plugin + settings + the C1 oauth creds)
-# directly under the home the launcher pins via $QUORUM_HOME_ENV. The launcher
-# still passes an EXPLICIT --gemini_dir="$QUORUM_AGENT_HOME/.gemini" so the state
-# seam is unambiguous.
+# reads its runtime OAuth token from
+# $HOME/.gemini/antigravity-cli/antigravity-oauth-token at runtime. With "." the
+# config dir IS the run's throwaway home, so configDir == runHome: provisioning
+# seeds .gemini (plugin + settings + the nested runtime token) directly under
+# the home the launcher pins via $QUORUM_HOME_ENV. The launcher still passes an
+# EXPLICIT --gemini_dir="$QUORUM_AGENT_HOME/.gemini" so the state seam is
+# unambiguous.
 home_config_subdir: "."
 session_log_dir: "${QUORUM_AGENT_HOME}/.gemini/antigravity-cli/brain"
 session_log_glob: "**/transcript.jsonl"

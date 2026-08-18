@@ -25,4 +25,16 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
-exec env $QUORUM_HOME_ENV hermes --yolo "$@"
+# Host-env isolation (F13): env -i + explicit allowlist. hermes reads its
+# provider key from ~/.hermes/.env inside the throwaway home (seeded by
+# provisioning) — nothing secret rides the environment.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+
+exec env -i \
+  "${env_args[@]}" \
+  $QUORUM_HOME_ENV \
+  hermes --yolo "$@"

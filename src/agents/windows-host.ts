@@ -1,6 +1,7 @@
 import type { RemoteConfig } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
 import type { CommandResult, CommandRunner } from './command-runner.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Shared OpenSSH options. ControlMaster/ControlPath MUST be off: a host with
 // `ControlMaster auto` otherwise multiplexes the connection back onto itself and
@@ -48,6 +49,15 @@ export class WindowsHost {
     return `${this.remote.user}@${this.remote.host}`;
   }
 
+  // All three subprocess invocations (ssh, scpFrom, scpTo) pass an explicit
+  // allowlisted env (F13): omitted options would make spawnSync inherit the
+  // FULL parent env — the whole provider bundle. The password rides argv via
+  // `sshpass -p`, never the env (no SSHPASS); the only var this surface
+  // actively needs is PATH (sshpass execvp()s `ssh` through the child PATH).
+  private subprocessEnv(): Record<string, string> {
+    return provisionSubprocessEnv();
+  }
+
   ssh(remoteCmd: string): CommandResult {
     // No -tt: this is a non-interactive exec seam; a forced PTY over
     // spawnSync's non-TTY stdin silently no-ops the remote command on Windows
@@ -63,7 +73,7 @@ export class WindowsHost {
       this.target(),
       remoteCmd,
     ];
-    return this.runner.run('sshpass', args);
+    return this.runner.run('sshpass', args, { env: this.subprocessEnv() });
   }
 
   scpFrom(winPath: string, localDir: string): CommandResult {
@@ -78,7 +88,7 @@ export class WindowsHost {
       `${this.target()}:${toScpRemotePath(winPath)}`,
       localDir,
     ];
-    return this.runner.run('sshpass', args);
+    return this.runner.run('sshpass', args, { env: this.subprocessEnv() });
   }
 
   scpTo(localPath: string, winPath: string): CommandResult {
@@ -93,7 +103,7 @@ export class WindowsHost {
       localPath,
       `${this.target()}:${toScpRemotePath(winPath)}`,
     ];
-    return this.runner.run('sshpass', args);
+    return this.runner.run('sshpass', args, { env: this.subprocessEnv() });
   }
 
   // Quoting-safe + secret-safe guest write: base64 the content (chars [A-Za-z0-9+/=]

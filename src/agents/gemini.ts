@@ -16,6 +16,7 @@ import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Gemini-family provisioning: install the Superpowers CLI extension into an
 // isolated GEMINI_CLI_HOME without invoking the model. Writes
@@ -310,12 +311,13 @@ export class GeminiAgent implements CodingAgent {
     // The provisioning subprocesses additionally need GEMINI_CLI_HOME pointed at
     // the isolated config dir so the link/list run against it. The launched agent
     // finds its config via the throwaway $HOME default, so GEMINI_CLI_HOME is
-    // NOT returned — it is preflight-only.
-    const subprocessEnv = {
-      ...envSnapshot(),
+    // NOT returned — it is preflight-only. Both run on the non-secret
+    // provision allowlist plus these extras (F13): no host credentials reach
+    // the third-party CLI.
+    const subprocessEnv = provisionSubprocessEnv({
       ...agentVars,
       GEMINI_CLI_HOME: configDir,
-    };
+    });
 
     // gemini extensions link <SUPERPOWERS_ROOT> --consent
     const link = runner.run(

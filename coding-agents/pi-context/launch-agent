@@ -19,19 +19,33 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
-set -a
-. "$PI_ENV_FILE"
-set +a
-
 # pi-subagents provides the `subagent` delegation tool. It is a host
 # prerequisite like pi itself: npm install -g pi-subagents. --no-extensions
 # disables ambient discovery, so the package is loaded explicitly by path.
 # PI_SUBAGENTS_PKG is resolved here at launch, not substituted by quorum.
-PI_SUBAGENTS_PKG="$(npm root -g)/pi-subagents"
+# Resolved BEFORE pi.env is sourced, through env -i with only npm's own
+# resolution routing (PATH finds the binary + global prefix; the HOST home
+# carries the user-level ~/.npmrc prefix deciding where pi-subagents was
+# installed) — the npm child never inherits pi.env secrets or the launcher's
+# ambient env (which carries the grader credential).
+PI_SUBAGENTS_PKG="$(env -i \
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
+  "HOME=${HOME-}" \
+  npm root -g)/pi-subagents"
 if [ ! -d "$PI_SUBAGENTS_PKG" ]; then
   echo "launch-agent: pi-subagents not found at $PI_SUBAGENTS_PKG; run: npm install -g pi-subagents" >&2
   exit 1
 fi
+
+# pi.env OWNS these names (SYNC: writePiEnvFile, src/agents/pi.ts, writes
+# exactly this closed set). Drop inherited values before sourcing so an
+# omitted name (PI_API_KEY in OAuth mode) stays absent — omission stays
+# omission, a hostile host export can never ride the forward below, and a
+# file-omitted PI_PROVIDER/PI_MODEL fails loudly at the flags under set -u.
+unset PI_PROVIDER PI_MODEL PI_API_KEY
+set -a
+. "$PI_ENV_FILE"
+set +a
 
 # Ambient context-file discovery is intentionally LEFT ON (no --no-context-files):
 # the per-run throwaway $HOME (+ the container) already isolates pi from the
@@ -40,7 +54,24 @@ fi
 # the Superpowers bootstrap and any injected user-preference instructions live.
 # --no-extensions / --no-skills stay: those scope pi to ONLY the explicitly-loaded
 # Superpowers extension + skills, not ambient ones — a separate concern.
-exec env \
+# Host-env isolation (F13): env -i + explicit allowlist. The sourced pi.env
+# sets PI_PROVIDER/PI_MODEL (also passed as flags below) and an optional
+# PI_API_KEY (api-key auth; OAuth keeps the credential in auth.json inside the
+# throwaway home). Only names the file actually set survive the pre-source
+# unset above, so this loop forwards exactly the file's values.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+for name in PI_PROVIDER PI_MODEL PI_API_KEY; do
+  if [[ -n "${!name-}" ]]; then
+    env_args+=("$name=${!name}")
+  fi
+done
+
+exec env -i \
+  "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   PI_OFFLINE=1 \
   PI_TELEMETRY=0 \

@@ -12,7 +12,6 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { backupCredential } from '../agents/agy-creds.ts';
 import { killRunTmuxServer } from '../agents/agy-teardown.ts';
 import { AgyRateLimitWatcher } from '../agents/agy-watch.ts';
 import {
@@ -48,6 +47,7 @@ import {
   OpenCodeCaptureError,
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
+import { SERF_API_ENV_FILE_NAME } from '../agents/serf.ts';
 import { WindowsHost } from '../agents/windows-host.ts';
 import type { AtifTrajectory } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
@@ -63,6 +63,7 @@ import {
 import { readManifest } from '../check/manifest.ts';
 import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
+import type { AgentConfig } from '../contracts/agent-config.ts';
 import {
   agentConfigDir,
   CodingAgentConfigError,
@@ -105,6 +106,7 @@ import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError } from './errors.ts';
+import { gauntletEnvBase } from './gauntlet-env.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
 
@@ -289,12 +291,16 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // QUORUM_AGENT_HOME (mirroring the QUORUM_AGENT_CWD exposure) so tooling that
   // drives the agent can locate the agent's collapsed config dir.
   readonly runHomeDir: string;
-  readonly extraEnv: Record<string, string>;
-  // Base env gauntlet inherits. Defaults to the full host snapshot; copilot
-  // passes a tightly-scoped allowlist (copilotGauntletEnv) so the host
-  // environment (other provider keys, credentialed proxies) is not leaked into
-  // the agent subprocess.
-  readonly envBase?: Readonly<Record<string, string | undefined>> | undefined;
+  // Base env gauntlet inherits: an allowlist projection of the host env, never
+  // the full snapshot (the agent under test shares the child's UID and can
+  // read a peer's environment). Every agent gets the GAUNTLET_ENV_ALLOWLIST
+  // projection (gauntletEnvBase); copilot passes its stricter
+  // copilotGauntletEnv, which also rejects credentialed proxy URLs. There is
+  // deliberately NO adapter env channel here: provision() maps are consumed
+  // pre-spawn (launcher substitutions + runtime cleanup), and the only
+  // overlays are the quorum-owned QUORUM_AGENT_CWD / QUORUM_AGENT_HOME,
+  // applied after the base so nothing can override them.
+  readonly envBase: Readonly<Record<string, string | undefined>>;
 }
 
 // The gauntlet child currently in flight for this process (one run per process),
@@ -321,10 +327,9 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   return new Promise<GauntletExit>((resolvePromise, rejectPromise) => {
     const child = spawn('gauntlet', buildGauntletArgv(a), {
       env: {
-        ...(a.envBase ?? envSnapshot()),
+        ...a.envBase,
         QUORUM_AGENT_CWD: a.launchCwd,
         QUORUM_AGENT_HOME: a.runHomeDir,
-        ...a.extraEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -354,9 +359,10 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
 // when no parseable result exists (a gauntlet that exited non-zero but wrote a
 // valid result still yields that pass/fail; a non-zero exit with no/garbled
 // result becomes investigate -> composer indeterminate, not a gauntlet-stage
-// error). The subprocess env is the sanctioned snapshot overlaid with the launch
-// cwd and the agent's extra env. A spawn-level failure (gauntlet not on PATH)
-// still rejects from spawnGauntlet and surfaces as an 'unknown'-stage crash.
+// error). The subprocess env is the caller's allowlist projection overlaid with
+// only the quorum-owned launch-cwd/agent-home names. A spawn-level failure
+// (gauntlet not on PATH) still rejects from spawnGauntlet and surfaces as an
+// 'unknown'-stage crash.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
@@ -969,6 +975,7 @@ export async function runScenario(
   // bytes the run did. Stays null when a run fails before reaching the load
   // (early guards); it is never read late.
   const expectedChecksCache: ExpectedChecksCache = { manifest: null };
+  const runAgentCache: RunAgentConfigCache = { config: null };
   try {
     // Freeze the parsed credentials before selecting the named credential. This
     // makes direct runs reproducible and ensures later runner code never
@@ -990,6 +997,7 @@ export async function runScenario(
       identity,
       credentials,
       expectedChecksCache,
+      runAgentCache,
     );
   } catch (err: unknown) {
     const stage = errorStage(err);
@@ -1005,17 +1013,23 @@ export async function runScenario(
       expected: expectedChecksCache.manifest,
     });
   }
-  // Best-effort provenance stamp (PRI-2494). The binary name comes from the
-  // agent yaml when it loads; a broken yaml just means a null CLI version.
-  let agentBinary: string | null = null;
-  try {
-    agentBinary = loadAgentConfig(a.codingAgentsDir, a.codingAgent).binary;
-  } catch {
-    agentBinary = null;
-  }
+  // Best-effort provenance stamp (PRI-2494). F13 micro corrective round 2:
+  // compute the runnability decision FIRST, and NEVER reload the agent
+  // config post-run — loadAgentConfig is side-effectful (pin_cli_version
+  // enforcement spawns `<binary> --version` with the AMBIENT env), so the old
+  // provenance-time reload re-invoked the agent binary after a setup failure
+  // (where its result was discarded anyway: agent_cli_version composes null)
+  // while handing that child the operator's HOME/provider/AWS bundle. The
+  // binary now comes from the config the run itself already loaded (threaded
+  // via runAgentCache); a null cache (config loading itself failed) skips
+  // agent provenance entirely.
+  const agentRunnable = verdict.error?.stage !== 'setup';
+  const provenanceRunHome = join(runDir, 'home');
+  mkdirSync(provenanceRunHome, { recursive: true });
   const provenance = collectProvenance({
     repoRoot: repoRoot(),
-    agentBinary,
+    agentBinary: agentRunnable ? (runAgentCache.config?.binary ?? null) : null,
+    runHomeDir: provenanceRunHome,
   });
   const identified: FinalVerdict = {
     ...verdict,
@@ -1082,6 +1096,19 @@ function errorStage(err: unknown): RunErrorStage {
 // error itself travels as the exception, so nothing re-reads the file.
 interface ExpectedChecksCache {
   manifest: CheckManifest | null;
+}
+
+// Shared state carrying the agent config the run itself loaded (F13 micro
+// corrective round 2): created in runScenario, filled once by the runner body
+// right after its single loadAgentConfig succeeds, consumed by the post-run
+// provenance stamp. Stays null when loading failed (unknown agent, broken
+// yaml, pin mismatch, missing required env) — the stamp then skips agent
+// provenance rather than triggering ANOTHER load. loadAgentConfig is
+// side-effectful (pin_cli_version enforcement spawns `<binary> --version`
+// with the ambient env), so it must never run post-run just to recover the
+// binary name.
+interface RunAgentConfigCache {
+  config: AgentConfig | null;
 }
 
 // The context dir an agent installs into <runDir>/gauntlet-agent/context/.
@@ -1158,6 +1185,7 @@ async function runInner(
   identity: RunIdentity,
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
+  runAgentCache: RunAgentConfigCache,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
@@ -1169,6 +1197,7 @@ async function runInner(
       identity,
       credentials,
       expectedChecksCache,
+      runAgentCache,
     );
   } finally {
     cleanupAgentRuntime(cleanupDirs);
@@ -1196,6 +1225,7 @@ async function runInnerBody(
   identity: RunIdentity,
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
+  runAgentCache: RunAgentConfigCache,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -1212,6 +1242,11 @@ async function runInnerBody(
     );
   }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+  // The run's ONE loaded config, cached for the post-run provenance stamp
+  // (F13 micro corrective round 2): the stamp reads the binary from here and
+  // never reloads — loadAgentConfig's pin enforcement spawns `<binary>
+  // --version` with the ambient env, which must not run post-failure.
+  runAgentCache.config = cfg;
 
   // Credential resolution uses the parsed object that was frozen into this run
   // directory before any setup. Missing credential name means no credential;
@@ -1337,27 +1372,36 @@ async function runInnerBody(
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner
-  // needs for the $QUORUM_COPILOT_SESSION_ID substitution, the gauntlet env base,
-  // and the post-run secret-leak / session-state cascade. Every other agent uses
-  // the declarative provision() motion.
+  // needs for the $QUORUM_COPILOT_SESSION_ID substitution and the post-run
+  // secret-leak / session-state cascade. Every other agent uses the declarative
+  // provision() motion.
+  //
+  // The provision env map is consumed entirely PRE-SPAWN — launcher
+  // substitutions (kimi, the non-linux $WIN_* set) and runtime cleanup
+  // registration. It never reaches the gauntlet child env (the spawn takes
+  // only the allowlist projection plus the quorum-owned overlays).
   let copilotProvisioning: CopilotProvisioning | undefined;
-  let extraEnv: Record<string, string>;
+  let provisionEnv: Record<string, string>;
   if (cfg.name === 'copilot' && agent instanceof CopilotAgent) {
     copilotProvisioning = agent.provisionCopilot(
       home,
       defaultCommandRunner,
       crypto.randomUUID(),
     );
-    extraEnv = copilotProvisioning.env;
+    provisionEnv = copilotProvisioning.env;
   } else {
-    extraEnv = agent.provision(home, defaultCommandRunner, resolvedCredential);
+    provisionEnv = agent.provision(
+      home,
+      defaultCommandRunner,
+      resolvedCredential,
+    );
   }
   // Track any secret temp dir provisioning created outside the run root (kimi's
   // runtime-env mkdtemp) so the runInner finally reaps it. Pushed AFTER provision
   // returns, so this covers the success path and every later run-exit; a
   // provision that THROWS after writing the secret file is the one window not
   // covered here.
-  cleanupDirs.push(...runtimeCleanupDirs(extraEnv));
+  cleanupDirs.push(...runtimeCleanupDirs(provisionEnv));
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
   // setup-helpers against it). QUORUM_CODING_AGENT lets agent-aware setup steps
   // (e.g. inject-user-preference) target the ambient instructions file THIS agent
@@ -1548,6 +1592,12 @@ async function runInnerBody(
     substitutions['$SERF_MODEL_SH'] = shellSingleQuote(serfModel);
     substitutions['$SERF_API_KEY_ENV'] = serfKeyEnv ?? '';
     substitutions['$SERF_API_KEY_ENV_SH'] = shellSingleQuote(serfKeyEnv ?? '');
+    // The private per-run env file SerfAgent.provision writes (mode 0600,
+    // exactly the selected name/value); deterministic config-dir-relative
+    // path, mirroring the codex-api.env pattern.
+    const serfEnvFile = join(configDir, SERF_API_ENV_FILE_NAME);
+    substitutions['$SERF_ENV_FILE'] = serfEnvFile;
+    substitutions['$SERF_ENV_FILE_SH'] = shellSingleQuote(serfEnvFile);
   }
   if (cfg.name === 'copilot' && copilotProvisioning !== undefined) {
     // Use the provisioning record's env file + minted session id so the
@@ -1568,12 +1618,12 @@ async function runInnerBody(
     // KimiAgent.provision returns $KIMI_ENV_FILE / $KIMI_BINARY in its extra-env
     // map; thread them into the context-dir substitution set so the kimi-context
     // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`.
-    Object.assign(substitutions, kimiLaunchSubstitutions(extraEnv));
+    Object.assign(substitutions, kimiLaunchSubstitutions(provisionEnv));
   }
   // Windows runtime: the WindowsClaudeAgent.provision return value carries the
   // $WIN_* launcher substitutions; merge them so the SSH launcher resolves.
   if (os !== 'linux') {
-    Object.assign(substitutions, extraEnv);
+    Object.assign(substitutions, provisionEnv);
   }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
@@ -1591,24 +1641,27 @@ async function runInnerBody(
             : [],
   });
 
-  // copilot: gauntlet inherits a tightly-scoped allowlist instead of the full
-  // host env, and a proxy var carrying credentialed userinfo is rejected.
-  // copilotGauntletEnv can throw a ProvisionError (credentialed proxy) -> mapped
-  // to a setup indeterminate.
-  const gauntletEnvBase =
-    cfg.name === 'copilot' ? copilotGauntletEnv(envSnapshot()) : undefined;
+  // The gauntlet child env base: every agent gets the GAUNTLET_ENV_ALLOWLIST
+  // projection of the host env; copilot keeps its stricter allowlist, where a
+  // proxy var carrying credentialed userinfo is additionally rejected
+  // (copilotGauntletEnv can throw a ProvisionError -> mapped to a setup
+  // indeterminate).
+  const gauntletEnvBaseValue =
+    cfg.name === 'copilot'
+      ? copilotGauntletEnv(envSnapshot())
+      : gauntletEnvBase(envSnapshot());
 
   writePhase(runDir, 'agent', identity);
 
-  // antigravity: agy reads auth from the live, token-rotating ~/.gemini/
-  // oauth_creds.json. A SIGKILL/tmux-kill during a refresh can corrupt it and
-  // brick the shared account — back it up before the run and verify/restore in a
-  // finally (best-effort, restore only if the live file is missing or corrupt).
-  // A live AgyRateLimitWatcher tails the run's agy.log during the drive and, on
-  // a confirmed Code Assist 429, tears down gauntlet's private tmux server so the
-  // cell fails fast instead of burning its full budget.
+  // antigravity: the run's agy operates ONLY on the per-run seeded token
+  // inside the throwaway home (HOME + --gemini_dir pinned by provisioning and
+  // the launcher), so a mid-run kill can no longer corrupt any operator
+  // credential — the old host ~/.gemini backup/restore path is gone with the
+  // host-credential exposure it worked around. A live AgyRateLimitWatcher
+  // tails the run's agy.log during the drive and, on a confirmed Code Assist
+  // 429, tears down gauntlet's private tmux server so the cell fails fast
+  // instead of burning its full budget.
   const isAntigravity = cfg.normalizer === 'antigravity';
-  const credBackup = isAntigravity ? backupCredential() : null;
   let watcher: AgyRateLimitWatcher | null = null;
   if (isAntigravity) {
     const agyLog = join(configDir, 'agy.log');
@@ -1636,15 +1689,11 @@ async function runInnerBody(
       graderModel: a.graderModel,
       launchCwd,
       runHomeDir,
-      extraEnv,
-      envBase: gauntletEnvBase,
+      envBase: gauntletEnvBaseValue,
     }));
   } finally {
     if (watcher !== null) {
       await watcher.stop();
-    }
-    if (credBackup !== null) {
-      credBackup.verifyOrRestore();
     }
   }
 

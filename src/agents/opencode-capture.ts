@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { envSnapshot } from '../env.ts';
+import { captureBaseEnv } from './capture-env.ts';
 import { xdgHomeEnv } from './home-env.ts';
 
 export class OpenCodeCaptureError extends Error {
@@ -51,50 +51,19 @@ export function opencodeEnv(opencodeHome: string): Record<string, string> {
   };
 }
 
-// The fixed set of host env vars an opencode subprocess may inherit. Everything
-// else (proxy vars, ambient OPENCODE_CONFIG_DIR, other harness vars) is scrubbed
-// so the subprocess exercises the pinned provider, not opencode's ambient-key
-// auto-selection.
-export const OPENCODE_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
-  'PATH',
-  'TERM',
-  'COLORTERM',
-  'LANG',
-  'LC_ALL',
-  'SSL_CERT_FILE',
-  'REQUESTS_CA_BUNDLE',
-  'NODE_EXTRA_CA_CERTS',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'OPENROUTER_API_KEY',
-  'GEMINI_API_KEY',
-  'GOOGLE_API_KEY',
-  'AWS_PROFILE',
-  'AWS_REGION',
-  'AWS_DEFAULT_REGION',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SESSION_TOKEN',
-]);
-
 // 90s (not 30s): under high run-all concurrency, `opencode session list` (the
 // pre-run snapshot) and `opencode export` contend for CPU and can exceed 30s,
 // which surfaced as setup-phase indeterminates in the 32× GLM batch
 // (docs/experiments/2026-06-23-glm-5.2-full-suite-benchmark.md).
 export const OPENCODE_CAPTURE_TIMEOUT_MS = 90_000;
 
-// Filter the host env to the allowlist, default PATH/TERM/LANG (PATH falls back
-// to the POSIX default "/bin:/usr/bin"), then overlay the XDG isolation vars.
+// The capture child's env: the shared non-secret capture base (F13 — the
+// subprocess only reads run-local session state, so no provider/AWS credential
+// belongs in it) with the XDG isolation vars + OPENCODE_CONFIG_DIR overlaid.
+// The pinned OPENCODE_CONFIG_DIR points at the run's private opencode.json,
+// which already carries the selected provider — ambient keys are never needed.
 export function opencodeRunEnv(opencodeHome: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(envSnapshot())) {
-    if (OPENCODE_ENV_ALLOWLIST.has(key) && value !== undefined) {
-      env[key] = value;
-    }
-  }
-  if (!('PATH' in env)) env['PATH'] = '/bin:/usr/bin';
-  if (!('TERM' in env)) env['TERM'] = 'xterm-256color';
-  if (!('LANG' in env)) env['LANG'] = 'C.UTF-8';
+  const env = captureBaseEnv();
   Object.assign(env, opencodeEnv(opencodeHome));
   return env;
 }

@@ -5,10 +5,29 @@
 # the QA agent can launch Gemini with one command even when tmux strips env.
 set -euo pipefail
 cd $QUORUM_AGENT_CWD_SH || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD_SH" >&2; exit 1; }
+# The trusted env file OWNS GEMINI_API_KEY: drop any inherited value before
+# sourcing so a file that omits it (OAuth mode) leaves it absent — omission
+# stays omission, and a hostile host export can never ride the forward below.
+unset GEMINI_API_KEY
 set -a
 . $GEMINI_ENV_FILE_SH
 set +a
-exec env \
+
+# Host-env isolation (F13): env -i + explicit allowlist, matching the
+# codex/claude launchers. The sourced .gemini-env sets GEMINI_API_KEY in
+# api-key mode (empty in OAuth mode — OAuth creds are files in the throwaway
+# home), so forward it only when the FILE set it.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+if [[ -n "${GEMINI_API_KEY-}" ]]; then
+  env_args+=("GEMINI_API_KEY=$GEMINI_API_KEY")
+fi
+
+exec env -i \
+  "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   GEMINI_DEFAULT_AUTH_TYPE=$GEMINI_AUTH_TYPE_SH \
   GEMINI_CLI_TRUST_WORKSPACE=true \

@@ -2,14 +2,27 @@ import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
-import { resolveApiKey } from '../credentials/resolve.ts';
+import { resolveApiKey, resolveApiKeyEnvName } from '../credentials/resolve.ts';
 import {
   isSerfOpenRouterCampaignCredentialV1,
   SERF_OPENROUTER_V1_API_KEY_ENV,
 } from '../credentials/serf-openrouter-profile.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
-import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
+import {
+  type CodingAgent,
+  ProvisionError,
+  type RunHome,
+  shellSingleQuote,
+} from './index.ts';
+import { writePrivateFileNoFollow } from './private-file.ts';
+
+// The private per-run env file provision writes into the serf config dir: one
+// line, `<SELECTED_NAME>='<value>'`, mode 0600. The launcher unsets the
+// selected name, sources this file, and forwards ONLY the file-owned name —
+// the gauntlet child env (which carries the grader credential) can never
+// backfill it. Mirrors the claude .claude-env / codex codex-api.env pattern.
+export const SERF_API_ENV_FILE_NAME = 'serf-api.env';
 
 // Serf provisioning adapter. Like the Claude adapter, serf loads Superpowers by
 // pointing `--plugin-dir` straight at SUPERPOWERS_ROOT (no staging into the
@@ -93,10 +106,29 @@ export class SerfAgent implements CodingAgent {
           `serf: auth '${credential.auth}' is not supported; use 'api-key'`,
         );
       }
+      let resolution: ReturnType<typeof resolveApiKey>;
       try {
-        resolveApiKey(credential, 'ANTHROPIC_API_KEY');
+        resolution = resolveApiKey(credential, 'ANTHROPIC_API_KEY');
       } catch (e) {
         throw new ProvisionError(e instanceof Error ? e.message : String(e));
+      }
+      if (resolution.kind === 'env') {
+        // Seed the selected credential into the private per-run env file the
+        // launcher sources; the selected NAME is the same one the runner bakes
+        // into the launcher as $SERF_API_KEY_ENV.
+        const keyEnvName = resolveApiKeyEnvName(
+          credential,
+          'ANTHROPIC_API_KEY',
+        );
+        if (keyEnvName === null) {
+          throw new ProvisionError(
+            'serf: could not resolve the selected api key env name',
+          );
+        }
+        writePrivateFileNoFollow(
+          join(home.configDir, SERF_API_ENV_FILE_NAME),
+          `${keyEnvName}=${shellSingleQuote(resolution.value)}\n`,
+        );
       }
 
       if (credential.compat.tool_choice_auto_only === true) {
@@ -119,9 +151,10 @@ export class SerfAgent implements CodingAgent {
       }
     }
 
-    // No extra env: the launcher forwards only the credential-selected key,
-    // loads the isolated per-run SERF_PROVIDERS_CONFIG when provisioned (or
-    // seeds from env when absent), and bakes the model/plugin-dir/export flags.
+    // No extra env: the launcher sources the private serf-api.env and forwards
+    // only the credential-selected key, loads the isolated per-run
+    // SERF_PROVIDERS_CONFIG when provisioned, and bakes the
+    // model/plugin-dir/export flags.
     return {};
   }
 }

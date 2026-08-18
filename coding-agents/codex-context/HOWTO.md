@@ -8,8 +8,11 @@ AI agent; what appears on screen is its work.
 Your bash starts in a scratch directory, NOT the workdir quorum
 prepared. quorum has generated a launcher that handles everything — it
 cds into the prepared workdir, pins a throwaway `$HOME` for the run,
-scrubs OpenAI API-key environment variables so Codex uses the copied
-ChatGPT subscription auth, and starts codex with the bypass flag. Type
+walls off the host environment with an `env -i` allowlist (host API
+keys never reach Codex; auth is either the copied ChatGPT subscription
+auth or, on api-key credentials, a run-scoped provider key sourced
+from the trusted per-run env file), and starts codex with the bypass
+flag. Type
 **this one line, verbatim**
 as your first action:
 
@@ -21,8 +24,12 @@ That path is burned into this HOWTO at runtime by quorum; it points at a
 generated executable that runs, in effect:
 
 ```
-cd <prepared-workdir> && HOME=<per-run-throwaway-home> env -u OPENAI_API_KEY codex --dangerously-bypass-approvals-and-sandbox
+cd <prepared-workdir> && [. <per-run-codex-env> &&] env -i PATH=<path> HOME=<per-run-throwaway-home> <XDG+TMPDIR pins> [CODEX_PROVIDER_API_KEY=<from that env file>] codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust
 ```
+
+(The bracketed parts exist only on api-key credentials; the subscription
+path authenticates from the seeded `$HOME/.codex/auth.json` under the
+throwaway home.)
 
 Because the `cd` and the flags live inside the launcher, you cannot skip
 them. Do NOT hand-type a bare `codex` or reconstruct the `cd … && codex`

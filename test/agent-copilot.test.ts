@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  COPILOT_GAUNTLET_ENV_ALLOWLIST,
   CopilotAgent,
   copilotGauntletEnv,
   scanCopilotSecretLeaks,
@@ -23,6 +24,7 @@ import {
   agentConfigDir,
   resolveSessionLogDir,
 } from '../src/contracts/agent-config.ts';
+import { GAUNTLET_ENV_ALLOWLIST } from '../src/runner/gauntlet-env.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
 
@@ -655,6 +657,82 @@ test('copilotGauntletEnv projects host env onto the allowlist and drops the rest
   });
 });
 
+// F13 final fix (IMPORTANT 2): the copilot gauntlet child env is rebuilt from
+// the standard grader contract — exactly the three supported Anthropic auth
+// names plus ANTHROPIC_BASE_URL — so a grader authenticated via OAuth works
+// under copilot exactly as under every other agent.
+test('copilotGauntletEnv carries all three grader auth alternatives + the base url', () => {
+  const env = copilotGauntletEnv({
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-grader-oauth-cc',
+    ANTHROPIC_AUTH_TOKEN: 'fake-grader-oauth-sdk',
+    ANTHROPIC_API_KEY: 'sk-grader-fake',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+  });
+  expect(env).toEqual({
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-grader-oauth-cc',
+    ANTHROPIC_AUTH_TOKEN: 'fake-grader-oauth-sdk',
+    ANTHROPIC_API_KEY: 'sk-grader-fake',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+  });
+});
+
+// The OpenAI block was an unrelated provider bundle in the child env; copilot
+// itself never consumed it (its BYOK path rides the mode-0600 env file), and
+// the grader is Anthropic-only.
+test('copilotGauntletEnv excludes the OpenAI block and every unrelated provider secret', () => {
+  const env = copilotGauntletEnv({
+    OPENAI_API_KEY: 'sk-host-openai',
+    OPENAI_BASE_URL: 'http://evil-openai.example',
+    OPENAI_ORG_ID: 'evil-org',
+    OPENAI_PROJECT: 'evil-project',
+    ANTHROPIC_LOG: 'debug',
+    GEMINI_API_KEY: 'sk-host-gemini',
+    AWS_SECRET_ACCESS_KEY: 'host-aws',
+    COPILOT_GITHUB_TOKEN: 'ghp_secret',
+    PATH: '/usr/bin',
+  });
+  expect(env).toEqual({ PATH: '/usr/bin' });
+});
+
+// Copilot-specific non-secret routing survives: each name is forwarded into
+// the copilot process by the launcher's own env -i forward list, so dropping
+// it from the child env would silently strip working routing.
+test('copilotGauntletEnv keeps copilot-specific non-secret routing', () => {
+  const routed = {
+    GH_HOST: 'github.example.com',
+    COPILOT_GH_HOST: 'copilot.example.com',
+    COPILOT_MODEL: 'claude-opus-5',
+    COPILOT_OFFLINE: 'true',
+    HOME: '/host/home',
+    TMUX_TMPDIR: '/tmp/tmux',
+  };
+  expect(copilotGauntletEnv(routed)).toEqual(routed);
+});
+
+test('COPILOT_GAUNTLET_ENV_ALLOWLIST secret-shaped names are exactly the grader trio', () => {
+  const secretish = COPILOT_GAUNTLET_ENV_ALLOWLIST.filter((n) =>
+    /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(n),
+  );
+  expect([...secretish].sort()).toEqual(
+    [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+    ].sort(),
+  );
+});
+
+// The copilot list is the standard grader contract plus copilot extras — never
+// a hand-maintained fork that can drift below the base again.
+test('COPILOT_GAUNTLET_ENV_ALLOWLIST is a superset of the standard grader contract', () => {
+  for (const name of GAUNTLET_ENV_ALLOWLIST) {
+    expect({
+      name,
+      present: COPILOT_GAUNTLET_ENV_ALLOWLIST.includes(name),
+    }).toEqual({ name, present: true });
+  }
+});
+
 test('copilotGauntletEnv passes a clean proxy URL and rejects a credentialed one', () => {
   // A bare host:port proxy is fine.
   expect(
@@ -821,5 +899,79 @@ test('scanCopilotSecretLeaks does not descend into a symlinked directory', () =>
   } finally {
     rmSync(runDir, { recursive: true, force: true });
     rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+// F13 env scoping: the `gh auth token` fallback subprocess must run on the
+// non-secret allowlist projection. gh's stored-auth routing is env-driven —
+// GH_HOST selects the host and GH_CONFIG_DIR redirects the config dir (both
+// actively read on the `auth token` path; Fix Round 1 audit) — so both seeded
+// values must ARRIVE, while token-shaped host vars must NOT.
+test('gh auth token subprocess env carries GH_HOST/GH_CONFIG_DIR routing, drops credentials', () => {
+  const sp = makeSuperpowersRoot();
+  const { home, cleanup } = makeTempHome();
+  try {
+    const GH_HOST_SEED = 'github.example.com';
+    const GH_CONFIG_DIR_SEED = '/tmp/quorum-gh-cfg-audit';
+    const runner = new FakeCommandRunner((command, args, options) => {
+      if (command === 'gh' && args[0] === 'auth' && args[1] === 'token') {
+        // Succeed ONLY when the stored-auth routing arrived in the env: the
+        // real gh resolves host/config-dir from exactly these vars.
+        if (
+          options?.env?.['GH_HOST'] === GH_HOST_SEED &&
+          options?.env?.['GH_CONFIG_DIR'] === GH_CONFIG_DIR_SEED
+        ) {
+          return { status: 0, stdout: 'gho_from_gh_cli\n', stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'gh: routing env missing' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    withProvisionEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: sp.root,
+        GH_HOST: GH_HOST_SEED,
+        GH_CONFIG_DIR: GH_CONFIG_DIR_SEED,
+        // Hostile token-shaped vars the adapter chain does NOT read (so the
+        // `gh auth token` fallback still runs); the chain vars GH_TOKEN /
+        // GITHUB_TOKEN / COPILOT_GITHUB_TOKEN stay cleared above.
+        GH_ENTERPRISE_TOKEN: 'hostile-enterprise',
+        GITHUB_ENTERPRISE_TOKEN: 'hostile-enterprise2',
+        OPENAI_API_KEY: 'hostile-openai',
+        ANTHROPIC_API_KEY: 'hostile-anthropic',
+        GEMINI_API_KEY: 'hostile-gemini',
+        AWS_SECRET_ACCESS_KEY: 'hostile-aws',
+      },
+      () => {
+        new CopilotAgent(CONFIG).provision(home, runner);
+      },
+    );
+    const ghCall = runner.calls.find((c) => c.command === 'gh');
+    expect(ghCall).toBeDefined();
+    const env = ghCall?.options?.env ?? {};
+    // Stored-auth routing arrives (this is what makes the fake succeed, and
+    // what a host-scoped gh setup needs at runtime).
+    expect(env['GH_HOST']).toBe(GH_HOST_SEED);
+    expect(env['GH_CONFIG_DIR']).toBe(GH_CONFIG_DIR_SEED);
+    // Token-shaped host vars and the provider bundle do not.
+    for (const name of [
+      'GH_TOKEN',
+      'GITHUB_TOKEN',
+      'GH_ENTERPRISE_TOKEN',
+      'GITHUB_ENTERPRISE_TOKEN',
+      'COPILOT_GITHUB_TOKEN',
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+    ]) {
+      expect(env[name]).toBeUndefined();
+    }
+    // PATH survives the projection (carries the fake-bin dir).
+    expect(env['PATH']).toContain(FAKE_BIN_DIR);
+  } finally {
+    cleanup();
+    sp.cleanup();
   }
 });

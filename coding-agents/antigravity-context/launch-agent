@@ -15,12 +15,16 @@
 # IS that home ($QUORUM_AGENT_HOME), so $QUORUM_AGENT_HOME/.gemini is the single
 # dir where provisioning seeds the plugin, settings, AND the C1 OAuth creds.
 #
-# CRITICAL (C1): agy reads its live, rotating OAuth token from
-# $HOME/.gemini/oauth_creds.json at RUNTIME, NOT from --gemini_dir. Because HOME
-# is now the throwaway home, that read would miss the operator's creds unless
-# provisioning copied them in — which it does (see seedAgyOauthCredentials in
-# src/agents/antigravity.ts). The keyring entry is per-login-user, not
-# home-relative, so it survives the throwaway HOME.
+# CRITICAL (C1/F13): agy reads its runtime credential from
+# $HOME/.gemini/antigravity-cli/antigravity-oauth-token at RUNTIME, NOT via
+# --gemini_dir. Because HOME is the throwaway home, that read would miss the
+# operator's token unless provisioning copied it in — which it does
+# (seedAgyRuntimeToken in src/agents/antigravity.ts), FIRST, before any agy
+# subprocess, failing before launch if the source token cannot be seeded (F13:
+# agy must never reach the operator's per-login-user keyring). That nested
+# token is the ONLY credential in the run home: the flat oauth_creds.json /
+# google_accounts.json are the Gemini-personal layout, carry an unrelated
+# operator credential, and are never copied.
 #
 # --gemini_dir stays EXPLICIT: it relocates agy's STATE tree (config, plugins,
 # antigravity-cli/{settings,brain}). It already resolves to the throwaway
@@ -30,11 +34,24 @@
 # live agy smoke is required before dropping it, even though empirically agy
 # defaults --gemini_dir to $HOME/.gemini when omitted.)
 #
-# Equivalent manual command (for debugging):
-#   cd "$QUORUM_AGENT_CWD" && HOME="$QUORUM_AGENT_HOME" ANTIGRAVITY_CONFIG_DIR="$QUORUM_AGENT_HOME" AGY_CLI_DISABLE_AUTO_UPDATE=true agy --gemini_dir="$QUORUM_AGENT_HOME/.gemini" --add-dir="$QUORUM_AGENT_CWD" --dangerously-skip-permissions --log-file "$QUORUM_AGENT_HOME/agy.log"
+# Equivalent manual command (for debugging) — a sketch, not literal bash (the
+# real invocation is the env -i wall below):
+#   cd "$QUORUM_AGENT_CWD" && env -i PATH="$PATH" TERM="${TERM:-xterm-256color}" LANG="${LANG:-C.UTF-8}" \
+#     HOME="$QUORUM_AGENT_HOME" <XDG+TMPDIR pins> ANTIGRAVITY_CONFIG_DIR="$QUORUM_AGENT_HOME" AGY_CLI_DISABLE_AUTO_UPDATE=true \
+#     agy --gemini_dir="$QUORUM_AGENT_HOME/.gemini" --add-dir="$QUORUM_AGENT_CWD" --dangerously-skip-permissions --log-file "$QUORUM_AGENT_HOME/agy.log"
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
-exec env \
+# Host-env isolation (F13): env -i + explicit allowlist. agy reads its OAuth
+# creds from the throwaway home's .gemini (seeded by provisioning) — nothing
+# secret rides the environment.
+env_args=(
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  "TERM=${TERM:-xterm-256color}"
+  "LANG=${LANG:-C.UTF-8}"
+)
+
+exec env -i \
+  "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   ANTIGRAVITY_CONFIG_DIR="$QUORUM_AGENT_HOME" \
   AGY_CLI_DISABLE_AUTO_UPDATE=true \

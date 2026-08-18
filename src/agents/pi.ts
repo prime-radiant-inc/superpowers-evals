@@ -51,16 +51,20 @@ function requirePiEnv(name: string, purpose: string): string {
 }
 
 // Write pi.env (mode 0600). Shlex-quoted export lines for PI_PROVIDER / PI_MODEL
-// (the launcher passes both to `pi --provider/--model` under `set -u`), an
+// (the launcher passes both to `pi --provider/--model` under `set -u`) and an
 // optional PI_API_KEY (api-key auth; OAuth omits it — the credential lives in
-// auth.json), then extra env sorted by name, then a trailing empty line (the
-// joined-with-newline list ends with "", so the file ends in a single newline).
+// auth.json), then a trailing empty line (the joined-with-newline list ends
+// with "", so the file ends in a single newline).
+//
+// SYNC (F13): coding-agents/pi-context/launch-agent unsets then forwards
+// exactly these three names through its `env -i` wall. The name set is CLOSED
+// by this signature — adding one is an intentional producer+consumer change:
+// extend this writer AND the launcher's unset/forward list together.
 function writePiEnvFile(
   configDir: string,
   provider: string,
   model: string,
   apiKey: string | undefined,
-  extraEnv: Record<string, string>,
 ): void {
   const lines = [
     `export PI_PROVIDER=${shlexQuote(provider)}`,
@@ -68,13 +72,6 @@ function writePiEnvFile(
   ];
   if (apiKey !== undefined) {
     lines.push(`export PI_API_KEY=${shlexQuote(apiKey)}`);
-  }
-  const extraNames = Object.keys(extraEnv).sort();
-  for (const name of extraNames) {
-    const value = extraEnv[name];
-    if (value !== undefined) {
-      lines.push(`export ${name}=${shlexQuote(value)}`);
-    }
   }
   lines.push('');
   writeFileSync(join(configDir, 'pi.env'), lines.join('\n'), { mode: 0o600 });
@@ -208,7 +205,7 @@ function seedPiOauth(
   );
 
   // pi.env carries provider/model for the launcher; no PI_API_KEY in OAuth mode.
-  writePiEnvFile(configDir, provider, credentialModel, undefined, {});
+  writePiEnvFile(configDir, provider, credentialModel, undefined);
 }
 
 // Read provider/model defaults from the host pi settings.json. A missing file is
@@ -419,7 +416,7 @@ export class PiAgent implements CodingAgent {
     );
 
     // pi.env (mode 0600): PI_PROVIDER=quorum, PI_MODEL, PI_API_KEY (resolved).
-    writePiEnvFile(configDir, 'quorum', credential.model, resolvedKey, {});
+    writePiEnvFile(configDir, 'quorum', credential.model, resolvedKey);
 
     return {};
   }

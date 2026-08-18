@@ -566,11 +566,15 @@ The allowlist (base system + network/TLS + tmux + gauntlet runtime + the grader/
 // KIMI_ENV_FILE; claude-windows' SSH values by design) is applied by
 // spawnGauntlet after this base and is unaffected.
 //
-// KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan): the grader
-// credential itself (ANTHROPIC_API_KEY et al.) remains readable by a same-UID
-// agent via /proc — closing that needs UID separation in the container, not
-// env scoping. This list bounds the blast to the grader credential instead of
-// the whole provider bundle.
+// KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan / UID work):
+// the allowlist above bounds what quorum's own CHILDREN inherit — but
+// same-UID process inspection is not bounded by it. A same-UID agent can
+// read a peer process's environment (/proc/<pid>/environ on Linux, `ps eww`
+// on macOS), and the quorum parent (and the run-all child) still carry the
+// operator's FULL host provider bundle in-process until parent env scoping /
+// UID separation lands — so same-UID inspection can still surface every host
+// credential, not just the grader's. Technical closure needs UID separation
+// in the container, not env scoping alone.
 export const GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
   // base system
   'PATH',
@@ -690,4 +694,4 @@ git commit -m "feat: gauntlet child env projected onto an allowlist for every ag
 
 **Type consistency:** `provisionSubprocessEnv(extra?)` signature identical in Tasks 2's helper, call sites, and tests; `SETUP_ENV_ALLOWLIST`/`GAUNTLET_ENV_ALLOWLIST`/`gauntletEnvBase` names used consistently; the harness generalization keeps `installLauncher(agent, opts)` shape with a widened union.
 
-**Deliberate scope exclusions (recorded so reviewers don't flag them):** claude-windows guest-side isolation (exception, Task 4); container mounts / `credentials.env` subsetting / UID separation / run-home retention (follow-on plan); `run-all`'s `invokeChild` env spread (`src/run-all/index.ts:202-208`) — the child is `quorum run`, which re-derives everything scoped here; scoping the parent spread is safe to defer because the child's own boundaries (launcher wall, setup/checks allowlists, gauntlet projection) are what this plan closes; the `/proc` grader-credential residual (documented in Task 5, owned by the follow-on).
+**Deliberate scope exclusions (recorded so reviewers don't flag them):** claude-windows guest-side isolation (exception, Task 4); container mounts / `credentials.env` subsetting / UID separation / run-home retention (follow-on plan); `run-all`'s `invokeChild` env spread (`src/run-all/index.ts:202-208`) — the child is `quorum run`, which re-derives everything scoped here at its own seams; deferring the parent-spread scoping is therefore not a child-boundary gap, BUT it is not a free residual: the run-all child (and the quorum parent itself) still carry the operator's FULL host provider bundle in-process, so a same-UID agent can still inspect them and surface every host credential until parent scoping / UID separation (Plan 4 / UID work, same as the Task 5 same-UID residual).

@@ -1,11 +1,16 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { collectProvenance } from '../src/runner/provenance.ts';
 
 const REPO = resolve(import.meta.dir, '..');
+
+// The run-local throwaway home every version probe must be routed to
+// (F13 corrective round): HOME/XDG_CONFIG_HOME of the agent/gauntlet --version
+// children are pinned here, never to the operator's home.
+const RUN_HOME = mkdtempSync(join(tmpdir(), 'run-home-'));
 
 function git(cwd: string, ...args: string[]): string {
   const p = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -38,13 +43,20 @@ test('collectProvenance reads superpowers rev + dirty flag from SUPERPOWERS_ROOT
   const prev = process.env['SUPERPOWERS_ROOT'];
   process.env['SUPERPOWERS_ROOT'] = sproot;
   try {
-    const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: null,
+      runHomeDir: RUN_HOME,
+    });
     expect(p.superpowers_rev).toBe(git(sproot, 'rev-parse', 'HEAD'));
     expect(p.superpowers_dirty).toBe(false);
     writeFileSync(join(sproot, 'dirt.txt'), 'x');
     expect(
-      collectProvenance({ repoRoot: REPO, agentBinary: null })
-        .superpowers_dirty,
+      collectProvenance({
+        repoRoot: REPO,
+        agentBinary: null,
+        runHomeDir: RUN_HOME,
+      }).superpowers_dirty,
     ).toBe(true);
   } finally {
     if (prev === undefined) delete process.env['SUPERPOWERS_ROOT'];
@@ -113,7 +125,11 @@ test('collectProvenance returns null superpowers_rev for a linked worktree whose
     expect(directProbe.status).not.toBe(0);
     expect(headSha).not.toBe('');
 
-    const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: null,
+      runHomeDir: RUN_HOME,
+    });
     expect(p.superpowers_rev).toBe(null);
   } finally {
     if (prev === undefined) delete process.env['SUPERPOWERS_ROOT'];
@@ -128,7 +144,11 @@ test('collectProvenance uses the QUORUM_SUPERPOWERS_REV host override for a link
   process.env['SUPERPOWERS_ROOT'] = worktree;
   process.env['QUORUM_SUPERPOWERS_REV'] = headSha;
   try {
-    const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: null,
+      runHomeDir: RUN_HOME,
+    });
     expect(p.superpowers_rev).toBe(headSha);
   } finally {
     if (prevRoot === undefined) delete process.env['SUPERPOWERS_ROOT'];
@@ -145,7 +165,11 @@ test('collectProvenance prefers a live in-container rev-parse over a stale QUORU
   process.env['SUPERPOWERS_ROOT'] = sproot;
   process.env['QUORUM_SUPERPOWERS_REV'] = '';
   try {
-    const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: null,
+      runHomeDir: RUN_HOME,
+    });
     expect(p.superpowers_rev).toBe(git(sproot, 'rev-parse', 'HEAD'));
   } finally {
     if (prevRoot === undefined) delete process.env['SUPERPOWERS_ROOT'];
@@ -156,7 +180,11 @@ test('collectProvenance prefers a live in-container rev-parse over a stale QUORU
 });
 
 test('collectProvenance reads the harness rev from repoRoot', () => {
-  const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+  const p = collectProvenance({
+    repoRoot: REPO,
+    agentBinary: null,
+    runHomeDir: RUN_HOME,
+  });
   expect(p.harness_rev).toBe(git(REPO, 'rev-parse', 'HEAD'));
 });
 
@@ -169,7 +197,11 @@ test('collectProvenance probes the agent CLI version via --version', () => {
   const prevPath = process.env['PATH'];
   process.env['PATH'] = `${bin}:${prevPath ?? ''}`;
   try {
-    const p = collectProvenance({ repoRoot: REPO, agentBinary: 'fake-agent' });
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: 'fake-agent',
+      runHomeDir: RUN_HOME,
+    });
     expect(p.agent_cli_version).toBe('fake-agent 9.9.9');
   } finally {
     process.env['PATH'] = prevPath ?? '';
@@ -183,6 +215,7 @@ test('collectProvenance never throws: every probe failure is a null field', () =
     const p = collectProvenance({
       repoRoot: mkdtempSync(join(tmpdir(), 'notrepo-')),
       agentBinary: 'definitely-not-a-binary-xyz',
+      runHomeDir: RUN_HOME,
     });
     expect(p.superpowers_rev).toBe(null);
     expect(p.superpowers_dirty).toBe(null);
@@ -197,6 +230,106 @@ test('collectProvenance never throws: every probe failure is a null field', () =
 // The battery that silently ran a stale PATH binary also reported os "linux"
 // on a Darwin host; provenance now records where the run actually executed.
 test('collectProvenance records the host platform', () => {
-  const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
+  const p = collectProvenance({
+    repoRoot: REPO,
+    agentBinary: null,
+    runHomeDir: RUN_HOME,
+  });
   expect(p.host_platform).toBe(process.platform);
+});
+
+// F13 corrective round: the version probes spawn third-party binaries (the
+// agent CLI and gauntlet) — real children. Git provenance legitimately reads
+// the operator's HOME/XDG config routing, but the VERSION children must run
+// under an explicit non-secret projection with HOME/XDG_CONFIG_HOME pinned to
+// the run-local throwaway home: never the operator's home-relative auth state
+// (keyring routing, ~/.gemini, ~/.config) and never the provider/AWS bundle.
+// Proven through real spawned children dumping their env.
+test('version probe children run on the exact run-local non-secret projection', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'bin-'));
+  const agentDump = join(bin, 'agent-env-dump.txt');
+  const gauntletDump = join(bin, 'gauntlet-env-dump.txt');
+  const fakeAgent = join(bin, 'fake-agent');
+  writeFileSync(
+    fakeAgent,
+    `#!/bin/sh\nenv > '${agentDump}'\necho "fake-agent 1.0.0"\n`,
+  );
+  const fakeGauntlet = join(bin, 'gauntlet');
+  writeFileSync(
+    fakeGauntlet,
+    `#!/bin/sh\nenv > '${gauntletDump}'\necho "gauntlet 2.0.0"\n`,
+  );
+  spawnSync('chmod', ['+x', fakeAgent, fakeGauntlet]);
+
+  const HOSTILE: Record<string, string> = {
+    OPENAI_API_KEY: 'sk-host-openai',
+    ANTHROPIC_API_KEY: 'sk-host-anthropic',
+    OPENROUTER_API_KEY: 'sk-host-openrouter',
+    GEMINI_API_KEY: 'sk-host-gemini',
+    KIMI_MODEL_API_KEY: 'sk-host-kimi',
+    AWS_SECRET_ACCESS_KEY: 'host-aws-secret',
+    AWS_SESSION_TOKEN: 'host-aws-session',
+    AWS_BEARER_TOKEN_BEDROCK: 'host-bedrock',
+    SOME_RANDOM_HOST_VAR: 'leaked',
+    // Operator home/config routing sentinels: these must NEVER reach a
+    // version child — HOME/XDG_CONFIG_HOME are pinned run-local instead.
+    HOME: '/operator-sentinel-home',
+    XDG_CONFIG_HOME: '/operator-sentinel-xdg',
+  };
+  const saved: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(HOSTILE)) {
+    saved[k] = process.env[k];
+    process.env[k] = v;
+  }
+  const prevPath = process.env['PATH'];
+  process.env['PATH'] = `${bin}:${prevPath ?? ''}`;
+  try {
+    const p = collectProvenance({
+      repoRoot: REPO,
+      agentBinary: 'fake-agent',
+      runHomeDir: RUN_HOME,
+    });
+    // Version values are still recorded.
+    expect(p.agent_cli_version).toBe('fake-agent 1.0.0');
+    expect(p.gauntlet_version).toBe('gauntlet 2.0.0');
+    const allowedKeys = new Set([
+      'PATH',
+      'TERM',
+      'LANG',
+      'HOME',
+      'XDG_CONFIG_HOME',
+    ]);
+    for (const dumpPath of [agentDump, gauntletDump]) {
+      const dumped: Record<string, string> = {};
+      for (const line of readFileSync(dumpPath, 'utf8').split('\n')) {
+        const eq = line.indexOf('=');
+        if (eq > 0) dumped[line.slice(0, eq)] = line.slice(eq + 1);
+      }
+      // EXACT non-secret projection: no name outside the base trio + the two
+      // run-local routing pins survives — the provider/AWS bundle and host
+      // extras are absent by construction, not by enumeration. (PWD/SHLVL/_
+      // are injected by the /bin/sh probe harness itself, not by quorum's
+      // passed env, so they are excluded from the exact-set check.)
+      const shellArtifacts = new Set(['PWD', 'SHLVL', '_']);
+      for (const key of Object.keys(dumped)) {
+        if (shellArtifacts.has(key)) continue;
+        expect({ dump: dumpPath, key, allowed: allowedKeys.has(key) }).toEqual({
+          dump: dumpPath,
+          key,
+          allowed: true,
+        });
+      }
+      // The routing pins are the run-local home/config, never the operator's.
+      expect(dumped['HOME']).toBe(RUN_HOME);
+      expect(dumped['XDG_CONFIG_HOME']).toBe(join(RUN_HOME, '.config'));
+      // PATH still resolves the binary.
+      expect(dumped['PATH']).toBeTruthy();
+    }
+  } finally {
+    process.env['PATH'] = prevPath ?? '';
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 });

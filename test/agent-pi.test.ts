@@ -333,10 +333,17 @@ test('api-key credential: pi.env carries resolved key, not placeholder', () => {
         const agent = new PiAgent(piConfig());
         agent.provision(home, stubRunner, credential);
 
+        // Exact body: pi.env's name set is CLOSED (writePiEnvFile has no
+        // extension point; the launcher unsets + forwards exactly these).
         const envBody = readFileSync(join(home.configDir, 'pi.env'), 'utf8');
-        expect(envBody).toContain('export PI_PROVIDER=quorum');
-        expect(envBody).toContain('export PI_MODEL=glm-5.2-fp8');
-        expect(envBody).toContain('export PI_API_KEY=actual-secret');
+        expect(envBody).toBe(
+          [
+            'export PI_PROVIDER=quorum',
+            'export PI_MODEL=glm-5.2-fp8',
+            'export PI_API_KEY=actual-secret',
+            '',
+          ].join('\n'),
+        );
         expect(envBody).not.toContain('$PI_API_KEY');
       },
     );

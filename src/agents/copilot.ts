@@ -12,9 +12,11 @@ import {
 import { join, relative, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import { GAUNTLET_ENV_ALLOWLIST } from '../runner/gauntlet-env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { provisionSubprocessEnv } from './subprocess-env.ts';
 
 // Copilot provisioning adapter. provision() is SETUP: it verifies the copilot
 // binary is on PATH, stages the isolated COPILOT_HOME, writes a mode-0600 secret
@@ -90,37 +92,30 @@ export const COPILOT_PROXY_ENV_NAMES: readonly string[] = [
   'all_proxy',
 ];
 
-// The env vars the runner forwards into the gauntlet/copilot process. Auth
-// secrets do NOT appear here — they go to the mode-0600 env file. Exported for
-// the runner's spawnGauntlet.
+// The env vars the runner forwards into the gauntlet/copilot process: the
+// STANDARD grader contract (GAUNTLET_ENV_ALLOWLIST — base system + network/
+// TLS + tmux + exactly the three Anthropic auth names and ANTHROPIC_BASE_URL,
+// so an OAuth-authenticated grader works under copilot like everywhere else)
+// plus copilot's own non-secret routing. Every extra below is forwarded into
+// the copilot process by the launcher's env -i forward list
+// (coding-agents/copilot-context/launch-agent) — that forward is the
+// active-path evidence for retaining it here. Copilot auth secrets
+// (COPILOT_GITHUB_TOKEN / COPILOT_PROVIDER_*) never appear: they ride the
+// mode-0600 env file the launcher sources.
 export const COPILOT_GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
-  'PATH',
-  'TERM',
-  'LANG',
+  ...GAUNTLET_ENV_ALLOWLIST,
+  // GitHub host selection for copilot's stored-auth routing.
   'GH_HOST',
   'COPILOT_GH_HOST',
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'ALL_PROXY',
-  'NO_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'all_proxy',
-  'no_proxy',
-  'SSL_CERT_FILE',
-  'SSL_CERT_DIR',
-  'NODE_EXTRA_CA_CERTS',
-  'REQUESTS_CA_BUNDLE',
-  'CURL_CA_BUNDLE',
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_LOG',
-  'OPENAI_API_KEY',
-  'OPENAI_BASE_URL',
-  'OPENAI_ORG_ID',
-  'OPENAI_PROJECT',
+  // Copilot model/offline knobs (non-BYOK; BYOK values ride the env file).
   'COPILOT_MODEL',
   'COPILOT_OFFLINE',
+  // The launcher forwards the full proxy set + the extra CA-bundle names into
+  // the copilot binary; the standard list carries the rest of both families.
+  'ALL_PROXY',
+  'all_proxy',
+  'REQUESTS_CA_BUNDLE',
+  'CURL_CA_BUNDLE',
 ];
 
 // Single-quote a value for a POSIX shell, escaping embedded single quotes.
@@ -247,12 +242,16 @@ interface CopilotAuthEnv {
 // and a non-zero exit (both yield no token). The presence check uses Bun.which
 // (a real PATH lookup); a `command -v gh` probe ENOENTs through the no-shell
 // spawnSync seam and false-fails on Linux. The `gh auth token` call itself
-// routes through the injectable runner so the hermetic gate stubs it.
+// routes through the injectable runner so the hermetic gate stubs it, and runs
+// on the non-secret provision allowlist (F13): gh resolves its stored auth from
+// its config files, not from the host provider bundle.
 function ghAuthToken(runner: CommandRunner): string | undefined {
   if (Bun.which('gh', { PATH: envSnapshot()['PATH'] ?? '' }) === null) {
     return undefined;
   }
-  const result = runner.run('gh', ['auth', 'token'], { env: envSnapshot() });
+  const result = runner.run('gh', ['auth', 'token'], {
+    env: provisionSubprocessEnv(),
+  });
   if (result.status !== 0) {
     return undefined;
   }

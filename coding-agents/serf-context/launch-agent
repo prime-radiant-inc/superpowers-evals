@@ -22,7 +22,11 @@
 # materialize a credential-free model-compat profile there; when absent, serf
 # seeds its provider instance from the selected environment variable. The path
 # never falls back to a host ~/.serf/providers.toml. SERF_API_KEY_ENV names the
-# one API key forwarded into the otherwise clean environment.
+# one API key forwarded into the otherwise clean environment; its VALUE comes
+# only from the private per-run serf-api.env provisioning writes (sourced
+# below after unsetting the name), never from the ambient env — the launcher's
+# ambient env is the gauntlet child projection, which carries the GRADER
+# credential and must not reach serf.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 
@@ -36,9 +40,20 @@ if [[ -z "$selected_name" ]]; then
   echo 'launch-agent: selected Serf API key env name is empty' >&2
   exit 1
 fi
+# The private serf-api.env (written by provisioning, mode 0600) OWNS the
+# selected key: drop any inherited value before sourcing so the ambient env —
+# which carries the GRADER credential, possibly under the same name — can
+# never backfill an omitted file value. Omission stays omission and fails
+# loudly below.
+unset "$selected_name"
+if [[ -f $SERF_ENV_FILE_SH ]]; then
+  set -a
+  . $SERF_ENV_FILE_SH
+  set +a
+fi
 selected_value="${!selected_name-}"
 if [[ -z "$selected_value" ]]; then
-  echo "launch-agent: selected Serf API key env $selected_name is unset/empty" >&2
+  echo "launch-agent: selected Serf API key env $selected_name is unset/empty (private serf-api.env missing or omits it)" >&2
   exit 1
 fi
 env_args+=("$selected_name=$selected_value")
