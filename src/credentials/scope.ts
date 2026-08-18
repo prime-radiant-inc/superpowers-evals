@@ -28,6 +28,25 @@ export const AGENT_OAUTH_MOUNT: Readonly<Record<string, string>> = {
   pi: 'pi',
 };
 
+// Conventional API-key env name per runtime family, mirroring what each
+// adapter actually passes resolveApiKey(credential, <conventional>) — or, for
+// kimi, the env its api-key path reads directly (KIMI_MODEL_API_KEY; kimi_k3
+// omits api_key_env on purpose). Frozen contract: a name here is what the
+// appliance bundle must carry for that family's api-key credentials that
+// don't declare api_key_env. codex deliberately has NO fallback (its adapter
+// calls resolveApiKey(credential, undefined) — an api-key codex credential
+// must declare api_key_env); hermes derives a provider-specific key env (its
+// corpus credentials all declare api_key_env); copilot/antigravity are OAuth
+// paths.
+export const CONVENTIONAL_API_KEY_ENV: Readonly<Record<string, string>> = {
+  claude: 'ANTHROPIC_API_KEY',
+  serf: 'ANTHROPIC_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  kimi: 'KIMI_MODEL_API_KEY',
+  opencode: 'OPENAI_API_KEY',
+  pi: 'PI_API_KEY',
+};
+
 export interface CredentialScope {
   readonly envNames: readonly string[];
   readonly authMounts: readonly string[];
@@ -44,17 +63,30 @@ function loadAgentOrThrow(codingAgentsDir: string, agent: string): AgentConfig {
   return loadAgentConfigForValidation(codingAgentsDir, agent);
 }
 
-// Fold one compatible agent/credential pair into the scope: the env var name
-// whenever the credential declares one (regardless of auth type), and the
-// agent's OAuth mount when auth rides the bundle (oauth/subscription) and the
-// harness has a mount entry.
+// Fold one compatible agent/credential pair into the scope. For api-key auth
+// the env name is credential.api_key_env when declared, else the family's
+// conventional adapter name — and when neither exists, fail closed (a
+// zero-material scope would silently strand the agent without a key). Other
+// auth types contribute api_key_env only when declared (e.g. bedrock-bearer's
+// AWS_BEARER_TOKEN_BEDROCK); oauth/subscription additionally contribute the
+// agent's bundle mount when the harness has an entry.
 function contribute(
+  credName: string,
   entry: Pick<Credential, 'api_key_env' | 'auth'>,
   agent: string,
+  family: string,
   envNames: Set<string>,
   authMounts: Set<string>,
 ): void {
-  if (entry.api_key_env !== undefined) {
+  if (entry.auth === 'api-key') {
+    const envName = entry.api_key_env ?? CONVENTIONAL_API_KEY_ENV[family];
+    if (envName === undefined) {
+      throw new Error(
+        `credential scope: api-key credential '${credName}' declares no api_key_env and agent '${agent}' (family '${family}') has no conventional api-key env name`,
+      );
+    }
+    envNames.add(envName);
+  } else if (entry.api_key_env !== undefined) {
     envNames.add(entry.api_key_env);
   }
   if (entry.auth === 'oauth' || entry.auth === 'subscription') {
@@ -96,7 +128,9 @@ export function credentialScopeForAgents(
 
   if (credentials === null) {
     for (const agent of agents) {
-      loadAgentOrThrow(codingAgentsDir, agent);
+      const family = agentRuntimeFamily(
+        loadAgentOrThrow(codingAgentsDir, agent),
+      );
       const credName = resolveCredentialNameForAgent(
         codingAgentsDir,
         agent,
@@ -109,7 +143,7 @@ export function credentialScopeForAgents(
           `credential scope: unknown default credential '${credName}' for agent '${agent}'`,
         );
       }
-      contribute(entry, agent, envNames, authMounts);
+      contribute(credName, entry, agent, family, envNames, authMounts);
     }
     return {
       envNames: [...envNames].sort(),
@@ -132,7 +166,7 @@ export function credentialScopeForAgents(
       const entry = registry[name];
       if (entry === undefined || !entry.harnesses.includes(family)) continue;
       pairs += 1;
-      contribute(entry, agent, envNames, authMounts);
+      contribute(name, entry, agent, family, envNames, authMounts);
     }
   }
   if (pairs === 0) {
