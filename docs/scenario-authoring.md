@@ -506,6 +506,44 @@ Every verb emits **one** JSON record to `QUORUM_RECORD_SINK`
 record's `check` field is the **sub-verb** name (e.g. `skill-called`), never the
 wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
 
+### Expected-check manifests
+
+Every scenario commits a `checks-manifest.json` next to its `checks.sh`: the
+**frozen multiset of check records `checks.sh` is expected to emit**. Each entry
+is `{phase, check, args, negated, count}` — same key shape as a record, plus a
+`count` for repeats. The composer enforces it: a run whose emitted records do
+not match the manifest composes **`indeterminate`** with a `checks`-stage error
+(`expected-check manifest mismatch (missing: … | unexpected: …)`), never
+`pass`. A check that silently stops emitting — the classic false-pass — is now
+unrepresentable in a verdict.
+
+The authoring loop is three steps: **edit `checks.sh` → `bun run quorum check
+--update-manifests` → commit both files.** `quorum check` fails on a missing
+manifest (`checks-manifest.json missing`) or a stale one (`checks-manifest.json
+stale — checks.sh changed`), so the two cannot drift apart unnoticed. Only a
+scenario whose `checks.sh` fails validation (e.g. unparseable, unknown verb)
+skips the manifest gate — fix the `checks.sh` problems first.
+
+Two rules worth knowing:
+
+- **`$`-bearing args are wildcards.** The extractor cannot predict runtime
+  expansion, so a check line whose raw text contains `$` freezes with
+  `args: null`, which matches records with *any* args (phase/check/negated
+  still must match). Literal-arg entries consume their records first, so
+  wildcards can't steal exact matches.
+- **The extractor refuses what it can't model** (`src/check/manifest.ts`).
+  Unquoted control operators and metacharacters (`;`, `&`, `|`, `(`, `)`, `<`,
+  `>`, backquote), word-start `#` comments, line continuations, `{` on its own
+  line, and unknown verbs all make extraction fail — reported by
+  `quorum check --update-manifests` as `manifest extraction: …`. A check that
+  can't be extracted exactly is never silently mis-frozen. The bare `:` no-op
+  (`post() { : }`) emits no record and contributes no entry.
+
+At run time the runner reads the manifest once (an absent file = legacy
+composition with no enforcement; an unparseable committed file is repository
+misconfiguration and stages as **`setup`**). The corpus carries no manifest-less
+scenarios — keep it that way; every new scenario ships one.
+
 ### Exit codes: assertion-fail (1) vs broken-check (127)
 
 | Exit | Meaning | Invertible by `not`? |
