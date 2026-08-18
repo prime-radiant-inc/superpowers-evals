@@ -63,6 +63,7 @@ import {
 import { readManifest } from '../check/manifest.ts';
 import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
+import type { AgentConfig } from '../contracts/agent-config.ts';
 import {
   agentConfigDir,
   CodingAgentConfigError,
@@ -974,6 +975,7 @@ export async function runScenario(
   // bytes the run did. Stays null when a run fails before reaching the load
   // (early guards); it is never read late.
   const expectedChecksCache: ExpectedChecksCache = { manifest: null };
+  const runAgentCache: RunAgentConfigCache = { config: null };
   try {
     // Freeze the parsed credentials before selecting the named credential. This
     // makes direct runs reproducible and ensures later runner code never
@@ -995,6 +997,7 @@ export async function runScenario(
       identity,
       credentials,
       expectedChecksCache,
+      runAgentCache,
     );
   } catch (err: unknown) {
     const stage = errorStage(err);
@@ -1010,26 +1013,22 @@ export async function runScenario(
       expected: expectedChecksCache.manifest,
     });
   }
-  // Best-effort provenance stamp (PRI-2494). The binary name comes from the
-  // agent yaml when it loads; a broken yaml just means a null CLI version.
-  let agentBinary: string | null = null;
-  try {
-    agentBinary = loadAgentConfig(a.codingAgentsDir, a.codingAgent).binary;
-  } catch {
-    agentBinary = null;
-  }
-  // F13 corrective round: the version-probe children route HOME/XDG to the
-  // run-local throwaway home — ensure it exists even when the run failed
-  // before creating it — and a setup-stage failure means the Coding-Agent
-  // never became runnable, so its version probe is skipped entirely (zero
-  // agent-binary invocations post-failure). The git and gauntlet probes
-  // still run, under the same run-local routing.
+  // Best-effort provenance stamp (PRI-2494). F13 micro corrective round 2:
+  // compute the runnability decision FIRST, and NEVER reload the agent
+  // config post-run — loadAgentConfig is side-effectful (pin_cli_version
+  // enforcement spawns `<binary> --version` with the AMBIENT env), so the old
+  // provenance-time reload re-invoked the agent binary after a setup failure
+  // (where its result was discarded anyway: agent_cli_version composes null)
+  // while handing that child the operator's HOME/provider/AWS bundle. The
+  // binary now comes from the config the run itself already loaded (threaded
+  // via runAgentCache); a null cache (config loading itself failed) skips
+  // agent provenance entirely.
+  const agentRunnable = verdict.error?.stage !== 'setup';
   const provenanceRunHome = join(runDir, 'home');
   mkdirSync(provenanceRunHome, { recursive: true });
-  const agentRunnable = verdict.error?.stage !== 'setup';
   const provenance = collectProvenance({
     repoRoot: repoRoot(),
-    agentBinary: agentRunnable ? agentBinary : null,
+    agentBinary: agentRunnable ? (runAgentCache.config?.binary ?? null) : null,
     runHomeDir: provenanceRunHome,
   });
   const identified: FinalVerdict = {
@@ -1097,6 +1096,19 @@ function errorStage(err: unknown): RunErrorStage {
 // error itself travels as the exception, so nothing re-reads the file.
 interface ExpectedChecksCache {
   manifest: CheckManifest | null;
+}
+
+// Shared state carrying the agent config the run itself loaded (F13 micro
+// corrective round 2): created in runScenario, filled once by the runner body
+// right after its single loadAgentConfig succeeds, consumed by the post-run
+// provenance stamp. Stays null when loading failed (unknown agent, broken
+// yaml, pin mismatch, missing required env) — the stamp then skips agent
+// provenance rather than triggering ANOTHER load. loadAgentConfig is
+// side-effectful (pin_cli_version enforcement spawns `<binary> --version`
+// with the ambient env), so it must never run post-run just to recover the
+// binary name.
+interface RunAgentConfigCache {
+  config: AgentConfig | null;
 }
 
 // The context dir an agent installs into <runDir>/gauntlet-agent/context/.
@@ -1173,6 +1185,7 @@ async function runInner(
   identity: RunIdentity,
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
+  runAgentCache: RunAgentConfigCache,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
@@ -1184,6 +1197,7 @@ async function runInner(
       identity,
       credentials,
       expectedChecksCache,
+      runAgentCache,
     );
   } finally {
     cleanupAgentRuntime(cleanupDirs);
@@ -1211,6 +1225,7 @@ async function runInnerBody(
   identity: RunIdentity,
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
+  runAgentCache: RunAgentConfigCache,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -1227,6 +1242,11 @@ async function runInnerBody(
     );
   }
   const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+  // The run's ONE loaded config, cached for the post-run provenance stamp
+  // (F13 micro corrective round 2): the stamp reads the binary from here and
+  // never reloads — loadAgentConfig's pin enforcement spawns `<binary>
+  // --version` with the ambient env, which must not run post-failure.
+  runAgentCache.config = cfg;
 
   // Credential resolution uses the parsed object that was frozen into this run
   // directory before any setup. Missing credential name means no credential;
