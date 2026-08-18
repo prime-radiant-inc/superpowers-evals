@@ -825,16 +825,27 @@ test('scanCopilotSecretLeaks does not descend into a symlinked directory', () =>
 });
 
 // F13 env scoping: the `gh auth token` fallback subprocess must run on the
-// non-secret allowlist projection with NO extras — the provider bundle never
-// reaches the third-party gh CLI. (gh's own token envs are already cleared by
-// clearedAuthEnv so the fallback path runs at all.)
-test('gh auth token subprocess env drops host credentials (base allowlist only)', () => {
+// non-secret allowlist projection. gh's stored-auth routing is env-driven —
+// GH_HOST selects the host and GH_CONFIG_DIR redirects the config dir (both
+// actively read on the `auth token` path; Fix Round 1 audit) — so both seeded
+// values must ARRIVE, while token-shaped host vars must NOT.
+test('gh auth token subprocess env carries GH_HOST/GH_CONFIG_DIR routing, drops credentials', () => {
   const sp = makeSuperpowersRoot();
   const { home, cleanup } = makeTempHome();
   try {
-    const runner = new FakeCommandRunner((command, args) => {
+    const GH_HOST_SEED = 'github.example.com';
+    const GH_CONFIG_DIR_SEED = '/tmp/quorum-gh-cfg-audit';
+    const runner = new FakeCommandRunner((command, args, options) => {
       if (command === 'gh' && args[0] === 'auth' && args[1] === 'token') {
-        return { status: 0, stdout: 'gho_from_gh_cli\n', stderr: '' };
+        // Succeed ONLY when the stored-auth routing arrived in the env: the
+        // real gh resolves host/config-dir from exactly these vars.
+        if (
+          options?.env?.['GH_HOST'] === GH_HOST_SEED &&
+          options?.env?.['GH_CONFIG_DIR'] === GH_CONFIG_DIR_SEED
+        ) {
+          return { status: 0, stdout: 'gho_from_gh_cli\n', stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'gh: routing env missing' };
       }
       return { status: 0, stdout: '', stderr: '' };
     });
@@ -842,10 +853,16 @@ test('gh auth token subprocess env drops host credentials (base allowlist only)'
       {
         ...clearedAuthEnv(),
         SUPERPOWERS_ROOT: sp.root,
+        GH_HOST: GH_HOST_SEED,
+        GH_CONFIG_DIR: GH_CONFIG_DIR_SEED,
+        // Hostile token-shaped vars the adapter chain does NOT read (so the
+        // `gh auth token` fallback still runs); the chain vars GH_TOKEN /
+        // GITHUB_TOKEN / COPILOT_GITHUB_TOKEN stay cleared above.
+        GH_ENTERPRISE_TOKEN: 'hostile-enterprise',
+        GITHUB_ENTERPRISE_TOKEN: 'hostile-enterprise2',
         OPENAI_API_KEY: 'hostile-openai',
         ANTHROPIC_API_KEY: 'hostile-anthropic',
         GEMINI_API_KEY: 'hostile-gemini',
-        KIMI_MODEL_API_KEY: 'hostile-kimi',
         AWS_SECRET_ACCESS_KEY: 'hostile-aws',
       },
       () => {
@@ -855,20 +872,26 @@ test('gh auth token subprocess env drops host credentials (base allowlist only)'
     const ghCall = runner.calls.find((c) => c.command === 'gh');
     expect(ghCall).toBeDefined();
     const env = ghCall?.options?.env ?? {};
+    // Stored-auth routing arrives (this is what makes the fake succeed, and
+    // what a host-scoped gh setup needs at runtime).
+    expect(env['GH_HOST']).toBe(GH_HOST_SEED);
+    expect(env['GH_CONFIG_DIR']).toBe(GH_CONFIG_DIR_SEED);
+    // Token-shaped host vars and the provider bundle do not.
     for (const name of [
+      'GH_TOKEN',
+      'GITHUB_TOKEN',
+      'GH_ENTERPRISE_TOKEN',
+      'GITHUB_ENTERPRISE_TOKEN',
+      'COPILOT_GITHUB_TOKEN',
       'OPENAI_API_KEY',
       'ANTHROPIC_API_KEY',
       'GEMINI_API_KEY',
-      'KIMI_MODEL_API_KEY',
       'AWS_SECRET_ACCESS_KEY',
     ]) {
       expect(env[name]).toBeUndefined();
     }
-    // No copilot extras: the base projection is all gh gets. PATH proves it
-    // carries the (allowlisted) mutated host PATH including the fake-bin dir;
-    // the resolved token itself must not be echoed into the subprocess env.
+    // PATH survives the projection (carries the fake-bin dir).
     expect(env['PATH']).toContain(FAKE_BIN_DIR);
-    expect(env['COPILOT_GITHUB_TOKEN']).toBeUndefined();
   } finally {
     cleanup();
     sp.cleanup();

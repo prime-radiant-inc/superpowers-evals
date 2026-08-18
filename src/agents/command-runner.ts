@@ -9,7 +9,11 @@ import { spawnSync } from 'node:child_process';
 export interface CommandOptions {
   // Working directory for the child process.
   readonly cwd?: string;
-  // Full environment for the child (compose with envSnapshot() at the call site).
+  // Environment for the child. WARNING: omitted (undefined) means spawnSync
+  // inherits the FULL parent env — including the host provider bundle — so a
+  // provisioning caller must always pass an explicit, surface-specific
+  // projection (e.g. provisionSubprocessEnv() plus adapter extras), never
+  // envSnapshot() and never nothing.
   readonly env?: Readonly<Record<string, string | undefined>>;
   // Data written to the child's stdin (e.g. an API key piped to `codex login`).
   readonly input?: string;

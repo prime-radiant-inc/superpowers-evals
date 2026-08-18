@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type {
+  CommandOptions,
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
@@ -7,10 +8,18 @@ import { WindowsHost } from '../src/agents/windows-host.ts';
 import { RemoteConfigSchema } from '../src/contracts/os-target.ts';
 
 class FakeRunner implements CommandRunner {
-  calls: { command: string; args: string[] }[] = [];
+  calls: {
+    command: string;
+    args: string[];
+    options?: CommandOptions | undefined;
+  }[] = [];
   result: CommandResult = { status: 0, stdout: '', stderr: '' };
-  run(command: string, args: readonly string[]): CommandResult {
-    this.calls.push({ command, args: [...args] });
+  run(
+    command: string,
+    args: readonly string[],
+    options?: CommandOptions,
+  ): CommandResult {
+    this.calls.push({ command, args: [...args], options });
     return this.result;
   }
 }
@@ -72,6 +81,61 @@ describe('WindowsHost', () => {
     expect(localIdx).toBeLessThan(destIdx);
     // Must NOT contain backslash form
     expect(args).not.toContain('user@127.0.0.1:C:\\dst');
+  });
+});
+
+// F13 env scoping (Fix Round 1): every WindowsHost subprocess must pass an
+// explicit env — omitted CommandRunner options mean spawnSync's env is
+// undefined and the child INHERITS THE FULL PARENT ENV (the whole provider
+// bundle). All three methods (ssh, scpFrom, scpTo) run on the non-secret
+// provision allowlist. The SSH password rides argv via `sshpass -p` (never
+// SSHPASS/env) and the password env itself must NOT survive into the child.
+describe('WindowsHost env isolation (F13)', () => {
+  test('ssh/scpFrom/scpTo pass an allowlisted env: no password env, no host credentials, PATH survives', () => {
+    Bun.env['WIN_EVAL_PASSWORD'] = 'password';
+    const HOSTILE = [
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+    ];
+    const saved: Record<string, string | undefined> = {};
+    for (const name of HOSTILE) {
+      saved[name] = Bun.env[name];
+      Bun.env[name] = `hostile-${name}`;
+    }
+    try {
+      const r = new FakeRunner();
+      const host = new WindowsHost(remote, r);
+      host.ssh('whoami');
+      host.scpFrom('C:\\eval-runs\\x\\w', '/tmp/out');
+      host.scpTo('/tmp/x', 'C:\\dst');
+      expect(r.calls.length).toBe(3);
+      for (const call of r.calls) {
+        // An explicit env must be present at all — omitted options mean
+        // spawnSync inherits the parent env wholesale.
+        const env = call.options?.env;
+        expect(env).toBeDefined();
+        // The password env feeds `sshpass -p` argv; it must never leak into
+        // the child env (and SSHPASS is not used — auth is argv-only).
+        expect(env?.['WIN_EVAL_PASSWORD']).toBeUndefined();
+        expect(env?.['SSHPASS']).toBeUndefined();
+        for (const name of HOSTILE) {
+          expect(env?.[name]).toBeUndefined();
+        }
+        // The one var this surface actively needs survives: sshpass resolves
+        // `ssh` via the child PATH.
+        expect(env?.['PATH']).toBe(Bun.env['PATH']);
+        // The password still rides argv (unchanged delivery mechanism).
+        expect(call.args).toContain('-p');
+        expect(call.args).toContain('password');
+      }
+    } finally {
+      for (const name of HOSTILE) {
+        if (saved[name] === undefined) delete Bun.env[name];
+        else Bun.env[name] = saved[name];
+      }
+    }
   });
 });
 
