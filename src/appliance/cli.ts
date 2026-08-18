@@ -15,6 +15,7 @@ import { importBundle } from './import.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
+import { prune as pruneResults } from './prune.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
 import type { LoadedApplianceConfig } from './types.ts';
 
@@ -47,6 +48,11 @@ export interface ImportCommandArgs extends BaseCommandArgs {
   readonly bundleDir: string;
 }
 
+export interface PruneCommandArgs extends BaseCommandArgs {
+  readonly apply: boolean;
+  readonly olderThanDays: number;
+}
+
 export type ApplianceActionResult = unknown;
 
 export interface ApplianceActions {
@@ -76,6 +82,9 @@ export interface ApplianceActions {
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
   readonly import: (
     args: ImportCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly prune: (
+    args: PruneCommandArgs,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
 }
 
@@ -382,6 +391,13 @@ function defaultActions(): ApplianceActions {
       const loaded = loadApplianceConfig(undefined, { ensureState: true });
       return importBundle(loaded, { bundleDir: args.bundleDir });
     },
+    prune: async (args) => {
+      const loaded = loadApplianceConfig(undefined, { ensureState: true });
+      return pruneResults(loaded, {
+        apply: args.apply,
+        olderThanDays: args.olderThanDays,
+      });
+    },
   };
 }
 
@@ -592,6 +608,33 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
       const args = { ...commandOptions(options), bundleDir };
       return handleAction(args, resolvedDeps, () => actions.import(args));
     });
+
+  program
+    .command('prune')
+    .description(
+      'quarantine incomplete, unreferenced run dirs (dry-run unless --apply)',
+    )
+    .option('--json', 'emit JSON')
+    .option(
+      '--apply',
+      'move candidates to state/quarantine instead of just reporting',
+    )
+    .option(
+      '--older-than-days <days>',
+      'only consider directories untouched for at least this many days',
+      (v: string) => Number.parseInt(v, 10),
+      7,
+    )
+    .action(
+      (options: JsonOption & { apply?: boolean; olderThanDays?: number }) => {
+        const args = {
+          ...commandOptions(options),
+          apply: options.apply ?? false,
+          olderThanDays: options.olderThanDays ?? 7,
+        };
+        return handleAction(args, resolvedDeps, () => actions.prune(args));
+      },
+    );
 
   return program;
 }

@@ -29,6 +29,7 @@ function noopActions(
     show: async () => ({ ok: true }),
     costs: async () => ({ ok: true }),
     import: async () => ({ ok: true }),
+    prune: async () => ({ ok: true }),
     ...overrides,
   };
 }
@@ -215,6 +216,35 @@ test('the removed --force option is rejected loudly by the actual CLI', () => {
   );
   expect(proc.status).not.toBe(0);
   expect(`${proc.stderr}${proc.stdout}`).toContain("unknown option '--force'");
+});
+
+test('prune defaults to a dry-run with a 7-day floor and forwards --apply', async () => {
+  // Fresh program per parse: commander keeps option state across parseAsync
+  // calls, which would leak --apply from one invocation into the next.
+  const calls: unknown[] = [];
+  const parsePrune = async (extra: readonly string[]): Promise<void> => {
+    const program = createApplianceProgram({
+      stdout: () => undefined,
+      stderr: () => undefined,
+      actions: noopActions({
+        prune: async (args) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      }),
+    });
+    await program.parseAsync(['node', 'evals-appliance', 'prune', ...extra]);
+  };
+
+  await parsePrune([]);
+  await parsePrune(['--apply']);
+  await parsePrune(['--apply', '--older-than-days', '14']);
+
+  expect(calls).toEqual([
+    { json: false, apply: false, olderThanDays: 7 },
+    { json: false, apply: true, olderThanDays: 7 },
+    { json: false, apply: true, olderThanDays: 14 },
+  ]);
 });
 
 test('run forwards scenario and coding agent with appliance options', async () => {

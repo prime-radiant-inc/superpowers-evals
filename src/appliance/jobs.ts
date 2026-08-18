@@ -306,17 +306,13 @@ export function readJobById(
   return readJobDirStrict(loaded, jobId);
 }
 
-// Exact artifacts.run_id resolution. Unlike readJob, this never consults job
-// ids, so a run_id that happens to equal an unrelated job's id cannot resolve
-// that job. Zero claimants throw job_not_found — the only error that means
-// absence. Multiple claimants or any malformed job directory fail closed as
-// config_invalid: absence cannot be proven over ambiguous or corrupt state,
-// which needs manual repair, not a guess.
-export function readJobByRunId(
-  loaded: LoadedApplianceConfig,
-  runId: string,
-): JobRecord {
-  const matches: JobRecord[] = [];
+// Strict enumeration of every job record in the directory namespace, under
+// the same integrity boundary as the exact lookups: symlinked entries and
+// malformed job directories fail closed as config_invalid, because a record
+// that cannot be read may have claimed anything. Shared by exact run-id
+// resolution and prune's reference collection.
+export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
+  const jobs: JobRecord[] = [];
   if (existsSync(loaded.paths.jobs)) {
     for (const entry of readdirSync(loaded.paths.jobs, {
       withFileTypes: true,
@@ -327,12 +323,25 @@ export function readJobByRunId(
       if (!entry.isDirectory()) {
         continue;
       }
-      const job = readJobDirStrict(loaded, entry.name);
-      if (job.artifacts.run_id === runId) {
-        matches.push(job);
-      }
+      jobs.push(readJobDirStrict(loaded, entry.name));
     }
   }
+  return jobs;
+}
+
+// Exact artifacts.run_id resolution. Unlike readJob, this never consults job
+// ids, so a run_id that happens to equal an unrelated job's id cannot resolve
+// that job. Zero claimants throw job_not_found — the only error that means
+// absence. Multiple claimants or any malformed job directory fail closed as
+// config_invalid: absence cannot be proven over ambiguous or corrupt state,
+// which needs manual repair, not a guess.
+export function readJobByRunId(
+  loaded: LoadedApplianceConfig,
+  runId: string,
+): JobRecord {
+  const matches = readAllJobsStrict(loaded).filter(
+    (job) => job.artifacts.run_id === runId,
+  );
   if (matches.length > 1) {
     const ids = matches.map((job) => job.job_id).join(', ');
     throw new ApplianceError(

@@ -246,6 +246,36 @@ appliance-resolved ref nor run against the blessed bundle. Treat
 `origin.rev_recovery` as the confidence marker: `inferred_superpowers_sha` is a
 neighbour's sha, not evidence about the run itself.
 
+## Pruning Incomplete Run Dirs
+
+Interrupted or abandoned runs leave directories with no `verdict.json` that
+nothing can read — the dashboard and `quorum show` both ignore them. Prune
+quarantines them:
+
+```bash
+evals-appliance prune --json                 # dry-run report (default)
+evals-appliance prune --apply --json         # move candidates to state/quarantine/
+evals-appliance prune --apply --older-than-days 14
+```
+
+A directory is a candidate only when ALL of these hold: it sits directly under
+the results root, it has no `verdict.json` (completed runs are never pruned —
+their retention waits for an explicit archive/retention contract), its mtime is
+older than the age floor (default 7 days), and nothing references it — no batch
+`results.jsonl` record, no appliance job record, and no mention anywhere under
+`campaigns/` (a fail-closed substring scan, so campaign-referenced runs stay
+protected as the campaign kernel lands). Stale `.importing-*` stage dirs from
+crashed imports are candidates too. Reference metadata that cannot be read —
+an unparseable batch record or a corrupt job record under `state/jobs` — makes
+prune refuse to plan at all (`config_invalid`) rather than guess; repair the
+record and rerun.
+
+`--apply` holds `run.lock` (it refuses with `lock_busy` while a batch or import
+is live) and **moves** candidates to `state/quarantine/` — it never deletes.
+Inspect quarantined dirs there; restore one by moving it back. Final deletion
+of a quarantined directory is a manual operator decision, after inspection,
+with `rm -rf` typed by a human who has looked at it.
+
 ## Dashboard
 
 The dashboard is read-only and must not submit or stop jobs:
