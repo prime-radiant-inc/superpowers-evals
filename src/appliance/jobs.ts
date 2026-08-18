@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   statSync,
@@ -11,6 +12,7 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
 import { atomicWriteJson, mkdirPrivate, readJsonFile } from './fs.ts';
+import { provenancePath } from './provenance.ts';
 import {
   type ApplianceCommandKind,
   type JobRecord,
@@ -256,17 +258,49 @@ function readJobDirStrict(
       `job directory ${dirName} holds a record for job_id ${job.job_id}; repair state/jobs manually`,
     );
   }
+  // The provenance field is record-controlled; anything acting on it (like
+  // import's terminal-provenance retirement) would follow a redirected path
+  // wherever it points — including at landed evidence. Exact lookups only
+  // accept records carrying the canonical derived path.
+  const canonical = provenancePath(loaded, job.job_id);
+  if (job.artifacts.provenance !== canonical) {
+    throw new ApplianceError(
+      'config_invalid',
+      'job',
+      `job ${job.job_id} record points provenance at ${job.artifacts.provenance} (expected ${canonical}); repair state/jobs manually`,
+    );
+  }
   return job;
 }
 
+// A symlink where a job directory belongs is corrupt state for exact
+// lookups: following it would accept a record from outside the integrity
+// boundary, while skipping it would fake absence. Both exact paths reject
+// it the same way, so they can never disagree about the same entry.
+function rejectSymlinkedJobDir(name: string): never {
+  throw new ApplianceError(
+    'config_invalid',
+    'job',
+    `state/jobs entry ${name} is a symlink; repair state/jobs manually`,
+  );
+}
+
 // Exact job-id lookup in the directory namespace — no artifact scan, no
-// generic fallback. An absent directory is null; a directory that exists but
-// is malformed fails closed as config_invalid, because it can prove nothing.
+// generic fallback, and symlinks are never followed. An absent (or
+// non-directory) entry is null; a symlink or a directory that exists but is
+// malformed fails closed as config_invalid, because it can prove nothing.
 export function readJobById(
   loaded: LoadedApplianceConfig,
   jobId: string,
 ): JobRecord | null {
-  if (!existsSync(jobDir(loaded, jobId))) {
+  const stats = lstatSync(jobDir(loaded, jobId), { throwIfNoEntry: false });
+  if (stats === undefined) {
+    return null;
+  }
+  if (stats.isSymbolicLink()) {
+    rejectSymlinkedJobDir(jobId);
+  }
+  if (!stats.isDirectory()) {
     return null;
   }
   return readJobDirStrict(loaded, jobId);
@@ -287,6 +321,9 @@ export function readJobByRunId(
     for (const entry of readdirSync(loaded.paths.jobs, {
       withFileTypes: true,
     })) {
+      if (entry.isSymbolicLink()) {
+        rejectSymlinkedJobDir(entry.name);
+      }
       if (!entry.isDirectory()) {
         continue;
       }

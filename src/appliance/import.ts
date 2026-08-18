@@ -275,8 +275,10 @@ function reserveImportJob(
   // Retire any terminal provenance BEFORE the demotion below: a nonterminal
   // record must never sit next to terminal success evidence. State-only —
   // landed run bytes are never touched — and finishImportJob rewrites the
-  // provenance after a successful landing.
-  rmSync(base.artifacts.provenance, { force: true });
+  // provenance after a successful landing. The path is DERIVED, never taken
+  // from the record: a stored field is record-controlled and must not steer
+  // a delete (exact lookup also rejects noncanonical fields upstream).
+  rmSync(provenancePath(loaded, base.job_id), { force: true });
   const job = updateJob(loaded, base.job_id, (current) => ({
     ...current,
     status: 'running' as const,

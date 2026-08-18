@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +21,10 @@ import {
   readJobByRunId,
   updateJob,
 } from '../src/appliance/jobs.ts';
-import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import type {
+  JobRecord,
+  LoadedApplianceConfig,
+} from '../src/appliance/types.ts';
 
 function loaded(): LoadedApplianceConfig {
   const root = mkdtempSync(join(tmpdir(), 'appliance-jobs-'));
@@ -231,6 +235,71 @@ test('readJobById fails closed on a directory missing its job.json or holding a 
     () => readJobById(cfg, 'job-20260818T000000Z-beef'),
     'config_invalid',
   );
+});
+
+// A symlinked job-directory entry: link name is a plausible job id and the
+// target holds an identity-valid record (job_id equals the LINK name), so
+// following it would accept the record while a Dirent scan would skip it.
+function plantSymlinkedJobDir(
+  cfg: LoadedApplianceConfig,
+  linkName: string,
+  runId: string | null,
+): void {
+  const target = join(cfg.config.root, 'detached-job-payload');
+  mkdirSync(target, { recursive: true });
+  const donor = importJob(cfg);
+  const record = JSON.parse(
+    readFileSync(join(cfg.paths.jobs, donor.job_id, 'job.json'), 'utf8'),
+  ) as JobRecord;
+  writeFileSync(
+    join(target, 'job.json'),
+    JSON.stringify({
+      ...record,
+      job_id: linkName,
+      artifacts: { ...record.artifacts, run_id: runId },
+    }),
+  );
+  symlinkSync(target, join(cfg.paths.jobs, linkName));
+}
+
+test('readJobByRunId fails closed on a symlinked job-directory entry instead of skipping it', () => {
+  const cfg = loaded();
+  plantSymlinkedJobDir(cfg, 'job-20260818T000000Z-link', 'target-run');
+
+  expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
+});
+
+test('readJobById fails closed on a symlinked job directory instead of following it', () => {
+  const cfg = loaded();
+  plantSymlinkedJobDir(cfg, 'job-20260818T000000Z-link', null);
+
+  expectCode(
+    () => readJobById(cfg, 'job-20260818T000000Z-link'),
+    'config_invalid',
+  );
+});
+
+test('exact lookups fail closed on a record whose provenance path is noncanonical', () => {
+  const cfg = loaded();
+  const job = importJob(cfg);
+  claimRun(cfg, job.job_id, 'target-run');
+  // An identity-valid record whose provenance field was redirected: trusting
+  // it would let retirement delete whatever the field points at.
+  const recordPath = join(cfg.paths.jobs, job.job_id, 'job.json');
+  const record = JSON.parse(readFileSync(recordPath, 'utf8')) as JobRecord;
+  writeFileSync(
+    recordPath,
+    JSON.stringify({
+      ...record,
+      artifacts: {
+        ...record.artifacts,
+        provenance: join(cfg.config.root, 'evals/results/victim/verdict.json'),
+      },
+    }),
+  );
+
+  expectCode(() => readJobByRunId(cfg, 'target-run'), 'config_invalid');
+  expectCode(() => readJobById(cfg, job.job_id), 'config_invalid');
 });
 
 test('readJobByRunId fails closed on a record whose job_id mismatches its directory name', () => {

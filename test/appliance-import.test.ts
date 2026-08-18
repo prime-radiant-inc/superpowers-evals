@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -498,6 +499,49 @@ test('a failed landing leaves no durable success claim; retry reuses the reserve
   expect(existsSync(join(destRun, 'verdict.json'))).toBe(true);
 });
 
+test('a record-redirected provenance path can never delete landed evidence', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  importBundle(cfg, { bundleDir: bundle });
+  const landedVerdict = join(
+    cfg.config.container.results_root,
+    RUN_ID,
+    'verdict.json',
+  );
+  const sentinel = readFileSync(landedVerdict, 'utf8');
+  // Craft the identity-valid record: provenance redirected at the landed
+  // verdict, status demoted so a re-import takes the heal path — where
+  // retirement would trust the field and delete the evidence.
+  const job = readJobByRunId(cfg, RUN_ID);
+  const recordPath = join(cfg.paths.jobs, job.job_id, 'job.json');
+  const recordBytes = readFileSync(recordPath, 'utf8');
+  const record = JSON.parse(recordBytes) as JobRecord;
+  const crafted = JSON.stringify({
+    ...record,
+    status: 'running',
+    artifacts: { ...record.artifacts, provenance: landedVerdict },
+  });
+  writeFileSync(recordPath, crafted);
+  const dirsBefore = countJobDirs(cfg);
+
+  const retry = importBundle(cfg, { bundleDir: bundle });
+  // The landed evidence is byte-for-byte intact:
+  expect(readFileSync(landedVerdict, 'utf8')).toBe(sentinel);
+  // The entry failed typed; nothing was retired, mutated, or landed:
+  expect(retry.imported).toBe(0);
+  expect(retry.healed).toBe(0);
+  expect(retry.failures[0]?.run_id).toBe(RUN_ID);
+  expect(retry.failures[0]?.code).toBe('config_invalid');
+  expect(retry.failures[0]?.message).toContain('provenance');
+  expect(readFileSync(recordPath, 'utf8')).toBe(crafted);
+  expect(countJobDirs(cfg)).toBe(dirsBefore);
+  // Later entries follow the corruption fail-closed rule — the crafted
+  // record poisons the scan for every entry, typed and non-aborting:
+  expect(retry.failed).toBe(2);
+  expect(retry.failures[1]?.run_id).toBe(RUN_ID_B);
+  expect(retry.failures[1]?.code).toBe('config_invalid');
+});
+
 test('re-landing a previously complete job retires its terminal provenance before demotion', () => {
   const cfg = loaded();
   const bundle = makeBundle();
@@ -776,6 +820,55 @@ test('a job directory with no job.json fails entries closed instead of becoming 
   );
   // No job was minted:
   expect(countJobDirs(cfg)).toBe(dirsBefore);
+});
+
+test('a symlinked job directory fails entries closed before any reservation or landing', () => {
+  const cfg = loaded();
+  const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
+  // A symlinked entry whose target holds an identity-valid record claiming
+  // RUN_ID: a scan that merely skips the link would report false absence and
+  // mint a duplicate claimant.
+  const target = join(cfg.config.root, 'detached-job-payload');
+  mkdirSync(target, { recursive: true });
+  const donor = createJob(cfg, {
+    kind: 'import',
+    superpowersRef: 'unknown',
+    argv: ['evals-appliance', 'import'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  const record = JSON.parse(
+    readFileSync(join(cfg.paths.jobs, donor.job_id, 'job.json'), 'utf8'),
+  ) as JobRecord;
+  writeFileSync(
+    join(target, 'job.json'),
+    JSON.stringify({
+      ...record,
+      job_id: 'job-20260818T000000Z-link',
+      artifacts: { ...record.artifacts, run_id: RUN_ID },
+    }),
+  );
+  symlinkSync(target, join(cfg.paths.jobs, 'job-20260818T000000Z-link'));
+  const dirsBefore = countJobDirs(cfg);
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  // Symlinked state is corrupt state: absence is unprovable for any entry,
+  // so each fails as its own typed failure, without aborting the loop:
+  expect(result.imported).toBe(0);
+  expect(result.failed).toBe(2);
+  expect(result.failures.map((f) => f.run_id)).toEqual([RUN_ID, RUN_ID_B]);
+  for (const failure of result.failures) {
+    expect(failure.code).toBe('config_invalid');
+    expect(failure.message).toContain('symlink');
+  }
+  // No reservation, landing, or mutation happened:
+  expect(countJobDirs(cfg)).toBe(dirsBefore);
+  expect(countJobsForRun(cfg, RUN_ID)).toBe(0);
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID_B))).toBe(
+    false,
+  );
 });
 
 test('a mismatched record claiming the run cannot redirect recording into another job', () => {
