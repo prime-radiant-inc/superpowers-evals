@@ -503,8 +503,10 @@ waiting to happen.
 Every verb emits **one** JSON record to `QUORUM_RECORD_SINK`
 (`src/check/record.ts`): `{check, args, negated, passed, detail}`. The `phase`
 (`pre`/`post`) comes from quorum, not the verb (`src/checks/index.ts`). The
-record's `check` field is the **sub-verb** name (e.g. `skill-called`), never the
-wrapper `check-transcript`. An empty detail (`''`) is normalized to `null`.
+record's `check` field is the **sub-verb** name (e.g. `skill-called`), not the
+wrapper `check-transcript` — with one exception: `not check-transcript <verb>`
+records under the **wrapper** name `check-transcript` with `negated: true` and
+the inner verb as `args[0]`. An empty detail (`''`) is normalized to `null`.
 
 ### Expected-check manifests
 

@@ -523,3 +523,17 @@ test('checkScenario flags a stale manifest and passes a fresh one', () => {
   expect(checkScenario(dir).some((p) => p.includes('stale'))).toBe(true);
   rmSync(root, { recursive: true, force: true });
 });
+
+test('checkScenario flags an unparseable manifest instead of throwing', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
+  // Corrupt the committed manifest: readManifest's JSON.parse throws
+  // SyntaxError — validateManifest must report it as a problem string, not
+  // let it escape and abort the checkScenario sweep (and every scenario
+  // after this one).
+  writeFileSync(join(dir, 'checks-manifest.json'), '{ corrupt');
+  const problems = checkScenario(dir);
+  expect(problems.some((p) => p.includes('unparseable'))).toBe(true);
+  rmSync(root, { recursive: true, force: true });
+});

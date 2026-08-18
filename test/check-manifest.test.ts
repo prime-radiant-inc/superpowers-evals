@@ -89,6 +89,7 @@ describe('record-emission characterization (pins extractor rules)', () => {
       check: 'file-exists',
       args: ['present.txt'],
       negated: false,
+      passed: true,
       phase: 'post',
     });
   });

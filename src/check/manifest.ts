@@ -259,9 +259,14 @@ export function extractManifest(checksShPath: string): CheckManifest {
   const counted = new Map<string, ManifestEntry>();
   for (const line of functionBodies(text)) {
     // The bash no-op builtin, used by pure-AC scenarios as an empty body
-    // placeholder (`post() { : }`). It emits no check record at runtime, so
-    // it contributes no entry. (Corpus: spec-targets-wrong-component,
-    // spec-writing-blind-spot.)
+    // placeholder — the no-op must sit on its own line inside a multiline
+    // body (the one-line `post() { : }` form is rejected above, since the
+    // declaration line must end at its `{`):
+    //   post() {
+    //       :
+    //   }
+    // It emits no check record at runtime, so it contributes no entry.
+    // (Corpus: spec-targets-wrong-component, spec-writing-blind-spot.)
     if (line.tokens.length === 1 && line.tokens[0] === ':') continue;
     const { check, args, negated } = toEntryKeyParts(line.tokens);
     const wild = line.rawArgsHaveDollar;

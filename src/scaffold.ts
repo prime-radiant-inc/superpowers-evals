@@ -19,6 +19,7 @@ import {
 } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { ZodError } from 'zod';
 import { FS_VERBS } from './check/dispatch.ts';
 import {
   extractManifest,
@@ -243,6 +244,16 @@ function validateManifest(scenarioDir: string): string[] {
   } catch (e) {
     if (e instanceof ManifestExtractionError)
       return [`manifest extraction: ${e.message}`];
+    // readManifest throws SyntaxError (bad JSON) or ZodError (valid JSON,
+    // wrong shape) on a corrupted committed manifest. Report it as a
+    // problem string — same shape as missing/stale — so one bad file
+    // can't crash `quorum check` and abort validation of every
+    // remaining scenario.
+    if (e instanceof SyntaxError || e instanceof ZodError) {
+      return [
+        `checks-manifest.json unparseable: ${e.message} (run: quorum check --update-manifests)`,
+      ];
+    }
     throw e;
   }
 }
