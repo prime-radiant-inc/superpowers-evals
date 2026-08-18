@@ -12,7 +12,6 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { backupCredential } from '../agents/agy-creds.ts';
 import { killRunTmuxServer } from '../agents/agy-teardown.ts';
 import { AgyRateLimitWatcher } from '../agents/agy-watch.ts';
 import {
@@ -1624,15 +1623,15 @@ async function runInnerBody(
 
   writePhase(runDir, 'agent', identity);
 
-  // antigravity: agy reads auth from the live, token-rotating ~/.gemini/
-  // oauth_creds.json. A SIGKILL/tmux-kill during a refresh can corrupt it and
-  // brick the shared account — back it up before the run and verify/restore in a
-  // finally (best-effort, restore only if the live file is missing or corrupt).
-  // A live AgyRateLimitWatcher tails the run's agy.log during the drive and, on
-  // a confirmed Code Assist 429, tears down gauntlet's private tmux server so the
-  // cell fails fast instead of burning its full budget.
+  // antigravity: the run's agy operates ONLY on the per-run seeded token
+  // inside the throwaway home (HOME + --gemini_dir pinned by provisioning and
+  // the launcher), so a mid-run kill can no longer corrupt any operator
+  // credential — the old host ~/.gemini backup/restore path is gone with the
+  // host-credential exposure it worked around. A live AgyRateLimitWatcher
+  // tails the run's agy.log during the drive and, on a confirmed Code Assist
+  // 429, tears down gauntlet's private tmux server so the cell fails fast
+  // instead of burning its full budget.
   const isAntigravity = cfg.normalizer === 'antigravity';
-  const credBackup = isAntigravity ? backupCredential() : null;
   let watcher: AgyRateLimitWatcher | null = null;
   if (isAntigravity) {
     const agyLog = join(configDir, 'agy.log');
@@ -1665,9 +1664,6 @@ async function runInnerBody(
   } finally {
     if (watcher !== null) {
       await watcher.stop();
-    }
-    if (credBackup !== null) {
-      credBackup.verifyOrRestore();
     }
   }
 

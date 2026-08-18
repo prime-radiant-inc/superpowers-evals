@@ -4,6 +4,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -20,7 +21,7 @@ import {
   AntigravityAgent,
   excludeAntigravityProjectMarker,
   prepareAntigravityLaunchCwd,
-  seedAgyOauthCredentials,
+  seedAgyRuntimeToken,
   setAgyWhichForTesting,
   stageAntigravityPluginSource,
   writeAntigravitySettings,
@@ -35,10 +36,11 @@ import { makeTempHome } from './provision-helpers.ts';
 // stub the probe to "present" for the provisioning tests; the dedicated
 // which-guard test overrides it to "absent".
 //
-// Also pin AGY_OAUTH_HOME to an isolated dir seeded with the C1 OAuth creds, so
-// provision tests exercise the seed WITHOUT reading the operator's real
-// ~/.gemini (a test-isolation violation — and on a host without the nested agy
-// token, a spurious ProvisionError). The dedicated C1 seed tests override
+// Also pin AGY_OAUTH_HOME to an isolated dir carrying the nested runtime
+// token, so provision tests exercise the seed WITHOUT reading the operator's
+// real ~/.gemini (a test-isolation violation — and on a host without the
+// nested agy token, a spurious ProvisionError). The flat Gemini-personal files
+// are present too, as never-copied decoys. The dedicated seed tests override
 // AGY_OAUTH_HOME within their own bodies via withAgyOauthHome.
 let agyOauthHomeFixture: string | undefined;
 let prevAgyOauthHome: string | undefined;
@@ -284,10 +286,18 @@ test('provision drives the expected agy subprocess calls (preflight then install
       expect(preflight?.options?.env?.['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe(
         'true',
       );
-      // The preflight --gemini_dir is throwaway: NOT the run config dir.
+      // F13: HOME/config routing pinned to the isolated run home, so agy
+      // cannot consult the operator's keyring or real ~/.gemini.
+      expect(preflight?.options?.env?.['HOME']).toBe(home.configDir);
+      expect(preflight?.options?.env?.['XDG_CONFIG_HOME']).toBe(
+        join(home.configDir, '.config'),
+      );
+      // The preflight --gemini_dir is throwaway: NOT the run config dir — but
+      // it lives UNDER the isolated run home, never in the shared OS tmpdir.
       const preflightGeminiDir = geminiDirArg(preflight?.args ?? []);
       expect(preflightGeminiDir).toBeDefined();
       expect(preflightGeminiDir).not.toBe(join(home.configDir, '.gemini'));
+      expect(preflightGeminiDir?.startsWith(`${home.configDir}/`)).toBe(true);
 
       // 2. Plugin install against the real per-run --gemini_dir, cwd=configDir.
       // The install SOURCE is a CLEAN staged copy (excludes evals/.git/
@@ -307,7 +317,57 @@ test('provision drives the expected agy subprocess calls (preflight then install
       expect(install?.options?.env?.['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe(
         'true',
       );
+      expect(install?.options?.env?.['HOME']).toBe(home.configDir);
+      expect(install?.options?.env?.['XDG_CONFIG_HOME']).toBe(
+        join(home.configDir, '.config'),
+      );
     });
+  } finally {
+    cleanup();
+  }
+});
+
+// F13 final fix (IMPORTANT 3): the explicit per-run token must be validated
+// and seeded BEFORE any agy subprocess — the preflight previously ran first,
+// against the operator's real HOME, and could authenticate via the login
+// keyring even when the explicit token was absent.
+test('provision seeds the runtime token before any agy subprocess runs', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const runToken = join(
+    home.configDir,
+    '.gemini',
+    'antigravity-cli',
+    'antigravity-oauth-token',
+  );
+  const tokenPresentAtCall: boolean[] = [];
+  const preflightTokenSeen: boolean[] = [];
+  const runner = new FakeCommandRunner((command, args) => {
+    if (command === 'agy') {
+      tokenPresentAtCall.push(existsSync(runToken));
+      const geminiDir = geminiDirArg(args);
+      if (!isPluginInstall(args) && geminiDir !== undefined) {
+        preflightTokenSeen.push(
+          existsSync(
+            join(geminiDir, 'antigravity-cli', 'antigravity-oauth-token'),
+          ),
+        );
+      }
+    }
+    return happyResponder(command, args);
+  });
+  try {
+    withRoot(spRoot, () => {
+      new AntigravityAgent(ANTIGRAVITY_CONFIG).provision(home, runner);
+    });
+    // Both agy subprocesses (preflight, then install) ran strictly AFTER the
+    // run token was seeded into the isolated home.
+    expect(tokenPresentAtCall).toEqual([true, true]);
+    // The preflight's throwaway --gemini_dir carries the seeded explicit
+    // token too, so whichever location agy resolves (its --gemini_dir tree or
+    // $HOME/.gemini) it authenticates with the per-run token, never the
+    // operator keyring.
+    expect(preflightTokenSeen).toEqual([true]);
   } finally {
     cleanup();
   }
@@ -839,9 +899,10 @@ test('stageAntigravityPluginSource copies the plugin without the evals subtree',
 // C1 OAuth-creds seed (per-run-home-isolation spec §5C). agy reads its live
 // OAuth token from $HOME/.gemini/antigravity-cli/antigravity-oauth-token at
 // runtime (NOT oauth_creds.json — that is the Gemini-personal layout that agy
-// ignores). Once the agent runs under the throwaway $HOME (home_config_subdir
-// "."), provisioning must copy the real token from the REAL ~/.gemini (via
-// AGY_OAUTH_HOME) into configDir/.gemini or agy can't authenticate.
+// ignores and that carries an unrelated operator credential). Once the agent
+// runs under the throwaway $HOME (home_config_subdir "."), provisioning must
+// copy the real token from the REAL ~/.gemini (via AGY_OAUTH_HOME) into
+// configDir/.gemini or agy can't authenticate. ONLY that token is seeded.
 
 // Set AGY_OAUTH_HOME around `body`, restoring the prior value even on throw.
 function withAgyOauthHome(
@@ -865,7 +926,7 @@ function withAgyOauthHome(
   }
 }
 
-test('seedAgyOauthCredentials copies all three creds (incl. nested token) into configDir/.gemini at 0600', () => {
+test('seedAgyRuntimeToken seeds ONLY the nested runtime token, at 0600', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
   const oauthSource = srcHome.configDir;
@@ -875,6 +936,8 @@ test('seedAgyOauthCredentials copies all three creds (incl. nested token) into c
     join(oauthSource, 'antigravity-cli', 'antigravity-oauth-token'),
     'real-oauth-token-contents',
   );
+  // Flat Gemini-personal files at the source: agy ignores them and they carry
+  // an unrelated operator credential — they must NOT be copied.
   writeFileSync(
     join(oauthSource, 'oauth_creds.json'),
     '{"access_token":"tok"}',
@@ -886,9 +949,7 @@ test('seedAgyOauthCredentials copies all three creds (incl. nested token) into c
 
   try {
     withAgyOauthHome(oauthSource, () => {
-      const missing = seedAgyOauthCredentials(home.configDir);
-      // All three creds present at source -> nothing flagged missing.
-      expect(missing).toEqual([]);
+      expect(seedAgyRuntimeToken(home.configDir)).toBe(true);
       // The nested agy OAuth token must land under antigravity-cli/ at 0600.
       const tokenDst = join(
         home.configDir,
@@ -899,14 +960,9 @@ test('seedAgyOauthCredentials copies all three creds (incl. nested token) into c
       expect(existsSync(tokenDst)).toBe(true);
       expect(readFileSync(tokenDst, 'utf8')).toBe('real-oauth-token-contents');
       expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
-      // The flat Gemini-shared creds also land at 0600.
+      // The flat Gemini-personal files never enter the run home.
       for (const name of ['oauth_creds.json', 'google_accounts.json']) {
-        const dst = join(home.configDir, '.gemini', name);
-        expect(existsSync(dst)).toBe(true);
-        expect(readFileSync(dst, 'utf8')).toBe(
-          readFileSync(join(oauthSource, name), 'utf8'),
-        );
-        expect(statSync(dst).mode & 0o777).toBe(0o600);
+        expect(existsSync(join(home.configDir, '.gemini', name))).toBe(false);
       }
     });
   } finally {
@@ -915,13 +971,13 @@ test('seedAgyOauthCredentials copies all three creds (incl. nested token) into c
   }
 });
 
-test('seedAgyOauthCredentials tolerates missing sources (returns the absent names, no throw)', () => {
+test('seedAgyRuntimeToken reports a missing source token without throwing or writing', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
-  // Source dir exists but only carries oauth_creds.json (the nested token and
-  // google_accounts.json are absent). The helper itself only copies and
-  // reports — it never throws; the criticality policy (fail on a missing
-  // runtime token) lives in provision() and has its own tests in this file.
+  // Source dir exists but carries only a flat Gemini-personal file; the nested
+  // token is absent. The helper only copies and reports — it never throws; the
+  // criticality policy (fail before any agy subprocess) lives in provision()
+  // and has its own tests in this file.
   const oauthSource = srcHome.configDir;
   mkdirSync(oauthSource, { recursive: true });
   writeFileSync(
@@ -931,34 +987,9 @@ test('seedAgyOauthCredentials tolerates missing sources (returns the absent name
 
   try {
     withAgyOauthHome(oauthSource, () => {
-      let missing: string[] | undefined;
-      expect(() => {
-        missing = seedAgyOauthCredentials(home.configDir);
-      }).not.toThrow();
-      // The token (first in list) and google_accounts.json are absent; only
-      // oauth_creds.json was present and gets copied.
-      expect(missing).toEqual([
-        join('antigravity-cli', 'antigravity-oauth-token'),
-        'google_accounts.json',
-      ]);
-      // The present cred was still copied at 0600.
-      const copied = join(home.configDir, '.gemini', 'oauth_creds.json');
-      expect(existsSync(copied)).toBe(true);
-      expect(statSync(copied).mode & 0o777).toBe(0o600);
-      // The absent creds were not fabricated.
-      expect(
-        existsSync(join(home.configDir, '.gemini', 'google_accounts.json')),
-      ).toBe(false);
-      expect(
-        existsSync(
-          join(
-            home.configDir,
-            '.gemini',
-            'antigravity-cli',
-            'antigravity-oauth-token',
-          ),
-        ),
-      ).toBe(false);
+      expect(seedAgyRuntimeToken(home.configDir)).toBe(false);
+      // Nothing was written — not the token, and never the flat file.
+      expect(existsSync(join(home.configDir, '.gemini'))).toBe(false);
     });
   } finally {
     cleanup();
@@ -966,21 +997,12 @@ test('seedAgyOauthCredentials tolerates missing sources (returns the absent name
   }
 });
 
-test('seedAgyOauthCredentials tolerates an entirely-missing source dir', () => {
+test('seedAgyRuntimeToken tolerates an entirely-missing source dir', () => {
   const { home, cleanup } = makeTempHome();
   try {
     // Point AGY_OAUTH_HOME at a path that does not exist at all.
     withAgyOauthHome(join(home.workdir, 'no-such-gemini'), () => {
-      let missing: string[] | undefined;
-      expect(() => {
-        missing = seedAgyOauthCredentials(home.configDir);
-      }).not.toThrow();
-      // All three creds flagged (nested token first, then the flat files); nothing written.
-      expect(missing).toEqual([
-        join('antigravity-cli', 'antigravity-oauth-token'),
-        'oauth_creds.json',
-        'google_accounts.json',
-      ]);
+      expect(seedAgyRuntimeToken(home.configDir)).toBe(false);
       expect(existsSync(join(home.configDir, '.gemini'))).toBe(false);
     });
   } finally {
@@ -988,7 +1010,7 @@ test('seedAgyOauthCredentials tolerates an entirely-missing source dir', () => {
   }
 });
 
-test('provision seeds the C1 OAuth creds (incl. agy token) into configDir/.gemini', () => {
+test('provision seeds the runtime token into configDir/.gemini and nothing else', () => {
   const { home, cleanup } = makeTempHome();
   const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
   const spRoot = makeSpRoot(home);
@@ -1026,11 +1048,9 @@ test('provision seeds the C1 OAuth creds (incl. agy token) into configDir/.gemin
         expect(existsSync(tokenDst)).toBe(true);
         expect(readFileSync(tokenDst, 'utf8')).toBe('provisioned-oauth-token');
         expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
-        // The flat Gemini-shared creds also land at 0600.
+        // The flat Gemini-personal files at the source are NEVER copied.
         for (const name of ['oauth_creds.json', 'google_accounts.json']) {
-          const dst = join(home.configDir, '.gemini', name);
-          expect(existsSync(dst)).toBe(true);
-          expect(statSync(dst).mode & 0o777).toBe(0o600);
+          expect(existsSync(join(home.configDir, '.gemini', name))).toBe(false);
         }
       });
     });
@@ -1075,6 +1095,9 @@ test('provision throws ProvisionError when the agy runtime OAuth token is missin
         }
         expect(thrown).toBeInstanceOf(ProvisionError);
         expect(String(thrown)).toContain('antigravity-oauth-token');
+        // F13 (IMPORTANT 3): NO agy subprocess ran — the missing token fails
+        // provisioning before the preflight could reach for the keyring.
+        expect(runner.calls.length).toBe(0);
       });
     });
   } finally {
@@ -1098,9 +1121,11 @@ test('provision succeeds (silently) when only the incidental Gemini files are mi
   );
   const runner = new FakeCommandRunner(happyResponder);
   // Capture stderr around provision() so a "creds not seeded" fallback
-  // warning fails this test instead of dirtying the output.
+  // warning fails this test instead of dirtying the output. Save the EXACT
+  // original function reference (no .bind wrapper) so the finally-restore
+  // leaves process.stderr.write's identity untouched for later tests.
   const stderrWrites: string[] = [];
-  const realStderrWrite = process.stderr.write.bind(process.stderr);
+  const realStderrWrite = process.stderr.write;
 
   try {
     withRoot(spRoot, () => {
@@ -1140,6 +1165,102 @@ test('provision succeeds (silently) when only the incidental Gemini files are mi
   }
 });
 
+// F13 final fix (IMPORTANT 4): agy authenticates with the nested runtime
+// token ONLY. The flat Gemini-personal files (oauth_creds.json /
+// google_accounts.json) carry an UNRELATED operator credential and must never
+// reach the agent-readable run home, any subprocess env, or the provision
+// return — proven with sentinel secrets at the source.
+test('provision never copies the flat Gemini-personal files or leaks their sentinel secrets', () => {
+  const { home, cleanup } = makeTempHome();
+  const { home: srcHome, cleanup: srcCleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const oauthSource = srcHome.configDir;
+  const CREDS_SENTINEL = 'GEMINI-PERSONAL-SENTINEL-a1b2c3';
+  const ACCOUNTS_SENTINEL = 'GOOGLE-ACCOUNTS-SENTINEL-d4e5f6';
+  mkdirSync(join(oauthSource, 'antigravity-cli'), { recursive: true });
+  writeFileSync(
+    join(oauthSource, 'antigravity-cli', 'antigravity-oauth-token'),
+    'run-token',
+  );
+  writeFileSync(
+    join(oauthSource, 'oauth_creds.json'),
+    `{"access_token":"${CREDS_SENTINEL}"}`,
+  );
+  writeFileSync(
+    join(oauthSource, 'google_accounts.json'),
+    `{"active":"${ACCOUNTS_SENTINEL}"}`,
+  );
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withRoot(spRoot, () => {
+      withAgyOauthHome(oauthSource, () => {
+        const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
+        const env = agent.provision(home, runner);
+        // Neither flat file was copied into the run home.
+        expect(
+          existsSync(join(home.configDir, '.gemini', 'oauth_creds.json')),
+        ).toBe(false);
+        expect(
+          existsSync(join(home.configDir, '.gemini', 'google_accounts.json')),
+        ).toBe(false);
+        // Neither sentinel appears anywhere under the run home or workdir.
+        const treeFiles = (dir: string): string[] =>
+          existsSync(dir) ? readdirTree(dir) : [];
+        for (const file of [
+          ...treeFiles(home.configDir),
+          ...treeFiles(home.workdir),
+        ]) {
+          const content = readFileSync(file, 'utf8');
+          expect({
+            file,
+            hasSentinel: content.includes(CREDS_SENTINEL),
+          }).toEqual({ file, hasSentinel: false });
+          expect({
+            file,
+            hasSentinel: content.includes(ACCOUNTS_SENTINEL),
+          }).toEqual({ file, hasSentinel: false });
+        }
+        // No sentinel rides any subprocess env or the provision return.
+        for (const call of runner.calls) {
+          for (const value of Object.values(call.options?.env ?? {})) {
+            expect(value?.includes(CREDS_SENTINEL) ?? false).toBe(false);
+            expect(value?.includes(ACCOUNTS_SENTINEL) ?? false).toBe(false);
+          }
+        }
+        expect(JSON.stringify(env).includes(CREDS_SENTINEL)).toBe(false);
+        // The runtime token itself DID land, at 0600.
+        const tokenDst = join(
+          home.configDir,
+          '.gemini',
+          'antigravity-cli',
+          'antigravity-oauth-token',
+        );
+        expect(readFileSync(tokenDst, 'utf8')).toBe('run-token');
+        expect(statSync(tokenDst).mode & 0o777).toBe(0o600);
+      });
+    });
+  } finally {
+    cleanup();
+    srcCleanup();
+  }
+});
+
+// Recursively list every regular file under `dir` (test-local helper for the
+// sentinel scan).
+function readdirTree(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...readdirTree(full));
+    } else if (entry.isFile()) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 // F13 env scoping: both agy provisioning subprocesses (auth preflight + plugin
 // install) must run on the non-secret allowlist projection plus the agy extra —
 // the full provider bundle never reaches the third-party CLI.
@@ -1171,9 +1292,11 @@ test('provision subprocess env drops host credentials, carries the agy extra', (
         for (const name of HOSTILE) {
           expect(env[name]).toBeUndefined();
         }
-        // The agy extra arrives; PATH proves the base projection happened.
+        // The agy extra arrives; PATH proves the base projection happened;
+        // HOME is the ISOLATED run home, never the operator's.
         expect(env['AGY_CLI_DISABLE_AUTO_UPDATE']).toBe('true');
         expect(env['PATH']).toBe(process.env['PATH']);
+        expect(env['HOME']).toBe(home.configDir);
       }
     });
   } finally {

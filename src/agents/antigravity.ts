@@ -27,11 +27,18 @@ import { provisionSubprocessEnv } from './subprocess-env.ts';
 // per-run ANTIGRAVITY_CONFIG_DIR/.gemini tree so the agy CLI boots against an
 // authenticated, Superpowers-equipped, no-prompt Antigravity workspace.
 //
+// The explicit per-run runtime token (AGY_RUNTIME_OAUTH_TOKEN) is validated
+// and seeded FIRST — before any agy subprocess — and every agy subprocess
+// runs with HOME/config routing pinned to the isolated run home (F13), so agy
+// authenticates with the seeded token and can never consult the operator's
+// real ~/.gemini or per-login-user keyring.
+//
 // The setup has two subprocess interactions, both driven through the injected
 // CommandRunner so the hermetic gate stubs them:
-//   1. agy auth preflight: a throwaway --gemini_dir + --print "Reply with
-//      EXACTLY OK." that validates the Gemini Code Assist backend is reachable
-//      and not rate-limited, against isolated state we discard afterward.
+//   1. agy auth preflight: a throwaway --gemini_dir (under the run home,
+//      seeded with the per-run token) + --print "Reply with EXACTLY OK." that
+//      validates the Gemini Code Assist backend is reachable and not
+//      rate-limited, against isolated state we discard afterward.
 //   2. agy plugin install <SUPERPOWERS_ROOT> against the real per-run
 //      --gemini_dir, which copies the Superpowers plugin into the .gemini tree.
 // Everything else (configDir mkdir, plugin-file verification, settings.json) is
@@ -61,60 +68,47 @@ const REQUIRED_PLUGIN_FILES: readonly string[] = [
 // C1 OAuth-creds seed (spec docs/superpowers/specs/2026-06-15-per-run-home-
 // isolation.md §5C). agy reads its live OAuth token from
 // $HOME/.gemini/antigravity-cli/antigravity-oauth-token at RUNTIME — NOT from
-// oauth_creds.json (that file is Gemini-personal mode; agy ignores it). Once
-// the agent runs under the throwaway $HOME, that read would miss the operator's
-// token, so provisioning copies it from the REAL home into the per-run .gemini.
-// We keep oauth_creds.json + google_accounts.json in the list because they are
-// the shared .gemini auth layout for gemini.ts sibling and are harmless to
-// copy; but the nested antigravity-oauth-token is the one agy actually uses.
+// oauth_creds.json (that file is Gemini-personal mode; agy ignores it, and it
+// carries an UNRELATED operator credential, so it must never enter the
+// agent-readable run home). The nested token is the WHOLE runtime credential
+// contract: it is the only file seeded.
 export const AGY_RUNTIME_OAUTH_TOKEN = join(
   'antigravity-cli',
   'antigravity-oauth-token',
 );
-const AGY_OAUTH_CREDENTIAL_FILES: readonly string[] = [
-  AGY_RUNTIME_OAUTH_TOKEN,
-  'oauth_creds.json',
-  'google_accounts.json',
-];
 
-// Copy agy's live OAuth credential files from the REAL home's .gemini into the
-// per-run .gemini at mode 0600. The source home is AGY_OAUTH_HOME (the test /
-// operator override) else ~/.gemini.
-//
-// The critical file is AGY_RUNTIME_OAUTH_TOKEN — the nested ~500-byte token
-// that agy actually reads for authentication. oauth_creds.json and
-// google_accounts.json are included because they are the shared .gemini
-// Gemini-personal layout (copied by gemini.ts sibling) and harmless to carry,
-// but they do NOT authenticate agy on their own.
-//
-// This helper only copies and reports: it returns the credential paths
-// (relative to AGY_OAUTH_HOME) absent at the source and never throws. The
-// criticality policy lives in provision(), which fails on a missing runtime
-// token (F13: launching without it would leave agy reaching for the
-// operator's per-login-user keyring — a host credential) and tolerates the
-// two incidental files.
+// Copy agy's runtime OAuth token from the REAL home's .gemini into the per-run
+// .gemini at mode 0600. The source home is AGY_OAUTH_HOME (the test / operator
+// override) else ~/.gemini. Returns false when the source token is absent —
+// the criticality policy (fail before any agy subprocess) lives in
+// provision().
 // Bun's homedir() snapshots the REAL $HOME at startup and ignores quorum's own
 // per-subprocess HOME pin, so this always reads the operator's real ~/.gemini.
-export function seedAgyOauthCredentials(configDir: string): string[] {
+export function seedAgyRuntimeToken(configDir: string): boolean {
   const sourceHome = getEnv('AGY_OAUTH_HOME') ?? join(homedir(), '.gemini');
-  const destDir = join(configDir, '.gemini');
-  const missing: string[] = [];
-  for (const name of AGY_OAUTH_CREDENTIAL_FILES) {
-    const source = join(sourceHome, name);
-    if (!statSync(source, { throwIfNoEntry: false })?.isFile()) {
-      missing.push(name);
-      continue;
-    }
-    const dest = join(destDir, name);
-    // For nested paths (e.g. antigravity-cli/antigravity-oauth-token) the dest
-    // parent is <destDir>/antigravity-cli/, not destDir itself.
-    mkdirSync(dirname(dest), { recursive: true });
-    // writeFileSync's `mode` only applies on create; chmod after to enforce
-    // 0600 even when the file already existed.
-    writeFileSync(dest, readFileSync(source, 'utf8'), { mode: 0o600 });
-    chmodSync(dest, 0o600);
+  const source = join(sourceHome, AGY_RUNTIME_OAUTH_TOKEN);
+  if (!statSync(source, { throwIfNoEntry: false })?.isFile()) {
+    return false;
   }
-  return missing;
+  const dest = join(configDir, '.gemini', AGY_RUNTIME_OAUTH_TOKEN);
+  mkdirSync(dirname(dest), { recursive: true });
+  // writeFileSync's `mode` only applies on create; chmod after to enforce
+  // 0600 even when the file already existed.
+  writeFileSync(dest, readFileSync(source, 'utf8'), { mode: 0o600 });
+  chmodSync(dest, 0o600);
+  return true;
+}
+
+// The env every agy provisioning subprocess runs under (F13): the non-secret
+// provisioning allowlist with HOME and XDG config routing pinned to the
+// isolated run home, so agy resolves the seeded per-run token and can never
+// consult the operator's real ~/.gemini or per-login-user keyring state.
+function antigravitySubprocessEnv(configDir: string): Record<string, string> {
+  return provisionSubprocessEnv({
+    HOME: configDir,
+    XDG_CONFIG_HOME: join(configDir, '.config'),
+    AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+  });
 }
 
 // Env override for the parent of the visible-symlink workspace tree, and the
@@ -173,12 +167,30 @@ export class AntigravityAgent implements CodingAgent {
 
     mkdirSync(configDir, { recursive: true });
 
-    // 1. Auth preflight against throwaway state.
-    this.runAuthPreflight(runner);
+    // 1. C1 OAuth-creds seed, BEFORE any agy subprocess (F13). With
+    //    home_config_subdir ".", configDir IS the per-run throwaway home, so
+    //    configDir/.gemini == $HOME/.gemini — exactly where agy reads its
+    //    runtime credential (AGY_RUNTIME_OAUTH_TOKEN). The nested token is the
+    //    credential agy actually reads; running any agy subprocess without it
+    //    would leave agy reaching for the operator's per-login-user keyring —
+    //    a host credential the eval must never touch — so a missing source
+    //    token fails provisioning here, before the first subprocess.
+    if (!seedAgyRuntimeToken(configDir)) {
+      throw new ProvisionError(
+        `agy runtime OAuth token missing at source: ${AGY_RUNTIME_OAUTH_TOKEN} ` +
+          '(under AGY_OAUTH_HOME, else ~/.gemini). The per-run throwaway home ' +
+          'must carry this token; a keyring-only host must seed it explicitly ' +
+          'before running antigravity evals.',
+      );
+    }
 
-    // 2. agy plugin install against the real per-run --gemini_dir, cwd =
-    //    configDir, with auto-update disabled. Install from a CLEAN staged copy
-    //    (sans evals/.git/node_modules) rather than the raw SUPERPOWERS_ROOT, so
+    // 2. Auth preflight against throwaway state under the isolated run home.
+    this.runAuthPreflight(runner, configDir);
+
+    // 3. agy plugin install against the real per-run --gemini_dir, cwd =
+    //    configDir, with auto-update disabled and HOME/config routing pinned
+    //    to the isolated run home. Install from a CLEAN staged copy (sans
+    //    evals/.git/node_modules) rather than the raw SUPERPOWERS_ROOT, so
     //    agy's deep-copy never recurses into nested eval output.
     const geminiDir = join(configDir, '.gemini');
     const stagedPlugin = stageAntigravityPluginSource(superpowersRoot);
@@ -189,9 +201,7 @@ export class AntigravityAgent implements CodingAgent {
         [`--gemini_dir=${geminiDir}`, 'plugin', 'install', stagedPlugin],
         {
           cwd: configDir,
-          env: provisionSubprocessEnv({
-            AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
-          }),
+          env: antigravitySubprocessEnv(configDir),
         },
       );
     } finally {
@@ -203,7 +213,7 @@ export class AntigravityAgent implements CodingAgent {
       );
     }
 
-    // 3. Verify the required Superpowers plugin files landed.
+    // 4. Verify the required Superpowers plugin files landed.
     const pluginRoot = join(geminiDir, 'config', 'plugins', 'superpowers');
     const missing = REQUIRED_PLUGIN_FILES.filter(
       (rel) => !existsSync(join(pluginRoot, rel)),
@@ -214,28 +224,8 @@ export class AntigravityAgent implements CodingAgent {
       );
     }
 
-    // 4. Persist no-prompt settings for the isolated run.
+    // 5. Persist no-prompt settings for the isolated run.
     writeAntigravitySettings(configDir, workdir);
-
-    // 5. C1 OAuth-creds seed. With home_config_subdir ".", configDir IS the
-    //    per-run throwaway home, so configDir/.gemini == $HOME/.gemini — exactly
-    //    where agy reads its runtime credential (AGY_RUNTIME_OAUTH_TOKEN). Copy
-    //    the operator's creds from the REAL home so auth works under the
-    //    throwaway $HOME. The nested token is the credential agy actually
-    //    reads; launching without it would leave agy reaching for the
-    //    operator's per-login-user keyring — a host credential the agent under
-    //    test must never touch (F13) — so a missing source token fails
-    //    provisioning before launch. The two flat Gemini-layout files do not
-    //    authenticate agy and stay optional.
-    const missingCreds = seedAgyOauthCredentials(configDir);
-    if (missingCreds.includes(AGY_RUNTIME_OAUTH_TOKEN)) {
-      throw new ProvisionError(
-        `agy runtime OAuth token missing at source: ${AGY_RUNTIME_OAUTH_TOKEN} ` +
-          '(under AGY_OAUTH_HOME, else ~/.gemini). The per-run throwaway home ' +
-          'must carry this token; a keyring-only host must seed it explicitly ' +
-          'before running antigravity evals.',
-      );
-    }
 
     // NOTE: a pre-snapshot transcript assertion — the configDir transcripts must
     // be empty before the capture snapshot, else provisioning leaked a transcript
@@ -247,19 +237,32 @@ export class AntigravityAgent implements CodingAgent {
     return {};
   }
 
-  // Validate the Gemini Code Assist backend with a throwaway --gemini_dir so the
-  // real per-run config dir stays pristine. The synchronous CommandRunner has no
-  // timeout knob, so the live SpawnCommandRunner inherits the process default and
-  // the gate stubs the call entirely. This is a one-shot --print invocation (not
-  // a persistent/bidirectional process), so the synchronous seam models it
+  // Validate the Gemini Code Assist backend with a throwaway --gemini_dir so
+  // the real per-run .gemini stays pristine. The throwaway state lives UNDER
+  // the isolated run home (never the shared OS tmpdir) and is discarded
+  // afterward; the seeded per-run token is copied into it so that whichever
+  // location agy resolves — its --gemini_dir tree or $HOME/.gemini via the
+  // pinned HOME — it authenticates with the explicit per-run token, never the
+  // operator keyring. The synchronous CommandRunner has no timeout knob, so
+  // the live SpawnCommandRunner inherits the process default and the gate
+  // stubs the call entirely. This is a one-shot --print invocation (not a
+  // persistent/bidirectional process), so the synchronous seam models it
   // faithfully.
-  private runAuthPreflight(runner: CommandRunner): void {
-    const tmp = mkdtempSync(join(tmpdir(), 'quorum-antigravity-preflight-'));
+  private runAuthPreflight(runner: CommandRunner, configDir: string): void {
+    const tmp = mkdtempSync(join(configDir, 'agy-preflight-'));
     try {
       const cwd = join(tmp, 'cwd');
       mkdirSync(cwd, { recursive: true });
       const geminiDir = join(tmp, '.gemini');
       const logPath = join(tmp, 'agy.log');
+
+      // The run token was seeded before any agy subprocess (provision step 1);
+      // mirror it into the throwaway tree at the same 0600.
+      const runToken = join(configDir, '.gemini', AGY_RUNTIME_OAUTH_TOKEN);
+      const preflightToken = join(geminiDir, AGY_RUNTIME_OAUTH_TOKEN);
+      mkdirSync(dirname(preflightToken), { recursive: true });
+      writeFileSync(preflightToken, readFileSync(runToken), { mode: 0o600 });
+      chmodSync(preflightToken, 0o600);
 
       const result = runner.run(
         'agy',
@@ -275,9 +278,7 @@ export class AntigravityAgent implements CodingAgent {
         ],
         {
           cwd,
-          env: provisionSubprocessEnv({
-            AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
-          }),
+          env: antigravitySubprocessEnv(configDir),
         },
       );
 
@@ -428,9 +429,9 @@ function rstripDotBang(s: string): string {
 //
 // The live counterparts: AgyRateLimitWatcher (agy-watch.ts) tails the log mid-run
 // and fires killRunTmuxServer (agy-teardown.ts) on the first signal for early
-// teardown; backupCredential/verifyOrRestore (agy-creds.ts) guard the shared
-// OAuth token around the mid-run kill. This post-run scan is the verdict-layer
-// signal.
+// teardown. A mid-run kill touches only the per-run seeded token inside the
+// throwaway home — never any operator credential. This post-run scan is the
+// verdict-layer signal.
 export function antigravityRateLimitReason(configDir: string): string | null {
   const agyLog = join(configDir, 'agy.log');
   if (!existsSync(agyLog)) {

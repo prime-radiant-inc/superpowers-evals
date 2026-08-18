@@ -15,7 +15,7 @@ artifacts without checking them first.
 | --- | --- | --- |
 | `claude` | Claude Code | `ANTHROPIC_API_KEY`, `SUPERPOWERS_ROOT`; default credential: `opus` |
 | `codex` | Codex CLI | `SUPERPOWERS_ROOT`; local ChatGPT subscription login via `codex login` |
-| `antigravity` | Google Antigravity CLI, `agy` | `SUPERPOWERS_ROOT`; local browser/keyring auth |
+| `antigravity` | Google Antigravity CLI, `agy` | `SUPERPOWERS_ROOT`; nested runtime token `~/.gemini/antigravity-cli/antigravity-oauth-token` (minted by a local `agy` browser login) |
 | `gemini` | Gemini CLI, `gemini` | `GEMINI_API_KEY` or `GEMINI_AUTH_TYPE=oauth-personal`; `SUPERPOWERS_ROOT` |
 | `hermes` | Hermes CLI | default credential `openrouter_glm_5_2` uses `OPENROUTER_API_KEY`; `SUPERPOWERS_ROOT` |
 | `kimi` | Kimi Code | `KIMI_MODEL_API_KEY` or Kimi OAuth login; `SUPERPOWERS_ROOT` |
@@ -325,12 +325,16 @@ plugin manifest version strings inside PRs go stale and misdate evidence.
 
 Antigravity runs host-side for now. The generated launcher pins the throwaway
 home and runs `agy` with `--dangerously-skip-permissions` and an explicit
-`--gemini_dir` under `<run>/home/.gemini`. quorum seeds host Gemini OAuth creds,
-runs an isolated auth preflight, and installs the Superpowers plugin from
-`SUPERPOWERS_ROOT`.
+`--gemini_dir` under `<run>/home/.gemini`. quorum validates and seeds the
+operator's nested runtime token (`~/.gemini/antigravity-cli/
+antigravity-oauth-token` — the ONLY credential file it copies) into the run
+home before any `agy` subprocess, runs the auth preflight under that isolated
+home, and installs the Superpowers plugin from `SUPERPOWERS_ROOT`.
 
-Antigravity auth uses local browser/keyring state owned by the maintainer
-running the eval. It cannot run from environment-only CI credentials.
+Antigravity auth uses that nested runtime token, minted by the maintainer's
+local `agy` browser login. A host whose only credential lives in the login
+keyring (no token file) fails provisioning loudly before launch. It cannot run
+from environment-only CI credentials.
 
 Useful evidence:
 

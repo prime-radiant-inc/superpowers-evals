@@ -15,15 +15,16 @@
 # IS that home ($QUORUM_AGENT_HOME), so $QUORUM_AGENT_HOME/.gemini is the single
 # dir where provisioning seeds the plugin, settings, AND the C1 OAuth creds.
 #
-# CRITICAL (C1): agy reads its runtime credential from
+# CRITICAL (C1/F13): agy reads its runtime credential from
 # $HOME/.gemini/antigravity-cli/antigravity-oauth-token at RUNTIME, NOT via
 # --gemini_dir. Because HOME is the throwaway home, that read would miss the
 # operator's token unless provisioning copied it in — which it does
-# (seedAgyOauthCredentials in src/agents/antigravity.ts), failing before
-# launch if the source token cannot be seeded (F13: agy must never reach the
-# operator's per-login-user keyring). The flat oauth_creds.json /
-# google_accounts.json are the incidental Gemini-personal layout — copied when
-# present, but they do not authenticate agy.
+# (seedAgyRuntimeToken in src/agents/antigravity.ts), FIRST, before any agy
+# subprocess, failing before launch if the source token cannot be seeded (F13:
+# agy must never reach the operator's per-login-user keyring). That nested
+# token is the ONLY credential in the run home: the flat oauth_creds.json /
+# google_accounts.json are the Gemini-personal layout, carry an unrelated
+# operator credential, and are never copied.
 #
 # --gemini_dir stays EXPLICIT: it relocates agy's STATE tree (config, plugins,
 # antigravity-cli/{settings,brain}). It already resolves to the throwaway
