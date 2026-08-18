@@ -28,6 +28,7 @@ import {
   updateJob,
 } from '../src/appliance/jobs.ts';
 import { acquireLock } from '../src/appliance/locks.ts';
+import { showPayload, statusPayload } from '../src/appliance/summary.ts';
 import {
   ImportedProvenanceRecordSchema,
   type JobRecord,
@@ -151,11 +152,13 @@ interface BundleOverrides {
   readonly corruptChecksum?: boolean;
   readonly revRecovery?: string;
   readonly runIds?: readonly string[];
+  readonly verdictBody?: string;
 }
 
 function makeBundle(overrides: BundleOverrides = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'bundle-'));
-  const verdictBody = JSON.stringify({ schema: 1, final: 'pass' });
+  const verdictBody =
+    overrides.verdictBody ?? JSON.stringify({ schema: 1, final: 'pass' });
   const files: Record<string, string> = {
     'verdict.json': overrides.corruptChecksum
       ? sha256('something else entirely')
@@ -1104,6 +1107,75 @@ test('a manifest run_id with path traversal is rejected before anything lands', 
   expect(existsSync(escapeTarget)).toBe(false);
   // Nothing landed, nothing staged:
   expect(readdirSync(cfg.config.container.results_root)).toEqual([]);
+});
+
+// --- The batches namespace under the results root is reserved: run ids
+// --- there could land but never be addressed by status/show again.
+
+test('run_ids in the reserved batches namespace are rejected before anything lands', () => {
+  for (const runId of [
+    'batches',
+    'batch-shadow',
+    'batch-20260101T000000Z-abcd',
+  ]) {
+    const cfg = loaded();
+    const dir = makeBundle();
+    const manifestPath = join(dir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      entries: { run_id: string }[];
+    };
+    (manifest.entries[0] as { run_id: string }).run_id = runId;
+    renameSync(join(dir, 'runs', RUN_ID), join(dir, 'runs', runId));
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    let caught: unknown;
+    try {
+      importBundle(cfg, { bundleDir: dir });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect((caught as ApplianceError).message).toContain(runId);
+    // Nothing landed, nothing staged, nothing reserved:
+    expect(readdirSync(cfg.config.container.results_root)).toEqual([]);
+    expect(countJobDirs(cfg)).toBe(0);
+  }
+});
+
+test('a reserved run_id rejects the whole bundle: valid siblings do not land either', () => {
+  const cfg = loaded();
+  const dir = makeBundle({ runIds: ['batch-shadow', RUN_ID] });
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
+    false,
+  );
+  expect(countJobDirs(cfg)).toBe(0);
+});
+
+test('valid imported run ids stay consumable by status and show', () => {
+  const cfg = loaded();
+  const verdictBody = JSON.stringify({
+    schema: 1,
+    final: 'pass',
+    final_reason: 'pass reason',
+    gauntlet: null,
+    checks: [],
+    error: null,
+    economics: null,
+  });
+  const result = importBundle(cfg, { bundleDir: makeBundle({ verdictBody }) });
+  expect(result.imported).toBe(1);
+  const status = statusPayload(cfg, RUN_ID);
+  expect(
+    status.summary as { final: string; final_reason: string } | null,
+  ).toEqual({
+    final: 'pass',
+    final_reason: 'pass reason',
+  });
+  expect(status.artifact?.type).toBe('run');
+  const shown = showPayload(cfg, RUN_ID, true) as { final: string };
+  expect(shown.final).toBe('pass');
 });
 
 // --- Bundle trees are validated no-follow: only real directories and

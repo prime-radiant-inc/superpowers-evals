@@ -203,6 +203,15 @@ function validateBundle(bundleDir: string, manifest: BundleManifest): void {
         `unsafe run_id in manifest: ${JSON.stringify(entry.run_id)}`,
       );
     }
+    // The batches namespace is reserved: 'batches' is the batch index dir
+    // itself, and status/show/costs resolve every id starting with 'batch-'
+    // as a batch artifact — a run landed under either name could never be
+    // addressed again.
+    if (entry.run_id === 'batches' || entry.run_id.startsWith('batch-')) {
+      throw payloadFault(
+        `reserved run_id in manifest: ${JSON.stringify(entry.run_id)} (the batches namespace belongs to batch artifacts)`,
+      );
+    }
     const runDir = join(runsRoot, entry.run_id);
     const dirStats = lstatSync(runDir, { throwIfNoEntry: false });
     if (dirStats === undefined) {
