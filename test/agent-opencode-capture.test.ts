@@ -98,22 +98,45 @@ test('opencodeEnv isolates home and XDG dirs', () => {
 });
 
 // ---------------------------------------------------------------------------
-// opencodeRunEnv — the allowlist filter (B2-opencode-preflight-env-not-allowlisted)
+// opencodeRunEnv — the non-secret projection (F13: the capture subprocess only
+// reads run-local session state, so it gets NO provider/AWS credential at all)
 // ---------------------------------------------------------------------------
 
-test('opencodeRunEnv filters host env to the allowlist and overlays XDG isolation', () => {
+// The provider/AWS bundle a hostile (or merely ordinary) host env may carry.
+// None of it has a consumer on the local `opencode session list` / `opencode
+// export` path — the capture subprocess resolves everything run-local through
+// the HOME/XDG/OPENCODE_CONFIG_DIR pins.
+const HOSTILE_CAPTURE_ENV: Record<string, string> = {
+  OPENAI_API_KEY: 'sk-host-openai',
+  ANTHROPIC_API_KEY: 'sk-host-anthropic',
+  OPENROUTER_API_KEY: 'sk-host-openrouter',
+  GEMINI_API_KEY: 'sk-host-gemini',
+  GOOGLE_API_KEY: 'sk-host-google',
+  AWS_PROFILE: 'host-profile',
+  AWS_REGION: 'eu-host-1',
+  AWS_DEFAULT_REGION: 'eu-host-1',
+  AWS_ACCESS_KEY_ID: 'AKIA-host',
+  AWS_SECRET_ACCESS_KEY: 'host-aws-secret',
+  AWS_SESSION_TOKEN: 'host-aws-session',
+};
+
+test('opencodeRunEnv scrubs the provider bundle and overlays XDG isolation', () => {
   const home = join(makeTmpDir(), 'home');
   const orig = { ...process.env };
-  // A provider key (allowlisted) survives; harness/leak vars (not allowlisted)
-  // are scrubbed; an ambient OPENCODE_CONFIG_DIR is overridden by the XDG overlay.
+  // Run-local routing survives; credentials and harness/leak vars do not; an
+  // ambient OPENCODE_CONFIG_DIR is overridden by the XDG overlay.
   process.env['SUPERPOWERS_ROOT'] = '/real/superpowers';
   process.env['OPENCODE_CONFIG_DIR'] = '/ambient/opencode';
   process.env['HTTP_PROXY'] = 'http://leak';
-  process.env['OPENAI_API_KEY'] = 'sk-test';
   process.env['PATH'] = '/custom/bin';
+  for (const [k, v] of Object.entries(HOSTILE_CAPTURE_ENV)) {
+    process.env[k] = v;
+  }
   try {
     const env = opencodeRunEnv(home);
-    expect(env['OPENAI_API_KEY']).toBe('sk-test');
+    for (const k of Object.keys(HOSTILE_CAPTURE_ENV)) {
+      expect({ key: k, present: k in env }).toEqual({ key: k, present: false });
+    }
     expect(env['PATH']).toBe('/custom/bin');
     expect(env['OPENCODE_CONFIG_DIR']).toBe(join(home, '.config', 'opencode'));
     expect(env['HOME']).toBe(home);
@@ -154,11 +177,13 @@ test('opencodeRunEnv setdefaults PATH/TERM/LANG when absent', () => {
 // runOpencodeCommand — prefixes "opencode", uses launchCwd + allowlisted env
 // ---------------------------------------------------------------------------
 
-test('runOpencodeCommand prefixes opencode and passes allowlisted env + cwd', () => {
+test('runOpencodeCommand child env is exactly the non-secret base + run-local routing', () => {
   const home = join(makeTmpDir(), 'home');
   const orig = { ...process.env };
-  process.env['ANTHROPIC_API_KEY'] = 'sk-anthropic';
   process.env['SUPERPOWERS_ROOT'] = '/leak';
+  for (const [k, v] of Object.entries(HOSTILE_CAPTURE_ENV)) {
+    process.env[k] = v;
+  }
   try {
     let seen:
       | { args: string[]; cwd: string; env: Record<string, string> }
@@ -175,9 +200,27 @@ test('runOpencodeCommand prefixes opencode and passes allowlisted env + cwd', ()
     expect(result.stdout).toBe('ok');
     expect(seen?.args).toEqual(['opencode', 'session', 'list']);
     expect(seen?.cwd).toBe('/launch/here');
-    expect(seen?.env['ANTHROPIC_API_KEY']).toBe('sk-anthropic');
-    expect('SUPERPOWERS_ROOT' in (seen?.env ?? {})).toBe(false);
     expect(seen?.env['HOME']).toBe(home);
+    // The child env carries ONLY the non-secret base trio plus the run-local
+    // HOME/XDG/config pins — no provider bundle, no host leak vars.
+    const allowedKeys = new Set([
+      'PATH',
+      'TERM',
+      'LANG',
+      'HOME',
+      'XDG_CONFIG_HOME',
+      'XDG_CACHE_HOME',
+      'XDG_DATA_HOME',
+      'XDG_STATE_HOME',
+      'TMPDIR',
+      'OPENCODE_CONFIG_DIR',
+    ]);
+    for (const key of Object.keys(seen?.env ?? {})) {
+      expect({ key, allowed: allowedKeys.has(key) }).toEqual({
+        key,
+        allowed: true,
+      });
+    }
   } finally {
     for (const k of Object.keys(process.env)) {
       if (!(k in orig)) delete process.env[k];

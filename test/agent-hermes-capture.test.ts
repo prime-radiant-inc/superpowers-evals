@@ -78,19 +78,42 @@ test('hermesEnv isolates home and XDG dirs with no extra config-dir override', (
 });
 
 // ---------------------------------------------------------------------------
-// hermesRunEnv — allowlist filter + defaults + XDG overlay
+// hermesRunEnv — the non-secret projection (F13: the capture subprocess only
+// reads run-local session state, so it gets NO provider/AWS credential at all)
 // ---------------------------------------------------------------------------
 
-test('hermesRunEnv filters host env to the allowlist and overlays XDG isolation', () => {
+// The provider/AWS bundle a hostile (or merely ordinary) host env may carry.
+// None of it has a consumer on the local `hermes sessions list` / `sessions
+// export` path — the capture subprocess resolves everything run-local through
+// the HOME/XDG pins.
+const HOSTILE_CAPTURE_ENV: Record<string, string> = {
+  OPENAI_API_KEY: 'sk-host-openai',
+  ANTHROPIC_API_KEY: 'sk-host-anthropic',
+  OPENROUTER_API_KEY: 'sk-host-openrouter',
+  GEMINI_API_KEY: 'sk-host-gemini',
+  GOOGLE_API_KEY: 'sk-host-google',
+  AWS_PROFILE: 'host-profile',
+  AWS_REGION: 'eu-host-1',
+  AWS_DEFAULT_REGION: 'eu-host-1',
+  AWS_ACCESS_KEY_ID: 'AKIA-host',
+  AWS_SECRET_ACCESS_KEY: 'host-aws-secret',
+  AWS_SESSION_TOKEN: 'host-aws-session',
+};
+
+test('hermesRunEnv scrubs the provider bundle and overlays XDG isolation', () => {
   const home = join(makeTmpDir(), 'home');
   const orig = { ...process.env };
   process.env['SUPERPOWERS_ROOT'] = '/real/superpowers';
   process.env['HTTP_PROXY'] = 'http://leak';
-  process.env['OPENROUTER_API_KEY'] = 'or-test';
   process.env['PATH'] = '/custom/bin';
+  for (const [k, v] of Object.entries(HOSTILE_CAPTURE_ENV)) {
+    process.env[k] = v;
+  }
   try {
     const env = hermesRunEnv(home);
-    expect(env['OPENROUTER_API_KEY']).toBe('or-test');
+    for (const k of Object.keys(HOSTILE_CAPTURE_ENV)) {
+      expect({ key: k, present: k in env }).toEqual({ key: k, present: false });
+    }
     expect(env['PATH']).toBe('/custom/bin');
     expect(env['HOME']).toBe(home);
     expect('SUPERPOWERS_ROOT' in env).toBe(false);
@@ -130,11 +153,13 @@ test('hermesRunEnv setdefaults PATH/TERM/LANG when absent', () => {
 // runHermesCommand — prefixes "hermes", uses launchCwd + allowlisted env
 // ---------------------------------------------------------------------------
 
-test('runHermesCommand prefixes hermes and passes allowlisted env + cwd', () => {
+test('runHermesCommand child env is exactly the non-secret base + run-local routing', () => {
   const home = join(makeTmpDir(), 'home');
   const orig = { ...process.env };
-  process.env['OPENROUTER_API_KEY'] = 'or-real';
   process.env['SUPERPOWERS_ROOT'] = '/leak';
+  for (const [k, v] of Object.entries(HOSTILE_CAPTURE_ENV)) {
+    process.env[k] = v;
+  }
   try {
     let seen:
       | { args: string[]; cwd: string; env: Record<string, string> }
@@ -151,9 +176,26 @@ test('runHermesCommand prefixes hermes and passes allowlisted env + cwd', () => 
     expect(result.stdout).toBe('ok');
     expect(seen?.args).toEqual(['hermes', 'sessions', 'list']);
     expect(seen?.cwd).toBe('/launch/here');
-    expect(seen?.env['OPENROUTER_API_KEY']).toBe('or-real');
-    expect('SUPERPOWERS_ROOT' in (seen?.env ?? {})).toBe(false);
     expect(seen?.env['HOME']).toBe(home);
+    // The child env carries ONLY the non-secret base trio plus the run-local
+    // HOME/XDG pins — no provider bundle, no host leak vars.
+    const allowedKeys = new Set([
+      'PATH',
+      'TERM',
+      'LANG',
+      'HOME',
+      'XDG_CONFIG_HOME',
+      'XDG_CACHE_HOME',
+      'XDG_DATA_HOME',
+      'XDG_STATE_HOME',
+      'TMPDIR',
+    ]);
+    for (const key of Object.keys(seen?.env ?? {})) {
+      expect({ key, allowed: allowedKeys.has(key) }).toEqual({
+        key,
+        allowed: true,
+      });
+    }
   } finally {
     for (const k of Object.keys(process.env)) {
       if (!(k in orig)) delete process.env[k];

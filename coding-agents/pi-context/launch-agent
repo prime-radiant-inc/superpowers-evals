@@ -19,6 +19,24 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
+# pi-subagents provides the `subagent` delegation tool. It is a host
+# prerequisite like pi itself: npm install -g pi-subagents. --no-extensions
+# disables ambient discovery, so the package is loaded explicitly by path.
+# PI_SUBAGENTS_PKG is resolved here at launch, not substituted by quorum.
+# Resolved BEFORE pi.env is sourced, through env -i with only npm's own
+# resolution routing (PATH finds the binary + global prefix; the HOST home
+# carries the user-level ~/.npmrc prefix deciding where pi-subagents was
+# installed) — the npm child never inherits pi.env secrets or the launcher's
+# ambient env (which carries the grader credential).
+PI_SUBAGENTS_PKG="$(env -i \
+  "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
+  "HOME=${HOME-}" \
+  npm root -g)/pi-subagents"
+if [ ! -d "$PI_SUBAGENTS_PKG" ]; then
+  echo "launch-agent: pi-subagents not found at $PI_SUBAGENTS_PKG; run: npm install -g pi-subagents" >&2
+  exit 1
+fi
+
 # pi.env OWNS these names (SYNC: writePiEnvFile, src/agents/pi.ts, writes
 # exactly this closed set). Drop inherited values before sourcing so an
 # omitted name (PI_API_KEY in OAuth mode) stays absent — omission stays
@@ -28,16 +46,6 @@ unset PI_PROVIDER PI_MODEL PI_API_KEY
 set -a
 . "$PI_ENV_FILE"
 set +a
-
-# pi-subagents provides the `subagent` delegation tool. It is a host
-# prerequisite like pi itself: npm install -g pi-subagents. --no-extensions
-# disables ambient discovery, so the package is loaded explicitly by path.
-# PI_SUBAGENTS_PKG is resolved here at launch, not substituted by quorum.
-PI_SUBAGENTS_PKG="$(npm root -g)/pi-subagents"
-if [ ! -d "$PI_SUBAGENTS_PKG" ]; then
-  echo "launch-agent: pi-subagents not found at $PI_SUBAGENTS_PKG; run: npm install -g pi-subagents" >&2
-  exit 1
-fi
 
 # Ambient context-file discovery is intentionally LEFT ON (no --no-context-files):
 # the per-run throwaway $HOME (+ the container) already isolates pi from the

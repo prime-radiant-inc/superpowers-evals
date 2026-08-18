@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { shellSingleQuote } from '../src/agents/index.ts';
 import { populateContextDir } from '../src/runner/context.ts';
 import { homeEnvSubstitutions } from '../src/runner/index.ts';
@@ -102,6 +102,13 @@ const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
     substitutions: ({ fakeBinary }) => ({
       $KIMI_BINARY: shellSingleQuote(fakeBinary),
     }),
+    // Interpose the env-file delete helper: a fake `rm` (PATH-resolved, like
+    // the launcher's own invocation) dumps its environment before delegating
+    // to the real /bin/rm, so tests can prove the delete child never inherits
+    // the sourced model secret or the grader credential.
+    extraBinaries: ({ runDir }) => ({
+      rm: `#!/bin/sh\nenv > '${join(runDir, 'rm-env-dump.txt')}'\nexec /bin/rm "$@"\n`,
+    }),
   },
   pi: {
     binary: 'pi',
@@ -115,11 +122,16 @@ const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
       substitutions: (envFile) => ({ $PI_ENV_FILE: envFile }),
     },
     // The launcher resolves "$(npm root -g)/pi-subagents" and exits if the
-    // dir is absent, so the fake npm prints a root that contains it.
+    // dir is absent, so the fake npm prints a root that contains it. It also
+    // dumps its own environment (to runDir/npm-env-dump.txt) so tests can
+    // prove the npm child never inherits sourced secrets or the ambient
+    // (grader-carrying) launcher env.
     extraBinaries: ({ runDir }) => {
       const npmRoot = join(runDir, 'npm-root');
       mkdirSync(join(npmRoot, 'pi-subagents'), { recursive: true });
-      return { npm: `#!/bin/sh\necho '${npmRoot}'\n` };
+      return {
+        npm: `#!/bin/sh\nenv > '${join(runDir, 'npm-env-dump.txt')}'\necho '${npmRoot}'\n`,
+      };
     },
   },
   // No env file: the provider key is a file at ~/.hermes/.env inside the
@@ -490,6 +502,75 @@ test('pi launcher: file-omitted PI_MODEL is not backfilled by a hostile host val
   });
   expect(proc.status).not.toBe(0);
   expect(existsSync(envDump)).toBe(false);
+});
+
+// F13 final fix: the pi launcher's `npm root -g` helper must run BEFORE pi.env
+// is sourced, and through a scrubbed child env — never inheriting the sourced
+// PI_API_KEY or the launcher's ambient env (which in production is the gauntlet
+// child env carrying the grader credential).
+test('pi launcher: the npm helper child never sees pi.env secrets or the ambient env', () => {
+  const { launcher, binDir, envDump } = installLauncher('pi');
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      ANTHROPIC_API_KEY: 'sk-grader-HOSTILE',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const npmEnv = parseEnvDump(join(dirname(envDump), 'npm-env-dump.txt'));
+  // The sourced secret never reaches npm (resolution happens pre-source), and
+  // the ambient bundle (incl. the grader credential) is scrubbed away.
+  expect(npmEnv['PI_API_KEY']).toBe(undefined);
+  expect(npmEnv['ANTHROPIC_API_KEY']).toBe(undefined);
+  for (const key of Object.keys(HOSTILE)) {
+    expect({ key, value: npmEnv[key] }).toEqual({ key, value: undefined });
+  }
+  // npm keeps its own resolution routing: PATH (binary + global-prefix
+  // resolution) and the HOST home (a user-level npm prefix in ~/.npmrc decides
+  // where pi-subagents was installed).
+  expect(npmEnv['PATH']).toBeTruthy();
+  expect(npmEnv['HOME']).toBe('/host/home');
+  // The agent itself still gets exactly the file-owned values.
+  const env = parseEnvDump(envDump);
+  expectHostileScrubbed(env, { PI_API_KEY: 'sk-pi-test' });
+  expect(env['ANTHROPIC_API_KEY']).toBe(undefined);
+});
+
+// F13 final fix: the kimi launcher snapshots the sourced file-owned values
+// into the final exec's argument list, then unsets every secret (file-owned +
+// grader) BEFORE deleting the env file — so the rm child inherits none of them.
+test('kimi launcher: the env-file delete helper never sees sourced secrets or the grader credential', () => {
+  const { launcher, binDir, envDump, envFile } = installLauncher('kimi');
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      ANTHROPIC_API_KEY: 'sk-grader-HOSTILE',
+      CLAUDE_CODE_OAUTH_TOKEN: 'grader-oauth-HOSTILE',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const rmEnv = parseEnvDump(join(dirname(envDump), 'rm-env-dump.txt'));
+  // The sourced file-owned names are unset before the delete…
+  expect(rmEnv['KIMI_MODEL_API_KEY']).toBe(undefined);
+  expect(rmEnv['KIMI_MODEL_NAME']).toBe(undefined);
+  expect(rmEnv['KIMI_DISABLE_TELEMETRY']).toBe(undefined);
+  // …and so is the grader credential riding the launcher's ambient env.
+  expect(rmEnv['ANTHROPIC_API_KEY']).toBe(undefined);
+  expect(rmEnv['ANTHROPIC_AUTH_TOKEN']).toBe(undefined);
+  expect(rmEnv['CLAUDE_CODE_OAUTH_TOKEN']).toBe(undefined);
+  // The delete still happened, and the agent still got the snapshotted values.
+  expect(existsSync(envFile)).toBe(false);
+  const env = parseEnvDump(envDump);
+  expectHostileScrubbed(env, { KIMI_MODEL_API_KEY: 'sk-kimi-test' });
+  expect(env['KIMI_MODEL_NAME']).toBe('kimi-test-model');
+  expect(env['ANTHROPIC_API_KEY']).toBe(undefined);
+  expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe(undefined);
 });
 
 test('pi launcher: missing pi.env fails loudly, never launches', () => {

@@ -19,7 +19,7 @@
 // (non-evals-container) invocations and normal, non-worktree checkouts.
 
 import { spawnSync } from 'node:child_process';
-import { envSnapshot, getEnv } from '../env.ts';
+import { getEnv } from '../env.ts';
 
 export interface RunProvenance {
   superpowers_rev: string | null;
@@ -86,6 +86,30 @@ function versionLine(binary: string): string | null {
   return line === '' ? null : line;
 }
 
+// The probe children's env (F13): git plus the agent/gauntlet version binaries
+// are real subprocesses, so they get a non-secret projection, never the host
+// provider bundle. The retained names are the probes' own routing:
+//   PATH — structural: spawnSync resolves the bare binary name through the
+//     child env's PATH.
+//   HOME / XDG_CONFIG_HOME — git's documented config resolution runs on every
+//     command (~/.gitconfig and $XDG_CONFIG_HOME/git/config carry
+//     safe.directory / includeIf, which container hosts rely on for the
+//     rev/dirty probes), and the version binaries read their own config the
+//     same way.
+// Probes are best-effort by design (a failure nulls one field, never the run),
+// so a too-tight list degrades a provenance field silently rather than loudly —
+// which is why the routing trio stays in while everything else stays out.
+const PROBE_ENV_ALLOWLIST: readonly string[] = ['PATH', 'HOME', 'XDG_CONFIG_HOME'];
+
+function probeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of PROBE_ENV_ALLOWLIST) {
+    const value = getEnv(name);
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 // Run a probe; null on spawn error or nonzero exit. 10s timeout so a hung
 // probe cannot stall the verdict write.
 function run(cmd: string, args: string[]): string | null {
@@ -93,7 +117,7 @@ function run(cmd: string, args: string[]): string | null {
     const p = spawnSync(cmd, args, {
       encoding: 'utf8',
       timeout: 10_000,
-      env: envSnapshot(),
+      env: probeEnv(),
     });
     if (p.error || (p.status ?? 1) !== 0) return null;
     return p.stdout ?? '';

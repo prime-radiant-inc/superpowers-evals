@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { collectProvenance } from '../src/runner/provenance.ts';
@@ -199,4 +199,73 @@ test('collectProvenance never throws: every probe failure is a null field', () =
 test('collectProvenance records the host platform', () => {
   const p = collectProvenance({ repoRoot: REPO, agentBinary: null });
   expect(p.host_platform).toBe(process.platform);
+});
+
+// F13: the version probes spawn third-party binaries (the agent CLI and
+// gauntlet) — real children whose environment a same-named hostile export
+// would otherwise ride into. Both must receive the probe projection, never the
+// host provider bundle. Proven through real spawned children dumping their env.
+test('version probe children never see the host provider bundle', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'bin-'));
+  const agentDump = join(bin, 'agent-env-dump.txt');
+  const gauntletDump = join(bin, 'gauntlet-env-dump.txt');
+  const fakeAgent = join(bin, 'fake-agent');
+  writeFileSync(
+    fakeAgent,
+    `#!/bin/sh\nenv > '${agentDump}'\necho "fake-agent 1.0.0"\n`,
+  );
+  const fakeGauntlet = join(bin, 'gauntlet');
+  writeFileSync(
+    fakeGauntlet,
+    `#!/bin/sh\nenv > '${gauntletDump}'\necho "gauntlet 2.0.0"\n`,
+  );
+  spawnSync('chmod', ['+x', fakeAgent, fakeGauntlet]);
+
+  const HOSTILE: Record<string, string> = {
+    OPENAI_API_KEY: 'sk-host-openai',
+    ANTHROPIC_API_KEY: 'sk-host-anthropic',
+    OPENROUTER_API_KEY: 'sk-host-openrouter',
+    GEMINI_API_KEY: 'sk-host-gemini',
+    KIMI_MODEL_API_KEY: 'sk-host-kimi',
+    AWS_SECRET_ACCESS_KEY: 'host-aws-secret',
+    AWS_SESSION_TOKEN: 'host-aws-session',
+    AWS_BEARER_TOKEN_BEDROCK: 'host-bedrock',
+    SOME_RANDOM_HOST_VAR: 'leaked',
+  };
+  const saved: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(HOSTILE)) {
+    saved[k] = process.env[k];
+    process.env[k] = v;
+  }
+  const prevPath = process.env['PATH'];
+  process.env['PATH'] = `${bin}:${prevPath ?? ''}`;
+  try {
+    const p = collectProvenance({ repoRoot: REPO, agentBinary: 'fake-agent' });
+    expect(p.agent_cli_version).toBe('fake-agent 1.0.0');
+    expect(p.gauntlet_version).toBe('gauntlet 2.0.0');
+    for (const dumpPath of [agentDump, gauntletDump]) {
+      const dumped: Record<string, string> = {};
+      for (const line of readFileSync(dumpPath, 'utf8').split('\n')) {
+        const eq = line.indexOf('=');
+        if (eq > 0) dumped[line.slice(0, eq)] = line.slice(eq + 1);
+      }
+      for (const k of Object.keys(HOSTILE)) {
+        expect({ dump: dumpPath, key: k, value: dumped[k] }).toEqual({
+          dump: dumpPath,
+          key: k,
+          value: undefined,
+        });
+      }
+      // The probe routing survives: PATH resolves the binary, HOME routes the
+      // probed CLI's own config reads.
+      expect(dumped['PATH']).toBeTruthy();
+      expect(dumped['HOME']).toBe(process.env['HOME'] ?? '');
+    }
+  } finally {
+    process.env['PATH'] = prevPath ?? '';
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 });

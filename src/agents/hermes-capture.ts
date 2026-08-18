@@ -29,7 +29,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { envSnapshot } from '../env.ts';
+import { captureBaseEnv } from './capture-env.ts';
 import { xdgHomeEnv } from './home-env.ts';
 
 export class HermesCaptureError extends Error {
@@ -63,49 +63,19 @@ export function hermesEnv(hermesHome: string): Record<string, string> {
   return { ...xdgHomeEnv(hermesHome) };
 }
 
-// The fixed set of host env vars a hermes subprocess may inherit. Everything
-// else (proxy vars, other harness vars) is scrubbed so the subprocess exercises
-// the pinned provider, not ambient host state.
-export const HERMES_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
-  'PATH',
-  'TERM',
-  'COLORTERM',
-  'LANG',
-  'LC_ALL',
-  'SSL_CERT_FILE',
-  'REQUESTS_CA_BUNDLE',
-  'NODE_EXTRA_CA_CERTS',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'OPENROUTER_API_KEY',
-  'GEMINI_API_KEY',
-  'GOOGLE_API_KEY',
-  'AWS_PROFILE',
-  'AWS_REGION',
-  'AWS_DEFAULT_REGION',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SESSION_TOKEN',
-]);
-
 // 90s: `hermes sessions list` / `sessions export` share the same headroom
 // rationale opencode-capture.ts established for its capture calls under high
 // run-all concurrency (docs/experiments/2026-06-23-glm-5.2-full-suite-benchmark.md).
 // No hermes-specific incident has surfaced yet; kept consistent pending one.
 export const HERMES_CAPTURE_TIMEOUT_MS = 90_000;
 
-// Filter the host env to the allowlist, default PATH/TERM/LANG (PATH falls back
-// to the POSIX default "/bin:/usr/bin"), then overlay the XDG isolation vars.
+// The capture child's env: the shared non-secret capture base (F13 — the
+// subprocess only reads run-local SQLite session state, so no provider/AWS
+// credential belongs in it) with the XDG isolation vars overlaid. Hermes reads
+// its provider key from ~/.hermes/.env inside the pinned HOME when it needs
+// one; the local list/export path needs no credential at all.
 export function hermesRunEnv(hermesHome: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(envSnapshot())) {
-    if (HERMES_ENV_ALLOWLIST.has(key) && value !== undefined) {
-      env[key] = value;
-    }
-  }
-  if (!('PATH' in env)) env['PATH'] = '/bin:/usr/bin';
-  if (!('TERM' in env)) env['TERM'] = 'xterm-256color';
-  if (!('LANG' in env)) env['LANG'] = 'C.UTF-8';
+  const env = captureBaseEnv();
   Object.assign(env, hermesEnv(hermesHome));
   return env;
 }
