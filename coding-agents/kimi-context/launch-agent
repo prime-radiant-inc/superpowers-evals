@@ -21,6 +21,26 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
+# The trusted env file OWNS every name below (SYNC: it is allowlist-built by
+# buildKimiSubprocessEnv, src/agents/kimi.ts, whose finite host passthrough +
+# model env must match this list exactly — one intentional producer+consumer
+# change per addition). PATH/TERM/LANG are the base-trio exception: the file
+# also sets them, but they forward with launch-time fallbacks like every other
+# converted launcher. Drop inherited values before sourcing so a file-omitted
+# name (e.g. KIMI_MODEL_API_KEY in OAuth mode) stays absent — omission stays
+# omission, and a hostile host export can never ride the forward below.
+kimi_file_vars=(
+  SHELL LC_ALL LC_CTYPE
+  http_proxy https_proxy all_proxy no_proxy
+  HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+  KIMI_MODEL_NAME KIMI_MODEL_PROVIDER_TYPE KIMI_MODEL_BASE_URL
+  KIMI_MODEL_MAX_CONTEXT_SIZE KIMI_MODEL_CAPABILITIES
+  KIMI_MODEL_DEFAULT_THINKING KIMI_MODEL_API_KEY
+  KIMI_DISABLE_TELEMETRY KIMI_DISABLE_CRON
+  KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT
+)
+unset "${kimi_file_vars[@]}"
+
 set -a
 . "$KIMI_ENV_FILE"
 set +a
@@ -29,27 +49,15 @@ trap - EXIT HUP INT TERM
 unset KIMI_ENV_FILE
 unset -f cleanup_kimi_env
 
-# Host-env isolation (F13): env -i + explicit allowlist. The env file is
-# allowlist-built by buildKimiSubprocessEnv (src/agents/kimi.ts) and already
-# sourced above (and deleted); forward exactly those names — keep this list in
-# sync with that builder: the forward list must name every var that file can
-# set. The base trio covers the builder's PATH/TERM/LANG passthrough; the
-# builder's open-ended LC_*/*_proxy host passthrough is frozen here to the
-# standard names (bash 3.2 has no safe prefix expansion) — an exotic host
-# locale/proxy name is dropped at the wall, never leaked.
+# Host-env isolation (F13): env -i + explicit allowlist. Only names the
+# sourced file actually set survive the pre-source unset above, so this loop
+# forwards exactly the file's values.
 env_args=(
   "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
   "TERM=${TERM:-xterm-256color}"
   "LANG=${LANG:-C.UTF-8}"
 )
-for name in SHELL LC_ALL LC_CTYPE \
-  http_proxy https_proxy all_proxy no_proxy \
-  HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
-  KIMI_MODEL_NAME KIMI_MODEL_PROVIDER_TYPE KIMI_MODEL_BASE_URL \
-  KIMI_MODEL_MAX_CONTEXT_SIZE KIMI_MODEL_CAPABILITIES \
-  KIMI_MODEL_DEFAULT_THINKING KIMI_MODEL_API_KEY \
-  KIMI_DISABLE_TELEMETRY KIMI_DISABLE_CRON \
-  KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT; do
+for name in "${kimi_file_vars[@]}"; do
   if [[ -n "${!name-}" ]]; then
     env_args+=("$name=${!name}")
   fi

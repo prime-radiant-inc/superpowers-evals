@@ -742,29 +742,45 @@ interface SubprocessEnvContext {
   readonly pinHome: boolean;
 }
 
-// Build an allow-listed, hermetic env for the kimi process. Pass through
-// PATH/TERM/LANG/SHELL plus LC_* and *_proxy from the host, overlay the model
-// env, then set HOME + the KIMI/XDG dirs under the kimi home.
+// Build an allow-listed, hermetic env for the kimi process: a FINITE host
+// passthrough (base names, standard locale/proxy spellings — never open-ended
+// prefix/suffix matches), overlay the model env, then set HOME + the KIMI/XDG
+// dirs under the kimi home.
 //
-// SYNC (F13): coding-agents/kimi-context/launch-agent forwards the runtime
-// env file this builder produces (pinHome=false) through its `env -i` wall as
-// a static name list — the launcher's forward list must name every var this
-// file can set. A name added here but not there is silently dropped at the
-// launch wall; update both together.
+// SYNC (F13): coding-agents/kimi-context/launch-agent unsets then forwards
+// the runtime env file this builder produces (pinHome=false) through its
+// `env -i` wall as the static `kimi_file_vars` list — every name this builder
+// can emit must appear there (PATH/TERM/LANG ride the launcher's base trio).
+// A name added here but not there is dropped at the launch wall; adding one
+// is an intentional producer+consumer change, updated together.
+const KIMI_HOST_PASSTHROUGH_ENV: readonly string[] = [
+  'PATH',
+  'TERM',
+  'LANG',
+  'SHELL',
+  'LC_ALL',
+  'LC_CTYPE',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+];
+
 function buildKimiSubprocessEnv(
   ctx: SubprocessEnvContext,
 ): Record<string, string> {
   const base = envSnapshot();
-  const allowExact: ReadonlySet<string> = new Set([
-    'PATH',
-    'TERM',
-    'LANG',
-    'SHELL',
-  ]);
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(base)) {
-    if (value !== undefined && allowExact.has(key)) {
-      out[key] = value;
+  // Project by direct name lookup (the allowlist pattern), never by
+  // enumerating the snapshot.
+  for (const name of KIMI_HOST_PASSTHROUGH_ENV) {
+    const value = base[name];
+    if (value !== undefined) {
+      out[name] = value;
     }
   }
   if (explicitKimiBinary() === undefined) {
@@ -774,14 +790,6 @@ function buildKimiSubprocessEnv(
     const binDir = join(kimiInstallHome(), 'bin');
     const pathSep = sep === '\\' ? ';' : ':';
     out['PATH'] = out['PATH'] ? `${binDir}${pathSep}${out['PATH']}` : binDir;
-  }
-  for (const [key, value] of Object.entries(base)) {
-    if (
-      value !== undefined &&
-      (key.startsWith('LC_') || key.toLowerCase().endsWith('_proxy'))
-    ) {
-      out[key] = value;
-    }
   }
   for (const [key, value] of Object.entries(ctx.kimiModelEnv)) {
     out[key] = value;

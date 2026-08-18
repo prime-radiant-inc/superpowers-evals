@@ -121,7 +121,13 @@ const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
 // installed launcher path plus its env-file/home fixture paths.
 function installLauncher(
   agent: LauncherAgent,
-  opts: { omitEnvFile?: boolean; envFileContent?: string } = {},
+  opts: {
+    omitEnvFile?: boolean;
+    envFileContent?: string;
+    // Per-test overrides applied after the fixture's substitutions (e.g. the
+    // gemini OAuth test pins $GEMINI_AUTH_TYPE_SH to 'oauth-personal').
+    substitutions?: Record<string, string>;
+  } = {},
 ): {
   launcher: string;
   binDir: string;
@@ -173,6 +179,7 @@ function installLauncher(
     ...homeEnvSubstitutions(home),
     ...envFileSubs,
     ...(fixture.substitutions?.(ctx) ?? {}),
+    ...(opts.substitutions ?? {}),
   };
   populateContextDir({
     codingAgentsDir: REAL_CODING_AGENTS,
@@ -363,6 +370,88 @@ test('pi launcher: hostile host env never reaches the agent; pi.env key wins', (
   expect(env['PI_TELEMETRY']).toBe('0');
   expect(env['HOME']).not.toBe('/host/home');
   expect(env['PATH']).toBeTruthy();
+});
+
+test('gemini launcher: OAuth mode (empty .gemini-env) drops a hostile host GEMINI_API_KEY', () => {
+  const { launcher, binDir, envDump } = installLauncher('gemini', {
+    // OAuth mode: provisioning writes an EMPTY .gemini-env (creds are files in
+    // the throwaway home) and substitutes the oauth auth type.
+    envFileContent: '',
+    substitutions: { $GEMINI_AUTH_TYPE_SH: shellSingleQuote('oauth-personal') },
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: { ...HOSTILE, PATH: `${binDir}:/usr/bin:/bin`, HOME: '/host/home' },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  // No override: the file OWNS GEMINI_API_KEY and omitted it, so omission
+  // stays omission even though the hostile host exported the same name.
+  expectHostileScrubbed(env);
+  expect(env['GEMINI_DEFAULT_AUTH_TYPE']).toBe('oauth-personal');
+  expect(env['HOME']).not.toBe('/host/home');
+});
+
+test('kimi launcher: OAuth-mode env file (no model key) drops hostile host KIMI_MODEL_API_KEY and file-omitted proxies', () => {
+  const { launcher, binDir, envDump, envFile } = installLauncher('kimi', {
+    // OAuth mode: buildKimiSubprocessEnv gets kimiModelEnv {} — the file holds
+    // only base passthrough names, no KIMI_MODEL_*.
+    envFileContent: "SHELL='/bin/zsh'\n",
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      HTTPS_PROXY: 'http://evil-proxy.example:3128',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  expectHostileScrubbed(env);
+  // The file's own value repopulates after the pre-source unset…
+  expect(env['SHELL']).toBe('/bin/zsh');
+  // …but a file-omitted forwardable name stays absent even when the host
+  // exported it.
+  expect(env['HTTPS_PROXY']).toBe(undefined);
+  expect(existsSync(envFile)).toBe(false);
+});
+
+test('pi launcher: OAuth-mode pi.env (no PI_API_KEY) drops a hostile host PI_API_KEY', () => {
+  const { launcher, binDir, envDump } = installLauncher('pi', {
+    envFileContent:
+      "export PI_PROVIDER='openai-codex'\nexport PI_MODEL='gpt-5.5-codex'\n",
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: { ...HOSTILE, PATH: `${binDir}:/usr/bin:/bin`, HOME: '/host/home' },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  // PI_API_KEY is in HOSTILE with no override: omission stays omission.
+  expectHostileScrubbed(env);
+  expect(env['PI_PROVIDER']).toBe('openai-codex');
+  expect(env['PI_MODEL']).toBe('gpt-5.5-codex');
+});
+
+test('pi launcher: file-omitted PI_MODEL is not backfilled by a hostile host value', () => {
+  const { launcher, binDir, envDump } = installLauncher('pi', {
+    envFileContent: "export PI_PROVIDER='openai-codex'\n",
+  });
+  // The host exports the name pi.env omitted: the launcher must fail loudly
+  // under set -u, never launch with the hostile model.
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      PI_MODEL: 'evil-model',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).not.toBe(0);
+  expect(existsSync(envDump)).toBe(false);
 });
 
 test('pi launcher: missing pi.env fails loudly, never launches', () => {

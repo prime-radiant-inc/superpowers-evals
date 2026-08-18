@@ -19,6 +19,12 @@ cd "$QUORUM_AGENT_CWD" || {
   exit 1
 }
 
+# pi.env OWNS these names (SYNC: writePiEnvFile, src/agents/pi.ts, writes
+# exactly this closed set). Drop inherited values before sourcing so an
+# omitted name (PI_API_KEY in OAuth mode) stays absent — omission stays
+# omission, a hostile host export can never ride the forward below, and a
+# file-omitted PI_PROVIDER/PI_MODEL fails loudly at the flags under set -u.
+unset PI_PROVIDER PI_MODEL PI_API_KEY
 set -a
 . "$PI_ENV_FILE"
 set +a
@@ -41,11 +47,10 @@ fi
 # --no-extensions / --no-skills stay: those scope pi to ONLY the explicitly-loaded
 # Superpowers extension + skills, not ambient ones — a separate concern.
 # Host-env isolation (F13): env -i + explicit allowlist. The sourced pi.env
-# sets PI_PROVIDER/PI_MODEL (also passed as flags below), an optional
+# sets PI_PROVIDER/PI_MODEL (also passed as flags below) and an optional
 # PI_API_KEY (api-key auth; OAuth keeps the credential in auth.json inside the
-# throwaway home), and a sorted extraEnv that every writePiEnvFile call site
-# (src/agents/pi.ts) currently passes empty — forward exactly those names, and
-# keep this list in sync with that writer.
+# throwaway home). Only names the file actually set survive the pre-source
+# unset above, so this loop forwards exactly the file's values.
 env_args=(
   "PATH=${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
   "TERM=${TERM:-xterm-256color}"

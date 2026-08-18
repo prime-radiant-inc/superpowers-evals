@@ -300,6 +300,59 @@ test('provision seeds KIMI_CODE_HOME, runs the preflight, installs the plugin', 
   }
 });
 
+// F13: the host passthrough into the runtime env file (and the preflight env)
+// is a FINITE allowlist matching the launcher's static forward list — the
+// previously open-ended LC_*/*_proxy matchers must not admit names the Bash
+// 3.2 launcher cannot forward.
+test('runtime env file host passthrough is finite: standard locale/proxy names survive, LC_MESSAGES/FTP_PROXY do not', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = join(home.workdir, '..', 'superpowers-src');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = new FakeCommandRunner(happyResponder);
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spRoot,
+        KIMI_MODEL_API_KEY: API_KEY,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        KIMI_MODEL_NAME: undefined,
+        // In the finite allowlist.
+        LC_ALL: 'C.UTF-8',
+        HTTPS_PROXY: 'http://corp-proxy.example:3128',
+        https_proxy: 'http://corp-proxy.example:3128',
+        // Matched by the OLD open-ended LC_* prefix / *_proxy suffix rules;
+        // the static launcher list never forwarded them, so the producer must
+        // not emit them.
+        LC_MESSAGES: 'evil-locale',
+        FTP_PROXY: 'http://evil-ftp.example:2121',
+      },
+      () => {
+        const agent = new KimiAgent(KIMI_CONFIG);
+        const env = agent.provision(home, runner);
+        const envFileBody = readFileSync(env['KIMI_ENV_FILE'] ?? '', 'utf8');
+        expect(envFileBody).toContain("LC_ALL='C.UTF-8'");
+        expect(envFileBody).toContain(
+          "HTTPS_PROXY='http://corp-proxy.example:3128'",
+        );
+        expect(envFileBody).toContain(
+          "https_proxy='http://corp-proxy.example:3128'",
+        );
+        expect(envFileBody).not.toContain('LC_MESSAGES=');
+        expect(envFileBody).not.toContain('FTP_PROXY=');
+        // The shared builder also feeds the auth preflight subprocess env.
+        const preflightEnv = runner.calls[0]?.options?.env ?? {};
+        expect(preflightEnv['LC_ALL']).toBe('C.UTF-8');
+        expect(preflightEnv['LC_MESSAGES']).toBeUndefined();
+        expect(preflightEnv['FTP_PROXY']).toBeUndefined();
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('preflight env equals the effective model env overlaid on the hermetic XDG dirs', () => {
   const { home, cleanup } = makeTempHome();
   const spRoot = join(home.workdir, '..', 'superpowers-src');
