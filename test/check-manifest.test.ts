@@ -11,6 +11,9 @@
 //   - `not check-transcript <verb> ...` records under the WRAPPER name
 //     `check-transcript` with negated=true and args = [verb, ...verb-args].
 //
+// Every case pins the full {check, args, negated, passed} tuple — the
+// extractor's rules are built on these values.
+//
 // If reality and these expectations ever disagree, REALITY WINS: change the
 // expectations, then fix the extractor — never the other way around.
 
@@ -56,34 +59,15 @@ async function phaseRecords(
   return { pre: pre.records, post: post.records };
 }
 
-// The minimal ATIF trajectory shape check-transcript actually reads: steps'
-// tool_calls keyed by function_name (see src/atif/project.ts flattenToolCalls).
-// Mirrors the committed fixture pattern in test/check-transcript.test.ts.
-function writeTrajectory(toolName: string): string {
-  const tdir = mkdtempSync(join(tmpdir(), 'manifest-atif-'));
-  const trajectoryPath = join(tdir, 'trajectory.json');
-  writeFileSync(
-    trajectoryPath,
-    JSON.stringify({
-      schema_version: 'ATIF-v1.7',
-      agent: { name: 'test-agent', version: '0.0.0' },
-      steps: [
-        {
-          step_id: 1,
-          source: 'agent',
-          tool_calls: [
-            {
-              tool_call_id: 'tc0',
-              function_name: toolName,
-              arguments: { file_path: 'a' },
-            },
-          ],
-        },
-      ],
-    }),
-  );
-  return trajectoryPath;
-}
+// A committed minimal ATIF trajectory with one Write tool call — the smallest
+// fixture the transcript checks can match against (validates against
+// src/atif/validate.ts). check-transcript reads steps' tool_calls keyed by
+// function_name (src/atif/project.ts flattenToolCalls); check-transcript.test.ts
+// builds these inline, so the shared minimal one lives here as a committed file.
+const TRAJECTORY_FIXTURE = join(
+  REPO_ROOT,
+  'test/fixtures/atif-minimal-write-trajectory.json',
+);
 
 describe('record-emission characterization (pins extractor rules)', () => {
   test('plain fs verb records under the verb name with literal args', async () => {
@@ -105,7 +89,13 @@ describe('record-emission characterization (pins extractor rules)', () => {
       pre: '    file-exists present.txt',
       post: '    not file-exists absent.txt',
     });
-    expect(post[0]).toMatchObject({ check: 'file-exists', negated: true });
+    expect(post).toHaveLength(1);
+    expect(post[0]).toMatchObject({
+      check: 'file-exists',
+      args: ['absent.txt'],
+      negated: true,
+      passed: true,
+    });
   });
 
   test('single-quoted $ args are NOT expanded (literal in the record)', async () => {
@@ -113,34 +103,49 @@ describe('record-emission characterization (pins extractor rules)', () => {
       pre: '    file-exists present.txt',
       post: `    command-succeeds 'test -n "$PWD"'`,
     });
-    expect(post[0]?.args).toEqual(['test -n "$PWD"']);
+    expect(post).toHaveLength(1);
+    expect(post[0]).toMatchObject({
+      check: 'command-succeeds',
+      args: ['test -n "$PWD"'],
+      negated: false,
+      passed: true,
+    });
   });
 
   test('plain transcript check records under the inner VERB name', async () => {
-    const transcriptPath = writeTrajectory('Write');
     const { post } = await phaseRecords(
       {
         pre: '    file-exists present.txt',
         post: '    check-transcript tool-called Write',
       },
-      { transcriptPath },
+      { transcriptPath: TRAJECTORY_FIXTURE },
     );
+    expect(post).toHaveLength(1);
     expect(post[0]).toMatchObject({
       check: 'tool-called',
       args: ['Write'],
       negated: false,
+      passed: true,
     });
   });
 
   test('negated transcript check records under the WRAPPER name check-transcript', async () => {
-    const transcriptPath = writeTrajectory('Write');
     const { post } = await phaseRecords(
       {
         pre: '    file-exists present.txt',
         post: '    not check-transcript tool-called Bash',
       },
-      { transcriptPath },
+      { transcriptPath: TRAJECTORY_FIXTURE },
     );
-    expect(post[0]).toMatchObject({ check: 'check-transcript', negated: true });
+    expect(post).toHaveLength(1);
+    // The inner verb rides as args[0]: args = [verb, ...verb-args], NOT the
+    // verb's own args. Load-bearing pin for the extractor's RECORD_NAME_RULES
+    // (Task 2).
+    expect(post[0]).toMatchObject({
+      check: 'check-transcript',
+      args: ['tool-called', 'Bash'],
+      negated: true,
+      passed: true,
+    });
   });
 });

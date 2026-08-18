@@ -1,0 +1,17 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "agent": { "name": "test-agent", "version": "0.0.0" },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "agent",
+      "tool_calls": [
+        {
+          "tool_call_id": "tc0",
+          "function_name": "Write",
+          "arguments": { "file_path": "a" }
+        }
+      ]
+    }
+  ]
+}
