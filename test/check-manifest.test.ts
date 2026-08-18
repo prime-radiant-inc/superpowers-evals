@@ -21,6 +21,11 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  compareRecords,
+  extractManifest,
+  ManifestExtractionError,
+} from '../src/check/manifest.ts';
 import { runPhase } from '../src/checks/index.ts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -146,6 +151,188 @@ describe('record-emission characterization (pins extractor rules)', () => {
       args: ['tool-called', 'Bash'],
       negated: true,
       passed: true,
+    });
+  });
+});
+
+// --- Static extractor + multiset compare (Task 2) ---
+// The extractor must agree with the record-emission rules pinned above.
+
+function writeChecksSh(content: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'manifest-ex-'));
+  const p = join(dir, 'checks.sh');
+  writeFileSync(p, content);
+  return p;
+}
+
+describe('extractManifest', () => {
+  test('extracts plain verbs with args, phases, and multiplicity', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    file-exists a.txt\n    file-exists a.txt\n    file-contains a.txt hello\n}\n',
+    );
+    const m = extractManifest(p);
+    expect(m.entries).toContainEqual({
+      phase: 'pre',
+      check: 'git-repo',
+      args: [],
+      negated: false,
+      count: 1,
+    });
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'file-exists',
+      args: ['a.txt'],
+      negated: false,
+      count: 2,
+    });
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'file-contains',
+      args: ['a.txt', 'hello'],
+      negated: false,
+      count: 1,
+    });
+  });
+
+  test('encodes `not` and transcript naming per the Task 1 characterization', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    not file-exists gone.txt\n    check-transcript skill-called superpowers:brainstorming\n    not check-transcript tool-called Bash\n}\n',
+    );
+    const m = extractManifest(p);
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'file-exists',
+      args: ['gone.txt'],
+      negated: true,
+      count: 1,
+    });
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'skill-called',
+      args: ['superpowers:brainstorming'],
+      negated: false,
+      count: 1,
+    });
+    // Wrapper-name rule from Task 1 characterization:
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'check-transcript',
+      args: ['tool-called', 'Bash'],
+      negated: true,
+      count: 1,
+    });
+  });
+
+  test('any token containing $ makes args a wildcard (null)', () => {
+    const p = writeChecksSh(
+      `pre() {\n    git-repo\n}\n\npost() {\n    command-succeeds 'test -n "$PWD"'\n}\n`,
+    );
+    const m = extractManifest(p);
+    expect(m.entries).toContainEqual({
+      phase: 'post',
+      check: 'command-succeeds',
+      args: null,
+      negated: false,
+      count: 1,
+    });
+  });
+
+  test('unknown verb throws ManifestExtractionError', () => {
+    const p = writeChecksSh(
+      'pre() {\n    file-exsts a.txt\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('setup-helpers lines are rejected (never valid in checks.sh)', () => {
+    const p = writeChecksSh(
+      'pre() {\n    setup-helpers run init_repo\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+});
+
+describe('compareRecords', () => {
+  const rec = (
+    over: Partial<import('../src/contracts/verdict.ts').CheckRecord>,
+  ) => ({
+    check: 'file-exists',
+    args: ['a.txt'],
+    negated: false,
+    passed: true,
+    detail: null,
+    phase: 'post' as const,
+    ...over,
+  });
+  const manifest = (
+    entries: import('../src/contracts/check-manifest.ts').ManifestEntry[],
+  ) => ({ schema_version: 1 as const, entries });
+
+  test('exact multiset match → empty diffs', () => {
+    const m = manifest([
+      {
+        phase: 'post',
+        check: 'file-exists',
+        args: ['a.txt'],
+        negated: false,
+        count: 2,
+      },
+    ]);
+    const d = compareRecords(m, [rec({}), rec({})]);
+    expect(d).toEqual({ missing: [], unexpected: [] });
+  });
+
+  test('vanished record → missing; extra record → unexpected', () => {
+    const m = manifest([
+      {
+        phase: 'post',
+        check: 'file-exists',
+        args: ['a.txt'],
+        negated: false,
+        count: 2,
+      },
+    ]);
+    expect(compareRecords(m, [rec({})]).missing).toHaveLength(1);
+    expect(
+      compareRecords(m, [
+        rec({}),
+        rec({}),
+        rec({ check: 'git-repo', args: [] }),
+      ]).unexpected,
+    ).toHaveLength(1);
+  });
+
+  test('wildcard entry matches any args but still counts multiplicity', () => {
+    const m = manifest([
+      {
+        phase: 'post',
+        check: 'command-succeeds',
+        args: null,
+        negated: false,
+        count: 1,
+      },
+    ]);
+    expect(
+      compareRecords(m, [
+        rec({ check: 'command-succeeds', args: ['whatever expanded'] }),
+      ]),
+    ).toEqual({ missing: [], unexpected: [] });
+    expect(compareRecords(m, []).missing).toHaveLength(1);
+  });
+
+  test('a FAILED record still satisfies its manifest entry (pass/fail is the composer verdict axis, presence is the manifest axis)', () => {
+    const m = manifest([
+      {
+        phase: 'post',
+        check: 'file-exists',
+        args: ['a.txt'],
+        negated: false,
+        count: 1,
+      },
+    ]);
+    expect(compareRecords(m, [rec({ passed: false })])).toEqual({
+      missing: [],
+      unexpected: [],
     });
   });
 });
