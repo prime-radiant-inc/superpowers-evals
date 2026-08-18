@@ -430,7 +430,8 @@ test('non-positive or non-integer age floors fail closed before any mutation', (
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
 
-// --- Critical 2: campaign symlinks / non-regular entries hide references ---
+// --- Campaign scan integrity: symlinks and non-regular entries could hide
+// --- references, so they fail the scan closed ---
 
 test('a symlinked file under campaigns/ fails prune closed', () => {
   const cfg = loaded();
@@ -498,7 +499,7 @@ test('a symlinked campaigns/ root fails prune closed', () => {
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
 
-// --- Critical 3: a symlinked results_root must never move outside dirs ---
+// --- Results root: a symlinked results_root must never move outside dirs ---
 
 test('a symlinked results_root fails closed and moves nothing outside', () => {
   const cfg = loaded();
@@ -541,7 +542,8 @@ test('a results_root that is a plain file fails closed', () => {
   );
 });
 
-// --- Important 2: exact stage grammar; references protect stages too ---
+// --- Stage grammar: exactly the importer's predicate, and references
+// --- protect stages too ---
 
 test('a completed near-miss .importing dir keeps verdict protection', () => {
   const cfg = loaded();
@@ -587,7 +589,7 @@ test('a campaign-mentioned exact stage dir is protected', () => {
   expect(existsSync(join(root, '.importing-run-9.123.tmp'))).toBe(true);
 });
 
-// --- Important 3: canonical, uniformly strict batch/job scanning ---
+// --- Reference scanning: canonical, uniformly strict batch/job state ---
 
 test('a batch dir without batch.json fails prune closed', () => {
   const cfg = loaded();
@@ -682,9 +684,9 @@ test('a results.jsonl row failing the canonical record schema fails prune closed
 });
 
 test('a batch dir without results.jsonl fails prune closed', () => {
-  // Supersedes the round-1 live-batch tolerance (controller ruling): apply's
-  // re-plan owns run.lock, so no batch can be racing its first append —
-  // a batch dir with no record file is stale/crashed/ambiguous state.
+  // Apply's re-plan owns run.lock, so no live batch can be racing its first
+  // append — a batch dir with no record file is stale/crashed/ambiguous
+  // state, not a batch that has yet to write its first cell.
   const cfg = loaded();
   const root = cfg.config.container.results_root;
   makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
@@ -771,7 +773,7 @@ test('a symlinked job.json fails prune closed', () => {
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
 
-// --- Fix round 2, Critical: unreadable campaign state must fail typed ---
+// --- Unreadable campaign state proves nothing and must fail typed ---
 
 test('an unreadable nested campaigns/ directory fails prune closed', () => {
   const cfg = loaded();
@@ -830,7 +832,7 @@ test('an unreadable campaign file fails prune closed', () => {
   expect(existsSync(join(root, 'old-partial'))).toBe(true);
 });
 
-// --- Fix round 2, Important: stage matcher must be exactly the importer's ---
+// --- Near-miss stage names are ordinary run dirs, never stale stages ---
 
 test('near-miss stage names with unsafe run ids or non-canonical pids keep verdict protection', () => {
   const cfg = loaded();
