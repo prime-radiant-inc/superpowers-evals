@@ -47,7 +47,7 @@ const UNMODELABLE_METACHARS = new Set([';', '&', '|', '(', ')', '<', '>', '`']);
 // Unquoted # starts a comment at the beginning of a word (mid-word it is
 // literal); a word-start comment is unmodelable here and throws. Anything
 // fancier (control operators, subshells, redirection) throws too.
-function tokenize(line: string): string[] {
+function tokenize(line: string, lineNo: number): string[] {
   const out: string[] = [];
   let cur = '';
   let started = false; // current word has begun (quote or char)
@@ -60,7 +60,9 @@ function tokenize(line: string): string[] {
       wordChar = true;
       const end = line.indexOf("'", i + 1);
       if (end === -1)
-        throw new ManifestExtractionError(`unterminated quote: ${line}`);
+        throw new ManifestExtractionError(
+          `line ${lineNo}: unterminated quote: ${line.trim()}`,
+        );
       cur += line.slice(i + 1, end);
       i = end + 1;
     } else if (c === '"') {
@@ -89,23 +91,33 @@ function tokenize(line: string): string[] {
         }
       }
       if (line[i] !== '"')
-        throw new ManifestExtractionError(`unterminated quote: ${line}`);
+        throw new ManifestExtractionError(
+          `line ${lineNo}: unterminated quote: ${line.trim()}`,
+        );
       i += 1;
-    } else if (UNMODELABLE_METACHARS.has(c)) {
-      throw new ManifestExtractionError(
-        `unmodelable shell construct '${c}' in: ${line.trim()}`,
-      );
-    } else if (c === '\\' && i + 1 < line.length) {
+    } else if (c === '\\') {
+      // Bash line continuation — an unquoted backslash at end of line. The
+      // extractor works line-by-line, so it cannot model continuations; a
+      // silent literal-backslash token would mis-extract the entry.
+      if (i + 1 >= line.length) {
+        throw new ManifestExtractionError(
+          `line ${lineNo}: line continuation (trailing backslash) is not supported: ${line.trim()}`,
+        );
+      }
       started = true;
       wordChar = true;
       cur += line[i + 1] as string;
       i += 2;
+    } else if (UNMODELABLE_METACHARS.has(c)) {
+      throw new ManifestExtractionError(
+        `line ${lineNo}: unmodelable shell construct '${c}' in: ${line.trim()}`,
+      );
     } else if (c === '#') {
       // bash: '#' begins a comment only at the start of a word; mid-word it
       // is a literal character (and escaped \# is handled by the branch above).
       if (!wordChar) {
         throw new ManifestExtractionError(
-          `inline comments are not supported: ${line.trim()}`,
+          `line ${lineNo}: inline comments are not supported: ${line.trim()}`,
         );
       }
       started = true;
@@ -141,37 +153,66 @@ function functionBodies(text: string): RawLine[] {
   const lines: RawLine[] = [];
   let phase: CheckPhase | null = null;
   let depth = 0;
+  const seenPhases = new Set<string>();
+  let lineNo = 0;
   for (const raw of text.split(/\r?\n/)) {
+    lineNo += 1;
     const s = raw.trim();
     if (!s || s.startsWith('#')) continue;
     const decl = /^(pre|post)\s*\(\s*\)/.exec(s);
     if (decl) {
-      const rest = s.slice(decl[0].length).trim();
-      if (rest !== '{' && rest !== '') {
+      const name = decl[1] as CheckPhase;
+      if (phase !== null) {
         throw new ManifestExtractionError(
-          `one-line function bodies are not supported: ${s}`,
+          `line ${lineNo}: ${name}() declared inside ${phase}() body`,
         );
       }
-      phase = decl[1] as CheckPhase;
-      if (rest === '{') depth += 1;
+      const rest = s.slice(decl[0].length).trim();
+      if (rest !== '{') {
+        throw new ManifestExtractionError(
+          `line ${lineNo}: ${name}() declaration must carry its '{' on the same line: ${s}`,
+        );
+      }
+      if (seenPhases.has(name)) {
+        throw new ManifestExtractionError(
+          `line ${lineNo}: ${name}() declared twice`,
+        );
+      }
+      seenPhases.add(name);
+      phase = name;
+      depth = 1;
       continue;
     }
     if (s === '{') {
-      depth += 1;
-      continue;
+      throw new ManifestExtractionError(
+        `line ${lineNo}: stray '{' outside a function declaration`,
+      );
     }
     if (s === '}') {
+      if (phase === null) {
+        throw new ManifestExtractionError(
+          `line ${lineNo}: unbalanced '}' with no open function body`,
+        );
+      }
       depth -= 1;
-      if (depth <= 0) phase = null;
+      if (depth === 0) phase = null;
       continue;
     }
-    if (phase && depth > 0) {
-      lines.push({
-        phase,
-        tokens: tokenize(s),
-        rawArgsHaveDollar: s.includes('$'),
-      });
+    if (phase === null) {
+      throw new ManifestExtractionError(
+        `line ${lineNo}: content outside any function body: ${s}`,
+      );
     }
+    lines.push({
+      phase,
+      tokens: tokenize(s, lineNo),
+      rawArgsHaveDollar: s.includes('$'),
+    });
+  }
+  if (phase !== null) {
+    throw new ManifestExtractionError(
+      `line ${lineNo}: unterminated function body: missing '}' before EOF`,
+    );
   }
   return lines;
 }

@@ -383,6 +383,66 @@ describe('extractManifest', () => {
     );
     expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
   });
+
+  // --- rejection: function-structure defects (census: 0 in the 85-file
+  // corpus; every real checks.sh is exactly `pre() { … }\n\npost() { … }` with
+  // no top-level code) ---
+
+  test('EOF inside a function body (missing closing brace) is rejected', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    git-repo\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test("stray '}' with no matching declaration is rejected", () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test("stray '{' outside a function declaration is rejected", () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\n{\n    git-repo\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('a phase declaration nested inside another function body is rejected', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    not file-exists x\n    pre() {\n        git-repo\n    }\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test("a declaration line with no opening '{' is rejected", () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost()\n{\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('redeclaration of the same phase is rejected', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npre() {\n    git-branch main\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('top-level code outside any function body is rejected', () => {
+    const p = writeChecksSh(
+      'set -euo pipefail\n\npre() {\n    git-repo\n}\n\npost() {\n    git-repo\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
+
+  test('an unquoted trailing backslash (line continuation) is rejected', () => {
+    const p = writeChecksSh(
+      'pre() {\n    git-repo\n}\n\npost() {\n    file-contains a.txt b\\\n}\n',
+    );
+    expect(() => extractManifest(p)).toThrow(ManifestExtractionError);
+  });
 });
 
 describe('writeManifest', () => {
