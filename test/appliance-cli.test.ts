@@ -181,14 +181,14 @@ test('status accepts --json before the id', async () => {
   expect(ids).toEqual(['job-1']);
 });
 
-test('import forwards the bundle dir and defaults force to false', async () => {
-  const calls: Array<{ bundleDir: string; force: boolean }> = [];
+test('import forwards the bundle dir with no force flag', async () => {
+  const calls: unknown[] = [];
   const program = createApplianceProgram({
     stdout: () => undefined,
     stderr: () => undefined,
     actions: noopActions({
-      import: async ({ bundleDir, force }) => {
-        calls.push({ bundleDir, force });
+      import: async (args) => {
+        calls.push(args);
         return { ok: true };
       },
     }),
@@ -201,18 +201,8 @@ test('import forwards the bundle dir and defaults force to false', async () => {
     '--json',
     '/srv/bundles/lane-b',
   ]);
-  await program.parseAsync([
-    'node',
-    'evals-appliance',
-    'import',
-    '--force',
-    '/srv/bundles/lane-b',
-  ]);
 
-  expect(calls).toEqual([
-    { bundleDir: '/srv/bundles/lane-b', force: false },
-    { bundleDir: '/srv/bundles/lane-b', force: true },
-  ]);
+  expect(calls).toEqual([{ json: true, bundleDir: '/srv/bundles/lane-b' }]);
 });
 
 test('run forwards scenario and coding agent with appliance options', async () => {

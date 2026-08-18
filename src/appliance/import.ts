@@ -3,17 +3,19 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
 } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { BundleManifest } from '../export-runs/manifest.ts';
 import { BundleManifestSchema, denylistHit } from '../export-runs/manifest.ts';
-import { ApplianceError } from './errors.ts';
+import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
 import { atomicWriteJson } from './fs.ts';
 import { createJob, readJob, updateJob } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { provenancePath } from './provenance.ts';
+import { dirsEquivalent, moveToQuarantine } from './safe-fs.ts';
 import {
   ImportedProvenanceRecordSchema,
   type JobRecord,
@@ -23,13 +25,20 @@ import {
 
 export interface ImportArgs {
   readonly bundleDir: string;
-  readonly force: boolean;
+}
+
+export interface ImportFailure {
+  readonly run_id: string;
+  readonly code: ApplianceErrorCode | 'unknown';
+  readonly message: string;
 }
 
 export interface ImportResult {
   readonly imported: number;
   readonly skipped: number;
+  readonly healed: number;
   readonly failed: number;
+  readonly failures: readonly ImportFailure[];
   readonly run_ids: readonly string[];
 }
 
@@ -85,8 +94,19 @@ function allBundleFiles(runDir: string): string[] {
 
 // Validation runs over the whole bundle before a single run lands, so a bad
 // bundle leaves the results root untouched rather than half-populated.
+const RUN_ID_SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 function validateBundle(bundleDir: string, manifest: BundleManifest): void {
   for (const entry of manifest.entries) {
+    // Safety first: the run_id becomes a path component under the results
+    // root, so traversal is a config fault, never an artifact probe.
+    if (!RUN_ID_SAFE.test(entry.run_id) || entry.run_id.includes('..')) {
+      throw new ApplianceError(
+        'config_invalid',
+        'import',
+        `unsafe run_id in manifest: ${JSON.stringify(entry.run_id)}`,
+      );
+    }
     const runDir = join(bundleDir, 'runs', entry.run_id);
     if (!existsSync(runDir) || !statSync(runDir).isDirectory()) {
       throw new ApplianceError(
@@ -163,6 +183,53 @@ function writeImportedProvenance(
   return path;
 }
 
+function recordImportJob(
+  loaded: LoadedApplianceConfig,
+  entry: BundleManifest['entries'][number],
+  manifest: BundleManifest,
+  importedAt: string,
+  destRun: string,
+): void {
+  const origin: Origin = {
+    kind: 'imported',
+    imported_at: importedAt,
+    source_host: manifest.source_host,
+    source_path: entry.source_path,
+    superpowers_sha: entry.superpowers_sha,
+    superpowers_tree_sha: entry.superpowers_tree_sha,
+    inferred_superpowers_sha: entry.inferred_superpowers_sha,
+    rev_recovery: entry.rev_recovery,
+    harness_rev: entry.harness_rev,
+    scenario: entry.scenario,
+    coding_agent: entry.coding_agent,
+    credential: entry.credential,
+  };
+
+  const created = createJob(loaded, {
+    kind: 'import',
+    // An imported run's ref is whatever we could establish about it, which
+    // origin carries; the request field records the same for readability.
+    superpowersRef: entry.superpowers_sha ?? 'unknown',
+    argv: ['evals-appliance', 'import', entry.run_id],
+    requester: { agent: null, thread: null, task: null },
+  });
+
+  const job = updateJob(loaded, created.job_id, (current) => ({
+    ...current,
+    status: 'done' as const,
+    started_at: entry.started_at,
+    finished_at: entry.finished_at,
+    origin,
+    artifacts: { ...current.artifacts, run_id: entry.run_id },
+    result: {
+      exit_code: entry.final === 'pass' ? 0 : 1,
+      summary: `imported ${entry.final} run ${entry.run_id}`,
+    },
+  }));
+
+  writeImportedProvenance(loaded, job, origin, destRun);
+}
+
 export function importBundle(
   loaded: LoadedApplianceConfig,
   args: ImportArgs,
@@ -193,69 +260,75 @@ function importLocked(
   const resultsRoot = loaded.config.container.results_root;
   const importedAt = new Date().toISOString();
   const runIds: string[] = [];
+  const failures: ImportFailure[] = [];
   let imported = 0;
   let skipped = 0;
+  let healed = 0;
   let failed = 0;
 
   for (const entry of manifest.entries) {
     const destRun = join(resultsRoot, entry.run_id);
-    if (alreadyImported(loaded, entry.run_id) && !args.force) {
-      skipped += 1;
-      continue;
-    }
-
+    // Stage beside the destination, then decide. The landed dir is never
+    // deleted or copied over by this command. Recursive cleanup is permitted
+    // only for this exact process-owned stage path (its run_id is validated
+    // by validateBundle), never for destRun or any stable run directory.
+    const staged = join(
+      resultsRoot,
+      `.importing-${entry.run_id}.${process.pid}.tmp`,
+    );
     try {
-      // Land the payload first: a job record pointing at a missing run dir is
-      // worse than a run dir with no job, which the next import repairs.
-      rmSync(destRun, { recursive: true, force: true });
-      cpSync(join(args.bundleDir, 'runs', entry.run_id), destRun, {
+      // A crashed import's stale stage from this exact slot:
+      rmSync(staged, { recursive: true, force: true });
+      cpSync(join(args.bundleDir, 'runs', entry.run_id), staged, {
         recursive: true,
       });
 
-      const origin: Origin = {
-        kind: 'imported',
-        imported_at: importedAt,
-        source_host: manifest.source_host,
-        source_path: entry.source_path,
-        superpowers_sha: entry.superpowers_sha,
-        superpowers_tree_sha: entry.superpowers_tree_sha,
-        inferred_superpowers_sha: entry.inferred_superpowers_sha,
-        rev_recovery: entry.rev_recovery,
-        harness_rev: entry.harness_rev,
-        scenario: entry.scenario,
-        coding_agent: entry.coding_agent,
-        credential: entry.credential,
-      };
+      if (!existsSync(destRun)) {
+        renameSync(staged, destRun);
+        recordImportJob(loaded, entry, manifest, importedAt, destRun);
+        runIds.push(entry.run_id);
+        imported += 1;
+        continue;
+      }
 
-      const created = createJob(loaded, {
-        kind: 'import',
-        // An imported run's ref is whatever we could establish about it, which
-        // origin carries; the request field records the same for readability.
-        superpowersRef: entry.superpowers_sha ?? 'unknown',
-        argv: ['evals-appliance', 'import', entry.run_id],
-        requester: { agent: null, thread: null, task: null },
+      if (
+        dirsEquivalent(staged, destRun, {
+          exclude: ['appliance-provenance.json'],
+        })
+      ) {
+        rmSync(staged, { recursive: true, force: true });
+        if (alreadyImported(loaded, entry.run_id)) {
+          skipped += 1;
+        } else {
+          // The run dir predates appliance records: heal the record so
+          // status/show see it. The dir's bytes are already correct.
+          recordImportJob(loaded, entry, manifest, importedAt, destRun);
+          healed += 1;
+        }
+        continue;
+      }
+
+      const quarantined = moveToQuarantine(
+        loaded,
+        staged,
+        `import-conflict-${entry.run_id}`,
+      );
+      failures.push({
+        run_id: entry.run_id,
+        code: 'import_conflict',
+        message: `destination exists with different content; staged payload quarantined to ${quarantined}; landed run untouched`,
       });
-
-      const job = updateJob(loaded, created.job_id, (current) => ({
-        ...current,
-        status: 'done' as const,
-        started_at: entry.started_at,
-        finished_at: entry.finished_at,
-        origin,
-        artifacts: { ...current.artifacts, run_id: entry.run_id },
-        result: {
-          exit_code: entry.final === 'pass' ? 0 : 1,
-          summary: `imported ${entry.final} run ${entry.run_id}`,
-        },
-      }));
-
-      writeImportedProvenance(loaded, job, origin, destRun);
-      runIds.push(entry.run_id);
-      imported += 1;
-    } catch {
+      failed += 1;
+    } catch (error) {
+      rmSync(staged, { recursive: true, force: true });
+      failures.push({
+        run_id: entry.run_id,
+        code: error instanceof ApplianceError ? error.code : 'unknown',
+        message: error instanceof Error ? error.message : String(error),
+      });
       failed += 1;
     }
   }
 
-  return { imported, skipped, failed, run_ids: runIds };
+  return { imported, skipped, healed, failed, failures, run_ids: runIds };
 }

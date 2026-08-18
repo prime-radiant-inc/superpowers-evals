@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -133,7 +134,7 @@ function expectCode(fn: () => void, code: ApplianceErrorCode): void {
 
 test('import lands the payload and writes an imported job record', () => {
   const cfg = loaded();
-  const result = importBundle(cfg, { bundleDir: makeBundle(), force: false });
+  const result = importBundle(cfg, { bundleDir: makeBundle() });
 
   expect(result.imported).toBe(1);
   expect(result.skipped).toBe(0);
@@ -160,7 +161,7 @@ test('import lands the payload and writes an imported job record', () => {
 
 test('imported provenance is written next to the run and in the state dir', () => {
   const cfg = loaded();
-  importBundle(cfg, { bundleDir: makeBundle(), force: false });
+  importBundle(cfg, { bundleDir: makeBundle() });
   const job = readJob(cfg, RUN_ID);
 
   const stateRecord = ImportedProvenanceRecordSchema.parse(
@@ -183,10 +184,7 @@ test('a checksum mismatch aborts before anything lands', () => {
   const cfg = loaded();
   expectCode(
     () =>
-      importBundle(cfg, {
-        bundleDir: makeBundle({ corruptChecksum: true }),
-        force: false,
-      }),
+      importBundle(cfg, { bundleDir: makeBundle({ corruptChecksum: true }) }),
     'artifact_missing',
   );
   expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
@@ -202,7 +200,6 @@ test('a credential-shaped path in the bundle is rejected outright', () => {
         bundleDir: makeBundle({
           extraFile: { path: 'raw-sessions/auth.json', body: '{"t":"secret"}' },
         }),
-        force: false,
       }),
     'config_invalid',
   );
@@ -214,8 +211,8 @@ test('a credential-shaped path in the bundle is rejected outright', () => {
 test('importing the same bundle twice lands one copy', () => {
   const cfg = loaded();
   const bundle = makeBundle();
-  importBundle(cfg, { bundleDir: bundle, force: false });
-  const second = importBundle(cfg, { bundleDir: bundle, force: false });
+  importBundle(cfg, { bundleDir: bundle });
+  const second = importBundle(cfg, { bundleDir: bundle });
 
   expect(second.imported).toBe(0);
   expect(second.skipped).toBe(1);
@@ -224,10 +221,10 @@ test('importing the same bundle twice lands one copy', () => {
   expect(job.artifacts.run_id).toBe(RUN_ID);
 });
 
-test('--force replaces an already-imported run', () => {
+test('a conflicting destination is rejected: landed run untouched, payload quarantined', () => {
   const cfg = loaded();
   const bundle = makeBundle();
-  importBundle(cfg, { bundleDir: bundle, force: false });
+  importBundle(cfg, { bundleDir: bundle });
   const landed = join(
     cfg.config.container.results_root,
     RUN_ID,
@@ -235,9 +232,51 @@ test('--force replaces an already-imported run', () => {
   );
   writeFileSync(landed, 'STALE');
 
-  const second = importBundle(cfg, { bundleDir: bundle, force: true });
-  expect(second.imported).toBe(1);
-  expect(readFileSync(landed, 'utf8')).not.toBe('STALE');
+  const second = importBundle(cfg, { bundleDir: bundle });
+  expect(second.imported).toBe(0);
+  expect(second.failed).toBe(1);
+  expect(second.failures[0]?.code).toBe('import_conflict');
+  // The landed evidence is byte-for-byte what it was:
+  expect(readFileSync(landed, 'utf8')).toBe('STALE');
+  // The incoming payload was quarantined intact, not deleted:
+  const qroot = join(cfg.config.root, 'state', 'quarantine');
+  const qdirs = readdirSync(qroot);
+  const qname = qdirs.find((d) => d.includes(RUN_ID));
+  expect(qname).toBeDefined();
+  expect(
+    readFileSync(join(qroot, qname as string, 'verdict.json'), 'utf8'),
+  ).not.toBe('STALE');
+});
+
+test('a pre-existing identical run dir with no job record is record-healed, not overwritten', () => {
+  const cfg = loaded();
+  const bundle = makeBundle();
+  // A run dir that predates appliance records (e.g. committed locally):
+  const destRun = join(cfg.config.container.results_root, RUN_ID);
+  mkdirSync(destRun, { recursive: true });
+  // Byte-identical to makeBundle's payload (same body string as makeBundle uses):
+  writeFileSync(
+    join(destRun, 'verdict.json'),
+    JSON.stringify({ schema: 1, final: 'pass' }),
+  );
+
+  const result = importBundle(cfg, { bundleDir: bundle });
+  expect(result.imported).toBe(0);
+  expect(result.healed).toBe(1);
+  expect(readJob(cfg, RUN_ID).artifacts.run_id).toBe(RUN_ID);
+});
+
+test('a manifest run_id with path traversal is rejected before anything lands', () => {
+  const cfg = loaded();
+  const dir = makeBundle();
+  const manifestPath = join(dir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.entries[0].run_id = '../../evil';
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+  expect(existsSync(join(cfg.config.container.results_root, 'evil'))).toBe(
+    false,
+  );
 });
 
 test('a failing verdict imports with a non-zero exit code', () => {
@@ -248,7 +287,7 @@ test('a failing verdict imports with a non-zero exit code', () => {
   manifest.entries[0].final = 'fail';
   writeFileSync(manifestPath, JSON.stringify(manifest));
 
-  importBundle(cfg, { bundleDir: dir, force: false });
+  importBundle(cfg, { bundleDir: dir });
   expect(readJob(cfg, RUN_ID).result.exit_code).toBe(1);
 });
 
@@ -263,7 +302,7 @@ test('import refuses while a live job holds run.lock', () => {
 
   try {
     expectCode(
-      () => importBundle(cfg, { bundleDir: makeBundle(), force: false }),
+      () => importBundle(cfg, { bundleDir: makeBundle() }),
       'lock_busy',
     );
     expect(existsSync(join(cfg.config.container.results_root, RUN_ID))).toBe(
@@ -278,15 +317,12 @@ test('import releases run.lock when a bundle is rejected', () => {
   const cfg = loaded();
   expectCode(
     () =>
-      importBundle(cfg, {
-        bundleDir: makeBundle({ corruptChecksum: true }),
-        force: false,
-      }),
+      importBundle(cfg, { bundleDir: makeBundle({ corruptChecksum: true }) }),
     'artifact_missing',
   );
 
   // A rejected import must not strand the lock; the next one has to work.
-  const result = importBundle(cfg, { bundleDir: makeBundle(), force: false });
+  const result = importBundle(cfg, { bundleDir: makeBundle() });
   expect(result.imported).toBe(1);
 });
 
@@ -294,8 +330,5 @@ test('a malformed manifest is a config error, not a crash', () => {
   const cfg = loaded();
   const dir = mkdtempSync(join(tmpdir(), 'bundle-bad-'));
   writeFileSync(join(dir, 'manifest.json'), '{"schema_version": 99}');
-  expectCode(
-    () => importBundle(cfg, { bundleDir: dir, force: false }),
-    'config_invalid',
-  );
+  expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
 });

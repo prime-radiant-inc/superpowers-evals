@@ -45,7 +45,6 @@ export interface IdCommandArgs extends BaseCommandArgs {
 
 export interface ImportCommandArgs extends BaseCommandArgs {
   readonly bundleDir: string;
-  readonly force: boolean;
 }
 
 export type ApplianceActionResult = unknown;
@@ -381,10 +380,7 @@ function defaultActions(): ApplianceActions {
     },
     import: async (args) => {
       const loaded = loadApplianceConfig(undefined, { ensureState: true });
-      return importBundle(loaded, {
-        bundleDir: args.bundleDir,
-        force: args.force,
-      });
+      return importBundle(loaded, { bundleDir: args.bundleDir });
     },
   };
 }
@@ -587,16 +583,13 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
 
   program
     .command('import')
-    .description('ingest a scrubbed bundle built by quorum export-runs')
+    .description(
+      'ingest a scrubbed bundle built by quorum export-runs (never modifies landed runs; conflicts are quarantined)',
+    )
     .option('--json', 'emit JSON')
-    .option('--force', 'replace runs that are already imported')
     .argument('<bundle-dir>')
-    .action((bundleDir: string, options: JsonOption & { force?: boolean }) => {
-      const args = {
-        ...commandOptions(options),
-        bundleDir,
-        force: options.force ?? false,
-      };
+    .action((bundleDir: string, options: JsonOption) => {
+      const args = { ...commandOptions(options), bundleDir };
       return handleAction(args, resolvedDeps, () => actions.import(args));
     });
 
