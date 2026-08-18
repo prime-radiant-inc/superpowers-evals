@@ -39,13 +39,14 @@ test('provisionSubprocessEnv projects the allowlist and overlays extras', () => 
   }
 });
 
-// The exact-list contract (Fix Round 1): the shared list is the exact union of
-// non-secret names with ACTIVE-COMMAND evidence across the in-scope commands
-// (both agy calls, gemini extensions link/list, hermes plugins enable,
-// node --check, gh auth token, sshpass/ssh/scp) — see the evidence table in
-// src/agents/subprocess-env.ts and task-2-report.md Fix Round 1. A name may
-// only be added together with that evidence; this regression makes an
-// unevidenced re-add fail the gate instead of leaking silently.
+// The exact-list contract (Fix Rounds 1–2): the shared list is the exact union
+// of non-secret names with per-name ACTIVE-COMMAND evidence across the
+// in-scope commands (both agy calls, gemini extensions link/list, hermes
+// plugins enable, node --check, gh auth token, sshpass/ssh/scp) — see the
+// evidence record in src/agents/subprocess-env.ts and task-2-report.md Fix
+// Rounds 1–2. A name may only be added together with that evidence; this
+// regression makes an unevidenced re-add fail the gate instead of leaking
+// silently.
 test('PROVISION_ENV_ALLOWLIST is exactly the active-command-evidenced union', () => {
   expect([...PROVISION_ENV_ALLOWLIST]).toEqual([
     'GH_CONFIG_DIR',
@@ -55,8 +56,6 @@ test('PROVISION_ENV_ALLOWLIST is exactly the active-command-evidenced union', ()
     'HTTPS_PROXY',
     'NO_PROXY',
     'PATH',
-    'SSL_CERT_DIR',
-    'SSL_CERT_FILE',
     'XDG_CONFIG_HOME',
     'http_proxy',
     'https_proxy',

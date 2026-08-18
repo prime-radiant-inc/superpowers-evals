@@ -8,9 +8,10 @@ import { getEnv } from '../env.ts';
 // loudly and is re-added only with active-command evidence; a leaked var is
 // silent.
 //
-// This list is the EXACT union of names with evidence on the active path of an
-// in-scope command (Fix Round 1 audit, 2026-08-18, macOS arm64 host; method +
-// raw observations in task-2-report.md). In-scope commands: C1
+// This list is the EXACT union of names with per-name evidence on the active
+// path of an in-scope command (Fix Round 1 audit, 2026-08-18, macOS arm64
+// host, as corrected in Fix Round 2; method + raw observations in
+// task-2-report.md). In-scope commands: C1
 // `agy --gemini_dir=… plugin install SRC`, C2 `agy --gemini_dir=… --print`
 // (network preflight), C3 `gemini extensions link SRC --consent`, C4
 // `gemini extensions list`, C5 `hermes plugins enable superpowers`, C6
@@ -29,8 +30,6 @@ import { getEnv } from '../env.ts';
 //     x/net/http/httpproxy FromEnvironment resolver runs on the preflight's
 //     network path; its documented read set is exactly HTTP_PROXY/http_proxy,
 //     HTTPS_PROXY/https_proxy, NO_PROXY/no_proxy.
-//   SSL_CERT_FILE/SSL_CERT_DIR — C2 runtime: bogus values fail the
-//     preflight's TLS POST ("Eligibility check failed: Post https://…").
 //   GH_HOST — C7 runtime: GH_HOST=git.example.com → "no oauth token found for
 //     git.example.com" (actively routes host selection).
 //   GH_CONFIG_DIR — C7 runtime: pointing it at a dir with no config yields
@@ -44,7 +43,13 @@ import { getEnv } from '../env.ts';
 // unrelated distribution-wide hit): TERM, LANG, LC_ALL, LC_CTYPE, TMPDIR,
 // SHELL, USER, LOGNAME, TZ, CI, ALL_PROXY, all_proxy, NODE_EXTRA_CA_CERTS,
 // REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE, XDG_CACHE_HOME, XDG_DATA_HOME,
-// XDG_STATE_HOME. Credential-shaped names (GEMINI_API_KEY, GH_TOKEN, …) stay
+// XDG_STATE_HOME. Also absent (removed in Fix Round 2): SSL_CERT_FILE and
+// SSL_CERT_DIR — the Fix Round 1 probe set BOTH to bogus values in a single
+// C2 run, proving only that at least one of the pair affects the preflight's
+// TLS POST, which does not independently justify either name; under the
+// fail-loud rule a custom-CA host fails loudly and re-adds only the
+// demonstrated name with per-name evidence. Credential-shaped names
+// (GEMINI_API_KEY, GH_TOKEN, …) stay
 // out by design: provisioning delivers credentials via per-run 0600 files or
 // the OS keyring, never the host env. The exact-list regression in
 // test/agent-subprocess-env.test.ts freezes this set; a name may only be
@@ -57,8 +62,6 @@ export const PROVISION_ENV_ALLOWLIST: readonly string[] = [
   'HTTPS_PROXY',
   'NO_PROXY',
   'PATH',
-  'SSL_CERT_DIR',
-  'SSL_CERT_FILE',
   'XDG_CONFIG_HOME',
   'http_proxy',
   'https_proxy',
