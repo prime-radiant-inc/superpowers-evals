@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -171,6 +172,14 @@ test('the spawned gauntlet child gets the projection, not the host env', async (
     const child = JSON.parse(
       readFileSync(join(runDir, 'mock-gauntlet-env.json'), 'utf8'),
     ) as Record<string, string | undefined>;
+    // Gauntlet is a Bun executable. It must start inside the fresh run dir so
+    // Bun cannot reload an operator checkout's .env after the runner projects
+    // the child environment.
+    expect(
+      realpathSync(
+        readFileSync(join(runDir, 'mock-gauntlet-cwd.txt'), 'utf8').trim(),
+      ),
+    ).toBe(realpathSync(runDir));
     // Hostile provider bundle: absent.
     expect(child['OPENAI_API_KEY']).toBeUndefined();
     expect(child['GEMINI_API_KEY']).toBeUndefined();

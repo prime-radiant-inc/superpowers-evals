@@ -58,6 +58,10 @@ if (fixture === 'hang') {
       join(projectDir, 'mock-gauntlet-env.json'),
       `${JSON.stringify(capture, null, 2)}\n`,
     );
+    writeFileSync(
+      join(projectDir, 'mock-gauntlet-cwd.txt'),
+      `${process.cwd()}\n`,
+    );
   }
 
   // 1) gauntlet result artifacts: <project-dir>/gauntlet-agent/results/<runId>/.

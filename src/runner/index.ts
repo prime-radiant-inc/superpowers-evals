@@ -326,6 +326,7 @@ interface GauntletExit {
 function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   return new Promise<GauntletExit>((resolvePromise, rejectPromise) => {
     const child = spawn('gauntlet', buildGauntletArgv(a), {
+      cwd: a.runDir,
       env: {
         ...a.envBase,
         QUORUM_AGENT_CWD: a.launchCwd,
