@@ -60,6 +60,7 @@ import {
   diagnoseKimiUnmatchedLogs,
   snapshotDir,
 } from '../capture/index.ts';
+import { readManifest } from '../check/manifest.ts';
 import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
 import { compose } from '../composer.ts';
 import {
@@ -68,6 +69,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
+import type { CheckManifest } from '../contracts/check-manifest.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
@@ -989,7 +991,12 @@ export async function runScenario(
       checks: [],
       captureEmpty: false,
       error: { stage, message },
-      expected: null,
+      // Best-effort read, guarded: this site only runs while composing an
+      // already-staged error (compose short-circuits on `error` before ever
+      // consulting `expected`), and the very manifest that caused the error —
+      // e.g. an unparseable file readManifest throws on — must not crash the
+      // error verdict itself.
+      expected: safeExpectedChecks(a.scenarioDir),
     });
   }
   // Best-effort provenance stamp (PRI-2494). The binary name comes from the
@@ -1060,6 +1067,20 @@ function errorStage(err: unknown): RunErrorStage {
     return 'setup';
   }
   return 'unknown';
+}
+
+// Best-effort manifest read for the runScenario catch's error compose. There
+// the manifest may itself be the reason the run failed (readManifest throws on
+// an unparseable file), so a plain read could throw while composing the error
+// verdict and lose it entirely; null (absent/unreadable = legacy semantics,
+// never a false pass) keeps error composition crash-free. The value is inert
+// anyway: compose short-circuits on `error` before consulting `expected`.
+function safeExpectedChecks(scenarioDir: string): CheckManifest | null {
+  try {
+    return readManifest(scenarioDir);
+  } catch {
+    return null;
+  }
 }
 
 // The context dir an agent installs into <runDir>/gauntlet-agent/context/.
@@ -1233,6 +1254,14 @@ async function runInnerBody(
     });
   }
 
+  // Expected-check manifest, loaded once for every later compose site: a run
+  // whose emitted records drift from the scenario's committed manifest can
+  // never compose pass (the composer turns any mismatch into a checks-stage
+  // indeterminate). Absent file = null = legacy composition. An unparseable
+  // manifest throws here and surfaces as a setup-stage error verdict via the
+  // runScenario catch — never a silent legacy compose.
+  const expectedChecks = readManifest(a.scenarioDir);
+
   // 5. Coding-agent gating: honor the `# coding-agents:` directive before any
   //    side effect, so a direct `quorum run` against an excluded agent skips.
   const allowed = parseCodingAgentsDirective(checksSh);
@@ -1347,7 +1376,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `pre-checks crashed (exit ${pre.exitCode})${crashHint(pre.stderr)}`,
       },
-      expected: null,
+      expected: expectedChecks,
     });
   }
   if (pre.records.some((r) => !r.passed)) {
@@ -1356,7 +1385,7 @@ async function runInnerBody(
       checks: [...pre.records],
       captureEmpty: false,
       error: null,
-      expected: null,
+      expected: expectedChecks,
     });
   }
 
@@ -1926,7 +1955,7 @@ async function runInnerBody(
         stage: 'checks',
         message: `post-checks crashed (exit ${post.exitCode})${crashHint(post.stderr)}`,
       },
-      expected: null,
+      expected: expectedChecks,
     });
   }
 
@@ -1953,7 +1982,7 @@ async function runInnerBody(
     checks: [...pre.records, ...post.records],
     captureEmpty,
     error: null,
-    expected: null,
+    expected: expectedChecks,
   });
   // Economics is measurement, never worth losing a verdict over: a wrong-typed
   // artifact (version skew, tampering, a legacy pre-obol usage file) degrades to
