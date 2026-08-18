@@ -23,7 +23,7 @@ import { getEnv } from '../env.ts';
 // CheckRecord minus its phase field.
 const SinkRecordSchema = CheckRecordSchema.omit({ phase: true });
 
-const CHECK_ENV_ALLOWLIST = [
+export const CHECK_ENV_ALLOWLIST = [
   'CI',
   'COMSPEC',
   'LANG',

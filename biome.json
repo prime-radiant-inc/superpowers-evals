@@ -116,7 +116,8 @@
         "test/check-tool.test.ts",
         "test/prelude-record-equality.test.ts",
         "test/prelude-drift.test.ts",
-        "test/provenance.test.ts"
+        "test/provenance.test.ts",
+        "test/setup-step-env.test.ts"
       ],
       "linter": {
         "rules": {
