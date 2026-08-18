@@ -20,6 +20,11 @@ import {
 import { basename, join, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { FS_VERBS } from './check/dispatch.ts';
+import {
+  extractManifest,
+  ManifestExtractionError,
+  readManifest,
+} from './check/manifest.ts';
 import { TRANSCRIPT_VERBS } from './check/transcript-dispatch.ts';
 import { validateBaselineManifest } from './scenario-manifest.ts';
 import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
@@ -53,7 +58,10 @@ set -euo pipefail
 setup-helpers run create_base_repo
 `;
 
-// Scaffolded checks.sh skeleton.
+// Scaffolded checks.sh skeleton. The post() body keeps its TODO as a
+// full-line comment followed by the bare `:` no-op: an inline comment after
+// `:` would make the skeleton unextractable by check-manifest (the committed
+// manifest must be generatable straight from `quorum new` output).
 const CHECKS_TEMPLATE = `# Deterministic checks for this scenario. Run by quorum.
 # pre() runs after setup.sh, before the Coding-Agent.
 # post() runs after the Coding-Agent's run is captured.
@@ -64,7 +72,8 @@ pre() {
 }
 
 post() {
-    : # TODO: add checks
+    # TODO: add checks
+    :
 }
 `;
 
@@ -208,6 +217,36 @@ function validateChecksSh(scenarioDir: string): string[] {
   return problems;
 }
 
+// Validate the committed expected-check manifest: checks-manifest.json must
+// exist and byte-match a fresh extraction of checks.sh. Only called when
+// validateChecksSh is clean — a manifest can only be judged against a
+// parseable checks.sh, and a comments-only file legitimately extracts to an
+// empty manifest (phase presence is validateChecksSh's job). Equality is by
+// JSON.stringify: extractManifest is entry-order deterministic (it walks
+// checks.sh top-to-bottom) and writeManifest/readManifest round-trip the
+// canonical key order, so an unchanged checks.sh never reads as stale.
+function validateManifest(scenarioDir: string): string[] {
+  try {
+    const expected = extractManifest(join(scenarioDir, 'checks.sh'));
+    const committed = readManifest(scenarioDir);
+    if (committed === null) {
+      return [
+        'checks-manifest.json missing (run: quorum check --update-manifests)',
+      ];
+    }
+    if (JSON.stringify(committed) !== JSON.stringify(expected)) {
+      return [
+        'checks-manifest.json stale — checks.sh changed (run: quorum check --update-manifests)',
+      ];
+    }
+    return [];
+  } catch (e) {
+    if (e instanceof ManifestExtractionError)
+      return [`manifest extraction: ${e.message}`];
+    throw e;
+  }
+}
+
 // Count occurrences of a single character in a string.
 function countChar(s: string, ch: string): number {
   let n = 0;
@@ -315,7 +354,12 @@ export function checkScenario(scenarioDir: string): string[] {
     }
   }
 
-  problems.push(...validateChecksSh(scenarioDir));
+  const checksProblems = validateChecksSh(scenarioDir);
+  problems.push(...checksProblems);
+  // A manifest can only be judged against a checks.sh that already validates.
+  if (checksProblems.length === 0) {
+    problems.push(...validateManifest(scenarioDir));
+  }
   if (existsSync(join(scenarioDir, 'baseline-manifest.json'))) {
     problems.push(...validateBaselineManifest(scenarioDir));
   }

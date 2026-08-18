@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  appendFileSync,
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -11,6 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { extractManifest, writeManifest } from '../src/check/manifest.ts';
 import {
   checkScenario,
   fixExecutableBits,
@@ -82,6 +84,13 @@ test('newScenario defaults the story id to the directory basename when no name i
 test('a fresh scenario round-trips through checkScenario with zero problems', () => {
   const root = scenariosRoot();
   const dir = newScenario(join(root, 'fresh'));
+  // A fresh skeleton is structurally valid except for its not-yet-generated
+  // manifest — the authoring flow is quorum new → edit →
+  // quorum check --update-manifests → commit both files.
+  expect(checkScenario(dir)).toEqual([
+    'checks-manifest.json missing (run: quorum check --update-manifests)',
+  ]);
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
@@ -177,6 +186,7 @@ test('checkScenario accepts multiple known helpers on one line', () => {
     '#!/usr/bin/env bash\nsetup-helpers run create_base_repo add_worktree\n',
   );
   chmodSync(setup, 0o755);
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
@@ -344,6 +354,7 @@ test('checkScenario passes init_repo_from_fixtures when fixtures/ is present', (
   chmodSync(join(dir, 'setup.sh'), 0o755);
   mkdirSync(join(dir, 'fixtures'), { recursive: true });
   writeFileSync(join(dir, 'fixtures', 'plan.md'), 'PLAN\n');
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
@@ -356,6 +367,7 @@ test('checkScenario does not demand fixtures/ when init_repo_from_fixtures only 
     '#!/usr/bin/env bash\nset -euo pipefail\n# not using init_repo_from_fixtures here\nsetup-helpers run create_base_repo\n',
   );
   chmodSync(join(dir, 'setup.sh'), 0o755);
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
   expect(checkScenario(dir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
@@ -439,8 +451,12 @@ test('checkScenario accepts real verbs, not/check-transcript, helpers, and shell
       '',
     ].join('\n'),
   );
-  const problems = checkScenario(dir);
-  expect(problems.filter((p) => p.includes('unknown check'))).toEqual([]);
+  // The verb lint's own messages all start with 'checks.sh:' — filter to that
+  // prefix so this stays a lint-layer test: this fixture deliberately uses
+  // shell control flow (`if`, `local`) that manifest extraction rejects, and
+  // validateManifest reports it separately as 'manifest extraction: ...'.
+  const problems = checkScenario(dir).filter((p) => p.startsWith('checks.sh:'));
+  expect(problems).toEqual([]);
 });
 
 // PRI-2494 prototype-chain false-pass: JS prototype names must NOT lint as valid verbs.
@@ -471,4 +487,39 @@ test('every active scenario passes the verb lint', () => {
       problems: [],
     });
   }
+});
+
+// Expected-check manifest freshness (composer false-pass hardening): every
+// scenario must commit a checks-manifest.json that matches a fresh extraction
+// of its checks.sh. The authoring flow is: edit checks.sh →
+// `bun run quorum check --update-manifests` → commit both files.
+test('checkScenario flags a missing manifest', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  const problems = checkScenario(dir);
+  expect(problems.some((p) => p.includes('checks-manifest.json missing'))).toBe(
+    true,
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('checkScenario flags a stale manifest and passes a fresh one', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  writeManifest(dir, extractManifest(join(dir, 'checks.sh')));
+  expect(checkScenario(dir).filter((p) => p.includes('manifest'))).toHaveLength(
+    0,
+  );
+  // Edit checks.sh without regenerating:
+  appendFileSync(join(dir, 'checks.sh'), '\n'); // whitespace-only must NOT go stale
+  expect(checkScenario(dir).filter((p) => p.includes('manifest'))).toHaveLength(
+    0,
+  );
+  const text = readFileSync(join(dir, 'checks.sh'), 'utf8');
+  writeFileSync(
+    join(dir, 'checks.sh'),
+    text.replace('post() {', 'post() {\n    git-repo'),
+  );
+  expect(checkScenario(dir).some((p) => p.includes('stale'))).toBe(true);
+  rmSync(root, { recursive: true, force: true });
 });
