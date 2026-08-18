@@ -23,7 +23,9 @@ type LauncherAgent =
   | 'kimi'
   | 'pi'
   | 'hermes'
-  | 'antigravity';
+  | 'antigravity'
+  | 'opencode'
+  | 'serf';
 
 // Context handed to per-agent fixture builders.
 interface FixtureCtx {
@@ -50,11 +52,11 @@ interface LauncherFixture {
 
 // Each agent in the LauncherAgent union has an entry — the launchers this
 // suite black-box-tests (claude/codex plus the F13-converted
-// gemini/kimi/pi/hermes/antigravity). opencode/serf/copilot carry env -i
-// walls of their own but have no coverage here yet, and claude-windows
-// delegates its env to the Windows guest's launch.cmd, so there is no local
-// launcher to test. installLauncher throws on a missing entry so an
-// uncovered agent fails loudly.
+// gemini/kimi/pi/hermes/antigravity/opencode/serf). copilot carries an env -i
+// wall of its own with no coverage here yet, and claude-windows delegates its
+// env to the Windows guest's launch.cmd, so there is no local launcher to
+// test. installLauncher throws on a missing entry so an uncovered agent fails
+// loudly.
 const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
   claude: {
     binary: 'claude',
@@ -129,6 +131,27 @@ const FIXTURES: Partial<Record<LauncherAgent, LauncherFixture>> = {
   // template's $QUORUM_AGENT_HOME arrives via homeEnvSubstitutions.
   antigravity: {
     binary: 'agy',
+  },
+  // No env file: the selected credential lives in the private mode-0600
+  // opencode.json provisioning writes into the throwaway home's config dir,
+  // so nothing secret may ride the env.
+  opencode: {
+    binary: 'opencode',
+  },
+  serf: {
+    binary: 'serf',
+    // The private serf-api.env provisioning writes: exactly the selected env
+    // name (here the campaign's OPENROUTER_API_KEY) with the credential value.
+    envFile: {
+      defaultContent: "OPENROUTER_API_KEY='sk-serf-file'\n",
+      substitutions: (envFile) => ({
+        $SERF_ENV_FILE_SH: shellSingleQuote(envFile),
+      }),
+    },
+    substitutions: () => ({
+      $SERF_API_KEY_ENV: 'OPENROUTER_API_KEY',
+      $SERF_MODEL_SH: shellSingleQuote('openrouter/@preset/test'),
+    }),
   },
 };
 
@@ -506,4 +529,92 @@ test('antigravity launcher: hostile host env never reaches the agent', () => {
   expect(env['HOME']).not.toBe('/host/home');
   expect(env['HOME']).toContain('home');
   expect(env['PATH']).toBeTruthy();
+});
+
+test('opencode launcher: hostile host env (incl. the grader key) never reaches the agent', () => {
+  const { launcher, binDir, envDump } = installLauncher('opencode');
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      // The gauntlet child env carries the GRADER credential (the launcher's
+      // ambient env post-F13); it must never be forwarded into the agent under
+      // test — opencode's credential lives in its private opencode.json.
+      ANTHROPIC_API_KEY: 'sk-grader-HOSTILE',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  expectHostileScrubbed(env);
+  expect(env['ANTHROPIC_API_KEY']).toBe(undefined);
+  // The private-config contract still works: the config dir (holding the
+  // mode-0600 opencode.json with the selected key) is pinned inside the
+  // throwaway home.
+  expect(env['OPENCODE_CONFIG_DIR']).toBe(
+    join(env['HOME'] ?? '', '.config', 'opencode'),
+  );
+  expect(env['HOME']).not.toBe('/host/home');
+  expect(env['PATH']).toBeTruthy();
+});
+
+test('serf launcher: non-Anthropic serf-api.env key reaches serf; the grader key does not', () => {
+  const { launcher, binDir, envDump } = installLauncher('serf');
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      ANTHROPIC_API_KEY: 'sk-grader-HOSTILE',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  // File-over-host: the private file's value wins over the hostile host
+  // export of the same selected name.
+  expectHostileScrubbed(env, { OPENROUTER_API_KEY: 'sk-serf-file' });
+  // The grader credential in the launcher's ambient env never reaches serf.
+  expect(env['ANTHROPIC_API_KEY']).toBe(undefined);
+  expect(env['SERF_PROVIDERS_CONFIG']).toContain('.serf/providers.toml');
+  expect(env['HOME']).not.toBe('/host/home');
+  expect(env['PATH']).toBeTruthy();
+});
+
+test('serf launcher: a file omitting the selected key fails loudly, never backfills from the grader env', () => {
+  const { launcher, binDir, envDump } = installLauncher('serf', {
+    envFileContent: '',
+    substitutions: { $SERF_API_KEY_ENV: 'ANTHROPIC_API_KEY' },
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      // The grader key under the SAME selected name: omission must stay
+      // omission — fail loudly rather than launch serf on the grader
+      // credential.
+      ANTHROPIC_API_KEY: 'sk-grader-HOSTILE',
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).not.toBe(0);
+  expect(proc.stderr).toContain('ANTHROPIC_API_KEY');
+  expect(existsSync(envDump)).toBe(false);
+});
+
+test('serf launcher: missing serf-api.env fails loudly, never launches on an ambient key', () => {
+  const { launcher, binDir, envDump } = installLauncher('serf', {
+    omitEnvFile: true,
+  });
+  // HOSTILE exports the selected OPENROUTER_API_KEY; with no private file the
+  // launcher must fail loudly rather than launch on the ambient value.
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: { ...HOSTILE, PATH: `${binDir}:/usr/bin:/bin`, HOME: '/host/home' },
+  });
+  expect(proc.status).not.toBe(0);
+  expect(proc.stderr).toContain('OPENROUTER_API_KEY');
+  expect(existsSync(envDump)).toBe(false);
 });

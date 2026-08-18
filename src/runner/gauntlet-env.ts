@@ -1,11 +1,16 @@
 // The gauntlet child is quorum's own QA driver, but the agent under test
 // shares its UID — and a same-UID process can read a peer's environment
 // (/proc/<pid>/environ on Linux, `ps eww` on macOS). The child therefore gets
-// an allowlist projection of the host env, never the full snapshot. The
-// adapter-curated extraEnv passthrough (launch substitutions like
-// KIMI_ENV_FILE; claude-windows' SSH values by design) is applied by
-// spawnGauntlet after this base and is unaffected, as are the runner's
-// explicit QUORUM_AGENT_CWD / QUORUM_AGENT_HOME overlays.
+// an allowlist projection of the host env, never the full snapshot. The only
+// overlays spawnGauntlet applies after this base are the quorum-owned
+// QUORUM_AGENT_CWD / QUORUM_AGENT_HOME; adapter provision() env maps
+// (KIMI_ENV_FILE, the claude-windows $WIN_* values, …) are consumed pre-spawn
+// as launcher substitutions and cleanup registration and have no channel into
+// the child env. The credential names below are therefore the only
+// secret-shaped names in this non-Copilot host-base projection; copilot's
+// copilotGauntletEnv is stricter still. The claude-windows SSH password
+// residual lives in the generated launcher file / sshpass argv on the Windows
+// trusted-maintainer path (Task 4), not in the child env.
 //
 // KNOWN RESIDUAL (owned by the F13 filesystem follow-up plan): the grader
 // credential itself (ANTHROPIC_API_KEY et al.) remains readable by a same-UID
@@ -70,8 +75,8 @@ export const GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
   'NODE_EXTRA_CA_CERTS',
   // tmux (the gauntlet TUI adapter drives the agent through a private server)
   'TMUX_TMPDIR',
-  // The grader/driver model credential — the ONLY secrets the child may see:
-  // exactly the names gauntlet's Anthropic auth resolution reads (gauntlet
+  // The grader/driver model credential — the only secret-shaped names in this
+  // projection: exactly the names gauntlet's Anthropic auth resolution reads (gauntlet
   // src/models/anthropic.ts resolveAnthropicAuth: CLAUDE_CODE_OAUTH_TOKEN ||
   // ANTHROPIC_AUTH_TOKEN, else ANTHROPIC_API_KEY) plus the SDK's endpoint
   // override (@anthropic-ai/sdk client constructor reads ANTHROPIC_BASE_URL).

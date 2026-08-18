@@ -236,10 +236,15 @@ test('populateContextDir does not rewrite placeholder-like replacement content',
 
 const DEFAULT_SERF_MODEL = 'openrouter/anthropic/claude-sonnet-4-6';
 
+// envFileContent: undefined -> a default serf-api.env carrying a generated
+// value for selectedName; null -> NO file (the provisioning-gap case); a
+// string -> that exact content. The launcher's selected value comes only from
+// this private file (never the ambient env).
 function installSerfLauncher(
   selectedName: string,
   invoked?: string,
   model = DEFAULT_SERF_MODEL,
+  envFileContent?: string | null,
 ): {
   readonly launcher: string;
   readonly binDir: string;
@@ -263,6 +268,17 @@ function installSerfLauncher(
   );
   chmodSync(fakeSerf, 0o755);
 
+  // The private serf-api.env the launcher sources (the SerfAgent.provision
+  // contract): the selected value comes only from here.
+  const envFile = join(runDir, 'serf-api.env');
+  if (envFileContent !== null) {
+    writeFileSync(
+      envFile,
+      envFileContent ??
+        `${selectedName}=${shellSingleQuote(crypto.randomUUID())}\n`,
+    );
+  }
+
   populateContextDir({
     codingAgentsDir: REAL_CODING_AGENTS,
     codingAgent: 'serf',
@@ -274,6 +290,8 @@ function installSerfLauncher(
       $SERF_MODEL_SH: shellSingleQuote(model),
       $SERF_API_KEY_ENV: selectedName,
       $SERF_API_KEY_ENV_SH: shellSingleQuote(selectedName),
+      $SERF_ENV_FILE: envFile,
+      $SERF_ENV_FILE_SH: shellSingleQuote(envFile),
       ...homeEnvSubstitutions(home),
     },
     required: true,
@@ -299,7 +317,7 @@ function parseEnvDump(path: string): Record<string, string> {
   return values;
 }
 
-test('Serf launcher forwards only the selected indirect API-key value into its clean environment', () => {
+test('Serf launcher forwards only the selected file-owned API-key value into its clean environment', () => {
   const selectedName = 'SERF_TEST_SELECTED_API_KEY';
   const selectedValue = crypto.randomUUID();
   const unrelatedValues = {
@@ -309,7 +327,12 @@ test('Serf launcher forwards only the selected indirect API-key value into its c
     GOOGLE_API_KEY: crypto.randomUUID(),
     OPENROUTER_API_KEY: crypto.randomUUID(),
   };
-  const { launcher, binDir, envDump } = installSerfLauncher(selectedName);
+  const { launcher, binDir, envDump } = installSerfLauncher(
+    selectedName,
+    undefined,
+    DEFAULT_SERF_MODEL,
+    `${selectedName}=${shellSingleQuote(selectedValue)}\n`,
+  );
   const generated = readFileSync(launcher, 'utf8');
 
   expect(generated).toContain(selectedName);
@@ -319,7 +342,9 @@ test('Serf launcher forwards only the selected indirect API-key value into its c
     encoding: 'utf8',
     env: {
       PATH: `${binDir}:/usr/bin:/bin`,
-      [selectedName]: selectedValue,
+      // An ambient value under the SAME selected name (the grader-credential
+      // shape): the private file's value must win.
+      [selectedName]: 'ambient-EVIL',
       ...unrelatedValues,
     },
   });
@@ -347,10 +372,7 @@ test('Serf launcher preserves a shell-significant model as one exact argv withou
 
   const proc = spawnSync('bash', [launcher, 'do work'], {
     encoding: 'utf8',
-    env: {
-      PATH: `${binDir}:/usr/bin:/bin`,
-      [selectedName]: crypto.randomUUID(),
-    },
+    env: { PATH: `${binDir}:/usr/bin:/bin` },
   });
 
   expect(proc.status).toBe(0);
@@ -367,10 +389,7 @@ test('Serf launcher exports raw-local provider handles for OpenRouter attestatio
 
   const proc = spawnSync('bash', [launcher, 'do work'], {
     encoding: 'utf8',
-    env: {
-      PATH: `${binDir}:/usr/bin:/bin`,
-      [selectedName]: crypto.randomUUID(),
-    },
+    env: { PATH: `${binDir}:/usr/bin:/bin` },
   });
 
   expect(proc.status).toBe(0);
@@ -381,18 +400,25 @@ test('Serf launcher exports raw-local provider handles for OpenRouter attestatio
   expect(argv.lastIndexOf('--export-atif-provider-handles')).toBe(modeFlag);
 });
 
-test('Serf launcher rejects missing and empty selected API-key values before it invokes Serf', () => {
+test('Serf launcher rejects a missing or value-less serf-api.env before it invokes Serf', () => {
   const selectedName = 'SERF_TEST_SELECTED_API_KEY';
-  for (const selectedValue of [undefined, '']) {
+  // null -> no file at all (the provisioning-gap case); the string -> a file
+  // whose selected value is empty. Both must fail loudly — even though the
+  // ambient env carries the selected name (the grader-credential shape), it
+  // must never backfill.
+  for (const envFileContent of [null, `${selectedName}=''\n`]) {
     const invoked = join(mkdtempSync(join(tmpdir(), 'serf-invoked-')), 'serf');
-    const { launcher, binDir } = installSerfLauncher(selectedName, invoked);
+    const { launcher, binDir } = installSerfLauncher(
+      selectedName,
+      invoked,
+      DEFAULT_SERF_MODEL,
+      envFileContent,
+    );
     const proc = spawnSync('bash', [launcher, 'do work'], {
       encoding: 'utf8',
       env: {
         PATH: `${binDir}:/usr/bin:/bin`,
-        ...(selectedValue === undefined
-          ? {}
-          : { [selectedName]: selectedValue }),
+        [selectedName]: 'ambient-EVIL',
       },
     });
     expect(proc.status).toBe(1);

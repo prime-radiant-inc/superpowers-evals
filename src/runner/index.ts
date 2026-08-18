@@ -48,6 +48,7 @@ import {
   OpenCodeCaptureError,
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
+import { SERF_API_ENV_FILE_NAME } from '../agents/serf.ts';
 import { WindowsHost } from '../agents/windows-host.ts';
 import type { AtifTrajectory } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
@@ -290,12 +291,15 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // QUORUM_AGENT_HOME (mirroring the QUORUM_AGENT_CWD exposure) so tooling that
   // drives the agent can locate the agent's collapsed config dir.
   readonly runHomeDir: string;
-  readonly extraEnv: Record<string, string>;
   // Base env gauntlet inherits: an allowlist projection of the host env, never
   // the full snapshot (the agent under test shares the child's UID and can
   // read a peer's environment). Every agent gets the GAUNTLET_ENV_ALLOWLIST
   // projection (gauntletEnvBase); copilot passes its stricter
-  // copilotGauntletEnv, which also rejects credentialed proxy URLs.
+  // copilotGauntletEnv, which also rejects credentialed proxy URLs. There is
+  // deliberately NO adapter env channel here: provision() maps are consumed
+  // pre-spawn (launcher substitutions + runtime cleanup), and the only
+  // overlays are the quorum-owned QUORUM_AGENT_CWD / QUORUM_AGENT_HOME,
+  // applied after the base so nothing can override them.
   readonly envBase: Readonly<Record<string, string | undefined>>;
 }
 
@@ -326,7 +330,6 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
         ...a.envBase,
         QUORUM_AGENT_CWD: a.launchCwd,
         QUORUM_AGENT_HOME: a.runHomeDir,
-        ...a.extraEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -357,9 +360,9 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
 // valid result still yields that pass/fail; a non-zero exit with no/garbled
 // result becomes investigate -> composer indeterminate, not a gauntlet-stage
 // error). The subprocess env is the caller's allowlist projection overlaid with
-// the launch cwd and the agent's extra env. A spawn-level failure (gauntlet not
-// on PATH) still rejects from spawnGauntlet and surfaces as an 'unknown'-stage
-// crash.
+// only the quorum-owned launch-cwd/agent-home names. A spawn-level failure
+// (gauntlet not on PATH) still rejects from spawnGauntlet and surfaces as an
+// 'unknown'-stage crash.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
@@ -1340,27 +1343,36 @@ async function runInnerBody(
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner
-  // needs for the $QUORUM_COPILOT_SESSION_ID substitution, the gauntlet env base,
-  // and the post-run secret-leak / session-state cascade. Every other agent uses
-  // the declarative provision() motion.
+  // needs for the $QUORUM_COPILOT_SESSION_ID substitution and the post-run
+  // secret-leak / session-state cascade. Every other agent uses the declarative
+  // provision() motion.
+  //
+  // The provision env map is consumed entirely PRE-SPAWN — launcher
+  // substitutions (kimi, the non-linux $WIN_* set) and runtime cleanup
+  // registration. It never reaches the gauntlet child env (the spawn takes
+  // only the allowlist projection plus the quorum-owned overlays).
   let copilotProvisioning: CopilotProvisioning | undefined;
-  let extraEnv: Record<string, string>;
+  let provisionEnv: Record<string, string>;
   if (cfg.name === 'copilot' && agent instanceof CopilotAgent) {
     copilotProvisioning = agent.provisionCopilot(
       home,
       defaultCommandRunner,
       crypto.randomUUID(),
     );
-    extraEnv = copilotProvisioning.env;
+    provisionEnv = copilotProvisioning.env;
   } else {
-    extraEnv = agent.provision(home, defaultCommandRunner, resolvedCredential);
+    provisionEnv = agent.provision(
+      home,
+      defaultCommandRunner,
+      resolvedCredential,
+    );
   }
   // Track any secret temp dir provisioning created outside the run root (kimi's
   // runtime-env mkdtemp) so the runInner finally reaps it. Pushed AFTER provision
   // returns, so this covers the success path and every later run-exit; a
   // provision that THROWS after writing the secret file is the one window not
   // covered here.
-  cleanupDirs.push(...runtimeCleanupDirs(extraEnv));
+  cleanupDirs.push(...runtimeCleanupDirs(provisionEnv));
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
   // setup-helpers against it). QUORUM_CODING_AGENT lets agent-aware setup steps
   // (e.g. inject-user-preference) target the ambient instructions file THIS agent
@@ -1551,6 +1563,12 @@ async function runInnerBody(
     substitutions['$SERF_MODEL_SH'] = shellSingleQuote(serfModel);
     substitutions['$SERF_API_KEY_ENV'] = serfKeyEnv ?? '';
     substitutions['$SERF_API_KEY_ENV_SH'] = shellSingleQuote(serfKeyEnv ?? '');
+    // The private per-run env file SerfAgent.provision writes (mode 0600,
+    // exactly the selected name/value); deterministic config-dir-relative
+    // path, mirroring the codex-api.env pattern.
+    const serfEnvFile = join(configDir, SERF_API_ENV_FILE_NAME);
+    substitutions['$SERF_ENV_FILE'] = serfEnvFile;
+    substitutions['$SERF_ENV_FILE_SH'] = shellSingleQuote(serfEnvFile);
   }
   if (cfg.name === 'copilot' && copilotProvisioning !== undefined) {
     // Use the provisioning record's env file + minted session id so the
@@ -1571,12 +1589,12 @@ async function runInnerBody(
     // KimiAgent.provision returns $KIMI_ENV_FILE / $KIMI_BINARY in its extra-env
     // map; thread them into the context-dir substitution set so the kimi-context
     // launcher's `. "$KIMI_ENV_FILE"` / `exec $KIMI_BINARY` resolve under `set -u`.
-    Object.assign(substitutions, kimiLaunchSubstitutions(extraEnv));
+    Object.assign(substitutions, kimiLaunchSubstitutions(provisionEnv));
   }
   // Windows runtime: the WindowsClaudeAgent.provision return value carries the
   // $WIN_* launcher substitutions; merge them so the SSH launcher resolves.
   if (os !== 'linux') {
-    Object.assign(substitutions, extraEnv);
+    Object.assign(substitutions, provisionEnv);
   }
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
@@ -1642,7 +1660,6 @@ async function runInnerBody(
       graderModel: a.graderModel,
       launchCwd,
       runHomeDir,
-      extraEnv,
       envBase: gauntletEnvBaseValue,
     }));
   } finally {

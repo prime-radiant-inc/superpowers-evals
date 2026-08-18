@@ -43,12 +43,22 @@ if (fixture === 'hang') {
 } else {
   const fixtureDir = join(import.meta.dir, 'fixtures', fixture);
 
-  // 0) the exact env this child received, so tests can assert what the
-  // runner's gauntlet-env projection let through (test/gauntlet-env.test.ts).
-  writeFileSync(
-    join(projectDir, 'mock-gauntlet-env.json'),
-    `${JSON.stringify(process.env, null, 2)}\n`,
-  );
+  // 0) opt-in finite-key env capture (test/gauntlet-env.test.ts): only when
+  // the generated shim exported MOCK_GAUNTLET_ENV_KEYS, and only those keys.
+  // Never a full env dump — the child env legitimately carries the grader
+  // credential, and a full dump would persist a real token to disk.
+  const captureKeys = process.env['MOCK_GAUNTLET_ENV_KEYS'];
+  if (captureKeys !== undefined && captureKeys !== '') {
+    const capture: Record<string, string> = {};
+    for (const key of captureKeys.split(',')) {
+      const value = process.env[key];
+      if (value !== undefined) capture[key] = value;
+    }
+    writeFileSync(
+      join(projectDir, 'mock-gauntlet-env.json'),
+      `${JSON.stringify(capture, null, 2)}\n`,
+    );
+  }
 
   // 1) gauntlet result artifacts: <project-dir>/gauntlet-agent/results/<runId>/.
   const runId = `mock_${fixture}_0000`;
