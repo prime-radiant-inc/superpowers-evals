@@ -212,10 +212,48 @@ evals-appliance import --json <bundle-dir>
 
 Import verifies every checksum in the manifest and re-runs the credential
 denylist against what is actually on disk before anything lands, so a tampered
-or mis-built bundle is rejected whole rather than partially applied. It holds
-`run.lock` for the duration; if a live job holds it, import returns `lock_busy`
-and does nothing. Re-running is safe: runs already present are skipped, and
-`--force` replaces them.
+or mis-built bundle is rejected whole. The bundle is also validated
+structurally without following symlinks: the bundle root, `runs/`, and every
+payload directory must be real directories holding only regular files, every
+manifest path must be a plain relative path, and the files on disk must be
+exactly the files the manifest lists — a symlink or special file anywhere in
+the payload, an unlisted extra file, or a `run_id` in the reserved
+`batches`/`batch-*` namespace (those names belong to batch artifacts and could
+never be addressed by `status`/`show` again) rejects the bundle whole. The
+appliance's own configured root, results root, and `state/` namespace are
+validated no-follow across **every existing path component from the
+filesystem root down** — an intermediate symlink anywhere in those paths
+(say, `<root>/evals` pointing elsewhere) is rejected the same as a symlinked
+final directory. Configure real paths, not symlink aliases; the appliance
+never silently canonicalizes your configuration. Import refuses before
+writing anything if any of this fails. It holds `run.lock`
+for the duration; if a live job holds it, import returns `lock_busy` and does
+nothing. Each run then lands by staging the payload beside the results root
+and atomically renaming it into place — import never modifies or deletes a
+landed run directory.
+Re-running is safe: a run whose landed content already matches the bundle is
+skipped, and if the run dir predates appliance job records — or a previous
+recording was left incomplete — the record is healed in `state/` only (never
+by writing inside the landed run) so `status`/`show` see it. Only a missing
+state provenance marker is healed this way; a malformed one (a symlink,
+directory, corrupt record, or one recorded for a different job) fails the
+entry closed for manual repair. If the landed run
+differs from the bundle, that
+entry is rejected as `import_conflict`: the landed run stays byte-for-byte
+untouched and the incoming payload is moved to `state/quarantine/` for
+comparison — and if that quarantine move itself fails, the staged conflict
+payload is retained beside the results root and the failure message names its
+path so you can recover it. An entry whose `run_id` equals an unrelated job's
+id is rejected
+(`config_invalid`) so `status`/`show` stay unambiguous, and corrupt job
+records under `state/jobs` fail entries closed for manual repair. Per-entry
+failures are reported with `run_id`, code, and message in the JSON result,
+and any failed entry makes the command itself fail: `ok: false` and a nonzero
+exit, with the full result payload preserved. A
+failed entry never leaves a job record claiming success — its record stays
+visibly incomplete for the next import to reuse. There is no `--force`: if a
+landed run is wrong, move the bad directory aside yourself after inspection
+and re-import.
 
 Imported runs are visible to the normal read commands:
 
@@ -230,6 +268,50 @@ of `refs` and a credential bundle, because it was neither built from an
 appliance-resolved ref nor run against the blessed bundle. Treat
 `origin.rev_recovery` as the confidence marker: `inferred_superpowers_sha` is a
 neighbour's sha, not evidence about the run itself.
+
+## Pruning Incomplete Run Dirs
+
+Interrupted or abandoned runs leave directories with no `verdict.json` that
+nothing can read — the dashboard and `quorum show` both ignore them. Prune
+quarantines them:
+
+```bash
+evals-appliance prune --json                 # dry-run report (default)
+evals-appliance prune --apply --json         # move candidates to state/quarantine/
+evals-appliance prune --apply --older-than-days 14
+```
+
+A directory is a candidate only when ALL of these hold: it sits directly under
+the results root, it has no `verdict.json` (completed runs are never pruned —
+their retention waits for an explicit archive/retention contract), its mtime is
+older than the age floor (`--older-than-days` accepts only a positive integer;
+default 7 days), and nothing references it — no batch `results.jsonl` record,
+no appliance job record, and no mention anywhere under `campaigns/` (a
+fail-closed substring scan, so campaign-referenced runs stay protected as the
+campaign kernel lands). Stale import stage dirs — exactly the
+`.importing-<run-id>.<pid>.tmp` slots a crashed import leaves, under the same
+reference protection — are candidates too; anything merely resembling that
+name is treated as an ordinary run dir. Reference state that cannot be read
+honestly makes prune refuse to plan at all (`config_invalid`) rather than
+guess: a batch dir missing its canonical `batch.json` or `results.jsonl`
+(an empty `results.jsonl` is a valid zero-row file), an unparseable or
+non-canonical `results.jsonl` record, a corrupt job record under
+`state/jobs`, any symlink or unreadable entry inside the batches, jobs, or
+campaigns namespaces, or a configured root, results root, or `state/`
+jobs/locks/provenance/quarantine root whose path is not real directories all
+the way down — every existing component from the filesystem root is checked
+no-follow, so an intermediate symlink (e.g. `<root>/evals` pointing at
+another volume's results) refuses the plan just like a symlinked final
+directory. Repair the state and rerun.
+
+`--apply` holds `run.lock` (it refuses with `lock_busy` while a batch or import
+is live) and **moves** candidates to `state/quarantine/` — it never deletes.
+If any candidate cannot be moved, the command reports the partial result
+(`quarantined` and `failures` both listed) with `ok: false` and a nonzero
+exit; the failed sources stay where they were. Inspect quarantined dirs
+there; restore one by moving it back. Final deletion of a quarantined
+directory is a manual operator decision, after inspection, with `rm -rf`
+typed by a human who has looked at it.
 
 ## Dashboard
 

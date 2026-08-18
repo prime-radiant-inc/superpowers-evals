@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -18,7 +19,9 @@ import {
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 function loaded(
-  root = mkdtempSync(join(tmpdir(), 'appliance-locks-')),
+  // Canonical (realpath) root: the boundary validates every absolute
+  // path component no-follow; macOS tmpdir traverses the /var symlink.
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-locks-'))),
 ): LoadedApplianceConfig {
   mkdirSync(join(root, 'state/locks'), { recursive: true });
   return {

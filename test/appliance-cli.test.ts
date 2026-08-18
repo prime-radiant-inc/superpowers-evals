@@ -1,10 +1,13 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +18,7 @@ import {
 } from '../src/appliance/cli.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { envSnapshot } from '../src/env.ts';
 
 function noopActions(
   overrides: Partial<ApplianceActions> = {},
@@ -29,6 +33,7 @@ function noopActions(
     show: async () => ({ ok: true }),
     costs: async () => ({ ok: true }),
     import: async () => ({ ok: true }),
+    prune: async () => ({ ok: true }),
     ...overrides,
   };
 }
@@ -181,14 +186,14 @@ test('status accepts --json before the id', async () => {
   expect(ids).toEqual(['job-1']);
 });
 
-test('import forwards the bundle dir and defaults force to false', async () => {
-  const calls: Array<{ bundleDir: string; force: boolean }> = [];
+test('import forwards the bundle dir with no force flag', async () => {
+  const calls: unknown[] = [];
   const program = createApplianceProgram({
     stdout: () => undefined,
     stderr: () => undefined,
     actions: noopActions({
-      import: async ({ bundleDir, force }) => {
-        calls.push({ bundleDir, force });
+      import: async (args) => {
+        calls.push(args);
         return { ok: true };
       },
     }),
@@ -201,18 +206,305 @@ test('import forwards the bundle dir and defaults force to false', async () => {
     '--json',
     '/srv/bundles/lane-b',
   ]);
-  await program.parseAsync([
-    'node',
-    'evals-appliance',
-    'import',
-    '--force',
-    '/srv/bundles/lane-b',
-  ]);
+
+  expect(calls).toEqual([{ json: true, bundleDir: '/srv/bundles/lane-b' }]);
+});
+
+test('import renders ok:false and exit 1 for all-failed and mixed results', async () => {
+  const failure = {
+    run_id: 'r-bad',
+    code: 'import_conflict',
+    message: 'destination exists with different content',
+  };
+  const cases: {
+    result: {
+      imported: number;
+      skipped: number;
+      healed: number;
+      failed: number;
+      failures: (typeof failure)[];
+      run_ids: string[];
+    };
+    ok: boolean;
+    exits: number[];
+  }[] = [
+    {
+      result: {
+        imported: 1,
+        skipped: 0,
+        healed: 0,
+        failed: 0,
+        failures: [],
+        run_ids: ['r-good'],
+      },
+      ok: true,
+      exits: [],
+    },
+    {
+      result: {
+        imported: 0,
+        skipped: 0,
+        healed: 0,
+        failed: 2,
+        failures: [failure, { ...failure, run_id: 'r-worse' }],
+        run_ids: [],
+      },
+      ok: false,
+      exits: [1],
+    },
+    {
+      result: {
+        imported: 1,
+        skipped: 0,
+        healed: 0,
+        failed: 1,
+        failures: [failure],
+        run_ids: ['r-good'],
+      },
+      ok: false,
+      exits: [1],
+    },
+  ];
+  for (const { result, ok, exits } of cases) {
+    const stdout: string[] = [];
+    const seenExits: number[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: (code) => seenExits.push(code),
+      actions: noopActions({ import: async () => result }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'import',
+      '--json',
+      '/srv/bundles/lane-b',
+    ]);
+    const payload = JSON.parse(stdout.join('')) as {
+      ok: boolean;
+      imported: number;
+      failed: number;
+      failures: unknown[];
+      run_ids: unknown[];
+    };
+    expect(payload.ok).toBe(ok);
+    // The full result payload survives either way.
+    expect(payload.imported).toBe(result.imported);
+    expect(payload.failed).toBe(result.failed);
+    expect(payload.failures).toEqual(result.failures);
+    expect(payload.run_ids).toEqual(result.run_ids);
+    expect(seenExits).toEqual(exits);
+  }
+});
+
+test('the removed --force option is rejected loudly by the actual CLI', () => {
+  // Real subprocess: commander's option parsing rejects --force before any
+  // config is loaded or any action runs — the loud failure we want.
+  const proc = spawnSync(
+    'bun',
+    ['src/appliance/cli.ts', 'import', '--force', '/tmp/no-such-bundle'],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(`${proc.stderr}${proc.stdout}`).toContain("unknown option '--force'");
+});
+
+test('prune defaults to a dry-run with a 7-day floor and forwards --apply', async () => {
+  // Fresh program per parse: commander keeps option state across parseAsync
+  // calls, which would leak --apply from one invocation into the next.
+  const calls: unknown[] = [];
+  const parsePrune = async (extra: readonly string[]): Promise<void> => {
+    const program = createApplianceProgram({
+      stdout: () => undefined,
+      stderr: () => undefined,
+      actions: noopActions({
+        prune: async (args) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      }),
+    });
+    await program.parseAsync(['node', 'evals-appliance', 'prune', ...extra]);
+  };
+
+  await parsePrune([]);
+  await parsePrune(['--apply']);
+  await parsePrune(['--apply', '--older-than-days', '14']);
 
   expect(calls).toEqual([
-    { bundleDir: '/srv/bundles/lane-b', force: false },
-    { bundleDir: '/srv/bundles/lane-b', force: true },
+    { json: false, apply: false, olderThanDays: 7 },
+    { json: false, apply: true, olderThanDays: 7 },
+    { json: false, apply: true, olderThanDays: 14 },
   ]);
+});
+
+test('prune rejects unsafe --older-than-days values before the action runs', async () => {
+  const calls: unknown[] = [];
+  for (const extra of [
+    ['--older-than-days', '0'],
+    ['--older-than-days=-1'],
+    ['--older-than-days', '1.5'],
+    ['--older-than-days', '7days'],
+    ['--older-than-days', 'abc'],
+  ]) {
+    const stdout: string[] = [];
+    const exits: number[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: (code) => exits.push(code),
+      actions: noopActions({
+        prune: async (args) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'prune',
+      '--json',
+      '--apply',
+      ...extra,
+    ]);
+    const payload = JSON.parse(stdout.join('')) as {
+      ok: boolean;
+      error: { code: string };
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.error.code).toBe('config_invalid');
+    expect(exits).toEqual([1]);
+  }
+  expect(calls).toEqual([]);
+});
+
+test('default dry-run prune creates and chmods no state dirs', () => {
+  // Real subprocess against the DEFAULT actions: a dry-run report must not
+  // materialize or re-chmod state/{jobs,locks,provenance}.
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-cli-dryrun-')),
+  );
+  for (const sub of [
+    'evals/results',
+    'superpowers',
+    'gauntlet',
+    'credentials/blessed',
+  ]) {
+    mkdirSync(join(root, sub), { recursive: true });
+  }
+  writeFileSync(
+    join(root, 'credentials/blessed/metadata.json'),
+    JSON.stringify({
+      bundle_id: 'blessed-x',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+    }),
+  );
+  const configPath = join(root, 'appliance.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      root,
+      evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
+      superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+      gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'credentials/blessed'),
+      },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(root, 'evals/results'),
+      },
+    }),
+  );
+  // Pre-existing state/jobs with a non-0o700 mode: dry-run must leave it be.
+  mkdirSync(join(root, 'state/jobs'), { recursive: true });
+  chmodSync(join(root, 'state'), 0o755);
+  chmodSync(join(root, 'state/jobs'), 0o755);
+
+  const proc = spawnSync('bun', ['src/appliance/cli.ts', 'prune', '--json'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...envSnapshot(), EVALS_APPLIANCE_CONFIG: configPath },
+  });
+  expect(proc.status).toBe(0);
+  const payload = JSON.parse(proc.stdout) as { ok: boolean; dry_run: boolean };
+  expect(payload.ok).toBe(true);
+  expect(payload.dry_run).toBe(true);
+  expect(existsSync(join(root, 'state/locks'))).toBe(false);
+  expect(existsSync(join(root, 'state/provenance'))).toBe(false);
+  expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o755);
+  expect(statSync(join(root, 'state/jobs')).mode & 0o777).toBe(0o755);
+});
+
+test('prune apply renders ok:false and exit 1 when any candidate move failed', async () => {
+  const cases: {
+    result: {
+      dry_run: boolean;
+      quarantined: { name: string; to: string }[];
+      failures: { name: string; message: string }[];
+    };
+    ok: boolean;
+    exits: number[];
+  }[] = [
+    {
+      result: {
+        dry_run: false,
+        quarantined: [{ name: 'a', to: '/q/a' }],
+        failures: [],
+      },
+      ok: true,
+      exits: [],
+    },
+    {
+      result: {
+        dry_run: false,
+        quarantined: [{ name: 'a', to: '/q/a' }],
+        failures: [{ name: 'b', message: 'EXDEV' }],
+      },
+      ok: false,
+      exits: [1],
+    },
+    {
+      result: {
+        dry_run: false,
+        quarantined: [],
+        failures: [{ name: 'b', message: 'EXDEV' }],
+      },
+      ok: false,
+      exits: [1],
+    },
+  ];
+  for (const { result, ok, exits } of cases) {
+    const stdout: string[] = [];
+    const seenExits: number[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: (code) => seenExits.push(code),
+      actions: noopActions({ prune: async () => result }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'prune',
+      '--json',
+      '--apply',
+    ]);
+    const payload = JSON.parse(stdout.join('')) as {
+      ok: boolean;
+      quarantined: unknown[];
+      failures: unknown[];
+    };
+    expect(payload.ok).toBe(ok);
+    // The full partial result survives either way.
+    expect(payload.quarantined).toEqual(result.quarantined);
+    expect(payload.failures).toEqual(result.failures);
+    expect(seenExits).toEqual(exits);
+  }
 });
 
 test('run forwards scenario and coding agent with appliance options', async () => {

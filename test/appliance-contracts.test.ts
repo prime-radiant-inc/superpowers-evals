@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,7 +21,10 @@ import {
 } from '../src/appliance/types.ts';
 
 function fixture(): { root: string; configPath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-config-'));
+  // Canonical (realpath) fixture root: the appliance boundary validates
+  // every absolute path component no-follow, and macOS tmpdir paths
+  // traverse the /var symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-config-')));
   for (const dir of [
     'superpowers-evals',
     'superpowers',

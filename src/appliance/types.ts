@@ -56,6 +56,7 @@ export const ApplianceCommandKindSchema = z.enum([
   'run',
   'run-all',
   'import',
+  'prune',
 ]);
 export type ApplianceCommandKind = z.infer<typeof ApplianceCommandKindSchema>;
 

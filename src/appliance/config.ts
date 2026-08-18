@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEnv } from '../env.ts';
 import { ApplianceError } from './errors.ts';
-import { mkdirPrivate, readJsonFile } from './fs.ts';
+import { readJsonFile } from './fs.ts';
+import { ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
   ApplianceConfigSchema,
   CredentialBundleMetadataSchema,
@@ -54,10 +55,16 @@ export function loadConfig(
       provenance: join(stateRoot, 'provenance'),
     };
     if (options.ensureState === true) {
-      mkdirPrivate(stateRoot);
-      mkdirPrivate(paths.jobs);
-      mkdirPrivate(paths.locks);
-      mkdirPrivate(paths.provenance);
+      // The state namespace is a no-follow boundary: ensuring it must never
+      // create or chmod through a symlinked component.
+      ensurePrivateDirNoFollow(config.root, stateRoot, 'state');
+      ensurePrivateDirNoFollow(config.root, paths.jobs, 'state/jobs');
+      ensurePrivateDirNoFollow(config.root, paths.locks, 'state/locks');
+      ensurePrivateDirNoFollow(
+        config.root,
+        paths.provenance,
+        'state/provenance',
+      );
     }
 
     return {

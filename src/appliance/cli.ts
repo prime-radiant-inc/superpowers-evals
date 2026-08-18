@@ -15,6 +15,7 @@ import { importBundle } from './import.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
+import { prune as pruneResults } from './prune.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
 import type { LoadedApplianceConfig } from './types.ts';
 
@@ -45,7 +46,11 @@ export interface IdCommandArgs extends BaseCommandArgs {
 
 export interface ImportCommandArgs extends BaseCommandArgs {
   readonly bundleDir: string;
-  readonly force: boolean;
+}
+
+export interface PruneCommandArgs extends BaseCommandArgs {
+  readonly apply: boolean;
+  readonly olderThanDays: number;
 }
 
 export type ApplianceActionResult = unknown;
@@ -77,6 +82,9 @@ export interface ApplianceActions {
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
   readonly import: (
     args: ImportCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly prune: (
+    args: PruneCommandArgs,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
 }
 
@@ -381,9 +389,16 @@ function defaultActions(): ApplianceActions {
     },
     import: async (args) => {
       const loaded = loadApplianceConfig(undefined, { ensureState: true });
-      return importBundle(loaded, {
-        bundleDir: args.bundleDir,
-        force: args.force,
+      return importBundle(loaded, { bundleDir: args.bundleDir });
+    },
+    prune: async (args) => {
+      // No ensureState: a default dry-run is read-only and must not create
+      // or re-chmod state dirs; apply's own mutation helpers (lock acquire,
+      // quarantine move) create exactly what they own.
+      const loaded = loadApplianceConfig();
+      return pruneResults(loaded, {
+        apply: args.apply,
+        olderThanDays: args.olderThanDays,
       });
     },
   };
@@ -420,9 +435,18 @@ async function handleAction(
   args: BaseCommandArgs,
   deps: Required<Pick<ApplianceCliDeps, 'stdout' | 'stderr' | 'setExitCode'>>,
   action: () => ApplianceActionResult | Promise<ApplianceActionResult>,
+  resultFailed?: (value: unknown) => boolean,
 ): Promise<void> {
   try {
-    deps.stdout(renderResult(await action(), args.json));
+    const value = await action();
+    if (resultFailed?.(value) === true) {
+      // A structured partial failure: preserve the full payload, but the
+      // command did not succeed — ok:false and a nonzero exit.
+      deps.stdout(renderResult({ ...(value as object), ok: false }, args.json));
+      deps.setExitCode(1);
+      return;
+    }
+    deps.stdout(renderResult(value, args.json));
   } catch (error) {
     if (args.json) {
       deps.stdout(`${JSON.stringify(toErrorJson(error), null, 2)}\n`);
@@ -436,6 +460,49 @@ async function handleAction(
 
 function commandOptions(options: JsonOption): BaseCommandArgs {
   return { json: options.json ?? false };
+}
+
+// The age floor is prune's only eligibility dial; anything but a positive
+// safe-integer string (0, negatives, fractions, '7days', non-numbers) is
+// rejected before the action runs. planPrune revalidates independently.
+function parseOlderThanDays(value: string): number {
+  const days = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(days) || days <= 0) {
+    throw new ApplianceError(
+      'config_invalid',
+      'arguments',
+      `--older-than-days must be a positive integer, got: ${value}`,
+    );
+  }
+  return days;
+}
+
+// An import with any failed entry is a failed command: the full result
+// (successes AND per-entry failures) is preserved verbatim, but the CLI
+// must not exit 0 over entries that did not land.
+function importFailed(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const result = value as { failed?: unknown; failures?: unknown };
+  return (
+    (typeof result.failed === 'number' && result.failed > 0) ||
+    (Array.isArray(result.failures) && result.failures.length > 0)
+  );
+}
+
+// An apply that could not move every candidate is a failed command even
+// though the partial result (successes AND failures) is preserved verbatim:
+// the CLI must not exit 0 over unquarantined candidates. Dry-run and
+// all-success apply carry an empty failures list and stay successful.
+function pruneApplyFailed(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'failures' in value &&
+    Array.isArray((value as { failures: unknown }).failures) &&
+    (value as { failures: unknown[] }).failures.length > 0
+  );
 }
 
 function commandDetachOptions(options: JsonDetachOptions): {
@@ -587,18 +654,54 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
 
   program
     .command('import')
-    .description('ingest a scrubbed bundle built by quorum export-runs')
+    .description(
+      'ingest a scrubbed bundle built by quorum export-runs (never modifies landed runs; conflicts are quarantined)',
+    )
     .option('--json', 'emit JSON')
-    .option('--force', 'replace runs that are already imported')
     .argument('<bundle-dir>')
-    .action((bundleDir: string, options: JsonOption & { force?: boolean }) => {
-      const args = {
-        ...commandOptions(options),
-        bundleDir,
-        force: options.force ?? false,
-      };
-      return handleAction(args, resolvedDeps, () => actions.import(args));
+    .action((bundleDir: string, options: JsonOption) => {
+      const args = { ...commandOptions(options), bundleDir };
+      return handleAction(
+        args,
+        resolvedDeps,
+        () => actions.import(args),
+        importFailed,
+      );
     });
+
+  program
+    .command('prune')
+    .description(
+      'quarantine incomplete, unreferenced run dirs (dry-run unless --apply)',
+    )
+    .option('--json', 'emit JSON')
+    .option(
+      '--apply',
+      'move candidates to state/quarantine instead of just reporting',
+    )
+    .option(
+      '--older-than-days <days>',
+      'only consider directories untouched for at least this many days (positive integer)',
+      '7',
+    )
+    .action(
+      (options: JsonOption & { apply?: boolean; olderThanDays?: string }) => {
+        const base = {
+          ...commandOptions(options),
+          apply: options.apply ?? false,
+        };
+        return handleAction(
+          base,
+          resolvedDeps,
+          () =>
+            actions.prune({
+              ...base,
+              olderThanDays: parseOlderThanDays(options.olderThanDays ?? '7'),
+            }),
+          pruneApplyFailed,
+        );
+      },
+    );
 
   return program;
 }

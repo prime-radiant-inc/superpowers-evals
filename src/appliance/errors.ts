@@ -18,6 +18,7 @@ export const ApplianceErrorCodeSchema = z.enum([
   'job_not_running',
   'cancel_failed',
   'artifact_missing',
+  'import_conflict',
 ]);
 export type ApplianceErrorCode = z.infer<typeof ApplianceErrorCodeSchema>;
 

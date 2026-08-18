@@ -2,6 +2,17 @@
 
 Status: approved 2026-08-09. Supersedes nothing.
 
+> **Superseded in part, 2026-08-18.** The import landing semantics in this
+> document (§ Import, items 4–5; the `--force` flag and “replaces it”
+> idempotency) are superseded by the evidence-safety contract in
+> `2026-08-17-quorum-campaign-platform-design.md` (fix-now item 1, bullets 3–4)
+> as implemented in the import-safety plan
+> (`docs/superpowers/plans/2026-08-18-import-safety-and-prune.md`). Import now
+> stages each payload beside the results root and atomically renames it into
+> place; it never modifies or deletes a landed run directory, and there is no
+> `--force`. Export, bundle format, and the rev-recovery ladder below remain
+> accurate.
+
 Two corpora of quorum runs were produced on Jesse's laptop before the shared
 appliance existed. They hold the only copy of several experiment campaigns.
 This design moves them onto the appliance as first-class artifacts that
@@ -176,8 +187,13 @@ secret); no credential *material* does.
 
 ### Import: `evals-appliance import`
 
+> **Superseded 2026-08-18** — see the notice above. The current landing
+> contract is stage → compare → atomic rename with a typed `import_conflict`
+> rejection; `--force` no longer exists. The validation and locking steps
+> (1–3) below remain accurate.
+
 ```
-evals-appliance import --json <bundle-dir> [--force]
+evals-appliance import --json <bundle-dir>   # [--force] removed 2026-08-18
 ```
 
 Lives in `src/appliance/import.ts`, wired into the appliance CLI alongside
@@ -192,10 +208,23 @@ Lives in `src/appliance/import.ts`, wired into the appliance CLI alongside
    `config.toml`. The export allowlist should make this unreachable; it is the
    backstop that makes the guarantee checkable at the boundary rather than
    trusted from the sender.
-4. For each entry, writes a job record and provenance, then moves the payload
-   to `<results_root>/<run-id>/`.
-5. Is idempotent on `run_id`: an already-present run is skipped unless
-   `--force`, which replaces it. Interrupted imports resume by re-running.
+4. For each entry, stages the payload to a sibling `.importing-*` directory,
+   reserves a nonterminal job record claiming the `run_id` in `state/`
+   (run-side provenance is prepared on the staged payload), lands it with a
+   `rename` into `<results_root>/<run-id>/`, and only then marks the record
+   done and writes the state-side provenance — a failed landing stays visibly
+   incomplete instead of falsely done, and a retry reuses the reserved
+   record. A landed run directory is never modified or deleted. *(Supersedes
+   the 2026-08-09 “writes a job record and provenance, then moves the
+   payload” ordering.)*
+5. Is idempotent on `run_id`: a run whose landed content already matches the
+   bundle is skipped; if its job record is missing or incomplete the record is
+   healed in `state/` only; if the landed content differs the entry is
+   rejected as `import_conflict` with the staged payload quarantined and the
+   landed run untouched. An entry whose `run_id` equals an unrelated job's id
+   is rejected (`config_invalid`) so job-id-first consumers (`status`/`show`)
+   stay unambiguous. There is no `--force`. *(Supersedes the 2026-08-09
+   “`--force` replaces it” semantics.)*
 
 ### Schema Changes
 
@@ -258,7 +287,9 @@ pattern with a tmpdir config:
   produces a bundle containing neither, asserted by walking the output
 - manifest: checksums match; a corrupted payload byte fails import
 - denylist: a hand-built malicious bundle with `auth.json` is rejected
-- idempotency: importing twice lands one copy; `--force` replaces
+- idempotency: importing twice lands one copy; a conflicting destination is
+  rejected with the landed run untouched (`--force` replacement removed
+  2026-08-18)
 - schema: an imported job round-trips `JobRecordSchema`; `summary.ts` renders it
 - lock: import refuses when `run.lock` is held
 
