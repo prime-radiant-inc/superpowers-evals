@@ -121,10 +121,11 @@ function contribute(
  * credential `harnesses` include the agent's runtime family contribute —
  * mirroring run-all matrix eligibility. A nonempty selection with zero
  * compatible pairs throws (fail closed) rather than returning an ambiguous
- * empty scope. An empty `agents` list returns an asserted zero-material scope
- * (empty arrays); whether the caller treats a supplied empty scope as
- * zero-material or legacy is the future container API's decision, not this
- * function's.
+ * empty scope. An empty `agents` list returns the empty shape
+ * {envNames: [], authMounts: []} — a supplied CredentialScope (including this
+ * empty one) is an ASSERTED zero-material scope. Legacy/unscoped behavior
+ * exists only when the future container API receives no scope argument at
+ * all; this function never chooses it.
  */
 export function credentialScopeForAgents(
   agents: readonly string[],
