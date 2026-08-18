@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { CHECK_ENV_ALLOWLIST } from './checks/index.ts';
 import { getEnv } from './env.ts';
 import { repoRoot } from './paths.ts';
 
@@ -11,19 +10,18 @@ export class SetupError extends Error {}
 // setup.sh executes scenario-authored shell — the same untrusted-author
 // boundary as checks.sh, so it gets the same treatment: a non-secret
 // allowlist projection of the host env plus quorum-owned vars, never the full
-// snapshot. The base is the checks allowlist (corpus-governed for the sibling
-// boundary; its SUPERPOWERS_ROOT is read by setup-helpers/cli.ts:94). Beyond
-// it, every name requires concrete active-path evidence — the Fix-1 drop
-// sweep ran all 85 scenarios' real setup.sh with one name removed at a time:
-// dropping PATH broke 80/85 (exit 127: no binary resolution), dropping
-// SUPERPOWERS_ROOT broke the 2 symlink_superpowers scenarios; dropping any
-// other candidate (HOME, TMPDIR, SHELL, USER, LOGNAME, proxies, CA bundles)
-// broke nothing (git auto-detects identity without HOME; runGit injects the
-// fixture identity itself), so none of them are listed. A var setup.sh turns
-// out to need on some host fails loudly (tool error) and is added with
-// evidence; a var it doesn't need never leaks in.
+// snapshot. This list is setup-specific and corpus-exact, NOT the checks
+// allowlist: every name requires concrete active-path evidence, and the Fix-1
+// drop sweep (all 85 scenarios' real setup.sh, one name removed at a time)
+// showed only two survive that test — PATH (dropping it broke 80/85, exit 127:
+// no binary resolution) and SUPERPOWERS_ROOT (dropping it broke the 2
+// symlink_superpowers scenarios; also a recorded code read,
+// setup-helpers/cli.ts:94). Every checks-base name was swept too and none is
+// needed here (CI, LANG, TERM, TZ, … broke nothing when dropped), so none is
+// inherited. A var setup.sh turns out to need on some host fails loudly (tool
+// error) and is added with evidence; a var it doesn't need never leaks in.
 export const SETUP_ENV_ALLOWLIST: readonly string[] = [
-  ...CHECK_ENV_ALLOWLIST,
+  'SUPERPOWERS_ROOT',
   'PATH',
 ];
 

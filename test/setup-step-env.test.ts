@@ -57,6 +57,10 @@ test('setup.sh never sees host credentials; quorum-owned and allowlisted vars su
   expect(env['HOME']).toBeUndefined();
 });
 
+test('SETUP_ENV_ALLOWLIST is exactly the drop-sweep-evidenced names', () => {
+  expect([...SETUP_ENV_ALLOWLIST]).toEqual(['SUPERPOWERS_ROOT', 'PATH']);
+});
+
 test('SETUP_ENV_ALLOWLIST contains no credential-shaped names', () => {
   for (const name of SETUP_ENV_ALLOWLIST) {
     expect(name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i);
