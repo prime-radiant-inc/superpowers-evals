@@ -7,10 +7,17 @@
 
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { negate, runVerb } from '../src/check/dispatch.ts';
+import { FS_VERBS, negate, runVerb } from '../src/check/dispatch.ts';
 import type { CheckContext } from '../src/check/fs-verbs.ts';
 import {
   verbAssertCheckoutClean,
@@ -26,6 +33,10 @@ import {
   verbGitRepo,
   verbRequiresTool,
 } from '../src/check/fs-verbs.ts';
+import {
+  NEGATIVE_COVERED,
+  NEGATIVE_EXEMPT,
+} from './helpers/planted-negative-registry.ts';
 
 const REPO = resolve(import.meta.dir, '..');
 const PRELUDE = resolve(REPO, 'src', 'checks', 'prelude.sh');
@@ -770,4 +781,97 @@ test('codex-session-start-hook-executes: always pass with note (no bootstrap by 
   expect(outcome.passed).toBe(true);
   expect(outcome.detail).toContain('hook-less');
   expect(outcome.detail).toContain('no SessionStart bootstrap');
+});
+
+// ---------------------------------------------------------------------------
+// baseline-manifest — planted negative (worktree drift is the verb's target
+// defect; a clean pass alone would not prove the verification is wired)
+// ---------------------------------------------------------------------------
+
+test('baseline-manifest (planted negative): drifted worktree fails, not broken', () => {
+  const files = [
+    { path: 'docs/superpowers/plans/plan.md', content: 'PLAN\n' },
+    { path: 'docs/superpowers/specs/spec.md', content: 'SPEC\n' },
+  ];
+  const scenarioDir = workdir();
+  writeFileSync(
+    join(scenarioDir, 'baseline-manifest.json'),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        roles: {
+          spec: 'docs/superpowers/specs/spec.md',
+          plan: 'docs/superpowers/plans/plan.md',
+        },
+        files: files.map((f) => ({
+          path: f.path,
+          mode: '100644',
+          sha256: createHash('sha256').update(f.content).digest('hex'),
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const wd = workdir();
+  for (const f of files) {
+    writeFile(wd, f.path, f.content);
+    chmodSync(join(wd, f.path), 0o644);
+  }
+  const ctx = ctxFor(wd, { QUORUM_SCENARIO_DIR: scenarioDir });
+  // Sanity: the seeded tree verifies clean before the defect is planted.
+  expect(runVerb('baseline-manifest', [], ctx)?.passed).toBe(true);
+  // Planted defect: an extra file the agent left behind. The verb must FAIL
+  // (passed:false, not broken) — a verb wired to the wrong boolean would turn
+  // this drift into a silent GREEN.
+  writeFile(wd, 'drift.txt', 'unexpected\n');
+  const r = runVerb('baseline-manifest', [], ctx);
+  expect(r).not.toBeNull();
+  expect(r?.passed).toBe(false);
+  expect(r?.broken).toBeUndefined();
+  expect(r?.detail).toContain('extra file: drift.txt');
+});
+
+// ---------------------------------------------------------------------------
+// Planted-negative coverage gate: every fs verb must have a committed test
+// proving it FAILS (passed:false, negated:false, not broken) on its target
+// defect — a verb wired to the wrong boolean manufactures false GREENs that
+// no expected-check manifest can catch. Registrations (and any documented
+// always-pass exemptions) live in test/helpers/planted-negative-registry.ts;
+// many fs negatives live in this file, the per-harness bootstrap ones in
+// test/fs-verbs-bootstrap.test.ts.
+// ---------------------------------------------------------------------------
+
+test('coverage gate: every fs verb has a planted negative or a documented exemption', () => {
+  const vocab = Object.keys(FS_VERBS);
+  const problems: string[] = [];
+  for (const verb of vocab) {
+    const covered = NEGATIVE_COVERED.fs.includes(verb);
+    const exempt = Object.hasOwn(NEGATIVE_EXEMPT.fs, verb);
+    if (!covered && !exempt) {
+      problems.push(`fs verb lacks planted negative: ${verb}`);
+    }
+  }
+  // Exemptions must never be silent: each needs a non-empty reason citing
+  // the design note that makes the verb structurally unfailable.
+  for (const [verb, reason] of Object.entries(NEGATIVE_EXEMPT.fs)) {
+    if (!/\S/.test(reason)) {
+      problems.push(`exemption for ${verb} needs a non-empty reason`);
+    }
+  }
+  // Stale registrations are loud too: every registry entry must name a verb
+  // that actually exists in the vocabulary.
+  for (const verb of NEGATIVE_COVERED.fs) {
+    if (!vocab.includes(verb)) {
+      problems.push(`registry names unknown fs verb: ${verb}`);
+    }
+  }
+  for (const verb of Object.keys(NEGATIVE_EXEMPT.fs)) {
+    if (!vocab.includes(verb)) {
+      problems.push(`exemption names unknown fs verb: ${verb}`);
+    }
+  }
+  // One assertion carrying the full work queue, so a red gate prints every
+  // gap at once instead of stopping at the first.
+  expect(problems.join('; ')).toBe('');
 });

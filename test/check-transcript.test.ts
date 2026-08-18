@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallView } from '../src/atif/project.ts';
 import type { AtifTrajectory } from '../src/atif/types.ts';
+import { TRANSCRIPT_VERBS } from '../src/check/transcript-dispatch.ts';
 import {
   verbImplementationToolNotCalled,
   verbInvestigated,
@@ -17,6 +18,7 @@ import {
   verbSkillBeforeTool,
   verbSkillCalled,
   verbSkillNotCalled,
+  verbToolArgMatch,
   verbToolBefore,
   verbToolCalled,
   verbToolCount,
@@ -24,6 +26,10 @@ import {
   verbToolNotCalled,
   verbWorktreeCreated,
 } from '../src/check/verbs.ts';
+import {
+  NEGATIVE_COVERED,
+  NEGATIVE_EXEMPT,
+} from './helpers/planted-negative-registry.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -724,6 +730,22 @@ test('tool-arg-match fallback keys skip a present-but-null first key (jq // pari
   expect(r.lastRecord?.['passed']).toBe(true);
 });
 
+test('tool-arg-match (planted negative): calls with the wrong arg value fail, not broken', () => {
+  // Insertion mutation: the tool ran, but never with the expected argument
+  // value — exactly the defect tool-arg-match exists to catch. A verb wired
+  // to the wrong boolean would turn this into a silent GREEN.
+  const result = verbToolArgMatch(
+    [
+      call('Edit', { file_path: 'src/a.ts' }),
+      call('Edit', { file_path: 'src/b.ts' }),
+    ],
+    false,
+    ['Edit', '--eq', 'file_path=src/wrong.ts'],
+  );
+  expect(result.passed).toBe(false);
+  expect(result.detail).toBe('no Edit call matches all 1 matcher(s)');
+});
+
 // ---------------------------------------------------------------------------
 // Unknown verb
 // ---------------------------------------------------------------------------
@@ -817,4 +839,47 @@ test('crash on invalid regex emits fail record and exits non-zero (E2E)', async 
   expect(r.lastRecord).not.toBeNull();
   expect(r.lastRecord!['passed']).toBe(false);
   expect(String(r.lastRecord!['detail'] ?? '')).toContain('tool error');
+});
+
+// ---------------------------------------------------------------------------
+// Planted-negative coverage gate: every transcript verb must have a committed
+// test proving it FAILS (passed:false, negated:false, not broken) on its
+// target defect — a verb wired to the wrong boolean manufactures false GREENs
+// that no expected-check manifest can catch. Registrations (and any
+// documented always-pass exemptions) live in
+// test/helpers/planted-negative-registry.ts; the negatives live in this file.
+// ---------------------------------------------------------------------------
+
+test('coverage gate: every transcript verb has a planted negative or a documented exemption', () => {
+  const vocab = [...TRANSCRIPT_VERBS];
+  const problems: string[] = [];
+  for (const verb of vocab) {
+    const covered = NEGATIVE_COVERED.transcript.includes(verb);
+    const exempt = Object.hasOwn(NEGATIVE_EXEMPT.transcript, verb);
+    if (!covered && !exempt) {
+      problems.push(`transcript verb lacks planted negative: ${verb}`);
+    }
+  }
+  // Exemptions must never be silent: each needs a non-empty reason citing
+  // the design note that makes the verb structurally unfailable.
+  for (const [verb, reason] of Object.entries(NEGATIVE_EXEMPT.transcript)) {
+    if (!/\S/.test(reason)) {
+      problems.push(`exemption for ${verb} needs a non-empty reason`);
+    }
+  }
+  // Stale registrations are loud too: every registry entry must name a verb
+  // that actually exists in the vocabulary.
+  for (const verb of NEGATIVE_COVERED.transcript) {
+    if (!vocab.includes(verb)) {
+      problems.push(`registry names unknown transcript verb: ${verb}`);
+    }
+  }
+  for (const verb of Object.keys(NEGATIVE_EXEMPT.transcript)) {
+    if (!vocab.includes(verb)) {
+      problems.push(`exemption names unknown transcript verb: ${verb}`);
+    }
+  }
+  // One assertion carrying the full work queue, so a red gate prints every
+  // gap at once instead of stopping at the first.
+  expect(problems.join('; ')).toBe('');
 });
