@@ -13,10 +13,12 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  COPILOT_GAUNTLET_ENV_ALLOWLIST,
   CopilotAgent,
   copilotGauntletEnv,
   scanCopilotSecretLeaks,
 } from '../src/agents/copilot.ts';
+import { GAUNTLET_ENV_ALLOWLIST } from '../src/runner/gauntlet-env.ts';
 import { ProvisionError } from '../src/agents/index.ts';
 import {
   type AgentConfig,
@@ -653,6 +655,81 @@ test('copilotGauntletEnv projects host env onto the allowlist and drops the rest
     TERM: 'xterm',
     ANTHROPIC_API_KEY: 'sk-allowed',
   });
+});
+
+// F13 final fix (IMPORTANT 2): the copilot gauntlet child env is rebuilt from
+// the standard grader contract — exactly the three supported Anthropic auth
+// names plus ANTHROPIC_BASE_URL — so a grader authenticated via OAuth works
+// under copilot exactly as under every other agent.
+test('copilotGauntletEnv carries all three grader auth alternatives + the base url', () => {
+  const env = copilotGauntletEnv({
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-grader-oauth-cc',
+    ANTHROPIC_AUTH_TOKEN: 'fake-grader-oauth-sdk',
+    ANTHROPIC_API_KEY: 'sk-grader-fake',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+  });
+  expect(env).toEqual({
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-grader-oauth-cc',
+    ANTHROPIC_AUTH_TOKEN: 'fake-grader-oauth-sdk',
+    ANTHROPIC_API_KEY: 'sk-grader-fake',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+  });
+});
+
+// The OpenAI block was an unrelated provider bundle in the child env; copilot
+// itself never consumed it (its BYOK path rides the mode-0600 env file), and
+// the grader is Anthropic-only.
+test('copilotGauntletEnv excludes the OpenAI block and every unrelated provider secret', () => {
+  const env = copilotGauntletEnv({
+    OPENAI_API_KEY: 'sk-host-openai',
+    OPENAI_BASE_URL: 'http://evil-openai.example',
+    OPENAI_ORG_ID: 'evil-org',
+    OPENAI_PROJECT: 'evil-project',
+    ANTHROPIC_LOG: 'debug',
+    GEMINI_API_KEY: 'sk-host-gemini',
+    AWS_SECRET_ACCESS_KEY: 'host-aws',
+    COPILOT_GITHUB_TOKEN: 'ghp_secret',
+    PATH: '/usr/bin',
+  });
+  expect(env).toEqual({ PATH: '/usr/bin' });
+});
+
+// Copilot-specific non-secret routing survives: each name is forwarded into
+// the copilot process by the launcher's own env -i forward list, so dropping
+// it from the child env would silently strip working routing.
+test('copilotGauntletEnv keeps copilot-specific non-secret routing', () => {
+  const routed = {
+    GH_HOST: 'github.example.com',
+    COPILOT_GH_HOST: 'copilot.example.com',
+    COPILOT_MODEL: 'claude-opus-5',
+    COPILOT_OFFLINE: 'true',
+    HOME: '/host/home',
+    TMUX_TMPDIR: '/tmp/tmux',
+  };
+  expect(copilotGauntletEnv(routed)).toEqual(routed);
+});
+
+test('COPILOT_GAUNTLET_ENV_ALLOWLIST secret-shaped names are exactly the grader trio', () => {
+  const secretish = COPILOT_GAUNTLET_ENV_ALLOWLIST.filter((n) =>
+    /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(n),
+  );
+  expect([...secretish].sort()).toEqual(
+    [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+    ].sort(),
+  );
+});
+
+// The copilot list is the standard grader contract plus copilot extras — never
+// a hand-maintained fork that can drift below the base again.
+test('COPILOT_GAUNTLET_ENV_ALLOWLIST is a superset of the standard grader contract', () => {
+  for (const name of GAUNTLET_ENV_ALLOWLIST) {
+    expect({ name, present: COPILOT_GAUNTLET_ENV_ALLOWLIST.includes(name) }).toEqual(
+      { name, present: true },
+    );
+  }
 });
 
 test('copilotGauntletEnv passes a clean proxy URL and rejects a credentialed one', () => {

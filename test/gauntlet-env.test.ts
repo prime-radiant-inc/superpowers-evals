@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { envSnapshot } from '../src/env.ts';
 import {
   GAUNTLET_ENV_ALLOWLIST,
@@ -191,6 +192,102 @@ test('the spawned gauntlet child gets the projection, not the host env', async (
   } finally {
     restore();
     for (const dir of [shimDir, outRoot, scenarioDir, sproot]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+// Same wiring proof for copilot's stricter projection (F13 final fix,
+// IMPORTANT 2): the REAL runScenario spawns the mock gauntlet for a copilot
+// run; the child env must carry the three fake grader auth names + the base
+// url, and never the OpenAI block or copilot's own GitHub token (env-file-
+// only). All secrets are fakes — no real credential can reach the capture.
+test('the copilot gauntlet child gets the grader contract, not the OpenAI block', async () => {
+  const scenarioDir = makeScenario();
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-genv-'));
+  const sproot = mkdtempSync(join(tmpdir(), 'sproot-'));
+  // The copilot plugin files provisioning stages + verifies.
+  for (const rel of [
+    '.claude-plugin/plugin.json',
+    'hooks/hooks.json',
+    'hooks/run-hook.cmd',
+    'hooks/session-start',
+    'skills/using-superpowers/SKILL.md',
+    'skills/brainstorming/SKILL.md',
+  ]) {
+    const path = join(sproot, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'x\n');
+  }
+  // A fake copilot binary so the provisioning PATH guard passes (it is never
+  // launched: the mock gauntlet drops canned artifacts instead of driving it).
+  const binDir = mkdtempSync(join(tmpdir(), 'bin-genv-'));
+  const fakeCopilot = join(binDir, 'copilot');
+  writeFileSync(fakeCopilot, '#!/bin/sh\nexit 0\n');
+  chmodSync(fakeCopilot, 0o755);
+  const captureKeys = [
+    ...GRADER_CREDENTIAL_NAMES,
+    'ANTHROPIC_BASE_URL',
+    'OPENAI_API_KEY',
+    'OPENAI_BASE_URL',
+    'OPENAI_ORG_ID',
+    'COPILOT_GITHUB_TOKEN',
+    'GH_TOKEN',
+    'QUORUM_AGENT_CWD',
+    'QUORUM_AGENT_HOME',
+  ];
+  const shimDir = mockGauntletDir('pass', { captureEnvKeys: captureKeys });
+  const restore = swapEnv({
+    PATH: `${shimDir}:${binDir}:${MOCK}:${process.env['PATH'] ?? ''}`,
+    // ALL grader credential names replaced with fakes, plus a fake gateway
+    // base url that must ride along with them.
+    ANTHROPIC_API_KEY: 'sk-grader-e2e',
+    ANTHROPIC_AUTH_TOKEN: 'fake-grader-oauth-sdk',
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-grader-oauth-cc',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+    SUPERPOWERS_ROOT: sproot,
+    // Copilot's own auth: a fake GitHub token that must stay env-file-only.
+    COPILOT_GITHUB_TOKEN: 'ghp-fake-copilot-auth',
+    GH_TOKEN: 'gho-fake-fallback',
+    // The hostile unrelated provider block the old allowlist forwarded.
+    OPENAI_API_KEY: 'sk-host-openai',
+    OPENAI_BASE_URL: 'http://evil-openai.example',
+    OPENAI_ORG_ID: 'evil-org',
+  });
+  let runDir: string | undefined;
+  try {
+    await runScenario({
+      scenarioDir,
+      codingAgent: 'copilot',
+      codingAgentsDir: REAL_CODING_AGENTS,
+      outRoot,
+      onRunDir: (dir) => {
+        runDir = dir;
+      },
+    });
+    if (runDir === undefined) {
+      throw new Error('onRunDir never fired');
+    }
+    const child = JSON.parse(
+      readFileSync(join(runDir, 'mock-gauntlet-env.json'), 'utf8'),
+    ) as Record<string, string | undefined>;
+    // The full grader contract arrives — with exactly the fake values.
+    expect(child['ANTHROPIC_API_KEY']).toBe('sk-grader-e2e');
+    expect(child['ANTHROPIC_AUTH_TOKEN']).toBe('fake-grader-oauth-sdk');
+    expect(child['CLAUDE_CODE_OAUTH_TOKEN']).toBe('fake-grader-oauth-cc');
+    expect(child['ANTHROPIC_BASE_URL']).toBe('https://gateway.example/v1');
+    // The unrelated OpenAI block and copilot's own secrets: absent.
+    expect(child['OPENAI_API_KEY']).toBeUndefined();
+    expect(child['OPENAI_BASE_URL']).toBeUndefined();
+    expect(child['OPENAI_ORG_ID']).toBeUndefined();
+    expect(child['COPILOT_GITHUB_TOKEN']).toBeUndefined();
+    expect(child['GH_TOKEN']).toBeUndefined();
+    // The quorum-owned overlays survive the projection.
+    expect(child['QUORUM_AGENT_CWD']).toBeDefined();
+    expect(child['QUORUM_AGENT_HOME']).toBeDefined();
+  } finally {
+    restore();
+    for (const dir of [shimDir, binDir, outRoot, scenarioDir, sproot]) {
       rmSync(dir, { recursive: true, force: true });
     }
   }
