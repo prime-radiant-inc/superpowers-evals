@@ -16,11 +16,19 @@
 // of a bundle directory — and staged material is 0700 dirs / 0600 files.
 import { spawnSync } from 'node:child_process';
 import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
+  type Stats,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
@@ -37,7 +45,6 @@ import {
   type LiveCredentialScope,
 } from '../credentials/scope.ts';
 import { ApplianceError } from './errors.ts';
-import { writePrivateText } from './fs.ts';
 import {
   assertNoFollowDirChain,
   assertRealDirNoFollow,
@@ -119,10 +126,53 @@ function scopeError(message: string): ApplianceError {
   return new ApplianceError('config_invalid', 'credential-scope', message);
 }
 
+function lstatOrUndefined(path: string, label: string): Stats | undefined {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    throw scopeError(
+      `${label} is unreadable (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+    );
+  }
+}
+
+// Canonical no-follow identity for boundary comparison. An EXISTING target
+// must be a real directory reached without following a symlink — a
+// symlink-aliased repo/results/bundle path is refused outright, so an alias
+// can never dodge the overlap checks. A MISSING target canonicalizes through
+// its nearest existing ancestor under the same no-follow rule. realpath then
+// only normalizes case/`..`-free spelling (every component is already real),
+// giving a canonical identity safe for lexical exact/ancestor/descendant
+// comparison.
+function canonicalBoundaryPath(path: string, label: string): string {
+  const target = resolve(path);
+  try {
+    if (lstatOrUndefined(target, label) !== undefined) {
+      assertRealDirNoFollow(target, label);
+      return realpathSync(target);
+    }
+    let ancestor = dirname(target);
+    while (lstatOrUndefined(ancestor, label) === undefined) {
+      const parent = dirname(ancestor);
+      if (parent === ancestor) {
+        break;
+      }
+      ancestor = parent;
+    }
+    assertRealDirNoFollow(ancestor, label);
+    return join(realpathSync(ancestor), relative(ancestor, target));
+  } catch (error) {
+    if (error instanceof ApplianceError) {
+      throw error;
+    }
+    throw scopeError(
+      `${label} could not be canonicalized (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+    );
+  }
+}
+
 function pathsOverlap(a: string, b: string): boolean {
-  const ra = resolve(a);
-  const rb = resolve(b);
-  return ra === rb || ra.startsWith(rb + sep) || rb.startsWith(ra + sep);
+  return a === b || a.startsWith(b + sep) || b.startsWith(a + sep);
 }
 
 function overlapTargets(config: ApplianceConfig): readonly [string, string][] {
@@ -132,6 +182,24 @@ function overlapTargets(config: ApplianceConfig): readonly [string, string][] {
     ['gauntlet repo', config.gauntlet.path],
     ['results root', config.container.results_root],
   ];
+}
+
+// The shared overlap engine for both boundaries: the subject and every
+// comparison target are reduced to canonical no-follow identities first, and
+// any exact/ancestor/descendant relation is a typed refusal.
+function assertNoBoundaryOverlap(
+  subjectLabel: string,
+  subjectPath: string,
+  targets: readonly [string, string][],
+): void {
+  const subject = canonicalBoundaryPath(subjectPath, subjectLabel);
+  for (const [label, target] of targets) {
+    if (pathsOverlap(subject, canonicalBoundaryPath(target, label))) {
+      throw scopeError(
+        `${subjectLabel} overlaps the ${label} (${target}); repair the appliance config`,
+      );
+    }
+  }
 }
 
 // Every entry under a fixed slot must be a real directory or a regular file
@@ -152,21 +220,23 @@ function assertRegularTree(dir: string, label: string): void {
  * Validate the scoped credential state namespace: every existing component
  * no-follow, only the three fixed slots present, and no ancestor/descendant
  * overlap between state/credentials-scoped and the evals, superpowers, or
- * gauntlet repos or the results root. Probe staging calls only this helper
- * and never inspects the blessed bundle.
+ * gauntlet repos, the results root, or the credential bundle (a bundle
+ * overlapping this namespace would let staging cleanup remove blessed
+ * material). All comparisons use canonical no-follow identities, and the
+ * overlap checks run BEFORE any enumeration or cleanup. Probe staging calls
+ * only this helper and never inspects blessed bundle contents (the bundle
+ * path itself is compared at directory level only). Every exported mutator
+ * over the namespace runs this boundary first.
  */
 export function assertScopedCredentialStateBoundary(
   loaded: LoadedApplianceConfig,
 ): void {
   const config = loaded.config;
   const paths = scopedPaths(config);
-  for (const [label, target] of overlapTargets(config)) {
-    if (pathsOverlap(paths.root, target)) {
-      throw scopeError(
-        `state/credentials-scoped overlaps the ${label} (${target}); repair the appliance config`,
-      );
-    }
-  }
+  assertNoBoundaryOverlap('state/credentials-scoped', paths.root, [
+    ...overlapTargets(config),
+    ['credential bundle', config.credential_bundle.path],
+  ]);
   if (
     !assertNoFollowDirChain(config.root, paths.root, 'state/credentials-scoped')
   ) {
@@ -193,26 +263,73 @@ export function assertScopedCredentialStateBoundary(
 
 /**
  * Validate the blessed bundle boundary: a real no-follow bundle directory
- * with no ancestor/descendant overlap against the code repos or results
- * root. Live staging calls this (plus the state boundary) before any
- * evaluation; loadCredentialConfig calls it before reading metadata.json.
+ * with no ancestor/descendant overlap against the code repos, results root,
+ * or the scoped credential state namespace (symmetric with the state
+ * boundary). Comparisons use canonical no-follow identities. Live staging
+ * calls this (plus the state boundary) before any evaluation;
+ * loadCredentialConfig calls it before reading metadata.json.
  */
 export function assertCredentialBundleBoundary(config: ApplianceConfig): void {
   const bundleDir = config.credential_bundle.path;
-  for (const [label, target] of overlapTargets(config)) {
-    if (pathsOverlap(bundleDir, target)) {
-      throw scopeError(
-        `credential bundle overlaps the ${label} (${target}); repair the appliance config`,
-      );
-    }
-  }
   assertRealDirNoFollow(bundleDir, 'credential bundle');
+  assertNoBoundaryOverlap('credential bundle', bundleDir, [
+    ...overlapTargets(config),
+    ['scoped credential state', scopedPaths(config).root],
+  ]);
 }
 
-// Validate every component of bundleDir/rel no-follow and read the final
-// regular file. `required: false` treats a missing component as absence; a
-// symlink, FIFO, device, or directory-in-file-position always fails closed
-// BEFORE any open (reading a FIFO would block forever).
+// fd-based no-follow open of one regular file. O_NOFOLLOW makes the kernel —
+// not a racy lstat-then-open sequence — reject a symlink final component;
+// O_NONBLOCK keeps a FIFO from blocking the open so fstat can refuse it; any
+// other special node (socket, device) is refused by errno or by the fstat
+// regular-file check. Every fs failure is normalized to a typed
+// ApplianceError; raw errnos never escape.
+function openNoFollowRegularFile(
+  path: string,
+  label: string,
+  required: boolean,
+): number | null {
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      if (!required) {
+        return null;
+      }
+      throw scopeError(`${label} is missing: ${path}`);
+    }
+    if (code === 'ELOOP' || code === 'EMLINK') {
+      throw scopeError(`${label} is a symlink: ${path}`);
+    }
+    throw scopeError(
+      `${label} is not a readable regular file (${code ?? 'unknown error'}): ${path}`,
+    );
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      closeSync(fd);
+      throw scopeError(`${label} is not a regular file: ${path}`);
+    }
+  } catch (error) {
+    if (error instanceof ApplianceError) {
+      throw error;
+    }
+    closeSync(fd);
+    throw scopeError(
+      `${label} could not be inspected (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+    );
+  }
+  return fd;
+}
+
+// Validate the intermediate components of bundleDir/rel no-follow, then read
+// the final component through an O_NOFOLLOW file descriptor. `required:
+// false` treats a missing component as absence.
 function readBundleFile(
   bundleDir: string,
   rel: string,
@@ -220,9 +337,9 @@ function readBundleFile(
 ): string | null {
   const parts = rel.split('/');
   let cursor = bundleDir;
-  for (let i = 0; i < parts.length; i += 1) {
+  for (let i = 0; i < parts.length - 1; i += 1) {
     cursor = join(cursor, parts[i] ?? '');
-    const stats = lstatSync(cursor, { throwIfNoEntry: false });
+    const stats = lstatOrUndefined(cursor, 'credential bundle');
     if (stats === undefined) {
       if (!required) {
         return null;
@@ -232,32 +349,73 @@ function readBundleFile(
     if (stats.isSymbolicLink()) {
       throw scopeError(`credential bundle path is a symlink: ${cursor}`);
     }
-    if (i < parts.length - 1) {
-      if (!stats.isDirectory()) {
-        throw scopeError(
-          `credential bundle path is not a directory: ${cursor}`,
-        );
-      }
-    } else if (!stats.isFile()) {
-      throw scopeError(
-        `credential bundle entry is not a regular file: ${cursor}`,
-      );
+    if (!stats.isDirectory()) {
+      throw scopeError(`credential bundle path is not a directory: ${cursor}`);
     }
   }
-  return readFileSync(cursor, 'utf8');
+  const final = join(cursor, parts[parts.length - 1] ?? '');
+  const fd = openNoFollowRegularFile(
+    final,
+    `credential bundle ${rel}`,
+    required,
+  );
+  if (fd === null) {
+    return null;
+  }
+  try {
+    return readFileSync(fd, 'utf8');
+  } catch (error) {
+    throw scopeError(
+      `credential bundle ${rel} could not be read (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${final}`,
+    );
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Local no-follow private write into the staging slot. O_CREAT|O_EXCL|
+// O_NOFOLLOW means a pre-planted entry (symlink or otherwise) at the
+// destination is a typed refusal, never a follow — the slot was cleared
+// first, so any EEXIST is hostile. fs failures never escape raw.
+function writeScopedPrivateFile(path: string, value: string): void {
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    throw scopeError(
+      `scoped credential file could not be created (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+    );
+  }
+  try {
+    writeFileSync(fd, value);
+    fsyncSync(fd);
+  } catch (error) {
+    throw scopeError(
+      `scoped credential file could not be written (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+    );
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // One isolated evaluation of the trusted bundle env: /bin/bash with no
-// profile, no rc, and a minimal non-secret environment sources the file with
-// allexport and prints exactly the requested names NUL-separated. bash-3.2
-// compatible (macOS /bin/bash): ${!name+x} composes indirection with the
-// set-test.
+// profile, no rc, and a minimal non-secret environment sources the
+// already-read env bytes from ITS OWN STDIN — the path is never reopened, so
+// the bytes bash evaluates are exactly the bytes the O_NOFOLLOW read
+// validated — with allexport, and prints exactly the requested names
+// NUL-separated. bash-3.2 compatible (macOS /bin/bash): ${!name+x} composes
+// indirection with the set-test.
 const BUNDLE_EVAL_SCRIPT = [
   'set -eu',
-  'envfile=$1',
-  'shift',
   'set -a',
-  '. "$envfile"',
+  '. /dev/stdin',
   'set +a',
   'for name in "$@"; do',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: bash indirect expansion, not a JS template
@@ -269,21 +427,13 @@ const BUNDLE_EVAL_SCRIPT = [
 ].join('\n');
 
 function evaluateBundleEnv(
-  envFile: string,
+  envContent: string,
   names: readonly string[],
 ): Map<string, string> {
   const result = spawnSync(
     '/bin/bash',
-    [
-      '--noprofile',
-      '--norc',
-      '-c',
-      BUNDLE_EVAL_SCRIPT,
-      'bundle-env',
-      envFile,
-      ...names,
-    ],
-    { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' },
+    ['--noprofile', '--norc', '-c', BUNDLE_EVAL_SCRIPT, 'bundle-env', ...names],
+    { env: { PATH: '/usr/bin:/bin' }, input: envContent, encoding: 'utf8' },
   );
   if (result.status !== 0) {
     // stderr is withheld deliberately: a hostile env file can steer bash
@@ -463,6 +613,36 @@ interface OAuthPlan {
   readonly secrets: readonly LabeledSecret[];
 }
 
+// The closed runtime kind-to-mount table. TS types already pin these, but a
+// cast or deserialized scope can violate them at runtime, and the mount name
+// becomes a path component — so the mapping is re-validated here before any
+// destination path is derived from it.
+const OAUTH_MOUNT_BY_KIND: Readonly<
+  Record<string, ProjectedAuthMount['name']>
+> = {
+  codex: 'codex',
+  gemini: 'gemini',
+  antigravity: 'gemini',
+  kimi: 'kimi',
+  pi: 'pi',
+};
+
+const PROJECTED_MOUNT_NAMES: ReadonlySet<ProjectedAuthMount['name']> = new Set([
+  'codex',
+  'gemini',
+  'kimi',
+  'pi',
+]);
+
+function requireProjectedMountName(
+  name: ProjectedAuthMount['name'],
+): ProjectedAuthMount['name'] {
+  if (!PROJECTED_MOUNT_NAMES.has(name)) {
+    throw scopeError(`unknown auth mount name '${String(name)}'`);
+  }
+  return name;
+}
+
 function planOAuth(
   scope: LiveCredentialScope,
   bundleDir: string,
@@ -470,6 +650,19 @@ function planOAuth(
   const oauth = scope.oauth;
   if (oauth === null) {
     return null;
+  }
+  const expectedMount = Object.hasOwn(OAUTH_MOUNT_BY_KIND, oauth.kind)
+    ? OAUTH_MOUNT_BY_KIND[oauth.kind]
+    : undefined;
+  if (expectedMount === undefined) {
+    throw scopeError(
+      `unknown oauth projection kind '${(oauth as { kind: string }).kind}'`,
+    );
+  }
+  if (oauth.mountName !== expectedMount) {
+    throw scopeError(
+      `oauth kind '${oauth.kind}' must use mount '${expectedMount}', got '${String(oauth.mountName)}'`,
+    );
   }
   switch (oauth.kind) {
     case 'codex': {
@@ -625,7 +818,13 @@ function clearStagingSlot(loaded: LoadedApplianceConfig): void {
       'state/credentials-scoped/staging',
     )
   ) {
-    rmSync(paths.staging, { recursive: true });
+    try {
+      rmSync(paths.staging, { recursive: true });
+    } catch (error) {
+      throw scopeError(
+        `the staging slot could not be cleared (${error instanceof Error ? error.message : String(error)}): ${paths.staging}`,
+      );
+    }
   }
 }
 
@@ -652,7 +851,7 @@ export function stageProbeCredentialMaterial(
     'state/credentials-scoped/staging',
   );
   const agentEnvFile = join(paths.staging, AGENT_ENV_FILE);
-  writePrivateText(agentEnvFile, '');
+  writeScopedPrivateFile(agentEnvFile, '');
   return {
     kind: 'empty',
     credentialScope: EMPTY_CREDENTIAL_SCOPE,
@@ -680,10 +879,12 @@ export function stageLiveCredentialMaterial(
   const paths = scopedPaths(loaded.config);
 
   // Read and validate every credential source BEFORE creating the stage, so
-  // a bundle fault can never leave partial secret material behind.
+  // a bundle fault can never leave partial secret material behind. The env
+  // bytes are read once through the O_NOFOLLOW descriptor and handed to bash
+  // via stdin — the path is never reopened.
   const oauthPlan = planOAuth(scope, bundleDir);
-  const envFileRaw = readBundleFile(bundleDir, 'credentials.env', true);
-  if (envFileRaw === null) {
+  const envContent = readBundleFile(bundleDir, 'credentials.env', true);
+  if (envContent === null) {
     throw scopeError('credential bundle is missing credentials.env');
   }
   const names = new Set<string>();
@@ -702,9 +903,7 @@ export function stageLiveCredentialMaterial(
   for (const name of COPILOT_SUPERVISOR_ENV_NAMES) {
     names.add(name);
   }
-  const bundleEnv = evaluateBundleEnv(join(bundleDir, 'credentials.env'), [
-    ...names,
-  ]);
+  const bundleEnv = evaluateBundleEnv(envContent, [...names]);
 
   const agent = selectAgentEnv(scope, bundleEnv);
   const supervisor = buildSupervisorEnv(scope, bundleEnv);
@@ -713,8 +912,24 @@ export function stageLiveCredentialMaterial(
     supervisor.graderAuthValues,
   );
 
-  const agentEnvFile = join(paths.staging, AGENT_ENV_FILE);
-  const supervisorExecEnvFile = join(paths.staging, SUPERVISOR_ENV_FILE);
+  // Every destination is constrained to the fixed staging slot before it is
+  // used: a hostile mount name or relative path can never place material
+  // outside the slot.
+  const stagingRoot = resolve(paths.staging);
+  const insideStaging = (dest: string): string => {
+    const resolved = resolve(dest);
+    if (resolved !== stagingRoot && !resolved.startsWith(stagingRoot + sep)) {
+      throw scopeError(
+        `staging destination escapes the fixed staging slot: ${dest}`,
+      );
+    }
+    return resolved;
+  };
+
+  const agentEnvFile = insideStaging(join(paths.staging, AGENT_ENV_FILE));
+  const supervisorExecEnvFile = insideStaging(
+    join(paths.staging, SUPERVISOR_ENV_FILE),
+  );
   const authMounts: ProjectedAuthMount[] = [];
   try {
     ensurePrivateDirNoFollow(
@@ -722,18 +937,23 @@ export function stageLiveCredentialMaterial(
       paths.staging,
       'state/credentials-scoped/staging',
     );
-    writePrivateText(agentEnvFile, agentEnvBody(agent.entries));
-    writePrivateText(supervisorExecEnvFile, `${supervisor.lines.join('\n')}\n`);
+    writeScopedPrivateFile(agentEnvFile, agentEnvBody(agent.entries));
+    writeScopedPrivateFile(
+      supervisorExecEnvFile,
+      `${supervisor.lines.join('\n')}\n`,
+    );
     if (oauthPlan !== null) {
-      const mountRoot = join(paths.staging, 'auth', oauthPlan.mountName);
+      const mountRoot = insideStaging(
+        join(paths.staging, 'auth', oauthPlan.mountName),
+      );
       for (const file of oauthPlan.files) {
-        const dest = join(mountRoot, file.rel);
+        const dest = insideStaging(join(mountRoot, file.rel));
         ensurePrivateDirNoFollow(
           loaded.config.root,
           dirname(dest),
           'state/credentials-scoped/staging',
         );
-        writePrivateText(dest, file.content);
+        writeScopedPrivateFile(dest, file.content);
       }
       authMounts.push({ name: oauthPlan.mountName, path: mountRoot });
     }
@@ -741,7 +961,13 @@ export function stageLiveCredentialMaterial(
     try {
       rmSync(paths.staging, { recursive: true, force: true });
     } catch {}
-    throw error;
+    if (error instanceof ApplianceError) {
+      throw error;
+    }
+    // Never let a raw fs error escape the staging write phase.
+    throw scopeError(
+      `staging failed (${error instanceof Error ? error.message : String(error)})`,
+    );
   }
   return {
     kind: 'live',
@@ -819,29 +1045,43 @@ export function activateScopedCredentialMaterial(
   try {
     renameSync(paths.staging, paths.active);
   } catch (error) {
+    const swapMessage = error instanceof Error ? error.message : String(error);
     if (activeExists) {
       // Restore the old generation before surfacing the error; the stage
-      // stays in its slot for a retry.
+      // stays in its slot for a retry. If the restore ITSELF fails, the
+      // original failure must not mask it: the previous generation is
+      // stranded in the recovery slot with no active generation, and only a
+      // rollback-failed error naming that state is honest.
       try {
         renameSync(paths.recovery, paths.active);
-      } catch {}
+      } catch (restoreError) {
+        throw scopeError(
+          `activation rollback failed: the previous generation remains in state/credentials-scoped/recovery and no active generation exists (restore error: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}); original swap failure: ${swapMessage} — run the interrupted-swap recovery after repairing`,
+        );
+      }
     }
     throw scopeError(
-      `activation failed while swapping the stage into place: ${error instanceof Error ? error.message : String(error)}`,
+      `activation failed while swapping the stage into place: ${swapMessage}`,
     );
   }
   if (activeExists) {
-    rmSync(paths.recovery, { recursive: true, force: true });
+    try {
+      rmSync(paths.recovery, { recursive: true, force: true });
+    } catch (error) {
+      throw scopeError(
+        `activation succeeded but the retired generation could not be removed from the recovery slot (${error instanceof Error ? error.message : String(error)}); repair state/credentials-scoped manually`,
+      );
+    }
   }
 
-  const rebase = (path: string): string =>
-    join(paths.active, relative(paths.staging, path));
+  // The returned material is derived ONLY from the fixed slot constants and
+  // runtime-validated mount names — never by rebasing caller-provided paths.
   if (staged.kind === 'empty') {
     return {
       kind: 'empty',
       credentialScope: staged.credentialScope,
       root: paths.active,
-      agentEnvFile: rebase(staged.agentEnvFile),
+      agentEnvFile: join(paths.active, AGENT_ENV_FILE),
       supervisorExecEnvFile: null,
       authMounts: [],
     };
@@ -850,22 +1090,24 @@ export function activateScopedCredentialMaterial(
     kind: 'live',
     credentialScope: staged.credentialScope,
     root: paths.active,
-    agentEnvFile: rebase(staged.agentEnvFile),
-    supervisorExecEnvFile: rebase(staged.supervisorExecEnvFile),
+    agentEnvFile: join(paths.active, AGENT_ENV_FILE),
+    supervisorExecEnvFile: join(paths.active, SUPERVISOR_ENV_FILE),
     authMounts: staged.authMounts.map((mount) => ({
-      name: mount.name,
-      path: rebase(mount.path),
+      name: requireProjectedMountName(mount.name),
+      path: join(paths.active, 'auth', mount.name),
     })),
   };
 }
 
 /**
- * Remove only the fixed staging slot (validated no-follow). Never touches
- * the active generation or the recovery slot.
+ * Remove only the fixed staging slot (validated no-follow, behind the
+ * authoritative boundary). Never touches the active generation or the
+ * recovery slot.
  */
 export function discardStagedCredentialMaterial(
   loaded: LoadedApplianceConfig,
 ): void {
+  assertScopedCredentialStateBoundary(loaded);
   clearStagingSlot(loaded);
 }
 
@@ -874,11 +1116,13 @@ export function discardStagedCredentialMaterial(
  * reconcileScopedContainer after the configured container is confirmed down.
  * recovery-without-active restores the old generation deterministically;
  * recovery-plus-active is ambiguous (two complete generations) and fails
- * closed; no recovery slot is a no-op.
+ * closed; no recovery slot is a no-op. Runs the authoritative boundary
+ * first, like every mutator over the namespace.
  */
 export function recoverScopedCredentialActivation(
   loaded: LoadedApplianceConfig,
 ): void {
+  assertScopedCredentialStateBoundary(loaded);
   const paths = scopedPaths(loaded.config);
   const recoveryExists = slotExists(
     loaded,
@@ -903,12 +1147,14 @@ export function recoverScopedCredentialActivation(
 }
 
 /**
- * Retire every scoped credential slot (staging, recovery, active), each
- * validated no-follow before removal. Leaves nothing to accumulate.
+ * Retire every scoped credential slot (staging, recovery, active), behind
+ * the authoritative boundary and each validated no-follow before removal.
+ * Leaves nothing to accumulate.
  */
 export function retireScopedCredentialMaterial(
   loaded: LoadedApplianceConfig,
 ): void {
+  assertScopedCredentialStateBoundary(loaded);
   const paths = scopedPaths(loaded.config);
   const slots: readonly [string, string][] = [
     [paths.staging, 'state/credentials-scoped/staging'],
@@ -917,7 +1163,13 @@ export function retireScopedCredentialMaterial(
   ];
   for (const [slot, label] of slots) {
     if (slotExists(loaded, slot, label)) {
-      rmSync(slot, { recursive: true });
+      try {
+        rmSync(slot, { recursive: true });
+      } catch (error) {
+        throw scopeError(
+          `${label} could not be retired (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
     }
   }
 }

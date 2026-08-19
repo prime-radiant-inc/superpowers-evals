@@ -217,3 +217,65 @@ test('loadCredentialConfig still requires the code repos to exist', () => {
   const structural = loadStateConfig(fx.configPath);
   expect(structural.config.root).toBe(fx.root);
 });
+
+// --- Fix Round 1: structural loader no-follow (F2) ---------------------------
+
+// A redirected state namespace must be refused even by the READ-ONLY loader:
+// status/show/costs/cancel resolve records through these paths, so a
+// symlinked component would let them consume foreign records.
+test('loadStateConfig refuses a symlinked state namespace read-only', () => {
+  const fx = fixture({ metadata: null });
+  mkdirSync(join(fx.root, 'aside/job-planted'), { recursive: true });
+  writeFileSync(join(fx.root, 'aside/job-planted/job.json'), '{}');
+  mkdirSync(join(fx.root, 'state'), { recursive: true });
+  symlinkSync(join(fx.root, 'aside'), join(fx.root, 'state/jobs'));
+
+  const caught = captureError(() => loadStateConfig(fx.configPath));
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  // The planted record was never consumed or repaired away.
+  expect(existsSync(join(fx.root, 'aside/job-planted/job.json'))).toBe(true);
+});
+
+test('loadStateConfig refuses a symlinked state root read-only', () => {
+  const fx = fixture({ metadata: null });
+  mkdirSync(join(fx.root, 'aside'), { recursive: true });
+  symlinkSync(join(fx.root, 'aside'), join(fx.root, 'state'));
+  expect(captureError(() => loadStateConfig(fx.configPath))).toBeInstanceOf(
+    ApplianceError,
+  );
+});
+
+test('loadStateConfig refuses a symlink-aliased configured root', () => {
+  const fx = fixture({ metadata: null });
+  const realRoot = join(fx.root, 'real-root');
+  mkdirSync(realRoot, { recursive: true });
+  const rootLink = join(fx.root, 'root-link');
+  symlinkSync(realRoot, rootLink);
+  const configPath = join(fx.root, 'aliased.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      root: rootLink,
+      evals: {
+        path: join(fx.root, 'superpowers-evals'),
+        remote: 'origin',
+        ref: 'main',
+      },
+      superpowers: { path: join(fx.root, 'superpowers'), remote: 'origin' },
+      gauntlet: {
+        path: join(fx.root, 'gauntlet'),
+        remote: 'origin',
+        ref: 'main',
+      },
+      credential_bundle: { name: 'blessed', path: fx.bundleDir },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(fx.root, 'superpowers-evals/results'),
+      },
+    }),
+  );
+  const caught = captureError(() => loadStateConfig(configPath));
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+});

@@ -1152,3 +1152,322 @@ test('retireScopedCredentialMaterial removes every fixed slot and nothing else',
   // The bundle itself is untouched.
   expect(existsSync(join(fx.bundleDir, 'credentials.env'))).toBe(true);
 });
+
+// --- Fix Round 1 -------------------------------------------------------------
+
+// F1 (Critical): a credential bundle overlapping the scoped state namespace
+// must be rejected symmetrically BEFORE any enumeration or cleanup — a
+// hostile config must never let staging clear the blessed bundle.
+test('a bundle overlapping the scoped namespace is refused before any cleanup', () => {
+  const bundleAt: ((fx: Fixture) => string)[] = [
+    (fx) => fx.stagingDir,
+    (fx) => fx.activeDir,
+    (fx) => fx.recoveryDir,
+    (fx) => fx.scopedRoot,
+    (fx) => join(fx.root, 'state'),
+  ];
+  for (const bundlePathFor of bundleAt) {
+    const fx = makeFixture();
+    const bundleDir = bundlePathFor(fx);
+    mkdirSync(bundleDir, { recursive: true });
+    writeFileSync(
+      join(bundleDir, 'credentials.env'),
+      "ANTHROPIC_API_KEY='never-remove'\n",
+    );
+    const loaded: LoadedApplianceConfig = {
+      ...fx.loaded,
+      config: {
+        ...fx.loaded.config,
+        credential_bundle: { name: 'blessed', path: bundleDir },
+      },
+    };
+    expect(
+      captureError(() => stageProbeCredentialMaterial(loaded)),
+    ).toBeInstanceOf(ApplianceError);
+    expect(
+      captureError(() => stageLiveCredentialMaterial(loaded, CLAUDE_SCOPE)),
+    ).toBeInstanceOf(ApplianceError);
+    expect(
+      captureError(() => assertCredentialBundleBoundary(loaded.config)),
+    ).toBeInstanceOf(ApplianceError);
+    expect(
+      captureError(() => assertScopedCredentialStateBoundary(loaded)),
+    ).toBeInstanceOf(ApplianceError);
+    // The bundle payload survived: nothing enumerated or removed it.
+    expect(existsSync(join(bundleDir, 'credentials.env'))).toBe(true);
+  }
+});
+
+// F3: a symlink-aliased comparison target must not evade the boundary — the
+// reviewer probe configured evals as a symlink resolving into the bundle.
+test('a symlink-aliased repo path cannot evade the boundary overlap checks', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  rmSync(join(fx.root, 'evals'), { recursive: true, force: true });
+  symlinkSync(fx.bundleDir, join(fx.root, 'evals'));
+  expect(
+    captureError(() => assertCredentialBundleBoundary(fx.loaded.config)),
+  ).toBeInstanceOf(ApplianceError);
+  expect(
+    captureError(() => assertScopedCredentialStateBoundary(fx.loaded)),
+  ).toBeInstanceOf(ApplianceError);
+  expect(
+    captureError(() => stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE)),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(fx.stagingDir)).toBe(false);
+});
+
+// F3: every exported mutator runs the authoritative boundary first — a
+// symlinked slot or a foreign entry stops discard/recover/retire untouched.
+test('discard, recover, and retire enforce the authoritative boundary first', () => {
+  const mutators: ((loaded: LoadedApplianceConfig) => void)[] = [
+    discardStagedCredentialMaterial,
+    recoverScopedCredentialActivation,
+    retireScopedCredentialMaterial,
+  ];
+  for (const mutate of mutators) {
+    const fx = makeFixture();
+    mkdirSync(join(fx.root, 'aside'), { recursive: true });
+    writeFileSync(join(fx.root, 'aside/agent.env'), 'STOLEN=1\n');
+    mkdirSync(fx.scopedRoot, { recursive: true });
+    symlinkSync(join(fx.root, 'aside'), fx.activeDir);
+    expect(captureError(() => mutate(fx.loaded))).toBeInstanceOf(
+      ApplianceError,
+    );
+    expect(existsSync(join(fx.root, 'aside/agent.env'))).toBe(true);
+  }
+  for (const mutate of mutators) {
+    const fx = makeFixture();
+    mkdirSync(join(fx.scopedRoot, 'stray-entry'), { recursive: true });
+    expect(captureError(() => mutate(fx.loaded))).toBeInstanceOf(
+      ApplianceError,
+    );
+    expect(existsSync(join(fx.scopedRoot, 'stray-entry'))).toBe(true);
+  }
+});
+
+// F4: unreadable bundle sources fail typed — the reviewer probe surfaced a
+// raw EACCES Error from live staging.
+test('unreadable bundle sources fail typed, never as raw fs errors', () => {
+  const fxEnv = makeFixture();
+  seedBundle(fxEnv);
+  chmodSync(join(fxEnv.bundleDir, 'credentials.env'), 0o000);
+  try {
+    const caught = captureError(() =>
+      stageLiveCredentialMaterial(fxEnv.loaded, CLAUDE_SCOPE),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+  } finally {
+    chmodSync(join(fxEnv.bundleDir, 'credentials.env'), 0o600);
+  }
+
+  const fxAuth = makeFixture();
+  seedBundle(fxAuth);
+  chmodSync(join(fxAuth.bundleDir, 'codex/auth.json'), 0o000);
+  try {
+    const caught = captureError(() =>
+      stageLiveCredentialMaterial(fxAuth.loaded, CODEX_SCOPE),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect(existsSync(fxAuth.stagingDir)).toBe(false);
+  } finally {
+    chmodSync(join(fxAuth.bundleDir, 'codex/auth.json'), 0o600);
+  }
+});
+
+// Rider: a real special-file node (unix socket — character devices need root
+// to create) as a bundle source must fail typed through the real open path.
+test('a socket special-file bundle source fails typed through the real open path', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  rmSync(join(fx.bundleDir, 'codex/auth.json'));
+  const server = Bun.listen({
+    unix: join(fx.bundleDir, 'codex/auth.json'),
+    socket: { data() {} },
+  });
+  try {
+    const caught = captureError(() =>
+      stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect(existsSync(fx.stagingDir)).toBe(false);
+  } finally {
+    server.stop(true);
+  }
+});
+
+// Rider: nested file-token equality is enforced against EACH grader auth
+// alias, not just the API-key alias.
+test('a nested token equal to any single grader auth alias fails closed', () => {
+  const aliases = [
+    'QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN',
+    'QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN',
+    'QUORUM_GRADER_ANTHROPIC_API_KEY',
+  ];
+  for (const alias of aliases) {
+    const fx = makeFixture();
+    seedBundle(fx, {
+      envLines: [`${alias}='alias-secret-value'`],
+      files: {
+        'codex/auth.json': JSON.stringify({
+          tokens: { access_token: 'alias-secret-value' },
+        }),
+      },
+    });
+    const caught = captureError(() =>
+      stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).message).not.toContain(
+      'alias-secret-value',
+    );
+  }
+});
+
+// Rider (and F4 error normalization): a write failure AFTER staging has begun
+// cleans the fixed slot and surfaces a typed error, never a raw errno.
+test('a write failure after staging has begun cleans the slot and fails typed', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const realOpen = fs.openSync;
+  let agentEnvWrittenFirst = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    if (String(path).includes('supervisor.exec.env')) {
+      agentEnvWrittenFirst = existsSync(join(fx.stagingDir, 'agent.env'));
+      const err = new Error('EDQUOT: forced') as NodeJS.ErrnoException;
+      err.code = 'EDQUOT';
+      throw err;
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let caught: unknown;
+  try {
+    caught = captureError(() =>
+      stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE),
+    );
+  } finally {
+    spy.mockRestore();
+  }
+  expect(agentEnvWrittenFirst).toBe(true);
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  expect(existsSync(fx.stagingDir)).toBe(false);
+});
+
+// F5: a cast/hostile oauth mount name must not escape the staging slot, and
+// kind-to-mount mappings are validated at runtime.
+test('cast oauth mount names cannot escape the staging slot', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const escaping: LiveCredentialScope = {
+    ...CODEX_SCOPE,
+    oauth: {
+      kind: 'codex',
+      mountName: '../../../escape',
+    } as unknown as LiveCredentialScope['oauth'],
+  };
+  expect(
+    captureError(() => stageLiveCredentialMaterial(fx.loaded, escaping)),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(join(fx.root, 'state/escape'))).toBe(false);
+  expect(existsSync(join(fx.root, 'escape'))).toBe(false);
+
+  const wrongMount: LiveCredentialScope = {
+    ...CODEX_SCOPE,
+    oauth: {
+      kind: 'codex',
+      mountName: 'gemini',
+    } as unknown as LiveCredentialScope['oauth'],
+  };
+  expect(
+    captureError(() => stageLiveCredentialMaterial(fx.loaded, wrongMount)),
+  ).toBeInstanceOf(ApplianceError);
+});
+
+// F5: activation derives every returned path from the fixed constants; a
+// tampered staged material cannot steer paths outside the active slot.
+test('activation derives material paths from fixed constants, never caller paths', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const staged = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+  const tampered = {
+    ...staged,
+    agentEnvFile: '/etc/passwd',
+    supervisorExecEnvFile: '/etc/hosts',
+    authMounts: [{ name: 'codex' as const, path: '/etc' }],
+  };
+  const active = activateScopedCredentialMaterial(fx.loaded, tampered);
+  expect(active.kind).toBe('live');
+  expect(active.agentEnvFile).toBe(join(fx.activeDir, 'agent.env'));
+  expect(active.supervisorExecEnvFile).toBe(
+    join(fx.activeDir, 'supervisor.exec.env'),
+  );
+  expect(active.authMounts).toEqual([
+    { name: 'codex', path: join(fx.activeDir, 'auth/codex') },
+  ]);
+
+  const fx2 = makeFixture();
+  seedBundle(fx2);
+  const staged2 = stageLiveCredentialMaterial(fx2.loaded, CODEX_SCOPE);
+  const badName = {
+    ...staged2,
+    authMounts: [
+      {
+        name: 'evil' as unknown as 'codex',
+        path: staged2.authMounts[0]?.path ?? '',
+      },
+    ],
+  };
+  expect(
+    captureError(() => activateScopedCredentialMaterial(fx2.loaded, badName)),
+  ).toBeInstanceOf(ApplianceError);
+});
+
+// F6: when the swap fails AND the rollback rename also fails, the error must
+// name the rollback failure and the recovery state — never silently report
+// only the original swap failure.
+test('a failed rollback surfaces a typed rollback error naming the recovery state', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  activateScopedCredentialMaterial(
+    fx.loaded,
+    stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE),
+  );
+  const staged = stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE);
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, 'renameSync').mockImplementation(((
+    source: fs.PathLike,
+    dest: fs.PathLike,
+  ) => {
+    const s = String(source);
+    if (s === fx.stagingDir || s === fx.recoveryDir) {
+      const err = new Error('EACCES: forced') as NodeJS.ErrnoException;
+      err.code = 'EACCES';
+      throw err;
+    }
+    realRename(source, dest);
+  }) as typeof fs.renameSync);
+  let caught: unknown;
+  try {
+    caught = captureError(() =>
+      activateScopedCredentialMaterial(fx.loaded, staged),
+    );
+  } finally {
+    spy.mockRestore();
+  }
+  expect(caught).toBeInstanceOf(ApplianceError);
+  const message = (caught as ApplianceError).message;
+  expect(message).toContain('rollback');
+  expect(message).toContain('recovery');
+  // The old generation is preserved in the recovery slot; active is absent.
+  expect(existsSync(join(fx.recoveryDir, 'agent.env'))).toBe(true);
+  expect(existsSync(fx.activeDir)).toBe(false);
+  // The documented interrupted-swap recovery then restores it.
+  recoverScopedCredentialActivation(fx.loaded);
+  expect(existsSync(join(fx.activeDir, 'agent.env'))).toBe(true);
+});

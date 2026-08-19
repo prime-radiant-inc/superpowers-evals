@@ -1,10 +1,21 @@
-import { existsSync, lstatSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  constants as fsConstants,
+  fstatSync,
+  openSync,
+  readFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { getEnv } from '../env.ts';
 import { assertCredentialBundleBoundary } from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
 import { readJsonFile } from './fs.ts';
-import { ensurePrivateDirNoFollow } from './safe-fs.ts';
+import {
+  assertNoFollowDirChain,
+  assertRealDirNoFollow,
+  ensurePrivateDirNoFollow,
+} from './safe-fs.ts';
 import {
   ApplianceConfigSchema,
   CredentialBundleMetadataSchema,
@@ -53,7 +64,11 @@ export function loadStateConfig(
       `appliance config ${resolvedConfigPath}`,
     );
 
-    requirePath(config.root, 'configured root');
+    // The configured root and the state namespace are no-follow boundaries
+    // for READS too: status/show/costs/cancel resolve records through these
+    // paths, so even the read-only loader must refuse a symlinked component
+    // that would let them consume redirected records.
+    assertRealDirNoFollow(config.root, 'configured root');
 
     const stateRoot = join(config.root, 'state');
     const paths = {
@@ -62,8 +77,8 @@ export function loadStateConfig(
       provenance: join(stateRoot, 'provenance'),
     };
     if (options.ensureState === true) {
-      // The state namespace is a no-follow boundary: ensuring it must never
-      // create or chmod through a symlinked component.
+      // Mutating ensure: validated no-follow creation, never create or
+      // chmod through a symlinked component.
       ensurePrivateDirNoFollow(config.root, stateRoot, 'state');
       ensurePrivateDirNoFollow(config.root, paths.jobs, 'state/jobs');
       ensurePrivateDirNoFollow(config.root, paths.locks, 'state/locks');
@@ -72,6 +87,14 @@ export function loadStateConfig(
         paths.provenance,
         'state/provenance',
       );
+    } else {
+      // Read-only: every EXISTING namespace component must be a real
+      // directory reached without following a symlink; missing tails are
+      // fine (mutation paths create them).
+      assertNoFollowDirChain(config.root, stateRoot, 'state');
+      assertNoFollowDirChain(config.root, paths.jobs, 'state/jobs');
+      assertNoFollowDirChain(config.root, paths.locks, 'state/locks');
+      assertNoFollowDirChain(config.root, paths.provenance, 'state/provenance');
     }
 
     return {
@@ -107,23 +130,55 @@ export function loadCredentialConfig(
       state.config.credential_bundle.path,
       'metadata.json',
     );
-    const metadataStats = lstatSync(metadataPath, { throwIfNoEntry: false });
-    if (metadataStats === undefined) {
+    // fd-based no-follow read: the kernel (O_NOFOLLOW), not a racy
+    // lstat-then-open sequence, rejects a symlinked metadata.json; fstat on
+    // the open descriptor refuses any non-regular node.
+    let fd: number;
+    try {
+      fd = openSync(
+        metadataPath,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+      );
+    } catch (openError) {
+      const code = (openError as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        throw new Error(
+          `credential bundle metadata does not exist: ${metadataPath}`,
+        );
+      }
+      if (code === 'ELOOP' || code === 'EMLINK') {
+        throw new Error(
+          `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
+        );
+      }
       throw new Error(
-        `credential bundle metadata does not exist: ${metadataPath}`,
+        `credential bundle metadata is unreadable (${code ?? 'unknown error'}): ${metadataPath}`,
       );
     }
-    if (metadataStats.isSymbolicLink() || !metadataStats.isFile()) {
+    let raw: string;
+    try {
+      if (!fstatSync(fd).isFile()) {
+        throw new Error(
+          `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
+        );
+      }
+      raw = readFileSync(fd, 'utf8');
+    } finally {
+      closeSync(fd);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch (parseError) {
       throw new Error(
-        `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
+        `credential bundle metadata: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
       );
     }
-    const bundle = readJsonFile(
-      metadataPath,
-      CredentialBundleMetadataSchema,
-      'credential bundle metadata',
-    );
-    return { ...state, bundle };
+    const result = CredentialBundleMetadataSchema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(`credential bundle metadata: ${result.error.message}`);
+    }
+    return { ...state, bundle: result.data };
   } catch (error) {
     throw configError(error);
   }
