@@ -69,15 +69,218 @@ Phase 1 shared `run-all` is Linux-container-only. Windows evals and Antigravity
 remain trusted-maintainer break-glass paths until the appliance explicitly
 supports them.
 
+## Credential Scoping
+
+A live appliance job delivers exactly one agent's credentials, and nothing
+else. `run` takes `--coding-agent <agent>` with an optional
+`--credential <name>`; `run-all` takes `--coding-agents` with exactly one entry
+and an optional `--credentials` with exactly one name. An omitted credential
+means that agent's registry default. A list, a repeated flag, a blank value, or
+a value that looks like an option is refused at argument validation, before any
+job record exists — mixed-scope batches are rejected and stay rejected until
+per-cell containers land. `run-all` also refuses `--coding-agents-dir`,
+`--out-root`, `--scenarios-root`, `--credentials-file`, and `--credential`: the
+first three would relocate the trusted roots the appliance controls,
+`--credentials-file` would swap the blessed registry the bundle was built for,
+and `--credential` is `run`'s flag, which would leave the real selection unmade
+while looking like it had been made.
+
+That one `(agent, credential)` cell is resolved at submission against the evals
+corpus at its current commit and written into the job record once, as an
+immutable triple: the selection, the resolved scope, and the source evals SHA.
+Nothing later in the job's life may patch that authority.
+
+### What the container receives
+
+The scoped container gets one read-only bind of the generation's `agent.env` at
+`/run/evals/credentials.env`, carrying only the env names this cell's scope
+projects (plus `GEMINI_AUTH_TYPE` when the scope pins a Gemini mode), and at
+most one read-only bind of one projected OAuth directory at its fixed
+destination: `/auth/codex`, `/auth/gemini`, `/auth/kimi-code`, or `/auth/pi`.
+
+Those projections are exact files, never whole source directories. Codex gets
+`auth.json` only. Gemini gets `oauth_creds.json` and `google_accounts.json`.
+Kimi gets `config.toml` and `credentials/kimi-code.json`, plus
+`oauth/kimi-code` when the bundle carries it. Pi gets `agent/auth.json`
+rewritten down to the single selected provider entry; `settings.json` is never
+projected. The Antigravity projector delivers
+`antigravity-cli/antigravity-oauth-token` only — never the Gemini personal
+files, and vice versa, even though both share the `gemini` mount name — but
+the appliance still refuses to submit an Antigravity job at argument
+validation, so that path is reachable only by trusted-maintainer break-glass.
+
+`supervisor.exec.env` is never mounted anywhere. It reaches exactly one
+process — the live Quorum supervisor — as the host-side argument of
+`docker exec --env-file`. The grader credential travels in that file only under
+its `QUORUM_GRADER_*` alias names; the runner maps them back to the canonical
+names inside the Gauntlet child alone, so the canonical names never exist in a
+host file, in the supervisor env, or in anything the Coding-Agent can read.
+
+If the bundle provides no nonempty source for a projected env name or a
+required OAuth file, the whole job is refused before live execution. The
+refusal names the destination and its candidate source names, or the bundle
+path, and never a value.
+
+### Preflight, and the lease the worker is bound to
+
+Preflight syncs the managed repos and resolves the requested Superpowers ref,
+then re-verifies the job's persisted source SHA against the fast-forwarded
+evals checkout **and** recomputes the scope from that corpus; either mismatch
+refuses before Docker. It then requires `docker exec --env-file`, builds, and
+recreates the container around an **asserted-empty** generation to run
+`evals-tool-versions` and `quorum check` — no credential material exists at
+any point in that probe. Only then is the probe container downed, the live
+generation staged, and the container recreated around exactly the projected
+material.
+
+The container ID is captured from `docker run` stdout and verified by direct
+inspection of that exact ID; a name lookup is never blessed as the lease
+identity. That inspection also verifies the container's **actual** mount
+topology: exactly one read-only bind of the generation's `agent.env` at
+`/run/evals/credentials.env` and exactly one read-only bind of each asserted
+projection at its fixed destination, then a sweep of every remaining mount
+which rejects `/auth` itself and every unasserted `/auth` descendant (compared
+component-wise, so a path like `/authority` is not caught by accident); any
+source that is, sits inside, or contains the blessed bundle directory; any
+source touching the scoped credential state namespace other than the exact
+asserted projections; and any source that is or contains
+`supervisor.exec.env`. A rejection removes exactly the captured container ID —
+never the configured name — and fails the job typed.
+
+Immediately before the live exec the worker rereads the job record and rebinds
+it to the lease preflight attested: the record's authoritative scope must
+canonically equal the lease's, and its recorded container evidence must be
+exactly what that lease produces. A record re-pointed at another cell between
+preflight and execution is refused typed, with no live exec and no supervisor
+env file attached to anything.
+
+Liveness and cancellation target the recorded immutable container ID through
+one fixed `docker exec`. A replacement container under the configured name is
+never signalled; cancellation reports `lost` instead.
+
+`prepare` asserts an empty scope — no selection, no source SHA, and a
+zero-material generation — and a resumed `prepare` against an existing job id
+is accepted only when the record still carries that exact triple. `import`
+records carry no scope at all and never execute.
+
+Records written before scoped delivery read back with a null scope. They stay
+readable by `status`/`show`/`costs` and cancellable through the verified
+recorded-ID path, but they cannot be executed: there is no full-bundle fallback
+to widen back into. Resubmit instead.
+
+### Generation lifecycle and repair
+
+Scoped material lives under `<root>/state/credentials-scoped` in three fixed
+slots: `staging`, `active`, `recovery`. New material is staged while the old
+container may still reference `active`; once the container is down, a
+two-rename swap installs it. A failed or abandoned stage clears only `staging`,
+and the next invocation repeats that cleanup, so an interruption does not
+strand a slot. An interrupted swap is recovered on the next reconcile when only
+`recovery` exists; when both `active` and `recovery` exist the appliance
+refuses to guess between two complete generations and asks for manual repair.
+
+Retiring a bundle is a manual operator procedure, in this order: down the
+container, then remove `<root>/state/credentials-scoped`. There is no
+subcommand for it.
+
+### Bundle migration and rollback
+
+The blessed bundle's `credentials.env` must supply the grader credential under
+`QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN`,
+`QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN`, or `QUORUM_GRADER_ANTHROPIC_API_KEY`,
+with at least one nonempty; `QUORUM_GRADER_ANTHROPIC_BASE_URL` alone is not
+auth. The grader secret must be a **different value** from every secret
+delivered to the agent, not merely a differently named copy of it: staging
+compares the agent's delivered material against every grader auth value and
+refuses on any equality, naming the channels and never the values. Duplicating
+one Anthropic key under both an agent name and a grader alias is refused, and
+the remediation is a separate grader key.
+
+Rollback is a paired code-and-bundle operation. Keep a versioned backup of the
+pre-migration bundle and restore it whenever you roll code back to before the
+scoped cutover. Code-only rollback after alias migration is unsupported: it can
+strand the grader or silently change its auth semantics.
+
+Inside the container the supervisor env sets
+`QUORUM_GRADER_SOURCE_MODE=appliance-scoped`, and in that mode the grader
+credential is read only from the aliases. With the marker absent, trusted local
+runs keep the canonical host contract unchanged. Any other explicit value,
+including an empty one, is an error rather than an implicit source choice.
+
+### Diagnostics and expected refusals
+
+`doctor --json` reports `docker.exec_env_file`. When it is false, scoped
+delivery cannot run at all, and preflight refuses at the same capability check
+before build or staging.
+
+A credential-bundle fault — missing directory, symlinked component, unreadable
+or invalid `metadata.json`, or overlap with a code repo, the results root, or
+the scoped state namespace — refuses `doctor`, `prepare`, `run`, and
+`run-all`. It never blocks `status`, `show`, `costs`, `import`, `prune`, or
+identity-verified `cancel`, which load only the structural config. Repair the
+bundle, then resubmit.
+
+Every appliance path is validated no-follow across every existing component
+from the filesystem root down, and the scoped state namespace must be disjoint
+from the code repos, the results root, and the bundle. Configure real paths,
+not symlink aliases. `state/credentials-scoped` may hold only `staging`,
+`active`, and `recovery`, each a real directory containing only real
+directories and regular files; anything else refuses with a repair instruction
+and performs no cleanup.
+
+Source-SHA drift is an expected refusal after any upstream evals update: the
+job resolved its scope at one commit and preflight has fast-forwarded past it.
+Resubmit from a freshly loaded appliance process, so the persisted resolver
+code, the selection, and the SHA all agree.
+
+Mount signatures recorded before the scoped cutover describe a different
+payload and are not comparable with signatures recorded after it. Do not diff
+them across the upgrade.
+
+### Isolation boundary and accepted residual
+
+Filesystem scoping is a filesystem boundary. It does not provide UID isolation
+and is not claimed to.
+
+A process running as the same UID, or as root, can inspect other appliance
+process state — including `/proc` of the live Quorum supervisor — so
+host-only delivery of the supervisor env file is not a defence against a
+same-UID observer. Such a process can also race the fixed staging slot and
+displace a generation while it is being written.
+
+Staging detects that displacement and fails closed: the fixed path must still
+identify the exact inode that was written, or the job is refused rather than
+reported successful, and cleanup then locates the pinned generation by inode
+among the entries of its pinned parent so it never deletes an unrelated
+directory by name. A generation renamed entirely **outside** the scoped
+namespace cannot be located and is left in place — the code cannot erase
+secret bytes a same-UID process has moved somewhere it does not own.
+
+Operators must therefore treat same-UID and root access to the appliance host
+as trusted-maintainer scope. Stronger closure requires separate UID or host
+isolation, which Phase 1 does not implement. This residual is accepted and
+open, not fixed.
+
+### Physical verification status
+
+Everything above is enforced by automated behavior tests. The physical gate has
+not been run: no Docker canary of the projection matrix, no
+`docker exec --env-file` value round-trip against a real Docker client and
+server, and no real Codex-subscription appliance job have been executed against
+this code. Do not claim physical verification, and do not cite this section as
+evidence of it, until that gate runs and its experiment record exists.
+
 ## Sentinel Batch
 
-Start with the sentinel tier and a narrow target set:
+Start with the sentinel tier and a narrow target set. One appliance job carries
+exactly one agent (see [Credential Scoping](#credential-scoping)), so a
+multi-agent sweep is several jobs run one after another, not one batch:
 
 ```bash
 evals-appliance run-all --json --detach \
   --superpowers-ref <branch-tag-or-sha> \
   -- --tier sentinel \
-     --coding-agents claude,codex,kimi \
+     --coding-agents claude \
      --jobs 4
 ```
 
