@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -20,7 +21,7 @@ import {
   EMPTY_CREDENTIAL_SCOPE,
   type OAuthProjection,
 } from '../src/credentials/scope.ts';
-import { setProcessEnv } from '../src/env.ts';
+import { envSnapshot } from '../src/env.ts';
 import { repoRoot } from '../src/paths.ts';
 
 // These tests read the repo's committed corpus (credentials.yaml +
@@ -54,7 +55,7 @@ function corpusAgents(): string[] {
 
 describe('CONVENTIONAL_API_KEY_ENV', () => {
   test("freezes the adapters' current conventional api-key env contract", () => {
-    // Mirrors the second argument each adapter passes resolveApiKey() today
+    // Mirrors the second argument each adapter passes resolveApiKey()
     // (src/agents/{index,serf,gemini,opencode,pi}.ts) plus kimi's direct
     // KIMI_MODEL_API_KEY read. Codex deliberately has no fallback
     // (resolveApiKey(credential, undefined)); hermes/copilot/antigravity have
@@ -332,21 +333,33 @@ describe('brief-pinned projections', () => {
   });
 
   test('gemini mode derives from credential.auth, ignoring ambient GEMINI_AUTH_TYPE', () => {
-    // The launcher-era GEMINI_AUTH_TYPE env must not leak into the scope: an
-    // ambient oauth-personal while the selected credential is api-key stays
-    // gemini-api-key.
-    setProcessEnv('GEMINI_AUTH_TYPE', 'oauth-personal');
-    try {
-      expect(
-        credentialScopeForSelection(root, {
-          agent: 'gemini',
-          credential: 'gemini_default',
-        }).geminiAuthType,
-      ).toBe('gemini-api-key');
-    } finally {
-      // '' reads as unset everywhere getEnv() is consulted.
-      setProcessEnv('GEMINI_AUTH_TYPE', '');
-    }
+    // The gemini launcher's ambient GEMINI_AUTH_TYPE env must not leak into
+    // the scope: an ambient oauth-personal while the selected credential is
+    // api-key stays gemini-api-key. The hostile ambient value lives in a child
+    // process's env, so the parent env is never mutated — no later test or
+    // subprocess can see a GEMINI_AUTH_TYPE this test invented.
+    const hadKey = Object.hasOwn(envSnapshot(), 'GEMINI_AUTH_TYPE');
+    const before = envSnapshot()['GEMINI_AUTH_TYPE'];
+    const script = [
+      `const { credentialScopeForSelection } = await import(${JSON.stringify(
+        join(root, 'src/credentials/scope.ts'),
+      )});`,
+      `const scope = credentialScopeForSelection(${JSON.stringify(root)}, {`,
+      "  agent: 'gemini',",
+      "  credential: 'gemini_default',",
+      '});',
+      'process.stdout.write(String(scope.geminiAuthType));',
+    ].join('\n');
+    const child = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { ...envSnapshot(), GEMINI_AUTH_TYPE: 'oauth-personal' },
+    });
+    expect(child.stderr).toBe('');
+    expect(child.status).toBe(0);
+    expect(child.stdout).toBe('gemini-api-key');
+    // Exact parent-env preservation: key presence AND value are unchanged.
+    expect(Object.hasOwn(envSnapshot(), 'GEMINI_AUTH_TYPE')).toBe(hadKey);
+    expect(envSnapshot()['GEMINI_AUTH_TYPE']).toBe(before);
   });
 });
 
@@ -419,8 +432,8 @@ describe('named credential-scope errors', () => {
   test('Object.prototype property names are unknown credentials, not TypeErrors', () => {
     // `in` and bare [] both see inherited properties: registry['constructor']
     // is the Object constructor and registry['__proto__'] is Object.prototype,
-    // neither of which has .harnesses — the historical bug surfaced as
-    // "TypeError: undefined is not an object (entry.harnesses.includes)"
+    // neither of which has .harnesses — an inherited-property read surfaces
+    // as "TypeError: undefined is not an object (entry.harnesses.includes)"
     // instead of the named unknown-credential error. Both must fail closed
     // with the required named error.
     expect(() =>

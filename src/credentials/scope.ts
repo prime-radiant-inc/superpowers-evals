@@ -93,10 +93,10 @@ export const CONVENTIONAL_API_KEY_ENV: Readonly<Record<string, string>> = {
 // Own-property credential lookup: inherited Object.prototype members
 // ('constructor', '__proto__', 'toString', ...) must never be treated as
 // registry entries — `name in registry` and bare `registry[name]` both see
-// them (registry['constructor'] is the Object constructor), which historically
-// turned a typo'd name into "TypeError: entry.harnesses.includes" instead of
-// the named unknown-credential error. Every registry read goes through here so
-// refactors cannot reintroduce the inherited-property read.
+// them (registry['constructor'] is the Object constructor), which turns such
+// a name into "TypeError: entry.harnesses.includes" instead of the named
+// unknown-credential error. Every registry read goes through here so no
+// other code path can perform the inherited-property read.
 function lookupCredential(
   registry: Record<string, Credential>,
   name: string,
