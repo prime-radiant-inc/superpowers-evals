@@ -24,7 +24,9 @@ import {
 } from '../run-all/options.ts';
 import {
   type ContainerLease,
+  credentialScopesEqual,
   evalsContainerPath,
+  leaseToJobContainerEvidence,
   liveLeaseFromJob,
   type RecordedContainerIdentity,
   runRecordedContainerLifecycle,
@@ -929,6 +931,41 @@ function requireRecordQuorumCommand(job: JobRecord): readonly string[] {
 }
 
 /**
+ * The record the lease was attested for. Preflight validates ONE job, stages
+ * ONE credential generation for it, and returns the lease that generation
+ * produced — but the worker rereads the record from disk before executing, and
+ * that record is durable, mutable state. So the two halves of the attestation
+ * are re-proved against the record actually being executed: its authoritative
+ * scope must canonically equal the lease's, and its recorded container
+ * evidence must be exactly what this lease produces. Otherwise a job could be
+ * re-pointed at another cell between attestation and exec, and run that cell's
+ * command inside this cell's credentials.
+ */
+function requireLeaseBoundRecord(job: JobRecord, lease: ContainerLease): void {
+  const scope = job.credential_scope;
+  if (scope === null || !credentialScopesEqual(scope, lease.credentialScope)) {
+    throw liveCommandFault(
+      job,
+      'no longer asserts the credential scope its preflight attested; refusing to execute it',
+    );
+  }
+  const expected = leaseToJobContainerEvidence(lease);
+  const recorded = job.container;
+  if (
+    recorded === null ||
+    recorded.name !== expected.name ||
+    recorded.id !== expected.id ||
+    recorded.image_id !== expected.image_id ||
+    recorded.mount_signature !== expected.mount_signature
+  ) {
+    throw liveCommandFault(
+      job,
+      'does not record the container evidence its preflight attested; refusing to execute it',
+    );
+  }
+}
+
+/**
  * The live Quorum exec: pinned to the immutable container the job preflighted
  * against, and the ONE place the worker-only supervisor env file crosses into
  * a process. The command launched is the job's own validated Quorum command,
@@ -943,6 +980,7 @@ export function liveCommandArgs(
   supervisorExecEnvFile: string,
 ): string[] {
   const argv = requireRecordQuorumCommand(job);
+  requireLeaseBoundRecord(job, lease);
   const runAllEnv =
     job.kind === 'run-all'
       ? ['export QUORUM_RUN_ALL_SIGNAL_MODE=detached']

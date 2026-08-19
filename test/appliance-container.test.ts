@@ -1729,6 +1729,235 @@ test('captured-container mount topology is validated exactly and failures roll b
   });
 });
 
+// The captured topology is validated against the loaded appliance boundaries,
+// not just against the asserted destinations: a container that carries the
+// blessed bundle, an unasserted piece of the scoped credential state, or the
+// worker-only supervisor env file can never be blessed as a lease, wherever
+// it hung that material and whatever it called the destination.
+
+test('captured topology refuses the blessed bundle at any destination, including /auth itself', () => {
+  const cases: {
+    readonly label: string;
+    readonly fragment: string;
+    readonly mounts: (fx: ScopedFixture) => FakeInspectMount[];
+  }[] = [
+    {
+      // The exact reviewer probe: the whole blessed bundle read-only at
+      // /auth, whose component the fixed destinations all live under.
+      label: 'the whole bundle mounted at /auth',
+      fragment: 'blessed credential bundle',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: fx.bundleDir,
+              Destination: '/auth',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'the whole bundle mounted somewhere unrelated',
+      fragment: 'blessed credential bundle',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: fx.bundleDir,
+              Destination: '/mnt/blessed',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'one file from inside the bundle',
+      fragment: 'blessed credential bundle',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.bundleDir, 'credentials.env'),
+              Destination: '/run/evals/other.env',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'a parent directory containing the bundle',
+      fragment: 'blessed credential bundle',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.root, 'credentials'),
+              Destination: '/mnt/credentials',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'the active slot root, which contains the supervisor env file',
+      fragment: 'supervisor exec env file',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: fx.activeDir,
+              Destination: '/mnt/active',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'a grandparent directory containing the supervisor env file',
+      fragment: 'supervisor exec env file',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.root, 'state'),
+              Destination: '/mnt/state',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'an unasserted mount at /auth itself',
+      fragment: '/auth',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.root, 'not-credentials'),
+              Destination: '/auth',
+              RW: false,
+            },
+          ],
+        }),
+    },
+  ];
+
+  for (const { label, fragment, mounts } of cases) {
+    const fx = makeGeminiCorpusFixture();
+    seedGeminiBundle(fx);
+    const staged = stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope());
+    const runner = new ScopedFakeRunner();
+    runner.mounts = mounts(fx);
+
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    const err = expectContainerError(caught, fragment);
+    expect(`${label}: ${err.code}`).toBe(`${label}: container_unhealthy`);
+    // Rollback targets exactly the captured id, never the configured name.
+    expect(runner.calls[runner.calls.length - 1]).toEqual({
+      command: 'docker',
+      args: ['rm', '-f', SCOPED_ID],
+    });
+  }
+});
+
+test('captured topology refuses unasserted scoped credential state for an asserted-empty generation', () => {
+  // An asserted-empty generation has no supervisor env file, so scoped state
+  // is refused on its own boundary rather than as a supervisor leak.
+  for (const slot of ['active', 'staging', 'recovery'] as const) {
+    const fx = makeScopedFixture();
+    const staged = stageProbeCredentialMaterial(fx.loaded);
+    const runner = new ScopedFakeRunner();
+    runner.mounts = scopedInspectMounts({
+      envFile: join(fx.activeDir, 'agent.env'),
+      extra: [
+        {
+          Type: 'bind',
+          Source: join(fx.scopedRoot, slot),
+          Destination: `/mnt/${slot}`,
+          RW: false,
+        },
+      ],
+    });
+
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    const err = expectContainerError(caught, 'scoped credential state');
+    expect(`${slot}: ${err.code}`).toBe(`${slot}: container_unhealthy`);
+    expect(runner.calls[runner.calls.length - 1]).toEqual({
+      command: 'docker',
+      args: ['rm', '-f', SCOPED_ID],
+    });
+  }
+});
+
+test('captured topology accepts the exact asserted mounts beside ordinary code mounts', () => {
+  const fx = makeGeminiCorpusFixture();
+  seedGeminiBundle(fx);
+  const staged = stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope());
+  const runner = new ScopedFakeRunner();
+  runner.mounts = scopedInspectMounts({
+    envFile: join(fx.activeDir, 'agent.env'),
+    auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+    extra: [
+      {
+        Type: 'bind',
+        Source: fx.loaded.config.evals.path,
+        Destination: '/workspace/evals',
+        RW: true,
+      },
+      {
+        Type: 'bind',
+        Source: fx.loaded.config.superpowers.path,
+        Destination: '/workspace/superpowers',
+        RW: false,
+      },
+      {
+        Type: 'bind',
+        Source: fx.loaded.config.container.results_root,
+        Destination: '/workspace/evals/results',
+        RW: true,
+      },
+    ],
+  });
+
+  const lease = reconcileScopedContainer(fx.loaded, runner, staged);
+
+  expect(lease.id).toBe(SCOPED_ID);
+  expect(lease.credentialScope).toEqual(geminiCorpusScope());
+  expect(
+    runner.calls.some(
+      (call) => call.command === 'docker' && call.args[0] === 'rm',
+    ),
+  ).toBe(false);
+});
+
 test('material paths must be the exact fixed slot paths, not descendants', () => {
   const fx = makeScopedFixture();
   seedGeminiBundle(fx);

@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -236,6 +237,22 @@ function liveRecord(
   return createJob(cfg, liveJobRequest(kind, { argv, ...options }));
 }
 
+// An out-of-band rewrite of the durable record. The credential triple is
+// immutable through updateJob, so a scope re-point can only arrive this way:
+// a hand-edited, restored, or corrupted job.json underneath a running worker.
+function rewriteJobRecordRaw(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  patch: Record<string, unknown>,
+): void {
+  const path = join(cfg.paths.jobs, jobId, 'job.json');
+  const record = JSON.parse(readFileSync(path, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  writeFileSync(path, JSON.stringify({ ...record, ...patch }));
+}
+
 // Rewrites only the durable command, the way a tampered or hand-edited record
 // would.
 function tamperCommand(
@@ -249,9 +266,34 @@ function tamperCommand(
   }));
 }
 
+// A live record already bound to the lease its preflight attested. The live
+// exec re-proves that binding against the record it rereads, so any case that
+// is meant to get past it has to state both halves.
+function leaseBoundRecord(
+  cfg: LoadedApplianceConfig,
+  kind: 'run' | 'run-all',
+  argv: readonly string[],
+  options: {
+    readonly lease?: ContainerLease;
+    readonly request?: Parameters<typeof liveJobRequest>[1];
+  } = {},
+): JobRecord {
+  const lease = options.lease ?? liveLease();
+  const job = liveRecord(cfg, kind, argv, options.request ?? {});
+  return updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    container: {
+      name: lease.name,
+      id: lease.id,
+      image_id: lease.imageId,
+      mount_signature: lease.mountSignature,
+    },
+  }));
+}
+
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
   const cfg = loaded();
-  const job = liveRecord(cfg, 'run-all', [
+  const job = leaseBoundRecord(cfg, 'run-all', [
     ...LEGAL_RUN_ALL_ARGV,
     '--tier',
     'sentinel',
@@ -279,15 +321,13 @@ test('liveCommandArgs launches quorum in a signalable in-container process group
 
 test('liveCommandArgs refuses a lease that does not name the configured container', () => {
   const cfg = loaded();
-  const job = liveRecord(cfg, 'run', LEGAL_RUN_ARGV);
+  // Bound to that lease, so the refusal is the lease-vs-config check rather
+  // than the record-vs-lease one.
+  const lease = liveLease({ name: 'someone-elses-container' });
+  const job = leaseBoundRecord(cfg, 'run', LEGAL_RUN_ARGV, { lease });
   let caught: unknown = null;
   try {
-    liveCommandArgs(
-      cfg,
-      job,
-      liveLease({ name: 'someone-elses-container' }),
-      SUPERVISOR_FILE,
-    );
+    liveCommandArgs(cfg, job, lease, SUPERVISOR_FILE);
   } catch (error) {
     caught = error;
   }
@@ -574,7 +614,9 @@ test('liveCommandArgs preserves the legitimate arguments of an unmodified comman
   ];
 
   for (const entry of accepted) {
-    const job = liveRecord(cfg, entry.kind, entry.argv, entry.options ?? {});
+    const job = leaseBoundRecord(cfg, entry.kind, entry.argv, {
+      request: entry.options ?? {},
+    });
     const args = liveCommandArgs(cfg, job, liveLease(), SUPERVISOR_FILE);
     for (const token of entry.argv) {
       expect(args).toContain(token);
@@ -696,13 +738,17 @@ test('liveCommandArgs exports detached signal mode for appliance run-all', () =>
   const cfg = loaded();
   const runAllArgs = liveCommandArgs(
     cfg,
-    liveRecord(cfg, 'run-all', [...LEGAL_RUN_ALL_ARGV, '--tier', 'sentinel']),
+    leaseBoundRecord(cfg, 'run-all', [
+      ...LEGAL_RUN_ALL_ARGV,
+      '--tier',
+      'sentinel',
+    ]),
     liveLease(),
     SUPERVISOR_FILE,
   );
   const singleRunArgs = liveCommandArgs(
     cfg,
-    liveRecord(cfg, 'run', LEGAL_RUN_ARGV),
+    leaseBoundRecord(cfg, 'run', LEGAL_RUN_ARGV),
     liveLease(),
     SUPERVISOR_FILE,
   );
@@ -739,8 +785,72 @@ const CORPUS_SCOPE = {
   oauth: { kind: 'gemini', mountName: 'gemini' },
 } as const;
 
+// The terminal single-run verdict the live command is supposed to leave
+// behind. Written at seed time for the tests whose subject is elsewhere, and
+// from inside the live command for the ones whose subject is discovery.
+function writeRunVerdict(cfg: LoadedApplianceConfig, runId = RUN_ID): void {
+  mkdirSync(join(cfg.config.container.results_root, runId), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(cfg.config.container.results_root, runId, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: 'pass',
+      final_reason: 'ok',
+      gauntlet: null,
+      checks: [],
+      error: null,
+      economics: null,
+      scenario: 'writing-plans',
+      coding_agent: 'gemini',
+      started_at: new Date(Date.now() - 1000).toISOString(),
+      finished_at: new Date().toISOString(),
+    }),
+  );
+}
+
+// A batch whose header already carries a finished_at, the terminal artifact a
+// run-all job is waiting for.
+function writeFinishedBatch(
+  cfg: LoadedApplianceConfig,
+  batchId = 'batch-1',
+): void {
+  const batchDir = join(cfg.config.container.results_root, 'batches', batchId);
+  const now = Date.now();
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      schema_version: 1,
+      id: batchId,
+      started_at: new Date(now - 1_000).toISOString(),
+      finished_at: new Date(now).toISOString(),
+      coding_agents: ['gemini'],
+      jobs: 1,
+    }),
+  );
+}
+
+// The in-container process group the live command reports through the pid
+// file the worker polls for.
+function writeContainerPid(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  pid = 456,
+): void {
+  const pidDir = join(cfg.config.container.results_root, '.appliance-pids');
+  mkdirSync(pidDir, { recursive: true });
+  writeFileSync(join(pidDir, `${jobId}.pid`), `${pid}\n`);
+}
+
 // Seed the trusted corpus and blessed bundle the live scope resolves against.
-function seedLiveAppliance(cfg: LoadedApplianceConfig): void {
+// `seedTerminalVerdict: false` leaves the results root without a terminal
+// artifact, so a test can prove the worker discovers one that appears later.
+function seedLiveAppliance(
+  cfg: LoadedApplianceConfig,
+  options: { readonly seedTerminalVerdict?: boolean } = {},
+): void {
   const evalsPath = cfg.config.evals.path;
   mkdirSync(join(evalsPath, 'coding-agents'), { recursive: true });
   copyFileSync(
@@ -769,25 +879,9 @@ function seedLiveAppliance(cfg: LoadedApplianceConfig): void {
     join(cfg.config.container.results_root, `${RUN_ID}-placeholder`),
     '',
   );
-  mkdirSync(join(cfg.config.container.results_root, RUN_ID), {
-    recursive: true,
-  });
-  writeFileSync(
-    join(cfg.config.container.results_root, RUN_ID, 'verdict.json'),
-    JSON.stringify({
-      schema: 1,
-      final: 'pass',
-      final_reason: 'ok',
-      gauntlet: null,
-      checks: [],
-      error: null,
-      economics: null,
-      scenario: 'writing-plans',
-      coding_agent: 'gemini',
-      started_at: new Date(Date.now() - 1000).toISOString(),
-      finished_at: new Date().toISOString(),
-    }),
-  );
+  if (options.seedTerminalVerdict !== false) {
+    writeRunVerdict(cfg);
+  }
 }
 
 // Drives a whole live worker: git plumbing, the docker capability probe, both
@@ -796,6 +890,23 @@ class WorkerRunner implements CommandRunner {
   calls: { command: string; args: readonly string[] }[] = [];
   ups = 0;
   activeDir: string;
+
+  // What the live Quorum exec itself reports, and a hook that fires while it
+  // is "running" so a test can act on the state the worker sees mid-flight.
+  liveResult: CommandResult = {
+    status: 0,
+    stdout: `run-id: ${RUN_ID}\n`,
+    stderr: '',
+  };
+  onLiveCommand?: () => void;
+  // Fires as the LIVE scoped generation comes up, the moment preflight is
+  // about to attest its lease.
+  onLiveUp?: () => void;
+  // A managed repo the live command left dirty, observed by postflight only.
+  dirtyAfterLiveCommand = false;
+  private liveCommandSeen = false;
+  // Whether the recorded in-container process group answers a liveness probe.
+  processGroupAlive = false;
 
   constructor(activeDir: string) {
     this.activeDir = activeDir;
@@ -836,6 +947,17 @@ class WorkerRunner implements CommandRunner {
       args[1] === 'inspect'
     ) {
       const target = args[2] ?? '';
+      // The recorded-container lifecycle seam inspects the configured NAME;
+      // scoped capture inspects the immutable ID it just created.
+      if (target === 'quorum-appliance') {
+        return this.ups < 2
+          ? { status: 1, stdout: '', stderr: 'no such container\n' }
+          : {
+              status: 0,
+              stdout: JSON.stringify([{ Id: LIVE_ID, Image: 'sha256:img-1' }]),
+              stderr: '',
+            };
+      }
       return {
         status: 0,
         stdout: JSON.stringify([
@@ -844,9 +966,17 @@ class WorkerRunner implements CommandRunner {
         stderr: '',
       };
     }
+    if (command === 'docker' && args[0] === 'exec') {
+      return args.join(' ').includes('kill -0 -- -456') &&
+        this.processGroupAlive
+        ? { status: 0, stdout: '', stderr: '' }
+        : { status: 1, stdout: '', stderr: '' };
+    }
     if (command === 'git') {
       if (args.includes('status')) {
-        return { status: 0, stdout: '', stderr: '' };
+        return this.dirtyAfterLiveCommand && this.liveCommandSeen
+          ? { status: 0, stdout: ' M mutated.txt\n', stderr: '' }
+          : { status: 0, stdout: '', stderr: '' };
       }
       if (
         args.includes('rev-parse') &&
@@ -873,13 +1003,18 @@ class WorkerRunner implements CommandRunner {
     if (last === 'up') {
       const id = this.ups === 0 ? PROBE_ID : LIVE_ID;
       this.ups += 1;
+      if (id === LIVE_ID) {
+        this.onLiveUp?.();
+      }
       return { status: 0, stdout: `${id}\n`, stderr: '' };
     }
     if (args.includes('evals-tool-versions')) {
       return { status: 0, stdout: 'bun 1.3.13\n', stderr: '' };
     }
     if (args.includes('--exec-env-file')) {
-      return { status: 0, stdout: `run-id: ${RUN_ID}\n`, stderr: '' };
+      this.liveCommandSeen = true;
+      this.onLiveCommand?.();
+      return this.liveResult;
     }
     return { status: 0, stdout: 'ok\n', stderr: '' };
   }
@@ -900,6 +1035,27 @@ function seededLiveJob(cfg: LoadedApplianceConfig) {
         '--coding-agent',
         'gemini',
         '--credential',
+        CORPUS_CREDENTIAL,
+      ],
+      selection: { agent: 'gemini', credential: CORPUS_CREDENTIAL },
+      scope: CORPUS_SCOPE,
+      sourceEvalsSha: RESOLVED_SHA,
+    }),
+  );
+}
+
+// The run-all half of the same fixture cell, whose terminal artifact is a
+// batch header rather than a verdict.
+function seededLiveRunAllJob(cfg: LoadedApplianceConfig) {
+  return createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents',
+        'gemini',
+        '--credentials',
         CORPUS_CREDENTIAL,
       ],
       selection: { agent: 'gemini', credential: CORPUS_CREDENTIAL },
@@ -1026,6 +1182,335 @@ test('runWorker refuses a kind/argv mismatch before any runner call', async () =
     false,
   );
   expect(readJob(cfg, job.job_id).status).toBe('failed');
+});
+
+// --- the executed record is the preflighted one (F13 Task 5) ----------------
+// Preflight attests ONE (scope, lease) pair; the worker then rereads the job
+// before executing. The record it reads back is durable, mutable state, so the
+// live exec must prove that reread record is still the one the lease was built
+// for — otherwise a job can be re-pointed at another cell's credentials
+// between attestation and execution.
+
+test('liveCommandArgs refuses a job whose credential scope is not the lease scope', () => {
+  const cfg = loaded();
+  const job = liveRecord(cfg, 'run', LEGAL_RUN_ARGV);
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    container: {
+      name: 'quorum-appliance',
+      id: CONTAINER_ID,
+      image_id: 'sha256:img-1',
+      mount_signature: 'f'.repeat(64),
+    },
+  }));
+  // The record still selects codex x codex_sub, but its authoritative scope
+  // now names another cell entirely.
+  rewriteJobRecordRaw(cfg, job.job_id, { credential_scope: CORPUS_SCOPE });
+  const repointed = readJob(cfg, job.job_id);
+
+  let caught: unknown = null;
+  try {
+    liveCommandArgs(cfg, repointed, liveLease(), SUPERVISOR_FILE);
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  expect((caught as ApplianceError).step).toBe('live-command');
+});
+
+test('liveCommandArgs refuses every drift between recorded container evidence and the lease', () => {
+  const cfg = loaded();
+  const lease = liveLease();
+  const evidence = {
+    name: lease.name,
+    id: lease.id,
+    image_id: lease.imageId,
+    mount_signature: lease.mountSignature,
+  };
+  const drifts: readonly {
+    readonly what: string;
+    readonly container: typeof evidence | null;
+  }[] = [
+    { what: 'no recorded container at all', container: null },
+    {
+      what: 'another container id',
+      container: { ...evidence, id: 'b'.repeat(64) },
+    },
+    {
+      what: 'another container name',
+      container: { ...evidence, name: 'someone-elses-container' },
+    },
+    {
+      what: 'another image id',
+      container: { ...evidence, image_id: 'sha256:img-2' },
+    },
+    {
+      what: 'another mount signature',
+      container: { ...evidence, mount_signature: 'a'.repeat(64) },
+    },
+  ];
+
+  for (const drift of drifts) {
+    const job = liveRecord(cfg, 'run', LEGAL_RUN_ARGV);
+    const drifted = updateJob(cfg, job.job_id, (current) => ({
+      ...current,
+      container: drift.container,
+    }));
+
+    let caught: unknown = null;
+    try {
+      liveCommandArgs(cfg, drifted, lease, SUPERVISOR_FILE);
+    } catch (error) {
+      caught = error;
+    }
+    expect(`${drift.what}: ${caught instanceof ApplianceError}`).toBe(
+      `${drift.what}: true`,
+    );
+    expect((caught as ApplianceError).step).toBe('live-command');
+  }
+
+  // The exact evidence the lease produces is accepted.
+  const job = liveRecord(cfg, 'run', LEGAL_RUN_ARGV);
+  const bound = updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    container: evidence,
+  }));
+  expect(liveCommandArgs(cfg, bound, lease, SUPERVISOR_FILE)).toContain('exec');
+});
+
+test('runWorker refuses a scope re-pointed after preflight attested its lease', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  const job = seededLiveJob(cfg);
+  writeContainerPid(cfg, job.job_id);
+  // The live generation is up and attested; only now does the durable record
+  // start naming a different cell's credentials.
+  runner.onLiveUp = () => {
+    rewriteJobRecordRaw(cfg, job.job_id, {
+      credential_scope: FIXTURE_LIVE_SCOPE,
+    });
+  };
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'live-command',
+  });
+
+  // The live exec — the one place the supervisor env file crosses into a
+  // process — never happened.
+  expect(
+    runner.calls.filter((call) => call.args.includes('--exec-env-file')),
+  ).toEqual([]);
+  const record = readJob(cfg, job.job_id);
+  expect(record.status).toBe('failed');
+  expect(record.error?.step).toBe('live-command');
+});
+
+// --- the worker's terminal lifecycle ----------------------------------------
+// What the worker does around the live command: hold and release both locks,
+// discover the terminal artifact the command left (from stdout, or by
+// discovery when the wrapper exits early with none), copy provenance beside
+// that artifact, classify a nonzero exit, refuse a run with no captured
+// in-container process group, and quarantine a run that left a managed repo
+// dirty. Every case goes through runWorker, because that ordering IS the
+// contract.
+
+test('runWorker preflights, runs the live command, records artifacts, and releases locks', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  runner.liveResult = {
+    status: 0,
+    stdout: 'artifacts: results/batches/batch-1\n',
+    stderr: '',
+  };
+  const job = seededLiveRunAllJob(cfg);
+  writeFinishedBatch(cfg);
+  writeContainerPid(cfg, job.job_id);
+  let liveLockRefs: unknown = null;
+  runner.onLiveCommand = () => {
+    liveLockRefs = JSON.parse(
+      readFileSync(join(cfg.paths.locks, 'run.lock/lock.json'), 'utf8'),
+    ).refs;
+  };
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.batch_id).toBe('batch-1');
+  expect(updated.result).toEqual({
+    exit_code: 0,
+    summary: 'live command completed',
+  });
+  expect(updated.process?.host_pid).toBe(process.pid);
+  // The run lock carried the preflighted refs while the command was live.
+  expect(liveLockRefs).toEqual(updated.refs);
+  expect(
+    statSync(join(cfg.config.container.results_root, '.appliance-pids')).mode &
+      0o777,
+  ).toBe(0o700);
+  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
+  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
+  expect(
+    existsSync(
+      join(
+        cfg.config.container.results_root,
+        'batches/batch-1/appliance-provenance.json',
+      ),
+    ),
+  ).toBe(true);
+  expect(readFileSync(updated.artifacts.stdout_log, 'utf8')).toContain(
+    'artifacts: results/batches/batch-1',
+  );
+});
+
+test('runWorker waits for a terminal single-run artifact after an early zero wrapper exit', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg, { seedTerminalVerdict: false });
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  runner.liveResult = { status: 0, stdout: '', stderr: '' };
+  runner.processGroupAlive = true;
+  const job = seededLiveJob(cfg);
+  writeContainerPid(cfg, job.job_id);
+  runner.onLiveCommand = () => {
+    setTimeout(() => writeRunVerdict(cfg), 10);
+  };
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.run_id).toBe(RUN_ID);
+  expect(
+    existsSync(
+      join(
+        cfg.config.container.results_root,
+        RUN_ID,
+        'appliance-provenance.json',
+      ),
+    ),
+  ).toBe(true);
+});
+
+test('runWorker discovers a terminal batch after an early zero wrapper exit without stdout', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg, { seedTerminalVerdict: false });
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  runner.liveResult = { status: 0, stdout: '', stderr: '' };
+  runner.processGroupAlive = true;
+  const job = seededLiveRunAllJob(cfg);
+  writeContainerPid(cfg, job.job_id);
+  runner.onLiveCommand = () => {
+    setTimeout(() => writeFinishedBatch(cfg, 'batch-detached'), 10);
+  };
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('done');
+  expect(updated.artifacts.batch_id).toBe('batch-detached');
+  expect(
+    existsSync(
+      join(
+        cfg.config.container.results_root,
+        'batches/batch-detached/appliance-provenance.json',
+      ),
+    ),
+  ).toBe(true);
+});
+
+test('runWorker fails when a nonzero live command only created a batch shell', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg, { seedTerminalVerdict: false });
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  runner.liveResult = {
+    status: 1,
+    stdout: 'batch batch-1\nartifacts: results/batches/batch-1\n',
+    stderr: 'boom\n',
+  };
+  const job = seededLiveRunAllJob(cfg);
+  // A batch directory with no header: nothing terminal was ever written.
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+  writeContainerPid(cfg, job.job_id);
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('failed');
+  expect(updated.result).toEqual({
+    exit_code: 1,
+    summary: 'live command exited 1',
+  });
+});
+
+test('runWorker fails a successful live command without a captured container process group', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg, { seedTerminalVerdict: false });
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  const job = seededLiveRunAllJob(cfg);
+  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+    recursive: true,
+  });
+  // No pid file: the in-container process group was never reported.
+
+  await runWorker(cfg, job.job_id, runner);
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('failed');
+  expect(updated.result.summary).toBe('container process id was not captured');
+  expect(updated.process?.container_pgid).toBe(null);
+});
+
+test('runWorker throws and leaves a quarantined record when postflight finds a dirty repo', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  runner.liveResult = {
+    status: 0,
+    stdout: 'artifacts: results/batches/batch-1\n',
+    stderr: '',
+  };
+  runner.dirtyAfterLiveCommand = true;
+  const job = seededLiveRunAllJob(cfg);
+  writeFinishedBatch(cfg);
+  writeContainerPid(cfg, job.job_id);
+  const dirty = `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`;
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'repo_dirty',
+    message: dirty,
+  });
+
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('quarantined');
+  expect(updated.finished_at).not.toBe(null);
+  expect(updated.result).toEqual({
+    exit_code: 0,
+    summary: `postflight dirty check failed: ${dirty}`,
+  });
+  expect(updated.error).toMatchObject({ code: 'repo_dirty', message: dirty });
+  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
+  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
 });
 
 test('cancel sends one fixed SIGINT to the recorded container id only', async () => {

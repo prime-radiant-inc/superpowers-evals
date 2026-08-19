@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import type { CredentialScope } from '../credentials/scope.ts';
 import { credentialScopeForSelection } from '../credentials/scope.ts';
@@ -296,7 +296,13 @@ function fixedScopedSlot(
   loaded: LoadedApplianceConfig,
   slot: 'staging' | 'active',
 ): string {
-  return join(loaded.config.root, 'state', 'credentials-scoped', slot);
+  return join(fixedScopedRoot(loaded), slot);
+}
+
+// The whole scoped credential state namespace. Nothing under it may enter the
+// container except the exact projections the asserted material names.
+function fixedScopedRoot(loaded: LoadedApplianceConfig): string {
+  return join(loaded.config.root, 'state', 'credentials-scoped');
 }
 
 const SCOPED_AGENT_ENV_FILE = 'agent.env';
@@ -984,6 +990,38 @@ function canonicalHostPath(path: string, what: string): string {
   }
 }
 
+// The best-effort host identity of a CAPTURED mount source. Unlike the
+// asserted paths, this string comes from the container runtime and may name
+// something unresolvable (a volume the current user cannot traverse, a path
+// removed since creation), so it must never abort validation: an
+// unresolvable source is compared in its normalized form, which is enough
+// because a source that actually delivers protected material resolves.
+function capturedMountSource(raw: string): string {
+  const normalized = resolve(raw);
+  try {
+    return realpathSync(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+// Whether `ancestor` is `path` or a directory containing it.
+function pathContains(ancestor: string, path: string): boolean {
+  return path === ancestor || path.startsWith(ancestor + sep);
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  return pathContains(a, b) || pathContains(b, a);
+}
+
+const AUTH_ROOT_DESTINATION = '/auth';
+
+// Whether a container-side destination lands inside the fixed auth namespace,
+// compared COMPONENT-WISE so /auth itself is inside it and /authority is not.
+function inAuthNamespace(destination: string): boolean {
+  return pathContains(AUTH_ROOT_DESTINATION, resolve('/', destination));
+}
+
 interface CapturedMount {
   readonly Type: string;
   readonly Source: string;
@@ -1032,14 +1070,24 @@ function parseCapturedMounts(
   });
 }
 
-// Validate the captured container's ACTUAL mount topology against the
-// asserted active material: exactly one read-only bind of the active agent
-// env file at /run/evals/credentials.env, exactly one read-only bind of each
-// asserted projected auth directory at its fixed destination, no unasserted
-// /auth/* mount anywhere, and the supervisor exec env file never mounted on
-// any mount's source. Any drift is a typed refusal; the caller rolls back
-// exactly the captured id.
+/**
+ * Validate the captured container's ACTUAL mount topology against both the
+ * asserted active material and the loaded appliance boundaries.
+ *
+ * Two halves, and both are load-bearing. The asserted half requires exactly
+ * one read-only bind of the active agent env file at
+ * /run/evals/credentials.env and exactly one read-only bind of each asserted
+ * projected auth directory at its fixed destination. The boundary half then
+ * sweeps EVERY captured mount, whatever it is called and wherever it hangs:
+ * no source may touch the blessed credential bundle, none may be or contain
+ * the worker-only supervisor exec env file, nothing in the fixed auth
+ * namespace (including /auth itself) may be other than an exact asserted
+ * projection, and no other part of the scoped credential state may cross into
+ * the container at all. Any drift is a typed refusal; the caller rolls back
+ * exactly the captured id.
+ */
 function requireCapturedMountTopology(
+  loaded: LoadedApplianceConfig,
   capturedId: string,
   record: unknown,
   active: ActiveCredentialMaterial,
@@ -1082,7 +1130,14 @@ function requireCapturedMountTopology(
     );
   }
 
-  const assertedDestinations = new Set<string>();
+  // Destination -> the one canonical host source the asserted material
+  // authorizes there. The boundary sweep below blesses a mount only when it
+  // matches such a pair exactly, so neither a second copy of an asserted
+  // source at another destination nor a differently-spelled destination can
+  // pass as asserted.
+  const asserted = new Map<string, string>([
+    [CREDENTIAL_ENV_DESTINATION, capturedMountSource(envMount.Source)],
+  ]);
   for (const mount of active.authMounts) {
     const destination = Object.hasOwn(AUTH_MOUNT_DESTINATION, mount.name)
       ? AUTH_MOUNT_DESTINATION[mount.name]
@@ -1093,7 +1148,6 @@ function requireCapturedMountTopology(
         `has an unknown projected auth mount name '${String(mount.name)}'`,
       );
     }
-    assertedDestinations.add(destination);
     const matches = mounts.filter((entry) => entry.Destination === destination);
     if (matches.length !== 1) {
       throw capturedFault(
@@ -1126,32 +1180,52 @@ function requireCapturedMountTopology(
         `${destination} mount source does not match the asserted projected auth directory`,
       );
     }
+    asserted.set(destination, capturedMountSource(match.Source));
   }
 
+  const bundleRoot = canonicalHostPath(
+    loaded.config.credential_bundle.path,
+    'credential bundle',
+  );
+  const scopedStateRoot = canonicalHostPath(
+    fixedScopedRoot(loaded),
+    'scoped credential state root',
+  );
+  const supervisorSource =
+    active.supervisorExecEnvFile === null
+      ? null
+      : canonicalHostPath(
+          active.supervisorExecEnvFile,
+          'supervisor exec env file',
+        );
+
   for (const mount of mounts) {
-    if (
-      mount.Destination.startsWith('/auth/') &&
-      !assertedDestinations.has(mount.Destination)
-    ) {
+    const source = capturedMountSource(mount.Source);
+    const isAsserted = asserted.get(mount.Destination) === source;
+
+    if (pathsOverlap(source, bundleRoot)) {
+      throw capturedFault(
+        capturedId,
+        `mounts the blessed credential bundle at ${mount.Destination}, which must never enter the container`,
+      );
+    }
+    if (supervisorSource !== null && pathContains(source, supervisorSource)) {
+      throw capturedFault(
+        capturedId,
+        `mounts the supervisor exec env file at ${mount.Destination}, which must never enter the container`,
+      );
+    }
+    if (inAuthNamespace(mount.Destination) && !isAsserted) {
       throw capturedFault(
         capturedId,
         `exposes an unasserted auth mount at ${mount.Destination}`,
       );
     }
-  }
-
-  if (active.supervisorExecEnvFile !== null) {
-    const supervisorSource = canonicalHostPath(
-      active.supervisorExecEnvFile,
-      'supervisor exec env file',
-    );
-    for (const mount of mounts) {
-      if (mount.Source === supervisorSource) {
-        throw capturedFault(
-          capturedId,
-          'mounts the supervisor exec env file, which must never enter the container',
-        );
-      }
+    if (pathsOverlap(source, scopedStateRoot) && !isAsserted) {
+      throw capturedFault(
+        capturedId,
+        `mounts unasserted scoped credential state at ${mount.Destination}`,
+      );
     }
   }
 }
@@ -1161,6 +1235,7 @@ function requireCapturedMountTopology(
 // and to expose exactly the asserted credential mount topology. Returns the
 // image id for the lease.
 function inspectCapturedContainer(
+  loaded: LoadedApplianceConfig,
   runner: CommandRunner,
   capturedId: string,
   active: ActiveCredentialMaterial,
@@ -1199,7 +1274,7 @@ function inspectCapturedContainer(
       `inspection of captured container ${capturedId} identified a different container; refusing to bless it`,
     );
   }
-  requireCapturedMountTopology(capturedId, record, active);
+  requireCapturedMountTopology(loaded, capturedId, record, active);
   return stringField(record, 'Image') ?? stringField(record, 'ImageID');
 }
 
@@ -1286,7 +1361,12 @@ export function reconcileScopedContainer(
   }
 
   try {
-    const imageId = inspectCapturedContainer(runner, capturedId, active);
+    const imageId = inspectCapturedContainer(
+      loaded,
+      runner,
+      capturedId,
+      active,
+    );
     return {
       name: loaded.config.container.name,
       id: capturedId,

@@ -455,20 +455,47 @@ export async function preflightLiveJob(
   }
 }
 
+// The credential triple a prepare record is born with, re-proved on the way
+// back in. prepare resolves no cell: it asserts zero material, selects no
+// (agent, credential), and pins no source SHA. A resumed record that claims
+// kind 'prepare' while carrying any of those is not a prepare record — it
+// predates scoped delivery or was edited underneath the job — and probing it
+// would run the whole preflight against a shape prepare never produces.
+function requirePrepareRecord(job: JobRecord): void {
+  if (job.kind !== 'prepare') {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} is a ${job.kind} job; prepare probes only prepare jobs`,
+    );
+  }
+  const scope = job.credential_scope;
+  if (scope === null || scope.kind !== 'empty') {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} (prepare) does not assert an empty credential scope; refusing to probe it`,
+    );
+  }
+  if (
+    job.credential_selection !== null ||
+    job.credential_scope_source_evals_sha !== null
+  ) {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} (prepare) carries a credential selection or source SHA, which prepare never resolves; refusing to probe it`,
+    );
+  }
+}
+
 // prepare stops at the empty probe: its evidence comes from the probe lease,
 // and no credential material is ever staged, activated, or mounted.
 async function preflightPrepareJob(
   args: PreflightArgs,
 ): Promise<PreflightResult> {
   try {
-    const job = readJob(args.loaded, args.jobId);
-    if (job.kind !== 'prepare') {
-      throw new ApplianceError(
-        'config_invalid',
-        'preflight',
-        `job ${job.job_id} is a ${job.kind} job; prepare probes only prepare jobs`,
-      );
-    }
+    requirePrepareRecord(readJob(args.loaded, args.jobId));
     const probed = await preflightThroughEmptyProbe(args, null);
     return commitPreflightEvidence(
       args.loaded,

@@ -781,6 +781,98 @@ test('prepare refuses a live job record instead of probing it', async () => {
   expect(dockerCalls(runner)).toEqual([]);
 });
 
+// A resumed prepare is identified by its whole credential triple, not by its
+// kind alone: prepare asserts zero material and pins no cell, so a record
+// claiming kind 'prepare' while carrying a selection, a scope, or a source
+// SHA is not a prepare record. The triple is immutable through updateJob, so
+// such a record can only arrive as a hand-edited, restored, or corrupted
+// job.json — which is exactly what a resumed prepare reads back.
+function rewritePrepareRecordRaw(
+  fx: Fixture,
+  jobId: string,
+  patch: Record<string, unknown>,
+): void {
+  const path = join(fx.loaded.paths.jobs, jobId, 'job.json');
+  const record = JSON.parse(readFileSync(path, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  writeFileSync(path, JSON.stringify({ ...record, ...patch }));
+}
+
+test('prepare refuses a resumed record that does not carry the exact prepare triple', async () => {
+  const mutations: readonly {
+    readonly what: string;
+    readonly patch: Record<string, unknown>;
+  }[] = [
+    {
+      what: 'a legacy record predating scoped delivery',
+      patch: { credential_scope: null },
+    },
+    {
+      what: 'a live scope smuggled onto a prepare record',
+      patch: { credential_scope: corpusScope() },
+    },
+    {
+      what: 'a credential selection',
+      patch: { credential_selection: CORPUS_SELECTION },
+    },
+    {
+      what: 'a pinned source evals SHA',
+      patch: { credential_scope_source_evals_sha: RESOLVED_SHA },
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const fx = fixture();
+    const runner = new FakeRunner();
+    seedMounts(fx, runner);
+    const job = createJob(fx.loaded, prepareJobRequest());
+    rewritePrepareRecordRaw(fx, job.job_id, mutation.patch);
+
+    await expect(
+      prepare({
+        loaded: fx.loaded,
+        superpowersRef: 'main',
+        argv: ['prepare'],
+        requester: { agent: null },
+        runner,
+        jobId: job.job_id,
+      }),
+    ).rejects.toMatchObject({ code: 'config_invalid', step: 'preflight' });
+
+    // Refused before the probe: no container, and no scoped state at all.
+    expect(`${mutation.what}: ${dockerCalls(runner).length}`).toBe(
+      `${mutation.what}: 0`,
+    );
+    expect(existsSync(fx.scopedRoot)).toBe(false);
+    expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
+  }
+});
+
+test('prepare probes a resumed record that carries the exact prepare triple', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = createJob(fx.loaded, prepareJobRequest());
+
+  const result = await prepare({
+    loaded: fx.loaded,
+    superpowersRef: 'main',
+    argv: ['prepare'],
+    requester: { agent: null },
+    runner,
+    jobId: job.job_id,
+  });
+
+  expect(result.container.id).toBe(PROBE_ID);
+  const record = readJob(fx.loaded, job.job_id);
+  expect(record.status).toBe('done');
+  expect(record.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  expect(record.credential_selection).toBe(null);
+  expect(record.credential_scope_source_evals_sha).toBe(null);
+});
+
 test('preflight maps container build failures to image_build_failed', async () => {
   const fx = fixture();
   const runner = new FakeRunner();
