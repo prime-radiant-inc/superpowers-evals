@@ -752,19 +752,23 @@ function requireScopeToPayloadBinding(
   }
 
   // Exact mode binding: when the canonical scope derives a gemini mode, the
-  // GEMINI_AUTH_TYPE entry must carry exactly that value — the projector's
+  // FINAL agent.env line must carry exactly that value — the projector's
   // single-quoted form or the bare token both derive to it, anything else
-  // fails. The name binding above guarantees exactly one such line (the
-  // canonical scope derives no destination of that name, and a mode-bearing
-  // canonical scope is always gemini-family, whose destinations are
-  // GEMINI_API_KEY at most). When the canonical mode is null, that same name
-  // binding keeps GEMINI_AUTH_TYPE absent. The refusal names the variable
-  // and the selection, never the value — a tampered entry may carry
-  // secret-shaped material.
+  // fails. The mode entry's canonical position is last: the projector
+  // appends it after every agentEnv projection, and expectedNames above
+  // mirrors that, so the name binding pins the final line's name to
+  // GEMINI_AUTH_TYPE. Position is load-bearing: a credential may project its
+  // own value INTO GEMINI_AUTH_TYPE (api_key_env names it), putting two
+  // assignments to that name in the file; the shell makes the last one
+  // runtime-authoritative, and a first-match lookup would validate the
+  // earlier projected assignment while a tampered final mode sails through.
+  // When the canonical mode is null no mode entry is expected and no value
+  // check applies (a GEMINI_AUTH_TYPE line can then only be an ordinary
+  // projected destination, bound by name above). The refusal names the
+  // variable and the selection, never the value — a tampered entry may
+  // carry secret-shaped material.
   if (canonical.geminiAuthType !== null) {
-    const modeLine = parsedLines.find(
-      (entry) => entry.name === 'GEMINI_AUTH_TYPE',
-    );
+    const modeLine = parsedLines[parsedLines.length - 1];
     if (
       modeLine === undefined ||
       modeLine.value === null ||

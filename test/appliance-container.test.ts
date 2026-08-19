@@ -544,6 +544,59 @@ function geminiCorpusScope(): LiveCredentialScope {
 
 const GEMINI_CORPUS_CREDENTIAL_BODY = `    model: gemini-2.5-pro\n    api: gemini\n    auth: oauth\n    harnesses: [gemini]\n`;
 
+// A schema-valid gemini API-key credential whose explicit api_key_env is
+// GEMINI_AUTH_TYPE itself, so the canonical stage carries TWO assignments to
+// that destination: the projected credential value first and the derived
+// mode last (the shell makes the last assignment runtime-authoritative).
+// Staging only succeeds when the bundle value equals the derived mode (the
+// projector's contradiction check), so both canonical lines carry
+// 'gemini-api-key'.
+const GEMINI_KEY_AUTHTYPE_CREDENTIAL = 'gemini_key_authtype_fx';
+const GEMINI_KEY_AUTHTYPE_CREDENTIAL_BODY = `    model: gemini-2.5-pro\n    api: gemini\n    auth: api-key\n    api_key_env: GEMINI_AUTH_TYPE\n    harnesses: [gemini]\n`;
+function geminiKeyAuthtypeScope(): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'gemini',
+    runtimeFamily: 'gemini',
+    credential: GEMINI_KEY_AUTHTYPE_CREDENTIAL,
+    agentEnv: [
+      {
+        destinationName: 'GEMINI_AUTH_TYPE',
+        sourceNames: ['GEMINI_AUTH_TYPE'],
+      },
+    ],
+    geminiAuthType: 'gemini-api-key',
+    oauth: null,
+  };
+}
+
+function makeGeminiKeyAuthtypeFixture(): ScopedFixture {
+  return makeScopedFixture({
+    corpus: [
+      {
+        agent: 'gemini',
+        credential: GEMINI_KEY_AUTHTYPE_CREDENTIAL,
+        credentialBody: GEMINI_KEY_AUTHTYPE_CREDENTIAL_BODY,
+      },
+    ],
+  });
+}
+
+function seedGeminiKeyAuthtypeBundle(fx: ScopedFixture): void {
+  writeScopedTree(fx.bundleDir, {
+    'metadata.json': JSON.stringify({
+      bundle_id: 'blessed-x',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+    }),
+    'credentials.env': `${SCOPED_ENV_LINES.join('\n')}\nGEMINI_AUTH_TYPE='gemini-api-key'\n`,
+  });
+}
+
+const GEMINI_KEY_AUTHTYPE_CANONICAL_ENV =
+  "GEMINI_AUTH_TYPE='gemini-api-key'\nGEMINI_AUTH_TYPE='gemini-api-key'\n";
+
 // A corpus-derived pi OAuth pair: provider pinned on the credential record.
 const PI_CORPUS_CREDENTIAL = 'pi_default';
 const PI_CORPUS_CREDENTIAL_BODY = `    provider: openai-codex\n    model: gpt-5.5\n    auth: oauth\n    harnesses: [pi]\n`;
@@ -1868,6 +1921,81 @@ test('a tampered GEMINI_AUTH_TYPE mode value in agent.env fails typed before any
     expect(err.message).not.toContain('oauth-personal ');
     // Fails BEFORE any wrapper or docker call, and the staged material is
     // byte-for-byte unchanged (paths, kinds, modes, bytes).
+    expect(runner.calls).toHaveLength(0);
+    expect(fingerprintTree(fx.stagingDir)).toBe(stageBefore);
+  }
+});
+
+test('a duplicate GEMINI_AUTH_TYPE destination stages both assignments and reconciles canonically', () => {
+  // gemini_key_authtype_fx projects its api key INTO GEMINI_AUTH_TYPE, so
+  // the canonical stage carries two assignments to that name — the binding
+  // must accept the untampered duplicate and activation must preserve both
+  // lines byte-for-byte.
+  const fx = makeGeminiKeyAuthtypeFixture();
+  seedGeminiKeyAuthtypeBundle(fx);
+  const staged = stageLiveCredentialMaterial(
+    fx.loaded,
+    geminiKeyAuthtypeScope(),
+  );
+  expect(readFileSync(join(fx.stagingDir, 'agent.env'), 'utf8')).toBe(
+    GEMINI_KEY_AUTHTYPE_CANONICAL_ENV,
+  );
+  const runner = new ScopedFakeRunner();
+  runner.mounts = envOnlyMounts(fx);
+
+  const lease = reconcileScopedContainer(fx.loaded, runner, staged);
+
+  expect(lease.id).toBe(SCOPED_ID);
+  expect(lease.credentialScope).toEqual(geminiKeyAuthtypeScope());
+  expect(existsSync(fx.stagingDir)).toBe(false);
+  expect(readFileSync(join(fx.activeDir, 'agent.env'), 'utf8')).toBe(
+    GEMINI_KEY_AUTHTYPE_CANONICAL_ENV,
+  );
+});
+
+test('tampering only the final duplicate GEMINI_AUTH_TYPE mode assignment fails typed before any runner call and leaves the stage byte-for-byte unchanged', () => {
+  // Same canonical duplicate-destination stage as above; the FIRST
+  // GEMINI_AUTH_TYPE line (the projected credential value) stays canonical
+  // and only the FINAL line — the derived mode the shell makes
+  // runtime-authoritative — is tampered. Both duplicate assignments remain,
+  // so the name/count/order binding still passes and a first-match lookup
+  // would validate the untampered first line; only validating the mode at
+  // its exact final expected position catches the tamper.
+  const canonicalFirstLine = "GEMINI_AUTH_TYPE='gemini-api-key'\n";
+  const tamperedFinalLines: readonly string[] = [
+    "GEMINI_AUTH_TYPE='oauth-personal'\n", // the other canonical mode
+    'GEMINI_AUTH_TYPE=oauth-personal\n', // bare tampered token
+    "GEMINI_AUTH_TYPE=''\n", // emptied mode
+  ];
+  for (const tamperedFinalLine of tamperedFinalLines) {
+    const fx = makeGeminiKeyAuthtypeFixture();
+    seedGeminiKeyAuthtypeBundle(fx);
+    const staged = stageLiveCredentialMaterial(
+      fx.loaded,
+      geminiKeyAuthtypeScope(),
+    );
+    expect(readFileSync(join(fx.stagingDir, 'agent.env'), 'utf8')).toBe(
+      GEMINI_KEY_AUTHTYPE_CANONICAL_ENV,
+    );
+    writeFileSync(
+      join(fx.stagingDir, 'agent.env'),
+      `${canonicalFirstLine}${tamperedFinalLine}`,
+    );
+    const stageBefore = fingerprintTree(fx.stagingDir);
+
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    expect(caught).toBeInstanceOf(ApplianceError);
+    const err = caught as ApplianceError;
+    expect(err.code).toBe('config_invalid');
+    expect(err.message).toContain('GEMINI_AUTH_TYPE');
+    // No observed value in the refusal: neither the tampered mode nor the
+    // canonical one may be echoed.
+    expect(err.message).not.toContain('oauth-personal');
+    expect(err.message).not.toContain('gemini-api-key');
     expect(runner.calls).toHaveLength(0);
     expect(fingerprintTree(fx.stagingDir)).toBe(stageBefore);
   }
