@@ -75,15 +75,19 @@ A live appliance job delivers exactly one agent's credentials, and nothing
 else. `run` takes `--coding-agent <agent>` with an optional
 `--credential <name>`; `run-all` takes `--coding-agents` with exactly one entry
 and an optional `--credentials` with exactly one name. An omitted credential
-means that agent's registry default. A list, a repeated flag, a blank value, or
-a value that looks like an option is refused at argument validation, before any
-job record exists — mixed-scope batches are rejected and stay rejected until
-per-cell containers land. `run-all` also refuses `--coding-agents-dir`,
-`--out-root`, `--scenarios-root`, `--credentials-file`, and `--credential`: the
-first three would relocate the trusted roots the appliance controls,
-`--credentials-file` would swap the blessed registry the bundle was built for,
-and `--credential` is `run`'s flag, which would leave the real selection unmade
-while looking like it had been made.
+means that agent's registry default. A list, a blank value, or a value that
+looks like an option is refused at argument validation, before any job record
+exists, and so is a repeated *credential or run-all selection* flag:
+`run --credential`, `run-all --coding-agents`, and `run-all --credentials` each
+refuse a second occurrence instead of letting one silently win. Pass
+`run --coding-agent` once — it is an ordinary required option, so a repeat
+resolves last-win rather than being refused. Mixed-scope batches are rejected
+and stay rejected until per-cell containers land. `run-all` also refuses
+`--coding-agents-dir`, `--out-root`, `--scenarios-root`, `--credentials-file`,
+and `--credential`: the first three would relocate the trusted roots the
+appliance controls, `--credentials-file` would swap the blessed registry the
+bundle was built for, and `--credential` is `run`'s flag, which would leave the
+real selection unmade while looking like it had been made.
 
 That one `(agent, credential)` cell is resolved at submission against the evals
 corpus at its current commit and written into the job record once, as an
@@ -112,9 +116,20 @@ validation, so that path is reachable only by trusted-maintainer break-glass.
 `supervisor.exec.env` is never mounted anywhere. It reaches exactly one
 process — the live Quorum supervisor — as the host-side argument of
 `docker exec --env-file`. The grader credential travels in that file only under
-its `QUORUM_GRADER_*` alias names; the runner maps them back to the canonical
-names inside the Gauntlet child alone, so the canonical names never exist in a
-host file, in the supervisor env, or in anything the Coding-Agent can read.
+its `QUORUM_GRADER_*` alias names, and the runner maps those back to the
+canonical names when it builds the Gauntlet child's environment.
+
+So the canonical grader names appear in no host credential file, in nothing
+mounted into the container, and not in the supervisor exec env file — but they
+do exist in the Gauntlet child's process environment, which is where the
+grader CLI reads them. No Coding-Agent is given them: each launcher rebuilds
+the agent's environment with `env -i` and an explicit allowlist fed from that
+run's own credential file, so the grader's names are not inherited even though
+the launcher itself starts as a child of Gauntlet. That is an
+**intentional-delivery** boundary, not a containment one. A Coding-Agent runs
+at the same privilege as the Gauntlet child, so an agent that goes looking can
+still read those names out of a peer process; see
+[Isolation boundary and accepted residual](#isolation-boundary-and-accepted-residual).
 
 If the bundle provides no nonempty source for a projected env name or a
 required OAuth file, the whole job is refused before live execution. The
@@ -243,10 +258,15 @@ Filesystem scoping is a filesystem boundary. It does not provide UID isolation
 and is not claimed to.
 
 A process running as the same UID, or as root, can inspect other appliance
-process state — including `/proc` of the live Quorum supervisor — so
-host-only delivery of the supervisor env file is not a defence against a
-same-UID observer. Such a process can also race the fixed staging slot and
-displace a generation while it is being written.
+process state — including `/proc` of the live Quorum supervisor, and of the
+Gauntlet child that legitimately holds the grader credential under its
+canonical names. Neither host-only delivery of the supervisor exec env file
+nor the `QUORUM_GRADER_*` aliasing is a defence against such an observer, and
+the Coding-Agent under test runs at that same privilege: it is never handed
+the grader's canonical names, but nothing stops it from reading a peer
+process's environment. Same-UID inspection also reaches the fixed staging
+slot, which such a process can race and displace while a generation is being
+written.
 
 Staging detects that displacement and fails closed: the fixed path must still
 identify the exact inode that was written, or the job is refused rather than
