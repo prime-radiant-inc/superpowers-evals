@@ -408,7 +408,7 @@ function commitPreflightEvidence(
     error: null,
   }));
 
-  const provenance = writeProvenance(loaded, readJob(loaded, jobId), {
+  const provenance = writeProvenance(loaded, jobId, {
     path: probed.toolVersionsPath,
     text: probed.toolVersionsText,
   });

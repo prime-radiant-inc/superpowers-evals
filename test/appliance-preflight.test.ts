@@ -425,6 +425,11 @@ test('preflightLiveJob probes empty, then binds live execution to the scoped lea
     'mount_signature',
     'name',
   ]);
+  // The resolved superpowers revision is what a run is reproducible against,
+  // so it must survive verbatim from the ref resolution into the result, the
+  // durable job, and provenance.
+  expect(result.evidence.refs.superpowers_requested_ref).toBe('main');
+  expect(result.evidence.refs.superpowers_resolved_sha).toBe(RESOLVED_SHA);
   expect(result.evidence.refs.evals_resolved_sha).toBe(RESOLVED_SHA);
   expect(result.evidence.credential_bundle).toEqual({
     name: 'blessed',
@@ -448,6 +453,9 @@ test('preflightLiveJob probes empty, then binds live execution to the scoped lea
   // The job carries the same evidence and its ORIGINAL authoritative scope.
   const updated = readJob(fx.loaded, job.job_id);
   expect(updated.container).toEqual(result.evidence.container);
+  expect(updated.refs).toEqual(result.evidence.refs);
+  expect(updated.refs?.superpowers_requested_ref).toBe('main');
+  expect(updated.refs?.superpowers_resolved_sha).toBe(RESOLVED_SHA);
   expect(updated.refs?.evals_resolved_sha).toBe(RESOLVED_SHA);
   expect(updated.credential_bundle?.bundle_id).toBe('blessed-2026-06-18-a');
   expect(updated.credential_scope).toEqual(corpusScope());
@@ -463,6 +471,8 @@ test('preflightLiveJob probes empty, then binds live execution to the scoped lea
     ...result.evidence.container,
     code_mounts_read_only: false,
   });
+  expect(provenance.refs).toEqual(updated.refs);
+  expect(provenance.refs.superpowers_resolved_sha).toBe(RESOLVED_SHA);
   expect(provenance.command_argv).toEqual(updated.command.argv);
 });
 
@@ -697,7 +707,7 @@ test('a provenance fault leaves committed job evidence a retry heals without cha
 
   // The retry heals only the derived file, from the job.
   rmSync(fx.loaded.paths.provenance);
-  const path = writeProvenance(fx.loaded, readJob(fx.loaded, job.job_id), {
+  const path = writeProvenance(fx.loaded, job.job_id, {
     path: null,
     text: 'bun 1.3.13\n',
   });

@@ -263,11 +263,12 @@ export function runRecordedContainerLifecycle(
 }
 
 // ---------------------------------------------------------------------------
-// Scoped container primitives (F13). These live BESIDE the full-bundle
-// helpers above until Task 5's atomic caller cutover deletes that path; they
-// offer no omission mode — every lease carries an asserted scope, and the
-// discriminated staged/active material is the sole scope authority at this
-// boundary.
+// Scoped container primitives (F13). The full-bundle path they replaced is
+// gone: what remains above is the name-only wrapper lifecycle (build, down,
+// status, inspect) and the closed recorded-lifecycle seam, none of which can
+// carry credential material. These offer no omission mode either — every
+// lease carries an asserted scope, and the discriminated staged/active
+// material is the sole scope authority at this boundary.
 
 /**
  * The immutable identity of one scoped container generation: the configured

@@ -15,6 +15,7 @@ import type {
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { BatchHeaderSchema } from '../contracts/batch.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
+import type { CredentialSelection } from '../credentials/scope.ts';
 import { envSnapshot } from '../env.ts';
 import {
   type ContainerLease,
@@ -571,9 +572,15 @@ function interruptHostProcessGroup(child: ChildProcess): void {
  * A scoped job (one carrying a live credential scope) must reconstruct its
  * immutable lease first: a record whose evidence or scope was tampered with,
  * or which never captured an id, yields nothing runnable and therefore
- * nothing signalable. A record predating scoped delivery has no lease to
- * reconstruct and is read directly — this is the one durable-identity
- * exception, and it still reaches only the closed lifecycle primitive below.
+ * nothing signalable.
+ *
+ * The ONE durable-identity exception is a GENUINE legacy live record: a run or
+ * run-all job whose whole credential triple is absent, because it was written
+ * before scoped delivery existed and so has no lease to reconstruct. A record
+ * that kept part of that triple was not written that way, an asserted-empty
+ * scope is a claim of no material rather than a missing claim, and a kind that
+ * never executed live has no in-container process group of its own — none of
+ * them may read raw evidence.
  *
  * Either way the signal itself goes ONLY through runRecordedContainerLifecycle
  * — the fixed docker inspect + exec seam — never through a wrapper argument
@@ -591,6 +598,14 @@ function lifecycleIdentity(job: JobRecord): RecordedContainerIdentity | null {
       }
       throw error;
     }
+  }
+  const isGenuineLegacyRecord =
+    (job.kind === 'run' || job.kind === 'run-all') &&
+    job.credential_selection === null &&
+    job.credential_scope === null &&
+    job.credential_scope_source_evals_sha === null;
+  if (!isGenuineLegacyRecord) {
+    return null;
   }
   const name = job.container?.name ?? null;
   const id = job.container?.id ?? null;
@@ -727,27 +742,217 @@ function writeArtifactProvenance(
   jobId: string,
   preflight: LivePreflightResult,
 ): void {
-  writeProvenance(loaded, readJob(loaded, jobId), {
+  writeProvenance(loaded, jobId, {
     path: preflight.evidence.tool_versions_path,
     text: preflight.evidence.tool_versions_text,
   });
 }
 
+// Flags the appliance never forwards to run-all: the first three would
+// relocate the trusted roots it controls, --credentials-file would swap the
+// blessed registry the bundle was built for, and --credential is run's flag,
+// which would leave the real selection (--credentials) unmade while looking
+// like it had been made. Submission refuses each of them; so does this.
+const FORBIDDEN_RUN_ALL_FLAGS: readonly string[] = [
+  '--coding-agents-dir',
+  '--out-root',
+  '--scenarios-root',
+  '--credentials-file',
+  '--credential',
+];
+
+const TRUSTED_SCENARIO_PREFIX = 'scenarios/';
+
+function liveCommandFault(job: JobRecord, message: string): ApplianceError {
+  return new ApplianceError(
+    'config_invalid',
+    'live-command',
+    `job ${job.job_id} (${job.kind}) ${message}`,
+  );
+}
+
+// Every occurrence of `--name value` and `--name=value`, mirroring the
+// submission parser: "absent" and "present with nothing after it" are
+// different answers, and a repeated option is never silently resolved to one.
+function optionOccurrences(
+  argv: readonly string[],
+  name: string,
+): (string | null)[] {
+  const equalsPrefix = `${name}=`;
+  const values: (string | null)[] = [];
+  argv.forEach((arg, index) => {
+    if (arg.startsWith(equalsPrefix)) {
+      values.push(arg.slice(equalsPrefix.length));
+      return;
+    }
+    if (arg === name) {
+      values.push(argv[index + 1] ?? null);
+    }
+  });
+  return values;
+}
+
+// A run-all cell option: absent exactly when the record selected nothing,
+// otherwise ONE occurrence naming exactly the one selected entry. A repeated,
+// widened, or renamed option is a command for a cell this record never
+// asserted.
+function requireSelectedRunAllOption(
+  job: JobRecord,
+  name: string,
+  selected: string | null,
+): void {
+  const occurrences = optionOccurrences(job.command.argv, name);
+  if (selected === null) {
+    if (occurrences.length > 0) {
+      throw liveCommandFault(
+        job,
+        `command passes ${name}, but the record asserts none`,
+      );
+    }
+    return;
+  }
+  const entries = (occurrences[0] ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  if (
+    occurrences.length !== 1 ||
+    entries.length !== 1 ||
+    entries[0] !== selected
+  ) {
+    throw liveCommandFault(
+      job,
+      `command must pass ${name} naming exactly '${selected}'`,
+    );
+  }
+}
+
+/**
+ * The exact Quorum command a `run` record authorizes. Submission builds this
+ * argv from the normalized scenario and the one selected cell and forwards
+ * nothing else, so it is RECONSTRUCTED here rather than pattern matched: the
+ * scenario is the only free token, and it must still be a relative path under
+ * the trusted scenarios root the normalizer produces.
+ */
+function requireRunCommand(
+  job: JobRecord,
+  selection: CredentialSelection,
+): void {
+  const argv = job.command.argv;
+  const scenario = argv[2] ?? '';
+  if (
+    !scenario.startsWith(TRUSTED_SCENARIO_PREFIX) ||
+    scenario.length === TRUSTED_SCENARIO_PREFIX.length ||
+    scenario.split('/').includes('..')
+  ) {
+    throw liveCommandFault(
+      job,
+      `command does not name a scenario under ${TRUSTED_SCENARIO_PREFIX}`,
+    );
+  }
+  const expected = [
+    'quorum',
+    'run',
+    scenario,
+    '--coding-agent',
+    selection.agent,
+    ...(selection.credential === null
+      ? []
+      : ['--credential', selection.credential]),
+  ];
+  if (
+    argv.length !== expected.length ||
+    argv.some((arg, index) => arg !== expected[index])
+  ) {
+    throw liveCommandFault(
+      job,
+      `command is not the quorum run of scenario ${scenario} for agent '${selection.agent}' credential '${selection.credential ?? '(default)'}'`,
+    );
+  }
+}
+
+/**
+ * The structural rules a `run-all` record's command must satisfy. Unlike run,
+ * submission forwards the operator's remaining Quorum arguments verbatim, so
+ * there is no argv to reconstruct — this re-checks exactly what submission
+ * checked: the program and subcommand, the flags the appliance refuses to
+ * forward, the single OS it supports, and that the command still names the one
+ * (agent, credential) cell the record asserts.
+ */
+function requireRunAllCommand(
+  job: JobRecord,
+  selection: CredentialSelection,
+): void {
+  const argv = job.command.argv;
+  if (argv[0] !== 'quorum' || argv[1] !== 'run-all') {
+    throw liveCommandFault(job, 'command is not a quorum run-all');
+  }
+  for (const flag of FORBIDDEN_RUN_ALL_FLAGS) {
+    if (optionOccurrences(argv, flag).length > 0) {
+      throw liveCommandFault(
+        job,
+        `command passes ${flag}, which the appliance never forwards to run-all`,
+      );
+    }
+  }
+  requireSelectedRunAllOption(job, '--coding-agents', selection.agent);
+  requireSelectedRunAllOption(job, '--credentials', selection.credential);
+  const osValues = optionOccurrences(argv, '--os');
+  if (
+    osValues.length > 1 ||
+    (osValues.length === 1 && osValues[0] !== 'linux')
+  ) {
+    throw liveCommandFault(job, 'command must request the linux OS or none');
+  }
+}
+
+/**
+ * The ONE Quorum command a live record authorizes, read off that record. Its
+ * `command.argv` is durable, mutable job state, and the live exec below is the
+ * only place the worker-only supervisor env file crosses into a process — so a
+ * record naming any other program, subcommand, or (agent, credential) cell is
+ * refused typed HERE, against its own kind and selection, before a runner
+ * call, a staged credential, or any output exists.
+ */
+function requireRecordQuorumCommand(job: JobRecord): readonly string[] {
+  if (job.kind !== 'run' && job.kind !== 'run-all') {
+    throw liveCommandFault(
+      job,
+      'is not a run or run-all job; it executes no live Quorum command',
+    );
+  }
+  const selection = job.credential_selection;
+  if (selection === null) {
+    throw liveCommandFault(
+      job,
+      'has no credential selection to validate its command against',
+    );
+  }
+  if (job.kind === 'run') {
+    requireRunCommand(job, selection);
+  } else {
+    requireRunAllCommand(job, selection);
+  }
+  return job.command.argv;
+}
+
 /**
  * The live Quorum exec: pinned to the immutable container the job preflighted
  * against, and the ONE place the worker-only supervisor env file crosses into
- * a process. A replacement container under the configured name can neither be
- * targeted here nor pass the wrapper's own identity check.
+ * a process. The command launched is the job's own validated Quorum command,
+ * never an argv handed in beside the record; a replacement container under the
+ * configured name can neither be targeted here nor pass the wrapper's own
+ * identity check.
  */
 export function liveCommandArgs(
   loaded: LoadedApplianceConfig,
-  jobId: string,
-  argv: readonly string[],
+  job: JobRecord,
   lease: ContainerLease,
   supervisorExecEnvFile: string,
 ): string[] {
+  const argv = requireRecordQuorumCommand(job);
   const runAllEnv =
-    argv[0] === 'quorum' && argv[1] === 'run-all'
+    job.kind === 'run-all'
       ? ['export QUORUM_RUN_ALL_SIGNAL_MODE=detached']
       : [];
   const script = [
@@ -762,7 +967,14 @@ export function liveCommandArgs(
   return scopedExecContainerArgs(
     loaded,
     lease,
-    ['bash', '-lc', script, 'appliance-live', containerPidPath(jobId), ...argv],
+    [
+      'bash',
+      '-lc',
+      script,
+      'appliance-live',
+      containerPidPath(job.job_id),
+      ...argv,
+    ],
     { execEnvFile: supervisorExecEnvFile },
   );
 }
@@ -935,6 +1147,10 @@ export async function runWorker(
 
   try {
     const job = readJob(loaded, jobId);
+    // The record's own Quorum command, validated before any lock, repo sync,
+    // container, or credential work: a rewritten command must never reach
+    // staging, let alone the supervisor env file the live exec attaches.
+    requireRecordQuorumCommand(job);
     runLock = acquireLock({
       loaded,
       name: 'run.lock',
@@ -978,8 +1194,7 @@ export async function runWorker(
     // The supervisor env file reaches exactly one process: this one.
     const args = liveCommandArgs(
       loaded,
-      jobId,
-      liveJob.command.argv,
+      liveJob,
       preflight.lease,
       preflight.supervisorExecEnvFile,
     );

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type {
   CommandOptions,
   CommandResult,
@@ -2529,6 +2529,23 @@ test('the full-bundle container path is gone from the module surface', () => {
   expect(exported).toContain('scopedExecContainerArgs');
 });
 
+// The named bindings a module imports from container.ts, which is the real
+// call-site surface: everything container.ts exports is reachable only by
+// naming it here (a namespace import would sidestep that, so it is refused
+// outright below).
+function containerImportNames(text: string): string[] {
+  const named = text.match(
+    /import\s*\{([\s\S]*?)\}\s*from\s*'\.\/container\.ts'/,
+  );
+  if (named?.[1] === undefined) {
+    return [];
+  }
+  return named[1]
+    .split(',')
+    .map((part) => part.replace(/^\s*type\s+/, '').trim())
+    .filter((part) => part !== '');
+}
+
 test('no source file can construct an arbitrary or Quorum exec without a lease', () => {
   const offenders: string[] = [];
   for (const file of sourceFiles(join(REPO, 'src'))) {
@@ -2544,10 +2561,46 @@ test('no source file can construct an arbitrary or Quorum exec without a lease',
   // The wrapper's `exec` subcommand is nameable in exactly one module: the
   // scoped exec builder and the closed recorded-lifecycle primitive both live
   // in container.ts, so every other appliance module must go through them.
+  // Matched in any quoting form, so switching quote style cannot smuggle a
+  // second construction site past this guard.
+  const execLiteral = /(['"`])exec\1/;
   const execNamers = sourceFiles(join(REPO, 'src/appliance'))
-    .filter((file) => readFileSync(file, 'utf8').includes("'exec'"))
+    .filter((file) => execLiteral.test(readFileSync(file, 'utf8')))
     .map((file) => file.slice(join(REPO, 'src/appliance/').length));
   expect(execNamers).toEqual(['container.ts']);
+
+  // The import surface is what actually bounds the call sites: assert exactly
+  // which modules can name the arbitrary-command exec builder, the fixed
+  // probe/interrupt seam, and the wrapper path itself.
+  const importsByModule = new Map<string, string[]>();
+  for (const file of sourceFiles(join(REPO, 'src/appliance'))) {
+    const module = basename(file);
+    if (module === 'container.ts') {
+      continue;
+    }
+    const text = readFileSync(file, 'utf8');
+    // A namespace import would make the named-binding scan meaningless.
+    expect(text).not.toMatch(
+      /import\s+\*\s+as\s+\w+\s+from\s+'\.\/container\.ts'/,
+    );
+    importsByModule.set(module, containerImportNames(text));
+  }
+  const importersOf = (symbol: string): string[] =>
+    [...importsByModule.entries()]
+      .filter(([, names]) => names.includes(symbol))
+      .map(([module]) => module)
+      .sort();
+
+  expect(importersOf('scopedExecContainerArgs')).toEqual(['process.ts']);
+  expect(importersOf('runInLeasedContainer')).toEqual(['preflight.ts']);
+  expect(importersOf('runRecordedContainerLifecycle')).toEqual(['process.ts']);
+  expect(importersOf('reconcileScopedContainer')).toEqual(['preflight.ts']);
+  // The wrapper path is only ever the command of a scoped exec (process.ts) or
+  // of a name-only status probe (doctor.ts).
+  expect(importersOf('evalsContainerPath')).toEqual([
+    'doctor.ts',
+    'process.ts',
+  ]);
 
   // The temporary cutover module is deleted, not merely unimported.
   expect(existsSync(join(REPO, 'src/appliance/scoped-cutover.ts'))).toBe(false);

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
 import { atomicWriteJson } from './fs.ts';
+import { readJob } from './jobs.ts';
 import {
   type JobRecord,
   type LoadedApplianceStateConfig,
@@ -66,10 +67,12 @@ function requireCommitted<T>(value: T | null, jobId: string, what: string): T {
 
 /**
  * Write the live provenance record for a job that has already committed its
- * evidence. Identity comes from the reread job — refs, bundle, container
- * evidence, and the authoritative credential scope — so this file can never
- * disagree with the record it describes, and a failed write can be retried
- * from the job alone.
+ * evidence. The caller names the job; this reads the record for itself, so
+ * every durable field — refs, bundle, container evidence, the authoritative
+ * credential scope, the requester, the argv — comes off disk at write time.
+ * A caller cannot hand in a stale copy or a fabricated one, this file can
+ * never disagree with the record it describes, and a failed write can be
+ * retried from the job alone.
  *
  * Read-only code-mount evidence is provenance-only: it is a property of how
  * the appliance mounts code, not of the job, so it is stated here rather than
@@ -77,9 +80,10 @@ function requireCommitted<T>(value: T | null, jobId: string, what: string): T {
  */
 export function writeProvenance(
   loaded: LoadedApplianceStateConfig,
-  job: JobRecord,
+  jobId: string,
   toolVersions: ProvenanceToolVersions,
 ): string {
+  const job = readJob(loaded, jobId);
   const path = provenancePath(loaded, job.job_id);
   const container = requireCommitted(
     job.container,

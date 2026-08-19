@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -24,9 +25,15 @@ import {
   liveCommandArgs,
   runWorker,
 } from '../src/appliance/process.ts';
-import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import type {
+  JobRecord,
+  LoadedApplianceConfig,
+} from '../src/appliance/types.ts';
+import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
 import {
   FIXTURE_LIVE_SCOPE,
+  FIXTURE_LIVE_SELECTION,
+  importJobRequest,
   liveJobRequest,
 } from './appliance-job-fixtures.ts';
 
@@ -89,6 +96,13 @@ class FakeRunner implements CommandRunner {
     return this.calls.filter((call) =>
       call.args.join(' ').includes('kill -INT'),
     ).length;
+  }
+
+  // Liveness probes: the ONLY way a job asks whether its recorded in-container
+  // process group is still alive.
+  probeCalls(): number {
+    return this.calls.filter((call) => call.args.join(' ').includes('kill -0'))
+      .length;
   }
 }
 
@@ -178,6 +192,28 @@ function markRunning(
 // was preflighted against and carries the worker-only supervisor env file.
 const SUPERVISOR_FILE = '/srv/quorum/state/credentials-scoped/active/x.env';
 
+// The exact commands the CLI generates for the fixture cell
+// (codex x codex_sub). The live exec seam takes the job RECORD, so the command
+// it launches is always re-derived against that record's own kind and
+// selection rather than trusted because an argv was handed in.
+const LEGAL_RUN_ARGV: readonly string[] = [
+  'quorum',
+  'run',
+  'scenarios/writing-plans',
+  '--coding-agent',
+  'codex',
+  '--credential',
+  'codex_sub',
+];
+const LEGAL_RUN_ALL_ARGV: readonly string[] = [
+  'quorum',
+  'run-all',
+  '--coding-agents',
+  'codex',
+  '--credentials',
+  'codex_sub',
+];
+
 function liveLease(overrides: Partial<ContainerLease> = {}): ContainerLease {
   return {
     name: 'quorum-appliance',
@@ -189,15 +225,38 @@ function liveLease(overrides: Partial<ContainerLease> = {}): ContainerLease {
   };
 }
 
+// A persisted live job carrying a real record, so the command seam reads the
+// same authority production does.
+function liveRecord(
+  cfg: LoadedApplianceConfig,
+  kind: 'run' | 'run-all',
+  argv: readonly string[],
+  options: Parameters<typeof liveJobRequest>[1] = {},
+): JobRecord {
+  return createJob(cfg, liveJobRequest(kind, { argv, ...options }));
+}
+
+// Rewrites only the durable command, the way a tampered or hand-edited record
+// would.
+function tamperCommand(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  argv: readonly string[],
+): JobRecord {
+  return updateJob(cfg, jobId, (current) => ({
+    ...current,
+    command: { ...current.command, argv: [...argv] },
+  }));
+}
+
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
   const cfg = loaded();
-  const args = liveCommandArgs(
-    cfg,
-    'job-1',
-    ['quorum', 'run-all', '--tier', 'sentinel'],
-    liveLease(),
-    SUPERVISOR_FILE,
-  );
+  const job = liveRecord(cfg, 'run-all', [
+    ...LEGAL_RUN_ALL_ARGV,
+    '--tier',
+    'sentinel',
+  ]);
+  const args = liveCommandArgs(cfg, job, liveLease(), SUPERVISOR_FILE);
   expect(args.slice(0, 6)).toEqual([
     '--name',
     'quorum-appliance',
@@ -209,8 +268,10 @@ test('liveCommandArgs launches quorum in a signalable in-container process group
   expect(args[6]).toBe('exec');
   expect(args).toContain('bash');
   expect(args.join(' ')).toContain('setsid');
-  expect(args.join(' ')).toContain('appliance-pids/job-1.pid');
-  expect(args.join(' ')).toContain('quorum run-all --tier sentinel');
+  expect(args.join(' ')).toContain(`appliance-pids/${job.job_id}.pid`);
+  expect(args.join(' ')).toContain(
+    'quorum run-all --coding-agents codex --credentials codex_sub --tier sentinel',
+  );
   // Never the wrapper's full-bundle argument path.
   expect(args).not.toContain('--env-file');
   expect(args).not.toContain('--auth');
@@ -218,12 +279,12 @@ test('liveCommandArgs launches quorum in a signalable in-container process group
 
 test('liveCommandArgs refuses a lease that does not name the configured container', () => {
   const cfg = loaded();
+  const job = liveRecord(cfg, 'run', LEGAL_RUN_ARGV);
   let caught: unknown = null;
   try {
     liveCommandArgs(
       cfg,
-      'job-1',
-      ['quorum', 'run'],
+      job,
       liveLease({ name: 'someone-elses-container' }),
       SUPERVISOR_FILE,
     );
@@ -232,6 +293,278 @@ test('liveCommandArgs refuses a lease that does not name the configured containe
   }
   expect(caught).toBeInstanceOf(ApplianceError);
   expect((caught as ApplianceError).step).toBe('container');
+});
+
+// --- the live command is the job's OWN Quorum command (F13 Task 5) ----------
+// command.argv is durable, mutable job state, and this exec is the single
+// place the worker-only supervisor env file crosses into a process. A record
+// naming any other program, subcommand, or (agent, credential) cell must be
+// refused typed at that attachment point, never launched with the selected
+// credential's environment attached.
+
+test('liveCommandArgs refuses every command that is not this record kind Quorum command', () => {
+  const cfg = loaded();
+  const refused: readonly {
+    readonly what: string;
+    readonly kind: 'run' | 'run-all';
+    readonly argv: readonly string[];
+  }[] = [
+    { what: 'a bare environment dump', kind: 'run', argv: ['env'] },
+    { what: 'an empty command', kind: 'run', argv: [] },
+    {
+      what: 'a shell reading the projected credential file',
+      kind: 'run',
+      argv: ['bash', '-lc', 'cat /run/evals/credentials.env'],
+    },
+    { what: 'quorum with no subcommand', kind: 'run', argv: ['quorum'] },
+    {
+      what: 'quorum run with no scenario',
+      kind: 'run',
+      argv: ['quorum', 'run'],
+    },
+    {
+      what: 'quorum run whose scenario slot is an option',
+      kind: 'run',
+      argv: ['quorum', 'run', '--coding-agent', 'codex'],
+    },
+    {
+      // Submission normalizes every scenario to a path under the trusted
+      // scenarios root; an absolute one never came from that normalizer.
+      what: 'quorum run naming an absolute path',
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        '/etc',
+        '--coding-agent',
+        'codex',
+        '--credential',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run escaping the scenarios root',
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/../../etc',
+        '--coding-agent',
+        'codex',
+        '--credential',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run omitting the selected credential',
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'codex',
+      ],
+    },
+    {
+      what: 'quorum run naming another agent',
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'claude',
+        '--credential',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run naming another credential',
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'codex',
+        '--credential',
+        'opus',
+      ],
+    },
+    {
+      what: 'quorum run with a trailing extra argument',
+      kind: 'run',
+      argv: [...LEGAL_RUN_ARGV, '--out-root', '/tmp/elsewhere'],
+    },
+    {
+      what: 'a run record carrying the run-all command',
+      kind: 'run',
+      argv: LEGAL_RUN_ALL_ARGV,
+    },
+    {
+      what: 'a run-all record carrying the run command',
+      kind: 'run-all',
+      argv: LEGAL_RUN_ARGV,
+    },
+    {
+      what: 'quorum run-all with no selected agent',
+      kind: 'run-all',
+      argv: ['quorum', 'run-all'],
+    },
+    {
+      what: 'quorum run-all naming another agent',
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents',
+        'claude',
+        '--credentials',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run-all widening to two agents',
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents',
+        'codex,claude',
+        '--credentials',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run-all repeating the agent option',
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents',
+        'codex',
+        '--coding-agents',
+        'claude',
+        '--credentials',
+        'codex_sub',
+      ],
+    },
+    {
+      what: 'quorum run-all omitting the selected credential',
+      kind: 'run-all',
+      argv: ['quorum', 'run-all', '--coding-agents', 'codex'],
+    },
+    {
+      what: 'quorum run-all naming another credential',
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents',
+        'codex',
+        '--credentials',
+        'opus',
+      ],
+    },
+    {
+      // The appliance forbids these on run-all: they would relocate the
+      // trusted roots or swap the blessed registry out from under the job.
+      what: 'quorum run-all relocating a trusted root',
+      kind: 'run-all',
+      argv: [...LEGAL_RUN_ALL_ARGV, '--out-root', '/tmp/elsewhere'],
+    },
+    {
+      what: 'quorum run-all smuggling the singular run credential flag',
+      kind: 'run-all',
+      argv: [...LEGAL_RUN_ALL_ARGV, '--credential', 'opus'],
+    },
+  ];
+
+  for (const entry of refused) {
+    const job = tamperCommand(
+      cfg,
+      liveRecord(cfg, entry.kind, ['quorum', entry.kind]).job_id,
+      entry.argv,
+    );
+    let caught: unknown = null;
+    try {
+      liveCommandArgs(cfg, job, liveLease(), SUPERVISOR_FILE);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect((caught as ApplianceError).step).toBe('live-command');
+  }
+});
+
+test('liveCommandArgs preserves the legitimate arguments of an unmodified command', () => {
+  const cfg = loaded();
+  const accepted: readonly {
+    readonly kind: 'run' | 'run-all';
+    readonly argv: readonly string[];
+    readonly options?: Parameters<typeof liveJobRequest>[1];
+  }[] = [
+    { kind: 'run', argv: LEGAL_RUN_ARGV },
+    {
+      // An omitted --credential is the agent default, preserved verbatim.
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'codex',
+      ],
+      options: { selection: { agent: 'codex', credential: null } },
+    },
+    {
+      // Scenario paths nest, so the trusted-root rule is a prefix rule, not a
+      // single-segment one.
+      kind: 'run',
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/family/writing-plans-elicited',
+        '--coding-agent',
+        'codex',
+        '--credential',
+        'codex_sub',
+      ],
+    },
+    {
+      kind: 'run-all',
+      argv: [...LEGAL_RUN_ALL_ARGV, '--jobs', '2', '--tier', 'sentinel'],
+    },
+    {
+      // The equals form the submission parser also accepts.
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--coding-agents=codex',
+        '--credentials=codex_sub',
+      ],
+    },
+    {
+      // An omitted --credentials is the agent default here too.
+      kind: 'run-all',
+      argv: ['quorum', 'run-all', '--coding-agents', 'codex', '--os', 'linux'],
+      options: { selection: { agent: 'codex', credential: null } },
+    },
+  ];
+
+  for (const entry of accepted) {
+    const job = liveRecord(cfg, entry.kind, entry.argv, entry.options ?? {});
+    const args = liveCommandArgs(cfg, job, liveLease(), SUPERVISOR_FILE);
+    for (const token of entry.argv) {
+      expect(args).toContain(token);
+    }
+    expect(
+      args.slice(args.indexOf('exec') + 1).slice(-entry.argv.length),
+    ).toEqual([...entry.argv]);
+  }
 });
 
 test('launchLiveCommand delegates to the injected runner', async () => {
@@ -345,15 +678,13 @@ test('liveCommandArgs exports detached signal mode for appliance run-all', () =>
   const cfg = loaded();
   const runAllArgs = liveCommandArgs(
     cfg,
-    'job-run-all',
-    ['quorum', 'run-all', '--tier', 'sentinel'],
+    liveRecord(cfg, 'run-all', [...LEGAL_RUN_ALL_ARGV, '--tier', 'sentinel']),
     liveLease(),
     SUPERVISOR_FILE,
   );
   const singleRunArgs = liveCommandArgs(
     cfg,
-    'job-run',
-    ['quorum', 'run', 'scenario-a', '--coding-agent', 'claude'],
+    liveRecord(cfg, 'run', LEGAL_RUN_ARGV),
     liveLease(),
     SUPERVISOR_FILE,
   );
@@ -536,12 +867,12 @@ class WorkerRunner implements CommandRunner {
   }
 }
 
-test('runWorker hands the supervisor env file to the live Quorum exec only', async () => {
-  const cfg = loaded();
-  seedLiveAppliance(cfg);
-  const activeDir = join(cfg.config.root, 'state/credentials-scoped/active');
-  const runner = new WorkerRunner(activeDir);
-  const job = createJob(
+// A submitted live job for the fixture cell (gemini x gemini_oauth_fx),
+// exactly as the CLI persists one: the argv names the selected credential
+// because the selection names it, and an explicit selection is never carried
+// beside a command that omits it.
+function seededLiveJob(cfg: LoadedApplianceConfig) {
+  return createJob(
     cfg,
     liveJobRequest('run', {
       argv: [
@@ -550,12 +881,22 @@ test('runWorker hands the supervisor env file to the live Quorum exec only', asy
         'scenarios/writing-plans',
         '--coding-agent',
         'gemini',
+        '--credential',
+        CORPUS_CREDENTIAL,
       ],
       selection: { agent: 'gemini', credential: CORPUS_CREDENTIAL },
       scope: CORPUS_SCOPE,
       sourceEvalsSha: RESOLVED_SHA,
     }),
   );
+}
+
+test('runWorker hands the supervisor env file to the live Quorum exec only', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const activeDir = join(cfg.config.root, 'state/credentials-scoped/active');
+  const runner = new WorkerRunner(activeDir);
+  const job = seededLiveJob(cfg);
   // The in-container process group the live command reports.
   mkdirSync(join(cfg.config.container.results_root, '.appliance-pids'), {
     recursive: true,
@@ -612,6 +953,63 @@ test('runWorker hands the supervisor env file to the live Quorum exec only', asy
   expect(JSON.parse(provenance).credential_scope).toEqual(CORPUS_SCOPE);
 });
 
+// The same command boundary, reached the way an operator does: through the
+// whole worker. A record whose durable command was rewritten after submission
+// must be refused before the worker touches git, Docker, or the blessed
+// bundle — so no credential is ever staged, mounted, or attached for it.
+
+test('runWorker refuses a tampered command before any runner call or credential staging', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  const job = seededLiveJob(cfg);
+  tamperCommand(cfg, job.job_id, ['env']);
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'live-command',
+  });
+
+  expect(runner.calls).toEqual([]);
+  expect(existsSync(join(cfg.config.root, 'state/credentials-scoped'))).toBe(
+    false,
+  );
+  const record = readJob(cfg, job.job_id);
+  expect(record.status).toBe('failed');
+  expect(record.error?.step).toBe('live-command');
+  expect(record.container).toBe(null);
+});
+
+test('runWorker refuses a kind/argv mismatch before any runner call', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const runner = new WorkerRunner(
+    join(cfg.config.root, 'state/credentials-scoped/active'),
+  );
+  const job = seededLiveJob(cfg);
+  tamperCommand(cfg, job.job_id, [
+    'quorum',
+    'run-all',
+    '--coding-agents',
+    'gemini',
+    '--credentials',
+    CORPUS_CREDENTIAL,
+  ]);
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'live-command',
+  });
+
+  expect(runner.calls).toEqual([]);
+  expect(existsSync(join(cfg.config.root, 'state/credentials-scoped'))).toBe(
+    false,
+  );
+  expect(readJob(cfg, job.job_id).status).toBe('failed');
+});
+
 test('cancel sends one fixed SIGINT to the recorded container id only', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
@@ -666,17 +1064,45 @@ test('cancel of a job with no recorded container identity emits no signal', asyn
   expect(readJob(cfg, job.job_id).status).toBe('lost');
 });
 
+// Edits job.json directly, which is the only way to model a record the
+// appliance itself could not have written: updateJob refuses any patch that
+// moves the credential triple.
+function rewriteRawRecord(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  edit: (record: Record<string, unknown>) => void,
+): void {
+  const path = join(cfg.paths.jobs, jobId, 'job.json');
+  const record = JSON.parse(readFileSync(path, 'utf8'));
+  edit(record);
+  writeFileSync(path, JSON.stringify(record, null, 2));
+}
+
+// Removes fields from the raw record so they are ABSENT on disk — the shape a
+// record written before those fields existed has, which the read defaults then
+// fill in as null. Partial removal models a partially tampered record.
+function stripRecordFields(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+  fields: readonly string[],
+): void {
+  rewriteRawRecord(cfg, jobId, (record) => {
+    for (const field of fields) {
+      delete record[field];
+    }
+  });
+}
+
 // A record written before the credential triple existed: the fields are
 // absent on disk, so the read defaults make the scope null. It cannot execute,
 // but safe cancellation still reaches Task 2's fixed recorded-container seam
 // without anyone fabricating a runnable lease for it.
 function demoteToLegacyRecord(cfg: LoadedApplianceConfig, jobId: string): void {
-  const path = join(cfg.paths.jobs, jobId, 'job.json');
-  const record = JSON.parse(readFileSync(path, 'utf8'));
-  delete record.credential_selection;
-  delete record.credential_scope;
-  delete record.credential_scope_source_evals_sha;
-  writeFileSync(path, JSON.stringify(record, null, 2));
+  stripRecordFields(cfg, jobId, [
+    'credential_selection',
+    'credential_scope',
+    'credential_scope_source_evals_sha',
+  ]);
 }
 
 test('cancel of a legacy null-scope record still reaches the recorded-container seam', async () => {
@@ -715,7 +1141,106 @@ test('cancel of a scoped job with tampered container evidence emits no signal', 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
 
   expect(runner.interruptCalls()).toBe(0);
+  expect(runner.probeCalls()).toBe(0);
   expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+// --- which records may prove a recorded identity (F13 Task 5) ---------------
+// Liveness and cancellation both reach the fixed recorded-container seam only
+// through an identity the record can PROVE. A scoped record proves one by
+// rebuilding its immutable lease. The single raw-evidence exception is a
+// genuine legacy live record: kind run or run-all whose whole credential
+// triple is absent on disk, because it predates scoped delivery entirely.
+// Every other shape — asserted-empty, partially stripped, or a kind that never
+// executed live — yields no identity, so no docker call is made at all.
+
+interface LifecycleCase {
+  readonly what: string;
+  readonly create: (cfg: LoadedApplianceConfig) => JobRecord;
+  readonly demote: (cfg: LoadedApplianceConfig, jobId: string) => void;
+  readonly reachesSeam: boolean;
+}
+
+const LIFECYCLE_CASES: readonly LifecycleCase[] = [
+  {
+    what: 'a genuine legacy run record',
+    create: (cfg) => createJob(cfg, liveJobRequest('run')),
+    demote: demoteToLegacyRecord,
+    reachesSeam: true,
+  },
+  {
+    what: 'a genuine legacy run-all record',
+    create: (cfg) => createJob(cfg, liveJobRequest('run-all')),
+    demote: demoteToLegacyRecord,
+    reachesSeam: true,
+  },
+  {
+    what: 'a record that kept its credential selection',
+    create: (cfg) => createJob(cfg, liveJobRequest('run-all')),
+    demote: (cfg, jobId) => {
+      stripRecordFields(cfg, jobId, [
+        'credential_scope',
+        'credential_scope_source_evals_sha',
+      ]);
+      expect(readJob(cfg, jobId).credential_selection).toEqual(
+        FIXTURE_LIVE_SELECTION,
+      );
+    },
+    reachesSeam: false,
+  },
+  {
+    what: 'a record that kept its source evals SHA',
+    create: (cfg) => createJob(cfg, liveJobRequest('run-all')),
+    demote: (cfg, jobId) => {
+      stripRecordFields(cfg, jobId, [
+        'credential_selection',
+        'credential_scope',
+      ]);
+      expect(readJob(cfg, jobId).credential_scope_source_evals_sha).not.toBe(
+        null,
+      );
+    },
+    reachesSeam: false,
+  },
+  {
+    what: 'a record asserting an empty scope',
+    create: (cfg) => createJob(cfg, liveJobRequest('run-all')),
+    demote: (cfg, jobId) =>
+      rewriteRawRecord(cfg, jobId, (record) => {
+        record['credential_selection'] = null;
+        record['credential_scope'] = EMPTY_CREDENTIAL_SCOPE;
+        record['credential_scope_source_evals_sha'] = null;
+      }),
+    reachesSeam: false,
+  },
+  {
+    what: 'an imported record, which never executed live',
+    create: (cfg) => createJob(cfg, importJobRequest()),
+    demote: () => {},
+    reachesSeam: false,
+  },
+];
+
+test('only a genuine legacy live record reads its recorded identity raw', async () => {
+  for (const entry of LIFECYCLE_CASES) {
+    const cfg = loaded();
+    const runner = new FakeRunner();
+    const job = entry.create(cfg);
+    markRunning(cfg, job.job_id);
+    entry.demote(cfg, job.job_id);
+
+    await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+    // Cancellation: one fixed SIGINT through the seam, or none at all.
+    expect(runner.interruptCalls()).toBe(entry.reachesSeam ? 1 : 0);
+    // Liveness rides the same identity gate: a record that cannot prove one
+    // is never probed either, and therefore reports lost.
+    expect(runner.probeCalls()).toBe(entry.reachesSeam ? 1 : 0);
+    for (const call of runner.calls) {
+      expect(call.command).toBe('docker');
+    }
+    expect(readJob(cfg, job.job_id).status).toBe('lost');
+  }
 });
 
 test('cancel records cancelled for a stopped single-run verdict discovered after SIGINT', async () => {
