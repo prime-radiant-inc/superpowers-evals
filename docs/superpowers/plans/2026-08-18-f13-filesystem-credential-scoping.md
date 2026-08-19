@@ -52,7 +52,7 @@ scoped compatibility behavior while reviewing the plan.
 ## Verified Process Facts
 
 1. scripts/evals-container currently mounts the complete credentials.env and every discovered OAuth directory; read-only is still readable by the agent UID.
-2. container/bin/quorum sources the mounted env file into every quorum subcommand and conditionally sets OAuth home variables. The current base image does not bake those variables, but the shim would preserve any inherited or injected OAuth-home value unless it explicitly unsets absent mounts; hostile-env tests must exercise that defense-in-depth boundary.
+2. container/bin/quorum sources the mounted env file into every quorum subcommand and conditionally sets OAuth home variables. The Dockerfile documents that its base image supplies AGY_OAUTH_HOME and KIMI_OAUTH_HOME; regardless of the current base-image bytes, the shim preserves any inherited or injected OAuth-home value unless it explicitly unsets absent mounts. Hostile-env tests must exercise that load-bearing boundary.
 3. reconcileContainer currently downs and ups unconditionally. containerMountSignature is descriptive evidence, not a reconcile comparator.
 4. credentialScopeForAgents currently returns a union and loses adapter/file identity. Gemini and Antigravity share the gemini bundle directory but consume disjoint files; Pi auth.json can carry multiple provider tokens.
 5. A mixed run-all uses one container for the whole batch. A union therefore cannot satisfy the spec's per-agent isolation requirement.
@@ -235,10 +235,17 @@ Append the receipt to task-1-report.md and obtain a scoped Sol review before Tas
 **Files:**
 - Create: src/credentials/grader.ts
 - Create: src/appliance/credential-scope.ts
+- Create: src/appliance/scoped-cutover.ts
+- Modify: src/appliance/config.ts
+- Modify: src/appliance/cli.ts
+- Modify: src/appliance/process.ts
 - Modify: src/appliance/safe-fs.ts
 - Modify: src/runner/gauntlet-env.ts
 - Modify: src/agents/copilot.ts
 - Test: test/appliance-credential-scope.test.ts
+- Test: test/appliance-contracts.test.ts
+- Test: test/appliance-cli.test.ts
+- Test: test/appliance-process.test.ts
 - Test: test/appliance-safe-fs.test.ts
 - Test: test/gauntlet-env.test.ts
 - Test: test/agent-copilot.test.ts
@@ -284,19 +291,49 @@ export interface ProjectedAuthMount {
   readonly path: string;
 }
 
-export interface StagedCredentialMaterial {
+export interface EmptyStagedCredentialMaterial {
+  readonly kind: 'empty';
+  readonly credentialScope: EmptyCredentialScope;
   readonly stageDir: string;
   readonly agentEnvFile: string;
-  readonly supervisorExecEnvFile: string | null;
+  readonly supervisorExecEnvFile: null;
+  readonly authMounts: readonly [];
+}
+
+export interface LiveStagedCredentialMaterial {
+  readonly kind: 'live';
+  readonly credentialScope: LiveCredentialScope;
+  readonly stageDir: string;
+  readonly agentEnvFile: string;
+  readonly supervisorExecEnvFile: string;
   readonly authMounts: readonly ProjectedAuthMount[];
 }
 
-export interface ActiveCredentialMaterial {
+export type StagedCredentialMaterial =
+  | EmptyStagedCredentialMaterial
+  | LiveStagedCredentialMaterial;
+
+export interface EmptyActiveCredentialMaterial {
+  readonly kind: 'empty';
+  readonly credentialScope: EmptyCredentialScope;
   readonly root: string;
   readonly agentEnvFile: string;
-  readonly supervisorExecEnvFile: string | null;
+  readonly supervisorExecEnvFile: null;
+  readonly authMounts: readonly [];
+}
+
+export interface LiveActiveCredentialMaterial {
+  readonly kind: 'live';
+  readonly credentialScope: LiveCredentialScope;
+  readonly root: string;
+  readonly agentEnvFile: string;
+  readonly supervisorExecEnvFile: string;
   readonly authMounts: readonly ProjectedAuthMount[];
 }
+
+export type ActiveCredentialMaterial =
+  | EmptyActiveCredentialMaterial
+  | LiveActiveCredentialMaterial;
 
 export function stageProbeCredentialMaterial(
   loaded: LoadedApplianceConfig,
@@ -329,7 +366,7 @@ export function assertScopedCredentialStateBoundary(
 ): void;
 
 export function assertCredentialBundleBoundary(
-  loaded: LoadedApplianceConfig,
+  config: ApplianceConfig,
 ): void;
 ~~~
 
@@ -361,6 +398,13 @@ error. Staging and staging cleanup never mutate `active` or the recovery slot.
 it resolves an interrupted swap before the new activation, never guesses
 between two complete generations, and fails closed on an ambiguous shape.
 
+`loadConfig` first parses only the structural appliance config, calls
+`assertCredentialBundleBoundary(config)`, validates `metadata.json` itself as
+a no-follow regular file, and only then reads bundle metadata. Neither
+`credentials.env` nor any OAuth payload is touched by config loading or probe
+staging. Real-loader tests redirect the bundle root and metadata through final
+and intermediate symlinks and prove typed refusal before payload access.
+
 Exact OAuth projections:
 
 | Kind | Blessed source | Active source and container destination |
@@ -389,6 +433,17 @@ Supervisor behavior:
   differ. Do not include base URLs, proxies, TLS paths, or routing values in
   this secret-equality comparison.
 - Never emit QUORUM_GRADER_* aliases into agent.env.
+
+The projector computes an internal, non-exported `agentSecretValues` list only
+for this comparison and discards it before returning staged material. It
+contains selected agent-env values, the Antigravity raw token, every nonempty
+string leaf from the exact credential-bearing Codex auth JSON, Gemini OAuth
+JSON files, Kimi credentials JSON, and selected Pi provider entry, plus the
+trimmed optional Kimi OAuth token payload. Non-credential Kimi config fields
+are excluded. These values are never logged, hashed, serialized, included in
+errors, or stored on the material interfaces. Synthetic equal/different tests
+cover every delivery class, including a nested JSON token equal to a
+differently named grader alias.
 
 Runner behavior:
 
@@ -424,11 +479,13 @@ expect(JSON.parse(readFileSync(piAuthPath, 'utf8'))).toEqual({
 Cover each projection, ordered Copilot aliases, separate grader aliases,
 the exact appliance mode marker, the unchanged local canonical mode, refusal
 of unknown/empty explicit modes, and absence of canonical fallback in scoped
-mode. Also cover
+mode. Pin that a partial nonempty alias set omits absent aliases and maps the
+present ones, while zero nonempty auth aliases fails. Also cover
 all-pairs distinct-value enforcement (including differently named agent and
 grader auth channels), hostile unrelated provider/AWS names, missing values,
 contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi
-JSON, traversal, permissions, rotation, fixed-stage cleanup after a partial
+JSON, traversal, permissions, rotation, nested file-token equality against
+each grader auth alias, fixed-stage cleanup after a partial
 write and on the next invocation, and forced first/second rename failures. Add a parent-env test containing distinct agent
 ANTHROPIC_API_KEY and QUORUM_GRADER_ANTHROPIC_API_KEY values: the ordinary
 agent adapter input remains the agent value, gauntletEnvBase returns the grader
@@ -440,13 +497,27 @@ recover deterministically before a new stage is activated.
 
 Add hostile topology fixtures for final and intermediate symlinks plus every
 ancestor/descendant overlap. Probe fixtures prove an invalid or unreadable
-blessed bundle is not touched; live fixtures prove the same bundle fault is
-typed before shell evaluation or file creation.
+blessed bundle cannot touch credential payloads; the validated metadata read is
+the only prepare-time bundle access. Live fixtures prove the same bundle fault
+is typed before shell evaluation or file creation.
+
+Add a temporary appliance cutover guard in `scoped-cutover.ts`. From Task 2
+through Task 4, production program actions for prepare/run/run-all and detached
+worker resume fail with a typed "scoped credential cutover incomplete" error
+before job creation, bundle payload access, or Docker. Parser/fake-action tests,
+status/show/costs, and identity-verified safe cancellation remain available.
+Task 5 deletes the guard and its imports in the same commit as the complete
+caller cutover; the intermediate freeze is therefore executable, not prose.
+Temporarily affected production-action tests assert this refusal in Tasks 2-4;
+Task 5 replaces those expectations with the scoped end-state behavior in the
+same commit that removes the guard.
 
 - [ ] **Step 2: Run RED**
 
 Run: bun test test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
+  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
+  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 
 Expected: modules and shared constants are missing.
@@ -459,7 +530,9 @@ Use no-follow helpers and writePrivateText. Project source files through regular
 
 ~~~bash
 bun test test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
+  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
+  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 bun test test/appliance-*.test.ts
 bun run check
@@ -471,8 +544,12 @@ bun run quorum check
 ~~~bash
 git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
   src/agents/copilot.ts src/appliance/credential-scope.ts \
+  src/appliance/scoped-cutover.ts src/appliance/config.ts \
+  src/appliance/cli.ts src/appliance/process.ts \
   src/appliance/safe-fs.ts test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/gauntlet-env.test.ts \
+  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
+  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 git commit -m "feat: project exact agent and supervisor credentials (F13)"
 ~~~
@@ -494,11 +571,6 @@ git commit -m "feat: project exact agent and supervisor credentials (F13)"
 **Interfaces:**
 
 ~~~typescript
-export interface ScopedContainerMounts {
-  readonly credentialScope: CredentialScope;
-  readonly material: StagedCredentialMaterial;
-}
-
 export interface ContainerLease {
   readonly name: string;
   readonly id: string;
@@ -515,7 +587,7 @@ export function scopedUpContainerArgs(
 export function reconcileScopedContainer(
   loaded: LoadedApplianceConfig,
   runner: CommandRunner,
-  scoped: ScopedContainerMounts,
+  staged: StagedCredentialMaterial,
 ): ContainerLease;
 
 export function scopedExecContainerArgs(
@@ -539,13 +611,19 @@ export function requireDockerExecEnvFile(
 ): void;
 ~~~
 
+The material discriminant is the sole scope authority at this boundary: empty
+material cannot carry a supervisor file or mounts, live material must carry its
+non-null supervisor file, and callers cannot pair scope A with material B.
+`reconcileScopedContainer` derives both active material and the lease scope
+from that one value. Mismatch/tamper tests fail before down or activation.
+
 reconcileScopedContainer always:
 
 1. inspects the existing configured container;
 2. downs it when present;
 3. recovers any interrupted prior activation, then activates the staged generation;
 4. ups with active agent.env, --no-default-auth, and only exact projected auth directories;
-5. captures a non-null container ID and mount signature;
+5. captures the non-null container ID from the scoped `docker run` stdout, runs the scoped results-mount probe and mount-signature inspection against that exact ID, and never blesses a later name lookup as the lease identity;
 6. returns a lease containing the asserted scope.
 
 The wrapper adds --no-default-auth, --exec-env-file, and --expected-container-id:
@@ -556,7 +634,8 @@ The wrapper adds --no-default-auth, --exec-env-file, and --expected-container-id
 - exec args do not call baseContainerArgs and do not rediscover bundle paths. They contain only configured name, expected immutable ID, optional exec env file, exec, and the command.
 - Before exec, the wrapper requires the configured name to resolve to the expected ID, then targets that immutable ID.
 - --exec-env-file is valid only for exec, validated no-follow as an absolute readable regular file, and emitted after docker exec and before the immutable ID.
-- After `up`, the wrapper resolves the configured name once and runs its internal results-mount probe against that immutable ID, never against the mutable name. The returned lease carries the same ID.
+- In scoped mode, `up` returns the ID from `docker run` itself and runs its internal results-mount probe against that immutable ID, never against the mutable name. Legacy direct-wrapper behavior and its exec-time probe remain unchanged.
+- If `docker run` succeeds but the results probe, identity/signature validation, or lease construction fails, rollback targets the captured ID directly. The original typed failure is retained and any cleanup failure is appended without values; a replacement under the configured name is never stopped.
 
 container/bin/quorum first unsets CODEX_AUTH_HOME, GEMINI_OAUTH_HOME, AGY_OAUTH_HOME, KIMI_OAUTH_HOME, and PI_OAUTH_HOME, then exports only variables whose projected mount exists. Extract only the auth-root selection into a sourceable shell helper if necessary for behavior testing; do not assert large rendered script strings.
 
@@ -570,13 +649,13 @@ the single caller cutover and deletes the old TypeScript full-bundle
 `baseContainerArgs` / `upContainerArgs` / `execContainerArgs` /
 `reconcileContainer` / `runInContainer` path in the same commit. No appliance
 live job or manual Docker gate may run after Task 3 or Task 4 until Task 5's
-atomic cutover lands. Task 4 may persist scope/provenance while the old
+atomic cutover lands. Task 4 may persist scope fields and the provenance schema while the old
 full-bundle execution path still exists, so its intermediate commit is also
 non-executable.
 
 - [ ] **Step 1: Write RED argument, wrapper, shim, and capability tests**
 
-Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; configured-name replacement fails before child execution; the internal results-mount probe targets the resolved immutable ID; and absent projected mounts remove hostile inherited/injected OAuth vars.
+Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; scope/material mismatches fail before mutation; configured-name replacement fails before child execution; scoped `up` captures `docker run` stdout as the lease ID and runs the results-mount probe against it; malformed/null post-up inspection downs only that captured ID; and absent projected mounts remove hostile inherited/injected OAuth vars.
 
 Add hostile topology fixtures showing that symlinked/intermediate-symlink paths or credential state/bundle beneath code/results mounts fail with zero Docker calls.
 
@@ -631,13 +710,11 @@ git commit -m "feat: bind scoped containers to immutable leases (F13)"
 - Modify: src/appliance/git.ts
 - Modify: src/appliance/import.ts
 - Modify: src/appliance/preflight.ts
-- Modify: src/appliance/provenance.ts
 - Test: test/appliance-contracts.test.ts
 - Test: test/appliance-cli.test.ts
 - Test: test/appliance-jobs.test.ts
 - Test: test/appliance-import.test.ts
 - Test: test/appliance-preflight.test.ts
-- Create: test/appliance-provenance.test.ts
 
 **Interfaces:**
 
@@ -661,6 +738,13 @@ export interface CreateJobRequest {
     readonly thread?: string | null;
     readonly task?: string | null;
   };
+}
+
+export interface JobContainerEvidence {
+  readonly name: string;
+  readonly id: string | null;
+  readonly image_id: string | null;
+  readonly mount_signature: string;
 }
 ~~~
 
@@ -688,7 +772,11 @@ normalizes omission through the schemas; it does not invent a live scope. A
 writer-exhaustiveness behavior suite drives every production writer and proves
 that run, run-all, prepare, and import each pass the explicit values above.
 
-Missing fields remain read-compatible. Live preflight must reject null scope; this task does not provide a legacy execution path.
+`JobContainerEvidence` deliberately retains the existing snake-case,
+read-compatible durable shape and nullable old-record ID. It never embeds a
+second scope: the job's top-level `credential_scope` is the only persisted
+authority. Missing fields remain read-compatible. Live preflight must reject
+null scope; this task does not provide a legacy execution path.
 
 The appliance CLI restriction is exact:
 
@@ -707,15 +795,19 @@ agent/credential because mixed selections are rejected before job creation;
 this safe-direction behavior is explicit and is not described as a
 "runnable-cell union."
 
-writeProvenance rereads the authoritative job and derives scope plus lease evidence from it. Callers cannot pass an independent scope. ImportedProvenanceRecordSchema and its writer persist credential_scope: null explicitly.
+Task 4 adds the provenance schema field and makes imported provenance persist
+`credential_scope: null` explicitly. It does not yet claim job-authoritative
+live provenance: Task 5 owns the evidence-first ordering, conversion between
+the in-memory lease and durable container evidence, and the live writer
+signature after the production cutover.
 
-- [ ] **Step 1: Write RED parser, initial-record, and provenance tests**
+- [ ] **Step 1: Write RED parser, initial-record, and import-provenance tests**
 
 Cover direct-run default, direct-run explicit credential, run-all default,
 run-all one credential, every invalid optional-value shape, forbidden
 cross-command/custom-registry flags, initial on-disk record contents, old
 missing-field read compatibility, live-null refusal ownership, explicit-empty
-prepare, explicit-null import, and job-authoritative provenance. Prove the
+prepare, and explicit-null import. Prove the
 normalized direct-run credential reaches both `ApplianceActions.run` and the
 persisted Quorum argv; no later layer reparses it.
 
@@ -723,14 +815,14 @@ Drive the prepare writer through `preflight.ts` in this task and prove it
 persists explicit `EMPTY_CREDENTIAL_SCOPE`; do not postpone that production
 writer to Task 5 merely because Task 5 later changes execution ordering.
 
-Pin that serialized job/provenance/CLI output contains neither credential paths nor the string credentials-scoped.
+Pin that serialized job/import-provenance/CLI output contains neither credential paths nor the string credentials-scoped.
 
 - [ ] **Step 2: Run RED**
 
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts
 ~~~
 
 - [ ] **Step 3: Implement atomic request persistence**
@@ -742,7 +834,7 @@ Add a current managed-checkout HEAD helper through CommandRunner in git.ts. Put 
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts
 bun test test/appliance-*.test.ts
 bun run check
 bun run quorum check
@@ -753,10 +845,9 @@ bun run quorum check
 ~~~bash
 git add src/appliance/types.ts src/appliance/cli.ts src/appliance/jobs.ts \
   src/appliance/git.ts src/appliance/import.ts src/appliance/preflight.ts \
-  src/appliance/provenance.ts \
   test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts
 git commit -m "feat: persist one authoritative credential request (F13)"
 ~~~
 
@@ -770,10 +861,11 @@ git commit -m "feat: persist one authoritative credential request (F13)"
 - Modify: src/appliance/container.ts
 - Modify: src/appliance/provenance.ts
 - Modify: src/appliance/types.ts
+- Delete: src/appliance/scoped-cutover.ts
 - Test: test/appliance-preflight.test.ts
 - Test: test/appliance-process.test.ts
 - Test: test/appliance-container.test.ts
-- Test: test/appliance-provenance.test.ts
+- Create: test/appliance-provenance.test.ts
 
 **Interfaces:**
 
@@ -784,7 +876,7 @@ export interface PreflightResult {
     readonly name: 'blessed';
     readonly bundle_id: string;
   };
-  readonly container: ContainerLease;
+  readonly container: JobContainerEvidence;
   readonly tool_versions_path: string;
   readonly tool_versions_text: string;
   readonly provenance_path: string;
@@ -801,6 +893,12 @@ export async function preflightLiveJob(
 ): Promise<LivePreflightResult>;
 
 export async function prepare(args: PrepareArgs): Promise<PreflightResult>;
+
+export function leaseToJobContainerEvidence(
+  lease: ContainerLease,
+): JobContainerEvidence;
+
+export function liveLeaseFromJob(job: JobRecord): ContainerLease;
 ~~~
 
 Live ordering is binding:
@@ -814,13 +912,20 @@ Live ordering is binding:
 7. stage asserted-empty probe material and reconcile the empty probe container;
 8. run evals-tool-versions and quorum check through the probe lease with no supervisor file;
 9. stage live material and reconcile again, which downs the probe before activating and mounting the live generation;
-10. atomically update the job with refs, bundle, live lease, and the unchanged authoritative scope;
+10. derive durable container evidence from the live lease and atomically update the job with refs, bundle, that evidence, and the unchanged authoritative scope;
 11. write provenance from the reread job;
 12. return the worker-only supervisor path.
 
 prepare stops after the empty probe evidence. It never evaluates the blessed env values, creates a supervisor file, or mounts OAuth material.
 
-PreflightResult is public evidence and contains no credential path. LivePreflightResult is private to runWorker and is never spread into CLI output, job JSON, or provenance.
+PreflightResult is public evidence and contains no credential path or duplicated
+scope. `leaseToJobContainerEvidence` drops the in-memory scope and preserves the
+existing durable field names. `liveLeaseFromJob` requires a non-null new-record
+ID plus a non-null top-level live scope, reconstructs the one in-memory lease,
+and rejects tampered/ambiguous records. LivePreflightResult is private to
+runWorker; its `lease` is the exact source used to construct
+`evidence.container`, not a separately recomputed authority, and it is never
+spread into CLI output, job JSON, or provenance.
 
 runWorker passes supervisorExecEnvFile only to the live Quorum exec. live, liveness, and cancellation reconstruct or consume the recorded immutable lease:
 
@@ -837,6 +942,8 @@ helpers named in Task 3. A repository-wide call-site test/grep must show no
 appliance production import can construct a container exec without a
 `ContainerLease`. The shell wrapper's explicitly documented direct legacy mode
 is not a TypeScript fallback and remains outside appliance execution.
+The same commit removes the temporary Task 2 cutover guard and its production
+imports only after the repository-wide scoped-call-site assertion is green.
 
 - [ ] **Step 1: Write RED ordering, freshness, privacy, and replacement tests**
 
@@ -849,6 +956,10 @@ job evidence -> provenance -> live exec with supervisor file
 ~~~
 
 Add separate failures for SHA drift and recomputed-scope mismatch, both with zero credential evaluation and zero Docker calls. Replace the configured-name inspect result between preflight and live/liveness/cancel and assert no child execution or replacement-container signal. Fault provenance after job evidence; retry must heal from the job without changing scope.
+Add exact lease/evidence round-trip tests, rejection for null-ID new live jobs
+and scope/evidence tampering, and proof that persisted scope exists only at the
+job top level. Legacy cancellation uses non-null durable ID evidence directly
+and never reconstructs a runnable lease.
 
 - [ ] **Step 2: Run RED**
 
@@ -862,7 +973,10 @@ bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
 Do not expose a generic env map or arbitrary exec options. Do not serialize
 private credential paths. Keep plan-time empty/live scope distinctions
 explicit, require a lease at every container exec call site, and delete the
-old TypeScript full-bundle helpers rather than leaving two production paths.
+old TypeScript full-bundle helpers and the temporary cutover guard rather than
+leaving two production paths. Make `writeProvenance` accept/reread job identity,
+not caller-supplied scope or container evidence; job evidence is committed
+first, then provenance is derived, and retry heals only the derived file.
 
 - [ ] **Step 4: Run GREEN and gates**
 
@@ -879,7 +993,7 @@ bun run quorum check
 ~~~bash
 git add src/appliance/preflight.ts src/appliance/process.ts \
   src/appliance/container.ts src/appliance/provenance.ts \
-  src/appliance/types.ts \
+  src/appliance/types.ts src/appliance/scoped-cutover.ts \
   test/appliance-preflight.test.ts test/appliance-process.test.ts \
   test/appliance-container.test.ts test/appliance-provenance.test.ts
 git commit -m "feat: run live jobs through scoped container leases (F13)"
@@ -941,6 +1055,14 @@ The Pi canary proves the witnessed projection shape only; the single real auth
 gate below remains Codex, so this plan does not claim physical Pi OAuth
 authentication was validated.
 
+Before those projections, pass a separate host-only public canary env file
+through the real scoped `docker exec --env-file` path. Use fixed non-secret
+values containing a space, a leading `#`, an embedded `=`, quotes, and an empty
+optional value. The child compares exact expected bytes and emits booleans
+only. Every value form accepted by staging must round-trip on the target Docker
+client/server; otherwise tighten staging validation and rerun the automated
+and physical gates before any real credential job.
+
 - [ ] **Step 3: Run one real disjoint Codex-subscription appliance job**
 
 Verify doctor first. Run through evals-appliance, not raw quorum. Inspect resolved Docker mount sources/destinations and agent env key names only. Confirm:
@@ -975,14 +1097,17 @@ No push without Drew's explicit approval after he reviews the final evidence.
 
 **Spec coverage:** The isolation unit now equals one agent plus one credential, so no cell shares a union with another. Env delivery is exact, OAuth delivery is exact by adapter file/entry, probes are empty, the grader file is host-only, and live execution binds to the scoped container that preflight recorded.
 
-**Failure-mode coverage:** Unknown/prototype names; missing defaults; missing Mantle api_key_env; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal agent/grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs; staging interruption and abandoned-stage cleanup; stale active generation; missing Docker capability; replacement containers; private path serialization; null live records; and probe credential exposure all have explicit behavior tests.
+**Failure-mode coverage:** Unknown/prototype names; missing defaults; missing Mantle api_key_env; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal env/file agent-versus-grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs before metadata or payload access; staging interruption and abandoned-stage cleanup; stale active generation; missing Docker capability; post-up identity failure; replacement containers; private path serialization; null live records; intermediate-cutover invocation; and probe credential exposure all have explicit behavior tests.
 
 **Type consistency:** Task 1 defines CredentialSelection and CredentialScope.
-Task 2 produces staged/active material. Task 3 adds independently testable
-scoped container primitives that consume staged material and produce
-ContainerLease without changing production callers. Task 4 persists
-selection/scope/source SHA atomically. Task 5 performs the one-time production
-cutover, deletes the old TypeScript full-bundle path, and produces a private
+Task 2 produces discriminated staged/active material whose scope cannot be
+paired independently. Task 3 adds independently testable scoped container
+primitives that derive ContainerLease from that material without changing
+production callers. Task 4 persists selection/scope/source SHA once plus the
+existing read-compatible JobContainerEvidence shape. Task 5 performs the
+one-time production cutover, deletes the old TypeScript full-bundle path and
+the temporary execution guard, converts lease to/from durable evidence using
+the job's sole top-level scope authority, and produces a private
 LivePreflightResult without serializing credential paths.
 
 **Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
