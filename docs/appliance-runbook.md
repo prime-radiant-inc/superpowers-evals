@@ -115,20 +115,39 @@ validation, so that path is reachable only by trusted-maintainer break-glass.
 
 `supervisor.exec.env` is never mounted anywhere. It reaches exactly one
 process — the live Quorum supervisor — as the host-side argument of
-`docker exec --env-file`. The grader credential travels in that file only under
-its `QUORUM_GRADER_*` alias names, and the runner maps those back to the
-canonical names when it builds the Gauntlet child's environment.
+`docker exec --env-file`. The grader credential travels in that file only
+under its `QUORUM_GRADER_*` alias names, and the runner maps those aliases
+back onto the canonical names — `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_BASE_URL` — when
+it builds the Gauntlet child's environment. The alias names never reach that
+child, and the canonical names never appear in the supervisor exec file.
 
-So the canonical grader names appear in no host credential file, in nothing
-mounted into the container, and not in the supervisor exec env file — but they
-do exist in the Gauntlet child's process environment, which is where the
-grader CLI reads them. No Coding-Agent is given them: each launcher rebuilds
-the agent's environment with `env -i` and an explicit allowlist fed from that
-run's own credential file, so the grader's names are not inherited even though
-the launcher itself starts as a child of Gauntlet. That is an
-**intentional-delivery** boundary, not a containment one. A Coding-Agent runs
+The invariant is about **values, not names**. The grader's secret values are
+absent from `agent.env`, absent from every projected auth file, and never
+intentionally delivered to a Coding-Agent. They exist in `supervisor.exec.env`
+under the alias names, and in the Gauntlet child's environment under the
+canonical names, which is where the grader CLI reads them.
+
+A canonical name can legitimately appear on the agent side at the same time,
+carrying an entirely different secret. A Claude or Serf api-key credential
+projects `ANTHROPIC_API_KEY` into `agent.env`, and a Claude OAuth credential
+projects `CLAUDE_CODE_OAUTH_TOKEN` — in both cases that is the selected
+agent's own credential, mounted at `/run/evals/credentials.env` exactly as
+intended. Same name with a different value is permitted **only** because
+staging proves the values differ: every secret delivered to the agent is
+compared all-pairs against every nonempty grader auth value, and any equality
+refuses the job (see
+[Bundle migration and rollback](#bundle-migration-and-rollback)). So a shared
+variable name is not evidence of a leak, and it is not licence to reuse one
+key for both roles — that is the case the check exists to refuse.
+
+No Coding-Agent is handed those values: each launcher rebuilds the agent's
+environment with `env -i` and an explicit allowlist fed from that run's own
+credential file, so nothing is inherited from Gauntlet even though the
+launcher starts as its child. That is an **intentional-delivery** boundary,
+not a containment one. A Coding-Agent runs
 at the same privilege as the Gauntlet child, so an agent that goes looking can
-still read those names out of a peer process; see
+still read the grader's values out of a peer process; see
 [Isolation boundary and accepted residual](#isolation-boundary-and-accepted-residual).
 
 If the bundle provides no nonempty source for a projected env name or a
@@ -259,14 +278,14 @@ and is not claimed to.
 
 A process running as the same UID, or as root, can inspect other appliance
 process state — including `/proc` of the live Quorum supervisor, and of the
-Gauntlet child that legitimately holds the grader credential under its
+Gauntlet child that legitimately holds the grader's secret values under the
 canonical names. Neither host-only delivery of the supervisor exec env file
-nor the `QUORUM_GRADER_*` aliasing is a defence against such an observer, and
-the Coding-Agent under test runs at that same privilege: it is never handed
-the grader's canonical names, but nothing stops it from reading a peer
-process's environment. Same-UID inspection also reaches the fixed staging
-slot, which such a process can race and displace while a generation is being
-written.
+nor the `QUORUM_GRADER_*` aliasing is a defence against such an observer. The
+Coding-Agent under test runs at that same privilege: intentional delivery
+never hands it the grader's values, but nothing stops it from reading them out
+of a peer process's environment. Same-UID inspection also reaches the fixed
+staging slot, which such a process can race and displace while a generation is
+being written.
 
 Staging detects that displacement and fails closed: the fixed path must still
 identify the exact inode that was written, or the job is refused rather than
