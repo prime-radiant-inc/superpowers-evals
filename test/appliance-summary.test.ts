@@ -12,6 +12,7 @@ import {
   statusPayload,
 } from '../src/appliance/summary.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { liveJobRequest } from './appliance-job-fixtures.ts';
 
 function loaded(): LoadedApplianceConfig {
   // Canonical (realpath) fixture root: the appliance boundary validates
@@ -133,12 +134,12 @@ test('status derives a completed batch summary from artifacts', () => {
     },
   ]);
   writeVerdict(cfg, 'run-1', 'fail');
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'done',
@@ -168,12 +169,12 @@ test('status prefers terminal batch artifacts over stale nonterminal job status'
     },
   ]);
   writeVerdict(cfg, 'run-1', 'pass');
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'running',
@@ -195,12 +196,12 @@ test('status prefers terminal batch artifacts over stale nonterminal job status'
 test('status reports active batch before first result record', () => {
   const cfg = loaded();
   writeBatchHeaderOnly(cfg, null);
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'running',
@@ -230,12 +231,12 @@ test('status reports active batch before first result record', () => {
 test('status preserves artifact_missing for terminal batch without results', () => {
   const cfg = loaded();
   writeBatchHeaderOnly(cfg, '2026-06-18T00:10:00Z');
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'done',
@@ -253,12 +254,12 @@ test('status preserves artifact_missing for terminal batch without results', () 
 
 test('status reports a nonterminal job as lost when its worker process is gone', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'running',
@@ -278,12 +279,12 @@ test('status reports a nonterminal job as lost when its worker process is gone',
 
 test('status gives a freshly submitted job time to acquire its worker lock', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
 
   const status = statusPayload(cfg, job.job_id);
 
@@ -293,12 +294,12 @@ test('status gives a freshly submitted job time to acquire its worker lock', () 
 
 test('status reports an old nonterminal job without a worker as lost', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   const jobPath = join(cfg.paths.jobs, job.job_id, 'job.json');
   writeFileSync(
     jobPath,
@@ -377,12 +378,12 @@ test('status attaches a matching quarantined job for a bare batch id', () => {
     },
   ]);
   writeVerdict(cfg, 'run-1', 'pass');
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'quarantined',
@@ -400,12 +401,13 @@ test('status attaches a matching quarantined job for a bare batch id', () => {
 test('status attaches a matching failed job for a bare run id', () => {
   const cfg = loaded();
   writeVerdict(cfg, 'run-1', 'fail');
-  const job = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run', 'alpha', '--coding-agent', 'codex'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      argv: ['quorum', 'run', 'alpha', '--coding-agent', 'codex'],
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'failed',
@@ -423,12 +425,12 @@ test('status attaches a matching failed job for a bare run id', () => {
 test('show renders a single run from a job artifact', () => {
   const cfg = loaded();
   writeVerdict(cfg, 'run-1', 'pass');
-  const job = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'done',
@@ -452,12 +454,12 @@ test('show and costs accept exact run artifact ids', () => {
 
 test('missing artifacts surface appliance artifact_missing errors', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     status: 'done',

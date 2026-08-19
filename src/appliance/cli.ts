@@ -7,10 +7,19 @@ import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
+import {
+  type CredentialSelection,
+  EMPTY_CREDENTIAL_SCOPE,
+} from '../credentials/scope.ts';
 import { getEnv } from '../env.ts';
 import { loadCredentialConfig, loadStateConfig } from './config.ts';
+import {
+  buildLiveCredentialRequest,
+  type LiveCredentialRequest,
+} from './credential-request.ts';
 import { doctorPayload } from './doctor.ts';
 import { ApplianceError, toErrorJson } from './errors.ts';
+import { currentCheckoutSha } from './git.ts';
 import { importBundle } from './import.ts';
 import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
@@ -34,6 +43,11 @@ export interface RunCommandArgs extends PrepareCommandArgs {
   readonly detach: boolean;
   readonly scenario: string;
   readonly agent: string;
+  // The normalized operator selection: a validated single credential name, or
+  // null for "the agent's default". The resolved concrete name lives on the
+  // request's scope; this preserves what was actually asked for, and drives
+  // the generated Quorum argv.
+  readonly credential: string | null;
 }
 
 export interface RunAllCommandArgs extends PrepareCommandArgs {
@@ -63,11 +77,16 @@ export interface ApplianceActions {
   readonly prepare: (
     args: PrepareCommandArgs,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  // Live commands receive the credential request the program action already
+  // resolved. It is an input, not something the action recomputes: fakes
+  // observe exactly what the real writer would persist.
   readonly run: (
     args: RunCommandArgs,
+    request: LiveCredentialRequest,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
   readonly runAll: (
     args: RunAllCommandArgs,
+    request: LiveCredentialRequest,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
   readonly status: (
     args: IdCommandArgs,
@@ -108,10 +127,20 @@ interface JsonDetachOptions extends JsonOption {
 }
 
 const UNSUPPORTED_APPLIANCE_AGENTS = new Set(['antigravity']);
-const FORBIDDEN_RUN_ALL_FLAGS = new Set([
-  '--coding-agents-dir',
-  '--out-root',
-  '--scenarios-root',
+// Forwarded flags the appliance refuses to honour, with why. The first three
+// would relocate the trusted roots the appliance controls; --credentials-file
+// would swap the blessed registry the bundle was built for; --credential is
+// run's flag, and accepting it on run-all would leave the real selection
+// (--credentials) unset while looking like it had been made.
+const FORBIDDEN_RUN_ALL_FLAGS: ReadonlyMap<string, string> = new Map([
+  ['--coding-agents-dir', 'is controlled by the Phase 1 appliance'],
+  ['--out-root', 'is controlled by the Phase 1 appliance'],
+  ['--scenarios-root', 'is controlled by the Phase 1 appliance'],
+  ['--credentials-file', 'is controlled by the Phase 1 appliance'],
+  [
+    '--credential',
+    'is not a run-all flag; use --credentials with exactly one credential',
+  ],
 ]);
 
 function requester(): {
@@ -231,22 +260,96 @@ function assertNoDuplicateOption(args: readonly string[], name: string): void {
 }
 
 function assertNoForbiddenRunAllFlags(args: readonly string[]): void {
-  for (const flag of FORBIDDEN_RUN_ALL_FLAGS) {
+  for (const [flag, reason] of FORBIDDEN_RUN_ALL_FLAGS) {
     if (optionOccurrences(args, flag).length > 0) {
       throw new ApplianceError(
         'unsupported_os',
         'arguments',
-        `run-all ${flag} is controlled by the Phase 1 appliance`,
+        `run-all ${flag} ${reason}`,
       );
     }
   }
 }
 
+function rejectSelection(message: string): never {
+  throw new ApplianceError('unsupported_os', 'arguments', message);
+}
+
+// One credential name, or nothing. A value that is blank, comma-bearing, or
+// option-shaped is ambiguous about which single cell the job is, and an
+// ambiguous selection must never reach job creation — the persisted scope
+// would then assert something the operator did not choose.
+function normalizeCredentialValue(
+  raw: string | null,
+  flag: string,
+  allowCsv: boolean,
+): string {
+  if (raw === null) {
+    rejectSelection(`appliance ${flag} requires exactly one credential`);
+  }
+  const value = raw.trim();
+  if (value === '') {
+    rejectSelection(`appliance ${flag} requires exactly one credential`);
+  }
+  if (value.startsWith('-')) {
+    rejectSelection(
+      `appliance ${flag} value looks like an option, not a credential: ${value}`,
+    );
+  }
+  if (!allowCsv) {
+    if (value.includes(',')) {
+      rejectSelection(
+        `appliance ${flag} takes exactly one credential, not a list: ${value}`,
+      );
+    }
+    return value;
+  }
+  const entries = csv(value);
+  const only = entries[0];
+  if (entries.length !== 1 || only === undefined) {
+    rejectSelection(
+      `appliance ${flag} takes exactly one credential, got: ${value}`,
+    );
+  }
+  return only;
+}
+
+// `run --credential`: omitted, or exactly one nonempty name. Commander keeps
+// the LAST value for a repeated option, so duplicates are counted from the
+// collected occurrences rather than silently resolved.
+function normalizeRunCredential(occurrences: readonly string[]): string | null {
+  if (occurrences.length === 0) {
+    return null;
+  }
+  if (occurrences.length > 1) {
+    rejectSelection(
+      'duplicate --credential is not supported on the Phase 1 appliance',
+    );
+  }
+  return normalizeCredentialValue(
+    occurrences[0] ?? null,
+    '--credential',
+    false,
+  );
+}
+
+// Validate the forwarded Quorum argv and read the ONE (agent, credential)
+// cell it selects out of it. The argv itself is never rewritten — it is
+// preserved verbatim for the worker — so this only reads.
+//
+// The asserted cell is exactly this normalized selection, not a union
+// re-derived from scenario eligibility. A run-all that later finds zero
+// runnable scenarios does no useful work, but it cannot widen into a second
+// agent or credential, because a mixed selection never gets this far.
 function assertSupportedRunAllArgs(
   args: readonly string[],
   loadConfig: () => LoadedApplianceStateConfig,
-): void {
+): {
+  readonly loaded: LoadedApplianceStateConfig;
+  readonly selection: CredentialSelection;
+} {
   assertNoDuplicateOption(args, '--coding-agents');
+  assertNoDuplicateOption(args, '--credentials');
   assertNoDuplicateOption(args, '--os');
   assertNoForbiddenRunAllFlags(args);
 
@@ -275,13 +378,32 @@ function assertSupportedRunAllArgs(
       'appliance run-all requires explicit --coding-agents',
     );
   }
-  for (const agent of agents) {
-    assertSupportedAgent(agent);
+  const agent = agents[0];
+  if (agents.length !== 1 || agent === undefined) {
+    throw new ApplianceError(
+      'unsupported_os',
+      'arguments',
+      `appliance run-all takes exactly one --coding-agents entry (one agent per job), got: ${codingAgents}`,
+    );
   }
-  const codingAgentsDir = join(loadConfig().config.evals.path, 'coding-agents');
-  for (const agent of agents) {
-    assertSupportedAgent(agent, codingAgentsDir);
-  }
+  assertSupportedAgent(agent);
+
+  // Absent is the agent default; present must name exactly one credential.
+  // optionOccurrences distinguishes "not passed" from "passed with nothing
+  // after it", which optionValue alone cannot.
+  const credentialOccurrences = optionOccurrences(args, '--credentials');
+  const credential =
+    credentialOccurrences.length === 0
+      ? null
+      : normalizeCredentialValue(
+          credentialOccurrences[0] ?? null,
+          '--credentials',
+          true,
+        );
+
+  const loaded = loadConfig();
+  assertSupportedAgent(agent, join(loaded.config.evals.path, 'coding-agents'));
+  return { loaded, selection: { agent, credential } };
 }
 
 function normalizeScenarioPath(
@@ -350,6 +472,10 @@ function defaultActions(): ApplianceActions {
         superpowersRef: args.superpowersRef,
         argv: ['prepare'],
         requester: requester(),
+        // prepare probes assert zero credential material.
+        credentialSelection: null,
+        credentialScope: EMPTY_CREDENTIAL_SCOPE,
+        credentialScopeSourceEvalsSha: null,
       });
       const result = await prepare({
         loaded,
@@ -360,7 +486,7 @@ function defaultActions(): ApplianceActions {
       });
       return { ok: true, job_id: job.job_id, ...result };
     },
-    run: async (args) => {
+    run: async (args, request) => {
       const structural = loadStateConfig();
       const scenario = normalizeScenarioPath(args.scenario, structural);
       const codingAgentsDir = join(
@@ -370,17 +496,30 @@ function defaultActions(): ApplianceActions {
       assertSupportedAgent(args.agent, codingAgentsDir);
       // TEMPORARY (Tasks 2-4): see prepare above.
       assertScopedCredentialCutover('run');
-      const argv = ['quorum', 'run', scenario, '--coding-agent', args.agent];
+      // The operator's selection, forwarded verbatim. An omitted credential
+      // stays omitted so Quorum resolves the same agent default the scope
+      // already recorded; the request's source SHA is what proves the two
+      // readings came from the same checkout.
+      const argv = [
+        'quorum',
+        'run',
+        scenario,
+        '--coding-agent',
+        args.agent,
+        ...(args.credential === null ? [] : ['--credential', args.credential]),
+      ];
       return submitLiveJob({
         kind: 'run',
         superpowersRef: args.superpowersRef,
         argv,
         detach: args.detach,
+        request,
       });
     },
-    runAll: async (args) => {
-      // Argument validation ran in the command action; validate the
-      // structural config, then the Tasks 2-4 cutover freeze (see prepare).
+    runAll: async (args, request) => {
+      // Argument validation and request construction ran in the command
+      // action; validate the structural config, then the Tasks 2-4 cutover
+      // freeze (see prepare).
       loadStateConfig();
       assertScopedCredentialCutover('run-all');
       return submitLiveJob({
@@ -388,6 +527,7 @@ function defaultActions(): ApplianceActions {
         superpowersRef: args.superpowersRef,
         argv: ['quorum', 'run-all', ...args.quorumArgs],
         detach: args.detach,
+        request,
       });
     },
     status: async (args) => {
@@ -423,11 +563,14 @@ function defaultActions(): ApplianceActions {
   };
 }
 
+// Persists the request it was handed. It never reparses argv and never
+// patches the scope after the worker spawns: one construction, one write.
 async function submitLiveJob(args: {
   readonly kind: 'run' | 'run-all';
   readonly superpowersRef: string;
   readonly argv: readonly string[];
   readonly detach: boolean;
+  readonly request: LiveCredentialRequest;
 }): Promise<unknown> {
   const loaded = loadCredentialConfig(undefined, { ensureState: true });
   const job = createJob(loaded, {
@@ -435,6 +578,9 @@ async function submitLiveJob(args: {
     superpowersRef: args.superpowersRef,
     argv: args.argv,
     requester: requester(),
+    credentialSelection: args.request.selection,
+    credentialScope: args.request.scope,
+    credentialScopeSourceEvalsSha: args.request.sourceEvalsSha,
   });
 
   if (args.detach) {
@@ -524,6 +670,35 @@ function pruneApplyFailed(value: unknown): boolean {
   );
 }
 
+// Commander keeps only the LAST value of a repeated option. Collecting every
+// occurrence is what makes a duplicate selection flag visible instead of
+// silently resolved. (Option state persists across parses on one Command
+// instance, so each CLI invocation builds its own program.)
+function collectOccurrence(
+  value: string,
+  previous: readonly string[],
+): readonly string[] {
+  return [...previous, value];
+}
+
+const NO_OCCURRENCES: readonly string[] = [];
+
+// Resolve the selection against the configured evals checkout and pin it to
+// that checkout's current HEAD. Runs in the program action, before the
+// action itself, so a fake and the real writer see the identical request and
+// an unresolvable selection fails before any job, state, bundle, or Docker.
+function liveCredentialRequest(
+  loaded: LoadedApplianceStateConfig,
+  selection: CredentialSelection,
+): LiveCredentialRequest {
+  const evalsPath = loaded.config.evals.path;
+  return buildLiveCredentialRequest(
+    evalsPath,
+    selection,
+    currentCheckoutSha(evalsPath, 'evals', defaultCommandRunner),
+  );
+}
+
 function commandDetachOptions(options: JsonDetachOptions): {
   readonly json: boolean;
   readonly detach: boolean;
@@ -582,6 +757,12 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
     .requiredOption('--superpowers-ref <ref>')
     .requiredOption('--scenario <name>')
     .requiredOption('--coding-agent <agent>')
+    .option(
+      '--credential <name>',
+      'credential registry name (defaults to the agent default)',
+      collectOccurrence,
+      NO_OCCURRENCES,
+    )
     .option('--json', 'emit JSON')
     .option('--detach', 'run in a detached appliance worker')
     .action(
@@ -590,23 +771,31 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           superpowersRef: string;
           scenario: string;
           codingAgent: string;
+          credential: readonly string[];
         },
       ) => {
-        const args = {
+        const base = {
           ...commandDetachOptions(options),
           superpowersRef: options.superpowersRef,
           scenario: options.scenario,
           agent: options.codingAgent,
         };
-        return handleAction(args, resolvedDeps, () => {
+        return handleAction(base, resolvedDeps, () => {
+          const credential = normalizeRunCredential(options.credential);
           const loaded = loadConfigForValidation();
-          const scenario = normalizeScenarioPath(args.scenario, loaded);
+          const scenario = normalizeScenarioPath(base.scenario, loaded);
           const codingAgentsDir = join(
             loaded.config.evals.path,
             'coding-agents',
           );
-          assertSupportedAgent(args.agent, codingAgentsDir);
-          return actions.run({ ...args, scenario });
+          assertSupportedAgent(base.agent, codingAgentsDir);
+          return actions.run(
+            { ...base, scenario, credential },
+            liveCredentialRequest(loaded, {
+              agent: base.agent,
+              credential,
+            }),
+          );
         });
       },
     );
@@ -628,8 +817,11 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           quorumArgs,
         };
         return handleAction(args, resolvedDeps, () => {
-          assertSupportedRunAllArgs(args.quorumArgs, loadConfigForValidation);
-          return actions.runAll(args);
+          const { loaded, selection } = assertSupportedRunAllArgs(
+            args.quorumArgs,
+            loadConfigForValidation,
+          );
+          return actions.runAll(args, liveCredentialRequest(loaded, selection));
         });
       },
     );

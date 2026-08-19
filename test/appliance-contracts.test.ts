@@ -18,11 +18,21 @@ import {
 import { ApplianceError, toErrorJson } from '../src/appliance/errors.ts';
 import { atomicWriteJson } from '../src/appliance/fs.ts';
 import {
+  CredentialScopeSchema,
+  CredentialSelectionSchema,
+  type JobContainerEvidence,
   JobRecordSchema,
   LockRecordSchema,
   ProcessGroupIdSchema,
   ProvenanceRecordSchema,
 } from '../src/appliance/types.ts';
+import {
+  type CredentialScope,
+  credentialScopeForSelection,
+  EMPTY_CREDENTIAL_SCOPE,
+  type OAuthProjection,
+} from '../src/credentials/scope.ts';
+import { repoRoot } from '../src/paths.ts';
 
 function fixture(): { root: string; configPath: string } {
   // Canonical (realpath) fixture root: the appliance boundary validates
@@ -496,6 +506,257 @@ describe('appliance contracts', () => {
         tool_versions_text: 'evals-tool-versions: available',
       }).success,
     ).toBe(true);
+  });
+});
+
+// --- persisted credential request (F13) -------------------------------------
+// A job carries exactly one authority for the credential material it may
+// receive: the normalized (agent, credential) selection, the scope that
+// selection resolved to, and the evals SHA it was resolved against. Records
+// written before these fields existed must still read back — as null, never as
+// a fabricated scope — while every new writer supplies all three explicitly.
+describe('persisted credential request', () => {
+  function jobRecordWithoutCredentialFields(
+    kind: 'run' | 'run-all' | 'prepare' | 'import',
+  ): Record<string, unknown> {
+    return {
+      schema_version: 1,
+      job_id: 'job-legacy',
+      kind,
+      status: 'preflighting',
+      created_at: '2026-06-18T00:00:00Z',
+      updated_at: '2026-06-18T00:00:00Z',
+      started_at: null,
+      finished_at: null,
+      requester: {
+        agent: null,
+        thread: null,
+        task: null,
+        host_user: 'drew',
+        remote_identity: 'local:drew',
+      },
+      command: { argv: ['quorum', 'run-all'], sanitized: true },
+      request: { superpowers_ref: 'main' },
+      refs: null,
+      credential_bundle: null,
+      container: null,
+      process: null,
+      artifacts: {
+        run_id: null,
+        batch_id: null,
+        stdout_log: '/tmp/stdout.log',
+        stderr_log: '/tmp/stderr.log',
+        provenance: '/tmp/provenance.json',
+      },
+      progress: null,
+      result: { exit_code: null, summary: null },
+      error: null,
+    };
+  }
+
+  test('old job records without the credential triple read back as null', () => {
+    for (const kind of ['run', 'run-all', 'prepare', 'import'] as const) {
+      const parsed = JobRecordSchema.parse(
+        jobRecordWithoutCredentialFields(kind),
+      );
+      expect(parsed.credential_selection).toBe(null);
+      expect(parsed.credential_scope).toBe(null);
+      expect(parsed.credential_scope_source_evals_sha).toBe(null);
+    }
+  });
+
+  test('a live job record round-trips its selection, scope, and source sha', () => {
+    const scope = credentialScopeForSelection(repoRoot(), {
+      agent: 'codex',
+      credential: 'codex_sub',
+    });
+    const parsed = JobRecordSchema.parse({
+      ...jobRecordWithoutCredentialFields('run'),
+      credential_selection: { agent: 'codex', credential: null },
+      credential_scope: scope,
+      credential_scope_source_evals_sha: 'a'.repeat(40),
+    });
+
+    expect(parsed.credential_selection).toEqual({
+      agent: 'codex',
+      credential: null,
+    });
+    expect(parsed.credential_scope).toEqual(scope);
+    expect(parsed.credential_scope_source_evals_sha).toBe('a'.repeat(40));
+    // Compile-time: the persisted schema cannot widen past the runtime type
+    // the resolver and the container boundary share.
+    const persisted: CredentialScope | null = parsed.credential_scope;
+    expect(persisted?.kind).toBe('live');
+  });
+
+  test('a prepare job record round-trips the asserted empty scope', () => {
+    const parsed = JobRecordSchema.parse({
+      ...jobRecordWithoutCredentialFields('prepare'),
+      credential_selection: null,
+      credential_scope: EMPTY_CREDENTIAL_SCOPE,
+      credential_scope_source_evals_sha: null,
+    });
+
+    expect(parsed.credential_selection).toBe(null);
+    expect(parsed.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+    expect(parsed.credential_scope_source_evals_sha).toBe(null);
+  });
+
+  test('the scope schema accepts exactly what the resolver produces', () => {
+    // One corpus pair per delivery shape the resolver can emit: env-only,
+    // env plus a gemini mode, an OAuth mount, and an OAuth mount carrying a
+    // provider. A schema too narrow for any of them would strand that pair.
+    for (const [agent, credential] of [
+      ['opencode', 'opencode_gpt5'],
+      ['gemini', 'gemini_default'],
+      ['codex', 'codex_sub'],
+      ['pi', 'pi_default'],
+    ] as const) {
+      const scope = credentialScopeForSelection(repoRoot(), {
+        agent,
+        credential,
+      });
+      expect(CredentialScopeSchema.parse(scope)).toEqual(scope);
+    }
+    expect(CredentialScopeSchema.parse(EMPTY_CREDENTIAL_SCOPE)).toEqual(
+      EMPTY_CREDENTIAL_SCOPE,
+    );
+  });
+
+  test('the scope schema rejects unaudited oauth shapes', () => {
+    const live = {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'pi',
+      runtimeFamily: 'pi',
+      credential: 'pi_default',
+      agentEnv: [],
+      geminiAuthType: null,
+    };
+    // A kind outside the audited projection table.
+    expect(
+      CredentialScopeSchema.safeParse({
+        ...live,
+        oauth: { kind: 'hermes', mountName: 'hermes' },
+      }).success,
+    ).toBe(false);
+    // pi's mount is meaningless without the provider it selects.
+    expect(
+      CredentialScopeSchema.safeParse({
+        ...live,
+        oauth: { kind: 'pi', mountName: 'pi' },
+      }).success,
+    ).toBe(false);
+    // An empty scope may not carry material.
+    expect(
+      CredentialScopeSchema.safeParse({
+        ...EMPTY_CREDENTIAL_SCOPE,
+        oauth: { kind: 'codex', mountName: 'codex' },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('the selection schema keeps the agent required and the credential nullable', () => {
+    expect(
+      CredentialSelectionSchema.parse({ agent: 'codex', credential: null }),
+    ).toEqual({ agent: 'codex', credential: null });
+    expect(
+      CredentialSelectionSchema.parse({
+        agent: 'codex',
+        credential: 'codex_sub',
+      }),
+    ).toEqual({ agent: 'codex', credential: 'codex_sub' });
+    expect(
+      CredentialSelectionSchema.safeParse({ credential: 'codex_sub' }).success,
+    ).toBe(false);
+  });
+
+  test('provenance defaults the credential scope to null and accepts an explicit null', () => {
+    const base = {
+      schema_version: 1,
+      job_id: 'job-123',
+      created_at: '2026-06-18T00:00:00Z',
+      refs: {
+        superpowers_requested_ref: 'main',
+        superpowers_resolved_sha: 'a'.repeat(40),
+        evals_ref: 'main',
+        evals_resolved_sha: 'b'.repeat(40),
+        gauntlet_ref: 'main',
+        gauntlet_built_sha: 'c'.repeat(40),
+      },
+      credential_bundle: { name: 'blessed', bundle_id: 'blessed-2026-06-18-a' },
+      container: {
+        name: 'quorum-appliance',
+        id: 'container-123',
+        image_id: 'image-123',
+        mount_signature: 'sig-123',
+        code_mounts_read_only: false,
+      },
+      requester: { host_user: 'drew', remote_identity: 'codex-session' },
+      command_argv: ['appliance', 'run'],
+      tool_versions_path: '/tmp/tool-versions.txt',
+      tool_versions_text: null,
+    };
+
+    expect(ProvenanceRecordSchema.parse(base).credential_scope).toBe(null);
+    expect(
+      ProvenanceRecordSchema.parse({ ...base, credential_scope: null })
+        .credential_scope,
+    ).toBe(null);
+  });
+
+  test('durable container evidence keeps its snake-case, old-record-nullable shape', () => {
+    const parsed = JobRecordSchema.parse({
+      ...jobRecordWithoutCredentialFields('run'),
+      container: {
+        name: 'quorum-appliance',
+        id: null,
+        image_id: null,
+        mount_signature: 'sig-123',
+      },
+    });
+    // Compile-time: the interface Task 5 converts leases to and from IS the
+    // durable job.container shape, not a parallel definition of it.
+    const evidence: JobContainerEvidence | null = parsed.container;
+    expect(evidence).toEqual({
+      name: 'quorum-appliance',
+      id: null,
+      image_id: null,
+      mount_signature: 'sig-123',
+    });
+    // Evidence never embeds a second scope: the job's top-level
+    // credential_scope is the only persisted authority.
+    expect(Object.keys(evidence ?? {}).sort()).toEqual([
+      'id',
+      'image_id',
+      'mount_signature',
+      'name',
+    ]);
+  });
+
+  test('every audited oauth projection round-trips through the scope schema', () => {
+    // Typed as the union, so a new projection member is a compile error here
+    // until the persisted schema learns it too.
+    const projections: OAuthProjection[] = [
+      { kind: 'codex', mountName: 'codex' },
+      { kind: 'gemini', mountName: 'gemini' },
+      { kind: 'antigravity', mountName: 'gemini' },
+      { kind: 'kimi', mountName: 'kimi' },
+      { kind: 'pi', mountName: 'pi', provider: 'openai-codex' },
+    ];
+    for (const oauth of projections) {
+      const scope: CredentialScope = {
+        schemaVersion: 1,
+        kind: 'live',
+        agent: 'fixture-agent',
+        runtimeFamily: 'fixture-family',
+        credential: 'fixture-credential',
+        agentEnv: [],
+        geminiAuthType: null,
+        oauth,
+      };
+      expect(CredentialScopeSchema.parse(scope)).toEqual(scope);
+    }
   });
 });
 

@@ -1,6 +1,77 @@
 import { z } from 'zod';
 import { ApplianceErrorCodeSchema } from './errors.ts';
 
+// --- persisted credential request -------------------------------------------
+// The durable mirror of src/credentials/scope.ts. A job's credential authority
+// is persisted once, in the job record, and read back by preflight and Task 5's
+// execution binding. These schemas exist so a record cannot claim a delivery
+// shape the resolver and the container boundary do not both understand; the
+// contract tests round-trip real resolver output through them.
+
+export const CredentialSelectionSchema = z.object({
+  agent: z.string(),
+  credential: z.string().nullable(),
+});
+
+// The arrays are .readonly() so the persisted shape is interchangeable with
+// the runtime CredentialScope type in BOTH directions — a resolver-produced
+// scope can be written, and a parsed record can be handed to the container
+// boundary — without anyone casting between two nearly-identical types.
+const AgentEnvProjectionSchema = z.object({
+  destinationName: z.string(),
+  sourceNames: z.array(z.string()).readonly(),
+});
+
+// Closed set: an OAuth kind outside the audited projection table has no
+// container mount, so a record naming one could never be executed.
+const OAuthProjectionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('codex'), mountName: z.literal('codex') }),
+  z.object({ kind: z.literal('gemini'), mountName: z.literal('gemini') }),
+  z.object({ kind: z.literal('antigravity'), mountName: z.literal('gemini') }),
+  z.object({ kind: z.literal('kimi'), mountName: z.literal('kimi') }),
+  z.object({
+    kind: z.literal('pi'),
+    mountName: z.literal('pi'),
+    provider: z.string(),
+  }),
+]);
+
+// An ASSERTED zero-material scope, not "unscoped": every field is pinned to
+// its empty value, so an empty scope can never carry material.
+const EmptyCredentialScopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal('empty'),
+  agent: z.null(),
+  runtimeFamily: z.null(),
+  credential: z.null(),
+  // Exactly the empty tuple. z.tuple([]).readonly() would infer
+  // `readonly never[]`, which is assignable FROM the runtime type but not
+  // back TO it, so a parsed empty scope could not be handed to the container
+  // boundary without a cast.
+  agentEnv: z.custom<readonly []>(
+    (value) => Array.isArray(value) && value.length === 0,
+    { message: 'an empty credential scope must carry no agent env' },
+  ),
+  geminiAuthType: z.null(),
+  oauth: z.null(),
+});
+
+const LiveCredentialScopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal('live'),
+  agent: z.string(),
+  runtimeFamily: z.string(),
+  credential: z.string(),
+  agentEnv: z.array(AgentEnvProjectionSchema).readonly(),
+  geminiAuthType: z.enum(['gemini-api-key', 'oauth-personal']).nullable(),
+  oauth: OAuthProjectionSchema.nullable(),
+});
+
+export const CredentialScopeSchema = z.discriminatedUnion('kind', [
+  EmptyCredentialScopeSchema,
+  LiveCredentialScopeSchema,
+]);
+
 export const ApplianceConfigSchema = z.object({
   root: z.string(),
   evals: z.object({
@@ -112,6 +183,19 @@ const JobContainerSchema = z.object({
   mount_signature: z.string(),
 });
 
+// The durable container evidence a job carries: snake-case, and nullable in
+// the ID it never recorded on older records. It deliberately embeds NO scope —
+// the job's top-level credential_scope is the only persisted authority — and
+// it is not a runnable lease. Task 5 converts between this and the in-memory
+// ContainerLease; preflight already builds it through this type, so the
+// interface and the persisted shape cannot drift apart.
+export interface JobContainerEvidence {
+  readonly name: string;
+  readonly id: string | null;
+  readonly image_id: string | null;
+  readonly mount_signature: string;
+}
+
 // A signalable process group id: `kill -0/-INT -- -PGID` targets the whole
 // group, so 0 (caller's group), 1 (init), negatives, and non-integers are
 // never recordable. runRecordedContainerLifecycle repeats this exact check at
@@ -155,6 +239,16 @@ export const JobRecordSchema = z.object({
   request: z.object({
     superpowers_ref: z.string(),
   }),
+  // The one authoritative credential request, written in the INITIAL atomic
+  // job.json and never patched afterwards: what was selected, what that
+  // resolved to, and the evals HEAD it resolved against (Task 5 refuses to
+  // execute if the checkout has since moved). The defaults exist ONLY so
+  // records written before these fields parse — as null, never as a
+  // fabricated scope. Every writer supplies all three explicitly; see the
+  // kind-discriminated CreateJobRequest in jobs.ts.
+  credential_selection: CredentialSelectionSchema.nullable().default(null),
+  credential_scope: CredentialScopeSchema.nullable().default(null),
+  credential_scope_source_evals_sha: z.string().nullable().default(null),
   refs: RefSnapshotSchema.nullable(),
   credential_bundle: JobCredentialBundleSchema.nullable(),
   container: JobContainerSchema.nullable(),
@@ -209,6 +303,11 @@ export const ProvenanceRecordSchema = z
     container: JobContainerSchema.extend({
       code_mounts_read_only: z.boolean(),
     }),
+    // Read-compatible today: the live provenance writer still derives from
+    // preflight state, so it defaults to null. Task 5 owns the evidence-first
+    // ordering that makes live provenance job-authoritative and supplies this
+    // explicitly from the job's own scope.
+    credential_scope: CredentialScopeSchema.nullable().default(null),
     tool_versions_path: z.string().nullable(),
     tool_versions_text: z.string().nullable(),
     requester: z.object({
@@ -239,6 +338,10 @@ export const ImportedProvenanceRecordSchema = z.object({
   job_id: z.string(),
   created_at: z.string(),
   origin: OriginSchema,
+  // Always null, written explicitly: an imported run predates this appliance
+  // and received no bundle material through it. Defaulted for records written
+  // before the field existed.
+  credential_scope: CredentialScopeSchema.nullable().default(null),
   requester: z.object({
     agent: z.string().nullable().optional(),
     thread: z.string().nullable().optional(),

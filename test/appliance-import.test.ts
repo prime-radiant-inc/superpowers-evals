@@ -36,6 +36,7 @@ import {
   type JobRecord,
   type LoadedApplianceConfig,
 } from '../src/appliance/types.ts';
+import { importJobRequest, liveJobRequest } from './appliance-job-fixtures.ts';
 
 function loaded(): LoadedApplianceConfig {
   // Canonical (realpath) fixture root: the appliance boundary validates
@@ -139,12 +140,10 @@ function snapshotTree(dir: string): string {
 }
 
 function importJobClaiming(cfg: LoadedApplianceConfig, runId: string) {
-  const job = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import', runId],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    importJobRequest({ argv: ['evals-appliance', 'import', runId] }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     artifacts: { ...current.artifacts, run_id: runId },
@@ -315,6 +314,57 @@ test('imported provenance is written next to the run and in the state dir', () =
     'appliance-provenance.json',
   );
   expect(existsSync(beside)).toBe(true);
+});
+
+// --- imported runs assert no credential scope (F13) -------------------------
+// An imported run predates this appliance and never received bundle material
+// through it. Its job and its provenance say so explicitly — null, written,
+// not an absent key a later reader fills in.
+
+test('an imported job records all-null credential fields end to end', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const job = readJob(cfg, RUN_ID);
+
+  expect(job.kind).toBe('import');
+  expect(job.credential_selection).toBe(null);
+  expect(job.credential_scope).toBe(null);
+  expect(job.credential_scope_source_evals_sha).toBe(null);
+
+  const persisted = JSON.parse(
+    readFileSync(join(cfg.paths.jobs, job.job_id, 'job.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  expect(Object.hasOwn(persisted, 'credential_scope')).toBe(true);
+  expect(persisted['credential_scope']).toBe(null);
+});
+
+test('imported provenance persists an explicit null credential scope', () => {
+  const cfg = loaded();
+  importBundle(cfg, { bundleDir: makeBundle() });
+  const job = readJob(cfg, RUN_ID);
+
+  for (const path of [
+    job.artifacts.provenance,
+    join(
+      cfg.config.container.results_root,
+      RUN_ID,
+      'appliance-provenance.json',
+    ),
+  ]) {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.hasOwn(raw, 'credential_scope')).toBe(true);
+    expect(raw['credential_scope']).toBe(null);
+    expect(ImportedProvenanceRecordSchema.parse(raw).credential_scope).toBe(
+      null,
+    );
+    // No bundle path, no scoped state dir, ever.
+    const text = readFileSync(path, 'utf8');
+    expect(text).not.toContain('credentials-scoped');
+    expect(text).not.toContain(cfg.config.credential_bundle.path);
+  }
 });
 
 test('a checksum mismatch aborts before anything lands', () => {
@@ -928,12 +978,7 @@ test('a non-import job claiming the run_id with no landed dir fails closed inste
   const cfg = loaded();
   const bundle = makeBundle();
   // A live run job whose run dir is absent (pathological but visible state):
-  const foreign = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const foreign = createJob(cfg, liveJobRequest('run'));
   updateJob(cfg, foreign.job_id, (current) => ({
     ...current,
     artifacts: { ...current.artifacts, run_id: RUN_ID },
@@ -985,12 +1030,12 @@ test('a run_id equal to an unrelated job id is rejected closed: consumers stay u
   // An unrelated import job that never claims this run — but whose job_id is
   // exactly the incoming run_id. status/show resolve direct job ids first,
   // so landing this run would make them show the job instead of the run:
-  const unrelated = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import', 'some-other-run'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const unrelated = createJob(
+    cfg,
+    importJobRequest({
+      argv: ['evals-appliance', 'import', 'some-other-run'],
+    }),
+  );
   const unrelatedPath = join(cfg.paths.jobs, unrelated.job_id, 'job.json');
   const unrelatedBytes = readFileSync(unrelatedPath, 'utf8');
   const bundle = makeBundle({ runIds: [unrelated.job_id, RUN_ID_B] });
@@ -1023,12 +1068,7 @@ test('a direct job that is itself the record claiming the run does not count as 
   // job-id-first consumers and the artifact namespace resolve the same
   // record. (An interrupted reservation repaired by hand could look like
   // this.)
-  const job = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, importJobRequest());
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     artifacts: { ...current.artifacts, run_id: job.job_id },
@@ -1047,12 +1087,7 @@ test('a direct job that is itself the record claiming the run does not count as 
 test('a corrupt job record fails entries closed with a typed failure instead of minting duplicates', () => {
   const cfg = loaded();
   const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
-  const corrupt = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const corrupt = createJob(cfg, liveJobRequest('run'));
   writeFileSync(join(cfg.paths.jobs, corrupt.job_id, 'job.json'), 'not json');
 
   const result = importBundle(cfg, { bundleDir: bundle });
@@ -1108,12 +1143,7 @@ test('a symlinked job directory fails entries closed before any reservation or l
   // mint a duplicate claimant.
   const target = join(cfg.config.root, 'detached-job-payload');
   mkdirSync(target, { recursive: true });
-  const donor = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const donor = createJob(cfg, importJobRequest());
   const record = JSON.parse(
     readFileSync(join(cfg.paths.jobs, donor.job_id, 'job.json'), 'utf8'),
   ) as JobRecord;
@@ -1153,12 +1183,7 @@ test('a mismatched record claiming the run cannot redirect recording into anothe
   const cfg = loaded();
   const bundle = makeBundle({ runIds: [RUN_ID, RUN_ID_B] });
   // A real job that claims nothing…
-  const original = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const original = createJob(cfg, importJobRequest());
   const originalPath = join(cfg.paths.jobs, original.job_id, 'job.json');
   const originalBytes = readFileSync(originalPath, 'utf8');
   // …and a schema-valid copy of its record, filed under the wrong directory

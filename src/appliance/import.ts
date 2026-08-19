@@ -372,6 +372,9 @@ function importedProvenanceRecord(job: JobRecord, origin: Origin): unknown {
     job_id: job.job_id,
     created_at: origin.imported_at,
     origin,
+    // Written explicitly, not defaulted: the record asserts that this run
+    // received no scoped credential material, rather than staying silent.
+    credential_scope: null,
     requester: job.requester,
     command_argv: [...job.command.argv],
   });
@@ -449,6 +452,11 @@ function reserveImportJob(
       // Associated from the very first durable write — see CreateJobRequest.
       runId: entry.run_id,
       requester: { agent: null, thread: null, task: null },
+      // An imported run received no credential material through this
+      // appliance. Stated, not omitted.
+      credentialSelection: null,
+      credentialScope: null,
+      credentialScopeSourceEvalsSha: null,
     });
   // Retire any terminal provenance BEFORE the demotion below: a nonterminal
   // record must never sit next to terminal success evidence. State-only —

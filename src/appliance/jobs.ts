@@ -11,32 +11,69 @@ import {
 } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
+import type {
+  CredentialSelection,
+  EmptyCredentialScope,
+  LiveCredentialScope,
+} from '../credentials/scope.ts';
 import { ApplianceError } from './errors.ts';
 import { atomicWriteJson, mkdirPrivate, readJsonFile } from './fs.ts';
 import { provenancePath } from './provenance.ts';
 import { assertNoFollowDirChain, ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
-  type ApplianceCommandKind,
   type JobRecord,
   JobRecordSchema,
   type LoadedApplianceStateConfig,
 } from './types.ts';
 
-export interface CreateJobRequest {
-  readonly kind: ApplianceCommandKind;
+export interface CreateJobRequestBase {
   readonly superpowersRef: string;
   readonly argv: readonly string[];
-  // Present when the job is born already associated with a run (import
-  // reservations): carried in the INITIAL atomic job.json write, so a crash
-  // right after creation still leaves a record that exact run-id lookup can
-  // find and reuse instead of minting a duplicate.
-  readonly runId?: string;
   readonly requester: {
     readonly agent: string | null;
     readonly thread?: string | null;
     readonly task?: string | null;
   };
 }
+
+// The write interface has NO omission mode. Every new job states its
+// credential authority up front, and the kind decides which statement is
+// legal, so the compiler — not a runtime check, and not a later patch —
+// rejects a live job created without a resolved selection, scope, and source
+// SHA. (The persisted schema keeps null defaults, but those are for READING
+// records written before the fields existed.)
+//
+// prune deliberately has no variant: it creates no job record at all.
+export type CreateJobRequest =
+  | (CreateJobRequestBase & {
+      readonly kind: 'run' | 'run-all';
+      readonly runId?: never;
+      readonly credentialSelection: CredentialSelection;
+      readonly credentialScope: LiveCredentialScope;
+      readonly credentialScopeSourceEvalsSha: string;
+    })
+  // prepare asserts ZERO credential material rather than declining to say:
+  // its probes must run with an empty scope, not a legacy full bundle.
+  | (CreateJobRequestBase & {
+      readonly kind: 'prepare';
+      readonly runId?: never;
+      readonly credentialSelection: null;
+      readonly credentialScope: EmptyCredentialScope;
+      readonly credentialScopeSourceEvalsSha: null;
+    })
+  // An imported run predates this appliance and never received material
+  // through it — all null, and it is the only kind born already associated
+  // with a run id (carried in the INITIAL atomic job.json write, so a crash
+  // right after creation still leaves a record exact run-id lookup can find
+  // and reuse instead of minting a duplicate).
+  | (CreateJobRequestBase & {
+      readonly kind: 'import';
+      readonly runId?: string;
+      readonly credentialSelection: null;
+      readonly credentialScope: null;
+      readonly credentialScopeSourceEvalsSha: null;
+    });
 
 type JobPatcher = (current: JobRecord) => JobRecord;
 
@@ -60,8 +97,20 @@ function jobPath(loaded: LoadedApplianceStateConfig, jobId: string): string {
   return join(jobDir(loaded, jobId), 'job.json');
 }
 
+// readJsonFile pins a schema's input type to its output type, which the
+// credential fields' read defaults deliberately break (a record written
+// before they existed omits them). So the shared reader still owns opening
+// the file, parsing JSON, and labelling those faults; only the schema step
+// happens here, with the identical `${label}: ${message}` shape.
 function readJobPath(path: string): JobRecord {
-  return readJsonFile(path, JobRecordSchema, `job record ${path}`);
+  const label = `job record ${path}`;
+  const parsed = JobRecordSchema.safeParse(
+    readJsonFile(path, z.unknown(), label),
+  );
+  if (!parsed.success) {
+    throw new Error(`${label}: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 function hostUser(): string {
@@ -157,6 +206,12 @@ export function createJob(
     request: {
       superpowers_ref: request.superpowersRef,
     },
+    // Part of the FIRST durable write, never a later patch: a crash between
+    // creation and preflight must not leave a job whose credential authority
+    // is unknown.
+    credential_selection: request.credentialSelection,
+    credential_scope: request.credentialScope,
+    credential_scope_source_evals_sha: request.credentialScopeSourceEvalsSha,
     refs: null,
     credential_bundle: null,
     container: null,

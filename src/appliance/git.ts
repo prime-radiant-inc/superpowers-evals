@@ -130,6 +130,34 @@ export function fastForwardManagedRepo(
   ).stdout.trim();
 }
 
+// The managed checkout's CURRENT HEAD, without fetching, fast-forwarding, or
+// otherwise moving it. This is the source identity a credential request is
+// pinned to: the scope was resolved by reading this exact tree, so Task 5 can
+// refuse to execute a job whose checkout has since moved. A commit sha is the
+// only answer that can prove that, so anything else fails closed rather than
+// persisting an unverifiable anchor.
+export function currentCheckoutSha(
+  repoPath: string,
+  label: string,
+  runner: CommandRunner,
+): string {
+  const sha = requireGit(
+    repoPath,
+    ['rev-parse', 'HEAD'],
+    runner,
+    'checkout_failed',
+    `failed to resolve current ${label} HEAD`,
+  ).stdout.trim();
+  if (!isFullSha(sha)) {
+    throw new ApplianceError(
+      'checkout_failed',
+      'git',
+      `${label} HEAD in ${repoPath} did not resolve to a commit sha: ${sha === '' ? '<empty>' : sha}`,
+    );
+  }
+  return sha.toLowerCase();
+}
+
 export function resolveSuperpowersRef(
   repo: RefRepo,
   requestedRef: string,

@@ -24,6 +24,8 @@ import {
   prepare,
 } from '../src/appliance/preflight.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
+import { liveJobRequest, prepareJobRequest } from './appliance-job-fixtures.ts';
 
 class FakeRunner implements CommandRunner {
   readonly calls: {
@@ -189,12 +191,13 @@ function commandSubsequence(
 test('preflight shells through evals-container with blessed credentials and records provenance', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'prepare',
-    superpowersRef: 'main',
-    argv: ['evals-appliance', 'prepare', '--superpowers-ref', 'main'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-4' },
-  });
+  const job = createJob(
+    cfg,
+    prepareJobRequest({
+      argv: ['evals-appliance', 'prepare', '--superpowers-ref', 'main'],
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-4' },
+    }),
+  );
 
   const result = await preflightForJob({
     loaded: cfg,
@@ -286,12 +289,13 @@ test('preflight copies provenance beside a known batch artifact when the directo
     recursive: true,
   });
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['evals-appliance', 'run-all', '--', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      argv: ['evals-appliance', 'run-all', '--', '--tier', 'sentinel'],
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
     artifacts: {
@@ -328,12 +332,10 @@ test('preflight maps container build failures to image_build_failed', async () =
       command.endsWith('scripts/evals-container') && args.includes('build'),
     result: { status: 1, stdout: '', stderr: 'docker build failed' },
   });
-  const job = createJob(cfg, {
-    kind: 'prepare',
-    superpowersRef: 'main',
-    argv: ['evals-appliance', 'prepare'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    prepareJobRequest({ argv: ['evals-appliance', 'prepare'] }),
+  );
 
   await expect(
     preflightForJob({
@@ -392,12 +394,12 @@ test('prepare refuses with the typed scoped-cutover error before any state mutat
 test('postflightDirtyCheck quarantines the job on a dirty managed repo', () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'prepare',
-    superpowersRef: 'main',
-    argv: ['prepare'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
-  });
+  const job = createJob(
+    cfg,
+    prepareJobRequest({
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+    }),
+  );
 
   const clean = postflightDirtyCheck(cfg, job.job_id, runner);
   expect(clean).toBe(null);
@@ -423,4 +425,85 @@ test('postflightDirtyCheck quarantines the job on a dirty managed repo', () => {
     code: 'repo_dirty',
     message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
   });
+});
+
+// --- live scope is required to preflight a live job (F13) -------------------
+// Records written before the credential triple existed read back with a null
+// scope. They stay readable and cancellable, but they can never execute: there
+// is no legacy full-bundle path to fall back to, so preflight refuses them
+// before touching a repo, the container, or the bundle.
+
+test('preflight refuses a live job whose scope is null', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  for (const kind of ['run', 'run-all'] as const) {
+    const job = createJob(cfg, liveJobRequest(kind));
+    // Demote to the shape an old record has on disk.
+    updateJob(cfg, job.job_id, (current) => ({
+      ...current,
+      credential_selection: null,
+      credential_scope: null,
+      credential_scope_source_evals_sha: null,
+    }));
+
+    await expect(
+      preflightForJob({
+        loaded: cfg,
+        jobId: job.job_id,
+        superpowersRef: 'main',
+        runner,
+      }),
+    ).rejects.toMatchObject({
+      code: 'config_invalid',
+      step: 'preflight',
+      message: expect.stringContaining('no credential scope'),
+    });
+
+    expect(readJob(cfg, job.job_id).status).toBe('failed');
+  }
+  // Refused before any repo, container, or bundle work.
+  expect(runner.calls).toEqual([]);
+});
+
+test('preflight refuses a live job carrying the asserted empty scope', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, liveJobRequest('run'));
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    credential_scope: EMPTY_CREDENTIAL_SCOPE,
+  }));
+
+  await expect(
+    preflightForJob({
+      loaded: cfg,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'preflight',
+  });
+  expect(runner.calls).toEqual([]);
+});
+
+test('preflight accepts a prepare job carrying the asserted empty scope', async () => {
+  // prepare legitimately asserts zero credential material; the live-scope
+  // requirement must not strand it.
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, prepareJobRequest());
+
+  const result = await preflightForJob({
+    loaded: cfg,
+    jobId: job.job_id,
+    superpowersRef: 'main',
+    runner,
+  });
+
+  expect(result.refs.superpowers_resolved_sha).toBe('a'.repeat(40));
+  expect(readJob(cfg, job.job_id).credential_scope).toEqual(
+    EMPTY_CREDENTIAL_SCOPE,
+  );
 });

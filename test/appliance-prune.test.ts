@@ -26,6 +26,7 @@ import { createJob, updateJob } from '../src/appliance/jobs.ts';
 import { acquireLock } from '../src/appliance/locks.ts';
 import { prune } from '../src/appliance/prune.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { importJobRequest } from './appliance-job-fixtures.ts';
 
 function loaded(): LoadedApplianceConfig {
   // Canonical (realpath) fixture root: the appliance boundary validates
@@ -178,12 +179,10 @@ test('batch-referenced and job-record-referenced incomplete dirs are protected',
   makeRunDir(root, 'in-batch', { verdict: false, ageDays: 30 });
   makeRunDir(root, 'in-jobs', { verdict: false, ageDays: 30 });
   makeBatch(root, 'b1', ['in-batch']);
-  const job = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'x',
-    argv: ['test'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    importJobRequest({ superpowersRef: 'x', argv: ['test'] }),
+  );
   updateJob(cfg, job.job_id, (cur) => ({
     ...cur,
     artifacts: { ...cur.artifacts, run_id: 'in-jobs' },
@@ -398,12 +397,10 @@ test('a symlinked state/jobs root cannot hide a reference: prune fails closed', 
   const root = cfg.config.container.results_root;
   makeRunDir(root, 'referenced-run', { verdict: false, ageDays: 30 });
   // The real record claiming the run:
-  const job = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'x',
-    argv: ['test'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    importJobRequest({ superpowersRef: 'x', argv: ['test'] }),
+  );
   updateJob(cfg, job.job_id, (cur) => ({
     ...cur,
     artifacts: { ...cur.artifacts, run_id: 'referenced-run' },
@@ -833,12 +830,10 @@ test('a symlinked job.json fails prune closed', () => {
   const cfg = loaded();
   const root = cfg.config.container.results_root;
   makeRunDir(root, 'old-partial', { verdict: false, ageDays: 30 });
-  const job = createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'x',
-    argv: ['test'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    importJobRequest({ superpowersRef: 'x', argv: ['test'] }),
+  );
   const recordPath = join(cfg.paths.jobs, job.job_id, 'job.json');
   const outside = join(cfg.config.root, 'outside-job.json');
   renameSync(recordPath, outside);

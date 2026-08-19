@@ -92,45 +92,135 @@ function writeScenario(evalsPath: string, relativePath: string): void {
   writeFileSync(join(dir, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
 }
 
+// The trusted checkout's own agent + credential corpus. codex_sub is the
+// agent default (subscription auth -> an OAuth mount, no env); openai_responses
+// is the explicit override (api-key -> one env passthrough). Two shapes, so a
+// resolved scope cannot be confused with a defaulted one.
+const CODEX_AGENT_LINES: readonly string[] = [
+  'name: codex',
+  'binary: codex',
+  'home_config_subdir: ".codex"',
+  'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+  'session_log_glob: "**/rollout-*.jsonl"',
+  'normalizer: codex',
+  'required_env: []',
+  'default_credential: codex_sub',
+];
+
+const CODEX_SUB_SCOPE = {
+  schemaVersion: 1,
+  kind: 'live',
+  agent: 'codex',
+  runtimeFamily: 'codex',
+  credential: 'codex_sub',
+  agentEnv: [],
+  geminiAuthType: null,
+  oauth: { kind: 'codex', mountName: 'codex' },
+};
+
+const OPENAI_RESPONSES_SCOPE = {
+  schemaVersion: 1,
+  kind: 'live',
+  agent: 'codex',
+  runtimeFamily: 'codex',
+  credential: 'openai_responses',
+  agentEnv: [
+    { destinationName: 'OPENAI_API_KEY', sourceNames: ['OPENAI_API_KEY'] },
+  ],
+  geminiAuthType: null,
+  oauth: null,
+};
+
+function writeCredentialsYaml(evalsPath: string): void {
+  writeFileSync(
+    join(evalsPath, 'credentials.yaml'),
+    [
+      'codex_sub:',
+      '  model: gpt-5.5',
+      '  api: openai-responses',
+      '  auth: subscription',
+      '  harnesses: [codex]',
+      'openai_responses:',
+      '  model: gpt-5.5',
+      '  api: openai-responses',
+      '  api_key_env: OPENAI_API_KEY',
+      '  harnesses: [codex]',
+      'kimi_default:',
+      '  model: kimi-k2',
+      '  api_key_env: KIMI_MODEL_API_KEY',
+      '  harnesses: [kimi]',
+      '',
+    ].join('\n'),
+  );
+}
+
+// Real git, not a faked rev-parse: the evals SHA a credential request pins is
+// the actual HEAD of the configured checkout, and Task 5 compares against it.
+function commitCheckout(evalsPath: string): string {
+  const git = (...args: readonly string[]): string => {
+    const proc = spawnSync('git', ['-C', evalsPath, ...args], {
+      encoding: 'utf8',
+    });
+    if (proc.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${proc.stderr}`);
+    }
+    return proc.stdout.trim();
+  };
+  const init = spawnSync('git', ['init', '-q', '-b', 'main', evalsPath], {
+    encoding: 'utf8',
+  });
+  if (init.status !== 0) {
+    throw new Error(`git init failed: ${init.stderr}`);
+  }
+  git('add', '-A');
+  git(
+    '-c',
+    'user.email=fixture@example.com',
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-q',
+    '-m',
+    'fixture checkout',
+  );
+  return git('rev-parse', 'HEAD');
+}
+
+interface TrustedCheckout {
+  readonly evalsPath: string;
+  readonly headSha: string;
+}
+
+// A structurally complete trusted evals checkout: agent corpus, credential
+// registry, scenarios, and a real commit whose HEAD the request pins.
+function trustedCheckout(scenarios: readonly string[] = []): TrustedCheckout {
+  const evalsPath = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-cli-evals-')),
+  );
+  writeAgentYaml(evalsPath, 'codex', CODEX_AGENT_LINES);
+  writeCredentialsYaml(evalsPath);
+  for (const scenario of scenarios) {
+    writeScenario(evalsPath, scenario);
+  }
+  return { evalsPath, headSha: commitCheckout(evalsPath) };
+}
+
 test('run-all keeps appliance flags before separator and passes quorum args verbatim', async () => {
-  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
-  writeAgentYaml(evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/rollout-*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
-  writeAgentYaml(evalsPath, 'kimi', [
-    'name: kimi',
-    'binary: kimi',
-    'home_config_subdir: ".kimi-code"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.kimi-code/sessions"',
-    'session_log_glob: "**/wire.jsonl"',
-    'normalizer: kimi',
-    'required_env: []',
-  ]);
+  const checkout = trustedCheckout();
   const calls: unknown[] = [];
   const stdout: string[] = [];
   const program = createApplianceProgram({
     stdout: (s) => stdout.push(s),
     stderr: () => undefined,
-    loadConfig: () => loadedForCli(evalsPath),
-    actions: {
-      doctor: async () => ({ ok: true }),
-      prepare: async () => ({ ok: true }),
-      run: async () => ({ ok: true }),
-      runAll: async (args) => {
-        calls.push(args);
+    loadConfig: () => loadedForCli(checkout.evalsPath),
+    actions: noopActions({
+      runAll: async (args, request) => {
+        calls.push({ args, request });
         return { ok: true, job_id: 'job-1', status: 'preflighting' };
       },
-      status: async () => ({ ok: true }),
-      cancel: async () => ({ ok: true }),
-      show: async () => ({ ok: true }),
-      costs: async () => ({ ok: true }),
-    },
+    }),
   });
   await program.parseAsync([
     'node',
@@ -144,17 +234,77 @@ test('run-all keeps appliance flags before separator and passes quorum args verb
     '--tier',
     'sentinel',
     '--coding-agents',
-    'codex,kimi',
+    'codex',
   ]);
   expect(calls).toEqual([
     {
-      json: true,
-      detach: true,
-      superpowersRef: 'feature/x',
-      quorumArgs: ['--tier', 'sentinel', '--coding-agents', 'codex,kimi'],
+      args: {
+        json: true,
+        detach: true,
+        superpowersRef: 'feature/x',
+        // The forwarded bytes survive byte-for-byte; the request is derived
+        // from them, never a rewrite of them.
+        quorumArgs: ['--tier', 'sentinel', '--coding-agents', 'codex'],
+      },
+      request: {
+        selection: { agent: 'codex', credential: null },
+        scope: CODEX_SUB_SCOPE,
+        sourceEvalsSha: checkout.headSha,
+      },
     },
   ]);
   expect(stdout.join('\n')).toContain('job-1');
+});
+
+test('run-all forwards one explicit credential and resolves it into the request', async () => {
+  const checkout = trustedCheckout();
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: () => undefined,
+    stderr: () => undefined,
+    loadConfig: () => loadedForCli(checkout.evalsPath),
+    actions: noopActions({
+      runAll: async (args, request) => {
+        calls.push({ args, request });
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run-all',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--',
+    '--coding-agents',
+    'codex',
+    '--credentials',
+    'openai_responses',
+  ]);
+
+  expect(calls).toEqual([
+    {
+      args: {
+        json: true,
+        detach: false,
+        superpowersRef: 'main',
+        quorumArgs: [
+          '--coding-agents',
+          'codex',
+          '--credentials',
+          'openai_responses',
+        ],
+      },
+      request: {
+        selection: { agent: 'codex', credential: 'openai_responses' },
+        scope: OPENAI_RESPONSES_SCOPE,
+        sourceEvalsSha: checkout.headSha,
+      },
+    },
+  ]);
 });
 
 test('status accepts --json before the id', async () => {
@@ -508,35 +658,18 @@ test('prune apply renders ok:false and exit 1 when any candidate move failed', a
 });
 
 test('run forwards scenario and coding agent with appliance options', async () => {
-  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
-  writeScenario(evalsPath, 'writing-plans');
-  writeAgentYaml(evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
+  const checkout = trustedCheckout(['writing-plans']);
   const calls: unknown[] = [];
   const program = createApplianceProgram({
     stdout: () => undefined,
     stderr: () => undefined,
-    loadConfig: () => loadedForCli(evalsPath),
-    actions: {
-      doctor: async () => ({ ok: true }),
-      prepare: async () => ({ ok: true }),
-      run: async (args) => {
-        calls.push(args);
+    loadConfig: () => loadedForCli(checkout.evalsPath),
+    actions: noopActions({
+      run: async (args, request) => {
+        calls.push({ args, request });
         return { ok: true };
       },
-      runAll: async () => ({ ok: true }),
-      status: async () => ({ ok: true }),
-      cancel: async () => ({ ok: true }),
-      show: async () => ({ ok: true }),
-      costs: async () => ({ ok: true }),
-    },
+    }),
   });
 
   await program.parseAsync([
@@ -555,28 +688,77 @@ test('run forwards scenario and coding agent with appliance options', async () =
 
   expect(calls).toEqual([
     {
-      json: true,
-      detach: true,
-      superpowersRef: 'feature/x',
-      scenario: 'scenarios/writing-plans',
-      agent: 'codex',
+      args: {
+        json: true,
+        detach: true,
+        superpowersRef: 'feature/x',
+        scenario: 'scenarios/writing-plans',
+        agent: 'codex',
+        // Omitted --credential normalizes to null and resolves the agent
+        // default inside the request.
+        credential: null,
+      },
+      request: {
+        selection: { agent: 'codex', credential: null },
+        scope: CODEX_SUB_SCOPE,
+        sourceEvalsSha: checkout.headSha,
+      },
+    },
+  ]);
+});
+
+test('run forwards one explicit credential and resolves it into the request', async () => {
+  const checkout = trustedCheckout(['writing-plans']);
+  const calls: unknown[] = [];
+  const program = createApplianceProgram({
+    stdout: () => undefined,
+    stderr: () => undefined,
+    loadConfig: () => loadedForCli(checkout.evalsPath),
+    actions: noopActions({
+      run: async (args, request) => {
+        calls.push({ args, request });
+        return { ok: true };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'run',
+    '--json',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'codex',
+    '--credential',
+    'openai_responses',
+  ]);
+
+  expect(calls).toEqual([
+    {
+      args: {
+        json: true,
+        detach: false,
+        superpowersRef: 'main',
+        scenario: 'scenarios/writing-plans',
+        agent: 'codex',
+        credential: 'openai_responses',
+      },
+      request: {
+        selection: { agent: 'codex', credential: 'openai_responses' },
+        scope: OPENAI_RESPONSES_SCOPE,
+        sourceEvalsSha: checkout.headSha,
+      },
     },
   ]);
 });
 
 test('run accepts trusted bare and prefixed scenario paths', async () => {
-  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
-  writeScenario(evalsPath, 'alpha');
-  writeScenario(evalsPath, 'nested/bravo');
-  writeAgentYaml(evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
+  const checkout = trustedCheckout(['alpha', 'nested/bravo']);
+  const evalsPath = checkout.evalsPath;
   const calls: unknown[] = [];
   const program = createApplianceProgram({
     stdout: () => undefined,
@@ -622,6 +804,7 @@ test('run accepts trusted bare and prefixed scenario paths', async () => {
       superpowersRef: 'main',
       scenario: 'scenarios/alpha',
       agent: 'codex',
+      credential: null,
     },
     {
       json: true,
@@ -629,6 +812,7 @@ test('run accepts trusted bare and prefixed scenario paths', async () => {
       superpowersRef: 'main',
       scenario: 'scenarios/nested/bravo',
       agent: 'codex',
+      credential: null,
     },
   ]);
 });
@@ -797,8 +981,12 @@ test('run rejects antigravity on the Phase 1 appliance', async () => {
 });
 
 test('run validates the trusted coding-agent config for single-scenario runs', async () => {
-  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
+  const evalsPath = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-cli-evals-')),
+  );
   writeScenario(evalsPath, 'writing-plans');
+  // required_env is deliberately unsatisfiable: loadAgentConfigForValidation
+  // checks config shape, not the host environment.
   writeAgentYaml(evalsPath, 'codex', [
     'name: codex',
     'binary: codex',
@@ -808,6 +996,7 @@ test('run validates the trusted coding-agent config for single-scenario runs', a
     'normalizer: codex',
     'required_env:',
     '  - QUORUM_DEFINITELY_UNSET_VALIDATION',
+    'default_credential: codex_sub',
   ]);
   writeAgentYaml(evalsPath, 'stealth', [
     'name: stealth',
@@ -819,6 +1008,8 @@ test('run validates the trusted coding-agent config for single-scenario runs', a
     'normalizer: antigravity',
     'required_env: []',
   ]);
+  writeCredentialsYaml(evalsPath);
+  commitCheckout(evalsPath);
   const stdout: string[] = [];
   const calls: unknown[] = [];
   const program = createApplianceProgram({
@@ -867,6 +1058,7 @@ test('run validates the trusted coding-agent config for single-scenario runs', a
       superpowersRef: 'main',
       scenario: 'scenarios/writing-plans',
       agent: 'codex',
+      credential: null,
     },
   ]);
 });
@@ -1110,16 +1302,10 @@ test('run-all rejects forwarded root and result override flags', async () => {
 });
 
 test('run-all validates requested agents against trusted checkout configs', async () => {
-  const evalsPath = mkdtempSync(join(tmpdir(), 'appliance-cli-evals-'));
-  writeAgentYaml(evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
+  const evalsPath = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-cli-evals-')),
+  );
+  writeAgentYaml(evalsPath, 'codex', CODEX_AGENT_LINES);
   writeAgentYaml(evalsPath, 'broken', ['name: broken']);
   writeAgentYaml(evalsPath, 'stealth', [
     'name: stealth',
@@ -1131,6 +1317,8 @@ test('run-all validates requested agents against trusted checkout configs', asyn
     'normalizer: antigravity',
     'required_env: []',
   ]);
+  writeCredentialsYaml(evalsPath);
+  commitCheckout(evalsPath);
   const stdout: string[] = [];
   const calls: unknown[] = [];
   const program = createApplianceProgram({
@@ -1275,6 +1463,7 @@ interface RealConfigFixture {
   readonly configPath: string;
   readonly evalsPath: string;
   readonly bundleDir: string;
+  readonly headSha: string;
 }
 
 // A structurally valid on-disk appliance config whose credential bundle is
@@ -1309,11 +1498,18 @@ function writeRealConfig(): RealConfigFixture {
       },
     }),
   );
+  // A real checkout: the program action resolves the credential request from
+  // this corpus and pins this HEAD BEFORE the cutover guard runs, so the
+  // fixture has to be able to answer both.
+  const evalsPath = join(root, 'evals');
+  writeCredentialsYaml(evalsPath);
+  const headSha = commitCheckout(evalsPath);
   return {
     root,
     configPath,
-    evalsPath: join(root, 'evals'),
+    evalsPath,
     bundleDir: join(root, 'credentials/blessed'),
+    headSha,
   };
 }
 
@@ -1353,15 +1549,7 @@ test('production prepare refuses with the cutover error before state mutation or
 test('production run refuses with the cutover error after argument validation', () => {
   const fx = writeRealConfig();
   writeScenario(fx.evalsPath, 'writing-plans');
-  writeAgentYaml(fx.evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/rollout-*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
   const proc = runCli(fx, [
     'run',
     '--superpowers-ref',
@@ -1399,15 +1587,7 @@ test('production run refuses with the cutover error after argument validation', 
 
 test('production run-all refuses with the cutover error after argument validation', () => {
   const fx = writeRealConfig();
-  writeAgentYaml(fx.evalsPath, 'codex', [
-    'name: codex',
-    'binary: codex',
-    'home_config_subdir: ".codex"',
-    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
-    'session_log_glob: "**/rollout-*.jsonl"',
-    'normalizer: codex',
-    'required_env: []',
-  ]);
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
   const proc = runCli(fx, [
     'run-all',
     '--superpowers-ref',
@@ -1460,4 +1640,205 @@ test('doctor requires the credential-aware loader and fails typed on a broken bu
   expect(payload.error?.code).toBe('config_invalid');
   expect(payload.error?.step).toBe('config');
   expect(payload.error?.message).toContain('metadata');
+});
+
+// --- one normalized (agent, credential) selection per job (F13) -------------
+// The appliance isolation unit is exactly one agent plus one credential. A
+// selection that could widen into a second cell — a second agent, a second
+// credential, a foreign registry, an ambiguous value — is rejected before any
+// job exists, so no job record can assert a scope broader than it will use.
+
+// Commander retains option state across parses on one program instance, so
+// every selection case below builds its own program.
+test('run rejects every ambiguous --credential shape before the action runs', async () => {
+  const checkout = trustedCheckout(['alpha']);
+  const cases: readonly (readonly string[])[] = [
+    ['--credential='], // blank
+    ['--credential', '   '], // whitespace only
+    ['--credential=,'], // comma only
+    ['--credential', 'a,b'], // two credentials
+    ['--credential', '--json'], // option-looking value
+    ['--credential', 'openai_responses', '--credential', 'codex_sub'], // duplicate
+  ];
+
+  for (const extra of cases) {
+    const calls: unknown[] = [];
+    const stdout: string[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: () => undefined,
+      loadConfig: () => loadedForCli(checkout.evalsPath),
+      actions: noopActions({
+        run: async (args) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'run',
+      '--json',
+      '--superpowers-ref',
+      'main',
+      '--scenario',
+      'alpha',
+      '--coding-agent',
+      'codex',
+      ...extra,
+    ]);
+
+    const payload = JSON.parse(stdout.join('')) as CliJson;
+    expect(payload.ok).toBe(false);
+    expect(payload.error?.code).toBe('unsupported_os');
+    expect(payload.error?.step).toBe('arguments');
+    expect(calls).toEqual([]);
+  }
+});
+
+test('run-all rejects every ambiguous selection shape before the action runs', async () => {
+  const checkout = trustedCheckout();
+  const cases: readonly (readonly string[])[] = [
+    ['--coding-agents', 'codex,kimi'], // two agents
+    ['--coding-agents', 'codex', '--credentials', 'a,b'], // two credentials
+    ['--coding-agents', 'codex', '--credentials='], // blank
+    ['--coding-agents', 'codex', '--credentials=,'], // comma only
+    ['--coding-agents', 'codex', '--credentials'], // bare, no value
+    ['--coding-agents', 'codex', '--credentials', '--tier', 'sentinel'], // option-looking
+    ['--coding-agents', 'codex', '--credentials', 'a', '--credentials', 'b'], // duplicate
+    ['--coding-agents', 'codex', '--credential', 'codex_sub'], // singular flag
+    ['--coding-agents', 'codex', '--credentials-file', '/tmp/creds.yaml'], // foreign registry
+  ];
+
+  for (const quorumArgs of cases) {
+    const calls: unknown[] = [];
+    const stdout: string[] = [];
+    const program = createApplianceProgram({
+      stdout: (s) => stdout.push(s),
+      stderr: () => undefined,
+      setExitCode: () => undefined,
+      loadConfig: () => loadedForCli(checkout.evalsPath),
+      actions: noopActions({
+        runAll: async (args) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'run-all',
+      '--json',
+      '--superpowers-ref',
+      'main',
+      '--',
+      ...quorumArgs,
+    ]);
+
+    const payload = JSON.parse(stdout.join('')) as CliJson;
+    expect(payload.ok).toBe(false);
+    expect(payload.error?.code).toBe('unsupported_os');
+    expect(payload.error?.step).toBe('arguments');
+    expect(calls).toEqual([]);
+  }
+});
+
+test('the cross-command and custom-registry selection flags are unknown to run', () => {
+  // Real subprocesses: commander rejects an unknown option before any action,
+  // config load, or job creation.
+  for (const flag of ['--credentials', '--credentials-file']) {
+    const proc = spawnSync(
+      'bun',
+      [
+        'src/appliance/cli.ts',
+        'run',
+        '--superpowers-ref',
+        'main',
+        '--scenario',
+        'alpha',
+        '--coding-agent',
+        'codex',
+        flag,
+        'whatever',
+      ],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    );
+    expect(proc.status).not.toBe(0);
+    expect(`${proc.stderr}${proc.stdout}`).toContain(
+      `unknown option '${flag}'`,
+    );
+  }
+});
+
+test('a bare --credential with no value is rejected by the real CLI', () => {
+  const proc = spawnSync(
+    'bun',
+    [
+      'src/appliance/cli.ts',
+      'run',
+      '--superpowers-ref',
+      'main',
+      '--scenario',
+      'alpha',
+      '--coding-agent',
+      'codex',
+      '--credential',
+    ],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(`${proc.stderr}${proc.stdout}`).toContain('--credential');
+});
+
+test('the credential request is built before the cutover guard refuses', () => {
+  // Ordering proof: an unresolvable credential fails with the credential-scope
+  // error, not the guard, which can only happen if the program action builds
+  // the request first. Both refusals precede any state directory.
+  const fx = writeRealConfig();
+  writeScenario(fx.evalsPath, 'writing-plans');
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+
+  const unknownCredential = runCli(fx, [
+    'run',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'codex',
+    '--credential',
+    'no_such_credential',
+    '--json',
+  ]);
+  expect(unknownCredential.status).toBe(1);
+  const scopePayload = JSON.parse(unknownCredential.stdout) as CliJson;
+  expect(scopePayload.error?.step).toBe('credential-scope');
+  expect(scopePayload.error?.message).toContain('no_such_credential');
+  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+
+  // A resolvable credential gets past request construction and lands on the
+  // guard — still before job creation, state mutation, or bundle access.
+  const resolvable = runCli(fx, [
+    'run',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'codex',
+    '--credential',
+    'openai_responses',
+    '--json',
+  ]);
+  expect(resolvable.status).toBe(1);
+  const guardPayload = JSON.parse(resolvable.stdout) as CliJson;
+  expect(guardPayload.error?.step).toBe('scoped-cutover');
+  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+
+  // CLI output names no credential material location.
+  expect(resolvable.stdout).not.toContain('credentials-scoped');
+  expect(resolvable.stdout).not.toContain(fx.bundleDir);
 });

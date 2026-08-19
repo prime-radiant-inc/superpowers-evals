@@ -3,6 +3,7 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
+import { EMPTY_CREDENTIAL_SCOPE } from '../credentials/scope.ts';
 import {
   buildContainer,
   containerMountSignature,
@@ -26,6 +27,8 @@ import { writeProvenance } from './provenance.ts';
 import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import type {
   ApplianceCommandKind,
+  JobContainerEvidence,
+  JobRecord,
   JobStatus,
   LoadedApplianceConfig,
   LoadedApplianceStateConfig,
@@ -158,12 +161,40 @@ export function postflightDirtyCheck(
   }
 }
 
+// A live job may only preflight against a resolved live scope. Records
+// written before the credential fields existed read back with a null scope,
+// and an empty scope is an assertion of NO material — neither can deliver a
+// credential to an agent, and there is no legacy full-bundle fallback to
+// widen into. Both fail closed here, before any repo, container, or bundle
+// work. prepare is exempt: its probes legitimately assert an empty scope.
+function assertLiveScopeForExecution(job: JobRecord): void {
+  if (job.kind !== 'run' && job.kind !== 'run-all') {
+    return;
+  }
+  if (job.credential_scope === null) {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} (${job.kind}) has no credential scope; it predates scoped credential delivery and cannot be executed — submit a new job`,
+    );
+  }
+  if (job.credential_scope.kind !== 'live') {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} (${job.kind}) asserts an empty credential scope, which delivers no credential material; refusing to execute it`,
+    );
+  }
+}
+
 export async function preflightForJob(
   args: PreflightArgs,
 ): Promise<PreflightResult> {
   const runner = args.runner ?? defaultCommandRunner;
 
   try {
+    assertLiveScopeForExecution(readJob(args.loaded, args.jobId));
+
     updateJob(args.loaded, args.jobId, (current) => ({
       ...current,
       status: 'preflighting',
@@ -279,13 +310,19 @@ export async function preflightForJob(
       job.command.argv,
     );
 
-    const { code_mounts_read_only: _codeMountsReadOnly, ...jobContainer } =
-      resultBase.container;
+    // The durable half of the container record: read-only mount evidence is
+    // provenance-only, and this shape carries no scope of its own.
+    const containerEvidence: JobContainerEvidence = {
+      name: resultBase.container.name,
+      id: resultBase.container.id,
+      image_id: resultBase.container.image_id,
+      mount_signature: resultBase.container.mount_signature,
+    };
     updateJob(args.loaded, args.jobId, (current) => ({
       ...current,
       refs,
       credential_bundle: resultBase.credential_bundle,
-      container: jobContainer,
+      container: containerEvidence,
       artifacts: {
         ...current.artifacts,
         provenance: provenancePath,
@@ -318,6 +355,11 @@ export async function prepare(args: PrepareArgs): Promise<PreflightResult> {
           superpowersRef: args.superpowersRef,
           argv: args.argv,
           requester: args.requester,
+          // prepare asserts zero credential material and pins no source SHA:
+          // it resolves no cell.
+          credentialSelection: null,
+          credentialScope: EMPTY_CREDENTIAL_SCOPE,
+          credentialScopeSourceEvalsSha: null,
         })
       : readJob(args.loaded, args.jobId);
   const command: ApplianceCommandKind = job.kind;

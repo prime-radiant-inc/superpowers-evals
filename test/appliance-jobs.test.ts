@@ -28,6 +28,15 @@ import type {
   JobRecord,
   LoadedApplianceConfig,
 } from '../src/appliance/types.ts';
+import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
+import {
+  FIXTURE_LIVE_SCOPE,
+  FIXTURE_LIVE_SELECTION,
+  FIXTURE_SOURCE_EVALS_SHA,
+  importJobRequest,
+  liveJobRequest,
+  prepareJobRequest,
+} from './appliance-job-fixtures.ts';
 
 function loaded(): LoadedApplianceConfig {
   // Canonical (realpath) fixture root: the appliance boundary validates
@@ -68,12 +77,7 @@ function loaded(): LoadedApplianceConfig {
 }
 
 function importJob(cfg: LoadedApplianceConfig) {
-  return createJob(cfg, {
-    kind: 'import',
-    superpowersRef: 'unknown',
-    argv: ['evals-appliance', 'import'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  return createJob(cfg, importJobRequest());
 }
 
 function claimRun(
@@ -100,12 +104,14 @@ function expectCode(fn: () => void, code: ApplianceErrorCode): void {
 
 test('createJob writes a preflighting job with private log paths', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      superpowersRef: 'feature/ref',
+      argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+      requester: { agent: 'codex', thread: null, task: null },
+    }),
+  );
 
   expect(job.job_id).toMatch(/^job-\d{8}T\d{6}Z-[0-9a-f]{4}$/);
   expect(job.status).toBe('preflighting');
@@ -131,12 +137,7 @@ test('createJob writes a preflighting job with private log paths', () => {
 
 test('updateJob applies atomic patches and preserves immutable ids', () => {
   const cfg = loaded();
-  const job = createJob(cfg, {
-    kind: 'prepare',
-    superpowersRef: 'main',
-    argv: ['prepare'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, prepareJobRequest());
 
   const updated = updateJob(cfg, job.job_id, (current) => ({
     ...current,
@@ -361,17 +362,111 @@ test('a jobs-root enumeration failure is typed config_invalid, never a raw fs er
   expect(err.message).toContain('EACCES');
 });
 
+// --- initial credential request persistence (F13) ---------------------------
+// The triple is part of the FIRST atomic job.json write, not a later patch: a
+// crash between creation and preflight must never leave a live job whose
+// credential authority is unknown. These read the bytes on disk, not just the
+// returned record.
+
+function persistedRecord(
+  cfg: LoadedApplianceConfig,
+  jobId: string,
+): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(join(cfg.paths.jobs, jobId, 'job.json'), 'utf8'),
+  ) as Record<string, unknown>;
+}
+
+test('createJob persists the live credential triple for run and run-all', () => {
+  const cfg = loaded();
+  for (const kind of ['run', 'run-all'] as const) {
+    const job = createJob(cfg, liveJobRequest(kind));
+
+    expect(job.credential_selection).toEqual(FIXTURE_LIVE_SELECTION);
+    expect(job.credential_scope).toEqual(FIXTURE_LIVE_SCOPE);
+    expect(job.credential_scope_source_evals_sha).toBe(
+      FIXTURE_SOURCE_EVALS_SHA,
+    );
+    expect(persistedRecord(cfg, job.job_id)).toMatchObject({
+      kind,
+      credential_selection: FIXTURE_LIVE_SELECTION,
+      credential_scope: FIXTURE_LIVE_SCOPE,
+      credential_scope_source_evals_sha: FIXTURE_SOURCE_EVALS_SHA,
+    });
+  }
+});
+
+test('createJob persists the asserted empty scope for prepare', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, prepareJobRequest());
+
+  expect(job.credential_selection).toBe(null);
+  expect(job.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  expect(job.credential_scope_source_evals_sha).toBe(null);
+  expect(persistedRecord(cfg, job.job_id)).toMatchObject({
+    credential_selection: null,
+    credential_scope: EMPTY_CREDENTIAL_SCOPE,
+    credential_scope_source_evals_sha: null,
+  });
+});
+
+test('createJob persists all-null credential fields for import', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, importJobRequest({ runId: 'run-imported' }));
+
+  expect(job.credential_selection).toBe(null);
+  expect(job.credential_scope).toBe(null);
+  expect(job.credential_scope_source_evals_sha).toBe(null);
+  const record = persistedRecord(cfg, job.job_id);
+  // Explicit nulls on disk, not absent keys the reader defaults later.
+  expect(Object.hasOwn(record, 'credential_selection')).toBe(true);
+  expect(Object.hasOwn(record, 'credential_scope')).toBe(true);
+  expect(Object.hasOwn(record, 'credential_scope_source_evals_sha')).toBe(true);
+  expect(record['credential_selection']).toBe(null);
+  expect(record['credential_scope']).toBe(null);
+  expect(record['credential_scope_source_evals_sha']).toBe(null);
+});
+
+test('the persisted credential fields carry no filesystem paths', () => {
+  const cfg = loaded();
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      scope: {
+        schemaVersion: 1,
+        kind: 'live',
+        agent: 'pi',
+        runtimeFamily: 'pi',
+        credential: 'pi_default',
+        agentEnv: [
+          { destinationName: 'PI_API_KEY', sourceNames: ['PI_API_KEY'] },
+        ],
+        geminiAuthType: null,
+        oauth: { kind: 'pi', mountName: 'pi', provider: 'openai-codex' },
+      },
+    }),
+  );
+
+  const record = persistedRecord(cfg, job.job_id);
+  const credentialFields = JSON.stringify({
+    credential_selection: record['credential_selection'],
+    credential_scope: record['credential_scope'],
+    credential_scope_source_evals_sha:
+      record['credential_scope_source_evals_sha'],
+  });
+  // Names and mount labels only — never where the material lives on disk.
+  expect(credentialFields).not.toContain('/');
+  expect(credentialFields).not.toContain('credentials-scoped');
+  expect(credentialFields).not.toContain(cfg.config.credential_bundle.path);
+  expect(credentialFields).not.toContain(cfg.config.root);
+});
+
 // Job persistence is part of the structural state boundary: the whole API
 // accepts a state-only loaded config carrying no bundle metadata.
 test('job lifecycle operates on the structural state config', () => {
   const full = loaded();
   const { bundle: _bundle, ...structural } = full;
-  const job = createJob(structural, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(structural, liveJobRequest('run'));
   expect(readJob(structural, job.job_id).job_id).toBe(job.job_id);
   expect(readJobById(structural, job.job_id)?.job_id).toBe(job.job_id);
 });

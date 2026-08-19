@@ -22,6 +22,7 @@ import {
   runWorker,
 } from '../src/appliance/process.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { liveJobRequest } from './appliance-job-fixtures.ts';
 
 const CONTAINER_ID =
   'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
@@ -321,12 +322,14 @@ test('liveCommandArgs exports detached signal mode for appliance run-all', () =>
 test('runWorker refuses with the typed scoped-cutover error', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run-all', {
+      superpowersRef: 'feature/ref',
+      argv: ['quorum', 'run-all', '--tier', 'sentinel'],
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
+    }),
+  );
 
   await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
     code: 'config_invalid',
@@ -345,12 +348,7 @@ test('runWorker refuses with the typed scoped-cutover error', async () => {
 test('cancel sends one fixed SIGINT to the recorded container id only', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id);
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -378,12 +376,7 @@ test('cancel of a replaced container emits no signal and reports lost', async ()
   const runner = new FakeRunner();
   runner.currentContainerId = 'replacement-container-id';
   runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id);
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -397,12 +390,7 @@ test('cancel of a job with no recorded container identity emits no signal', asyn
   const cfg = loaded();
   const runner = new FakeRunner();
   runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id, { containerId: null });
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -414,12 +402,12 @@ test('cancel of a job with no recorded container identity emits no signal', asyn
 test('cancel records cancelled for a stopped single-run verdict discovered after SIGINT', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
+    }),
+  );
   const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
   mkdirSync(join(cfg.config.container.results_root, runId), {
     recursive: true,
@@ -456,12 +444,12 @@ test('cancel records cancelled for a stopped single-run verdict discovered after
 test('cancel records done for a completed single-run verdict discovered after SIGINT', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
+    }),
+  );
   const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
   mkdirSync(join(cfg.config.container.results_root, runId), {
     recursive: true,
@@ -500,12 +488,7 @@ test('cancel leaves a running job retryable when SIGINT fails and the process is
   const runner = new FakeRunner();
   runner.cancelSignalFails = true;
   runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id);
 
   let message = '';
@@ -524,12 +507,7 @@ test('cancel keeps a job stopping when the process group is still alive after gr
   const cfg = loaded();
   const runner = new FakeRunner();
   runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id);
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -542,12 +520,7 @@ test('cancel keeps a job stopping when the process group is still alive after gr
 test('cancel retry classifies an exited stopping process without sending another SIGINT', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id, { status: 'stopping' });
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -559,12 +532,7 @@ test('cancel retry classifies an exited stopping process without sending another
 test('cancel records cancelled when a terminal batch footer is visible', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'main',
-    argv: ['quorum', 'run-all'],
-    requester: { agent: null, thread: null, task: null },
-  });
+  const job = createJob(cfg, liveJobRequest('run-all'));
   mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
     recursive: true,
   });
