@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -126,8 +127,35 @@ case "$1" in
     running=true
     id="\${EVALS_CONTAINER_FAKE_CONTAINER_ID:?}"
     write_state
-    # Real docker run -d prints the new container's full id on stdout.
-    printf '%s\\n' "$id"
+    # Real docker run --cidfile <path> writes the new container's full id
+    # to the file.
+    cidfile=""
+    expect_cid=false
+    for arg in "$@"; do
+      if [[ "$expect_cid" == true ]]; then
+        cidfile=$arg
+        expect_cid=false
+        continue
+      fi
+      case "$arg" in
+        --cidfile) expect_cid=true ;;
+        --cidfile=*) cidfile="\${arg#--cidfile=}" ;;
+      esac
+    done
+    if [[ -n "$cidfile" ]]; then
+      printf '%s\\n' "$id" > "$cidfile"
+    fi
+    # Real docker run -d prints the new container's full id on stdout; the
+    # knob models a docker/wrapper contract that misbehaves.
+    case "\${EVALS_CONTAINER_RUN_STDOUT:-id}" in
+      id) printf '%s\\n' "$id" ;;
+      blank) : ;;
+      multi) printf '%s %s\\n' "$id" "second-token" ;;
+      name) printf '%s\\n' "evals-fake-container" ;;
+      mismatch)
+        printf '%s\\n' "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ;;
+    esac
     exit 0
     ;;
   start)
@@ -147,6 +175,9 @@ case "$1" in
     exit 0
     ;;
   rm)
+    if [[ "\${EVALS_CONTAINER_RM_FAIL:-}" == true ]]; then
+      exit 1
+    fi
     shift
     if [[ "\${1:-}" == "-f" ]]; then
       shift
@@ -1274,9 +1305,13 @@ describe('scripts/evals-container scoped mode', () => {
         name,
         id: FAKE_CONTAINER_ID,
       });
+      const envFile = join(harness.root, 'agent.env');
+      writeFileSync(envFile, '');
       const proc = runWrapper(harness, [
         '--name',
         name,
+        '--env-file',
+        envFile,
         '--no-default-auth',
         'up',
       ]);
@@ -1398,7 +1433,10 @@ describe('scripts/evals-container scoped mode', () => {
         name,
         id: FAKE_CONTAINER_ID,
       });
-      const execEnvFile = join(harness.root, 'supervisor.exec.env');
+      const execEnvFile = join(
+        realpathSync(harness.root),
+        'supervisor.exec.env',
+      );
       writeFileSync(execEnvFile, 'ANTHROPIC_API_KEY=grader\n');
 
       const proc = runWrapper(harness, [
@@ -1475,6 +1513,12 @@ describe('scripts/evals-container scoped mode', () => {
 
       expect(proc.error).toBeUndefined();
       expect(proc.status).not.toBe(0);
+      // Case-specific diagnostics plus exact no-Docker behavior: an
+      // unknown-flag rejection can no longer pass this test vacuously.
+      expect(proc.stderr).toContain('not inspectable');
+      expect(dockerCommands(harness.dockerLog)).toEqual([
+        ['container', 'inspect', '-f', '{{.Id}}', 'evals-scoped-missing'],
+      ]);
       expect(dockerCommandsNamed(harness.dockerLog, 'exec')).toEqual([]);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });
@@ -1484,10 +1528,12 @@ describe('scripts/evals-container scoped mode', () => {
   test('--exec-env-file and --expected-container-id are validated before any docker call', () => {
     const cases: {
       label: string;
+      fragment: string;
       prepare: (harness: ReturnType<typeof makeHarness>) => string[];
     }[] = [
       {
         label: 'relative exec env file',
+        fragment: 'absolute path',
         prepare: () => [
           '--expected-container-id',
           FAKE_CONTAINER_ID,
@@ -1498,7 +1544,8 @@ describe('scripts/evals-container scoped mode', () => {
         ],
       },
       {
-        label: 'symlinked exec env file',
+        label: 'final-symlinked exec env file',
+        fragment: 'symlink',
         prepare: (harness) => {
           const real = join(harness.root, 'real.env');
           const link = join(harness.root, 'link.env');
@@ -1515,7 +1562,27 @@ describe('scripts/evals-container scoped mode', () => {
         },
       },
       {
+        label: 'intermediate-symlinked exec env file path',
+        fragment: 'symlink',
+        prepare: (harness) => {
+          const realDir = join(harness.root, 'real-dir');
+          const linkDir = join(harness.root, 'link-dir');
+          mkdirSync(realDir, { recursive: true });
+          writeFileSync(join(realDir, 'exec.env'), 'X=1\n');
+          symlinkSync(realDir, linkDir);
+          return [
+            '--expected-container-id',
+            FAKE_CONTAINER_ID,
+            '--exec-env-file',
+            join(linkDir, 'exec.env'),
+            'exec',
+            'quorum',
+          ];
+        },
+      },
+      {
         label: 'missing exec env file',
+        fragment: 'not a regular file',
         prepare: (harness) => [
           '--expected-container-id',
           FAKE_CONTAINER_ID,
@@ -1527,6 +1594,7 @@ describe('scripts/evals-container scoped mode', () => {
       },
       {
         label: 'unreadable exec env file',
+        fragment: 'not readable',
         prepare: (harness) => {
           const file = join(harness.root, 'unreadable.env');
           writeFileSync(file, 'X=1\n');
@@ -1543,6 +1611,7 @@ describe('scripts/evals-container scoped mode', () => {
       },
       {
         label: 'exec env file without an expected container id',
+        fragment: 'requires --expected-container-id',
         prepare: (harness) => {
           const file = join(harness.root, 'agent.env');
           writeFileSync(file, 'X=1\n');
@@ -1551,6 +1620,7 @@ describe('scripts/evals-container scoped mode', () => {
       },
       {
         label: 'exec env file outside exec',
+        fragment: 'only for exec',
         prepare: (harness) => {
           const file = join(harness.root, 'agent.env');
           writeFileSync(file, 'X=1\n');
@@ -1565,21 +1635,174 @@ describe('scripts/evals-container scoped mode', () => {
       },
       {
         label: 'expected container id outside exec',
+        fragment: 'only for exec',
         prepare: () => ['--expected-container-id', FAKE_CONTAINER_ID, 'status'],
       },
     ];
 
-    for (const { prepare } of cases) {
+    for (const { label, fragment, prepare } of cases) {
       const harness = makeHarness();
+      // A canonical root: the strict component walk rightly refuses the
+      // macOS /var -> /private/var alias mkdtemp hands out.
+      harness.root = realpathSync(harness.root);
       try {
         const proc = runWrapper(harness, prepare(harness));
 
         expect(proc.error).toBeUndefined();
         expect(proc.status).not.toBe(0);
+        // Case-specific diagnostics plus exact no-Docker behavior, so an
+        // unknown-flag rejection cannot pass this test vacuously.
+        expect(proc.stderr).toContain(fragment);
         expect(dockerLogLines(harness.dockerLog)).toEqual([]);
+      } catch (error) {
+        throw new Error(`case '${label}': ${String(error)}`);
       } finally {
         rmSync(harness.root, { recursive: true, force: true });
       }
+    }
+  });
+
+  test('--no-default-auth up refuses to discover a repo-default env file', () => {
+    const harness = makeHarness();
+    // A hostile repo-default env file the legacy path would otherwise
+    // silently discover and mount as the credential env.
+    const repoDefaultEnv = join(REPO, '.env.container');
+    expect(existsSync(repoDefaultEnv)).toBe(false);
+    writeFileSync(repoDefaultEnv, 'ANTHROPIC_API_KEY=hostile-repo-default\n');
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('--env-file');
+      expect(dockerLogLines(harness.dockerLog)).toEqual([]);
+    } finally {
+      rmSync(repoDefaultEnv, { force: true });
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('scoped up treats the cidfile as the rollback authority when stdout misbehaves', () => {
+    const cases: { label: string; fragment: string; stdout: string }[] = [
+      { label: 'blank stdout', fragment: 'no container id', stdout: 'blank' },
+      {
+        label: 'multi-token stdout',
+        fragment: 'multiple tokens',
+        stdout: 'multi',
+      },
+      {
+        label: 'name-like stdout',
+        fragment: 'malformed',
+        stdout: 'name',
+      },
+    ];
+    for (const { label, fragment, stdout } of cases) {
+      const harness = makeHarness({ EVALS_CONTAINER_RUN_STDOUT: stdout });
+      removeResultProbeFiles();
+      try {
+        const superpowersRoot = makeSuperpowersRoot(harness.root);
+        const envFile = join(harness.root, 'agent.env');
+        writeFileSync(envFile, '');
+
+        const proc = runWrapper(harness, [
+          '--superpowers-root',
+          superpowersRoot,
+          '--env-file',
+          envFile,
+          '--no-default-auth',
+          'up',
+        ]);
+
+        expect(proc.error).toBeUndefined();
+        expect(proc.status).not.toBe(0);
+        expect(proc.stderr).toContain(fragment);
+        expect(proc.stderr).toContain('rolled back container');
+        // Rollback removes exactly the cidfile container id, never the
+        // configured name.
+        expect(dockerCommandsNamed(harness.dockerLog, 'rm')).toEqual([
+          ['rm', '-f', FAKE_CONTAINER_ID],
+        ]);
+        expect(dockerCommandsNamed(harness.dockerLog, 'stop')).toEqual([]);
+      } catch (error) {
+        throw new Error(`case '${label}': ${String(error)}`);
+      } finally {
+        removeResultProbeFiles();
+        rmSync(harness.root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('scoped up cross-checks stdout against the cidfile and rolls back the cidfile id on mismatch', () => {
+    const harness = makeHarness({ EVALS_CONTAINER_RUN_STDOUT: 'mismatch' });
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const envFile = join(harness.root, 'agent.env');
+      writeFileSync(envFile, '');
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--env-file',
+        envFile,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('does not match');
+      // The cidfile id (the container docker actually created) is the
+      // rollback target — not the mismatched stdout id.
+      expect(dockerCommandsNamed(harness.dockerLog, 'rm')).toEqual([
+        ['rm', '-f', FAKE_CONTAINER_ID],
+      ]);
+      expect(dockerCommandsNamed(harness.dockerLog, 'stop')).toEqual([]);
+    } finally {
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('a scoped rollback failure is appended to the original failure without masking it', () => {
+    const harness = makeHarness({
+      EVALS_CONTAINER_RUN_STDOUT: 'blank',
+      EVALS_CONTAINER_RM_FAIL: 'true',
+    });
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const envFile = join(harness.root, 'agent.env');
+      writeFileSync(envFile, '');
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--env-file',
+        envFile,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('no container id');
+      expect(proc.stderr).toContain('also failed');
+      expect(dockerCommandsNamed(harness.dockerLog, 'rm')).toEqual([
+        ['rm', '-f', FAKE_CONTAINER_ID],
+      ]);
+    } finally {
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
     }
   });
 });

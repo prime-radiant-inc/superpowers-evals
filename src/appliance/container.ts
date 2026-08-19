@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import type { CredentialScope } from '../credentials/scope.ts';
 import {
@@ -403,12 +403,6 @@ function scopedContainerFault(message: string): ApplianceError {
   return new ApplianceError('config_invalid', 'container', message);
 }
 
-function insideDir(path: string, root: string): boolean {
-  const resolvedRoot = resolve(root);
-  const resolved = resolve(path);
-  return resolved !== resolvedRoot && resolved.startsWith(resolvedRoot + sep);
-}
-
 // Mirrors credential-scope's fixed slot layout. Activation re-validates the
 // staging slot authoritatively, but reconciliation must refuse a displaced
 // stage BEFORE the container is downed, so the fixed path is derived here
@@ -420,11 +414,239 @@ function fixedScopedSlot(
   return join(loaded.config.root, 'state', 'credentials-scoped', slot);
 }
 
-// The one consistency rule for both staged and active material: the material
-// discriminant must match its scope's, empty material can carry no
-// supervisor file or mounts, live material must carry its supervisor file,
-// the auth mounts must correspond exactly to the scope's own oauth
-// projection, and every projected path must stay under the material's root.
+const SCOPED_AGENT_ENV_FILE = 'agent.env';
+const SCOPED_SUPERVISOR_ENV_FILE = 'supervisor.exec.env';
+const SCOPED_AUTH_DIR = 'auth';
+const CREDENTIAL_ENV_DESTINATION = '/run/evals/credentials.env';
+
+// The container-side destination each projected auth mount name is mounted
+// at (the wrapper deliberately maps kimi -> /auth/kimi-code).
+const AUTH_MOUNT_DESTINATION: Readonly<
+  Record<ProjectedAuthMount['name'], string>
+> = {
+  codex: '/auth/codex',
+  gemini: '/auth/gemini',
+  kimi: '/auth/kimi-code',
+  pi: '/auth/pi',
+};
+
+const OAUTH_KIND_TO_MOUNT: Readonly<Record<string, string>> = {
+  codex: 'codex',
+  gemini: 'gemini',
+  antigravity: 'gemini',
+  kimi: 'kimi',
+  pi: 'pi',
+};
+
+// The exact file set each OAuth projection kind stages under
+// auth/<mount>/. Non-secret structure only: this is what binds a staged
+// generation to its scope's own projector, so a same-mount cross-scope
+// swap (gemini and antigravity share the 'gemini' mount name) cannot pass
+// this boundary even though the mount names correspond.
+const OAUTH_PROJECTED_FILES: Readonly<
+  Record<string, { required: readonly string[]; optional: readonly string[] }>
+> = {
+  codex: { required: ['auth.json'], optional: [] },
+  gemini: {
+    required: ['google_accounts.json', 'oauth_creds.json'],
+    optional: [],
+  },
+  antigravity: {
+    required: ['antigravity-cli/antigravity-oauth-token'],
+    optional: [],
+  },
+  kimi: {
+    required: ['config.toml', 'credentials/kimi-code.json'],
+    optional: ['oauth/kimi-code'],
+  },
+  pi: { required: ['agent/auth.json'], optional: [] },
+};
+
+// The complete non-secret shape of one asserted scope: schema version,
+// discriminant, identity fields, agent env projections, gemini mode, and the
+// oauth projector's own kind/mount/provider consistency. A scope that fails
+// this check can never reach a runner call.
+function requireScopeShape(label: string, scope: CredentialScope): void {
+  if (scope.schemaVersion !== 1) {
+    throw scopedContainerFault(
+      `${label} has an unsupported schemaVersion: ${String(scope.schemaVersion)}`,
+    );
+  }
+  // Runtime guard first: a cast scope may carry a kind outside the union.
+  const kind = (scope as { kind: unknown }).kind;
+  if (kind !== 'empty' && kind !== 'live') {
+    throw scopedContainerFault(`${label} has an unknown kind: ${String(kind)}`);
+  }
+  if (scope.kind === 'empty') {
+    if (
+      scope.agent !== null ||
+      scope.runtimeFamily !== null ||
+      scope.credential !== null ||
+      scope.geminiAuthType !== null ||
+      scope.oauth !== null ||
+      scope.agentEnv.length !== 0
+    ) {
+      throw scopedContainerFault(
+        `${label} is an empty scope carrying live material fields`,
+      );
+    }
+    return;
+  }
+  if (
+    scope.agent === '' ||
+    scope.runtimeFamily === '' ||
+    scope.credential === ''
+  ) {
+    throw scopedContainerFault(
+      `${label} is missing its agent, runtimeFamily, or credential identity`,
+    );
+  }
+  for (const projection of scope.agentEnv) {
+    if (projection.destinationName === '') {
+      throw scopedContainerFault(
+        `${label} has an agent env projection with no destination name`,
+      );
+    }
+    if (projection.sourceNames.length === 0) {
+      throw scopedContainerFault(
+        `${label} agent env projection '${projection.destinationName}' has no source names`,
+      );
+    }
+    for (const source of projection.sourceNames) {
+      if (source === '') {
+        throw scopedContainerFault(
+          `${label} agent env projection '${projection.destinationName}' has a blank source name`,
+        );
+      }
+    }
+  }
+  if (
+    scope.geminiAuthType !== null &&
+    scope.geminiAuthType !== 'gemini-api-key' &&
+    scope.geminiAuthType !== 'oauth-personal'
+  ) {
+    throw scopedContainerFault(
+      `${label} has an unknown geminiAuthType: ${String(scope.geminiAuthType)}`,
+    );
+  }
+  if (scope.oauth !== null) {
+    const mount = Object.hasOwn(OAUTH_KIND_TO_MOUNT, scope.oauth.kind)
+      ? OAUTH_KIND_TO_MOUNT[scope.oauth.kind]
+      : undefined;
+    if (mount === undefined) {
+      throw scopedContainerFault(
+        `${label} has an unknown oauth projection kind: ${String(scope.oauth.kind)}`,
+      );
+    }
+    if (scope.oauth.mountName !== mount) {
+      throw scopedContainerFault(
+        `${label} oauth kind '${scope.oauth.kind}' must use mount '${mount}', got '${String(scope.oauth.mountName)}'`,
+      );
+    }
+    if (
+      scope.oauth.kind === 'pi' &&
+      (typeof scope.oauth.provider !== 'string' || scope.oauth.provider === '')
+    ) {
+      throw scopedContainerFault(
+        `${label} pi oauth projection requires a nonempty provider`,
+      );
+    }
+  }
+}
+
+// Every regular file under dir, as slash-separated relative paths, or null
+// when dir is absent. Symlinks and non-regular entries are refusals: the
+// projected tree must be exactly the real files the projector wrote.
+function listProjectedTree(dir: string, label: string): string[] | null {
+  const stats = lstatSync(dir, { throwIfNoEntry: false });
+  if (stats === undefined) {
+    return null;
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw scopedContainerFault(`${label} must be a real directory: ${dir}`);
+  }
+  const files: string[] = [];
+  const walk = (path: string, rel: string): void => {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
+      const childPath = join(path, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw scopedContainerFault(`${label} contains a symlink: ${childPath}`);
+      }
+      if (entry.isDirectory()) {
+        walk(childPath, childRel);
+      } else if (entry.isFile()) {
+        files.push(childRel);
+      } else {
+        throw scopedContainerFault(
+          `${label} contains a non-regular entry: ${childPath}`,
+        );
+      }
+    }
+  };
+  walk(dir, '');
+  return files.sort();
+}
+
+// Bind the staged/active generation's non-secret file structure to the
+// asserted scope's own oauth projector: the projected auth tree must exist
+// exactly when the scope projects oauth material, must contain every
+// required file for the scope's kind, and must contain nothing else (beyond
+// the kind's optional files).
+function requireProjectedAuthTree(
+  label: string,
+  rootDir: string,
+  scope: CredentialScope,
+): void {
+  const authDir = join(rootDir, SCOPED_AUTH_DIR);
+  const oauth = scope.kind === 'live' ? scope.oauth : null;
+  if (oauth === null) {
+    if (listProjectedTree(authDir, `${label} projected auth tree`) !== null) {
+      throw scopedContainerFault(
+        `${label} carries a projected auth tree but its scope projects no oauth material`,
+      );
+    }
+    return;
+  }
+  const actual = listProjectedTree(authDir, `${label} projected auth tree`);
+  if (actual === null) {
+    throw scopedContainerFault(`${label} is missing its projected auth tree`);
+  }
+  const spec = Object.hasOwn(OAUTH_PROJECTED_FILES, oauth.kind)
+    ? OAUTH_PROJECTED_FILES[oauth.kind]
+    : undefined;
+  if (spec === undefined) {
+    throw scopedContainerFault(
+      `${label} has an unknown oauth projection kind: ${String(oauth.kind)}`,
+    );
+  }
+  const expectedRel = (file: string): string => `${oauth.mountName}/${file}`;
+  const allowed = new Set(
+    [...spec.required, ...spec.optional].map((file) => expectedRel(file)),
+  );
+  for (const rel of actual) {
+    if (!allowed.has(rel)) {
+      throw scopedContainerFault(
+        `${label} projected auth tree contains a file its scope does not project: ${rel}`,
+      );
+    }
+  }
+  for (const required of spec.required) {
+    if (!actual.includes(expectedRel(required))) {
+      throw scopedContainerFault(
+        `${label} projected auth tree is missing its scope-required file: ${expectedRel(required)}`,
+      );
+    }
+  }
+}
+
+// The one consistency rule for both staged and active material: the scope's
+// complete shape, the material discriminant matching the scope's, empty
+// material carrying no supervisor file or mounts, live material carrying its
+// supervisor file, every projected path being EXACTLY its fixed slot path
+// (never a descendant), the auth mounts corresponding exactly to the scope's
+// own oauth projection, and the projected auth tree binding to that
+// projection's file set.
 function requireScopedMaterialShape(
   label: string,
   material: {
@@ -436,10 +658,17 @@ function requireScopedMaterialShape(
   },
   rootDir: string,
 ): void {
+  const root = resolve(rootDir);
   const scope = material.credentialScope;
+  requireScopeShape(`${label} credential scope`, scope);
   if (material.kind !== scope.kind) {
     throw scopedContainerFault(
       `${label} pairs ${material.kind} material with a ${scope.kind} credential scope; the material discriminant is the sole scope authority`,
+    );
+  }
+  if (resolve(material.agentEnvFile) !== join(root, SCOPED_AGENT_ENV_FILE)) {
+    throw scopedContainerFault(
+      `${label} agent env file is not the fixed slot path: ${material.agentEnvFile}`,
     );
   }
   if (scope.kind === 'empty') {
@@ -460,9 +689,12 @@ function requireScopedMaterialShape(
         `live ${label} must carry its supervisor exec env file`,
       );
     }
-    if (!insideDir(material.supervisorExecEnvFile, rootDir)) {
+    if (
+      resolve(material.supervisorExecEnvFile) !==
+      join(root, SCOPED_SUPERVISOR_ENV_FILE)
+    ) {
       throw scopedContainerFault(
-        `${label} supervisor exec env file escapes its root: ${material.supervisorExecEnvFile}`,
+        `${label} supervisor exec env file is not the fixed slot path: ${material.supervisorExecEnvFile}`,
       );
     }
     const expected = scope.oauth === null ? [] : [scope.oauth.mountName];
@@ -476,18 +708,16 @@ function requireScopedMaterialShape(
       );
     }
   }
-  if (!insideDir(material.agentEnvFile, rootDir)) {
-    throw scopedContainerFault(
-      `${label} agent env file escapes its root: ${material.agentEnvFile}`,
-    );
-  }
   for (const mount of material.authMounts) {
-    if (!insideDir(mount.path, rootDir)) {
+    if (
+      resolve(mount.path) !== resolve(join(root, SCOPED_AUTH_DIR, mount.name))
+    ) {
       throw scopedContainerFault(
-        `${label} auth mount '${mount.name}' escapes its root: ${mount.path}`,
+        `${label} auth mount '${mount.name}' is not the fixed slot path: ${mount.path}`,
       );
     }
   }
+  requireProjectedAuthTree(label, root, scope);
 }
 
 /**
@@ -565,23 +795,45 @@ export function scopedExecContainerArgs(
   return args;
 }
 
-// The scoped mount signature describes the ASSERTED scope and the active
-// destinations — configured paths and mount names only, never credential
-// values, so a secret rotation does not change it.
+// The scoped mount signature describes the COMPLETE asserted non-secret
+// scope — schema version, identity, agent env projections, gemini mode, and
+// the oauth projector's kind/mount/provider — plus the fixed active
+// destinations. Never secret values, so a secret rotation does not change
+// it while any change to the asserted delivery contract does.
 function scopedMountSignature(
   loaded: LoadedApplianceConfig,
   active: ActiveCredentialMaterial,
 ): string {
   const scope = active.credentialScope;
+  const oauth =
+    scope.kind === 'live' && scope.oauth !== null
+      ? scope.oauth.kind === 'pi'
+        ? {
+            kind: scope.oauth.kind,
+            mountName: scope.oauth.mountName,
+            provider: scope.oauth.provider,
+          }
+        : { kind: scope.oauth.kind, mountName: scope.oauth.mountName }
+      : null;
   const payload = {
     evals: loaded.config.evals.path,
     superpowers: loaded.config.superpowers.path,
     results_root: loaded.config.container.results_root,
     scope: {
+      schema_version: scope.schemaVersion,
       kind: scope.kind,
       agent: scope.agent,
       runtime_family: scope.runtimeFamily,
       credential: scope.credential,
+      agent_env:
+        scope.kind === 'live'
+          ? scope.agentEnv.map((projection) => ({
+              destination: projection.destinationName,
+              sources: [...projection.sourceNames],
+            }))
+          : [],
+      gemini_auth_type: scope.geminiAuthType,
+      oauth,
     },
     agent_env_file: active.agentEnvFile,
     supervisor_exec_env_file: active.supervisorExecEnvFile,
@@ -593,12 +845,198 @@ function scopedMountSignature(
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+function canonicalHostPath(path: string, what: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    throw new ApplianceError(
+      'container_unhealthy',
+      'container',
+      `the asserted ${what} could not be canonicalized for mount validation: ${path}`,
+    );
+  }
+}
+
+interface CapturedMount {
+  readonly Type: string;
+  readonly Source: string;
+  readonly Destination: string;
+  readonly RW: boolean;
+}
+
+function capturedFault(capturedId: string, message: string): ApplianceError {
+  return new ApplianceError(
+    'container_unhealthy',
+    'container',
+    `captured container ${capturedId} ${message}`,
+  );
+}
+
+function parseCapturedMounts(
+  capturedId: string,
+  record: unknown,
+): CapturedMount[] {
+  if (typeof record !== 'object' || record === null) {
+    throw capturedFault(capturedId, 'inspection returned no mount array');
+  }
+  const raw = (record as Record<string, unknown>)['Mounts'];
+  if (!Array.isArray(raw)) {
+    throw capturedFault(capturedId, 'inspection returned no mount array');
+  }
+  return raw.map((entry): CapturedMount => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw capturedFault(capturedId, 'has a malformed mount entry');
+    }
+    const mount = entry as Record<string, unknown>;
+    if (
+      typeof mount['Type'] !== 'string' ||
+      typeof mount['Source'] !== 'string' ||
+      typeof mount['Destination'] !== 'string' ||
+      typeof mount['RW'] !== 'boolean'
+    ) {
+      throw capturedFault(capturedId, 'has a malformed mount entry');
+    }
+    return {
+      Type: mount['Type'],
+      Source: mount['Source'],
+      Destination: mount['Destination'],
+      RW: mount['RW'],
+    };
+  });
+}
+
+// Validate the captured container's ACTUAL mount topology against the
+// asserted active material: exactly one read-only bind of the active agent
+// env file at /run/evals/credentials.env, exactly one read-only bind of each
+// asserted projected auth directory at its fixed destination, no unasserted
+// /auth/* mount anywhere, and the supervisor exec env file never mounted on
+// any mount's source. Any drift is a typed refusal; the caller rolls back
+// exactly the captured id.
+function requireCapturedMountTopology(
+  capturedId: string,
+  record: unknown,
+  active: ActiveCredentialMaterial,
+): void {
+  const mounts = parseCapturedMounts(capturedId, record);
+  const envMounts = mounts.filter(
+    (mount) => mount.Destination === CREDENTIAL_ENV_DESTINATION,
+  );
+  if (envMounts.length !== 1) {
+    throw capturedFault(
+      capturedId,
+      `must expose exactly one ${CREDENTIAL_ENV_DESTINATION} mount, found ${envMounts.length}`,
+    );
+  }
+  const envMount = envMounts[0];
+  if (envMount === undefined) {
+    throw capturedFault(
+      capturedId,
+      `must expose exactly one ${CREDENTIAL_ENV_DESTINATION} mount`,
+    );
+  }
+  if (envMount.Type !== 'bind') {
+    throw capturedFault(
+      capturedId,
+      `${CREDENTIAL_ENV_DESTINATION} mount is not a bind mount`,
+    );
+  }
+  if (envMount.RW) {
+    throw capturedFault(
+      capturedId,
+      `${CREDENTIAL_ENV_DESTINATION} mount must be read-only`,
+    );
+  }
+  if (
+    envMount.Source !== canonicalHostPath(active.agentEnvFile, 'agent env file')
+  ) {
+    throw capturedFault(
+      capturedId,
+      `${CREDENTIAL_ENV_DESTINATION} mount source does not match the asserted agent env file`,
+    );
+  }
+
+  const assertedDestinations = new Set<string>();
+  for (const mount of active.authMounts) {
+    const destination = Object.hasOwn(AUTH_MOUNT_DESTINATION, mount.name)
+      ? AUTH_MOUNT_DESTINATION[mount.name]
+      : undefined;
+    if (destination === undefined) {
+      throw capturedFault(
+        capturedId,
+        `has an unknown projected auth mount name '${String(mount.name)}'`,
+      );
+    }
+    assertedDestinations.add(destination);
+    const matches = mounts.filter((entry) => entry.Destination === destination);
+    if (matches.length !== 1) {
+      throw capturedFault(
+        capturedId,
+        `must expose exactly one ${destination} mount, found ${matches.length}`,
+      );
+    }
+    const match = matches[0];
+    if (match === undefined) {
+      throw capturedFault(
+        capturedId,
+        `must expose exactly one ${destination} mount`,
+      );
+    }
+    if (match.Type !== 'bind') {
+      throw capturedFault(
+        capturedId,
+        `${destination} mount is not a bind mount`,
+      );
+    }
+    if (match.RW) {
+      throw capturedFault(capturedId, `${destination} mount must be read-only`);
+    }
+    if (
+      match.Source !==
+      canonicalHostPath(mount.path, `projected auth directory ${mount.name}`)
+    ) {
+      throw capturedFault(
+        capturedId,
+        `${destination} mount source does not match the asserted projected auth directory`,
+      );
+    }
+  }
+
+  for (const mount of mounts) {
+    if (
+      mount.Destination.startsWith('/auth/') &&
+      !assertedDestinations.has(mount.Destination)
+    ) {
+      throw capturedFault(
+        capturedId,
+        `exposes an unasserted auth mount at ${mount.Destination}`,
+      );
+    }
+  }
+
+  if (active.supervisorExecEnvFile !== null) {
+    const supervisorSource = canonicalHostPath(
+      active.supervisorExecEnvFile,
+      'supervisor exec env file',
+    );
+    for (const mount of mounts) {
+      if (mount.Source === supervisorSource) {
+        throw capturedFault(
+          capturedId,
+          'mounts the supervisor exec env file, which must never enter the container',
+        );
+      }
+    }
+  }
+}
+
 // Inspect the captured container BY ID and require the record to identify
-// exactly that ID; a name lookup is never blessed as the lease identity.
-// Returns the image id for the lease.
+// exactly that ID (a name lookup is never blessed as the lease identity)
+// and to expose exactly the asserted credential mount topology. Returns the
+// image id for the lease.
 function inspectCapturedContainer(
   runner: CommandRunner,
   capturedId: string,
+  active: ActiveCredentialMaterial,
 ): string | null {
   const result = runner.run('docker', ['container', 'inspect', capturedId]);
   if (result.status !== 0) {
@@ -634,6 +1072,7 @@ function inspectCapturedContainer(
       `inspection of captured container ${capturedId} identified a different container; refusing to bless it`,
     );
   }
+  requireCapturedMountTopology(capturedId, record, active);
   return stringField(record, 'Image') ?? stringField(record, 'ImageID');
 }
 
@@ -705,7 +1144,7 @@ export function reconcileScopedContainer(
   }
 
   try {
-    const imageId = inspectCapturedContainer(runner, capturedId);
+    const imageId = inspectCapturedContainer(runner, capturedId, active);
     return {
       name: loaded.config.container.name,
       id: capturedId,

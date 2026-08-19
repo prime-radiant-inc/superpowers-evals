@@ -11,7 +11,7 @@ options:
   --gauntlet-root <dir>
   --env-file <file>
   --auth <codex|gemini|kimi|pi>=<dir>
-  --no-default-auth
+  --no-default-auth                (up: no host-home fallbacks; requires --env-file)
   --expected-container-id <id>   (exec only)
   --exec-env-file <file>         (exec only, requires --expected-container-id)
 USAGE
@@ -20,6 +20,32 @@ USAGE
 die() {
   printf 'evals-container: %s\n' "$*" >&2
   exit 1
+}
+
+# Validate an absolute file path component by component WITHOUT following
+# symlinks: every ancestor component must be a real directory (not a
+# symlink, not '.'/'..'), and the final component must additionally be a
+# regular readable file. A final-component-only -L check would let an
+# intermediate symlink redirect the read, so the whole chain is walked.
+validate_no_follow_file() {
+  local path=$1 label=$2 component rest path_so_far
+  [[ "$path" == /* ]] || die "$label must be an absolute path: $path"
+  rest=${path#/}
+  while [[ -n "$rest" ]]; do
+    component=${rest%%/*}
+    if [[ "$component" == "$rest" ]]; then
+      rest=""
+    else
+      rest=${rest#*/}
+    fi
+    [[ -n "$component" && "$component" != "." && "$component" != ".." ]] \
+      || die "$label has an unsafe path component: $path"
+    path_so_far="$path_so_far/$component"
+    [[ ! -L "$path_so_far" ]] \
+      || die "$label reaches a symlink component: $path_so_far"
+  done
+  [[ -f "$path" ]] || die "$label is not a regular file: $path"
+  [[ -r "$path" ]] || die "$label is not readable: $path"
 }
 
 physical_dir() {
@@ -181,17 +207,21 @@ fi
 
 # Scoped-exec flag validation: both flags are exec-only, --exec-env-file
 # additionally requires the immutable id and must be an absolute, readable,
-# regular file reached WITHOUT following a symlink. All of this happens
-# before any Docker call.
+# regular file reached WITHOUT following a symlink (every component
+# no-follow). All of this happens before any Docker call.
 if [[ -n "$expected_container_id" || -n "$exec_env_file" ]]; then
   [[ "$command" == exec ]] || die "--expected-container-id and --exec-env-file are valid only for exec"
 fi
 if [[ -n "$exec_env_file" ]]; then
   [[ -n "$expected_container_id" ]] || die "--exec-env-file requires --expected-container-id"
-  [[ "$exec_env_file" == /* ]] || die "--exec-env-file must be an absolute path: $exec_env_file"
-  [[ ! -L "$exec_env_file" ]] || die "--exec-env-file must not be a symlink: $exec_env_file"
-  [[ -f "$exec_env_file" ]] || die "--exec-env-file is not a regular file: $exec_env_file"
-  [[ -r "$exec_env_file" ]] || die "--exec-env-file is not readable: $exec_env_file"
+  validate_no_follow_file "$exec_env_file" "--exec-env-file"
+fi
+
+# Scoped up must never silently discover a repo-default credential env
+# file: --no-default-auth requires the caller to pass --env-file explicitly
+# (the appliance always passes the projected active agent.env).
+if [[ "$command" == up && "$no_default_auth" == true && "$env_file_explicit" != true ]]; then
+  die "--no-default-auth requires an explicit --env-file; scoped up never discovers repo-default credential env files"
 fi
 
 if [[ -z "$container_name" ]]; then
@@ -392,6 +422,16 @@ scoped_probe_with_rollback() {
   fi
 }
 
+# Roll back exactly one captured container id, preserving the original
+# failure reason and appending a rollback failure without secret values.
+scoped_rollback_or_die() {
+  local target=$1 reason=$2
+  if ! docker rm -f "$target" >/dev/null 2>&1; then
+    die "scoped up $reason; rollback of container $target also failed"
+  fi
+  die "scoped up $reason; rolled back container $target"
+}
+
 run_up() {
   ensure_private_results_root
   local container_home=/workspace/evals/results/.container-home
@@ -505,19 +545,52 @@ run_up() {
   )
 
   if [[ "$no_default_auth" == true ]]; then
-    # Scoped up: capture the new container's id from `docker run` stdout —
-    # it is the immutable lease identity, never re-derived from the mutable
-    # configured name — probe the results mount against exactly that id, and
-    # print the id for the caller.
-    local captured_id
-    if ! captured_id=$(docker run "${run_args[@]}"); then
+    # Scoped up: docker itself records the created container's full id in a
+    # PRIVATE cidfile, and that file is the rollback AUTHORITY. stdout is
+    # cross-checked as a full 64-hex Docker id: blank, multi-token,
+    # name-like/malformed, or mismatching stdout still rolls back exactly the
+    # cidfile id — never the configured name. The probe and the printed id
+    # also use that id; a later name lookup is never blessed.
+    local cidfile authority_id stdout_id reason full_id_re
+    full_id_re='^[0-9a-f]{64}$'
+    cidfile=$(mktemp "${TMPDIR:-/tmp}/evals-container-cid.XXXXXXXX") \
+      || die "could not create a private cidfile for $container_name"
+    run_args+=(--cidfile "$cidfile")
+    if ! stdout_id=$(docker run "${run_args[@]}"); then
+      rm -f "$cidfile"
       die "docker run failed for $container_name"
     fi
-    if [[ -z "$captured_id" || "$captured_id" == *[[:space:]]* ]]; then
-      die "docker run did not print a single container id on stdout for $container_name"
+    authority_id=$(cat "$cidfile" 2>/dev/null || true)
+    rm -f "$cidfile"
+    if ! [[ "$authority_id" =~ $full_id_re ]]; then
+      # The cidfile is unusable (docker contract violation); stdout below is
+      # the only rollback candidate and is validated before any use.
+      authority_id=""
     fi
-    scoped_probe_with_rollback "$captured_id"
-    printf '%s\n' "$captured_id"
+    # Command substitution strips trailing newlines; trim any other
+    # surrounding whitespace before validating the printed id.
+    stdout_id="${stdout_id#"${stdout_id%%[![:space:]]*}"}"
+    stdout_id="${stdout_id%"${stdout_id##*[![:space:]]}"}"
+    reason=""
+    if [[ -z "$stdout_id" ]]; then
+      reason="received no container id on stdout"
+    elif [[ "$stdout_id" == *[[:space:]]* ]]; then
+      reason="received multiple tokens on stdout instead of one container id"
+    elif ! [[ "$stdout_id" =~ $full_id_re ]]; then
+      reason="received a malformed container id on stdout (expected a full 64-hex docker id)"
+    elif [[ -z "$authority_id" ]]; then
+      authority_id="$stdout_id"
+    elif [[ "$stdout_id" != "$authority_id" ]]; then
+      reason="stdout container id does not match the cidfile container id"
+    fi
+    if [[ -n "$reason" ]]; then
+      if [[ -z "$authority_id" ]]; then
+        die "scoped up $reason for $container_name; no rollback target is known"
+      fi
+      scoped_rollback_or_die "$authority_id" "$reason for $container_name"
+    fi
+    scoped_probe_with_rollback "$authority_id"
+    printf '%s\n' "$authority_id"
     return 0
   fi
 

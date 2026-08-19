@@ -390,6 +390,63 @@ function writeScopedTree(base: string, files: Record<string, string>): void {
   }
 }
 
+// The container-side destination the wrapper mounts each projected auth
+// name at (kimi deliberately maps to /auth/kimi-code).
+const AUTH_MOUNT_DEST: Readonly<Record<string, string>> = {
+  codex: '/auth/codex',
+  gemini: '/auth/gemini',
+  kimi: '/auth/kimi-code',
+  pi: '/auth/pi',
+};
+
+interface FakeInspectMount {
+  readonly Type: 'bind';
+  readonly Source: string;
+  readonly Destination: string;
+  readonly RW: boolean;
+}
+
+// The mount topology a correct scoped up produces: the active agent env file
+// read-only at /run/evals/credentials.env plus each asserted auth directory
+// read-only at its fixed destination.
+function scopedInspectMounts(spec: {
+  readonly envFile: string;
+  readonly auth?: readonly { name: string; path: string }[];
+  readonly extra?: readonly FakeInspectMount[];
+}): FakeInspectMount[] {
+  const mounts: FakeInspectMount[] = [
+    {
+      Type: 'bind',
+      Source: spec.envFile,
+      Destination: '/run/evals/credentials.env',
+      RW: false,
+    },
+  ];
+  for (const mount of spec.auth ?? []) {
+    mounts.push({
+      Type: 'bind',
+      Source: mount.path,
+      Destination: AUTH_MOUNT_DEST[mount.name] ?? `/auth/${mount.name}`,
+      RW: false,
+    });
+  }
+  mounts.push(...(spec.extra ?? []));
+  return mounts;
+}
+
+function envOnlyMounts(fx: ScopedFixture): FakeInspectMount[] {
+  return scopedInspectMounts({
+    envFile: join(fx.activeDir, 'agent.env'),
+  });
+}
+
+function geminiLiveMounts(fx: ScopedFixture): FakeInspectMount[] {
+  return scopedInspectMounts({
+    envFile: join(fx.activeDir, 'agent.env'),
+    auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+  });
+}
+
 function seedGeminiBundle(fx: ScopedFixture, salt = ''): void {
   writeScopedTree(fx.bundleDir, {
     'metadata.json': JSON.stringify({
@@ -418,6 +475,91 @@ const GEMINI_OAUTH_SCOPE: LiveCredentialScope = {
   geminiAuthType: 'oauth-personal',
   oauth: { kind: 'gemini', mountName: 'gemini' },
 };
+
+// Same agent/credential/mount as GEMINI_OAUTH_SCOPE but the Antigravity
+// projector: identical mount name, disjoint projected file set. Used to
+// prove a same-mount cross-scope swap cannot pass the boundary.
+const ANTIGRAVITY_SAME_MOUNT_SCOPE: LiveCredentialScope = {
+  schemaVersion: 1,
+  kind: 'live',
+  agent: 'gemini',
+  runtimeFamily: 'gemini',
+  credential: 'gemini_cred',
+  agentEnv: [],
+  geminiAuthType: null,
+  oauth: { kind: 'antigravity', mountName: 'gemini' },
+};
+
+const KIMI_OAUTH_SCOPE: LiveCredentialScope = {
+  schemaVersion: 1,
+  kind: 'live',
+  agent: 'kimi',
+  runtimeFamily: 'kimi',
+  credential: 'kimi_cred',
+  agentEnv: [],
+  geminiAuthType: null,
+  oauth: { kind: 'kimi', mountName: 'kimi' },
+};
+
+function piScope(provider: string): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'pi',
+    runtimeFamily: 'pi',
+    credential: 'pi_cred',
+    agentEnv: [],
+    geminiAuthType: null,
+    oauth: { kind: 'pi', mountName: 'pi', provider },
+  };
+}
+
+// Two api-key scopes that differ ONLY in agentEnv (same agent, credential,
+// destinations): identical trees, so any signature difference is attributable
+// to the agentEnv projection alone.
+function agentEnvKeyScope(destination: string): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'probe-agent',
+    runtimeFamily: 'probe-family',
+    credential: 'probe_cred',
+    agentEnv: [{ destinationName: destination, sourceNames: [destination] }],
+    geminiAuthType: null,
+    oauth: null,
+  };
+}
+
+// A bundle carrying every OAuth delivery class so cross-scope and provider
+// binding can be exercised on one fixture. Every value is a unique marker,
+// distinct from every grader alias value in SCOPED_ENV_LINES.
+function seedSharedAuthBundle(fx: ScopedFixture): void {
+  writeScopedTree(fx.bundleDir, {
+    'metadata.json': JSON.stringify({
+      bundle_id: 'blessed-x',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+    }),
+    'credentials.env': `${SCOPED_ENV_LINES.join('\n')}\n`,
+    'gemini/oauth_creds.json': JSON.stringify({
+      access_token: 'gem-access',
+      refresh_token: 'gem-refresh',
+    }),
+    'gemini/google_accounts.json': JSON.stringify({
+      accounts: [{ email: 'user@example.com' }],
+    }),
+    'gemini/antigravity-cli/antigravity-oauth-token': 'agy-marker-token\n',
+    'kimi-code/config.toml': 'model = "kimi"\n',
+    'kimi-code/credentials/kimi-code.json': JSON.stringify({
+      token: 'kimi-creds-marker',
+    }),
+    'kimi-code/oauth/kimi-code': 'kimi-oauth-marker\n',
+    'pi/agent/auth.json': JSON.stringify({
+      'openai-codex': { token: 'pi-codex-marker' },
+      anthropic: { token: 'pi-anthropic-marker' },
+    }),
+  });
+}
 
 // Full recursive fingerprint (paths, kinds, modes, bytes) used to prove the
 // cleanup path never touched a slot.
@@ -453,9 +595,15 @@ class ScopedFakeRunner implements CommandRunner {
   upStatus = 0;
   rmStatus = 0;
   execResult: CommandResult = { status: 0, stdout: '', stderr: '' };
+  // The Docker `container inspect` Mounts payload for the captured id. Real
+  // docker reports the created container's actual bind mounts here; leaving
+  // this empty models a container whose credential mounts are all wrong.
+  mounts: FakeInspectMount[] = [];
   inspect: (target: string) => CommandResult = (target) => ({
     status: 0,
-    stdout: JSON.stringify([{ Id: target, Image: 'img-1' }]),
+    stdout: JSON.stringify([
+      { Id: target, Image: 'img-1', Mounts: this.mounts },
+    ]),
     stderr: '',
   });
 
@@ -598,6 +746,14 @@ test('scopedUpContainerArgs for asserted-empty material carries the empty env fi
 
 test('scopedUpContainerArgs projects exactly the live auth mounts and never the supervisor path', () => {
   const fx = makeScopedFixture();
+  // A structurally complete active generation, so the boundary can bind the
+  // projected tree to the scope.
+  writeScopedTree(fx.activeDir, {
+    'agent.env': "ANTHROPIC_API_KEY='k'\n",
+    'supervisor.exec.env': 'QUORUM_GRADER_SOURCE_MODE=appliance-scoped\n',
+    'auth/gemini/oauth_creds.json': '{}',
+    'auth/gemini/google_accounts.json': '{}',
+  });
   const active = liveActiveMaterial(fx);
   const args = scopedUpContainerArgs(fx.loaded, active);
   expect(args).toEqual(
@@ -726,6 +882,7 @@ test('reconcileScopedContainer activates an asserted-empty stage, captures the d
   const fx = makeScopedFixture();
   const staged = stageProbeCredentialMaterial(fx.loaded);
   const runner = new ScopedFakeRunner();
+  runner.mounts = envOnlyMounts(fx);
 
   const lease = reconcileScopedContainer(fx.loaded, runner, staged);
 
@@ -756,6 +913,7 @@ test('reconcileScopedContainer downs an existing container, activates the live s
   const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
   const runner = new ScopedFakeRunner();
   runner.statusStdout = 'quorum-appliance: exists, running\n';
+  runner.mounts = geminiLiveMounts(fx);
 
   const lease = reconcileScopedContainer(fx.loaded, runner, staged);
 
@@ -891,10 +1049,13 @@ test('hostile scoped-state topology fails with zero wrapper or docker calls', ()
 
 test('a credential bundle beneath the results mount fails with zero wrapper or docker calls', () => {
   const fx = makeScopedFixture({ bundle: 'evals/results/blessed' });
+  // A structurally complete staged generation so validation reaches the
+  // bundle boundary rather than failing on the projected tree shape.
   writeScopedTree(fx.stagingDir, {
     'agent.env': '',
     'supervisor.exec.env': 'ANTHROPIC_API_KEY=grader\n',
     'auth/gemini/oauth_creds.json': '{}',
+    'auth/gemini/google_accounts.json': '{}',
   });
   const runner = new ScopedFakeRunner();
 
@@ -1037,6 +1198,7 @@ test('the mount signature describes scope and destinations, never secret values'
   const fx = makeScopedFixture();
   seedGeminiBundle(fx, '-first');
   const runnerA = new ScopedFakeRunner();
+  runnerA.mounts = geminiLiveMounts(fx);
   const leaseA = reconcileScopedContainer(
     fx.loaded,
     runnerA,
@@ -1048,6 +1210,7 @@ test('the mount signature describes scope and destinations, never secret values'
   seedGeminiBundle(fx, '-second');
   const runnerB = new ScopedFakeRunner();
   runnerB.statusStdout = 'quorum-appliance: exists, running\n';
+  runnerB.mounts = geminiLiveMounts(fx);
   const leaseB = reconcileScopedContainer(
     fx.loaded,
     runnerB,
@@ -1058,12 +1221,491 @@ test('the mount signature describes scope and destinations, never secret values'
   // A different asserted scope produces a different signature.
   const runnerC = new ScopedFakeRunner();
   runnerC.statusStdout = 'quorum-appliance: exists, running\n';
+  runnerC.mounts = envOnlyMounts(fx);
   const leaseC = reconcileScopedContainer(
     fx.loaded,
     runnerC,
     stageProbeCredentialMaterial(fx.loaded),
   );
   expect(leaseC.mountSignature).not.toBe(leaseA.mountSignature);
+});
+
+test('the mount signature covers the complete asserted scope, field by field', () => {
+  const fx = makeScopedFixture();
+  seedSharedAuthBundle(fx);
+
+  const signatureFor = (
+    scope: LiveCredentialScope,
+    auth: readonly { name: string; path: string }[] = [],
+  ): string => {
+    const runner = new ScopedFakeRunner();
+    runner.statusStdout = 'quorum-appliance: exists, running\n';
+    runner.mounts = scopedInspectMounts({
+      envFile: join(fx.activeDir, 'agent.env'),
+      auth,
+    });
+    return reconcileScopedContainer(
+      fx.loaded,
+      runner,
+      stageLiveCredentialMaterial(fx.loaded, scope),
+    ).mountSignature;
+  };
+
+  // agentEnv projections differ (identical trees otherwise).
+  expect(signatureFor(agentEnvKeyScope('ANTHROPIC_API_KEY'))).not.toBe(
+    signatureFor(agentEnvKeyScope('GEMINI_API_KEY')),
+  );
+
+  // geminiAuthType differs (same agentEnv, same destinations).
+  const withMode: LiveCredentialScope = {
+    ...agentEnvKeyScope('GEMINI_API_KEY'),
+    geminiAuthType: 'gemini-api-key',
+  };
+  expect(signatureFor(withMode)).not.toBe(
+    signatureFor(agentEnvKeyScope('GEMINI_API_KEY')),
+  );
+
+  // OAuth kind differs while the mount name is identical (gemini vs
+  // antigravity both mount 'gemini').
+  expect(
+    signatureFor(GEMINI_OAUTH_SCOPE, [
+      { name: 'gemini', path: join(fx.activeDir, 'auth/gemini') },
+    ]),
+  ).not.toBe(
+    signatureFor(ANTIGRAVITY_SAME_MOUNT_SCOPE, [
+      { name: 'gemini', path: join(fx.activeDir, 'auth/gemini') },
+    ]),
+  );
+
+  // OAuth provider differs (identical pi destinations).
+  expect(
+    signatureFor(piScope('openai-codex'), [
+      { name: 'pi', path: join(fx.activeDir, 'auth/pi') },
+    ]),
+  ).not.toBe(
+    signatureFor(piScope('anthropic'), [
+      { name: 'pi', path: join(fx.activeDir, 'auth/pi') },
+    ]),
+  );
+});
+
+test('captured-container mount topology is validated exactly and failures roll back only the captured id', () => {
+  const cases: {
+    readonly label: string;
+    readonly fragment: string;
+    readonly mounts: (fx: ScopedFixture) => FakeInspectMount[];
+  }[] = [
+    {
+      label: 'missing credentials env mount',
+      fragment: '/run/evals/credentials.env',
+      mounts: (fx) =>
+        geminiLiveMounts(fx).filter(
+          (mount) => mount.Destination !== '/run/evals/credentials.env',
+        ),
+    },
+    {
+      label: 'credentials env mount is read-write',
+      fragment: '/run/evals/credentials.env',
+      mounts: (fx) =>
+        geminiLiveMounts(fx).map((mount) =>
+          mount.Destination === '/run/evals/credentials.env'
+            ? { ...mount, RW: true }
+            : mount,
+        ),
+    },
+    {
+      label: 'credentials env mount from the wrong source',
+      fragment: '/run/evals/credentials.env',
+      mounts: (fx) =>
+        geminiLiveMounts(fx).map((mount) =>
+          mount.Destination === '/run/evals/credentials.env'
+            ? { ...mount, Source: join(fx.root, 'impostor.env') }
+            : mount,
+        ),
+    },
+    {
+      label: 'missing asserted auth mount',
+      fragment: '/auth/gemini',
+      mounts: (fx) => envOnlyMounts(fx),
+    },
+    {
+      label: 'auth mount is read-write',
+      fragment: '/auth/gemini',
+      mounts: (fx) =>
+        geminiLiveMounts(fx).map((mount) =>
+          mount.Destination === '/auth/gemini' ? { ...mount, RW: true } : mount,
+        ),
+    },
+    {
+      label: 'auth mount from the wrong source',
+      fragment: '/auth/gemini',
+      mounts: (fx) =>
+        geminiLiveMounts(fx).map((mount) =>
+          mount.Destination === '/auth/gemini'
+            ? { ...mount, Source: join(fx.root, 'evil-auth') }
+            : mount,
+        ),
+    },
+    {
+      label: 'unasserted extra auth mount',
+      fragment: 'unasserted',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.root, 'hostile-codex'),
+              Destination: '/auth/codex',
+              RW: false,
+            },
+          ],
+        }),
+    },
+    {
+      label: 'supervisor exec env file mounted into the container',
+      fragment: 'supervisor',
+      mounts: (fx) =>
+        scopedInspectMounts({
+          envFile: join(fx.activeDir, 'agent.env'),
+          auth: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+          extra: [
+            {
+              Type: 'bind',
+              Source: join(fx.activeDir, 'supervisor.exec.env'),
+              Destination: '/evil/supervisor',
+              RW: false,
+            },
+          ],
+        }),
+    },
+  ];
+
+  for (const { fragment, mounts } of cases) {
+    const fx = makeScopedFixture();
+    seedGeminiBundle(fx);
+    const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
+    const runner = new ScopedFakeRunner();
+    runner.mounts = mounts(fx);
+
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    const err = expectContainerError(caught, fragment);
+    expect(err.code).toBe('container_unhealthy');
+    // Rollback targets exactly the captured id, never the configured name.
+    expect(runner.calls[runner.calls.length - 1]).toEqual({
+      command: 'docker',
+      args: ['rm', '-f', SCOPED_ID],
+    });
+    const wrapper = evalsContainerPath(fx.loaded);
+    expect(
+      runner.calls.some(
+        (call) =>
+          call.command === wrapper &&
+          call.args[call.args.length - 1] === 'down',
+      ),
+    ).toBe(false);
+  }
+
+  // An asserted-empty scope tolerates no auth mount at all.
+  const fx = makeScopedFixture();
+  const staged = stageProbeCredentialMaterial(fx.loaded);
+  const runner = new ScopedFakeRunner();
+  runner.mounts = scopedInspectMounts({
+    envFile: join(fx.activeDir, 'agent.env'),
+    extra: [
+      {
+        Type: 'bind',
+        Source: join(fx.root, 'hostile-codex'),
+        Destination: '/auth/codex',
+        RW: false,
+      },
+    ],
+  });
+  const caught = captureError(() =>
+    reconcileScopedContainer(fx.loaded, runner, staged),
+  );
+  expectContainerError(caught, 'unasserted');
+  expect(runner.calls[runner.calls.length - 1]).toEqual({
+    command: 'docker',
+    args: ['rm', '-f', SCOPED_ID],
+  });
+});
+
+test('material paths must be the exact fixed slot paths, not descendants', () => {
+  const fx = makeScopedFixture();
+  seedGeminiBundle(fx);
+
+  // Direct active-material boundary.
+  const live = liveActiveMaterial(fx);
+  const activeAlternates = [
+    { ...live, agentEnvFile: join(fx.activeDir, 'nested/agent.env') },
+    {
+      ...live,
+      supervisorExecEnvFile: join(fx.activeDir, 'nested/supervisor.exec.env'),
+    },
+    {
+      ...live,
+      authMounts: [
+        { name: 'gemini', path: join(fx.activeDir, 'auth/gemini/nested') },
+      ],
+    },
+    {
+      ...live,
+      authMounts: [
+        { name: 'gemini', path: join(fx.activeDir, 'auth/gemini-x') },
+      ],
+    },
+  ];
+  for (const active of activeAlternates) {
+    const caught = captureError(() =>
+      scopedUpContainerArgs(
+        fx.loaded,
+        active as Parameters<typeof scopedUpContainerArgs>[1],
+      ),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+  }
+
+  // Staged boundary: alternate paths fail before any runner call and never
+  // discard the stage.
+  const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
+  const stagedAlternates = [
+    { ...staged, agentEnvFile: join(fx.stagingDir, 'nested/agent.env') },
+    {
+      ...staged,
+      supervisorExecEnvFile: join(fx.stagingDir, 'nested/supervisor.exec.env'),
+    },
+    {
+      ...staged,
+      authMounts: [
+        { name: 'gemini', path: join(fx.stagingDir, 'auth/gemini/nested') },
+      ],
+    },
+    {
+      ...staged,
+      authMounts: [
+        { name: 'gemini', path: join(fx.stagingDir, 'auth/gemini-x') },
+      ],
+    },
+  ];
+  for (const tampered of stagedAlternates) {
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(
+        fx.loaded,
+        runner,
+        tampered as unknown as StagedCredentialMaterial,
+      ),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect(runner.calls).toHaveLength(0);
+    expect(existsSync(fx.stagingDir)).toBe(true);
+  }
+});
+
+test('a same-mount cross-scope swap fails before down or activation', () => {
+  // Staged for Antigravity, relabeled with the same-mount Gemini scope.
+  const agy = makeScopedFixture();
+  seedSharedAuthBundle(agy);
+  const agyStaged = stageLiveCredentialMaterial(
+    agy.loaded,
+    ANTIGRAVITY_SAME_MOUNT_SCOPE,
+  );
+  const relabeledGemini = {
+    ...agyStaged,
+    credentialScope: GEMINI_OAUTH_SCOPE,
+  };
+
+  // Staged for Gemini, relabeled with the same-mount Antigravity scope.
+  const gem = makeScopedFixture();
+  seedSharedAuthBundle(gem);
+  const gemStaged = stageLiveCredentialMaterial(gem.loaded, GEMINI_OAUTH_SCOPE);
+  const relabeledAntigravity = {
+    ...gemStaged,
+    credentialScope: ANTIGRAVITY_SAME_MOUNT_SCOPE,
+  };
+
+  for (const [fx, staged] of [
+    [agy, relabeledGemini],
+    [gem, relabeledAntigravity],
+  ] as const) {
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(
+        fx.loaded,
+        runner,
+        staged as unknown as StagedCredentialMaterial,
+      ),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect((caught as ApplianceError).message).toContain('projected auth');
+    expect(runner.calls).toHaveLength(0);
+    expect(existsSync(fx.stagingDir)).toBe(true);
+  }
+});
+
+test('the staged auth tree must contain exactly the scope-required files', () => {
+  // Extra rogue file inside the projected tree.
+  const extra = makeScopedFixture();
+  seedGeminiBundle(extra);
+  const extraStaged = stageLiveCredentialMaterial(
+    extra.loaded,
+    GEMINI_OAUTH_SCOPE,
+  );
+  writeFileSync(join(extra.stagingDir, 'auth/gemini/rogue.json'), '{}');
+
+  // Missing one of the required files.
+  const missing = makeScopedFixture();
+  seedGeminiBundle(missing);
+  const missingStaged = stageLiveCredentialMaterial(
+    missing.loaded,
+    GEMINI_OAUTH_SCOPE,
+  );
+  rmSync(join(missing.stagingDir, 'auth/gemini/oauth_creds.json'));
+
+  // An asserted-empty stage carrying an auth tree.
+  const strayAuth = makeScopedFixture();
+  const strayAuthStaged = stageProbeCredentialMaterial(strayAuth.loaded);
+  mkdirSync(join(strayAuth.stagingDir, 'auth/codex'), { recursive: true });
+  writeFileSync(join(strayAuth.stagingDir, 'auth/codex/auth.json'), '{}');
+
+  // A live scope with no oauth projection carrying an auth tree.
+  const noOauth = makeScopedFixture();
+  seedGeminiBundle(noOauth);
+  const noOauthStaged = stageLiveCredentialMaterial(
+    noOauth.loaded,
+    agentEnvKeyScope('ANTHROPIC_API_KEY'),
+  );
+  mkdirSync(join(noOauth.stagingDir, 'auth/gemini'), { recursive: true });
+  writeFileSync(join(noOauth.stagingDir, 'auth/gemini/oauth_creds.json'), '{}');
+
+  for (const [fx, staged] of [
+    [extra, extraStaged],
+    [missing, missingStaged],
+    [strayAuth, strayAuthStaged],
+    [noOauth, noOauthStaged],
+  ] as const) {
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect((caught as ApplianceError).message).toContain('projected auth');
+    expect(runner.calls).toHaveLength(0);
+  }
+});
+
+test('the optional kimi oauth file is accepted present or absent', () => {
+  const withOptional = makeScopedFixture();
+  seedSharedAuthBundle(withOptional);
+  const runnerA = new ScopedFakeRunner();
+  runnerA.mounts = scopedInspectMounts({
+    envFile: join(withOptional.activeDir, 'agent.env'),
+    auth: [{ name: 'kimi', path: join(withOptional.activeDir, 'auth/kimi') }],
+  });
+  const leaseA = reconcileScopedContainer(
+    withOptional.loaded,
+    runnerA,
+    stageLiveCredentialMaterial(withOptional.loaded, KIMI_OAUTH_SCOPE),
+  );
+  expect(leaseA.credentialScope).toEqual(KIMI_OAUTH_SCOPE);
+
+  const withoutOptional = makeScopedFixture();
+  seedSharedAuthBundle(withoutOptional);
+  rmSync(join(withoutOptional.bundleDir, 'kimi-code/oauth/kimi-code'), {
+    force: true,
+  });
+  const runnerB = new ScopedFakeRunner();
+  runnerB.mounts = scopedInspectMounts({
+    envFile: join(withoutOptional.activeDir, 'agent.env'),
+    auth: [
+      { name: 'kimi', path: join(withoutOptional.activeDir, 'auth/kimi') },
+    ],
+  });
+  const leaseB = reconcileScopedContainer(
+    withoutOptional.loaded,
+    runnerB,
+    stageLiveCredentialMaterial(withoutOptional.loaded, KIMI_OAUTH_SCOPE),
+  );
+  expect(leaseB.credentialScope).toEqual(KIMI_OAUTH_SCOPE);
+});
+
+test('an incomplete or malformed scope is refused before any runner call', () => {
+  const fx = makeScopedFixture();
+  seedGeminiBundle(fx);
+  const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
+  const broken = [
+    { ...staged, credentialScope: { ...GEMINI_OAUTH_SCOPE, schemaVersion: 2 } },
+    {
+      ...staged,
+      credentialScope: { ...GEMINI_OAUTH_SCOPE, agent: '' },
+    },
+    {
+      ...staged,
+      credentialScope: { ...GEMINI_OAUTH_SCOPE, credential: '' },
+    },
+    {
+      ...staged,
+      credentialScope: { ...GEMINI_OAUTH_SCOPE, runtimeFamily: '' },
+    },
+    {
+      ...staged,
+      credentialScope: {
+        ...GEMINI_OAUTH_SCOPE,
+        agentEnv: [{ destinationName: '', sourceNames: ['X'] }],
+      } as unknown as LiveCredentialScope,
+    },
+    {
+      ...staged,
+      credentialScope: {
+        ...GEMINI_OAUTH_SCOPE,
+        geminiAuthType: 'hostile-mode',
+      } as unknown as LiveCredentialScope,
+    },
+    {
+      ...staged,
+      credentialScope: {
+        ...GEMINI_OAUTH_SCOPE,
+        oauth: { kind: 'gemini', mountName: 'pi' },
+      } as unknown as LiveCredentialScope,
+    },
+    {
+      ...staged,
+      credentialScope: {
+        ...GEMINI_OAUTH_SCOPE,
+        oauth: { kind: 'pi', mountName: 'pi' },
+      } as unknown as LiveCredentialScope,
+    },
+    {
+      ...staged,
+      credentialScope: {
+        ...EMPTY_CREDENTIAL_SCOPE,
+        agent: 'not-null',
+      } as unknown as typeof EMPTY_CREDENTIAL_SCOPE,
+    },
+  ];
+  for (const tampered of broken) {
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(
+        fx.loaded,
+        runner,
+        tampered as unknown as StagedCredentialMaterial,
+      ),
+    );
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect(runner.calls).toHaveLength(0);
+    expect(existsSync(fx.stagingDir)).toBe(true);
+  }
 });
 
 // --- runInLeasedContainer ----------------------------------------------------
