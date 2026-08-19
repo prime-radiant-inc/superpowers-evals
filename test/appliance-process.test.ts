@@ -1,18 +1,21 @@
 import { expect, test } from 'bun:test';
 import {
-  existsSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type {
   CommandOptions,
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
+import type { ContainerLease } from '../src/appliance/container.ts';
+import { ApplianceError } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   cancelJob,
@@ -22,7 +25,10 @@ import {
   runWorker,
 } from '../src/appliance/process.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
-import { liveJobRequest } from './appliance-job-fixtures.ts';
+import {
+  FIXTURE_LIVE_SCOPE,
+  liveJobRequest,
+} from './appliance-job-fixtures.ts';
 
 const CONTAINER_ID =
   'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
@@ -168,19 +174,64 @@ function markRunning(
   }));
 }
 
+// The live Quorum exec is lease-bound: it names the immutable container id it
+// was preflighted against and carries the worker-only supervisor env file.
+const SUPERVISOR_FILE = '/srv/quorum/state/credentials-scoped/active/x.env';
+
+function liveLease(overrides: Partial<ContainerLease> = {}): ContainerLease {
+  return {
+    name: 'quorum-appliance',
+    id: CONTAINER_ID,
+    imageId: 'sha256:img-1',
+    mountSignature: 'f'.repeat(64),
+    credentialScope: FIXTURE_LIVE_SCOPE,
+    ...overrides,
+  };
+}
+
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
   const cfg = loaded();
-  const args = liveCommandArgs(cfg, 'job-1', [
-    'quorum',
-    'run-all',
-    '--tier',
-    'sentinel',
+  const args = liveCommandArgs(
+    cfg,
+    'job-1',
+    ['quorum', 'run-all', '--tier', 'sentinel'],
+    liveLease(),
+    SUPERVISOR_FILE,
+  );
+  expect(args.slice(0, 6)).toEqual([
+    '--name',
+    'quorum-appliance',
+    '--expected-container-id',
+    CONTAINER_ID,
+    '--exec-env-file',
+    SUPERVISOR_FILE,
   ]);
-  expect(args).toContain('exec');
+  expect(args[6]).toBe('exec');
   expect(args).toContain('bash');
   expect(args.join(' ')).toContain('setsid');
   expect(args.join(' ')).toContain('appliance-pids/job-1.pid');
   expect(args.join(' ')).toContain('quorum run-all --tier sentinel');
+  // Never the wrapper's full-bundle argument path.
+  expect(args).not.toContain('--env-file');
+  expect(args).not.toContain('--auth');
+});
+
+test('liveCommandArgs refuses a lease that does not name the configured container', () => {
+  const cfg = loaded();
+  let caught: unknown = null;
+  try {
+    liveCommandArgs(
+      cfg,
+      'job-1',
+      ['quorum', 'run'],
+      liveLease({ name: 'someone-elses-container' }),
+      SUPERVISOR_FILE,
+    );
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).step).toBe('container');
 });
 
 test('launchLiveCommand delegates to the injected runner', async () => {
@@ -292,19 +343,20 @@ test('launchLiveCommand interrupts the host process group when spawn setup fails
 
 test('liveCommandArgs exports detached signal mode for appliance run-all', () => {
   const cfg = loaded();
-  const runAllArgs = liveCommandArgs(cfg, 'job-run-all', [
-    'quorum',
-    'run-all',
-    '--tier',
-    'sentinel',
-  ]);
-  const singleRunArgs = liveCommandArgs(cfg, 'job-run', [
-    'quorum',
-    'run',
-    'scenario-a',
-    '--coding-agent',
-    'claude',
-  ]);
+  const runAllArgs = liveCommandArgs(
+    cfg,
+    'job-run-all',
+    ['quorum', 'run-all', '--tier', 'sentinel'],
+    liveLease(),
+    SUPERVISOR_FILE,
+  );
+  const singleRunArgs = liveCommandArgs(
+    cfg,
+    'job-run',
+    ['quorum', 'run', 'scenario-a', '--coding-agent', 'claude'],
+    liveLease(),
+    SUPERVISOR_FILE,
+  );
 
   expect(runAllArgs.join('\n')).toContain(
     'export QUORUM_RUN_ALL_SIGNAL_MODE=detached',
@@ -314,35 +366,250 @@ test('liveCommandArgs exports detached signal mode for appliance run-all', () =>
   );
 });
 
-// Through Tasks 2-4 the detached worker resume path is frozen behind the
-// scoped credential cutover guard: it must refuse with the exact typed error
-// BEFORE acquiring locks, mutating the job record, or calling the runner.
-// Task 5 replaces these expectations with the scoped end-state behavior in
-// the same commit that deletes the guard.
-test('runWorker refuses with the typed scoped-cutover error', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  const job = createJob(
-    cfg,
-    liveJobRequest('run-all', {
-      superpowersRef: 'feature/ref',
-      argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-      requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
+// --- the live worker runs inside the scoped lease (F13 Task 5) --------------
+// runWorker preflights (empty probes, then the scoped live container) and
+// hands the supervisor exec env file to exactly one thing: the live Quorum
+// exec. Nothing else in the worker ever sees that host path.
+
+const PROBE_ID =
+  'ba5eba110000000000000000000000000000000000000000000000000000cafe';
+const LIVE_ID =
+  'c0de0000000000000000000000000000000000000000000000000000deadbeef';
+const RESOLVED_SHA = 'a'.repeat(40);
+const RUN_ID = 'writing-plans-gemini-linux-20260818T000000Z-abcd';
+const CORPUS_CREDENTIAL = 'gemini_oauth_fx';
+
+const CORPUS_SCOPE = {
+  schemaVersion: 1,
+  kind: 'live',
+  agent: 'gemini',
+  runtimeFamily: 'gemini',
+  credential: CORPUS_CREDENTIAL,
+  agentEnv: [],
+  geminiAuthType: 'oauth-personal',
+  oauth: { kind: 'gemini', mountName: 'gemini' },
+} as const;
+
+// Seed the trusted corpus and blessed bundle the live scope resolves against.
+function seedLiveAppliance(cfg: LoadedApplianceConfig): void {
+  const evalsPath = cfg.config.evals.path;
+  mkdirSync(join(evalsPath, 'coding-agents'), { recursive: true });
+  copyFileSync(
+    join(resolve(import.meta.dir, '..'), 'coding-agents', 'gemini.yaml'),
+    join(evalsPath, 'coding-agents/gemini.yaml'),
+  );
+  writeFileSync(
+    join(evalsPath, 'credentials.yaml'),
+    `# minimal corpus-derived registry (name -> record at the top level)\n  ${CORPUS_CREDENTIAL}:\n    model: gemini-2.5-pro\n    api: gemini\n    auth: oauth\n    harnesses: [gemini]\n`,
+  );
+  const bundle = cfg.config.credential_bundle.path;
+  mkdirSync(join(bundle, 'gemini'), { recursive: true });
+  writeFileSync(
+    join(bundle, 'credentials.env'),
+    "QUORUM_GRADER_ANTHROPIC_API_KEY='grader-anthropic-key'\n",
+  );
+  writeFileSync(
+    join(bundle, 'gemini/oauth_creds.json'),
+    JSON.stringify({ access_token: 'gem-access' }),
+  );
+  writeFileSync(
+    join(bundle, 'gemini/google_accounts.json'),
+    JSON.stringify({ accounts: [] }),
+  );
+  writeFileSync(
+    join(cfg.config.container.results_root, `${RUN_ID}-placeholder`),
+    '',
+  );
+  mkdirSync(join(cfg.config.container.results_root, RUN_ID), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(cfg.config.container.results_root, RUN_ID, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: 'pass',
+      final_reason: 'ok',
+      gauntlet: null,
+      checks: [],
+      error: null,
+      economics: null,
+      scenario: 'writing-plans',
+      coding_agent: 'gemini',
+      started_at: new Date(Date.now() - 1000).toISOString(),
+      finished_at: new Date().toISOString(),
     }),
   );
+}
 
-  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
-    code: 'config_invalid',
-    step: 'scoped-cutover',
-    message: expect.stringContaining('scoped credential cutover incomplete'),
+// Drives a whole live worker: git plumbing, the docker capability probe, both
+// scoped container generations, and the live Quorum exec.
+class WorkerRunner implements CommandRunner {
+  calls: { command: string; args: readonly string[] }[] = [];
+  ups = 0;
+  activeDir: string;
+
+  constructor(activeDir: string) {
+    this.activeDir = activeDir;
+  }
+
+  private mountsFor(id: string) {
+    const env = {
+      Type: 'bind',
+      Source: join(this.activeDir, 'agent.env'),
+      Destination: '/run/evals/credentials.env',
+      RW: false,
+    };
+    return id === LIVE_ID
+      ? [
+          env,
+          {
+            Type: 'bind',
+            Source: join(this.activeDir, 'auth/gemini'),
+            Destination: '/auth/gemini',
+            RW: false,
+          },
+        ]
+      : [env];
+  }
+
+  run(command: string, args: readonly string[]): CommandResult {
+    this.calls.push({ command, args });
+    if (command === 'docker' && args[0] === 'exec' && args[1] === '--help') {
+      return {
+        status: 0,
+        stdout: 'Usage: docker exec\n  --env-file list\n',
+        stderr: '',
+      };
+    }
+    if (
+      command === 'docker' &&
+      args[0] === 'container' &&
+      args[1] === 'inspect'
+    ) {
+      const target = args[2] ?? '';
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          { Id: target, Image: 'sha256:img-1', Mounts: this.mountsFor(target) },
+        ]),
+        stderr: '',
+      };
+    }
+    if (command === 'git') {
+      if (args.includes('status')) {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (
+        args.includes('rev-parse') &&
+        args.some((arg) => arg.startsWith('refs/tags/main'))
+      ) {
+        return { status: 1, stdout: '', stderr: 'missing tag\n' };
+      }
+      if (args.includes('rev-parse')) {
+        return { status: 0, stdout: `${RESOLVED_SHA}\n`, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    const last = args[args.length - 1] ?? '';
+    if (last === 'status') {
+      return {
+        status: 0,
+        stdout:
+          this.ups === 0
+            ? 'quorum-appliance: missing\n'
+            : 'quorum-appliance: exists, running\n',
+        stderr: '',
+      };
+    }
+    if (last === 'up') {
+      const id = this.ups === 0 ? PROBE_ID : LIVE_ID;
+      this.ups += 1;
+      return { status: 0, stdout: `${id}\n`, stderr: '' };
+    }
+    if (args.includes('evals-tool-versions')) {
+      return { status: 0, stdout: 'bun 1.3.13\n', stderr: '' };
+    }
+    if (args.includes('--exec-env-file')) {
+      return { status: 0, stdout: `run-id: ${RUN_ID}\n`, stderr: '' };
+    }
+    return { status: 0, stdout: 'ok\n', stderr: '' };
+  }
+}
+
+test('runWorker hands the supervisor env file to the live Quorum exec only', async () => {
+  const cfg = loaded();
+  seedLiveAppliance(cfg);
+  const activeDir = join(cfg.config.root, 'state/credentials-scoped/active');
+  const runner = new WorkerRunner(activeDir);
+  const job = createJob(
+    cfg,
+    liveJobRequest('run', {
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'gemini',
+      ],
+      selection: { agent: 'gemini', credential: CORPUS_CREDENTIAL },
+      scope: CORPUS_SCOPE,
+      sourceEvalsSha: RESOLVED_SHA,
+    }),
+  );
+  // The in-container process group the live command reports.
+  mkdirSync(join(cfg.config.container.results_root, '.appliance-pids'), {
+    recursive: true,
   });
+  writeFileSync(
+    join(
+      cfg.config.container.results_root,
+      '.appliance-pids',
+      `${job.job_id}.pid`,
+    ),
+    '456\n',
+  );
 
-  const after = readJob(cfg, job.job_id);
-  expect(after.status).toBe('preflighting');
-  expect(after.started_at).toBe(null);
-  expect(runner.calls).toEqual([]);
-  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
-  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
+  await runWorker(cfg, job.job_id, runner);
+
+  const supervisor = join(activeDir, 'supervisor.exec.env');
+  const withSupervisor = runner.calls.filter((call) =>
+    call.args.includes('--exec-env-file'),
+  );
+  expect(withSupervisor).toHaveLength(1);
+  const live = withSupervisor[0];
+  expect(live?.args.slice(0, 7)).toEqual([
+    '--name',
+    'quorum-appliance',
+    '--expected-container-id',
+    LIVE_ID,
+    '--exec-env-file',
+    supervisor,
+    'exec',
+  ]);
+  // The probe execs used the probe lease and no supervisor file.
+  const probeExecs = runner.calls.filter(
+    (call) =>
+      call.args.includes('--expected-container-id') &&
+      call.args[call.args.indexOf('--expected-container-id') + 1] === PROBE_ID,
+  );
+  expect(probeExecs).toHaveLength(2);
+
+  const record = readJob(cfg, job.job_id);
+  expect(record.status).toBe('done');
+  expect(record.container?.id).toBe(LIVE_ID);
+  expect(record.credential_scope).toEqual(CORPUS_SCOPE);
+  const jobJson = readFileSync(
+    join(cfg.paths.jobs, job.job_id, 'job.json'),
+    'utf8',
+  );
+  expect(jobJson).not.toContain(supervisor);
+  expect(jobJson).not.toContain('credentials-scoped');
+  const provenance = readFileSync(
+    join(cfg.paths.provenance, `${job.job_id}.json`),
+    'utf8',
+  );
+  expect(provenance).not.toContain(supervisor);
+  expect(JSON.parse(provenance).credential_scope).toEqual(CORPUS_SCOPE);
 });
 
 test('cancel sends one fixed SIGINT to the recorded container id only', async () => {
@@ -392,6 +659,58 @@ test('cancel of a job with no recorded container identity emits no signal', asyn
   runner.processGroupAlive = true;
   const job = createJob(cfg, liveJobRequest('run-all'));
   markRunning(cfg, job.job_id, { containerId: null });
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  expect(runner.interruptCalls()).toBe(0);
+  expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+// A record written before the credential triple existed: the fields are
+// absent on disk, so the read defaults make the scope null. It cannot execute,
+// but safe cancellation still reaches Task 2's fixed recorded-container seam
+// without anyone fabricating a runnable lease for it.
+function demoteToLegacyRecord(cfg: LoadedApplianceConfig, jobId: string): void {
+  const path = join(cfg.paths.jobs, jobId, 'job.json');
+  const record = JSON.parse(readFileSync(path, 'utf8'));
+  delete record.credential_selection;
+  delete record.credential_scope;
+  delete record.credential_scope_source_evals_sha;
+  writeFileSync(path, JSON.stringify(record, null, 2));
+}
+
+test('cancel of a legacy null-scope record still reaches the recorded-container seam', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  const job = createJob(cfg, liveJobRequest('run-all'));
+  markRunning(cfg, job.job_id);
+  demoteToLegacyRecord(cfg, job.job_id);
+  expect(readJob(cfg, job.job_id).credential_scope).toBe(null);
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  const interrupt = runner.calls.find((call) =>
+    call.args.join(' ').includes('kill -INT'),
+  );
+  expect(interrupt).toEqual({
+    command: 'docker',
+    args: ['exec', CONTAINER_ID, 'bash', '-c', 'kill -INT -- -456'],
+  });
+});
+
+test('cancel of a scoped job with tampered container evidence emits no signal', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, liveJobRequest('run-all'));
+  markRunning(cfg, job.job_id);
+  updateJob(cfg, job.job_id, (current) => ({
+    ...current,
+    container:
+      current.container === null
+        ? null
+        : { ...current.container, mount_signature: '' },
+  }));
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
 

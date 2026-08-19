@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import type { CredentialScope } from '../credentials/scope.ts';
@@ -17,33 +17,19 @@ import {
 } from './credential-scope.ts';
 import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
 import {
+  type JobContainerEvidence,
+  type JobRecord,
   type LoadedApplianceConfig,
   type LoadedApplianceStateConfig,
   ProcessGroupIdSchema,
 } from './types.ts';
 
-type AuthMountName = 'codex' | 'gemini' | 'kimi' | 'pi';
 type ContainerState = 'missing' | 'stopped' | 'running';
-
-export interface AuthMount {
-  readonly name: AuthMountName;
-  readonly path: string;
-}
 
 export interface ContainerIdentity {
   readonly id: string | null;
   readonly image_id: string | null;
 }
-
-const AUTH_DIRS: readonly {
-  readonly name: AuthMountName;
-  readonly bundleSubdir: string;
-}[] = [
-  { name: 'codex', bundleSubdir: 'codex' },
-  { name: 'gemini', bundleSubdir: 'gemini' },
-  { name: 'kimi', bundleSubdir: 'kimi-code' },
-  { name: 'pi', bundleSubdir: 'pi' },
-];
 
 function commandSummary(result: {
   status: number | null;
@@ -77,29 +63,6 @@ export function evalsContainerPath(loaded: LoadedApplianceStateConfig): string {
   return join(loaded.config.evals.path, 'scripts/evals-container');
 }
 
-export function discoveredAuthDirs(loaded: LoadedApplianceConfig): AuthMount[] {
-  return AUTH_DIRS.flatMap(({ name, bundleSubdir }) => {
-    const path = join(loaded.config.credential_bundle.path, bundleSubdir);
-    return existsSync(path) ? [{ name, path }] : [];
-  });
-}
-
-export function baseContainerArgs(loaded: LoadedApplianceConfig): string[] {
-  const bundle = loaded.config.credential_bundle.path;
-  const args = [
-    '--name',
-    loaded.config.container.name,
-    '--superpowers-root',
-    loaded.config.superpowers.path,
-    '--env-file',
-    join(bundle, 'credentials.env'),
-  ];
-  for (const auth of discoveredAuthDirs(loaded)) {
-    args.push('--auth', `${auth.name}=${auth.path}`);
-  }
-  return args;
-}
-
 export function buildContainerArgs(loaded: LoadedApplianceConfig): string[] {
   return [
     '--name',
@@ -108,10 +71,6 @@ export function buildContainerArgs(loaded: LoadedApplianceConfig): string[] {
     loaded.config.gauntlet.path,
     'build',
   ];
-}
-
-export function upContainerArgs(loaded: LoadedApplianceConfig): string[] {
-  return [...baseContainerArgs(loaded), 'up'];
 }
 
 export function downContainerArgs(loaded: LoadedApplianceConfig): string[] {
@@ -126,24 +85,6 @@ export function statusContainerArgs(
   return ['--name', loaded.config.container.name, 'status'];
 }
 
-export function execContainerArgs(
-  loaded: LoadedApplianceConfig,
-  command: readonly string[],
-): string[] {
-  return [...baseContainerArgs(loaded), 'exec', ...command];
-}
-
-export function containerMountSignature(loaded: LoadedApplianceConfig): string {
-  const payload = {
-    evals: loaded.config.evals.path,
-    superpowers: loaded.config.superpowers.path,
-    results_root: loaded.config.container.results_root,
-    bundle: loaded.config.credential_bundle.path,
-    auth_dirs: discoveredAuthDirs(loaded),
-  };
-  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-}
-
 export function buildContainer(
   loaded: LoadedApplianceConfig,
   runner: CommandRunner,
@@ -153,17 +94,6 @@ export function buildContainer(
     buildContainerArgs(loaded),
   );
   requireContainerCommand(result, 'image_build_failed', 'image build failed');
-}
-
-export function upContainer(
-  loaded: LoadedApplianceConfig,
-  runner: CommandRunner,
-): void {
-  const result = runner.run(
-    evalsContainerPath(loaded),
-    upContainerArgs(loaded),
-  );
-  requireContainerCommand(result, 'container_unhealthy', 'container up failed');
 }
 
 export function downContainer(
@@ -210,39 +140,6 @@ export function inspectContainerState(
   );
 }
 
-export function reconcileContainer(
-  loaded: LoadedApplianceConfig,
-  runner: CommandRunner,
-): void {
-  const state = inspectContainerState(loaded, runner);
-  if (state !== 'missing') {
-    downContainer(loaded, runner);
-  }
-  upContainer(loaded, runner);
-}
-
-export function statusContainer(
-  loaded: LoadedApplianceConfig,
-  runner: CommandRunner,
-): void {
-  const result = runner.run(
-    evalsContainerPath(loaded),
-    statusContainerArgs(loaded),
-  );
-  requireContainerCommand(
-    result,
-    'container_unhealthy',
-    'container status failed',
-  );
-  if (!result.stdout.includes('exists, running')) {
-    throw new ApplianceError(
-      'container_unhealthy',
-      'container',
-      `container is not running: ${commandSummary(result)}`,
-    );
-  }
-}
-
 function stringField(record: unknown, key: string): string | null {
   if (typeof record === 'object' && record !== null) {
     const value = (record as Record<string, unknown>)[key];
@@ -273,21 +170,6 @@ export function inspectContainerIdentity(
   } catch {
     return { id: null, image_id: null };
   }
-}
-
-export function runInContainer(
-  loaded: LoadedApplianceConfig,
-  runner: CommandRunner,
-  command: readonly string[],
-  code: ApplianceErrorCode,
-  action: string,
-) {
-  const result = runner.run(
-    evalsContainerPath(loaded),
-    execContainerArgs(loaded, command),
-  );
-  requireContainerCommand(result, code, action);
-  return result;
 }
 
 export interface RecordedContainerIdentity {
@@ -418,6 +300,19 @@ function fixedScopedSlot(
 
 const SCOPED_AGENT_ENV_FILE = 'agent.env';
 const SCOPED_SUPERVISOR_ENV_FILE = 'supervisor.exec.env';
+
+/**
+ * The host path of the ACTIVE generation's supervisor exec env file. Valid
+ * only after `reconcileScopedContainer` has activated LIVE material — that
+ * call is what proves the file exists and belongs to this generation. It is
+ * never mounted: it crosses into the container only as the host argument of
+ * `docker exec --env-file` for the live Quorum process.
+ */
+export function activeSupervisorExecEnvFile(
+  loaded: LoadedApplianceConfig,
+): string {
+  return join(fixedScopedSlot(loaded, 'active'), SCOPED_SUPERVISOR_ENV_FILE);
+}
 const SCOPED_AUTH_DIR = 'auth';
 const CREDENTIAL_ENV_DESTINATION = '/run/evals/credentials.env';
 
@@ -716,7 +611,7 @@ function requireScopeToPayloadBinding(
       `${label} credential scope could not be rederived from the evals corpus for agent '${scope.agent}' credential '${scope.credential}' (${error instanceof Error ? error.message : String(error)})`,
     );
   }
-  if (!scopesEqual(scope, canonical)) {
+  if (!credentialScopesEqual(scope, canonical)) {
     throw scopedContainerFault(
       `${label} credential scope does not match the scope canonically rederived from the evals corpus for agent '${scope.agent}' credential '${scope.credential}'`,
     );
@@ -823,7 +718,17 @@ function requireScopeToPayloadBinding(
   }
 }
 
-function scopesEqual(a: CredentialScope, b: CredentialScope): boolean {
+/**
+ * Whether two credential scopes assert the SAME delivery contract, compared
+ * through one canonical payload so key order cannot make identical contracts
+ * look different. Used both to bind staged material to the corpus-rederived
+ * scope and, in preflight, to require a persisted scope to still be the one
+ * its selection resolves to.
+ */
+export function credentialScopesEqual(
+  a: CredentialScope,
+  b: CredentialScope,
+): boolean {
   return (
     JSON.stringify(scopeSignaturePayload(a)) ===
     JSON.stringify(scopeSignaturePayload(b))
@@ -976,7 +881,7 @@ export function scopedUpContainerArgs(
 /**
  * Scoped wrapper `exec` argv: only the configured name, the expected
  * immutable container ID, the optional exec env file, `exec`, and the
- * command. It never rides baseContainerArgs and never rediscovers bundle
+ * command. It carries no bundle env-file or auth mounts and rediscovers no
  * paths.
  */
 export function scopedExecContainerArgs(
@@ -1440,4 +1345,72 @@ export function requireDockerExecEnvFile(runner: CommandRunner): void {
       'docker exec does not support --env-file (probed via docker exec --help); scoped credential delivery requires it',
     );
   }
+}
+
+/**
+ * The durable half of a lease: the identity a later liveness or cancellation
+ * can verify. The in-memory scope is deliberately dropped — the job's
+ * top-level credential_scope is the only persisted authority, so this shape
+ * can never carry a second, divergent copy of it.
+ */
+export function leaseToJobContainerEvidence(
+  lease: ContainerLease,
+): JobContainerEvidence {
+  return {
+    name: lease.name,
+    id: lease.id,
+    image_id: lease.imageId,
+    mount_signature: lease.mountSignature,
+  };
+}
+
+/**
+ * Reconstruct the one in-memory lease a scoped live job was bound to, from
+ * its own record. Both halves must be present and unambiguous: a non-null,
+ * single-token container id and a non-null top-level LIVE scope. A record
+ * that predates scoped delivery (null scope), asserts zero material (empty
+ * scope), or carries tampered/partial evidence cannot be turned back into
+ * something runnable — callers report lost and never signal.
+ */
+export function liveLeaseFromJob(job: JobRecord): ContainerLease {
+  const scope = job.credential_scope;
+  if (scope === null) {
+    throw scopedContainerFault(
+      `job ${job.job_id} has no credential scope; it cannot be bound to a scoped container lease`,
+    );
+  }
+  if (scope.kind !== 'live') {
+    throw scopedContainerFault(
+      `job ${job.job_id} asserts an empty credential scope; it cannot be bound to a scoped container lease`,
+    );
+  }
+  const container = job.container;
+  if (container === null) {
+    throw scopedContainerFault(
+      `job ${job.job_id} recorded no container evidence`,
+    );
+  }
+  if (container.name.trim() === '') {
+    throw scopedContainerFault(
+      `job ${job.job_id} recorded a blank container name`,
+    );
+  }
+  const id = container.id;
+  if (id === null || id.trim() === '' || /\s/.test(id)) {
+    throw scopedContainerFault(
+      `job ${job.job_id} recorded no single-token container id`,
+    );
+  }
+  if (container.mount_signature.trim() === '') {
+    throw scopedContainerFault(
+      `job ${job.job_id} recorded a blank container mount signature`,
+    );
+  }
+  return {
+    name: container.name,
+    id,
+    imageId: container.image_id,
+    mountSignature: container.mount_signature,
+    credentialScope: scope,
+  };
 }

@@ -3,15 +3,26 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
-import { EMPTY_CREDENTIAL_SCOPE } from '../credentials/scope.ts';
 import {
+  type CredentialSelection,
+  EMPTY_CREDENTIAL_SCOPE,
+  type LiveCredentialScope,
+} from '../credentials/scope.ts';
+import {
+  activeSupervisorExecEnvFile,
   buildContainer,
-  containerMountSignature,
-  inspectContainerIdentity,
-  reconcileContainer,
-  runInContainer,
-  statusContainer,
+  type ContainerLease,
+  credentialScopesEqual,
+  leaseToJobContainerEvidence,
+  reconcileScopedContainer,
+  requireDockerExecEnvFile,
+  runInLeasedContainer,
 } from './container.ts';
+import { buildLiveCredentialRequest } from './credential-request.ts';
+import {
+  stageLiveCredentialMaterial,
+  stageProbeCredentialMaterial,
+} from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
 import { writePrivateText } from './fs.ts';
 import {
@@ -24,7 +35,6 @@ import {
 import { createJob, readJob, updateJob } from './jobs.ts';
 import { withMutationLocks } from './locks.ts';
 import { writeProvenance } from './provenance.ts';
-import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import type {
   ApplianceCommandKind,
   JobContainerEvidence,
@@ -55,22 +65,35 @@ export interface PrepareArgs {
   readonly jobId?: string;
 }
 
+/**
+ * The PUBLIC evidence a preflight produces: what the job ran against. It
+ * carries the durable container evidence only — no credential path, and no
+ * second copy of the scope (the job's top-level credential_scope is the sole
+ * authority).
+ */
 export interface PreflightResult {
   readonly refs: RefSnapshot;
   readonly credential_bundle: {
     readonly name: 'blessed';
     readonly bundle_id: string;
   };
-  readonly container: {
-    readonly name: string;
-    readonly id: string | null;
-    readonly image_id: string | null;
-    readonly mount_signature: string;
-    readonly code_mounts_read_only: boolean;
-  };
+  readonly container: JobContainerEvidence;
   readonly tool_versions_path: string;
   readonly tool_versions_text: string;
   readonly provenance_path: string;
+}
+
+/**
+ * The PRIVATE result of a live preflight, for runWorker alone. `lease` is the
+ * exact value `evidence.container` was derived from, not a separate authority,
+ * and `supervisorExecEnvFile` is a host path that must never be spread into
+ * CLI output, job JSON, or provenance — it crosses only into the live Quorum
+ * exec's `docker exec --env-file`.
+ */
+export interface LivePreflightResult {
+  readonly evidence: PreflightResult;
+  readonly lease: ContainerLease;
+  readonly supervisorExecEnvFile: string;
 }
 
 function repos(loaded: LoadedApplianceStateConfig) {
@@ -161,178 +184,267 @@ export function postflightDirtyCheck(
   }
 }
 
-// A live job may only preflight against a resolved live scope. Records
-// written before the credential fields existed read back with a null scope,
-// and an empty scope is an assertion of NO material — neither can deliver a
-// credential to an agent, and there is no legacy full-bundle fallback to
-// widen into. Both fail closed here, before any repo, container, or bundle
-// work. prepare is exempt: its probes legitimately assert an empty scope.
-function assertLiveScopeForExecution(job: JobRecord): void {
+// The single (agent, credential) cell a live job was born asserting, read back
+// off its own record. Records written before the credential fields existed
+// read back with a null scope, and an empty scope is an assertion of NO
+// material — neither can deliver a credential to an agent, and there is no
+// legacy full-bundle fallback to widen into. Both fail closed, before any
+// repo, container, or bundle work.
+interface LivePlan {
+  readonly selection: CredentialSelection;
+  readonly scope: LiveCredentialScope;
+  readonly sourceEvalsSha: string;
+}
+
+function livePlanForJob(job: JobRecord): LivePlan {
   if (job.kind !== 'run' && job.kind !== 'run-all') {
-    return;
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} is a ${job.kind} job; only run and run-all jobs execute live`,
+    );
   }
-  if (job.credential_scope === null) {
+  const scope = job.credential_scope;
+  if (scope === null) {
     throw new ApplianceError(
       'config_invalid',
       'preflight',
       `job ${job.job_id} (${job.kind}) has no credential scope; it predates scoped credential delivery and cannot be executed — submit a new job`,
     );
   }
-  if (job.credential_scope.kind !== 'live') {
+  if (scope.kind !== 'live') {
     throw new ApplianceError(
       'config_invalid',
       'preflight',
       `job ${job.job_id} (${job.kind}) asserts an empty credential scope, which delivers no credential material; refusing to execute it`,
     );
   }
+  const selection = job.credential_selection;
+  const sourceEvalsSha = job.credential_scope_source_evals_sha;
+  if (selection === null || sourceEvalsSha === null) {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${job.job_id} (${job.kind}) carries a live scope with no selection or source SHA to re-verify it against; refusing to execute it`,
+    );
+  }
+  return { selection, scope, sourceEvalsSha };
 }
 
-export async function preflightForJob(
+// Submission read the corpus at one commit; preflight then fast-forwards it.
+// Executing a stale scope would deliver material for a cell the current corpus
+// no longer describes, so the SHA must still match AND the selection must
+// still resolve to exactly the persisted scope. Both run before any credential
+// value is evaluated and before Docker.
+function requireFreshCredentialScope(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  plan: LivePlan,
+  evalsResolvedSha: string,
+): void {
+  if (plan.sourceEvalsSha !== evalsResolvedSha) {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${jobId} resolved its credential scope against evals checkout ${plan.sourceEvalsSha}, but the fast-forwarded evals checkout is ${evalsResolvedSha}; submit a new job`,
+    );
+  }
+  const recomputed = buildLiveCredentialRequest(
+    loaded.config.evals.path,
+    plan.selection,
+    evalsResolvedSha,
+  ).scope;
+  if (!credentialScopesEqual(plan.scope, recomputed)) {
+    throw new ApplianceError(
+      'config_invalid',
+      'preflight',
+      `job ${jobId} persists a credential scope for agent '${plan.selection.agent}' credential '${plan.selection.credential ?? '(default)'}' that does not match the scope recomputed from the evals corpus at ${evalsResolvedSha}; submit a new job`,
+    );
+  }
+}
+
+interface ProbedPreflight {
+  readonly refs: RefSnapshot;
+  readonly probeLease: ContainerLease;
+  readonly toolVersionsPath: string;
+  readonly toolVersionsText: string;
+}
+
+/**
+ * Everything both preflight kinds do, in the one binding order: sync the
+ * managed repos, gate a live plan's freshness, require the docker capability
+ * scoped delivery depends on, build, then run the probes inside an
+ * ASSERTED-EMPTY container. No credential material exists at any point here.
+ */
+async function preflightThroughEmptyProbe(
   args: PreflightArgs,
-): Promise<PreflightResult> {
+  plan: LivePlan | null,
+): Promise<ProbedPreflight> {
   const runner = args.runner ?? defaultCommandRunner;
+  const loaded = args.loaded;
 
+  updateJob(loaded, args.jobId, (current) => ({
+    ...current,
+    status: 'preflighting',
+    error: null,
+  }));
+
+  for (const path of repos(loaded)) {
+    ensureCleanWorktree(path, runner);
+  }
+
+  fetchRepo(loaded.config.evals.path, loaded.config.evals.remote, runner);
+  fetchRepo(
+    loaded.config.superpowers.path,
+    loaded.config.superpowers.remote,
+    runner,
+  );
+  fetchRepo(loaded.config.gauntlet.path, loaded.config.gauntlet.remote, runner);
+
+  const evalsResolvedSha = fastForwardManagedRepo(
+    {
+      path: loaded.config.evals.path,
+      remote: loaded.config.evals.remote,
+      ref: loaded.config.evals.ref,
+      label: 'evals',
+    },
+    runner,
+  );
+  const gauntletBuiltSha = fastForwardManagedRepo(
+    {
+      path: loaded.config.gauntlet.path,
+      remote: loaded.config.gauntlet.remote,
+      ref: loaded.config.gauntlet.ref,
+      label: 'gauntlet',
+    },
+    runner,
+  );
+  const superpowersResolvedSha = resolveSuperpowersRef(
+    {
+      path: loaded.config.superpowers.path,
+      remote: loaded.config.superpowers.remote,
+    },
+    args.superpowersRef,
+    runner,
+  );
+  checkoutDetached(
+    loaded.config.superpowers.path,
+    superpowersResolvedSha,
+    runner,
+  );
+
+  const refs: RefSnapshot = {
+    superpowers_requested_ref: args.superpowersRef,
+    superpowers_resolved_sha: superpowersResolvedSha,
+    evals_ref: loaded.config.evals.ref,
+    evals_resolved_sha: evalsResolvedSha,
+    gauntlet_ref: loaded.config.gauntlet.ref,
+    gauntlet_built_sha: gauntletBuiltSha,
+  };
+
+  if (plan !== null) {
+    requireFreshCredentialScope(loaded, args.jobId, plan, evalsResolvedSha);
+  }
+
+  requireDockerExecEnvFile(runner);
+  buildContainer(loaded, runner);
+
+  const probeLease = reconcileScopedContainer(
+    loaded,
+    runner,
+    stageProbeCredentialMaterial(loaded),
+  );
+
+  const toolVersions = runInLeasedContainer(
+    loaded,
+    runner,
+    probeLease,
+    ['evals-tool-versions'],
+    'tool_versions_failed',
+    'evals-tool-versions failed',
+  );
+  const toolVersionsPath = jobToolVersionsPath(loaded, args.jobId);
+  writePrivateText(toolVersionsPath, toolVersions.stdout);
+
+  runInLeasedContainer(
+    loaded,
+    runner,
+    probeLease,
+    ['quorum', 'check'],
+    'quorum_check_failed',
+    'quorum check failed',
+  );
+
+  return {
+    refs,
+    probeLease,
+    toolVersionsPath,
+    toolVersionsText: toolVersions.stdout,
+  };
+}
+
+/**
+ * Commit the job's durable evidence, then derive provenance from the reread
+ * record. Evidence first is what makes a provenance fault recoverable: the
+ * job already states what it ran against, so a retry heals only the derived
+ * file. The authoritative scope is never part of this patch.
+ */
+function commitPreflightEvidence(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  probed: ProbedPreflight,
+  lease: ContainerLease,
+): PreflightResult {
+  const credentialBundle = {
+    name: 'blessed' as const,
+    bundle_id: loaded.bundle.bundle_id,
+  };
+  const container = leaseToJobContainerEvidence(lease);
+  updateJob(loaded, jobId, (current) => ({
+    ...current,
+    refs: probed.refs,
+    credential_bundle: credentialBundle,
+    container,
+    error: null,
+  }));
+
+  const provenance = writeProvenance(loaded, readJob(loaded, jobId), {
+    path: probed.toolVersionsPath,
+    text: probed.toolVersionsText,
+  });
+
+  return {
+    refs: probed.refs,
+    credential_bundle: credentialBundle,
+    container,
+    tool_versions_path: probed.toolVersionsPath,
+    tool_versions_text: probed.toolVersionsText,
+    provenance_path: provenance,
+  };
+}
+
+/**
+ * Preflight one live job: probe empty, then recreate the container around
+ * exactly this job's credential generation and return the lease the worker
+ * must execute inside. The probe container is downed before the live
+ * generation is activated and mounted.
+ */
+export async function preflightLiveJob(
+  args: PreflightArgs,
+): Promise<LivePreflightResult> {
+  const runner = args.runner ?? defaultCommandRunner;
   try {
-    assertLiveScopeForExecution(readJob(args.loaded, args.jobId));
-
-    updateJob(args.loaded, args.jobId, (current) => ({
-      ...current,
-      status: 'preflighting',
-      error: null,
-    }));
-
-    for (const path of repos(args.loaded)) {
-      ensureCleanWorktree(path, runner);
-    }
-
-    fetchRepo(
-      args.loaded.config.evals.path,
-      args.loaded.config.evals.remote,
-      runner,
-    );
-    fetchRepo(
-      args.loaded.config.superpowers.path,
-      args.loaded.config.superpowers.remote,
-      runner,
-    );
-    fetchRepo(
-      args.loaded.config.gauntlet.path,
-      args.loaded.config.gauntlet.remote,
-      runner,
-    );
-
-    const evalsResolvedSha = fastForwardManagedRepo(
-      {
-        path: args.loaded.config.evals.path,
-        remote: args.loaded.config.evals.remote,
-        ref: args.loaded.config.evals.ref,
-        label: 'evals',
-      },
-      runner,
-    );
-    const gauntletBuiltSha = fastForwardManagedRepo(
-      {
-        path: args.loaded.config.gauntlet.path,
-        remote: args.loaded.config.gauntlet.remote,
-        ref: args.loaded.config.gauntlet.ref,
-        label: 'gauntlet',
-      },
-      runner,
-    );
-    const superpowersResolvedSha = resolveSuperpowersRef(
-      {
-        path: args.loaded.config.superpowers.path,
-        remote: args.loaded.config.superpowers.remote,
-      },
-      args.superpowersRef,
-      runner,
-    );
-    checkoutDetached(
-      args.loaded.config.superpowers.path,
-      superpowersResolvedSha,
-      runner,
-    );
-
-    const refs: RefSnapshot = {
-      superpowers_requested_ref: args.superpowersRef,
-      superpowers_resolved_sha: superpowersResolvedSha,
-      evals_ref: args.loaded.config.evals.ref,
-      evals_resolved_sha: evalsResolvedSha,
-      gauntlet_ref: args.loaded.config.gauntlet.ref,
-      gauntlet_built_sha: gauntletBuiltSha,
-    };
-
-    buildContainer(args.loaded, runner);
-    reconcileContainer(args.loaded, runner);
-    statusContainer(args.loaded, runner);
-    const containerIdentity = inspectContainerIdentity(args.loaded, runner);
-
-    const toolVersions = runInContainer(
+    const plan = livePlanForJob(readJob(args.loaded, args.jobId));
+    const probed = await preflightThroughEmptyProbe(args, plan);
+    const lease = reconcileScopedContainer(
       args.loaded,
       runner,
-      ['evals-tool-versions'],
-      'tool_versions_failed',
-      'evals-tool-versions failed',
+      stageLiveCredentialMaterial(args.loaded, plan.scope),
     );
-    const toolVersionsPath = jobToolVersionsPath(args.loaded, args.jobId);
-    writePrivateText(toolVersionsPath, toolVersions.stdout);
-
-    runInContainer(
-      args.loaded,
-      runner,
-      ['quorum', 'check'],
-      'quorum_check_failed',
-      'quorum check failed',
-    );
-
-    const resultBase = {
-      refs,
-      credential_bundle: {
-        name: 'blessed' as const,
-        bundle_id: args.loaded.bundle.bundle_id,
-      },
-      container: {
-        name: args.loaded.config.container.name,
-        id: containerIdentity.id,
-        image_id: containerIdentity.image_id,
-        mount_signature: containerMountSignature(args.loaded),
-        code_mounts_read_only: false,
-      },
-      tool_versions_path: toolVersionsPath,
-      tool_versions_text: toolVersions.stdout,
-    };
-
-    const job = readJob(args.loaded, args.jobId);
-    const provenancePath = writeProvenance(
-      args.loaded,
-      job,
-      resultBase,
-      job.command.argv,
-    );
-
-    // The durable half of the container record: read-only mount evidence is
-    // provenance-only, and this shape carries no scope of its own.
-    const containerEvidence: JobContainerEvidence = {
-      name: resultBase.container.name,
-      id: resultBase.container.id,
-      image_id: resultBase.container.image_id,
-      mount_signature: resultBase.container.mount_signature,
-    };
-    updateJob(args.loaded, args.jobId, (current) => ({
-      ...current,
-      refs,
-      credential_bundle: resultBase.credential_bundle,
-      container: containerEvidence,
-      artifacts: {
-        ...current.artifacts,
-        provenance: provenancePath,
-      },
-      error: null,
-    }));
-
     return {
-      ...resultBase,
-      provenance_path: provenancePath,
+      evidence: commitPreflightEvidence(args.loaded, args.jobId, probed, lease),
+      lease,
+      supervisorExecEnvFile: activeSupervisorExecEnvFile(args.loaded),
     };
   } catch (error) {
     const stable = stableError(error);
@@ -343,11 +455,37 @@ export async function preflightForJob(
   }
 }
 
+// prepare stops at the empty probe: its evidence comes from the probe lease,
+// and no credential material is ever staged, activated, or mounted.
+async function preflightPrepareJob(
+  args: PreflightArgs,
+): Promise<PreflightResult> {
+  try {
+    const job = readJob(args.loaded, args.jobId);
+    if (job.kind !== 'prepare') {
+      throw new ApplianceError(
+        'config_invalid',
+        'preflight',
+        `job ${job.job_id} is a ${job.kind} job; prepare probes only prepare jobs`,
+      );
+    }
+    const probed = await preflightThroughEmptyProbe(args, null);
+    return commitPreflightEvidence(
+      args.loaded,
+      args.jobId,
+      probed,
+      probed.probeLease,
+    );
+  } catch (error) {
+    const stable = stableError(error);
+    try {
+      failJob(args.loaded, args.jobId, stable);
+    } catch {}
+    throw stable;
+  }
+}
+
 export async function prepare(args: PrepareArgs): Promise<PreflightResult> {
-  // TEMPORARY (Tasks 2-4): the production prepare path is frozen until the
-  // scoped credential cutover lands. The guard runs before job creation and
-  // lock acquisition; Task 5 deletes it with the complete caller cutover.
-  assertScopedCredentialCutover('prepare');
   const job =
     args.jobId === undefined
       ? createJob(args.loaded, {
@@ -375,27 +513,25 @@ export async function prepare(args: PrepareArgs): Promise<PreflightResult> {
           jobId: job.job_id,
           superpowersRef: args.superpowersRef,
         };
-        const result = await preflightForJob(
+        const result = await preflightPrepareJob(
           args.runner === undefined
             ? preflightArgs
             : { ...preflightArgs, runner: args.runner },
         );
-        if (job.kind === 'prepare') {
-          const postflightError = postflightDirtyCheck(
-            args.loaded,
-            job.job_id,
-            args.runner ?? defaultCommandRunner,
-          );
-          if (postflightError !== null) {
-            throw postflightError;
-          }
-          updateJob(args.loaded, job.job_id, (current) => ({
-            ...current,
-            status: 'done',
-            finished_at: new Date().toISOString(),
-            result: { exit_code: 0, summary: 'preflight ok' },
-          }));
+        const postflightError = postflightDirtyCheck(
+          args.loaded,
+          job.job_id,
+          args.runner ?? defaultCommandRunner,
+        );
+        if (postflightError !== null) {
+          throw postflightError;
         }
+        updateJob(args.loaded, job.job_id, (current) => ({
+          ...current,
+          status: 'done',
+          finished_at: new Date().toISOString(),
+          result: { exit_code: 0, summary: 'preflight ok' },
+        }));
         return result;
       },
     );

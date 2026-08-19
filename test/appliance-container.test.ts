@@ -19,10 +19,13 @@ import type {
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
+import * as containerModule from '../src/appliance/container.ts';
 import {
   type ContainerLease,
   dockerExecEnvFileSupport,
   evalsContainerPath,
+  leaseToJobContainerEvidence,
+  liveLeaseFromJob,
   type RecordedLifecycleOperation,
   reconcileScopedContainer,
   requireDockerExecEnvFile,
@@ -41,6 +44,7 @@ import {
 } from '../src/appliance/credential-scope.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import type {
+  JobRecord,
   LoadedApplianceConfig,
   LoadedApplianceStateConfig,
 } from '../src/appliance/types.ts';
@@ -2336,4 +2340,215 @@ test('requireDockerExecEnvFile fails typed when --env-file is unsupported or the
     expect((caught as ApplianceError).message).toContain('--env-file');
     expect(dockerExecEnvFileSupport(runner)).toBe(false);
   }
+});
+
+// --- lease <-> durable job evidence (F13 Task 5) -----------------------------
+// The in-memory lease is the runnable authority; the job carries only durable
+// evidence. The conversion is exact in both directions, and a record that
+// cannot prove BOTH halves (a non-null container id and a non-null top-level
+// live scope) can never be turned back into something runnable.
+
+const LEASE_ID =
+  'dec0de0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+
+function sampleLease(overrides: Partial<ContainerLease> = {}): ContainerLease {
+  return {
+    name: 'quorum-appliance',
+    id: LEASE_ID,
+    imageId: 'sha256:img-9',
+    mountSignature: 'f'.repeat(64),
+    credentialScope: GEMINI_OAUTH_SCOPE,
+    ...overrides,
+  };
+}
+
+function jobWithEvidence(
+  container: JobRecord['container'],
+  scope: JobRecord['credential_scope'],
+): JobRecord {
+  return {
+    schema_version: 1,
+    job_id: 'job-lease-1',
+    kind: 'run',
+    status: 'running',
+    created_at: '2026-08-18T00:00:00.000Z',
+    updated_at: '2026-08-18T00:00:00.000Z',
+    started_at: null,
+    finished_at: null,
+    requester: {
+      agent: null,
+      thread: null,
+      task: null,
+      host_user: 'fixture',
+      remote_identity: 'local:fixture',
+    },
+    command: { argv: ['quorum', 'run'], sanitized: true },
+    request: { superpowers_ref: 'main' },
+    credential_selection: { agent: 'gemini', credential: 'gemini_cred' },
+    credential_scope: scope,
+    credential_scope_source_evals_sha: 'e'.repeat(40),
+    refs: null,
+    credential_bundle: null,
+    container,
+    process: null,
+    artifacts: {
+      run_id: null,
+      batch_id: null,
+      stdout_log: '/dev/null',
+      stderr_log: '/dev/null',
+      provenance: '/dev/null',
+    },
+    progress: null,
+    result: { exit_code: null, summary: null },
+    error: null,
+  };
+}
+
+test('leaseToJobContainerEvidence drops the in-memory scope and keeps the durable field names', () => {
+  const evidence = leaseToJobContainerEvidence(sampleLease());
+
+  expect(Object.keys(evidence).sort()).toEqual([
+    'id',
+    'image_id',
+    'mount_signature',
+    'name',
+  ]);
+  expect(evidence).toEqual({
+    name: 'quorum-appliance',
+    id: LEASE_ID,
+    image_id: 'sha256:img-9',
+    mount_signature: 'f'.repeat(64),
+  });
+  const serialized = JSON.stringify(evidence);
+  expect(serialized).not.toContain('credentialScope');
+  expect(serialized).not.toContain('gemini_cred');
+});
+
+test('liveLeaseFromJob rebuilds exactly the lease its evidence came from', () => {
+  const lease = sampleLease();
+  const job = jobWithEvidence(
+    leaseToJobContainerEvidence(lease),
+    lease.credentialScope,
+  );
+
+  expect(liveLeaseFromJob(job)).toEqual(lease);
+});
+
+test('liveLeaseFromJob refuses tampered, null-id, and null-scope records', () => {
+  const lease = sampleLease();
+  const evidence = leaseToJobContainerEvidence(lease);
+  const cases: readonly {
+    readonly what: string;
+    readonly job: JobRecord;
+  }[] = [
+    {
+      what: 'null scope (a record predating scoped delivery)',
+      job: jobWithEvidence(evidence, null),
+    },
+    {
+      what: 'asserted-empty scope',
+      job: jobWithEvidence(evidence, EMPTY_CREDENTIAL_SCOPE),
+    },
+    {
+      what: 'no container evidence',
+      job: jobWithEvidence(null, lease.credentialScope),
+    },
+    {
+      what: 'null container id',
+      job: jobWithEvidence({ ...evidence, id: null }, lease.credentialScope),
+    },
+    {
+      what: 'blank container id',
+      job: jobWithEvidence({ ...evidence, id: '   ' }, lease.credentialScope),
+    },
+    {
+      what: 'ambiguous whitespace-bearing container id',
+      job: jobWithEvidence(
+        { ...evidence, id: `${LEASE_ID} other` },
+        lease.credentialScope,
+      ),
+    },
+    {
+      what: 'blank container name',
+      job: jobWithEvidence({ ...evidence, name: '' }, lease.credentialScope),
+    },
+    {
+      what: 'blank mount signature',
+      job: jobWithEvidence(
+        { ...evidence, mount_signature: '' },
+        lease.credentialScope,
+      ),
+    },
+  ];
+
+  for (const entry of cases) {
+    const caught = captureError(() => liveLeaseFromJob(entry.job));
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+    expect((caught as ApplianceError).step).toBe('container');
+  }
+});
+
+// --- repository-wide scoped call-site assertion (F13 Task 5) -----------------
+// After the cutover there is exactly ONE way for appliance production code to
+// reach a container process: through a ContainerLease. The full-bundle helpers
+// are gone from the module, no source file mentions them, and no module other
+// than container.ts can even name the wrapper's `exec` subcommand.
+
+const DELETED_FULL_BUNDLE_HELPERS: readonly string[] = [
+  'baseContainerArgs',
+  'upContainerArgs',
+  'execContainerArgs',
+  'reconcileContainer',
+  'runInContainer',
+  'containerMountSignature',
+  'discoveredAuthDirs',
+  'assertScopedCredentialCutover',
+];
+
+function sourceFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...sourceFiles(path));
+    } else if (entry.name.endsWith('.ts')) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
+test('the full-bundle container path is gone from the module surface', () => {
+  const exported = Object.keys(containerModule);
+  for (const name of DELETED_FULL_BUNDLE_HELPERS) {
+    expect(exported).not.toContain(name);
+  }
+  expect(exported).toContain('reconcileScopedContainer');
+  expect(exported).toContain('runInLeasedContainer');
+  expect(exported).toContain('scopedExecContainerArgs');
+});
+
+test('no source file can construct an arbitrary or Quorum exec without a lease', () => {
+  const offenders: string[] = [];
+  for (const file of sourceFiles(join(REPO, 'src'))) {
+    const text = readFileSync(file, 'utf8');
+    for (const name of DELETED_FULL_BUNDLE_HELPERS) {
+      if (new RegExp(`\\b${name}\\b`).test(text)) {
+        offenders.push(`${file}: ${name}`);
+      }
+    }
+  }
+  expect(offenders).toEqual([]);
+
+  // The wrapper's `exec` subcommand is nameable in exactly one module: the
+  // scoped exec builder and the closed recorded-lifecycle primitive both live
+  // in container.ts, so every other appliance module must go through them.
+  const execNamers = sourceFiles(join(REPO, 'src/appliance'))
+    .filter((file) => readFileSync(file, 'utf8').includes("'exec'"))
+    .map((file) => file.slice(join(REPO, 'src/appliance/').length));
+  expect(execNamers).toEqual(['container.ts']);
+
+  // The temporary cutover module is deleted, not merely unimported.
+  expect(existsSync(join(REPO, 'src/appliance/scoped-cutover.ts'))).toBe(false);
 });

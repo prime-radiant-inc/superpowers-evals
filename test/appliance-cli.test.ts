@@ -5,17 +5,29 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type {
+  CommandResult,
+  CommandRunner,
+} from '../src/agents/command-runner.ts';
 import {
   type ApplianceActions,
+  createApplianceActions,
   createApplianceProgram,
 } from '../src/appliance/cli.ts';
+import {
+  loadCredentialConfig,
+  loadStateConfig,
+} from '../src/appliance/config.ts';
+import { buildLiveCredentialRequest } from '../src/appliance/credential-request.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 import { envSnapshot } from '../src/env.ts';
@@ -1450,13 +1462,11 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(existsSync(marker)).toBe(false);
 });
 
-// --- scoped credential cutover freeze (Tasks 2-4) ---------------------------
-// Real subprocesses against the DEFAULT actions: the production prepare/run/
-// run-all actions must refuse with the exact typed cutover error AFTER
-// argument and structural-config validation but BEFORE job creation, state
-// mutation, credential-aware loading, bundle payload access, or Docker.
-// Task 5 replaces these expectations with the scoped end-state behavior in
-// the same commit that removes the guard.
+// --- the real production actions after the cutover (F13 Task 5) -------------
+// The production prepare/run/run-all writers are driven end to end through
+// createApplianceActions, whose finite dependencies are the two config
+// loaders, the command runner, the detached worker spawner, and runWorker.
+// Tests supply fakes at exactly that seam: no guard, no module mock.
 
 interface RealConfigFixture {
   readonly root: string;
@@ -1467,9 +1477,8 @@ interface RealConfigFixture {
 }
 
 // A structurally valid on-disk appliance config whose credential bundle is
-// BROKEN (no metadata.json): production actions that consult the bundle would
-// fail on it, so any refusal these tests observe happened before bundle
-// access.
+// BROKEN (no metadata.json): production actions that consult the bundle fail
+// on it, so any refusal these tests observe happened before bundle access.
 function writeRealConfig(): RealConfigFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-cli-real-')));
   for (const sub of [
@@ -1531,44 +1540,311 @@ function runCli(fx: RealConfigFixture, args: readonly string[]) {
   return proc;
 }
 
-test('production prepare refuses with the cutover error before state mutation or bundle access', () => {
-  const fx = writeRealConfig();
-  const proc = runCli(fx, ['prepare', '--superpowers-ref', 'main', '--json']);
-  expect(proc.status).toBe(1);
-  const payload = JSON.parse(proc.stdout) as CliJson;
-  expect(payload.ok).toBe(false);
-  expect(payload.error?.code).toBe('config_invalid');
-  expect(payload.error?.step).toBe('scoped-cutover');
-  expect(payload.error?.message).toContain(
-    'scoped credential cutover incomplete',
+// Valid bundle metadata, so the credential-aware loader succeeds.
+function seedBundleMetadata(fx: RealConfigFixture): void {
+  writeFileSync(
+    join(fx.bundleDir, 'metadata.json'),
+    JSON.stringify({
+      bundle_id: 'blessed-a',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: ['openai'],
+    }),
   );
-  // No job creation, no state mutation.
-  expect(existsSync(join(fx.root, 'state'))).toBe(false);
-});
+}
 
-test('production run refuses with the cutover error after argument validation', () => {
+// Records every subprocess the production actions make, and snapshots the job
+// namespace the first time one of them is a container action.
+class ActionRunner implements CommandRunner {
+  calls: { command: string; args: readonly string[] }[] = [];
+  jobsAtFirstContainerCall: string[] | null = null;
+  jobsDir: string;
+
+  constructor(jobsDir: string) {
+    this.jobsDir = jobsDir;
+  }
+
+  containerCalls(): { command: string; args: readonly string[] }[] {
+    return this.calls.filter(
+      (call) =>
+        call.command === 'docker' ||
+        call.command.endsWith('scripts/evals-container'),
+    );
+  }
+
+  run(command: string, args: readonly string[]): CommandResult {
+    const isContainerCall =
+      command === 'docker' || command.endsWith('scripts/evals-container');
+    if (isContainerCall && this.jobsAtFirstContainerCall === null) {
+      this.jobsAtFirstContainerCall = existsSync(this.jobsDir)
+        ? readdirSync(this.jobsDir)
+        : [];
+    }
+    this.calls.push({ command, args });
+    if (command === 'git' && args.includes('status')) {
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (
+      command === 'git' &&
+      args.includes('rev-parse') &&
+      args.some((arg) => arg.startsWith('refs/tags/'))
+    ) {
+      // Only the branch ref resolves, so the superpowers ref is unambiguous.
+      return { status: 1, stdout: '', stderr: 'missing tag\n' };
+    }
+    if (command === 'git' && args.includes('rev-parse')) {
+      return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+    }
+    if (command === 'docker' && args[0] === 'exec' && args[1] === '--help') {
+      return {
+        status: 0,
+        stdout: 'Usage: docker exec\n  --env-file list\n',
+        stderr: '',
+      };
+    }
+    if (command.endsWith('scripts/evals-container')) {
+      // Stop the real preflight at the image build: these tests are about
+      // what production WROTE before the first container action, not about a
+      // full simulated container lifecycle.
+      return { status: 1, stdout: '', stderr: 'fixture: no docker\n' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  }
+}
+
+interface ActionHarness {
+  readonly fx: RealConfigFixture;
+  readonly runner: ActionRunner;
+  readonly actions: ApplianceActions;
+  readonly workerCalls: string[];
+  readonly detachCalls: string[];
+  readonly jobsDir: string;
+}
+
+function actionHarness(fx: RealConfigFixture): ActionHarness {
+  const jobsDir = join(fx.root, 'state/jobs');
+  const runner = new ActionRunner(jobsDir);
+  const workerCalls: string[] = [];
+  const detachCalls: string[] = [];
+  const actions = createApplianceActions({
+    loadStateConfig: (options) => loadStateConfig(fx.configPath, options),
+    loadCredentialConfig: (options) =>
+      loadCredentialConfig(fx.configPath, options),
+    commandRunner: runner,
+    spawnDetachedWorker: (_loaded, jobId) => {
+      detachCalls.push(jobId);
+    },
+    runWorker: async (_loaded, jobId) => {
+      workerCalls.push(jobId);
+    },
+  });
+  return { fx, runner, actions, workerCalls, detachCalls, jobsDir };
+}
+
+function liveRequestFor(
+  fx: RealConfigFixture,
+  selection: { agent: string; credential: string | null },
+) {
+  return buildLiveCredentialRequest(fx.evalsPath, selection, fx.headSha);
+}
+
+function persistedJob(harness: ActionHarness, jobId: string) {
+  return JSON.parse(
+    readFileSync(join(harness.jobsDir, jobId, 'job.json'), 'utf8'),
+  ) as Record<string, unknown>;
+}
+
+test('production run persists the credential triple before the worker or Docker', async () => {
   const fx = writeRealConfig();
+  seedBundleMetadata(fx);
   writeScenario(fx.evalsPath, 'writing-plans');
   writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
-  const proc = runCli(fx, [
-    'run',
-    '--superpowers-ref',
-    'main',
-    '--scenario',
-    'writing-plans',
-    '--coding-agent',
-    'codex',
-    '--json',
-  ]);
-  expect(proc.status).toBe(1);
-  const payload = JSON.parse(proc.stdout) as CliJson;
-  expect(payload.error?.step).toBe('scoped-cutover');
-  expect(payload.error?.message).toContain(
-    'scoped credential cutover incomplete',
-  );
-  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+  const harness = actionHarness(fx);
 
-  // Ordering: a bad argument fails BEFORE the guard with its own error.
+  await harness.actions.run(
+    {
+      json: true,
+      superpowersRef: 'main',
+      detach: false,
+      scenario: 'writing-plans',
+      agent: 'codex',
+      credential: null,
+    },
+    liveRequestFor(fx, { agent: 'codex', credential: null }),
+  );
+
+  expect(harness.workerCalls).toHaveLength(1);
+  const jobId = harness.workerCalls[0] ?? '';
+  const record = persistedJob(harness, jobId);
+  expect(record['kind']).toBe('run');
+  expect(record['credential_selection']).toEqual({
+    agent: 'codex',
+    credential: null,
+  });
+  expect(record['credential_scope']).toEqual(CODEX_SUB_SCOPE);
+  expect(record['credential_scope_source_evals_sha']).toBe(fx.headSha);
+  expect(record['command']).toEqual({
+    argv: [
+      'quorum',
+      'run',
+      'scenarios/writing-plans',
+      '--coding-agent',
+      'codex',
+    ],
+    sanitized: true,
+  });
+  // The writer ran before anything touched a container.
+  expect(harness.runner.containerCalls()).toEqual([]);
+  expect(harness.detachCalls).toEqual([]);
+});
+
+test('production run-all persists the explicit credential and detaches its worker', async () => {
+  const fx = writeRealConfig();
+  seedBundleMetadata(fx);
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+  const harness = actionHarness(fx);
+
+  await harness.actions.runAll(
+    {
+      json: true,
+      superpowersRef: 'main',
+      detach: true,
+      quorumArgs: [
+        '--coding-agents',
+        'codex',
+        '--credentials',
+        'openai_responses',
+      ],
+    },
+    liveRequestFor(fx, { agent: 'codex', credential: 'openai_responses' }),
+  );
+
+  expect(harness.detachCalls).toHaveLength(1);
+  expect(harness.workerCalls).toEqual([]);
+  const record = persistedJob(harness, harness.detachCalls[0] ?? '');
+  expect(record['kind']).toBe('run-all');
+  expect(record['credential_selection']).toEqual({
+    agent: 'codex',
+    credential: 'openai_responses',
+  });
+  expect(record['credential_scope']).toEqual(OPENAI_RESPONSES_SCOPE);
+  expect(record['credential_scope_source_evals_sha']).toBe(fx.headSha);
+  expect(harness.runner.containerCalls()).toEqual([]);
+});
+
+test('production prepare writes its asserted-empty job before the first container action', async () => {
+  const fx = writeRealConfig();
+  seedBundleMetadata(fx);
+  const harness = actionHarness(fx);
+
+  await expect(
+    harness.actions.prepare({ json: true, superpowersRef: 'main' }),
+  ).rejects.toBeInstanceOf(ApplianceError);
+
+  const snapshot = harness.runner.jobsAtFirstContainerCall ?? [];
+  expect(snapshot).toHaveLength(1);
+  const record = persistedJob(harness, snapshot[0] ?? '');
+  expect(record['kind']).toBe('prepare');
+  expect(record['credential_selection']).toBe(null);
+  expect(record['credential_scope']).toEqual({
+    schemaVersion: 1,
+    kind: 'empty',
+    agent: null,
+    runtimeFamily: null,
+    credential: null,
+    agentEnv: [],
+    geminiAuthType: null,
+    oauth: null,
+  });
+  expect(record['credential_scope_source_evals_sha']).toBe(null);
+});
+
+test('bundle metadata faults fail prepare and run before job creation or Docker', async () => {
+  const cases: readonly {
+    readonly what: string;
+    readonly break: (fx: RealConfigFixture) => void;
+  }[] = [
+    { what: 'missing metadata', break: () => {} },
+    {
+      what: 'unreadable metadata',
+      break: (fx) => {
+        seedBundleMetadata(fx);
+        chmodSync(join(fx.bundleDir, 'metadata.json'), 0o000);
+      },
+    },
+    {
+      what: 'final-symlink metadata',
+      break: (fx) => {
+        const real = join(fx.root, 'elsewhere-metadata.json');
+        writeFileSync(
+          real,
+          JSON.stringify({
+            bundle_id: 'blessed-a',
+            rotated_at: '2026-06-18T00:00:00Z',
+            providers: [],
+          }),
+        );
+        symlinkSync(real, join(fx.bundleDir, 'metadata.json'));
+      },
+    },
+    {
+      what: 'intermediate-symlink bundle path',
+      break: (fx) => {
+        seedBundleMetadata(fx);
+        const link = join(fx.root, 'credentials-link');
+        symlinkSync(join(fx.root, 'credentials'), link);
+        const config = JSON.parse(readFileSync(fx.configPath, 'utf8'));
+        config.credential_bundle.path = join(link, 'blessed');
+        writeFileSync(fx.configPath, JSON.stringify(config));
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    const fx = writeRealConfig();
+    writeScenario(fx.evalsPath, 'writing-plans');
+    writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+    entry.break(fx);
+    const harness = actionHarness(fx);
+
+    await expect(
+      harness.actions.prepare({ json: true, superpowersRef: 'main' }),
+    ).rejects.toMatchObject({ code: 'config_invalid' });
+    await expect(
+      harness.actions.run(
+        {
+          json: true,
+          superpowersRef: 'main',
+          detach: false,
+          scenario: 'writing-plans',
+          agent: 'codex',
+          credential: null,
+        },
+        liveRequestFor(fx, { agent: 'codex', credential: null }),
+      ),
+    ).rejects.toMatchObject({ code: 'config_invalid' });
+
+    // No job record, no container action, no worker.
+    expect(
+      existsSync(harness.jobsDir) ? readdirSync(harness.jobsDir) : [],
+    ).toEqual([]);
+    expect(harness.runner.containerCalls()).toEqual([]);
+    expect(harness.workerCalls).toEqual([]);
+
+    // Status and identity-verified cancellation stay on the structural loader.
+    await expect(
+      harness.actions.status({ json: true, id: 'job-none' }),
+    ).rejects.toMatchObject({ code: 'job_not_found' });
+    await expect(
+      harness.actions.cancel({ json: true, id: 'job-none' }),
+    ).rejects.toMatchObject({ code: 'job_not_found' });
+  }
+});
+
+test('argument faults fail before job creation for run and run-all', () => {
+  const fx = writeRealConfig();
+  seedBundleMetadata(fx);
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+
   const badScenario = runCli(fx, [
     'run',
     '--superpowers-ref',
@@ -1580,29 +1856,10 @@ test('production run refuses with the cutover error after argument validation', 
     '--json',
   ]);
   expect(badScenario.status).toBe(1);
-  const badPayload = JSON.parse(badScenario.stdout) as CliJson;
-  expect(badPayload.error?.message).toContain('trusted scenario not found');
-  expect(badPayload.error?.step).not.toBe('scoped-cutover');
-});
+  expect((JSON.parse(badScenario.stdout) as CliJson).error?.message).toContain(
+    'trusted scenario not found',
+  );
 
-test('production run-all refuses with the cutover error after argument validation', () => {
-  const fx = writeRealConfig();
-  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
-  const proc = runCli(fx, [
-    'run-all',
-    '--superpowers-ref',
-    'main',
-    '--json',
-    '--',
-    '--coding-agents',
-    'codex',
-  ]);
-  expect(proc.status).toBe(1);
-  const payload = JSON.parse(proc.stdout) as CliJson;
-  expect(payload.error?.step).toBe('scoped-cutover');
-  expect(existsSync(join(fx.root, 'state'))).toBe(false);
-
-  // Ordering: missing --coding-agents is an argument error, not the guard.
   const badArgs = runCli(fx, [
     'run-all',
     '--superpowers-ref',
@@ -1610,11 +1867,11 @@ test('production run-all refuses with the cutover error after argument validatio
     '--json',
   ]);
   expect(badArgs.status).toBe(1);
-  const badPayload = JSON.parse(badArgs.stdout) as CliJson;
-  expect(badPayload.error?.message).toContain(
+  expect((JSON.parse(badArgs.stdout) as CliJson).error?.message).toContain(
     'requires explicit --coding-agents',
   );
-  expect(badPayload.error?.step).not.toBe('scoped-cutover');
+
+  expect(existsSync(join(fx.root, 'state/jobs'))).toBe(false);
 });
 
 test('structural status and cancel stay available while the bundle is broken', () => {
@@ -1793,10 +2050,11 @@ test('a bare --credential with no value is rejected by the real CLI', () => {
   expect(`${proc.stderr}${proc.stdout}`).toContain('--credential');
 });
 
-test('the credential request is built before the cutover guard refuses', () => {
+test('the credential request is built before the credential-aware loader runs', () => {
   // Ordering proof: an unresolvable credential fails with the credential-scope
-  // error, not the guard, which can only happen if the program action builds
-  // the request first. Both refusals precede any state directory.
+  // error, which can only happen if the program action builds the request
+  // before anything consults the bundle. Both refusals precede any state
+  // directory.
   const fx = writeRealConfig();
   writeScenario(fx.evalsPath, 'writing-plans');
   writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
@@ -1819,8 +2077,9 @@ test('the credential request is built before the cutover guard refuses', () => {
   expect(scopePayload.error?.message).toContain('no_such_credential');
   expect(existsSync(join(fx.root, 'state'))).toBe(false);
 
-  // A resolvable credential gets past request construction and lands on the
-  // guard — still before job creation, state mutation, or bundle access.
+  // A resolvable credential gets past request construction and then lands on
+  // this fixture's broken bundle — still before job creation, state mutation,
+  // or any bundle PAYLOAD access.
   const resolvable = runCli(fx, [
     'run',
     '--superpowers-ref',
@@ -1834,9 +2093,14 @@ test('the credential request is built before the cutover guard refuses', () => {
     '--json',
   ]);
   expect(resolvable.status).toBe(1);
-  const guardPayload = JSON.parse(resolvable.stdout) as CliJson;
-  expect(guardPayload.error?.step).toBe('scoped-cutover');
-  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+  const bundlePayload = JSON.parse(resolvable.stdout) as CliJson;
+  expect(bundlePayload.error?.step).toBe('config');
+  expect(bundlePayload.error?.code).toBe('config_invalid');
+  // The credential-aware loader ensures the appliance-owned state namespace
+  // before it validates the bundle, so an empty state/ may exist. What must
+  // NOT exist is a job: nothing was recorded as submitted.
+  const jobsDir = join(fx.root, 'state/jobs');
+  expect(existsSync(jobsDir) ? readdirSync(jobsDir) : []).toEqual([]);
 
   // CLI output names no credential material location.
   expect(resolvable.stdout).not.toContain('credentials-scoped');

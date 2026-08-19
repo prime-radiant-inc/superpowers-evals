@@ -432,6 +432,10 @@ test('the persisted credential fields carry no filesystem paths', () => {
   const job = createJob(
     cfg,
     liveJobRequest('run', {
+      // The selection and the scope describe the SAME cell: a record whose
+      // selection contradicted its scope would not be the shape production
+      // writes, so it could not prove anything about production's bytes.
+      selection: { agent: 'pi', credential: 'pi_default' },
       scope: {
         schemaVersion: 1,
         kind: 'live',
@@ -459,6 +463,59 @@ test('the persisted credential fields carry no filesystem paths', () => {
   expect(credentialFields).not.toContain('credentials-scoped');
   expect(credentialFields).not.toContain(cfg.config.credential_bundle.path);
   expect(credentialFields).not.toContain(cfg.config.root);
+
+  // The whole persisted record, not just the credential block: no field may
+  // leak the blessed bundle or the scoped credential namespace.
+  const wholeRecord = readFileSync(
+    join(cfg.paths.jobs, job.job_id, 'job.json'),
+    'utf8',
+  );
+  expect(wholeRecord).not.toContain(cfg.config.credential_bundle.path);
+  expect(wholeRecord).not.toContain('credentials-scoped');
+});
+
+// The credential triple is written once, in the initial atomic record, and is
+// the sole persisted authority afterwards. No update path may rewrite it — not
+// preflight committing evidence, not the worker recording artifacts.
+test('updateJob refuses to patch the persisted credential authority', () => {
+  const cfg = loaded();
+  const job = createJob(cfg, liveJobRequest('run'));
+  const patches: readonly ((current: JobRecord) => JobRecord)[] = [
+    (current) => ({ ...current, credential_scope: null }),
+    (current) => ({ ...current, credential_scope: EMPTY_CREDENTIAL_SCOPE }),
+    (current) => ({
+      ...current,
+      credential_selection: { agent: 'pi', credential: 'pi_default' },
+    }),
+    (current) => ({
+      ...current,
+      credential_scope_source_evals_sha: 'z'.repeat(40),
+    }),
+  ];
+
+  for (const patch of patches) {
+    let caught: unknown = null;
+    try {
+      updateJob(cfg, job.job_id, patch);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+  }
+
+  const after = readJob(cfg, job.job_id);
+  expect(after.credential_selection).toEqual(FIXTURE_LIVE_SELECTION);
+  expect(after.credential_scope).toEqual(FIXTURE_LIVE_SCOPE);
+  expect(after.credential_scope_source_evals_sha).toBe(
+    FIXTURE_SOURCE_EVALS_SHA,
+  );
+
+  // Everything else still updates normally.
+  expect(
+    updateJob(cfg, job.job_id, (current) => ({ ...current, status: 'running' }))
+      .status,
+  ).toBe('running');
 });
 
 // Job persistence is part of the structural state boundary: the whole API

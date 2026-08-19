@@ -2,7 +2,10 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { Command } from 'commander';
-import { defaultCommandRunner } from '../agents/command-runner.ts';
+import {
+  type CommandRunner,
+  defaultCommandRunner,
+} from '../agents/command-runner.ts';
 import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
@@ -12,7 +15,11 @@ import {
   EMPTY_CREDENTIAL_SCOPE,
 } from '../credentials/scope.ts';
 import { getEnv } from '../env.ts';
-import { loadCredentialConfig, loadStateConfig } from './config.ts';
+import {
+  type LoadConfigOptions,
+  loadCredentialConfig,
+  loadStateConfig,
+} from './config.ts';
 import {
   buildLiveCredentialRequest,
   type LiveCredentialRequest,
@@ -25,9 +32,11 @@ import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
 import { prune as pruneResults } from './prune.ts';
-import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
-import type { LoadedApplianceStateConfig } from './types.ts';
+import type {
+  LoadedApplianceConfig,
+  LoadedApplianceStateConfig,
+} from './types.ts';
 
 interface BaseCommandArgs {
   readonly json: boolean;
@@ -453,20 +462,73 @@ function normalizeScenarioPath(
   return `scenarios/${targetWithinRoot.split(sep).join('/')}`;
 }
 
-function defaultActions(): ApplianceActions {
+/**
+ * Everything the production actions reach outside their own module. It is a
+ * closed list on purpose: the actions themselves are the real writers, and
+ * this is the single seam a test substitutes at, so an end-to-end test drives
+ * the same code an operator does.
+ */
+export interface ApplianceActionDeps {
+  readonly loadStateConfig: (
+    options?: LoadConfigOptions,
+  ) => LoadedApplianceStateConfig;
+  readonly loadCredentialConfig: (
+    options?: LoadConfigOptions,
+  ) => LoadedApplianceConfig;
+  readonly commandRunner: CommandRunner;
+  readonly spawnDetachedWorker: (
+    loaded: LoadedApplianceStateConfig,
+    jobId: string,
+  ) => void;
+  readonly runWorker: (
+    loaded: LoadedApplianceConfig,
+    jobId: string,
+    runner: CommandRunner,
+  ) => Promise<void>;
+}
+
+export function createApplianceActions(
+  deps: ApplianceActionDeps,
+): ApplianceActions {
+  // Persists the request it was handed. It never reparses argv and never
+  // patches the scope after the worker spawns: one construction, one write.
+  const submitLiveJob = async (args: {
+    readonly kind: 'run' | 'run-all';
+    readonly superpowersRef: string;
+    readonly argv: readonly string[];
+    readonly detach: boolean;
+    readonly request: LiveCredentialRequest;
+  }): Promise<unknown> => {
+    const loaded = deps.loadCredentialConfig({ ensureState: true });
+    const job = createJob(loaded, {
+      kind: args.kind,
+      superpowersRef: args.superpowersRef,
+      argv: args.argv,
+      requester: requester(),
+      credentialSelection: args.request.selection,
+      credentialScope: args.request.scope,
+      credentialScopeSourceEvalsSha: args.request.sourceEvalsSha,
+    });
+
+    if (args.detach) {
+      deps.spawnDetachedWorker(loaded, job.job_id);
+      return readJob(loaded, job.job_id);
+    }
+
+    await deps.runWorker(loaded, job.job_id, deps.commandRunner);
+    return readJob(loaded, job.job_id);
+  };
+
   return {
     doctor: async () => {
-      const loaded = loadCredentialConfig();
-      return doctorPayload(loaded);
+      const loaded = deps.loadCredentialConfig();
+      return doctorPayload(loaded, deps.commandRunner);
     },
     prepare: async (args) => {
-      // TEMPORARY (Tasks 2-4): structural-config validation, then the scoped
-      // cutover freeze — BEFORE job creation, state mutation, the
-      // credential-aware loader, bundle access, or Docker. Task 5 deletes
-      // the guard in the same commit as the complete caller cutover.
-      loadStateConfig();
-      assertScopedCredentialCutover('prepare');
-      const loaded = loadCredentialConfig(undefined, { ensureState: true });
+      // Structural-config validation first, then the credential-aware loader:
+      // a broken bundle fails typed before any job record exists.
+      deps.loadStateConfig();
+      const loaded = deps.loadCredentialConfig({ ensureState: true });
       const job = createJob(loaded, {
         kind: 'prepare',
         superpowersRef: args.superpowersRef,
@@ -483,19 +545,18 @@ function defaultActions(): ApplianceActions {
         superpowersRef: args.superpowersRef,
         argv: ['prepare'],
         requester: requester(),
+        runner: deps.commandRunner,
       });
       return { ok: true, job_id: job.job_id, ...result };
     },
     run: async (args, request) => {
-      const structural = loadStateConfig();
+      const structural = deps.loadStateConfig();
       const scenario = normalizeScenarioPath(args.scenario, structural);
       const codingAgentsDir = join(
         structural.config.evals.path,
         'coding-agents',
       );
       assertSupportedAgent(args.agent, codingAgentsDir);
-      // TEMPORARY (Tasks 2-4): see prepare above.
-      assertScopedCredentialCutover('run');
       // The operator's selection, forwarded verbatim. An omitted credential
       // stays omitted so Quorum resolves the same agent default the scope
       // already recorded; the request's source SHA is what proves the two
@@ -518,10 +579,8 @@ function defaultActions(): ApplianceActions {
     },
     runAll: async (args, request) => {
       // Argument validation and request construction ran in the command
-      // action; validate the structural config, then the Tasks 2-4 cutover
-      // freeze (see prepare).
-      loadStateConfig();
-      assertScopedCredentialCutover('run-all');
+      // action; this validates the structural config before job creation.
+      deps.loadStateConfig();
       return submitLiveJob({
         kind: 'run-all',
         superpowersRef: args.superpowersRef,
@@ -531,30 +590,30 @@ function defaultActions(): ApplianceActions {
       });
     },
     status: async (args) => {
-      const loaded = loadStateConfig();
+      const loaded = deps.loadStateConfig();
       return statusPayload(loaded, args.id);
     },
     cancel: async (args) => {
-      const loaded = loadStateConfig();
-      return cancelJob(loaded, args.id, defaultCommandRunner);
+      const loaded = deps.loadStateConfig();
+      return cancelJob(loaded, args.id, deps.commandRunner);
     },
     show: async (args) => {
-      const loaded = loadStateConfig();
+      const loaded = deps.loadStateConfig();
       return showPayload(loaded, args.id, args.json);
     },
     costs: async (args) => {
-      const loaded = loadStateConfig();
+      const loaded = deps.loadStateConfig();
       return costsPayload(loaded, args.id, args.json);
     },
     import: async (args) => {
-      const loaded = loadStateConfig(undefined, { ensureState: true });
+      const loaded = deps.loadStateConfig({ ensureState: true });
       return importBundle(loaded, { bundleDir: args.bundleDir });
     },
     prune: async (args) => {
       // No ensureState: a default dry-run is read-only and must not create
       // or re-chmod state dirs; apply's own mutation helpers (lock acquire,
       // quarantine move) create exactly what they own.
-      const loaded = loadStateConfig();
+      const loaded = deps.loadStateConfig();
       return pruneResults(loaded, {
         apply: args.apply,
         olderThanDays: args.olderThanDays,
@@ -563,37 +622,18 @@ function defaultActions(): ApplianceActions {
   };
 }
 
-// Persists the request it was handed. It never reparses argv and never
-// patches the scope after the worker spawns: one construction, one write.
-async function submitLiveJob(args: {
-  readonly kind: 'run' | 'run-all';
-  readonly superpowersRef: string;
-  readonly argv: readonly string[];
-  readonly detach: boolean;
-  readonly request: LiveCredentialRequest;
-}): Promise<unknown> {
-  const loaded = loadCredentialConfig(undefined, { ensureState: true });
-  const job = createJob(loaded, {
-    kind: args.kind,
-    superpowersRef: args.superpowersRef,
-    argv: args.argv,
-    requester: requester(),
-    credentialSelection: args.request.selection,
-    credentialScope: args.request.scope,
-    credentialScopeSourceEvalsSha: args.request.sourceEvalsSha,
-  });
-
-  if (args.detach) {
-    spawnDetachedWorker(loaded, job.job_id);
-    return readJob(loaded, job.job_id);
-  }
-
-  await runWorker(loaded, job.job_id);
-  return readJob(loaded, job.job_id);
+function productionActionDeps(): ApplianceActionDeps {
+  return {
+    loadStateConfig: (options) => loadStateConfig(undefined, options),
+    loadCredentialConfig: (options) => loadCredentialConfig(undefined, options),
+    commandRunner: defaultCommandRunner,
+    spawnDetachedWorker,
+    runWorker,
+  };
 }
 
 function mergedActions(actions?: Partial<ApplianceActions>): ApplianceActions {
-  return { ...defaultActions(), ...actions };
+  return { ...createApplianceActions(productionActionDeps()), ...actions };
 }
 
 async function handleAction(

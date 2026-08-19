@@ -17,22 +17,23 @@ import { BatchHeaderSchema } from '../contracts/batch.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { envSnapshot } from '../env.ts';
 import {
+  type ContainerLease,
   evalsContainerPath,
-  execContainerArgs,
+  liveLeaseFromJob,
   type RecordedContainerIdentity,
   runRecordedContainerLifecycle,
+  scopedExecContainerArgs,
 } from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate } from './fs.ts';
 import { readJob, updateJob } from './jobs.ts';
 import { acquireLock, type LockHandle, updateLockRefs } from './locks.ts';
 import {
-  type PreflightResult,
+  type LivePreflightResult,
   postflightDirtyCheck,
-  preflightForJob,
+  preflightLiveJob,
 } from './preflight.ts';
 import { writeProvenance } from './provenance.ts';
-import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import type {
   JobRecord,
   JobStatus,
@@ -563,14 +564,34 @@ function interruptHostProcessGroup(child: ChildProcess): void {
   }, 250).unref();
 }
 
-// The recorded container identity a job carries, or null when the job never
-// captured one (no signal can be verified against a container we cannot
-// name). Liveness and cancellation of recorded containers go ONLY through
-// runRecordedContainerLifecycle — the fixed docker inspect + exec seam —
-// never through the wrapper's full-bundle argument path.
-function recordedContainerIdentity(
-  job: JobRecord,
-): RecordedContainerIdentity | null {
+/**
+ * The container identity a job's liveness or cancellation may verify against,
+ * or null when the job can prove none.
+ *
+ * A scoped job (one carrying a live credential scope) must reconstruct its
+ * immutable lease first: a record whose evidence or scope was tampered with,
+ * or which never captured an id, yields nothing runnable and therefore
+ * nothing signalable. A record predating scoped delivery has no lease to
+ * reconstruct and is read directly — this is the one durable-identity
+ * exception, and it still reaches only the closed lifecycle primitive below.
+ *
+ * Either way the signal itself goes ONLY through runRecordedContainerLifecycle
+ * — the fixed docker inspect + exec seam — never through a wrapper argument
+ * path, and a replacement container under the configured name is refused
+ * there, after inspect, with no exec.
+ */
+function lifecycleIdentity(job: JobRecord): RecordedContainerIdentity | null {
+  if (job.credential_scope?.kind === 'live') {
+    try {
+      const lease = liveLeaseFromJob(job);
+      return { name: lease.name, id: lease.id };
+    } catch (error) {
+      if (error instanceof ApplianceError) {
+        return null;
+      }
+      throw error;
+    }
+  }
   const name = job.container?.name ?? null;
   const id = job.container?.id ?? null;
   if (name === null || id === null || id.trim() === '') {
@@ -585,7 +606,7 @@ function containerProcessGroupAlive(
   pgid: number,
   runner: CommandRunner,
 ): boolean {
-  const identity = recordedContainerIdentity(job);
+  const identity = lifecycleIdentity(job);
   if (identity === null) {
     return false;
   }
@@ -697,19 +718,33 @@ function markFailed(
   } catch {}
 }
 
+// Re-derives provenance from the job after the live command lands, so the
+// artifact directories receive a copy. Everything but the tool versions comes
+// off the record itself, which is what lets this heal a preflight-time write
+// failure without restating any scope or container evidence.
 function writeArtifactProvenance(
   loaded: LoadedApplianceStateConfig,
   jobId: string,
-  preflight: PreflightResult,
+  preflight: LivePreflightResult,
 ): void {
-  const job = readJob(loaded, jobId);
-  writeProvenance(loaded, job, preflight, job.command.argv);
+  writeProvenance(loaded, readJob(loaded, jobId), {
+    path: preflight.evidence.tool_versions_path,
+    text: preflight.evidence.tool_versions_text,
+  });
 }
 
+/**
+ * The live Quorum exec: pinned to the immutable container the job preflighted
+ * against, and the ONE place the worker-only supervisor env file crosses into
+ * a process. A replacement container under the configured name can neither be
+ * targeted here nor pass the wrapper's own identity check.
+ */
 export function liveCommandArgs(
   loaded: LoadedApplianceConfig,
   jobId: string,
   argv: readonly string[],
+  lease: ContainerLease,
+  supervisorExecEnvFile: string,
 ): string[] {
   const runAllEnv =
     argv[0] === 'quorum' && argv[1] === 'run-all'
@@ -724,14 +759,12 @@ export function liveCommandArgs(
     'setsid bash -lc \'echo "$$" > "$1"; shift; exec "$@"\' appliance-live "$pid_path" "$@"',
   ].join('\n');
 
-  return execContainerArgs(loaded, [
-    'bash',
-    '-lc',
-    script,
-    'appliance-live',
-    containerPidPath(jobId),
-    ...argv,
-  ]);
+  return scopedExecContainerArgs(
+    loaded,
+    lease,
+    ['bash', '-lc', script, 'appliance-live', containerPidPath(jobId), ...argv],
+    { execEnvFile: supervisorExecEnvFile },
+  );
 }
 
 export async function launchLiveCommand(
@@ -855,19 +888,16 @@ export function spawnDetachedWorker(
 ): void {
   const processModule = new URL('./process.ts', import.meta.url).href;
   const configModule = new URL('./config.ts', import.meta.url).href;
-  const cutoverModule = new URL('./scoped-cutover.ts', import.meta.url).href;
   const script = `
 const { loadStateConfig, loadCredentialConfig } = await import(${JSON.stringify(configModule)});
-const { assertScopedCredentialCutover } = await import(${JSON.stringify(cutoverModule)});
 const { runWorker } = await import(${JSON.stringify(processModule)});
 const jobId = Bun.env.EVALS_APPLIANCE_JOB_ID;
 if (jobId === undefined) {
   throw new Error('EVALS_APPLIANCE_JOB_ID is required');
 }
-// Structural validation first, then the Tasks 2-4 cutover freeze, then the
-// credential-aware loader for the live worker (post-Task-5).
+// Structural validation first, then the credential-aware loader the live
+// worker needs: a resumed job stages its own credential generation.
 loadStateConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
-assertScopedCredentialCutover('detached worker resume');
 const loaded = loadCredentialConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
 await runWorker(loaded, jobId);
 `;
@@ -899,14 +929,9 @@ export async function runWorker(
   jobId: string,
   runner?: CommandRunner,
 ): Promise<void> {
-  // TEMPORARY (Tasks 2-4): run/run-all workers — including the detached
-  // resume path — are frozen until the scoped credential cutover lands.
-  // Refuse BEFORE lock acquisition or any job mutation; Task 5 deletes this
-  // with the complete caller cutover.
-  assertScopedCredentialCutover('run worker');
   let runLock: LockHandle | null = null;
   let syncLock: LockHandle | null = null;
-  let preflight: PreflightResult | null = null;
+  let preflight: LivePreflightResult | null = null;
 
   try {
     const job = readJob(loaded, jobId);
@@ -925,14 +950,14 @@ export async function runWorker(
       refs: job.refs,
     });
 
-    preflight = await preflightForJob({
+    preflight = await preflightLiveJob({
       loaded,
       jobId,
       superpowersRef: job.request.superpowers_ref,
       ...(runner === undefined ? {} : { runner }),
     });
-    updateLockRefs(runLock, preflight.refs);
-    updateLockRefs(syncLock, preflight.refs);
+    updateLockRefs(runLock, preflight.evidence.refs);
+    updateLockRefs(syncLock, preflight.evidence.refs);
     syncLock.release();
     syncLock = null;
 
@@ -950,7 +975,14 @@ export async function runWorker(
 
     mkdirPrivate(dirname(pidFilePath(loaded, jobId)));
     const command = evalsContainerPath(loaded);
-    const args = liveCommandArgs(loaded, jobId, liveJob.command.argv);
+    // The supervisor env file reaches exactly one process: this one.
+    const args = liveCommandArgs(
+      loaded,
+      jobId,
+      liveJob.command.argv,
+      preflight.lease,
+      preflight.supervisorExecEnvFile,
+    );
     let observedStdout = '';
     const streamStdout = (chunk: string): void => {
       observedStdout += chunk;
@@ -1070,7 +1102,7 @@ export async function cancelJob(
       // Identity-verified cancellation: the SIGINT goes only through the
       // fixed recorded-container seam. A replacement container (or a job
       // with no verifiable recorded identity) receives no signal at all.
-      const identity = recordedContainerIdentity(job);
+      const identity = lifecycleIdentity(job);
       if (identity !== null) {
         try {
           interrupted =

@@ -1,31 +1,87 @@
 import { expect, test } from 'bun:test';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type {
   CommandOptions,
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
-import { toErrorJson } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   postflightDirtyCheck,
-  preflightForJob,
+  preflightLiveJob,
   prepare,
 } from '../src/appliance/preflight.ts';
+import { writeProvenance } from '../src/appliance/provenance.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
-import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
+import {
+  EMPTY_CREDENTIAL_SCOPE,
+  type LiveCredentialScope,
+} from '../src/credentials/scope.ts';
 import { liveJobRequest, prepareJobRequest } from './appliance-job-fixtures.ts';
+
+const REPO = resolve(import.meta.dir, '..');
+
+// The two container generations one live preflight creates: the asserted-empty
+// probe first, the scoped live container second. Distinct ids, so evidence
+// derived from the live lease can never be the probe's.
+const PROBE_ID =
+  'ba5eba110000000000000000000000000000000000000000000000000000cafe';
+const LIVE_ID =
+  'c0de0000000000000000000000000000000000000000000000000000deadbeef';
+
+// The evals HEAD the fake git resolves every rev-parse to.
+const RESOLVED_SHA = 'a'.repeat(40);
+
+const CORPUS_CREDENTIAL = 'gemini_oauth_fx';
+const CORPUS_CREDENTIAL_BODY =
+  '    model: gemini-2.5-pro\n    api: gemini\n    auth: oauth\n    harnesses: [gemini]\n';
+
+const BUNDLE_ENV_LINES: readonly string[] = [
+  "QUORUM_GRADER_ANTHROPIC_API_KEY='grader-anthropic-key'",
+  "QUORUM_GRADER_ANTHROPIC_BASE_URL='https://gateway.example/v1'",
+  "HTTPS_PROXY='http://proxy.example:8080'",
+];
+
+// The exact live scope the fixture corpus rederives for gemini x
+// gemini_oauth_fx. Preflight recomputes this from the persisted selection and
+// requires exact equality before it evaluates any credential.
+function corpusScope(): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'gemini',
+    runtimeFamily: 'gemini',
+    credential: CORPUS_CREDENTIAL,
+    agentEnv: [],
+    geminiAuthType: 'oauth-personal',
+    oauth: { kind: 'gemini', mountName: 'gemini' },
+  };
+}
+
+const CORPUS_SELECTION = {
+  agent: 'gemini',
+  credential: CORPUS_CREDENTIAL,
+};
+
+interface FakeInspectMount {
+  readonly Type: 'bind';
+  readonly Source: string;
+  readonly Destination: string;
+  readonly RW: boolean;
+}
 
 class FakeRunner implements CommandRunner {
   readonly calls: {
@@ -39,6 +95,12 @@ class FakeRunner implements CommandRunner {
     readonly result: CommandResult;
   }[] = [];
 
+  execEnvFileSupported = true;
+  // The mount topology `docker container inspect` reports per captured id.
+  mounts = new Map<string, readonly FakeInspectMount[]>();
+  upIds: string[] = [PROBE_ID, LIVE_ID];
+  ups = 0;
+
   run(
     command: string,
     args: readonly string[],
@@ -51,6 +113,33 @@ class FakeRunner implements CommandRunner {
     if (configured !== undefined) {
       return configured.result;
     }
+    if (command === 'docker' && args[0] === 'exec' && args[1] === '--help') {
+      return {
+        status: 0,
+        stdout: this.execEnvFileSupported
+          ? 'Usage: docker exec\n  --env-file list\n'
+          : 'Usage: docker exec\n  --env list\n',
+        stderr: '',
+      };
+    }
+    if (
+      command === 'docker' &&
+      args[0] === 'container' &&
+      args[1] === 'inspect'
+    ) {
+      const target = args[2] ?? '';
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          {
+            Id: target,
+            Image: `sha256:image-${target.slice(0, 4)}`,
+            Mounts: this.mounts.get(target) ?? [],
+          },
+        ]),
+        stderr: '',
+      };
+    }
     if (command === 'git' && args.includes('status')) {
       return { status: 0, stdout: '', stderr: '' };
     }
@@ -62,97 +151,113 @@ class FakeRunner implements CommandRunner {
       return { status: 1, stdout: '', stderr: 'missing tag\n' };
     }
     if (command === 'git' && args.includes('rev-parse')) {
-      return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      return { status: 0, stdout: `${RESOLVED_SHA}\n`, stderr: '' };
     }
     if (command === 'git' && args.includes('cat-file')) {
       return { status: 0, stdout: '', stderr: '' };
     }
-    if (
-      command === 'docker' &&
-      args[0] === 'container' &&
-      args[1] === 'inspect'
-    ) {
-      return {
-        status: 0,
-        stdout: JSON.stringify([
-          { Id: 'container-id-1', Image: 'sha256:image-id-1' },
-        ]),
-        stderr: '',
-      };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('status')
-    ) {
-      return {
-        status: 0,
-        stdout: 'quorum-appliance: exists, running\n',
-        stderr: '',
-      };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('exec') &&
-      args.includes('evals-tool-versions')
-    ) {
-      return { status: 0, stdout: 'bun 1.3.13\n', stderr: '' };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('exec') &&
-      args.includes('quorum')
-    ) {
+    if (command.endsWith('scripts/evals-container')) {
+      const last = args[args.length - 1] ?? '';
+      if (last === 'status') {
+        return {
+          status: 0,
+          stdout:
+            this.ups === 0
+              ? 'quorum-appliance: missing\n'
+              : 'quorum-appliance: exists, running\n',
+          stderr: '',
+        };
+      }
+      if (last === 'up') {
+        const id = this.upIds[this.ups] ?? PROBE_ID;
+        this.ups += 1;
+        return { status: 0, stdout: `${id}\n`, stderr: '' };
+      }
+      if (args.includes('evals-tool-versions')) {
+        return { status: 0, stdout: 'bun 1.3.13\n', stderr: '' };
+      }
       return { status: 0, stdout: 'ok\n', stderr: '' };
     }
     return { status: 0, stdout: '', stderr: '' };
   }
 }
 
-function loaded(): LoadedApplianceConfig {
-  // Canonical (realpath) fixture root: the appliance boundary validates
-  // every absolute path component no-follow, and macOS tmpdir paths
-  // traverse the /var symlink.
+interface Fixture {
+  readonly loaded: LoadedApplianceConfig;
+  readonly root: string;
+  readonly bundleDir: string;
+  readonly scopedRoot: string;
+  readonly activeDir: string;
+}
+
+function writeTree(base: string, files: Record<string, string>): void {
+  for (const [rel, body] of Object.entries(files)) {
+    const path = join(base, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, body);
+  }
+}
+
+// Canonical (realpath) fixture root: the appliance boundary validates every
+// absolute path component no-follow, and macOS tmpdir paths traverse the /var
+// symlink.
+function fixture(): Fixture {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'appliance-preflight-')),
   );
   for (const dir of [
     'superpowers-evals/scripts',
     'superpowers-evals/results',
+    'superpowers-evals/coding-agents',
     'superpowers',
     'gauntlet',
-    'credentials/blessed/codex',
-    'credentials/blessed/gemini',
-    'credentials/blessed/kimi-code',
-    'credentials/blessed/pi',
+    'credentials/blessed',
     'state/jobs',
     'state/locks',
     'state/provenance',
   ]) {
     mkdirSync(join(root, dir), { recursive: true });
   }
+  const evalsPath = join(root, 'superpowers-evals');
   writeFileSync(
-    join(root, 'superpowers-evals/scripts/evals-container'),
+    join(evalsPath, 'scripts/evals-container'),
     '#!/usr/bin/env bash\n',
   );
-  writeFileSync(join(root, 'credentials/blessed/credentials.env'), 'KEY=x\n');
-  return {
+  copyFileSync(
+    join(REPO, 'coding-agents', 'gemini.yaml'),
+    join(evalsPath, 'coding-agents/gemini.yaml'),
+  );
+  writeFileSync(
+    join(evalsPath, 'credentials.yaml'),
+    `# minimal corpus-derived registry (name -> record at the top level)\n  ${CORPUS_CREDENTIAL}:\n${CORPUS_CREDENTIAL_BODY}`,
+  );
+  const bundleDir = join(root, 'credentials/blessed');
+  writeTree(bundleDir, {
+    'metadata.json': JSON.stringify({
+      bundle_id: 'blessed-2026-06-18-a',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: ['anthropic'],
+    }),
+    'credentials.env': `${BUNDLE_ENV_LINES.join('\n')}\n`,
+    'gemini/oauth_creds.json': JSON.stringify({
+      access_token: 'gem-access',
+      refresh_token: 'gem-refresh',
+    }),
+    'gemini/google_accounts.json': JSON.stringify({
+      accounts: [{ email: 'user@example.com' }],
+    }),
+  });
+  const loaded: LoadedApplianceConfig = {
     configPath: join(root, 'config/appliance.json'),
     config: {
       root,
-      evals: {
-        path: join(root, 'superpowers-evals'),
-        remote: 'origin',
-        ref: 'main',
-      },
+      evals: { path: evalsPath, remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
-      credential_bundle: {
-        name: 'blessed',
-        path: join(root, 'credentials/blessed'),
-      },
+      credential_bundle: { name: 'blessed', path: bundleDir },
       container: {
         name: 'quorum-appliance',
-        results_root: join(root, 'superpowers-evals/results'),
+        results_root: join(evalsPath, 'results'),
       },
     },
     bundle: {
@@ -167,289 +272,374 @@ function loaded(): LoadedApplianceConfig {
       provenance: join(root, 'state/provenance'),
     },
   };
+  const scopedRoot = join(root, 'state/credentials-scoped');
+  return {
+    loaded,
+    root,
+    bundleDir,
+    scopedRoot,
+    activeDir: join(scopedRoot, 'active'),
+  };
 }
 
-function commandSubsequence(
-  calls: readonly {
-    readonly command: string;
-    readonly args: readonly string[];
-  }[],
-): string[] {
-  return calls.map((call) => {
+// The mount topology a correct scoped up produces for each generation.
+function seedMounts(fx: Fixture, runner: FakeRunner): void {
+  const envMount: FakeInspectMount = {
+    Type: 'bind',
+    Source: join(fx.activeDir, 'agent.env'),
+    Destination: '/run/evals/credentials.env',
+    RW: false,
+  };
+  runner.mounts.set(PROBE_ID, [envMount]);
+  runner.mounts.set(LIVE_ID, [
+    envMount,
+    {
+      Type: 'bind',
+      Source: join(fx.activeDir, 'auth/gemini'),
+      Destination: '/auth/gemini',
+      RW: false,
+    },
+  ]);
+}
+
+function liveJob(
+  fx: Fixture,
+  overrides: Parameters<typeof liveJobRequest>[1] = {},
+) {
+  return createJob(
+    fx.loaded,
+    liveJobRequest('run', {
+      argv: [
+        'quorum',
+        'run',
+        'scenarios/writing-plans',
+        '--coding-agent',
+        'gemini',
+      ],
+      selection: CORPUS_SELECTION,
+      scope: corpusScope(),
+      sourceEvalsSha: RESOLVED_SHA,
+      ...overrides,
+    }),
+  );
+}
+
+// Every container-touching call, in order, with the git plumbing elided.
+function containerTrace(runner: FakeRunner): string[] {
+  return runner.calls.flatMap((call) => {
+    if (call.command === 'docker') {
+      if (call.args[0] === 'exec' && call.args[1] === '--help') {
+        return ['docker exec --help'];
+      }
+      if (call.args[0] === 'container' && call.args[1] === 'inspect') {
+        return [`docker inspect ${call.args[2]}`];
+      }
+      return [`docker ${call.args[0]}`];
+    }
     if (call.command.endsWith('scripts/evals-container')) {
-      return call.args[call.args.length - 1] ?? '';
+      const execAt = call.args.indexOf('exec');
+      return execAt >= 0
+        ? [`wrapper exec ${call.args.slice(execAt + 1).join(' ')}`]
+        : [`wrapper ${call.args[call.args.length - 1]}`];
     }
-    if (call.command === 'git') {
-      return call.args.includes('fetch')
-        ? `git fetch ${call.args[1]}`
-        : `git ${call.args.at(-1)}`;
-    }
-    return call.command;
+    return [];
   });
 }
 
-test('preflight shells through evals-container with blessed credentials and records provenance', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  const job = createJob(
-    cfg,
-    prepareJobRequest({
-      argv: ['evals-appliance', 'prepare', '--superpowers-ref', 'main'],
-      requester: { agent: 'codex', thread: 'thread-1', task: 'task-4' },
-    }),
+function dockerCalls(runner: FakeRunner): readonly unknown[] {
+  return runner.calls.filter(
+    (call) =>
+      call.command === 'docker' ||
+      call.command.endsWith('scripts/evals-container'),
   );
+}
 
-  const result = await preflightForJob({
-    loaded: cfg,
+test('preflightLiveJob probes empty, then binds live execution to the scoped lease', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+
+  const result = await preflightLiveJob({
+    loaded: fx.loaded,
     jobId: job.job_id,
     superpowersRef: 'main',
     runner,
   });
 
-  const evalsContainerCalls = runner.calls.filter((call) =>
+  expect(containerTrace(runner)).toEqual([
+    'docker exec --help',
+    'wrapper build',
+    'wrapper status',
+    'wrapper up',
+    `docker inspect ${PROBE_ID}`,
+    'wrapper exec evals-tool-versions',
+    'wrapper exec quorum check',
+    'wrapper status',
+    'wrapper down',
+    'wrapper up',
+    `docker inspect ${LIVE_ID}`,
+  ]);
+
+  const wrapperCalls = runner.calls.filter((call) =>
     call.command.endsWith('scripts/evals-container'),
   );
-  const buildCall = evalsContainerCalls.find((call) =>
-    call.args.includes('build'),
-  );
-  expect(buildCall?.args).toEqual([
+  expect(
+    wrapperCalls.find((call) => call.args.includes('build'))?.args,
+  ).toEqual([
     '--name',
     'quorum-appliance',
     '--gauntlet-root',
-    cfg.config.gauntlet.path,
+    fx.loaded.config.gauntlet.path,
     'build',
   ]);
-  expect(evalsContainerCalls.some((call) => call.args.at(-1) === 'up')).toBe(
-    true,
+  expect(wrapperCalls.find((call) => call.args.includes('down'))?.args).toEqual(
+    ['--name', 'quorum-appliance', 'down'],
   );
-  const downCall = evalsContainerCalls.find((call) =>
-    call.args.includes('down'),
-  );
-  expect(downCall?.args).toEqual(['--name', 'quorum-appliance', 'down']);
-  expect(
-    evalsContainerCalls.some((call) => call.args.at(-1) === 'status'),
-  ).toBe(true);
-  expect(
-    evalsContainerCalls.some(
-      (call) =>
-        call.args.includes('exec') && call.args.includes('evals-tool-versions'),
-    ),
-  ).toBe(true);
-  expect(
-    evalsContainerCalls.some(
-      (call) =>
-        call.args.includes('exec') &&
-        call.args.includes('quorum') &&
-        call.args.includes('check'),
-    ),
-  ).toBe(true);
-  expect(commandSubsequence(evalsContainerCalls)).toEqual([
-    'build',
-    'status',
-    'down',
-    'up',
-    'status',
-    'evals-tool-versions',
-    'check',
-  ]);
 
-  expect(result.credential_bundle.bundle_id).toBe('blessed-2026-06-18-a');
-  expect(result.refs.superpowers_resolved_sha).toBe('a'.repeat(40));
-  expect(result.container.id).toBe('container-id-1');
-  expect(result.container.image_id).toBe('sha256:image-id-1');
-  expect(result.container.mount_signature).toMatch(/^[0-9a-f]{64}$/);
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('preflighting');
-  expect(updated.refs?.superpowers_resolved_sha).toBe('a'.repeat(40));
+  // The probes ran through the PROBE lease with no supervisor file at all.
+  const probeExecs = runner.calls.filter(
+    (call) =>
+      call.command.endsWith('scripts/evals-container') &&
+      call.args.includes('exec'),
+  );
+  expect(probeExecs).toHaveLength(2);
+  for (const call of probeExecs) {
+    expect(call.args).toContain('--expected-container-id');
+    expect(call.args[call.args.indexOf('--expected-container-id') + 1]).toBe(
+      PROBE_ID,
+    );
+    expect(call.args).not.toContain('--exec-env-file');
+  }
+
+  // Durable evidence comes from the LIVE lease and carries no scope of its own.
+  expect(result.evidence.container).toEqual({
+    name: 'quorum-appliance',
+    id: LIVE_ID,
+    image_id: `sha256:image-${LIVE_ID.slice(0, 4)}`,
+    mount_signature: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(Object.keys(result.evidence.container).sort()).toEqual([
+    'id',
+    'image_id',
+    'mount_signature',
+    'name',
+  ]);
+  expect(result.evidence.refs.evals_resolved_sha).toBe(RESOLVED_SHA);
+  expect(result.evidence.credential_bundle).toEqual({
+    name: 'blessed',
+    bundle_id: 'blessed-2026-06-18-a',
+  });
+  expect(readFileSync(result.evidence.tool_versions_path, 'utf8')).toBe(
+    'bun 1.3.13\n',
+  );
+  expect(statSync(result.evidence.tool_versions_path).mode & 0o777).toBe(0o600);
+
+  // The lease IS the source of that evidence, not a separate recomputation.
+  expect(result.lease.id).toBe(LIVE_ID);
+  expect(result.lease.mountSignature).toBe(
+    result.evidence.container.mount_signature,
+  );
+  expect(result.lease.credentialScope).toEqual(corpusScope());
+  expect(result.supervisorExecEnvFile).toBe(
+    join(fx.activeDir, 'supervisor.exec.env'),
+  );
+
+  // The job carries the same evidence and its ORIGINAL authoritative scope.
+  const updated = readJob(fx.loaded, job.job_id);
+  expect(updated.container).toEqual(result.evidence.container);
+  expect(updated.refs?.evals_resolved_sha).toBe(RESOLVED_SHA);
   expect(updated.credential_bundle?.bundle_id).toBe('blessed-2026-06-18-a');
-  expect(updated.container?.name).toBe('quorum-appliance');
-  expect(updated.container?.id).toBe('container-id-1');
-  expect(updated.container?.image_id).toBe('sha256:image-id-1');
-  expect(readFileSync(result.tool_versions_path, 'utf8')).toBe('bun 1.3.13\n');
-  expect(statSync(result.tool_versions_path).mode & 0o777).toBe(0o600);
+  expect(updated.credential_scope).toEqual(corpusScope());
+  expect(updated.credential_scope_source_evals_sha).toBe(RESOLVED_SHA);
 
+  // Provenance is derived from the reread job.
   const provenance = JSON.parse(
-    readFileSync(updated.artifacts.provenance, 'utf8'),
+    readFileSync(result.evidence.provenance_path, 'utf8'),
   );
   expect(provenance.job_id).toBe(job.job_id);
-  expect(provenance.container.id).toBe('container-id-1');
-  expect(provenance.container.image_id).toBe('sha256:image-id-1');
-  expect(provenance.command_argv).toEqual([
-    'evals-appliance',
-    'prepare',
-    '--superpowers-ref',
-    'main',
-  ]);
-  expect(provenance.container.code_mounts_read_only).toBe(false);
+  expect(provenance.credential_scope).toEqual(corpusScope());
+  expect(provenance.container).toEqual({
+    ...result.evidence.container,
+    code_mounts_read_only: false,
+  });
+  expect(provenance.command_argv).toEqual(updated.command.argv);
+});
+
+test('the worker-only supervisor path never reaches the job record or provenance', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+
+  const result = await preflightLiveJob({
+    loaded: fx.loaded,
+    jobId: job.job_id,
+    superpowersRef: 'main',
+    runner,
+  });
+
+  const supervisor = result.supervisorExecEnvFile;
+  const jobJson = readFileSync(
+    join(fx.loaded.paths.jobs, job.job_id, 'job.json'),
+    'utf8',
+  );
+  const provenanceJson = readFileSync(result.evidence.provenance_path, 'utf8');
+  for (const serialized of [
+    jobJson,
+    provenanceJson,
+    JSON.stringify(result.evidence),
+  ]) {
+    expect(serialized).not.toContain(supervisor);
+    expect(serialized).not.toContain('supervisor.exec.env');
+    expect(serialized).not.toContain('credentials-scoped');
+    expect(serialized).not.toContain(fx.bundleDir);
+  }
 });
 
 test('preflight copies provenance beside a known batch artifact when the directory exists', async () => {
-  const cfg = loaded();
-  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
+  const fx = fixture();
+  mkdirSync(join(fx.loaded.config.container.results_root, 'batches/batch-1'), {
     recursive: true,
   });
   const runner = new FakeRunner();
+  seedMounts(fx, runner);
   const job = createJob(
-    cfg,
+    fx.loaded,
     liveJobRequest('run-all', {
-      argv: ['evals-appliance', 'run-all', '--', '--tier', 'sentinel'],
-      requester: { agent: 'codex', thread: null, task: null },
+      argv: ['quorum', 'run-all', '--coding-agents', 'gemini'],
+      selection: CORPUS_SELECTION,
+      scope: corpusScope(),
+      sourceEvalsSha: RESOLVED_SHA,
     }),
   );
-  updateJob(cfg, job.job_id, (current) => ({
+  updateJob(fx.loaded, job.job_id, (current) => ({
     ...current,
-    artifacts: {
-      ...current.artifacts,
-      batch_id: 'batch-1',
-    },
+    artifacts: { ...current.artifacts, batch_id: 'batch-1' },
   }));
 
-  await preflightForJob({
-    loaded: cfg,
+  await preflightLiveJob({
+    loaded: fx.loaded,
     jobId: job.job_id,
     superpowersRef: 'main',
     runner,
   });
 
   const artifactProvenance = join(
-    cfg.config.container.results_root,
+    fx.loaded.config.container.results_root,
     'batches/batch-1/appliance-provenance.json',
   );
   expect(existsSync(artifactProvenance)).toBe(true);
   const jobProvenance = JSON.parse(
-    readFileSync(join(cfg.paths.provenance, `${job.job_id}.json`), 'utf8'),
+    readFileSync(
+      join(fx.loaded.paths.provenance, `${job.job_id}.json`),
+      'utf8',
+    ),
   );
   expect(JSON.parse(readFileSync(artifactProvenance, 'utf8'))).toEqual(
     jobProvenance,
   );
 });
 
-test('preflight maps container build failures to image_build_failed', async () => {
-  const cfg = loaded();
+test('preflightLiveJob refuses a source SHA that drifted from the fast-forwarded checkout', async () => {
+  const fx = fixture();
   const runner = new FakeRunner();
-  runner.results.push({
-    match: (command, args) =>
-      command.endsWith('scripts/evals-container') && args.includes('build'),
-    result: { status: 1, stdout: '', stderr: 'docker build failed' },
-  });
-  const job = createJob(
-    cfg,
-    prepareJobRequest({ argv: ['evals-appliance', 'prepare'] }),
-  );
+  const job = liveJob(fx, { sourceEvalsSha: 'b'.repeat(40) });
 
   await expect(
-    preflightForJob({
-      loaded: cfg,
+    preflightLiveJob({
+      loaded: fx.loaded,
       jobId: job.job_id,
       superpowersRef: 'main',
       runner,
     }),
   ).rejects.toMatchObject({
-    code: 'image_build_failed',
-    step: 'container',
-  });
-});
-
-// Through Tasks 2-4 the production prepare action is frozen behind the scoped
-// credential cutover guard: it refuses with the exact typed error BEFORE
-// creating a job, acquiring locks, or calling the runner. The lock-busy
-// failed-job recording and the postflight quarantine flow this entry point
-// used to exercise return in Task 5 with the guard's removal; the postflight
-// quarantine contract itself stays covered below through its direct seam.
-test('prepare refuses with the typed scoped-cutover error before any state mutation', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-
-  let caught: unknown = null;
-  try {
-    await prepare({
-      loaded: cfg,
-      superpowersRef: 'main',
-      argv: ['prepare'],
-      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
-      runner,
-    });
-  } catch (error) {
-    caught = error;
-  }
-
-  expect(caught).toMatchObject({
     code: 'config_invalid',
-    step: 'scoped-cutover',
-    message: expect.stringContaining('scoped credential cutover incomplete'),
+    step: 'preflight',
+    message: expect.stringContaining('evals checkout'),
   });
-  expect(toErrorJson(caught)).toMatchObject({
-    ok: false,
-    error: { code: 'config_invalid', step: 'scoped-cutover' },
-  });
-  expect(readdirSync(cfg.paths.jobs)).toHaveLength(0);
-  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
-  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
-  expect(runner.calls).toHaveLength(0);
+
+  // Refused before credential evaluation and before any Docker work.
+  expect(dockerCalls(runner)).toEqual([]);
+  expect(existsSync(fx.scopedRoot)).toBe(false);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
 });
 
-// Direct seam for the postflight quarantine contract (previously reached via
-// prepare()): a dirty managed repo quarantines the job with the typed
-// repo_dirty error; a clean tree returns null and leaves the record alone.
-test('postflightDirtyCheck quarantines the job on a dirty managed repo', () => {
-  const cfg = loaded();
+test('preflightLiveJob refuses a persisted scope the corpus no longer produces', async () => {
+  const fx = fixture();
   const runner = new FakeRunner();
-  const job = createJob(
-    cfg,
-    prepareJobRequest({
-      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+  const job = liveJob(fx, {
+    scope: { ...corpusScope(), geminiAuthType: 'gemini-api-key' },
+  });
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
     }),
-  );
-
-  const clean = postflightDirtyCheck(cfg, job.job_id, runner);
-  expect(clean).toBe(null);
-  expect(readJob(cfg, job.job_id).status).toBe('preflighting');
-
-  runner.results.push({
-    match: (command, args) => command === 'git' && args.includes('status'),
-    result: { status: 0, stdout: ' M mutated.txt\n', stderr: '' },
-  });
-  const dirty = postflightDirtyCheck(cfg, job.job_id, runner);
-  expect(dirty).toMatchObject({
-    code: 'repo_dirty',
-    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
+  ).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'preflight',
+    message: expect.stringContaining('recomputed'),
   });
 
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('quarantined');
-  expect(updated.finished_at).not.toBe(null);
-  expect(updated.result.summary).toBe(
-    `postflight dirty check failed: dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
-  );
-  expect(updated.error).toMatchObject({
-    code: 'repo_dirty',
-    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
-  });
+  expect(dockerCalls(runner)).toEqual([]);
+  expect(existsSync(fx.scopedRoot)).toBe(false);
 });
 
-// --- live scope is required to preflight a live job (F13) -------------------
+test('preflightLiveJob requires docker exec --env-file before build or staging', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  runner.execEnvFileSupported = false;
+  const job = liveJob(fx);
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'container_unhealthy',
+    message: expect.stringContaining('--env-file'),
+  });
+
+  expect(containerTrace(runner)).toEqual(['docker exec --help']);
+  expect(existsSync(fx.scopedRoot)).toBe(false);
+});
+
 // Records written before the credential triple existed read back with a null
 // scope. They stay readable and cancellable, but they can never execute: there
-// is no legacy full-bundle path to fall back to, so preflight refuses them
-// before touching a repo, the container, or the bundle.
-
-test('preflight refuses a live job whose scope is null', async () => {
-  const cfg = loaded();
+// is no legacy full-bundle path to fall back to.
+test('preflightLiveJob refuses null and asserted-empty live scopes', async () => {
+  const fx = fixture();
   const runner = new FakeRunner();
+
+  // Both live kinds, demoted to the shape an old record has on disk: the
+  // credential fields are absent, not null-valued, so the read defaults apply.
   for (const kind of ['run', 'run-all'] as const) {
-    const job = createJob(cfg, liveJobRequest(kind));
-    // Demote to the shape an old record has on disk.
-    updateJob(cfg, job.job_id, (current) => ({
-      ...current,
-      credential_selection: null,
-      credential_scope: null,
-      credential_scope_source_evals_sha: null,
-    }));
+    const legacy = createJob(
+      fx.loaded,
+      liveJobRequest(kind, {
+        selection: CORPUS_SELECTION,
+        scope: corpusScope(),
+        sourceEvalsSha: RESOLVED_SHA,
+      }),
+    );
+    const legacyPath = join(fx.loaded.paths.jobs, legacy.job_id, 'job.json');
+    const legacyRecord = JSON.parse(readFileSync(legacyPath, 'utf8'));
+    delete legacyRecord.credential_selection;
+    delete legacyRecord.credential_scope;
+    delete legacyRecord.credential_scope_source_evals_sha;
+    writeFileSync(legacyPath, JSON.stringify(legacyRecord, null, 2));
 
     await expect(
-      preflightForJob({
-        loaded: cfg,
-        jobId: job.job_id,
+      preflightLiveJob({
+        loaded: fx.loaded,
+        jobId: legacy.job_id,
         superpowersRef: 'main',
         runner,
       }),
@@ -458,52 +648,194 @@ test('preflight refuses a live job whose scope is null', async () => {
       step: 'preflight',
       message: expect.stringContaining('no credential scope'),
     });
-
-    expect(readJob(cfg, job.job_id).status).toBe('failed');
+    expect(readJob(fx.loaded, legacy.job_id).status).toBe('failed');
   }
-  // Refused before any repo, container, or bundle work.
+
+  const emptyPath = join(fx.loaded.paths.jobs, liveJob(fx).job_id, 'job.json');
+  const emptyRecord = JSON.parse(readFileSync(emptyPath, 'utf8'));
+  emptyRecord.credential_scope = EMPTY_CREDENTIAL_SCOPE;
+  writeFileSync(emptyPath, JSON.stringify(emptyRecord, null, 2));
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: emptyRecord.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({ code: 'config_invalid', step: 'preflight' });
+
   expect(runner.calls).toEqual([]);
 });
 
-test('preflight refuses a live job carrying the asserted empty scope', async () => {
-  const cfg = loaded();
+test('a provenance fault leaves committed job evidence a retry heals without changing scope', async () => {
+  const fx = fixture();
   const runner = new FakeRunner();
-  const job = createJob(cfg, liveJobRequest('run'));
-  updateJob(cfg, job.job_id, (current) => ({
-    ...current,
-    credential_scope: EMPTY_CREDENTIAL_SCOPE,
-  }));
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+
+  // Fault the derived file only: the provenance namespace is a regular file,
+  // so the atomic write cannot create its parent.
+  rmSync(fx.loaded.paths.provenance, { recursive: true });
+  writeFileSync(fx.loaded.paths.provenance, 'not a directory\n');
 
   await expect(
-    preflightForJob({
-      loaded: cfg,
+    preflightLiveJob({
+      loaded: fx.loaded,
       jobId: job.job_id,
       superpowersRef: 'main',
       runner,
     }),
-  ).rejects.toMatchObject({
-    code: 'config_invalid',
-    step: 'preflight',
+  ).rejects.toMatchObject({ step: 'preflight' });
+
+  // Job evidence was committed FIRST, and the authoritative scope is intact.
+  const failed = readJob(fx.loaded, job.job_id);
+  expect(failed.container?.id).toBe(LIVE_ID);
+  expect(failed.refs?.evals_resolved_sha).toBe(RESOLVED_SHA);
+  expect(failed.credential_bundle?.bundle_id).toBe('blessed-2026-06-18-a');
+  expect(failed.credential_scope).toEqual(corpusScope());
+
+  // The retry heals only the derived file, from the job.
+  rmSync(fx.loaded.paths.provenance);
+  const path = writeProvenance(fx.loaded, readJob(fx.loaded, job.job_id), {
+    path: null,
+    text: 'bun 1.3.13\n',
   });
-  expect(runner.calls).toEqual([]);
+  const provenance = JSON.parse(readFileSync(path, 'utf8'));
+  expect(provenance.container.id).toBe(LIVE_ID);
+  expect(provenance.credential_scope).toEqual(corpusScope());
+  expect(readJob(fx.loaded, job.job_id).credential_scope).toEqual(
+    corpusScope(),
+  );
 });
 
-test('preflight accepts a prepare job carrying the asserted empty scope', async () => {
-  // prepare legitimately asserts zero credential material; the live-scope
-  // requirement must not strand it.
-  const cfg = loaded();
+test('prepare stops after the empty probe and never evaluates the blessed bundle', async () => {
+  const fx = fixture();
   const runner = new FakeRunner();
-  const job = createJob(cfg, prepareJobRequest());
+  seedMounts(fx, runner);
+  // A bundle whose credential payload is unusable: prepare must never read it.
+  rmSync(join(fx.bundleDir, 'credentials.env'));
+  rmSync(join(fx.bundleDir, 'gemini'), { recursive: true });
 
-  const result = await preflightForJob({
-    loaded: cfg,
-    jobId: job.job_id,
+  const result = await prepare({
+    loaded: fx.loaded,
     superpowersRef: 'main',
+    argv: ['prepare'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-4' },
     runner,
   });
 
-  expect(result.refs.superpowers_resolved_sha).toBe('a'.repeat(40));
-  expect(readJob(cfg, job.job_id).credential_scope).toEqual(
-    EMPTY_CREDENTIAL_SCOPE,
+  expect(containerTrace(runner)).toEqual([
+    'docker exec --help',
+    'wrapper build',
+    'wrapper status',
+    'wrapper up',
+    `docker inspect ${PROBE_ID}`,
+    'wrapper exec evals-tool-versions',
+    'wrapper exec quorum check',
+  ]);
+  expect(result.container.id).toBe(PROBE_ID);
+
+  // One asserted-empty generation: an empty agent env, no supervisor file, no
+  // auth material at all.
+  expect(readFileSync(join(fx.activeDir, 'agent.env'), 'utf8')).toBe('');
+  expect(existsSync(join(fx.activeDir, 'supervisor.exec.env'))).toBe(false);
+  expect(existsSync(join(fx.activeDir, 'auth'))).toBe(false);
+
+  const jobs = readdirSync(fx.loaded.paths.jobs);
+  expect(jobs).toHaveLength(1);
+  const jobId = jobs[0] ?? '';
+  const job = readJob(fx.loaded, jobId);
+  expect(job.status).toBe('done');
+  expect(job.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  const provenance = JSON.parse(readFileSync(result.provenance_path, 'utf8'));
+  expect(provenance.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  expect(provenance.container.id).toBe(PROBE_ID);
+});
+
+test('prepare refuses a live job record instead of probing it', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  const job = liveJob(fx);
+
+  await expect(
+    prepare({
+      loaded: fx.loaded,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: null },
+      runner,
+      jobId: job.job_id,
+    }),
+  ).rejects.toMatchObject({ code: 'config_invalid' });
+  expect(dockerCalls(runner)).toEqual([]);
+});
+
+test('preflight maps container build failures to image_build_failed', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  runner.results.push({
+    match: (command, args) =>
+      command.endsWith('scripts/evals-container') && args.includes('build'),
+    result: { status: 1, stdout: '', stderr: 'docker build failed' },
+  });
+  const job = createJob(fx.loaded, prepareJobRequest());
+
+  await expect(
+    prepare({
+      loaded: fx.loaded,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: null },
+      runner,
+      jobId: job.job_id,
+    }),
+  ).rejects.toMatchObject({
+    code: 'image_build_failed',
+    step: 'container',
+  });
+  // prepare records the failure on the job it owns.
+  const failed = readJob(fx.loaded, job.job_id);
+  expect(failed.status).toBe('failed');
+  expect(failed.error?.code).toBe('image_build_failed');
+});
+
+// Direct seam for the postflight quarantine contract: a dirty managed repo
+// quarantines the job with the typed repo_dirty error; a clean tree returns
+// null and leaves the record alone.
+test('postflightDirtyCheck quarantines the job on a dirty managed repo', () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  const job = createJob(
+    fx.loaded,
+    prepareJobRequest({
+      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+    }),
   );
+
+  const clean = postflightDirtyCheck(fx.loaded, job.job_id, runner);
+  expect(clean).toBe(null);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('preflighting');
+
+  runner.results.push({
+    match: (command, args) => command === 'git' && args.includes('status'),
+    result: { status: 0, stdout: ' M mutated.txt\n', stderr: '' },
+  });
+  const dirty = postflightDirtyCheck(fx.loaded, job.job_id, runner);
+  expect(dirty).toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${fx.loaded.config.evals.path}: M mutated.txt`,
+  });
+
+  const updated = readJob(fx.loaded, job.job_id);
+  expect(updated.status).toBe('quarantined');
+  expect(updated.finished_at).not.toBe(null);
+  expect(updated.result.summary).toBe(
+    `postflight dirty check failed: dirty worktree at ${fx.loaded.config.evals.path}: M mutated.txt`,
+  );
+  expect(updated.error).toMatchObject({
+    code: 'repo_dirty',
+    message: `dirty worktree at ${fx.loaded.config.evals.path}: M mutated.txt`,
+  });
 });

@@ -3,10 +3,10 @@ import { ApplianceErrorCodeSchema } from './errors.ts';
 
 // --- persisted credential request -------------------------------------------
 // The durable mirror of src/credentials/scope.ts. A job's credential authority
-// is persisted once, in the job record, and read back by preflight and Task 5's
-// execution binding. These schemas exist so a record cannot claim a delivery
-// shape the resolver and the container boundary do not both understand; the
-// contract tests round-trip real resolver output through them.
+// is persisted once, in the job record, and read back by preflight and the
+// live execution binding. These schemas exist so a record cannot claim a
+// delivery shape the resolver and the container boundary do not both
+// understand; the contract tests round-trip real resolver output through them.
 
 export const CredentialSelectionSchema = z.object({
   agent: z.string(),
@@ -186,9 +186,10 @@ const JobContainerSchema = z.object({
 // The durable container evidence a job carries: snake-case, and nullable in
 // the ID it never recorded on older records. It deliberately embeds NO scope —
 // the job's top-level credential_scope is the only persisted authority — and
-// it is not a runnable lease. Task 5 converts between this and the in-memory
-// ContainerLease; preflight already builds it through this type, so the
-// interface and the persisted shape cannot drift apart.
+// it is not a runnable lease. `leaseToJobContainerEvidence` and
+// `liveLeaseFromJob` convert between this and the in-memory ContainerLease;
+// preflight builds it only through this type, so the interface and the
+// persisted shape cannot drift apart.
 export interface JobContainerEvidence {
   readonly name: string;
   readonly id: string | null;
@@ -303,10 +304,10 @@ export const ProvenanceRecordSchema = z
     container: JobContainerSchema.extend({
       code_mounts_read_only: z.boolean(),
     }),
-    // Read-compatible today: the live provenance writer still derives from
-    // preflight state, so it defaults to null. Task 5 owns the evidence-first
-    // ordering that makes live provenance job-authoritative and supplies this
-    // explicitly from the job's own scope.
+    // Supplied explicitly from the job's own scope: live provenance is
+    // derived from the reread record after its evidence is committed, so this
+    // cannot disagree with the job. The null default reads records written
+    // before the field existed.
     credential_scope: CredentialScopeSchema.nullable().default(null),
     tool_versions_path: z.string().nullable(),
     tool_versions_text: z.string().nullable(),

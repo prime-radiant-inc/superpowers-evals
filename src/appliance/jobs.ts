@@ -461,6 +461,34 @@ export function readJobByRunId(
   return match;
 }
 
+// The credential triple is written once, in the initial atomic record, and is
+// the job's sole persisted authority from then on. Preflight commits refs,
+// bundle, and container evidence THROUGH this function, and the worker records
+// artifacts through it too — so this is where a scope rewrite would have to
+// happen, and where it is refused. A record whose asserted cell could drift
+// after creation would let the container receive material the job never
+// claimed.
+const CREDENTIAL_AUTHORITY_FIELDS = [
+  'credential_selection',
+  'credential_scope',
+  'credential_scope_source_evals_sha',
+] as const;
+
+function assertCredentialAuthorityUnchanged(
+  current: JobRecord,
+  patched: JobRecord,
+): void {
+  for (const field of CREDENTIAL_AUTHORITY_FIELDS) {
+    if (JSON.stringify(patched[field]) !== JSON.stringify(current[field])) {
+      throw new ApplianceError(
+        'config_invalid',
+        'job',
+        `patcher changed immutable ${field} for ${current.job_id}; a job's credential authority is written once, at creation`,
+      );
+    }
+  }
+}
+
 export function updateJob(
   loaded: LoadedApplianceStateConfig,
   jobId: string,
@@ -480,6 +508,7 @@ export function updateJob(
       `patcher changed immutable job_id for ${jobId}`,
     );
   }
+  assertCredentialAuthorityUnchanged(current, patched);
 
   const record = JobRecordSchema.parse({
     ...patched,

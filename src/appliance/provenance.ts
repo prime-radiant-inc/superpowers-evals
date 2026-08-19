@@ -1,31 +1,22 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { ApplianceError } from './errors.ts';
 import { atomicWriteJson } from './fs.ts';
 import {
   type JobRecord,
   type LoadedApplianceStateConfig,
   type ProvenanceRecord,
   ProvenanceRecordSchema,
-  type RefSnapshot,
 } from './types.ts';
 
-export interface ProvenanceContainerRecord {
-  readonly name: string;
-  readonly id: string | null;
-  readonly image_id: string | null;
-  readonly mount_signature: string;
-  readonly code_mounts_read_only: boolean;
-}
-
-export interface ProvenanceSource {
-  readonly refs: RefSnapshot;
-  readonly credential_bundle: {
-    readonly name: 'blessed';
-    readonly bundle_id: string;
-  };
-  readonly container: ProvenanceContainerRecord;
-  readonly tool_versions_path: string | null;
-  readonly tool_versions_text: string | null;
+// The only material provenance cannot read back off the job: the tool
+// versions the probe container reported. Everything else — refs, bundle,
+// container evidence, credential scope, requester, argv — is derived from the
+// record, so a retry heals the derived file without a caller being able to
+// restate any of it.
+export interface ProvenanceToolVersions {
+  readonly path: string | null;
+  readonly text: string | null;
 }
 
 function artifactProvenanceTargets(
@@ -62,24 +53,55 @@ export function provenancePath(
   return join(loaded.paths.provenance, `${jobId}.json`);
 }
 
+function requireCommitted<T>(value: T | null, jobId: string, what: string): T {
+  if (value === null) {
+    throw new ApplianceError(
+      'config_invalid',
+      'provenance',
+      `job ${jobId} has not committed its ${what}; provenance is derived from the job, never from the caller`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Write the live provenance record for a job that has already committed its
+ * evidence. Identity comes from the reread job — refs, bundle, container
+ * evidence, and the authoritative credential scope — so this file can never
+ * disagree with the record it describes, and a failed write can be retried
+ * from the job alone.
+ *
+ * Read-only code-mount evidence is provenance-only: it is a property of how
+ * the appliance mounts code, not of the job, so it is stated here rather than
+ * duplicated into durable job evidence.
+ */
 export function writeProvenance(
   loaded: LoadedApplianceStateConfig,
   job: JobRecord,
-  result: ProvenanceSource,
-  command: readonly string[],
+  toolVersions: ProvenanceToolVersions,
 ): string {
   const path = provenancePath(loaded, job.job_id);
+  const container = requireCommitted(
+    job.container,
+    job.job_id,
+    'container evidence',
+  );
   const record: ProvenanceRecord = ProvenanceRecordSchema.parse({
     schema_version: 1,
     job_id: job.job_id,
     created_at: new Date().toISOString(),
-    refs: result.refs,
-    credential_bundle: result.credential_bundle,
-    container: result.container,
-    tool_versions_path: result.tool_versions_path,
-    tool_versions_text: result.tool_versions_text,
+    refs: requireCommitted(job.refs, job.job_id, 'refs'),
+    credential_bundle: requireCommitted(
+      job.credential_bundle,
+      job.job_id,
+      'credential bundle',
+    ),
+    container: { ...container, code_mounts_read_only: false },
+    credential_scope: job.credential_scope,
+    tool_versions_path: toolVersions.path,
+    tool_versions_text: toolVersions.text,
     requester: job.requester,
-    command_argv: [...command],
+    command_argv: [...job.command.argv],
   });
 
   atomicWriteJson(path, record);
