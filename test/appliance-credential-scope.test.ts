@@ -1471,3 +1471,128 @@ test('a failed rollback surfaces a typed rollback error naming the recovery stat
   recoverScopedCredentialActivation(fx.loaded);
   expect(existsSync(join(fx.activeDir, 'agent.env'))).toBe(true);
 });
+
+// --- Fix Round 2 -------------------------------------------------------------
+
+// F4 (remaining): an intermediate directory component swapped for a symlink
+// immediately before the production open must not redirect the projection —
+// the read must be descriptor-relative to the already pinned parent, never a
+// re-resolution of the full pathname. (Reviewer probe: swap bundle/codex at
+// open time; pre-fix the attacker replacement target was projected.)
+test('an intermediate directory swapped mid-read cannot redirect the projection', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const attacker = join(fx.root, 'attacker-codex');
+  mkdirSync(attacker, { recursive: true });
+  writeFileSync(
+    join(attacker, 'auth.json'),
+    JSON.stringify({ tokens: { access_token: 'attacker-token' } }),
+  );
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    if (!swapped && String(path).endsWith('/auth.json')) {
+      swapped = true;
+      fs.renameSync(
+        join(fx.bundleDir, 'codex'),
+        join(fx.bundleDir, 'codex-real'),
+      );
+      fs.symlinkSync(attacker, join(fx.bundleDir, 'codex'));
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let material: ReturnType<typeof stageLiveCredentialMaterial> | undefined;
+  let caught: unknown;
+  try {
+    caught = captureError(() => {
+      material = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(swapped).toBe(true);
+  expect(caught).toBeUndefined();
+  const projected = readFileSync(
+    join(material?.authMounts[0]?.path ?? '', 'auth.json'),
+    'utf8',
+  );
+  // The pinned-parent read returns the original bundle bytes; the attacker
+  // replacement target is never projected.
+  expect(projected).toContain('codex-access');
+  expect(projected).not.toContain('attacker-token');
+});
+
+// F4 (remaining): the analogous race on staged WRITES — the staging slot
+// swapped for a symlink between writes must not place secret material in the
+// attacker's target directory.
+test('a staging slot swapped mid-write cannot redirect staged secrets', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const attacker = join(fx.root, 'attacker-staging');
+  mkdirSync(attacker, { recursive: true });
+  const stolen = join(fx.scopedRoot, 'staging-stolen');
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    if (!swapped && String(path).endsWith('/supervisor.exec.env')) {
+      swapped = true;
+      fs.renameSync(fx.stagingDir, stolen);
+      fs.symlinkSync(attacker, fx.stagingDir);
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  try {
+    captureError(() => stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE));
+  } finally {
+    spy.mockRestore();
+    rmSync(fx.stagingDir, { force: true }); // drop the planted symlink
+  }
+  expect(swapped).toBe(true);
+  // The attacker's target received nothing — in particular no supervisor
+  // env carrying grader aliases.
+  expect(existsSync(join(attacker, 'supervisor.exec.env'))).toBe(false);
+  expect(readdirSync(attacker)).toEqual([]);
+  // The pinned writes continued into the original (renamed) directory.
+  expect(existsSync(join(stolen, 'supervisor.exec.env'))).toBe(true);
+});
+
+// F-B: a rejected or cast staged object must be refused BEFORE the first
+// rename — staging, active, and recovery stay byte/metadata-identical.
+// (Reviewer result pre-fix: config_invalid thrown with staging gone, the
+// invalid stage committed to active, and the recovery generation deleted.)
+test('a rejected staged object leaves staging, active, and recovery untouched', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  activateScopedCredentialMaterial(
+    fx.loaded,
+    stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE),
+  );
+  const staged = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+  const stagingBefore = snapshotTree(fx.stagingDir);
+  const activeBefore = snapshotTree(fx.activeDir);
+  const bad = {
+    ...staged,
+    authMounts: [
+      {
+        name: 'evil' as unknown as 'codex',
+        path: staged.authMounts[0]?.path ?? '',
+      },
+    ],
+  };
+  const caught = captureError(() =>
+    activateScopedCredentialMaterial(fx.loaded, bad),
+  );
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  expect(snapshotTree(fx.stagingDir)).toBe(stagingBefore);
+  expect(snapshotTree(fx.activeDir)).toBe(activeBefore);
+  expect(existsSync(fx.recoveryDir)).toBe(false);
+});

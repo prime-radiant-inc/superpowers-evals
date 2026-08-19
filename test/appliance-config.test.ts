@@ -1,4 +1,5 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import {
   chmodSync,
   existsSync,
@@ -278,4 +279,54 @@ test('loadStateConfig refuses a symlink-aliased configured root', () => {
   const caught = captureError(() => loadStateConfig(configPath));
   expect(caught).toBeInstanceOf(ApplianceError);
   expect((caught as ApplianceError).code).toBe('config_invalid');
+});
+
+// --- Fix Round 2: descriptor-relative metadata read --------------------------
+
+// The bundle directory swapped for a symlink immediately before the metadata
+// open must not redirect the read: metadata is read relative to the pinned
+// bundle directory, never by re-resolving the full pathname.
+test('a bundle directory swapped mid-read cannot redirect the metadata load', () => {
+  const fx = fixture();
+  const attacker = join(fx.root, 'attacker-bundle');
+  mkdirSync(attacker, { recursive: true });
+  writeFileSync(
+    join(attacker, 'metadata.json'),
+    JSON.stringify({
+      bundle_id: 'attacker-bundle',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+    }),
+  );
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    if (!swapped && String(path).endsWith('/metadata.json')) {
+      swapped = true;
+      fs.renameSync(fx.bundleDir, join(fx.root, 'credentials/blessed-real'));
+      fs.symlinkSync(attacker, fx.bundleDir);
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let loadedBundleId: string | undefined;
+  let caught: unknown;
+  try {
+    caught = captureError(() => {
+      loadedBundleId = loadCredentialConfig(fx.configPath).bundle.bundle_id;
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(swapped).toBe(true);
+  // Either the swap is refused typed, or the pinned read returned the
+  // ORIGINAL metadata — the attacker metadata is never accepted.
+  if (caught === undefined) {
+    expect(loadedBundleId).toBe('blessed-a');
+  } else {
+    expect(caught).toBeInstanceOf(ApplianceError);
+  }
 });

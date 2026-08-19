@@ -17,10 +17,12 @@
 import { spawnSync } from 'node:child_process';
 import {
   closeSync,
+  fchmodSync,
   constants as fsConstants,
   fstatSync,
   fsyncSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -45,11 +47,7 @@ import {
   type LiveCredentialScope,
 } from '../credentials/scope.ts';
 import { ApplianceError } from './errors.ts';
-import {
-  assertNoFollowDirChain,
-  assertRealDirNoFollow,
-  ensurePrivateDirNoFollow,
-} from './safe-fs.ts';
+import { assertNoFollowDirChain, assertRealDirNoFollow } from './safe-fs.ts';
 import type { ApplianceConfig, LoadedApplianceConfig } from './types.ts';
 
 export interface ProjectedAuthMount {
@@ -104,6 +102,8 @@ export type ActiveCredentialMaterial =
 const AGENT_ENV_FILE = 'agent.env';
 const SUPERVISOR_ENV_FILE = 'supervisor.exec.env';
 const FIXED_SLOTS = ['staging', 'active', 'recovery'] as const;
+// The staging slot chain, walked descriptor-relative from the appliance root.
+const STAGING_CHAIN_PARTS = ['state', 'credentials-scoped', 'staging'] as const;
 
 interface ScopedPaths {
   readonly root: string;
@@ -278,21 +278,109 @@ export function assertCredentialBundleBoundary(config: ApplianceConfig): void {
   ]);
 }
 
-// fd-based no-follow open of one regular file. O_NOFOLLOW makes the kernel —
-// not a racy lstat-then-open sequence — reject a symlink final component;
-// O_NONBLOCK keeps a FIFO from blocking the open so fstat can refuse it; any
-// other special node (socket, device) is refused by errno or by the fstat
-// regular-file check. Every fs failure is normalized to a typed
-// ApplianceError; raw errnos never escape.
-function openNoFollowRegularFile(
-  path: string,
+// ---------------------------------------------------------------------------
+// Descriptor-relative component walk (openat-style, no native dependency).
+//
+// A full-pathname open — even with O_NOFOLLOW — only protects the FINAL
+// component: an attacker who swaps an INTERMEDIATE directory for a symlink
+// between validation and open redirects the whole operation. The primitives
+// below therefore pin every directory component with
+// open(O_RDONLY|O_DIRECTORY|O_NOFOLLOW) and address each child RELATIVE to
+// the already pinned parent, never re-resolving the attacker-influenceable
+// full pathname:
+//   - Linux (the only Phase 1 appliance production platform): children are
+//     addressed through /proc/self/fd/<fd>/<child> — a kernel magic link to
+//     the OPEN DIRECTORY itself, giving true openat semantics.
+//   - macOS (trusted dev/test machines): /dev/fd does not support sub-path
+//     traversal, so children are addressed through volfs,
+//     /.vol/<dev>/<ino>/<child>, which resolves BY DIRECTORY IDENTITY. The
+//     held fd keeps the vnode alive and APFS inode numbers are monotonic
+//     64-bit (never recycled), so the identity cannot be re-pointed.
+// Child opens keep O_NOFOLLOW (+O_DIRECTORY for intermediates), so a
+// symlinked child is still ELOOP. All failures are typed; raw errnos never
+// escape.
+interface PinnedDir {
+  readonly fd: number;
+  // The path prefix that addresses children relative to THIS pinned
+  // directory (see above); valid while fd stays open.
+  readonly viaPath: string;
+}
+
+function pinnedChildPath(parent: PinnedDir, name: string): string {
+  return `${parent.viaPath}/${name}`;
+}
+
+// A path component about to be resolved relative to a pinned parent must be
+// exactly one plain name.
+function assertSafeComponent(name: string, label: string): void {
+  if (
+    name === '' ||
+    name === '.' ||
+    name === '..' ||
+    name.includes('/') ||
+    name.includes('\0')
+  ) {
+    throw scopeError(`${label} has an unsafe path component: '${name}'`);
+  }
+}
+
+function openPinnedDir(
+  openPath: string,
+  display: string,
+  label: string,
+  required: boolean,
+): PinnedDir | null {
+  let fd: number;
+  try {
+    fd = openSync(
+      openPath,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      if (!required) {
+        return null;
+      }
+      throw scopeError(`${label} is missing or not a directory: ${display}`);
+    }
+    if (code === 'ELOOP' || code === 'EMLINK') {
+      throw scopeError(`${label} is a symlink: ${display}`);
+    }
+    throw scopeError(
+      `${label} is not an accessible directory (${code ?? 'unknown error'}): ${display}`,
+    );
+  }
+  try {
+    const stats = fstatSync(fd, { bigint: true });
+    const viaPath =
+      process.platform === 'darwin'
+        ? `/.vol/${stats.dev}/${stats.ino}`
+        : `/proc/self/fd/${fd}`;
+    return { fd, viaPath };
+  } catch (error) {
+    closeSync(fd);
+    throw scopeError(
+      `${label} could not be pinned (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${display}`,
+    );
+  }
+}
+
+// fd-based no-follow open of one regular file, addressed relative to a
+// pinned parent. O_NONBLOCK keeps a FIFO from blocking the open so fstat can
+// refuse it; any other special node (socket, device) is refused by errno or
+// by the fstat regular-file check.
+function openPinnedRegularFile(
+  parent: PinnedDir,
+  name: string,
+  display: string,
   label: string,
   required: boolean,
 ): number | null {
   let fd: number;
   try {
     fd = openSync(
-      path,
+      pinnedChildPath(parent, name),
       fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
     );
   } catch (error) {
@@ -301,19 +389,19 @@ function openNoFollowRegularFile(
       if (!required) {
         return null;
       }
-      throw scopeError(`${label} is missing: ${path}`);
+      throw scopeError(`${label} is missing: ${display}`);
     }
     if (code === 'ELOOP' || code === 'EMLINK') {
-      throw scopeError(`${label} is a symlink: ${path}`);
+      throw scopeError(`${label} is a symlink: ${display}`);
     }
     throw scopeError(
-      `${label} is not a readable regular file (${code ?? 'unknown error'}): ${path}`,
+      `${label} is not a readable regular file (${code ?? 'unknown error'}): ${display}`,
     );
   }
   try {
     if (!fstatSync(fd).isFile()) {
       closeSync(fd);
-      throw scopeError(`${label} is not a regular file: ${path}`);
+      throw scopeError(`${label} is not a regular file: ${display}`);
     }
   } catch (error) {
     if (error instanceof ApplianceError) {
@@ -321,87 +409,236 @@ function openNoFollowRegularFile(
     }
     closeSync(fd);
     throw scopeError(
-      `${label} could not be inspected (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
+      `${label} could not be inspected (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${display}`,
     );
   }
   return fd;
 }
 
-// Validate the intermediate components of bundleDir/rel no-follow, then read
-// the final component through an O_NOFOLLOW file descriptor. `required:
-// false` treats a missing component as absence.
+/**
+ * Read one regular file at anchorDir/parts through the pinned-descriptor
+ * walk: the anchor and every intermediate directory are opened no-follow and
+ * each child is addressed relative to its pinned parent, so a component
+ * swapped after validation cannot redirect the read. `required: false`
+ * treats any missing component as absence. Exported ONLY as the shared
+ * no-follow read seam for loadCredentialConfig's metadata read — not part of
+ * the approved material interface.
+ */
+export function readPinnedNoFollowFile(
+  anchorDir: string,
+  parts: readonly string[],
+  label: string,
+  required: boolean,
+): string | null {
+  for (const part of parts) {
+    assertSafeComponent(part, label);
+  }
+  const finalName = parts[parts.length - 1];
+  if (finalName === undefined) {
+    throw scopeError(`${label} has an empty path`);
+  }
+  const pins: PinnedDir[] = [];
+  try {
+    const anchor = openPinnedDir(anchorDir, anchorDir, label, true);
+    if (anchor === null) {
+      throw scopeError(`${label} anchor is missing: ${anchorDir}`);
+    }
+    pins.push(anchor);
+    let parent = anchor;
+    let display = anchorDir;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const name = parts[i] ?? '';
+      display = join(display, name);
+      const child = openPinnedDir(
+        pinnedChildPath(parent, name),
+        display,
+        label,
+        required,
+      );
+      if (child === null) {
+        return null;
+      }
+      pins.push(child);
+      parent = child;
+    }
+    const fd = openPinnedRegularFile(
+      parent,
+      finalName,
+      join(display, finalName),
+      label,
+      required,
+    );
+    if (fd === null) {
+      return null;
+    }
+    try {
+      return readFileSync(fd, 'utf8');
+    } catch (error) {
+      throw scopeError(
+        `${label} could not be read (${(error as NodeJS.ErrnoException).code ?? 'unknown error'})`,
+      );
+    } finally {
+      closeSync(fd);
+    }
+  } finally {
+    for (const pin of pins) {
+      try {
+        closeSync(pin.fd);
+      } catch {}
+    }
+  }
+}
+
 function readBundleFile(
   bundleDir: string,
   rel: string,
   required: boolean,
 ): string | null {
-  const parts = rel.split('/');
-  let cursor = bundleDir;
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    cursor = join(cursor, parts[i] ?? '');
-    const stats = lstatOrUndefined(cursor, 'credential bundle');
-    if (stats === undefined) {
-      if (!required) {
-        return null;
-      }
-      throw scopeError(`credential bundle is missing ${rel}`);
-    }
-    if (stats.isSymbolicLink()) {
-      throw scopeError(`credential bundle path is a symlink: ${cursor}`);
-    }
-    if (!stats.isDirectory()) {
-      throw scopeError(`credential bundle path is not a directory: ${cursor}`);
-    }
-  }
-  const final = join(cursor, parts[parts.length - 1] ?? '');
-  const fd = openNoFollowRegularFile(
-    final,
+  return readPinnedNoFollowFile(
+    bundleDir,
+    rel.split('/'),
     `credential bundle ${rel}`,
     required,
   );
-  if (fd === null) {
-    return null;
-  }
+}
+
+// Create-and-pin the private slot chain descriptor-relative from the
+// boundary-validated appliance root: each component is created 0700 (EEXIST
+// tolerated — the following no-follow open refuses a planted symlink) and
+// opened relative to its already pinned parent. Returns the pinned final
+// directory (fchmod'd 0700); the caller closes it.
+function pinPrivateDirChain(
+  root: string,
+  parts: readonly string[],
+  label: string,
+): PinnedDir {
+  const pins: PinnedDir[] = [];
   try {
-    return readFileSync(fd, 'utf8');
+    const anchor = openPinnedDir(root, root, label, true);
+    if (anchor === null) {
+      throw scopeError(`${label} anchor is missing: ${root}`);
+    }
+    pins.push(anchor);
+    let parent = anchor;
+    let display = root;
+    for (const name of parts) {
+      assertSafeComponent(name, label);
+      display = join(display, name);
+      const childPath = pinnedChildPath(parent, name);
+      try {
+        mkdirSync(childPath, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw scopeError(
+            `${label} could not be created (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${display}`,
+          );
+        }
+      }
+      const child = openPinnedDir(childPath, display, label, true);
+      if (child === null) {
+        throw scopeError(`${label} is missing after creation: ${display}`);
+      }
+      pins.push(child);
+      parent = child;
+    }
+    fchmodSync(parent.fd, 0o700);
+    // Release the intermediates; hand the pinned final dir to the caller.
+    for (const pin of pins) {
+      if (pin !== parent) {
+        try {
+          closeSync(pin.fd);
+        } catch {}
+      }
+    }
+    return parent;
   } catch (error) {
+    for (const pin of pins) {
+      try {
+        closeSync(pin.fd);
+      } catch {}
+    }
+    if (error instanceof ApplianceError) {
+      throw error;
+    }
     throw scopeError(
-      `credential bundle ${rel} could not be read (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${final}`,
+      `${label} could not be pinned (${error instanceof Error ? error.message : String(error)})`,
     );
-  } finally {
-    closeSync(fd);
   }
 }
 
-// Local no-follow private write into the staging slot. O_CREAT|O_EXCL|
-// O_NOFOLLOW means a pre-planted entry (symlink or otherwise) at the
-// destination is a typed refusal, never a follow — the slot was cleared
-// first, so any EEXIST is hostile. fs failures never escape raw.
-function writeScopedPrivateFile(path: string, value: string): void {
-  let fd: number;
-  try {
-    fd = openSync(
-      path,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_NOFOLLOW,
-      0o600,
-    );
-  } catch (error) {
-    throw scopeError(
-      `scoped credential file could not be created (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
-    );
+// Private no-follow write of base/parts, descriptor-relative to the pinned
+// base: intermediate directories are created 0700 and pinned, and the final
+// file is created O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW mode 0600 relative to
+// its pinned parent — a swapped or pre-planted component can never redirect
+// secret material outside the slot. fs failures never escape raw.
+function writePinnedFile(
+  base: PinnedDir,
+  parts: readonly string[],
+  value: string,
+  label: string,
+): void {
+  for (const part of parts) {
+    assertSafeComponent(part, label);
   }
+  const finalName = parts[parts.length - 1];
+  if (finalName === undefined) {
+    throw scopeError(`${label} has an empty path`);
+  }
+  const pins: PinnedDir[] = [];
   try {
-    writeFileSync(fd, value);
-    fsyncSync(fd);
-  } catch (error) {
-    throw scopeError(
-      `scoped credential file could not be written (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${path}`,
-    );
+    let parent = base;
+    let display = label;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const name = parts[i] ?? '';
+      display = join(display, name);
+      const childPath = pinnedChildPath(parent, name);
+      try {
+        mkdirSync(childPath, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw scopeError(
+            `staged material directory could not be created (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${display}`,
+          );
+        }
+      }
+      const child = openPinnedDir(childPath, display, label, true);
+      if (child === null) {
+        throw scopeError(`${label} is missing after creation: ${display}`);
+      }
+      pins.push(child);
+      parent = child;
+    }
+    let fd: number;
+    try {
+      fd = openSync(
+        pinnedChildPath(parent, finalName),
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+    } catch (error) {
+      throw scopeError(
+        `scoped credential file could not be created (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${join(display, finalName)}`,
+      );
+    }
+    try {
+      writeFileSync(fd, value);
+      fsyncSync(fd);
+    } catch (error) {
+      throw scopeError(
+        `scoped credential file could not be written (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${join(display, finalName)}`,
+      );
+    } finally {
+      closeSync(fd);
+    }
   } finally {
-    closeSync(fd);
+    for (const pin of pins) {
+      try {
+        closeSync(pin.fd);
+      } catch {}
+    }
   }
 }
 
@@ -845,13 +1082,17 @@ export function stageProbeCredentialMaterial(
   assertScopedCredentialStateBoundary(loaded);
   clearStagingSlot(loaded);
   const paths = scopedPaths(loaded.config);
-  ensurePrivateDirNoFollow(
+  const stagingPin = pinPrivateDirChain(
     loaded.config.root,
-    paths.staging,
+    STAGING_CHAIN_PARTS,
     'state/credentials-scoped/staging',
   );
   const agentEnvFile = join(paths.staging, AGENT_ENV_FILE);
-  writeScopedPrivateFile(agentEnvFile, '');
+  try {
+    writePinnedFile(stagingPin, [AGENT_ENV_FILE], '', 'probe agent env');
+  } finally {
+    closeSync(stagingPin.fd);
+  }
   return {
     kind: 'empty',
     credentialScope: EMPTY_CREDENTIAL_SCOPE,
@@ -931,29 +1172,40 @@ export function stageLiveCredentialMaterial(
     join(paths.staging, SUPERVISOR_ENV_FILE),
   );
   const authMounts: ProjectedAuthMount[] = [];
+  // The slot is created and PINNED once; every write below is
+  // descriptor-relative to that pin, so a component swapped mid-write cannot
+  // redirect staged secrets.
+  let stagingPin: PinnedDir | null = null;
   try {
-    ensurePrivateDirNoFollow(
+    stagingPin = pinPrivateDirChain(
       loaded.config.root,
-      paths.staging,
+      STAGING_CHAIN_PARTS,
       'state/credentials-scoped/staging',
     );
-    writeScopedPrivateFile(agentEnvFile, agentEnvBody(agent.entries));
-    writeScopedPrivateFile(
-      supervisorExecEnvFile,
+    writePinnedFile(
+      stagingPin,
+      [AGENT_ENV_FILE],
+      agentEnvBody(agent.entries),
+      'staged agent env',
+    );
+    writePinnedFile(
+      stagingPin,
+      [SUPERVISOR_ENV_FILE],
       `${supervisor.lines.join('\n')}\n`,
+      'staged supervisor env',
     );
     if (oauthPlan !== null) {
       const mountRoot = insideStaging(
         join(paths.staging, 'auth', oauthPlan.mountName),
       );
       for (const file of oauthPlan.files) {
-        const dest = insideStaging(join(mountRoot, file.rel));
-        ensurePrivateDirNoFollow(
-          loaded.config.root,
-          dirname(dest),
-          'state/credentials-scoped/staging',
+        insideStaging(join(mountRoot, file.rel));
+        writePinnedFile(
+          stagingPin,
+          ['auth', oauthPlan.mountName, ...file.rel.split('/')],
+          file.content,
+          'staged oauth material',
         );
-        writeScopedPrivateFile(dest, file.content);
       }
       authMounts.push({ name: oauthPlan.mountName, path: mountRoot });
     }
@@ -968,6 +1220,12 @@ export function stageLiveCredentialMaterial(
     throw scopeError(
       `staging failed (${error instanceof Error ? error.message : String(error)})`,
     );
+  } finally {
+    if (stagingPin !== null) {
+      try {
+        closeSync(stagingPin.fd);
+      } catch {}
+    }
   }
   return {
     kind: 'live',
@@ -1028,6 +1286,31 @@ export function activateScopedCredentialMaterial(
       'an interrupted activation left the recovery slot; recover before activating a new generation',
     );
   }
+  // Derive and fully validate the returned material BEFORE the first rename:
+  // a rejected or cast staged object must leave staging, active, and
+  // recovery untouched. Paths come only from the fixed slot constants and
+  // runtime-validated mount names — never from rebasing caller paths.
+  const result: ActiveCredentialMaterial =
+    staged.kind === 'empty'
+      ? {
+          kind: 'empty',
+          credentialScope: staged.credentialScope,
+          root: paths.active,
+          agentEnvFile: join(paths.active, AGENT_ENV_FILE),
+          supervisorExecEnvFile: null,
+          authMounts: [],
+        }
+      : {
+          kind: 'live',
+          credentialScope: staged.credentialScope,
+          root: paths.active,
+          agentEnvFile: join(paths.active, AGENT_ENV_FILE),
+          supervisorExecEnvFile: join(paths.active, SUPERVISOR_ENV_FILE),
+          authMounts: staged.authMounts.map((mount) => ({
+            name: requireProjectedMountName(mount.name),
+            path: join(paths.active, 'auth', mount.name),
+          })),
+        };
   const activeExists = slotExists(
     loaded,
     paths.active,
@@ -1074,29 +1357,7 @@ export function activateScopedCredentialMaterial(
     }
   }
 
-  // The returned material is derived ONLY from the fixed slot constants and
-  // runtime-validated mount names — never by rebasing caller-provided paths.
-  if (staged.kind === 'empty') {
-    return {
-      kind: 'empty',
-      credentialScope: staged.credentialScope,
-      root: paths.active,
-      agentEnvFile: join(paths.active, AGENT_ENV_FILE),
-      supervisorExecEnvFile: null,
-      authMounts: [],
-    };
-  }
-  return {
-    kind: 'live',
-    credentialScope: staged.credentialScope,
-    root: paths.active,
-    agentEnvFile: join(paths.active, AGENT_ENV_FILE),
-    supervisorExecEnvFile: join(paths.active, SUPERVISOR_ENV_FILE),
-    authMounts: staged.authMounts.map((mount) => ({
-      name: requireProjectedMountName(mount.name),
-      path: join(paths.active, 'auth', mount.name),
-    })),
-  };
+  return result;
 }
 
 /**

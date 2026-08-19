@@ -1,14 +1,10 @@
-import {
-  closeSync,
-  existsSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readFileSync,
-} from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEnv } from '../env.ts';
-import { assertCredentialBundleBoundary } from './credential-scope.ts';
+import {
+  assertCredentialBundleBoundary,
+  readPinnedNoFollowFile,
+} from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
 import { readJsonFile } from './fs.ts';
 import {
@@ -126,46 +122,17 @@ export function loadCredentialConfig(
     requirePath(state.config.gauntlet.path, 'gauntlet repo');
 
     assertCredentialBundleBoundary(state.config);
-    const metadataPath = join(
-      state.config.credential_bundle.path,
-      'metadata.json',
-    );
-    // fd-based no-follow read: the kernel (O_NOFOLLOW), not a racy
-    // lstat-then-open sequence, rejects a symlinked metadata.json; fstat on
-    // the open descriptor refuses any non-regular node.
-    let fd: number;
-    try {
-      fd = openSync(
-        metadataPath,
-        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
-      );
-    } catch (openError) {
-      const code = (openError as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
-        throw new Error(
-          `credential bundle metadata does not exist: ${metadataPath}`,
-        );
-      }
-      if (code === 'ELOOP' || code === 'EMLINK') {
-        throw new Error(
-          `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
-        );
-      }
-      throw new Error(
-        `credential bundle metadata is unreadable (${code ?? 'unknown error'}): ${metadataPath}`,
-      );
-    }
-    let raw: string;
-    try {
-      if (!fstatSync(fd).isFile()) {
-        throw new Error(
-          `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
-        );
-      }
-      raw = readFileSync(fd, 'utf8');
-    } finally {
-      closeSync(fd);
-    }
+    // Descriptor-relative no-follow read: the bundle directory is pinned and
+    // metadata.json is opened relative to that pin, so neither a symlinked
+    // final component nor a bundle directory swapped after validation can
+    // redirect the read.
+    const raw =
+      readPinnedNoFollowFile(
+        state.config.credential_bundle.path,
+        ['metadata.json'],
+        'credential bundle metadata',
+        true,
+      ) ?? '';
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw) as unknown;
