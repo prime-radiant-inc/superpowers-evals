@@ -1157,7 +1157,7 @@ test('run-all rejects empty coding agent lists', async () => {
   expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
 });
 
-test('run-all rejects antigravity and windows requests', async () => {
+test('run-all rejects antigravity and unsupported target-OS options', async () => {
   const stdout: string[] = [];
   const program = createApplianceProgram({
     stdout: (s) => stdout.push(s),
@@ -1204,7 +1204,7 @@ test('run-all rejects antigravity and windows requests', async () => {
   expect(errors).toEqual(['unsupported_os', 'unsupported_os']);
 });
 
-test('run-all rejects duplicate coding-agent and os forwarded flags', async () => {
+test('run-all rejects duplicate coding-agent and unsupported target-OS flags', async () => {
   const stdout: string[] = [];
   const calls: unknown[] = [];
   const program = createApplianceProgram({
@@ -1967,6 +1967,8 @@ test('run-all rejects every ambiguous selection shape before the action runs', a
     ['--coding-agents', 'codex', '--credentials', 'a', '--credentials', 'b'], // duplicate
     ['--coding-agents', 'codex', '--credential', 'codex_sub'], // singular flag
     ['--coding-agents', 'codex', '--credentials-file', '/tmp/creds.yaml'], // foreign registry
+    ['--', '--coding-agents', 'codex', '--credentials', 'codex_sub'], // downstream end-of-options hides the asserted selection
+    ['--tier', '--coding-agents', 'codex', '--credentials', 'codex_sub'], // downstream consumes the selection flag as another option's value
   ];
 
   for (const quorumArgs of cases) {

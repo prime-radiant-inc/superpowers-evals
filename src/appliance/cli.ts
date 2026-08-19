@@ -16,6 +16,11 @@ import {
 } from '../credentials/scope.ts';
 import { getEnv } from '../env.ts';
 import {
+  type ParsedRunAllArgv,
+  parseRunAllArgv,
+  RunAllArgvError,
+} from '../run-all/options.ts';
+import {
   type LoadConfigOptions,
   loadCredentialConfig,
   loadStateConfig,
@@ -192,29 +197,10 @@ function csv(value: string): string[] {
 }
 
 function optionOccurrences(
-  args: readonly string[],
+  parsed: ParsedRunAllArgv,
   name: string,
-): readonly (string | null)[] {
-  const equalsPrefix = `${name}=`;
-  const values: (string | null)[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === undefined) {
-      continue;
-    }
-    if (arg.startsWith(equalsPrefix)) {
-      values.push(arg.slice(equalsPrefix.length));
-      continue;
-    }
-    if (arg === name) {
-      values.push(args[i + 1] ?? null);
-    }
-  }
-  return values;
-}
-
-function optionValue(args: readonly string[], name: string): string | null {
-  return optionOccurrences(args, name)[0] ?? null;
+): readonly string[] {
+  return parsed.values.get(name) ?? [];
 }
 
 function rejectUnsupportedAgent(agent: string): never {
@@ -258,8 +244,8 @@ function assertSupportedAgent(agent: string, codingAgentsDir?: string): void {
   }
 }
 
-function assertNoDuplicateOption(args: readonly string[], name: string): void {
-  if (optionOccurrences(args, name).length > 1) {
+function assertNoDuplicateOption(parsed: ParsedRunAllArgv, name: string): void {
+  if (optionOccurrences(parsed, name).length > 1) {
     throw new ApplianceError(
       'unsupported_os',
       'arguments',
@@ -268,9 +254,9 @@ function assertNoDuplicateOption(args: readonly string[], name: string): void {
   }
 }
 
-function assertNoForbiddenRunAllFlags(args: readonly string[]): void {
+function assertNoForbiddenRunAllFlags(parsed: ParsedRunAllArgv): void {
   for (const [flag, reason] of FORBIDDEN_RUN_ALL_FLAGS) {
-    if (optionOccurrences(args, flag).length > 0) {
+    if (optionOccurrences(parsed, flag).length > 0) {
       throw new ApplianceError(
         'unsupported_os',
         'arguments',
@@ -357,21 +343,20 @@ function assertSupportedRunAllArgs(
   readonly loaded: LoadedApplianceStateConfig;
   readonly selection: CredentialSelection;
 } {
-  assertNoDuplicateOption(args, '--coding-agents');
-  assertNoDuplicateOption(args, '--credentials');
-  assertNoDuplicateOption(args, '--os');
-  assertNoForbiddenRunAllFlags(args);
-
-  const os = optionValue(args, '--os');
-  if (os !== null && os !== 'linux') {
-    throw new ApplianceError(
-      'unsupported_os',
-      'arguments',
-      `run-all --os ${os} is not supported on the Phase 1 appliance`,
-    );
+  let parsed: ParsedRunAllArgv;
+  try {
+    parsed = parseRunAllArgv(args);
+  } catch (error) {
+    if (!(error instanceof RunAllArgvError)) {
+      throw error;
+    }
+    throw new ApplianceError('unsupported_os', 'arguments', error.message);
   }
+  assertNoDuplicateOption(parsed, '--coding-agents');
+  assertNoDuplicateOption(parsed, '--credentials');
+  assertNoForbiddenRunAllFlags(parsed);
 
-  const codingAgents = optionValue(args, '--coding-agents');
+  const codingAgents = optionOccurrences(parsed, '--coding-agents')[0] ?? null;
   if (codingAgents === null || codingAgents.trim() === '') {
     throw new ApplianceError(
       'unsupported_os',
@@ -398,9 +383,9 @@ function assertSupportedRunAllArgs(
   assertSupportedAgent(agent);
 
   // Absent is the agent default; present must name exactly one credential.
-  // optionOccurrences distinguishes "not passed" from "passed with nothing
-  // after it", which optionValue alone cannot.
-  const credentialOccurrences = optionOccurrences(args, '--credentials');
+  // The shared parser keeps each actual occurrence, so duplicates cannot be
+  // silently reduced to Commander's last value.
+  const credentialOccurrences = optionOccurrences(parsed, '--credentials');
   const credential =
     credentialOccurrences.length === 0
       ? null

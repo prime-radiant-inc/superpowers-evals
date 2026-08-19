@@ -479,6 +479,24 @@ test('liveCommandArgs refuses every command that is not this record kind Quorum 
       kind: 'run-all',
       argv: [...LEGAL_RUN_ALL_ARGV, '--credential', 'opus'],
     },
+    {
+      what: 'quorum run-all hiding its selection after end-of-options',
+      kind: 'run-all',
+      argv: ['quorum', 'run-all', '--', ...LEGAL_RUN_ALL_ARGV.slice(2)],
+    },
+    {
+      what: 'quorum run-all consuming its agent flag as another option value',
+      kind: 'run-all',
+      argv: [
+        'quorum',
+        'run-all',
+        '--tier',
+        '--coding-agents',
+        'codex',
+        '--credentials',
+        'codex_sub',
+      ],
+    },
   ];
 
   for (const entry of refused) {
@@ -550,7 +568,7 @@ test('liveCommandArgs preserves the legitimate arguments of an unmodified comman
     {
       // An omitted --credentials is the agent default here too.
       kind: 'run-all',
-      argv: ['quorum', 'run-all', '--coding-agents', 'codex', '--os', 'linux'],
+      argv: ['quorum', 'run-all', '--coding-agents', 'codex'],
       options: { selection: { agent: 'codex', credential: null } },
     },
   ];

@@ -18,6 +18,11 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import type { CredentialSelection } from '../credentials/scope.ts';
 import { envSnapshot } from '../env.ts';
 import {
+  type ParsedRunAllArgv,
+  parseRunAllArgv,
+  RunAllArgvError,
+} from '../run-all/options.ts';
+import {
   type ContainerLease,
   evalsContainerPath,
   liveLeaseFromJob,
@@ -771,37 +776,17 @@ function liveCommandFault(job: JobRecord, message: string): ApplianceError {
   );
 }
 
-// Every occurrence of `--name value` and `--name=value`, mirroring the
-// submission parser: "absent" and "present with nothing after it" are
-// different answers, and a repeated option is never silently resolved to one.
-function optionOccurrences(
-  argv: readonly string[],
-  name: string,
-): (string | null)[] {
-  const equalsPrefix = `${name}=`;
-  const values: (string | null)[] = [];
-  argv.forEach((arg, index) => {
-    if (arg.startsWith(equalsPrefix)) {
-      values.push(arg.slice(equalsPrefix.length));
-      return;
-    }
-    if (arg === name) {
-      values.push(argv[index + 1] ?? null);
-    }
-  });
-  return values;
-}
-
 // A run-all cell option: absent exactly when the record selected nothing,
 // otherwise ONE occurrence naming exactly the one selected entry. A repeated,
 // widened, or renamed option is a command for a cell this record never
 // asserted.
 function requireSelectedRunAllOption(
   job: JobRecord,
+  parsed: ParsedRunAllArgv,
   name: string,
   selected: string | null,
 ): void {
-  const occurrences = optionOccurrences(job.command.argv, name);
+  const occurrences = parsed.values.get(name) ?? [];
   if (selected === null) {
     if (occurrences.length > 0) {
       throw liveCommandFault(
@@ -887,23 +872,30 @@ function requireRunAllCommand(
   if (argv[0] !== 'quorum' || argv[1] !== 'run-all') {
     throw liveCommandFault(job, 'command is not a quorum run-all');
   }
+  let parsed: ParsedRunAllArgv;
+  try {
+    parsed = parseRunAllArgv(argv.slice(2));
+  } catch (error) {
+    if (!(error instanceof RunAllArgvError)) {
+      throw error;
+    }
+    throw liveCommandFault(job, error.message);
+  }
   for (const flag of FORBIDDEN_RUN_ALL_FLAGS) {
-    if (optionOccurrences(argv, flag).length > 0) {
+    if ((parsed.values.get(flag) ?? []).length > 0) {
       throw liveCommandFault(
         job,
         `command passes ${flag}, which the appliance never forwards to run-all`,
       );
     }
   }
-  requireSelectedRunAllOption(job, '--coding-agents', selection.agent);
-  requireSelectedRunAllOption(job, '--credentials', selection.credential);
-  const osValues = optionOccurrences(argv, '--os');
-  if (
-    osValues.length > 1 ||
-    (osValues.length === 1 && osValues[0] !== 'linux')
-  ) {
-    throw liveCommandFault(job, 'command must request the linux OS or none');
-  }
+  requireSelectedRunAllOption(job, parsed, '--coding-agents', selection.agent);
+  requireSelectedRunAllOption(
+    job,
+    parsed,
+    '--credentials',
+    selection.credential,
+  );
 }
 
 /**

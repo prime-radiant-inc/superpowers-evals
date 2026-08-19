@@ -21,6 +21,10 @@ import { checkCredentials } from '../credentials/check.ts';
 import { getEnv } from '../env.ts';
 import { exportRuns } from '../export-runs/index.ts';
 import { runBatch } from '../run-all/index.ts';
+import {
+  configureRunAllOptions,
+  type RunAllOptions,
+} from '../run-all/options.ts';
 import { writeGridManifest } from '../run-all/write-grid-manifest.ts';
 import {
   checkScenario,
@@ -28,7 +32,6 @@ import {
   newScenario,
   ScaffoldError,
 } from '../scaffold.ts';
-import { DEFAULT_JOBS } from '../scheduler/index.ts';
 import { costsJson, loadCostRows, renderCosts } from './costs.ts';
 import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
@@ -96,21 +99,6 @@ interface ShowOptions {
   readonly json: boolean;
   readonly color: boolean;
   readonly resultsRoot: string;
-}
-
-interface RunAllOptions {
-  readonly codingAgents?: string;
-  readonly scenarios?: string;
-  readonly credentials?: string;
-  readonly credentialsFile?: string;
-  readonly jobs: string;
-  readonly scenariosRoot: string;
-  readonly codingAgentsDir: string;
-  readonly outRoot: string;
-  readonly tier?: string;
-  readonly includeDrafts: boolean;
-  readonly heartbeatSeconds: string;
-  readonly graderModel?: string;
 }
 
 const program = new Command();
@@ -298,31 +286,8 @@ program
     },
   );
 
-program
-  .command('run-all')
-  .option('--coding-agents <csv>', 'CSV agent filter (default: all)')
-  .option('--scenarios <csv>', 'CSV scenario filter (default: all)')
-  .option(
-    '--credentials <csv>',
-    'CSV credential filter (default: agent default_credential)',
-  )
-  .option('--credentials-file <path>', 'credentials YAML path')
-  .option('--jobs <n>', 'global slot pool size (>=1)', String(DEFAULT_JOBS))
-  .option('--scenarios-root <dir>', 'scenarios root', 'scenarios')
-  .option('--coding-agents-dir <dir>', 'agents dir', 'coding-agents')
-  .option('--out-root <dir>', 'results root', 'results')
-  .option('--tier <tier>', 'restrict to sentinel|full|adhoc')
-  .option('--include-drafts', 'include status: draft scenarios', false)
-  .option(
-    '--heartbeat-seconds <n>',
-    'seconds between liveness heartbeats (0 disables)',
-    String(30),
-  )
-  .option(
-    '--grader-model <id>',
-    'Gauntlet-Agent (grader) model for every cell (default: claude-sonnet-5)',
-  )
-  .action(async (opts: RunAllOptions) => {
+configureRunAllOptions(program.command('run-all')).action(
+  async (opts: RunAllOptions) => {
     const agentFilter = csvList(opts.codingAgents);
     // Filter by scenario name; accept a path/prefixed form too (scenarios/foo
     // -> foo), symmetric with run/check.
@@ -387,7 +352,8 @@ program
       process.exit(1);
     }
     process.exit(0);
-  });
+  },
+);
 
 interface GridManifestOptions {
   readonly scenariosRoot: string;
