@@ -18,16 +18,15 @@
 4. Submission records the source evals SHA and normalized selection. After fast-forward, any SHA drift fails before credential evaluation or Docker; when the SHA matches, preflight recomputes the scope and requires exact equality.
 5. Grader credentials come from distinct QUORUM_GRADER_* bundle source names. The host-only supervisor exec file retains those aliases; gauntletEnvBase translates them to canonical runtime names only while constructing the Gauntlet child environment, so the Quorum parent can simultaneously retain the Coding-Agent's canonical credential. If any selected agent secret value equals any nonempty grader auth secret value, projection fails closed regardless of their environment-variable names instead of falsely claiming separation. Endpoint and network-routing values are not secret values for this comparison.
 
-**Revision checkpoint:** Task 1's initial foundation is committed through 034e980; the unrelated focused-test timeout repair is dc6e89a. The 2026-08-18 five-seat adversarial review rejected plan-redline 1c0bd6f. This revision supersedes that plan text; Tasks 2-6 and the reopened Task 1 interface correction have not started. Nothing authorizes a push.
+**Revision checkpoint:** Task 1's initial foundation is committed through 034e980; the unrelated focused-test timeout repair is dc6e89a. The 2026-08-18 five-seat adversarial review rejected plan-redline 1c0bd6f, and the corrected plan was approved at 3e23527 after final Sol and feasibility gates. Drew approved local execution on 2026-08-18; Tasks 2-6 and the reopened Task 1 interface correction have not started. Nothing authorizes a push.
 
-**Compatibility decision requiring Drew's approval before execution:** Trusted
+**Compatibility decision approved by Drew on 2026-08-18:** Trusted
 local Quorum runs outside the appliance currently supply canonical grader
 environment names directly. Preserve that supported path behind an explicit
 source-mode branch: an absent mode uses the existing local canonical contract;
 `QUORUM_GRADER_SOURCE_MODE=appliance-scoped` reads only the distinct appliance
 aliases and never falls back to canonical values. This is not a null/optional
-appliance scope path. Task 2 must not begin until Drew approves this narrowly
-scoped compatibility behavior while reviewing the plan.
+appliance scope path.
 
 ## Global Constraints
 
