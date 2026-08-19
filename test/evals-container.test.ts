@@ -148,7 +148,18 @@ case "$1" in
     id="\${EVALS_CONTAINER_FAKE_CONTAINER_ID:?}"
     write_state
     if [[ -n "$cidfile" ]]; then
-      printf '%s\\n' "$id" > "$cidfile"
+      # Real docker run refuses an EXISTING cidfile (it errors "container id
+      # file <path> already exists") and only writes the id when it CREATES
+      # the container; the fake models both halves of that contract.
+      if [[ -e "$cidfile" ]]; then
+        printf 'docker: error: container id file %s already exists\\n' "$cidfile" >&2
+        exit 125
+      fi
+      case "\${EVALS_CONTAINER_CIDFILE_BEHAVIOR:-write}" in
+        write) printf '%s\\n' "$id" > "$cidfile" ;;
+        missing) : ;;
+        malformed) printf 'not-an-id\\n' > "$cidfile" ;;
+      esac
     fi
     # Real docker run -d prints the new container's full id on stdout; the
     # knob models a docker/wrapper contract that misbehaves.
@@ -1837,6 +1848,46 @@ describe('scripts/evals-container scoped mode', () => {
     } finally {
       removeResultProbeFiles();
       rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing or malformed cidfile is failure: no lease id, no stdout promotion, no rm target', () => {
+    for (const behavior of ['missing', 'malformed'] as const) {
+      const harness = makeHarness({
+        EVALS_CONTAINER_CIDFILE_BEHAVIOR: behavior,
+      });
+      removeResultProbeFiles();
+      try {
+        const superpowersRoot = makeSuperpowersRoot(harness.root);
+        const envFile = join(harness.root, 'agent.env');
+        writeFileSync(envFile, '');
+
+        const proc = runWrapper(harness, [
+          '--superpowers-root',
+          superpowersRoot,
+          '--env-file',
+          envFile,
+          '--no-default-auth',
+          'up',
+        ]);
+
+        expect(proc.error).toBeUndefined();
+        // Always a failure, never a success or a printed id.
+        expect(proc.status).not.toBe(0);
+        expect(proc.stdout).toBe('');
+        // The cidfile is the only authority: when it is missing or
+        // malformed there is NO authoritative rollback target, so no
+        // container is removed and stdout is never promoted.
+        expect(proc.stderr).toContain('cidfile');
+        expect(proc.stderr).toContain('no authoritative rollback target');
+        expect(dockerCommandsNamed(harness.dockerLog, 'rm')).toEqual([]);
+        expect(dockerCommandsNamed(harness.dockerLog, 'stop')).toEqual([]);
+      } catch (error) {
+        throw new Error(`case '${behavior}': ${String(error)}`);
+      } finally {
+        removeResultProbeFiles();
+        rmSync(harness.root, { recursive: true, force: true });
+      }
     }
   });
 });

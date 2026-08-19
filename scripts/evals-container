@@ -539,22 +539,28 @@ run_up() {
   )
   run_args+=("${provenance_env[@]+"${provenance_env[@]}"}")
   run_args+=("${mounts[@]}")
-  local cidfile=""
+  local cidfile="" cid_dir=""
   if [[ "$no_default_auth" == true ]]; then
     # Scoped up: docker itself records the created container's full id in a
-    # PRIVATE cidfile, and that file is the rollback AUTHORITY. The cidfile
-    # option is created and appended BEFORE the image tag: `docker run`
-    # treats every argument after the image as the container command, so a
-    # cidfile appended after it would be ignored as an option and shipped to
-    # the container command instead. stdout is cross-checked as a full
-    # 64-hex Docker id: blank, multi-token, name-like/malformed, or
-    # mismatching stdout still rolls back exactly the cidfile id — never the
-    # configured name. The probe and the printed id also use that id; a
-    # later name lookup is never blessed.
+    # PRIVATE cidfile, and that file is the rollback AUTHORITY. Docker
+    # REFUSES an existing --cidfile path, so the file must not exist yet:
+    # a private mktemp -d directory is created and a child path inside it
+    # (still nonexistent) is passed; the exact file and directory are
+    # removed on every exit path. The cidfile option is appended BEFORE the
+    # image tag: `docker run` treats every argument after the image as the
+    # container command, so a cidfile appended after it would be shipped to
+    # the container command instead. Stdout is only a cross-check against
+    # the authoritative cidfile id: blank, multi-token, name-like/malformed,
+    # or mismatching stdout still rolls back exactly the cidfile id — never
+    # the configured name — and a missing or malformed cidfile is failure
+    # with NO rollback target (stdout is never promoted to authority). The
+    # probe and the printed id also use the cidfile id; a later name lookup
+    # is never blessed.
     local authority_id stdout_id reason full_id_re
     full_id_re='^[0-9a-f]{64}$'
-    cidfile=$(mktemp "${TMPDIR:-/tmp}/evals-container-cid.XXXXXXXX") \
-      || die "could not create a private cidfile for $container_name"
+    cid_dir=$(mktemp -d "${TMPDIR:-/tmp}/evals-container-cid.XXXXXXXX") \
+      || die "could not create a private cidfile directory for $container_name"
+    cidfile="$cid_dir/container.cid"
     run_args+=(--cidfile "$cidfile")
   fi
   run_args+=(
@@ -564,18 +570,19 @@ run_up() {
 
   if [[ "$no_default_auth" == true ]]; then
     if ! stdout_id=$(docker run "${run_args[@]}"); then
-      rm -f "$cidfile"
+      rm -rf "$cid_dir"
       die "docker run failed for $container_name"
     fi
     authority_id=$(cat "$cidfile" 2>/dev/null || true)
-    rm -f "$cidfile"
+    rm -rf "$cid_dir"
+    # The cidfile is the ONLY authority. Missing or malformed cidfile is
+    # always failure: there is no authoritative rollback target and stdout
+    # is never promoted to one.
     if ! [[ "$authority_id" =~ $full_id_re ]]; then
-      # The cidfile is unusable (docker contract violation); stdout below is
-      # the only rollback candidate and is validated before any use.
-      authority_id=""
+      die "scoped up did not obtain an authoritative container id from the cidfile for $container_name; no authoritative rollback target is known"
     fi
     # Command substitution strips trailing newlines; trim any other
-    # surrounding whitespace before validating the printed id.
+    # surrounding whitespace before cross-checking the printed id.
     stdout_id="${stdout_id#"${stdout_id%%[![:space:]]*}"}"
     stdout_id="${stdout_id%"${stdout_id##*[![:space:]]}"}"
     reason=""
@@ -585,15 +592,10 @@ run_up() {
       reason="received multiple tokens on stdout instead of one container id"
     elif ! [[ "$stdout_id" =~ $full_id_re ]]; then
       reason="received a malformed container id on stdout (expected a full 64-hex docker id)"
-    elif [[ -z "$authority_id" ]]; then
-      authority_id="$stdout_id"
     elif [[ "$stdout_id" != "$authority_id" ]]; then
       reason="stdout container id does not match the cidfile container id"
     fi
     if [[ -n "$reason" ]]; then
-      if [[ -z "$authority_id" ]]; then
-        die "scoped up $reason for $container_name; no rollback target is known"
-      fi
       scoped_rollback_or_die "$authority_id" "$reason for $container_name"
     fi
     scoped_probe_with_rollback "$authority_id"

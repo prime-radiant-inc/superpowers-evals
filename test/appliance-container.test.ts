@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type {
   CommandOptions,
   CommandResult,
@@ -47,6 +48,8 @@ import {
   EMPTY_CREDENTIAL_SCOPE,
   type LiveCredentialScope,
 } from '../src/credentials/scope.ts';
+
+const REPO = resolve(import.meta.dir, '..');
 
 const CURRENT_ID =
   'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
@@ -319,7 +322,18 @@ interface ScopedFixture {
 // fixture: every boundary walk is no-follow and macOS tmpdir traverses /var
 // symlinks. Optional relative overrides build the hostile-topology variants.
 function makeScopedFixture(
-  overrides: { readonly evals?: string; readonly bundle?: string } = {},
+  overrides: {
+    readonly evals?: string;
+    readonly bundle?: string;
+    // Seeds a minimal, corpus-derived credential corpus
+    // (coding-agents/<agent>.yaml + credentials.yaml) so the scope can be
+    // canonically rederived from the evals repo during reconciliation.
+    readonly corpus?: readonly {
+      readonly agent: string;
+      readonly credential: string;
+      readonly credentialBody: string;
+    }[];
+  } = {},
 ): ScopedFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-scont-')));
   const evalsRel = overrides.evals ?? 'evals';
@@ -332,6 +346,22 @@ function makeScopedFixture(
     'state',
   ]) {
     mkdirSync(join(root, dir), { recursive: true });
+  }
+  if (overrides.corpus !== undefined) {
+    const corpusDir = join(root, evalsRel, 'coding-agents');
+    mkdirSync(corpusDir, { recursive: true });
+    const credentials: string[] = [];
+    for (const entry of overrides.corpus) {
+      copyFileSync(
+        join(REPO, 'coding-agents', `${entry.agent}.yaml`),
+        join(corpusDir, `${entry.agent}.yaml`),
+      );
+      credentials.push(`  ${entry.credential}:\n${entry.credentialBody}`);
+    }
+    writeFileSync(
+      join(root, evalsRel, 'credentials.yaml'),
+      `# minimal corpus-derived registry (name -> record at the top level)\n${credentials.join('\n')}\n`,
+    );
   }
   const bundleDir = join(root, bundleRel);
   const loaded: LoadedApplianceConfig = {
@@ -369,6 +399,23 @@ function makeScopedFixture(
     activeDir: join(scopedRoot, 'active'),
     recoveryDir: join(scopedRoot, 'recovery'),
   };
+}
+
+// A scoped fixture carrying the minimal corpus-derived gemini OAuth pair
+// (gemini × gemini_default), so staged live generations bind canonically.
+function makeGeminiCorpusFixture(
+  overrides: Parameters<typeof makeScopedFixture>[0] = {},
+): ScopedFixture {
+  return makeScopedFixture({
+    ...overrides,
+    corpus: [
+      {
+        agent: 'gemini',
+        credential: GEMINI_CORPUS_CREDENTIAL,
+        credentialBody: GEMINI_CORPUS_CREDENTIAL_BODY,
+      },
+    ],
+  });
 }
 
 const SCOPED_ENV_LINES: readonly string[] = [
@@ -476,6 +523,184 @@ const GEMINI_OAUTH_SCOPE: LiveCredentialScope = {
   oauth: { kind: 'gemini', mountName: 'gemini' },
 };
 
+// A gemini OAuth scope that CANONICALLY rederives from the fixture's
+// corpus-derived registry (gemini × gemini_oauth_fx — the corpus itself has
+// no gemini OAuth credential, so the fixture carries a synthetic oauth
+// entry modeled on the real antigravity/kimi oauth bodies): the exact live
+// shape the resolver returns for that pair.
+const GEMINI_CORPUS_CREDENTIAL = 'gemini_oauth_fx';
+function geminiCorpusScope(): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'gemini',
+    runtimeFamily: 'gemini',
+    credential: GEMINI_CORPUS_CREDENTIAL,
+    agentEnv: [],
+    geminiAuthType: 'oauth-personal',
+    oauth: { kind: 'gemini', mountName: 'gemini' },
+  };
+}
+
+const GEMINI_CORPUS_CREDENTIAL_BODY = `    model: gemini-2.5-pro\n    api: gemini\n    auth: oauth\n    harnesses: [gemini]\n`;
+
+// A corpus-derived pi OAuth pair: provider pinned on the credential record.
+const PI_CORPUS_CREDENTIAL = 'pi_default';
+const PI_CORPUS_CREDENTIAL_BODY = `    provider: openai-codex\n    model: gpt-5.5\n    auth: oauth\n    harnesses: [pi]\n`;
+function piCorpusScope(provider: string): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'pi',
+    runtimeFamily: 'pi',
+    credential: PI_CORPUS_CREDENTIAL,
+    agentEnv: [],
+    geminiAuthType: null,
+    oauth: { kind: 'pi', mountName: 'pi', provider },
+  };
+}
+
+// The minimal credential-body shape for an api-key credential with an
+// explicit destination (claude: CLAUDE_CODE_OAUTH_TOKEN for opus5_sub — see
+// CONVENTIONAL_API_KEY_ENV / claudeOAuth in scope.ts).
+const CLAUDE_CORPUS_CREDENTIAL = 'opus5_sub';
+const CLAUDE_CORPUS_CREDENTIAL_BODY = `    model: claude-opus-5\n    api: anthropic\n    auth: oauth\n    harnesses: [claude]\n`;
+function claudeCorpusScope(destination: string): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'claude',
+    runtimeFamily: 'claude',
+    credential: CLAUDE_CORPUS_CREDENTIAL,
+    agentEnv: [{ destinationName: destination, sourceNames: [destination] }],
+    geminiAuthType: null,
+    oauth: null,
+  };
+}
+
+// The multi-pair fixture corpus for the field-by-field signature test. Every
+// scope below is the EXACT canonical rederivation of its pair, so each
+// comparison isolates one field of the signature payload.
+const SIGNATURE_CORPUS = [
+  {
+    agent: 'gemini',
+    credential: GEMINI_CORPUS_CREDENTIAL,
+    credentialBody: GEMINI_CORPUS_CREDENTIAL_BODY,
+  },
+  {
+    agent: 'antigravity',
+    credential: 'antigravity_default',
+    credentialBody:
+      '    model: gemini-code-assist\n    auth: oauth\n    harnesses: [antigravity]\n',
+  },
+  {
+    agent: 'pi',
+    credential: 'pi_oauth_openai_fx',
+    credentialBody:
+      '    provider: openai-codex\n    model: gpt-5.5\n    auth: oauth\n    harnesses: [pi]\n',
+  },
+  {
+    agent: 'pi',
+    credential: 'pi_oauth_anthropic_fx',
+    credentialBody:
+      '    provider: anthropic\n    model: claude-opus-5\n    auth: oauth\n    harnesses: [pi]\n',
+  },
+  {
+    agent: 'pi',
+    credential: 'pi_key_openai_fx',
+    credentialBody:
+      '    model: gpt-5.5\n    api: openai-chat\n    api_key_env: OPENAI_API_KEY\n    harnesses: [pi]\n',
+  },
+  {
+    agent: 'pi',
+    credential: 'pi_key_openrouter_fx',
+    credentialBody:
+      '    model: glm-5.2\n    api: openai-chat\n    api_key_env: OPENROUTER_API_KEY\n    harnesses: [pi]\n',
+  },
+] as const;
+
+function signatureScope(
+  agent: string,
+  credential: string,
+  overrides: Partial<LiveCredentialScope> = {},
+): LiveCredentialScope {
+  const base: Record<string, LiveCredentialScope> = {
+    'gemini × gemini_oauth_fx': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'gemini',
+      runtimeFamily: 'gemini',
+      credential: 'gemini_oauth_fx',
+      agentEnv: [],
+      geminiAuthType: 'oauth-personal',
+      oauth: { kind: 'gemini', mountName: 'gemini' },
+    },
+    'antigravity × antigravity_default': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'antigravity',
+      runtimeFamily: 'antigravity',
+      credential: 'antigravity_default',
+      agentEnv: [],
+      geminiAuthType: null,
+      oauth: { kind: 'antigravity', mountName: 'gemini' },
+    },
+    'pi × pi_oauth_openai_fx': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'pi',
+      runtimeFamily: 'pi',
+      credential: 'pi_oauth_openai_fx',
+      agentEnv: [],
+      geminiAuthType: null,
+      oauth: { kind: 'pi', mountName: 'pi', provider: 'openai-codex' },
+    },
+    'pi × pi_oauth_anthropic_fx': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'pi',
+      runtimeFamily: 'pi',
+      credential: 'pi_oauth_anthropic_fx',
+      agentEnv: [],
+      geminiAuthType: null,
+      oauth: { kind: 'pi', mountName: 'pi', provider: 'anthropic' },
+    },
+    'pi × pi_key_openai_fx': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'pi',
+      runtimeFamily: 'pi',
+      credential: 'pi_key_openai_fx',
+      agentEnv: [
+        { destinationName: 'OPENAI_API_KEY', sourceNames: ['OPENAI_API_KEY'] },
+      ],
+      geminiAuthType: null,
+      oauth: null,
+    },
+    'pi × pi_key_openrouter_fx': {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: 'pi',
+      runtimeFamily: 'pi',
+      credential: 'pi_key_openrouter_fx',
+      agentEnv: [
+        {
+          destinationName: 'OPENROUTER_API_KEY',
+          sourceNames: ['OPENROUTER_API_KEY'],
+        },
+      ],
+      geminiAuthType: null,
+      oauth: null,
+    },
+  };
+  const key = `${agent} × ${credential}`;
+  const scope = base[key];
+  if (scope === undefined) {
+    throw new Error(`no signature scope for ${key}`);
+  }
+  return { ...scope, ...overrides };
+}
+
 // Same agent/credential/mount as GEMINI_OAUTH_SCOPE but the Antigravity
 // projector: identical mount name, disjoint projected file set. Used to
 // prove a same-mount cross-scope swap cannot pass the boundary.
@@ -489,30 +714,6 @@ const ANTIGRAVITY_SAME_MOUNT_SCOPE: LiveCredentialScope = {
   geminiAuthType: null,
   oauth: { kind: 'antigravity', mountName: 'gemini' },
 };
-
-const KIMI_OAUTH_SCOPE: LiveCredentialScope = {
-  schemaVersion: 1,
-  kind: 'live',
-  agent: 'kimi',
-  runtimeFamily: 'kimi',
-  credential: 'kimi_cred',
-  agentEnv: [],
-  geminiAuthType: null,
-  oauth: { kind: 'kimi', mountName: 'kimi' },
-};
-
-function piScope(provider: string): LiveCredentialScope {
-  return {
-    schemaVersion: 1,
-    kind: 'live',
-    agent: 'pi',
-    runtimeFamily: 'pi',
-    credential: 'pi_cred',
-    agentEnv: [],
-    geminiAuthType: null,
-    oauth: { kind: 'pi', mountName: 'pi', provider },
-  };
-}
 
 // Two api-key scopes that differ ONLY in agentEnv (same agent, credential,
 // destinations): identical trees, so any signature difference is attributable
@@ -540,7 +741,7 @@ function seedSharedAuthBundle(fx: ScopedFixture): void {
       rotated_at: '2026-06-18T00:00:00Z',
       providers: [],
     }),
-    'credentials.env': `${SCOPED_ENV_LINES.join('\n')}\n`,
+    'credentials.env': `${SCOPED_ENV_LINES.join('\n')}\nCLAUDE_CODE_OAUTH_TOKEN='claude-oauth-marker'\nOPENROUTER_API_KEY='openrouter-marker'\n`,
     'gemini/oauth_creds.json': JSON.stringify({
       access_token: 'gem-access',
       refresh_token: 'gem-refresh',
@@ -687,7 +888,10 @@ function emptyStagedLiteral(fx: ScopedFixture): EmptyStagedCredentialMaterial {
 function liveStagedLiteral(fx: ScopedFixture): LiveStagedCredentialMaterial {
   return {
     kind: 'live',
-    credentialScope: GEMINI_OAUTH_SCOPE,
+    // The corpus-backed gemini scope, so the material passes the complete
+    // scope-to-payload binding and the failure under test is the bundle
+    // boundary, not the binding.
+    credentialScope: geminiCorpusScope(),
     stageDir: fx.stagingDir,
     agentEnvFile: join(fx.stagingDir, 'agent.env'),
     supervisorExecEnvFile: join(fx.stagingDir, 'supervisor.exec.env'),
@@ -745,16 +949,23 @@ test('scopedUpContainerArgs for asserted-empty material carries the empty env fi
 });
 
 test('scopedUpContainerArgs projects exactly the live auth mounts and never the supervisor path', () => {
-  const fx = makeScopedFixture();
+  const fx = makeGeminiCorpusFixture();
   // A structurally complete active generation, so the boundary can bind the
-  // projected tree to the scope.
+  // projected tree and the scope to the payload.
   writeScopedTree(fx.activeDir, {
-    'agent.env': "ANTHROPIC_API_KEY='k'\n",
+    'agent.env': "GEMINI_AUTH_TYPE='oauth-personal'\n",
     'supervisor.exec.env': 'QUORUM_GRADER_SOURCE_MODE=appliance-scoped\n',
     'auth/gemini/oauth_creds.json': '{}',
     'auth/gemini/google_accounts.json': '{}',
   });
-  const active = liveActiveMaterial(fx);
+  const active: LiveActiveCredentialMaterial = {
+    kind: 'live',
+    credentialScope: geminiCorpusScope(),
+    root: fx.activeDir,
+    agentEnvFile: join(fx.activeDir, 'agent.env'),
+    supervisorExecEnvFile: join(fx.activeDir, 'supervisor.exec.env'),
+    authMounts: [{ name: 'gemini', path: join(fx.activeDir, 'auth/gemini') }],
+  };
   const args = scopedUpContainerArgs(fx.loaded, active);
   expect(args).toEqual(
     expectedScopedUpArgs(fx, [
@@ -908,16 +1119,16 @@ test('reconcileScopedContainer activates an asserted-empty stage, captures the d
 });
 
 test('reconcileScopedContainer downs an existing container, activates the live stage, and mounts exactly the projected auth directory', () => {
-  const fx = makeScopedFixture();
+  const fx = makeGeminiCorpusFixture();
   seedGeminiBundle(fx);
-  const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
+  const staged = stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope());
   const runner = new ScopedFakeRunner();
   runner.statusStdout = 'quorum-appliance: exists, running\n';
   runner.mounts = geminiLiveMounts(fx);
 
   const lease = reconcileScopedContainer(fx.loaded, runner, staged);
 
-  expect(lease.credentialScope).toEqual(GEMINI_OAUTH_SCOPE);
+  expect(lease.credentialScope).toEqual(geminiCorpusScope());
   const wrapper = evalsContainerPath(fx.loaded);
   expect(runner.calls).toEqual([
     { command: wrapper, args: ['--name', 'quorum-appliance', 'status'] },
@@ -1048,11 +1259,12 @@ test('hostile scoped-state topology fails with zero wrapper or docker calls', ()
 });
 
 test('a credential bundle beneath the results mount fails with zero wrapper or docker calls', () => {
-  const fx = makeScopedFixture({ bundle: 'evals/results/blessed' });
+  const fx = makeGeminiCorpusFixture({ bundle: 'evals/results/blessed' });
   // A structurally complete staged generation so validation reaches the
-  // bundle boundary rather than failing on the projected tree shape.
+  // bundle boundary rather than failing on the projected tree shape or the
+  // scope-to-payload binding.
   writeScopedTree(fx.stagingDir, {
-    'agent.env': '',
+    'agent.env': "GEMINI_AUTH_TYPE='oauth-personal'\n",
     'supervisor.exec.env': 'ANTHROPIC_API_KEY=grader\n',
     'auth/gemini/oauth_creds.json': '{}',
     'auth/gemini/google_accounts.json': '{}',
@@ -1227,14 +1439,14 @@ test('a rollback failure is appended to the original typed error without masking
 });
 
 test('the mount signature describes scope and destinations, never secret values', () => {
-  const fx = makeScopedFixture();
+  const fx = makeGeminiCorpusFixture();
   seedGeminiBundle(fx, '-first');
   const runnerA = new ScopedFakeRunner();
   runnerA.mounts = geminiLiveMounts(fx);
   const leaseA = reconcileScopedContainer(
     fx.loaded,
     runnerA,
-    stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE),
+    stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope()),
   );
 
   // Same scope and destinations with rotated secret bytes: the signature
@@ -1246,7 +1458,7 @@ test('the mount signature describes scope and destinations, never secret values'
   const leaseB = reconcileScopedContainer(
     fx.loaded,
     runnerB,
-    stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE),
+    stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope()),
   );
   expect(leaseB.mountSignature).toBe(leaseA.mountSignature);
 
@@ -1263,7 +1475,7 @@ test('the mount signature describes scope and destinations, never secret values'
 });
 
 test('the mount signature covers the complete asserted scope, field by field', () => {
-  const fx = makeScopedFixture();
+  const fx = makeScopedFixture({ corpus: [...SIGNATURE_CORPUS] });
   seedSharedAuthBundle(fx);
 
   const signatureFor = (
@@ -1283,39 +1495,32 @@ test('the mount signature covers the complete asserted scope, field by field', (
     ).mountSignature;
   };
 
-  // agentEnv projections differ (identical trees otherwise).
-  expect(signatureFor(agentEnvKeyScope('ANTHROPIC_API_KEY'))).not.toBe(
-    signatureFor(agentEnvKeyScope('GEMINI_API_KEY')),
+  // agentEnv projections differ (both pi api-key pairs, zero mounts).
+  expect(signatureFor(signatureScope('pi', 'pi_key_openai_fx'))).not.toBe(
+    signatureFor(signatureScope('pi', 'pi_key_openrouter_fx')),
   );
 
-  // geminiAuthType differs (same agentEnv, same destinations).
-  const withMode: LiveCredentialScope = {
-    ...agentEnvKeyScope('GEMINI_API_KEY'),
-    geminiAuthType: 'gemini-api-key',
-  };
-  expect(signatureFor(withMode)).not.toBe(
-    signatureFor(agentEnvKeyScope('GEMINI_API_KEY')),
-  );
-
-  // OAuth kind differs while the mount name is identical (gemini vs
-  // antigravity both mount 'gemini').
+  // OAuth kind AND gemini mode differ while the mount name is identical
+  // (gemini vs antigravity both mount 'gemini'). A mode-only delta is not
+  // canonically constructible — the mode is derived from the credential —
+  // so this pair covers the mode field alongside the kind field.
   expect(
-    signatureFor(GEMINI_OAUTH_SCOPE, [
+    signatureFor(signatureScope('gemini', 'gemini_oauth_fx'), [
       { name: 'gemini', path: join(fx.activeDir, 'auth/gemini') },
     ]),
   ).not.toBe(
-    signatureFor(ANTIGRAVITY_SAME_MOUNT_SCOPE, [
+    signatureFor(signatureScope('antigravity', 'antigravity_default'), [
       { name: 'gemini', path: join(fx.activeDir, 'auth/gemini') },
     ]),
   );
 
   // OAuth provider differs (identical pi destinations).
   expect(
-    signatureFor(piScope('openai-codex'), [
+    signatureFor(signatureScope('pi', 'pi_oauth_openai_fx'), [
       { name: 'pi', path: join(fx.activeDir, 'auth/pi') },
     ]),
   ).not.toBe(
-    signatureFor(piScope('anthropic'), [
+    signatureFor(signatureScope('pi', 'pi_oauth_anthropic_fx'), [
       { name: 'pi', path: join(fx.activeDir, 'auth/pi') },
     ]),
   );
@@ -1415,9 +1620,9 @@ test('captured-container mount topology is validated exactly and failures roll b
   ];
 
   for (const { fragment, mounts } of cases) {
-    const fx = makeScopedFixture();
+    const fx = makeGeminiCorpusFixture();
     seedGeminiBundle(fx);
-    const staged = stageLiveCredentialMaterial(fx.loaded, GEMINI_OAUTH_SCOPE);
+    const staged = stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope());
     const runner = new ScopedFakeRunner();
     runner.mounts = mounts(fx);
 
@@ -1583,6 +1788,93 @@ test('a same-mount cross-scope swap fails before down or activation', () => {
   }
 });
 
+test('a same-shape agent-env relabel of a live scope fails before any runner call', () => {
+  // The staged generation was projected with destination X
+  // (CLAUDE_CODE_OAUTH_TOKEN, the canonical claude oauth destination) and is
+  // relabeled with a scope whose agentEnv names a DIFFERENT destination —
+  // the same agent, credential, family, and file tree, so only the
+  // canonical rederivation plus the agent.env variable-name binding can
+  // catch it.
+  const fx = makeScopedFixture({
+    corpus: [
+      {
+        agent: 'claude',
+        credential: CLAUDE_CORPUS_CREDENTIAL,
+        credentialBody: CLAUDE_CORPUS_CREDENTIAL_BODY,
+      },
+    ],
+  });
+  seedSharedAuthBundle(fx);
+  const staged = stageLiveCredentialMaterial(
+    fx.loaded,
+    claudeCorpusScope('CLAUDE_CODE_OAUTH_TOKEN'),
+  );
+  const relabeled = {
+    ...staged,
+    credentialScope: claudeCorpusScope('ANTHROPIC_API_KEY'),
+  };
+
+  const runner = new ScopedFakeRunner();
+  const caught = captureError(() =>
+    reconcileScopedContainer(
+      fx.loaded,
+      runner,
+      relabeled as unknown as StagedCredentialMaterial,
+    ),
+  );
+
+  expect(caught).toBeInstanceOf(ApplianceError);
+  const err = caught as ApplianceError;
+  expect(err.code).toBe('config_invalid');
+  expect(err.message).toMatch(/scope|agent env/i);
+  // Fails BEFORE any container/runner call, and the stage is untouched.
+  expect(runner.calls).toHaveLength(0);
+  expect(existsSync(fx.stagingDir)).toBe(true);
+});
+
+test('a pi provider relabel at the same projected path fails before any runner call', () => {
+  // The staged auth/pi/agent/auth.json carries exactly the canonical
+  // provider's own-property key (openai-codex); the scope object is
+  // relabeled to a DIFFERENT provider (anthropic) with the identical mount
+  // name, file tree, and slot paths — only the provider binding can catch
+  // it. The corpus pair (pi × pi_default) canonically rederives provider
+  // openai-codex, so the relabel fails the exact scope comparison too.
+  const fx = makeScopedFixture({
+    corpus: [
+      {
+        agent: 'pi',
+        credential: PI_CORPUS_CREDENTIAL,
+        credentialBody: PI_CORPUS_CREDENTIAL_BODY,
+      },
+    ],
+  });
+  seedSharedAuthBundle(fx);
+  const staged = stageLiveCredentialMaterial(
+    fx.loaded,
+    piCorpusScope('openai-codex'),
+  );
+  const relabeled = {
+    ...staged,
+    credentialScope: piCorpusScope('anthropic'),
+  };
+
+  const runner = new ScopedFakeRunner();
+  const caught = captureError(() =>
+    reconcileScopedContainer(
+      fx.loaded,
+      runner,
+      relabeled as unknown as StagedCredentialMaterial,
+    ),
+  );
+
+  expect(caught).toBeInstanceOf(ApplianceError);
+  const err = caught as ApplianceError;
+  expect(err.code).toBe('config_invalid');
+  expect(err.message).toMatch(/scope|provider/i);
+  expect(runner.calls).toHaveLength(0);
+  expect(existsSync(fx.stagingDir)).toBe(true);
+});
+
 test('the staged auth tree must contain exactly the scope-required files', () => {
   // Extra rogue file inside the projected tree.
   const extra = makeScopedFixture();
@@ -1635,8 +1927,38 @@ test('the staged auth tree must contain exactly the scope-required files', () =>
   }
 });
 
+// The real corpus kimi OAuth pair (kimi × kimi_default): mountOnly kimi
+// with the optional oauth/kimi-code file, so the optional-file behavior can
+// be exercised canonically.
+const KIMI_CORPUS_CREDENTIAL = 'kimi_default';
+const KIMI_CORPUS_CREDENTIAL_BODY = `    model: kimi-for-coding\n    auth: oauth\n    harnesses: [kimi]\n`;
+function kimiCorpusScope(): LiveCredentialScope {
+  return {
+    schemaVersion: 1,
+    kind: 'live',
+    agent: 'kimi',
+    runtimeFamily: 'kimi',
+    credential: KIMI_CORPUS_CREDENTIAL,
+    agentEnv: [],
+    geminiAuthType: null,
+    oauth: { kind: 'kimi', mountName: 'kimi' },
+  };
+}
+
+function makeKimiCorpusFixture(): ScopedFixture {
+  return makeScopedFixture({
+    corpus: [
+      {
+        agent: 'kimi',
+        credential: KIMI_CORPUS_CREDENTIAL,
+        credentialBody: KIMI_CORPUS_CREDENTIAL_BODY,
+      },
+    ],
+  });
+}
+
 test('the optional kimi oauth file is accepted present or absent', () => {
-  const withOptional = makeScopedFixture();
+  const withOptional = makeKimiCorpusFixture();
   seedSharedAuthBundle(withOptional);
   const runnerA = new ScopedFakeRunner();
   runnerA.mounts = scopedInspectMounts({
@@ -1646,11 +1968,11 @@ test('the optional kimi oauth file is accepted present or absent', () => {
   const leaseA = reconcileScopedContainer(
     withOptional.loaded,
     runnerA,
-    stageLiveCredentialMaterial(withOptional.loaded, KIMI_OAUTH_SCOPE),
+    stageLiveCredentialMaterial(withOptional.loaded, kimiCorpusScope()),
   );
-  expect(leaseA.credentialScope).toEqual(KIMI_OAUTH_SCOPE);
+  expect(leaseA.credentialScope).toEqual(kimiCorpusScope());
 
-  const withoutOptional = makeScopedFixture();
+  const withoutOptional = makeKimiCorpusFixture();
   seedSharedAuthBundle(withoutOptional);
   rmSync(join(withoutOptional.bundleDir, 'kimi-code/oauth/kimi-code'), {
     force: true,
@@ -1665,9 +1987,9 @@ test('the optional kimi oauth file is accepted present or absent', () => {
   const leaseB = reconcileScopedContainer(
     withoutOptional.loaded,
     runnerB,
-    stageLiveCredentialMaterial(withoutOptional.loaded, KIMI_OAUTH_SCOPE),
+    stageLiveCredentialMaterial(withoutOptional.loaded, kimiCorpusScope()),
   );
-  expect(leaseB.credentialScope).toEqual(KIMI_OAUTH_SCOPE);
+  expect(leaseB.credentialScope).toEqual(kimiCorpusScope());
 });
 
 test('an incomplete or malformed scope is refused before any runner call', () => {

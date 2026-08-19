@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import type { CredentialScope } from '../credentials/scope.ts';
+import { credentialScopeForSelection } from '../credentials/scope.ts';
 import {
   type ActiveCredentialMaterial,
   activateScopedCredentialMaterial,
@@ -10,6 +11,7 @@ import {
   assertScopedCredentialStateBoundary,
   discardStagedCredentialMaterial,
   type ProjectedAuthMount,
+  readPinnedNoFollowFile,
   recoverScopedCredentialActivation,
   type StagedCredentialMaterial,
 } from './credential-scope.ts';
@@ -640,6 +642,165 @@ function requireProjectedAuthTree(
   }
 }
 
+// Complete scope-to-payload binding for a live generation, checked BEFORE
+// any runner call so a relabeled scope object can never reach a container.
+//
+// 1. The scope must exactly equal the canonically rederived scope for its
+//    own (agent, credential) pair from the evals corpus — so a same-shape
+//    relabel (different agentEnv destinations, or a different pi provider)
+//    fails even when every structural path/file check would pass.
+// 2. The fixed agent.env must contain exactly the rederived destination
+//    variable names, and the derived GEMINI_AUTH_TYPE mode when the scope
+//    carries one — not merely a plausible env file.
+// 3. For a pi oauth projection, the projected agent/auth.json must hold
+//    exactly the single canonical provider's own-property key, so a
+//    same-path provider relabel fails.
+// Reads use the Task 2 pinned no-follow seam; failures are typed and carry
+// no secret values.
+function requireScopeToPayloadBinding(
+  loaded: LoadedApplianceConfig,
+  label: string,
+  material: {
+    readonly kind: 'empty' | 'live';
+    readonly credentialScope: CredentialScope;
+    readonly agentEnvFile: string;
+    readonly supervisorExecEnvFile: string | null;
+    readonly authMounts: readonly ProjectedAuthMount[];
+  },
+  rootDir: string,
+): void {
+  if (material.kind !== 'live') {
+    return;
+  }
+  const scope = material.credentialScope;
+  if (scope.kind !== 'live') {
+    return;
+  }
+
+  let canonical: ReturnType<typeof credentialScopeForSelection>;
+  try {
+    canonical = credentialScopeForSelection(loaded.config.evals.path, {
+      agent: scope.agent,
+      credential: scope.credential,
+    });
+  } catch (error) {
+    throw scopedContainerFault(
+      `${label} credential scope could not be rederived from the evals corpus for agent '${scope.agent}' credential '${scope.credential}' (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!scopesEqual(scope, canonical)) {
+    throw scopedContainerFault(
+      `${label} credential scope does not match the scope canonically rederived from the evals corpus for agent '${scope.agent}' credential '${scope.credential}'`,
+    );
+  }
+
+  // The fixed agent.env must carry exactly the rederived destination names
+  // (and the derived gemini mode) — reading the pinned no-follow seam.
+  const envBody = readPinnedNoFollowFile(
+    rootDir,
+    [SCOPED_AGENT_ENV_FILE],
+    `${label} agent env file`,
+    true,
+  );
+  if (envBody === null) {
+    throw scopedContainerFault(
+      `${label} agent env file is missing from its slot`,
+    );
+  }
+  const lines = envBody.split('\n').filter((line) => line !== '');
+  const actualNames = lines.map((line) => line.slice(0, line.indexOf('=')));
+  const expectedNames = [
+    ...canonical.agentEnv.map((projection) => projection.destinationName),
+    ...(canonical.geminiAuthType !== null ? ['GEMINI_AUTH_TYPE'] : []),
+  ];
+  const sameShape =
+    lines.length === expectedNames.length &&
+    actualNames.every((name, index) => name === expectedNames[index]);
+  if (!sameShape) {
+    throw scopedContainerFault(
+      `${label} agent env file does not bind the canonically rederived destinations (expected: ${expectedNames.join(', ')})`,
+    );
+  }
+
+  const oauth = canonical.oauth;
+  if (oauth !== null && oauth.kind === 'pi') {
+    const raw = readPinnedNoFollowFile(
+      rootDir,
+      [SCOPED_AUTH_DIR, oauth.mountName, 'agent', 'auth.json'],
+      `${label} pi agent auth`,
+      true,
+    );
+    if (raw === null) {
+      throw scopedContainerFault(
+        `${label} pi agent auth.json is missing from its slot`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw scopedContainerFault(
+        `${label} pi agent auth.json is not valid JSON`,
+      );
+    }
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw scopedContainerFault(
+        `${label} pi agent auth.json is not a flat provider-keyed record`,
+      );
+    }
+    const keys = Object.keys(parsed).sort();
+    if (
+      keys.length !== 1 ||
+      keys[0] !== oauth.provider ||
+      !Object.hasOwn(parsed, oauth.provider)
+    ) {
+      throw scopedContainerFault(
+        `${label} pi agent auth.json must carry exactly the canonical provider '${oauth.provider}' entry`,
+      );
+    }
+  }
+}
+
+function scopesEqual(a: CredentialScope, b: CredentialScope): boolean {
+  return (
+    JSON.stringify(scopeSignaturePayload(a)) ===
+    JSON.stringify(scopeSignaturePayload(b))
+  );
+}
+
+function scopeSignaturePayload(scope: CredentialScope): unknown {
+  if (scope.kind === 'empty') {
+    return { kind: 'empty' };
+  }
+  const oauth =
+    scope.oauth === null
+      ? null
+      : scope.oauth.kind === 'pi'
+        ? {
+            kind: scope.oauth.kind,
+            mountName: scope.oauth.mountName,
+            provider: scope.oauth.provider,
+          }
+        : { kind: scope.oauth.kind, mountName: scope.oauth.mountName };
+  return {
+    schemaVersion: scope.schemaVersion,
+    kind: scope.kind,
+    agent: scope.agent,
+    runtimeFamily: scope.runtimeFamily,
+    credential: scope.credential,
+    agentEnv: scope.agentEnv.map((projection) => ({
+      destination: projection.destinationName,
+      sources: [...projection.sourceNames],
+    })),
+    geminiAuthType: scope.geminiAuthType,
+    oauth,
+  };
+}
+
 // The one consistency rule for both staged and active material: the scope's
 // complete shape, the material discriminant matching the scope's, empty
 // material carrying no supervisor file or mounts, live material carrying its
@@ -648,6 +809,7 @@ function requireProjectedAuthTree(
 // own oauth projection, and the projected auth tree binding to that
 // projection's file set.
 function requireScopedMaterialShape(
+  loaded: LoadedApplianceConfig,
   label: string,
   material: {
     readonly kind: 'empty' | 'live';
@@ -718,6 +880,7 @@ function requireScopedMaterialShape(
     }
   }
   requireProjectedAuthTree(label, root, scope);
+  requireScopeToPayloadBinding(loaded, label, material, rootDir);
 }
 
 /**
@@ -735,7 +898,7 @@ export function scopedUpContainerArgs(
       `active material does not point at the fixed active slot: ${active.root}`,
     );
   }
-  requireScopedMaterialShape('active material', active, active.root);
+  requireScopedMaterialShape(loaded, 'active material', active, active.root);
   const args = [
     '--name',
     loaded.config.container.name,
@@ -1101,7 +1264,12 @@ export function reconcileScopedContainer(
       `staged material does not point at the fixed staging slot: ${staged.stageDir}`,
     );
   }
-  requireScopedMaterialShape('staged material', staged, staged.stageDir);
+  requireScopedMaterialShape(
+    loaded,
+    'staged material',
+    staged,
+    staged.stageDir,
+  );
   assertScopedCredentialStateBoundary(loaded);
   if (staged.kind === 'live') {
     assertCredentialBundleBoundary(loaded.config);
