@@ -1139,6 +1139,38 @@ test('a scoped up that returns no container id fails typed with no rollback targ
   expect(runner.calls.some((call) => call.command === 'docker')).toBe(false);
 });
 
+test('a scoped up that returns a name-like or non-64-hex token on stdout is refused typed', () => {
+  const cases: { readonly label: string; readonly stdout: string }[] = [
+    { label: 'container-name-like token', stdout: 'quorum-appliance\n' },
+    { label: 'uppercase hex', stdout: `${SCOPED_ID.toUpperCase()}\n` },
+    { label: 'truncated id', stdout: `${SCOPED_ID.slice(0, 63)}\n` },
+    { label: 'oversized id', stdout: `${SCOPED_ID}a\n` },
+    { label: 'multi-token', stdout: `${SCOPED_ID} extra\n` },
+    { label: 'blank', stdout: '   \n' },
+  ];
+  for (const { stdout } of cases) {
+    const fx = makeScopedFixture();
+    const staged = stageProbeCredentialMaterial(fx.loaded);
+    const runner = new ScopedFakeRunner();
+    runner.upStdout = stdout;
+
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    expect(caught).toBeInstanceOf(ApplianceError);
+    const err = caught as ApplianceError;
+    expect(err.code).toBe('container_unhealthy');
+    expect(err.message).toMatch(
+      /non-blank container id|full 64-hex docker container id/,
+    );
+    // No inspect and no docker rollback on an unusable captured id: status
+    // + up only.
+    expect(runner.calls).toHaveLength(2);
+    expect(runner.calls.some((call) => call.command === 'docker')).toBe(false);
+  }
+});
+
 test('malformed or replaced post-up inspection rolls back only the captured id, never the configured name', () => {
   const inspections: ((target: string) => CommandResult)[] = [
     () => ({ status: 1, stdout: '', stderr: 'no such container\n' }),

@@ -47,26 +47,6 @@ write_state() {
   } > "$state_file"
 }
 
-run_name() {
-  local expect_name=false
-  local arg
-  for arg in "$@"; do
-    if [[ "$expect_name" == true ]]; then
-      printf '%s\\n' "$arg"
-      return 0
-    fi
-    case "$arg" in
-      --name)
-        expect_name=true
-        ;;
-      --name=*)
-        printf '%s\\n' "\${arg#--name=}"
-        return 0
-        ;;
-    esac
-  done
-}
-
 case "$1" in
   build)
     exit 0
@@ -119,7 +99,47 @@ case "$1" in
     exit 2
     ;;
   run)
-    name="$(run_name "$@")"
+    # Faithful to real docker run: "$1" here is the fake-Docker
+    # subcommand itself, so the positional arguments start at index 2 and
+    # the FIRST non-flag token after the known value-taking options
+    # (--name, --cidfile, --user, --workdir, --env, --mount, plus their =
+    # forms) is the image; everything after the image is the container
+    # command. An option-position-blind scan would let a misplaced option
+    # pass here while real docker treats it as part of the container
+    # command instead.
+    shift
+    name=""
+    cidfile=""
+    expect_value=""
+    image_seen=false
+    for arg in "$@"; do
+      if [[ "$image_seen" == true ]]; then
+        continue
+      fi
+      if [[ -n "$expect_value" ]]; then
+        case "$arg" in
+          -*) ;;
+          *)
+            case "$expect_value" in
+              name) name="$arg" ;;
+              cidfile) cidfile="$arg" ;;
+            esac
+            expect_value=""
+            ;;
+        esac
+        continue
+      fi
+      case "$arg" in
+        --name) expect_value=name ;;
+        --name=*) name="\${arg#--name=}" ;;
+        --cidfile) expect_value=cidfile ;;
+        --cidfile=*) cidfile="\${arg#--cidfile=}" ;;
+        --user|--workdir|--env|--mount) expect_value=skip ;;
+        --user=*|--workdir=*|--env=*|--mount=*) ;;
+        -*) ;;
+        *) image_seen=true ;;
+      esac
+    done
     if [[ -z "$name" || "$name" == -* ]]; then
       exit 1
     fi
@@ -127,21 +147,6 @@ case "$1" in
     running=true
     id="\${EVALS_CONTAINER_FAKE_CONTAINER_ID:?}"
     write_state
-    # Real docker run --cidfile <path> writes the new container's full id
-    # to the file.
-    cidfile=""
-    expect_cid=false
-    for arg in "$@"; do
-      if [[ "$expect_cid" == true ]]; then
-        cidfile=$arg
-        expect_cid=false
-        continue
-      fi
-      case "$arg" in
-        --cidfile) expect_cid=true ;;
-        --cidfile=*) cidfile="\${arg#--cidfile=}" ;;
-      esac
-    done
     if [[ -n "$cidfile" ]]; then
       printf '%s\\n' "$id" > "$cidfile"
     fi
@@ -1281,6 +1286,35 @@ describe('scripts/evals-container scoped mode', () => {
       const args = dockerCommand(harness.dockerLog, 'run');
       expect(authMountTargets(args)).toEqual(['/auth/gemini']);
       expectMountSource(mountForTarget(args, '/auth/gemini'), geminiAuth);
+      // The cidfile OPTION must precede the image tag: real docker run
+      // treats every argument after the image as the container command, so
+      // an appended --cidfile would never reach docker as an option.
+      // args[0] is the fake-docker subcommand 'run'; the image is the first
+      // non-flag token that is not the value of a value-taking option.
+      const VALUE_TAKING = new Set([
+        '--name',
+        '--cidfile',
+        '--user',
+        '--workdir',
+        '--env',
+        '--mount',
+      ]);
+      let imageIndex = -1;
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i] ?? '';
+        if (VALUE_TAKING.has(arg)) {
+          i++;
+          continue;
+        }
+        if (!arg.startsWith('-')) {
+          imageIndex = i;
+          break;
+        }
+      }
+      const cidfileIndex = args.indexOf('--cidfile');
+      expect(imageIndex).toBeGreaterThan(0);
+      expect(cidfileIndex).toBeGreaterThan(-1);
+      expect(cidfileIndex).toBeLessThan(imageIndex);
 
       // The scoped results probe targets the immutable captured id, never
       // the mutable configured name.

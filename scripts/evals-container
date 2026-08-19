@@ -539,23 +539,30 @@ run_up() {
   )
   run_args+=("${provenance_env[@]+"${provenance_env[@]}"}")
   run_args+=("${mounts[@]}")
+  local cidfile=""
+  if [[ "$no_default_auth" == true ]]; then
+    # Scoped up: docker itself records the created container's full id in a
+    # PRIVATE cidfile, and that file is the rollback AUTHORITY. The cidfile
+    # option is created and appended BEFORE the image tag: `docker run`
+    # treats every argument after the image as the container command, so a
+    # cidfile appended after it would be ignored as an option and shipped to
+    # the container command instead. stdout is cross-checked as a full
+    # 64-hex Docker id: blank, multi-token, name-like/malformed, or
+    # mismatching stdout still rolls back exactly the cidfile id — never the
+    # configured name. The probe and the printed id also use that id; a
+    # later name lookup is never blessed.
+    local authority_id stdout_id reason full_id_re
+    full_id_re='^[0-9a-f]{64}$'
+    cidfile=$(mktemp "${TMPDIR:-/tmp}/evals-container-cid.XXXXXXXX") \
+      || die "could not create a private cidfile for $container_name"
+    run_args+=(--cidfile "$cidfile")
+  fi
   run_args+=(
     "$image_tag"
     bash -lc 'mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" && exec sleep infinity'
   )
 
   if [[ "$no_default_auth" == true ]]; then
-    # Scoped up: docker itself records the created container's full id in a
-    # PRIVATE cidfile, and that file is the rollback AUTHORITY. stdout is
-    # cross-checked as a full 64-hex Docker id: blank, multi-token,
-    # name-like/malformed, or mismatching stdout still rolls back exactly the
-    # cidfile id — never the configured name. The probe and the printed id
-    # also use that id; a later name lookup is never blessed.
-    local cidfile authority_id stdout_id reason full_id_re
-    full_id_re='^[0-9a-f]{64}$'
-    cidfile=$(mktemp "${TMPDIR:-/tmp}/evals-container-cid.XXXXXXXX") \
-      || die "could not create a private cidfile for $container_name"
-    run_args+=(--cidfile "$cidfile")
     if ! stdout_id=$(docker run "${run_args[@]}"); then
       rm -f "$cidfile"
       die "docker run failed for $container_name"

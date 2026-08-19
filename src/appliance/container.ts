@@ -1142,6 +1142,16 @@ export function reconcileScopedContainer(
       'scoped up did not return a single non-blank container id on stdout',
     );
   }
+  if (!/^[0-9a-f]{64}$/.test(capturedId)) {
+    // The lease id is used verbatim as the rollback target and the exec
+    // identity, so a name-like or truncated token must never be blessed as
+    // a container id: docker full ids are exactly 64 lowercase hex chars.
+    throw new ApplianceError(
+      'container_unhealthy',
+      'container',
+      `scoped up did not return a full 64-hex docker container id on stdout (expected 64 lowercase hex characters): ${capturedId}`,
+    );
+  }
 
   try {
     const imageId = inspectCapturedContainer(runner, capturedId, active);
