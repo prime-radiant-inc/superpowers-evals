@@ -177,6 +177,21 @@ to an exact commit. Without it, runs whose verdict lacks a rev degrade to
 `tree_only`: the tree hash is still recorded, but no commit is named. It
 defaults to `$SUPERPOWERS_ROOT`.
 
+Export finds a run by its `verdict.json` at any depth, so quarantine sweeps that
+move a whole label tree under a holding directory are picked up along with the
+canonical `results/<label>/<run-id>/` layout.
+
+To export only what a previous bundle missed, exclude that bundle's runs:
+
+```bash
+bun run quorum export-runs <results-dir> --out <new-bundle> \
+  --exclude-manifest <old-bundle>/manifest.json
+```
+
+Prefer this over re-exporting everything. Thinning deletes the `home/` the rev
+recovery reads, so a second pass over an already-exported run produces a
+strictly weaker provenance record than the bundle already holds.
+
 The summary line reports how each run's superpowers rev was established:
 
 ```
