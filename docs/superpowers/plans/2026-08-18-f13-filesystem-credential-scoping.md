@@ -237,15 +237,31 @@ Append the receipt to task-1-report.md and obtain a scoped Sol review before Tas
 - Create: src/appliance/credential-scope.ts
 - Create: src/appliance/scoped-cutover.ts
 - Modify: src/appliance/config.ts
+- Modify: src/appliance/types.ts
 - Modify: src/appliance/cli.ts
 - Modify: src/appliance/process.ts
+- Modify: src/appliance/summary.ts
+- Modify: src/appliance/jobs.ts
+- Modify: src/appliance/locks.ts
+- Modify: src/appliance/import.ts
+- Modify: src/appliance/prune.ts
+- Modify: src/appliance/doctor.ts
+- Modify: src/appliance/preflight.ts
 - Modify: src/appliance/safe-fs.ts
 - Modify: src/runner/gauntlet-env.ts
 - Modify: src/agents/copilot.ts
 - Test: test/appliance-credential-scope.test.ts
+- Create: test/appliance-config.test.ts
 - Test: test/appliance-contracts.test.ts
 - Test: test/appliance-cli.test.ts
 - Test: test/appliance-process.test.ts
+- Test: test/appliance-summary.test.ts
+- Test: test/appliance-jobs.test.ts
+- Test: test/appliance-locks.test.ts
+- Test: test/appliance-import.test.ts
+- Test: test/appliance-prune.test.ts
+- Test: test/appliance-doctor.test.ts
+- Test: test/appliance-preflight.test.ts
 - Test: test/appliance-safe-fs.test.ts
 - Test: test/gauntlet-env.test.ts
 - Test: test/agent-copilot.test.ts
@@ -290,6 +306,30 @@ export interface ProjectedAuthMount {
   readonly name: 'codex' | 'gemini' | 'kimi' | 'pi';
   readonly path: string;
 }
+
+export interface LoadedApplianceStateConfig {
+  readonly config: ApplianceConfig;
+  readonly configPath: string;
+  readonly paths: {
+    readonly jobs: string;
+    readonly locks: string;
+    readonly provenance: string;
+  };
+}
+
+export interface LoadedApplianceConfig extends LoadedApplianceStateConfig {
+  readonly bundle: CredentialBundleMetadata;
+}
+
+export function loadStateConfig(
+  configPath?: string,
+  options?: LoadConfigOptions,
+): LoadedApplianceStateConfig;
+
+export function loadCredentialConfig(
+  configPath?: string,
+  options?: LoadConfigOptions,
+): LoadedApplianceConfig;
 
 export interface EmptyStagedCredentialMaterial {
   readonly kind: 'empty';
@@ -337,12 +377,12 @@ export type ActiveCredentialMaterial =
 
 export function stageProbeCredentialMaterial(
   loaded: LoadedApplianceConfig,
-): StagedCredentialMaterial;
+): EmptyStagedCredentialMaterial;
 
 export function stageLiveCredentialMaterial(
   loaded: LoadedApplianceConfig,
   scope: LiveCredentialScope,
-): StagedCredentialMaterial;
+): LiveStagedCredentialMaterial;
 
 export function activateScopedCredentialMaterial(
   loaded: LoadedApplianceConfig,
@@ -398,12 +438,24 @@ error. Staging and staging cleanup never mutate `active` or the recovery slot.
 it resolves an interrupted swap before the new activation, never guesses
 between two complete generations, and fails closed on an ambiguous shape.
 
-`loadConfig` first parses only the structural appliance config, calls
-`assertCredentialBundleBoundary(config)`, validates `metadata.json` itself as
-a no-follow regular file, and only then reads bundle metadata. Neither
-`credentials.env` nor any OAuth payload is touched by config loading or probe
-staging. Real-loader tests redirect the bundle root and metadata through final
-and intermediate symlinks and prove typed refusal before payload access.
+Do not make `bundle` optional on one shared loaded-config type. `loadStateConfig`
+parses the structural appliance config, validates only the appliance/state
+namespace needed for read and recovery operations, and never stats or reads the
+credential bundle. `loadCredentialConfig` builds on that structural value,
+calls `assertCredentialBundleBoundary(config)`, validates `metadata.json`
+itself as a no-follow regular file, and only then reads bundle metadata.
+Neither `credentials.env` nor any OAuth payload is touched by config loading or
+probe staging. Real-loader tests redirect the bundle root and metadata through
+final and intermediate symlinks and prove typed refusal before payload access.
+
+Status, show, costs, import, prune, and identity-verified cancellation accept
+`LoadedApplianceStateConfig`; a missing, unreadable, or unsafe bundle cannot
+strand those read/recovery operations. Doctor, prepare, run/run-all, live
+preflight, and credential staging require `LoadedApplianceConfig`. Functions
+that only need config/state paths are narrowed to the structural type so the
+compiler enforces this split. The production prepare/run guards execute after
+argument and structural-config validation but before the credential-aware
+loader, state mutation, bundle access, or Docker.
 
 Exact OAuth projections:
 
@@ -501,37 +553,57 @@ blessed bundle cannot touch credential payloads; the validated metadata read is
 the only prepare-time bundle access. Live fixtures prove the same bundle fault
 is typed before shell evaluation or file creation.
 
+With an existing synthetic job and missing, unreadable, final-symlink, and
+intermediate-symlink bundle metadata, prove structural status/show/costs remain
+readable, import/prune do not inspect the bundle, current-ID cancellation
+reaches only the fixed safe signal seam, and replacement-ID cancellation emits
+no signal. The credential-aware loader and doctor fail typed without payload
+access. Task 5 repeats the prepare/live cases after removing the cutover guard.
+
 Add a temporary appliance cutover guard in `scoped-cutover.ts`. From Task 2
 through Task 4, production program actions for prepare/run/run-all and detached
 worker resume fail with a typed "scoped credential cutover incomplete" error
-before job creation, bundle payload access, or Docker. Parser/fake-action tests,
-status/show/costs, and identity-verified safe cancellation remain available.
+after argument and structural-config validation but before job creation, state
+mutation, credential-aware loading, bundle payload access, or Docker.
+Parser/fake-action tests, status/show/costs, and identity-verified safe
+cancellation remain available even when the bundle boundary is invalid.
 Task 5 deletes the guard and its imports in the same commit as the complete
 caller cutover; the intermediate freeze is therefore executable, not prose.
-Temporarily affected production-action tests assert this refusal in Tasks 2-4;
+Temporarily affected production-action tests assert the exact typed refusal in
+Tasks 2-4; there is no test-only guard bypass.
 Task 5 replaces those expectations with the scoped end-state behavior in the
 same commit that removes the guard.
 
 - [ ] **Step 2: Run RED**
 
 Run: bun test test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
-  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/appliance-config.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-process.test.ts test/appliance-summary.test.ts \
+  test/appliance-jobs.test.ts test/appliance-locks.test.ts \
+  test/appliance-import.test.ts test/appliance-prune.test.ts \
+  test/appliance-doctor.test.ts test/appliance-preflight.test.ts \
   test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 
-Expected: modules and shared constants are missing.
+Expected: new modules and shared constants are missing; existing CLI/process
+assertions also fail because the typed cutover refusal and split config-loader
+behavior are not implemented.
 
 - [ ] **Step 3: Implement staging and activation**
 
-Use no-follow helpers and writePrivateText. Project source files through regular-file reads and destination writes; never recursive-copy a bundle directory. Clear only the fixed staging slot before a new stage and after a failed stage; interrupted staging is therefore recovered on the next invocation without accumulating secret directories. activateScopedCredentialMaterial is called only after the previous container is down and performs the recoverable active-to-recovery, stage-to-active swap above. gauntletEnvBase imports the source-to-runtime map from grader.ts; Copilot composes that function before its own routing projection.
+Use no-follow helpers and writePrivateText. Project source files through regular-file reads and destination writes; never recursive-copy a bundle directory. Clear only the fixed staging slot before a new stage and after a failed stage; interrupted staging is therefore recovered on the next invocation without accumulating secret directories. activateScopedCredentialMaterial is called only after the previous container is down and performs the recoverable active-to-recovery, stage-to-active swap above. Implement the structural/credential-aware loader split and narrow state-only consumers in the same task; do not retain an ambiguous loader or an optional bundle field. gauntletEnvBase imports the source-to-runtime map from grader.ts; Copilot composes that function before its own routing projection.
 
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
 bun test test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
-  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/appliance-config.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-process.test.ts test/appliance-summary.test.ts \
+  test/appliance-jobs.test.ts test/appliance-locks.test.ts \
+  test/appliance-import.test.ts test/appliance-prune.test.ts \
+  test/appliance-doctor.test.ts test/appliance-preflight.test.ts \
   test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 bun test test/appliance-*.test.ts
@@ -545,10 +617,17 @@ bun run quorum check
 git add src/credentials/grader.ts src/runner/gauntlet-env.ts \
   src/agents/copilot.ts src/appliance/credential-scope.ts \
   src/appliance/scoped-cutover.ts src/appliance/config.ts \
-  src/appliance/cli.ts src/appliance/process.ts \
+  src/appliance/types.ts src/appliance/cli.ts src/appliance/process.ts \
+  src/appliance/summary.ts src/appliance/jobs.ts src/appliance/locks.ts \
+  src/appliance/import.ts src/appliance/prune.ts \
+  src/appliance/doctor.ts src/appliance/preflight.ts \
   src/appliance/safe-fs.ts test/appliance-credential-scope.test.ts \
-  test/appliance-safe-fs.test.ts test/appliance-contracts.test.ts \
-  test/appliance-cli.test.ts test/appliance-process.test.ts \
+  test/appliance-config.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-contracts.test.ts test/appliance-cli.test.ts \
+  test/appliance-process.test.ts test/appliance-summary.test.ts \
+  test/appliance-jobs.test.ts test/appliance-locks.test.ts \
+  test/appliance-import.test.ts test/appliance-prune.test.ts \
+  test/appliance-doctor.test.ts test/appliance-preflight.test.ts \
   test/gauntlet-env.test.ts \
   test/agent-copilot.test.ts
 git commit -m "feat: project exact agent and supervisor credentials (F13)"
@@ -616,6 +695,10 @@ material cannot carry a supervisor file or mounts, live material must carry its
 non-null supervisor file, and callers cannot pair scope A with material B.
 `reconcileScopedContainer` derives both active material and the lease scope
 from that one value. Mismatch/tamper tests fail before down or activation.
+If a pre-activation down/recovery failure leaves the fixed staging slot behind,
+`reconcileScopedContainer` calls `discardStagedCredentialMaterial` on that
+owned slot before returning. Cleanup is best-effort, the original typed error
+wins, and active/recovery are never touched by this cleanup path.
 
 reconcileScopedContainer always:
 
@@ -655,7 +738,7 @@ non-executable.
 
 - [ ] **Step 1: Write RED argument, wrapper, shim, and capability tests**
 
-Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; scope/material mismatches fail before mutation; configured-name replacement fails before child execution; scoped `up` captures `docker run` stdout as the lease ID and runs the results-mount probe against it; malformed/null post-up inspection downs only that captured ID; and absent projected mounts remove hostile inherited/injected OAuth vars.
+Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; scope/material mismatches fail before mutation; a pre-activation failure discards only staging while preserving the primary error and active/recovery bytes; configured-name replacement fails before child execution; scoped `up` captures `docker run` stdout as the lease ID and runs the results-mount probe against it; malformed/null post-up inspection downs only that captured ID; and absent projected mounts remove hostile inherited/injected OAuth vars.
 
 Add hostile topology fixtures showing that symlinked/intermediate-symlink paths or credential state/bundle beneath code/results mounts fail with zero Docker calls.
 
@@ -704,6 +787,7 @@ git commit -m "feat: bind scoped containers to immutable leases (F13)"
 ### Task 4: Persist normalized selection, scope, and source identity atomically
 
 **Files:**
+- Create: src/appliance/credential-request.ts
 - Modify: src/appliance/types.ts
 - Modify: src/appliance/cli.ts
 - Modify: src/appliance/jobs.ts
@@ -715,6 +799,10 @@ git commit -m "feat: bind scoped containers to immutable leases (F13)"
 - Test: test/appliance-jobs.test.ts
 - Test: test/appliance-import.test.ts
 - Test: test/appliance-preflight.test.ts
+- Test: test/appliance-process.test.ts
+- Test: test/appliance-prune.test.ts
+- Test: test/appliance-summary.test.ts
+- Create: test/appliance-job-fixtures.ts
 
 **Interfaces:**
 
@@ -725,20 +813,44 @@ export interface LiveCredentialRequest {
   readonly sourceEvalsSha: string;
 }
 
-export interface CreateJobRequest {
-  readonly kind: ApplianceCommandKind;
+export interface CreateJobRequestBase {
   readonly superpowersRef: string;
   readonly argv: readonly string[];
-  readonly runId?: string;
-  readonly credentialSelection?: CredentialSelection | null;
-  readonly credentialScope?: CredentialScope | null;
-  readonly credentialScopeSourceEvalsSha?: string | null;
   readonly requester: {
     readonly agent: string | null;
     readonly thread?: string | null;
     readonly task?: string | null;
   };
 }
+
+export type CreateJobRequest =
+  | (CreateJobRequestBase & {
+      readonly kind: 'run' | 'run-all';
+      readonly runId?: never;
+      readonly credentialSelection: CredentialSelection;
+      readonly credentialScope: LiveCredentialScope;
+      readonly credentialScopeSourceEvalsSha: string;
+    })
+  | (CreateJobRequestBase & {
+      readonly kind: 'prepare';
+      readonly runId?: never;
+      readonly credentialSelection: null;
+      readonly credentialScope: EmptyCredentialScope;
+      readonly credentialScopeSourceEvalsSha: null;
+    })
+  | (CreateJobRequestBase & {
+      readonly kind: 'import';
+      readonly runId?: string;
+      readonly credentialSelection: null;
+      readonly credentialScope: null;
+      readonly credentialScopeSourceEvalsSha: null;
+    });
+
+export function buildLiveCredentialRequest(
+  evalsRoot: string,
+  selection: CredentialSelection,
+  sourceEvalsSha: string,
+): LiveCredentialRequest;
 
 export interface JobContainerEvidence {
   readonly name: string;
@@ -766,11 +878,15 @@ Every new writer supplies all three explicitly:
 - prepare: null selection, EMPTY_CREDENTIAL_SCOPE, null source SHA;
 - import: all null.
 
-The three request properties remain TypeScript-optional so unchanged test and
-helper callers continue to mean the schema-v1 read default of null. `createJob`
-normalizes omission through the schemas; it does not invent a live scope. A
-writer-exhaustiveness behavior suite drives every production writer and proves
-that run, run-all, prepare, and import each pass the explicit values above.
+Prune does not create a job record and therefore is deliberately absent from
+the write union.
+
+The persisted zod fields retain `.default(null)` only for reading old records.
+The write interface has no omission mode: every new job is one of the three
+variants above, and TypeScript rejects a run/run-all request without its full
+selection, live scope, and source SHA. Migrate every direct `createJob` caller,
+including process, prune, and summary fixtures, through explicit requests or a
+typed test factory; do not preserve write-side compatibility.
 
 `JobContainerEvidence` deliberately retains the existing snake-case,
 read-compatible durable shape and nullable old-record ID. It never embeds a
@@ -786,7 +902,11 @@ The appliance CLI restriction is exact:
 - duplicate selection flags, multiple CSV entries, bare/blank/comma-only/option-looking values, run with --credentials, run-all with --credential, and --credentials-file fail before job creation;
 - raw Quorum argv remains preserved separately.
 
-The program action computes LiveCredentialRequest using the configured evals checkout and its current HEAD. It passes the request through ApplianceActions so fake-action tests observe it. submitLiveJob and createJob only persist the request; they never reparse argv or patch scope after worker spawn.
+The program action uses the pure production `buildLiveCredentialRequest` with
+the configured evals checkout and its current HEAD. It passes that request
+through ApplianceActions so fake-action tests observe it. submitLiveJob and
+createJob only persist the request; they never reparse argv or patch scope
+after worker spawn.
 
 The asserted scope is the normalized single `(agent, credential)` request, not
 a union re-derived from scenario eligibility. A run-all that later has zero
@@ -805,15 +925,17 @@ signature after the production cutover.
 
 Cover direct-run default, direct-run explicit credential, run-all default,
 run-all one credential, every invalid optional-value shape, forbidden
-cross-command/custom-registry flags, initial on-disk record contents, old
-missing-field read compatibility, live-null refusal ownership, explicit-empty
-prepare, and explicit-null import. Prove the
-normalized direct-run credential reaches both `ApplianceActions.run` and the
-persisted Quorum argv; no later layer reparses it.
+cross-command/custom-registry flags, old missing-field read compatibility,
+live-null refusal ownership, explicit-empty prepare, and explicit-null import.
+Use fake-action tests to observe the pure `LiveCredentialRequest` and normalized
+argv for each live command. Use direct `createJob` calls with the same strict
+request shapes to prove the initial on-disk triple for run, run-all, prepare,
+and import; the non-executing import writer may also be driven end-to-end.
 
-Drive the prepare writer through `preflight.ts` in this task and prove it
-persists explicit `EMPTY_CREDENTIAL_SCOPE`; do not postpone that production
-writer to Task 5 merely because Task 5 later changes execution ordering.
+Real production prepare/run/run-all action tests in Task 4 assert the exact
+typed cutover refusal after request construction and before job creation. They
+must not bypass the guard or call `prepare()` directly into the legacy Docker
+path. Task 5 owns the post-guard end-to-end production-writer proof.
 
 Pin that serialized job/import-provenance/CLI output contains neither credential paths nor the string credentials-scoped.
 
@@ -822,19 +944,25 @@ Pin that serialized job/import-provenance/CLI output contains neither credential
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts
+  test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-prune.test.ts test/appliance-summary.test.ts
 ~~~
 
 - [ ] **Step 3: Implement atomic request persistence**
 
-Add a current managed-checkout HEAD helper through CommandRunner in git.ts. Put all three fields in createJob's initial JobRecordSchema.parse call. Do not implement fallback from null live records. Preserve read-side parsing and safe cancellation compatibility only.
+Add a current managed-checkout HEAD helper through CommandRunner in git.ts.
+Put all three fields in createJob's initial JobRecordSchema.parse call. Make
+the write interface the strict discriminated union above; only persisted record
+parsing retains null defaults. Preserve read-side parsing and safe cancellation
+compatibility only.
 
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts
+  test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-prune.test.ts test/appliance-summary.test.ts
 bun test test/appliance-*.test.ts
 bun run check
 bun run quorum check
@@ -843,11 +971,14 @@ bun run quorum check
 - [ ] **Step 5: Commit and review**
 
 ~~~bash
-git add src/appliance/types.ts src/appliance/cli.ts src/appliance/jobs.ts \
-  src/appliance/git.ts src/appliance/import.ts src/appliance/preflight.ts \
+git add src/appliance/credential-request.ts src/appliance/types.ts \
+  src/appliance/cli.ts src/appliance/jobs.ts src/appliance/git.ts \
+  src/appliance/import.ts src/appliance/preflight.ts \
   test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-preflight.test.ts
+  test/appliance-preflight.test.ts test/appliance-process.test.ts \
+  test/appliance-prune.test.ts test/appliance-summary.test.ts \
+  test/appliance-job-fixtures.ts
 git commit -m "feat: persist one authoritative credential request (F13)"
 ~~~
 
@@ -856,15 +987,19 @@ git commit -m "feat: persist one authoritative credential request (F13)"
 ### Task 5: Run empty probes, then bind live execution to the scoped lease
 
 **Files:**
+- Modify: src/appliance/cli.ts
 - Modify: src/appliance/preflight.ts
 - Modify: src/appliance/process.ts
 - Modify: src/appliance/container.ts
+- Modify: src/appliance/jobs.ts
 - Modify: src/appliance/provenance.ts
 - Modify: src/appliance/types.ts
 - Delete: src/appliance/scoped-cutover.ts
+- Test: test/appliance-cli.test.ts
 - Test: test/appliance-preflight.test.ts
 - Test: test/appliance-process.test.ts
 - Test: test/appliance-container.test.ts
+- Test: test/appliance-jobs.test.ts
 - Create: test/appliance-provenance.test.ts
 
 **Interfaces:**
@@ -899,6 +1034,23 @@ export function leaseToJobContainerEvidence(
 ): JobContainerEvidence;
 
 export function liveLeaseFromJob(job: JobRecord): ContainerLease;
+
+export interface RecordedContainerIdentity {
+  readonly name: string;
+  readonly id: string;
+}
+
+export type RecordedLifecycleOperation =
+  | 'probe-process-group'
+  | 'interrupt-process-group';
+
+export function runRecordedContainerLifecycle(
+  loaded: LoadedApplianceStateConfig,
+  runner: CommandRunner,
+  identity: RecordedContainerIdentity,
+  operation: RecordedLifecycleOperation,
+  processGroupId: number,
+): CommandResult;
 ~~~
 
 Live ordering is binding:
@@ -927,21 +1079,33 @@ runWorker; its `lease` is the exact source used to construct
 `evidence.container`, not a separately recomputed authority, and it is never
 spread into CLI output, job JSON, or provenance.
 
-runWorker passes supervisorExecEnvFile only to the live Quorum exec. live, liveness, and cancellation reconstruct or consume the recorded immutable lease:
+runWorker passes supervisorExecEnvFile only to the live Quorum exec. Live
+execution requires the reconstructed immutable lease:
 
 - live name/ID mismatch fails before spawn;
-- liveness mismatch reports lost;
-- cancellation mismatch never signals a replacement container;
-- a readable legacy record may cancel only when its recorded immutable container ID can be verified;
 - null-scope live jobs cannot preflight or resume.
+
+For new scoped jobs, liveness and cancellation reconstruct the lease through
+`liveLeaseFromJob`; mismatch reports lost for liveness and never signals a
+replacement during cancellation.
+
+Legacy liveness and safe cancellation do not fabricate a runnable lease.
+`runRecordedContainerLifecycle` accepts only a non-null recorded name/ID, one
+of the two fixed process-group operations, and a numeric PGID. It verifies the
+configured name still resolves to that exact ID, targets the immutable ID, and
+accepts no arbitrary command, env file, mount, or credential scope. A mismatch
+reports lost for liveness and never signals a replacement during cancellation;
+a null ID refuses. This is the sole durable-identity lifecycle exception.
 
 This task switches every production container call site to
 `reconcileScopedContainer`, `runInLeasedContainer`, and
 `scopedExecContainerArgs`, then deletes the superseded TypeScript full-bundle
 helpers named in Task 3. A repository-wide call-site test/grep must show no
-appliance production import can construct a container exec without a
-`ContainerLease`. The shell wrapper's explicitly documented direct legacy mode
-is not a TypeScript fallback and remains outside appliance execution.
+appliance production import can construct an arbitrary or Quorum exec without
+a `ContainerLease`. The only TypeScript exception is the closed
+`runRecordedContainerLifecycle` primitive for verified legacy
+liveness/cancellation. The shell wrapper's explicitly documented direct legacy
+mode is not a TypeScript fallback and remains outside appliance execution.
 The same commit removes the temporary Task 2 cutover guard and its production
 imports only after the repository-wide scoped-call-site assertion is green.
 
@@ -958,31 +1122,47 @@ job evidence -> provenance -> live exec with supervisor file
 Add separate failures for SHA drift and recomputed-scope mismatch, both with zero credential evaluation and zero Docker calls. Replace the configured-name inspect result between preflight and live/liveness/cancel and assert no child execution or replacement-container signal. Fault provenance after job evidence; retry must heal from the job without changing scope.
 Add exact lease/evidence round-trip tests, rejection for null-ID new live jobs
 and scope/evidence tampering, and proof that persisted scope exists only at the
-job top level. Legacy cancellation uses non-null durable ID evidence directly
-and never reconstructs a runnable lease.
+job top level. Legacy lifecycle tests cover a null-scope record with a non-null
+current ID, null-ID refusal, replacement-ID liveness/lost behavior, replacement
+ID no-signal cancellation, and rejection of every command outside the two
+fixed lifecycle operations; none reconstructs a runnable lease.
+
+After removing the cutover guard, drive the real production prepare/run/run-all
+actions through finite injected config/process/runner dependencies. Assert each
+initial job record contains its strict selection/scope/source-SHA triple before
+the first simulated Docker action. This is the end-to-end writer exhaustion
+gate deferred from Task 4; no test-only guard bypass or module mock is allowed.
+For missing, unreadable, final-symlink, and intermediate-symlink bundle
+metadata, the same end-state harness proves prepare/run fail typed before job
+creation or Docker while status and identity-verified cancellation remain on
+the structural loader.
 
 - [ ] **Step 2: Run RED**
 
 ~~~bash
-bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-container.test.ts test/appliance-provenance.test.ts
+bun test test/appliance-cli.test.ts test/appliance-preflight.test.ts \
+  test/appliance-process.test.ts test/appliance-container.test.ts \
+  test/appliance-jobs.test.ts test/appliance-provenance.test.ts
 ~~~
 
 - [ ] **Step 3: Implement one-way private threading**
 
 Do not expose a generic env map or arbitrary exec options. Do not serialize
 private credential paths. Keep plan-time empty/live scope distinctions
-explicit, require a lease at every container exec call site, and delete the
-old TypeScript full-bundle helpers and the temporary cutover guard rather than
-leaving two production paths. Make `writeProvenance` accept/reread job identity,
-not caller-supplied scope or container evidence; job evidence is committed
-first, then provenance is derived, and retry heals only the derived file.
+explicit, require a lease at every arbitrary/Quorum container exec call site,
+and keep the recorded-identity lifecycle primitive closed to its two fixed
+operations. Delete the old TypeScript full-bundle helpers and the temporary
+cutover guard rather than leaving two production paths. Make `writeProvenance`
+accept/reread job identity, not caller-supplied scope or container evidence;
+job evidence is committed first, then provenance is derived, and retry heals
+only the derived file.
 
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
-bun test test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-container.test.ts test/appliance-provenance.test.ts
+bun test test/appliance-cli.test.ts test/appliance-preflight.test.ts \
+  test/appliance-process.test.ts test/appliance-container.test.ts \
+  test/appliance-jobs.test.ts test/appliance-provenance.test.ts
 bun test test/appliance-*.test.ts test/evals-container.test.ts
 bun run check
 bun run quorum check
@@ -991,11 +1171,13 @@ bun run quorum check
 - [ ] **Step 5: Commit and final whole-branch review**
 
 ~~~bash
-git add src/appliance/preflight.ts src/appliance/process.ts \
-  src/appliance/container.ts src/appliance/provenance.ts \
+git add src/appliance/cli.ts src/appliance/preflight.ts \
+  src/appliance/process.ts src/appliance/container.ts \
+  src/appliance/jobs.ts src/appliance/provenance.ts \
   src/appliance/types.ts src/appliance/scoped-cutover.ts \
-  test/appliance-preflight.test.ts test/appliance-process.test.ts \
-  test/appliance-container.test.ts test/appliance-provenance.test.ts
+  test/appliance-cli.test.ts test/appliance-preflight.test.ts \
+  test/appliance-process.test.ts test/appliance-container.test.ts \
+  test/appliance-jobs.test.ts test/appliance-provenance.test.ts
 git commit -m "feat: run live jobs through scoped container leases (F13)"
 ~~~
 
@@ -1029,6 +1211,9 @@ Document:
   alias-only, while trusted local runs with no marker retain the canonical
   host contract; unknown or empty explicit modes are errors;
 - no-follow/disjointness errors and repair guidance;
+- credential-bundle faults refuse doctor/prepare/run but never block
+  status/show/costs or identity-verified cancellation; document both the
+  structural recovery path and bundle repair before resubmission;
 - source-SHA drift after any upstream evals update is an expected refusal; resubmit from a freshly loaded appliance process so the persisted resolver code, selection, and SHA agree;
 - mount signatures are not comparable across this upgrade;
 - same-UID /proc inspection remains outside filesystem closure.
@@ -1097,20 +1282,23 @@ No push without Drew's explicit approval after he reviews the final evidence.
 
 **Spec coverage:** The isolation unit now equals one agent plus one credential, so no cell shares a union with another. Env delivery is exact, OAuth delivery is exact by adapter file/entry, probes are empty, the grader file is host-only, and live execution binds to the scoped container that preflight recorded.
 
-**Failure-mode coverage:** Unknown/prototype names; missing defaults; missing Mantle api_key_env; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal env/file agent-versus-grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs before metadata or payload access; staging interruption and abandoned-stage cleanup; stale active generation; missing Docker capability; post-up identity failure; replacement containers; private path serialization; null live records; intermediate-cutover invocation; and probe credential exposure all have explicit behavior tests.
+**Failure-mode coverage:** Unknown/prototype names; missing defaults; missing Mantle api_key_env; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal env/file agent-versus-grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs before metadata or payload access; bundle-fault read/cancel availability; staging interruption and abandoned-stage cleanup; stale active generation; missing Docker capability; post-up identity failure; replacement containers; private path serialization; null live records; closed legacy lifecycle operations; intermediate-cutover invocation; and probe credential exposure all have explicit behavior tests.
 
 **Type consistency:** Task 1 defines CredentialSelection and CredentialScope.
-Task 2 produces discriminated staged/active material whose scope cannot be
-paired independently. Task 3 adds independently testable scoped container
-primitives that derive ContainerLease from that material without changing
-production callers. Task 4 persists selection/scope/source SHA once plus the
-existing read-compatible JobContainerEvidence shape. Task 5 performs the
-one-time production cutover, deletes the old TypeScript full-bundle path and
-the temporary execution guard, converts lease to/from durable evidence using
-the job's sole top-level scope authority, and produces a private
-LivePreflightResult without serializing credential paths.
+Task 2 splits structural state config from credential-aware config and produces
+discriminated staged/active material whose scope cannot be paired
+independently. Task 3 adds independently testable scoped container primitives
+that derive ContainerLease from that material without changing production
+callers. Task 4 makes every new CreateJobRequest a strict kind-discriminated
+write and persists selection/scope/source SHA once plus the existing
+read-compatible JobContainerEvidence shape. Task 5 performs the one-time
+production cutover, deletes the old TypeScript full-bundle path and the
+temporary execution guard, converts lease to/from durable evidence using the
+job's sole top-level scope authority, keeps legacy lifecycle access on a closed
+non-runnable identity type, and produces a private LivePreflightResult without
+serializing credential paths.
 
-**Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
+**Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. Old records may use only the verified, fixed lifecycle primitive for liveness/cancellation; they cannot produce a runnable lease. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
 
 **Secret lifecycle:** One fixed active generation, one fixed staging slot, and one transient recovery slot exist. New material is staged while the old container may still reference active; failed/abandoned staging clears only the staging slot, and the next invocation repeats that cleanup. After the container is down, a recoverable two-rename swap installs the staged tree and the new container mounts it. Interrupted or failed swaps restore/fail closed before a later job. Rotation downs the container before clearing active. No secret value or value-derived hash appears outside the files.
 
