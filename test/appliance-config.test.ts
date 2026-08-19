@@ -330,3 +330,57 @@ test('a bundle directory swapped mid-read cannot redirect the metadata load', ()
     expect(caught).toBeInstanceOf(ApplianceError);
   }
 });
+
+// --- Fix Round 3: absolute-root walk for the metadata anchor -----------------
+
+// An intermediate ANCESTOR of the bundle directory swapped for a symlink
+// immediately before the metadata open must not redirect the load: the anchor
+// is walked from the filesystem root, so the read is refused or returns the
+// original — never the attacker's metadata.
+test('an ancestor of the bundle anchor swapped at open time cannot redirect metadata', () => {
+  const fx = fixture();
+  const attacker = join(fx.root, 'attacker-tree');
+  mkdirSync(join(attacker, 'blessed'), { recursive: true });
+  writeFileSync(
+    join(attacker, 'blessed/metadata.json'),
+    JSON.stringify({
+      bundle_id: 'attacker-bundle',
+      rotated_at: '2026-06-18T00:00:00Z',
+      providers: [],
+    }),
+  );
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    // Only a single full-path open of the multi-component bundle anchor is
+    // vulnerable; a pinned /proc or /.vol child open never matches.
+    if (!swapped && String(path) === fx.bundleDir) {
+      swapped = true;
+      fs.renameSync(
+        join(fx.root, 'credentials'),
+        join(fx.root, 'credentials-real'),
+      );
+      fs.symlinkSync(attacker, join(fx.root, 'credentials'));
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let loadedBundleId: string | undefined;
+  let caught: unknown;
+  try {
+    caught = captureError(() => {
+      loadedBundleId = loadCredentialConfig(fx.configPath).bundle.bundle_id;
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  if (caught === undefined) {
+    expect(loadedBundleId).toBe('blessed-a');
+  } else {
+    expect(caught).toBeInstanceOf(ApplianceError);
+    expect((caught as ApplianceError).code).toBe('config_invalid');
+  }
+});

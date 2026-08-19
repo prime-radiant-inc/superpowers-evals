@@ -1529,7 +1529,13 @@ test('an intermediate directory swapped mid-read cannot redirect the projection'
 // F4 (remaining): the analogous race on staged WRITES — the staging slot
 // swapped for a symlink between writes must not place secret material in the
 // attacker's target directory.
-test('a staging slot swapped mid-write cannot redirect staged secrets', () => {
+// F-A3 (round 3, replaces the round-2 case that only checked redirection):
+// a staging slot displaced mid-write must fail TYPED with no returned
+// material and NO secret bytes left in either the fixed slot or the displaced
+// generation — the pinned writes may continue in the displaced inode, but
+// staging must detect the fixed path no longer names it, remove the displaced
+// generation by inode, and refuse to report success.
+test('a staging slot swapped mid-write fails typed and leaves no secret bytes', () => {
   const fx = makeFixture();
   seedBundle(fx);
   const attacker = join(fx.root, 'attacker-staging');
@@ -1549,19 +1555,29 @@ test('a staging slot swapped mid-write cannot redirect staged secrets', () => {
     }
     return realOpen(path, flags as fs.OpenMode, mode);
   }) as typeof fs.openSync);
+  let material: ReturnType<typeof stageLiveCredentialMaterial> | undefined;
+  let caught: unknown;
   try {
-    captureError(() => stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE));
+    caught = captureError(() => {
+      material = stageLiveCredentialMaterial(fx.loaded, CLAUDE_SCOPE);
+    });
   } finally {
     spy.mockRestore();
     rmSync(fx.stagingDir, { force: true }); // drop the planted symlink
   }
   expect(swapped).toBe(true);
-  // The attacker's target received nothing — in particular no supervisor
-  // env carrying grader aliases.
-  expect(existsSync(join(attacker, 'supervisor.exec.env'))).toBe(false);
+  // Typed failure, no returned material.
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  expect(material).toBeUndefined();
+  // No secret bytes reachable through the fixed staging path.
+  expect(existsSync(join(fx.stagingDir, 'supervisor.exec.env'))).toBe(false);
+  expect(existsSync(join(fx.stagingDir, 'agent.env'))).toBe(false);
+  // The displaced generation was located by inode and removed — no secret
+  // bytes left behind there either.
+  expect(existsSync(stolen)).toBe(false);
+  // The attacker's target received nothing.
   expect(readdirSync(attacker)).toEqual([]);
-  // The pinned writes continued into the original (renamed) directory.
-  expect(existsSync(join(stolen, 'supervisor.exec.env'))).toBe(true);
 });
 
 // F-B: a rejected or cast staged object must be refused BEFORE the first
@@ -1595,4 +1611,235 @@ test('a rejected staged object leaves staging, active, and recovery untouched', 
   expect(snapshotTree(fx.stagingDir)).toBe(stagingBefore);
   expect(snapshotTree(fx.activeDir)).toBe(activeBefore);
   expect(existsSync(fx.recoveryDir)).toBe(false);
+});
+
+// --- Fix Round 3 -------------------------------------------------------------
+
+// A1: an intermediate ANCESTOR of the bundle anchor swapped for a symlink
+// immediately before the anchor open must not redirect a source read. The
+// anchor is walked from the filesystem root, so the swap is refused (ELOOP)
+// or the original is read; it is never redirected to the attacker bundle.
+test('an ancestor of the bundle anchor swapped at open time cannot redirect a read', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const attacker = join(fx.root, 'attacker-tree');
+  mkdirSync(join(attacker, 'blessed/codex'), { recursive: true });
+  writeFileSync(
+    join(attacker, 'blessed/credentials.env'),
+    "ANTHROPIC_API_KEY='agent-anthropic-key'\nQUORUM_GRADER_ANTHROPIC_API_KEY='grader-anthropic-key'\n",
+  );
+  writeFileSync(
+    join(attacker, 'blessed/codex/auth.json'),
+    JSON.stringify({ tokens: { access_token: 'attacker-token' } }),
+  );
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    // The vulnerable pattern is a single full-path open of the multi-component
+    // bundle anchor; trigger only on that literal path (never on a pinned
+    // /proc or /.vol child open).
+    if (!swapped && String(path) === fx.bundleDir) {
+      swapped = true;
+      fs.renameSync(
+        join(fx.root, 'credentials'),
+        join(fx.root, 'credentials-real'),
+      );
+      fs.symlinkSync(attacker, join(fx.root, 'credentials'));
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let material: ReturnType<typeof stageLiveCredentialMaterial> | undefined;
+  let caught: unknown;
+  try {
+    caught = captureError(() => {
+      material = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  if (caught === undefined) {
+    const projected = readFileSync(
+      join(material?.authMounts[0]?.path ?? '', 'auth.json'),
+      'utf8',
+    );
+    expect(projected).toContain('codex-access');
+    expect(projected).not.toContain('attacker-token');
+  } else {
+    expect(caught).toBeInstanceOf(ApplianceError);
+  }
+});
+
+// A2: one pinned bundle generation is retained across every source read of a
+// staged generation. Swapping an ANCESTOR of the bundle between the first
+// source read (codex) and a later read (credentials.env) cannot redirect the
+// later read — with a fresh anchor reopened per source, it would. The
+// discriminator is the grader base URL read from credentials.env into the
+// supervisor env.
+test('the bundle is pinned once across credentials.env and every source read', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const attacker = join(fx.root, 'attacker-bundle');
+  mkdirSync(join(attacker, 'blessed/codex'), { recursive: true });
+  writeFileSync(
+    join(attacker, 'blessed/credentials.env'),
+    "QUORUM_GRADER_ANTHROPIC_API_KEY='grader-anthropic-key'\nQUORUM_GRADER_ANTHROPIC_BASE_URL='https://attacker.example/v1'\n",
+  );
+  writeFileSync(
+    join(attacker, 'blessed/codex/auth.json'),
+    JSON.stringify({ tokens: { access_token: 'attacker-token' } }),
+  );
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((
+    path: fs.PathLike,
+    flags?: fs.OpenMode,
+    mode?: fs.Mode | null,
+  ) => {
+    // Fire once the first source (codex/auth.json) is opened — this happens in
+    // both the pinned and the reopen-per-file implementations — by swapping
+    // the bundle's ANCESTOR `credentials`. A retained pin is immune; a fresh
+    // anchor reopen for the next read follows the swapped intermediate.
+    if (!swapped && String(path).endsWith('/auth.json')) {
+      swapped = true;
+      fs.renameSync(
+        join(fx.root, 'credentials'),
+        join(fx.root, 'credentials-real'),
+      );
+      fs.symlinkSync(attacker, join(fx.root, 'credentials'));
+    }
+    return realOpen(path, flags as fs.OpenMode, mode);
+  }) as typeof fs.openSync);
+  let material: ReturnType<typeof stageLiveCredentialMaterial> | undefined;
+  let caught: unknown;
+  try {
+    caught = captureError(() => {
+      material = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(swapped).toBe(true);
+  expect(caught).toBeUndefined();
+  // The supervisor env (built from credentials.env, read AFTER the swap
+  // fired) carries the ORIGINAL grader base URL, not the attacker's.
+  const supervisor = readFileSync(
+    material?.supervisorExecEnvFile ?? '',
+    'utf8',
+  );
+  expect(supervisor).toContain('gateway.example');
+  expect(supervisor).not.toContain('attacker.example');
+  // The OAuth projection is likewise from the original pinned bundle.
+  const projected = readFileSync(
+    join(material?.authMounts[0]?.path ?? '', 'auth.json'),
+    'utf8',
+  );
+  expect(projected).toContain('codex-access');
+  expect(projected).not.toContain('attacker-token');
+});
+
+// B: activation derives the expected mount(s) from staged.credentialScope.oauth
+// and requires exact correspondence — an allow-listed-but-mismatched name is
+// rejected BEFORE any rename. (Reviewer probe: Codex scope with mount name
+// 'pi' committed an invalid active generation.)
+test('activation rejects an allow-listed-but-mismatched mount name before any rename', () => {
+  const fx = makeFixture();
+  seedBundle(fx);
+  const staged = stageLiveCredentialMaterial(fx.loaded, CODEX_SCOPE);
+  const stagingBefore = snapshotTree(fx.stagingDir);
+  const pi = {
+    ...staged,
+    // 'pi' is a valid projected mount name, but wrong for a codex scope.
+    authMounts: [
+      { name: 'pi' as const, path: staged.authMounts[0]?.path ?? '' },
+    ],
+  };
+  const caught = captureError(() =>
+    activateScopedCredentialMaterial(fx.loaded, pi),
+  );
+  expect(caught).toBeInstanceOf(ApplianceError);
+  expect((caught as ApplianceError).code).toBe('config_invalid');
+  // No active generation was committed; staging is byte/metadata-identical.
+  expect(existsSync(fx.activeDir)).toBe(false);
+  expect(existsSync(fx.recoveryDir)).toBe(false);
+  expect(snapshotTree(fx.stagingDir)).toBe(stagingBefore);
+});
+
+test('activation rejects missing, extra, and duplicate mounts before any rename', () => {
+  // Missing: a gemini-oauth scope expects one mount; zero is rejected.
+  const missing = makeFixture();
+  seedBundle(missing);
+  const gemStaged = stageLiveCredentialMaterial(
+    missing.loaded,
+    GEMINI_OAUTH_SCOPE,
+  );
+  const gemStagingBefore = snapshotTree(missing.stagingDir);
+  expect(
+    captureError(() =>
+      activateScopedCredentialMaterial(missing.loaded, {
+        ...gemStaged,
+        authMounts: [],
+      }),
+    ),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(missing.activeDir)).toBe(false);
+  expect(snapshotTree(missing.stagingDir)).toBe(gemStagingBefore);
+
+  // Extra: a codex scope expects exactly one mount; two is rejected.
+  const extra = makeFixture();
+  seedBundle(extra);
+  const cxStaged = stageLiveCredentialMaterial(extra.loaded, CODEX_SCOPE);
+  const cxPath = cxStaged.authMounts[0]?.path ?? '';
+  expect(
+    captureError(() =>
+      activateScopedCredentialMaterial(extra.loaded, {
+        ...cxStaged,
+        authMounts: [
+          { name: 'codex' as const, path: cxPath },
+          { name: 'gemini' as const, path: cxPath },
+        ],
+      }),
+    ),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(extra.activeDir)).toBe(false);
+
+  // Duplicate: the same mount twice is rejected (cardinality mismatch).
+  const dup = makeFixture();
+  seedBundle(dup);
+  const dupStaged = stageLiveCredentialMaterial(dup.loaded, CODEX_SCOPE);
+  const dupPath = dupStaged.authMounts[0]?.path ?? '';
+  expect(
+    captureError(() =>
+      activateScopedCredentialMaterial(dup.loaded, {
+        ...dupStaged,
+        authMounts: [
+          { name: 'codex' as const, path: dupPath },
+          { name: 'codex' as const, path: dupPath },
+        ],
+      }),
+    ),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(dup.activeDir)).toBe(false);
+
+  // A no-oauth scope with a sneaked mount is rejected (expected zero).
+  const empty = makeFixture();
+  seedBundle(empty);
+  const claudeStaged = stageLiveCredentialMaterial(empty.loaded, CLAUDE_SCOPE);
+  expect(
+    captureError(() =>
+      activateScopedCredentialMaterial(empty.loaded, {
+        ...claudeStaged,
+        authMounts: [
+          {
+            name: 'codex' as const,
+            path: join(empty.stagingDir, 'auth/codex'),
+          },
+        ],
+      }),
+    ),
+  ).toBeInstanceOf(ApplianceError);
+  expect(existsSync(empty.activeDir)).toBe(false);
 });
