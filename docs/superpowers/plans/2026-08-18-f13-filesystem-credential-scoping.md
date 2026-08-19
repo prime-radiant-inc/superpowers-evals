@@ -52,7 +52,7 @@ scoped compatibility behavior while reviewing the plan.
 ## Verified Process Facts
 
 1. scripts/evals-container currently mounts the complete credentials.env and every discovered OAuth directory; read-only is still readable by the agent UID.
-2. container/bin/quorum sources the mounted env file into every quorum subcommand and conditionally sets OAuth home variables, while the image can retain inherited OAuth-home variables unless the shim explicitly unsets absent mounts.
+2. container/bin/quorum sources the mounted env file into every quorum subcommand and conditionally sets OAuth home variables. The current base image does not bake those variables, but the shim would preserve any inherited or injected OAuth-home value unless it explicitly unsets absent mounts; hostile-env tests must exercise that defense-in-depth boundary.
 3. reconcileContainer currently downs and ups unconditionally. containerMountSignature is descriptive evidence, not a reconcile comparator.
 4. credentialScopeForAgents currently returns a union and loses adapter/file identity. Gemini and Antigravity share the gemini bundle directory but consume disjoint files; Pi auth.json can carry multiple provider tokens.
 5. A mixed run-all uses one container for the whole batch. A union therefore cannot satisfy the spec's per-agent isolation requirement.
@@ -151,6 +151,7 @@ Binding adapter contracts:
 | Agent/family and auth | Agent env projection | OAuth projection |
 |---|---|---|
 | API-key credential | explicit api_key_env, else reviewed conventional family destination; source is the same name | none |
+| Claude Mantle / bedrock-bearer | credential.api_key_env is required and is both source and destination; no conventional fallback | none; CLAUDE_CODE_USE_MANTLE and AWS_REGION are derived by the adapter from the credential record, never read from bundle env |
 | Claude OAuth | CLAUDE_CODE_OAUTH_TOKEN from the same source name | none |
 | Copilot OAuth | destination COPILOT_GITHUB_TOKEN from ordered sources COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN | none |
 | Codex subscription | none | codex |
@@ -196,7 +197,7 @@ expect(
 ]);
 ~~~
 
-Also assert exact Codex, Gemini, Antigravity, Kimi, and Pi OAuth kinds; Gemini mode derived from credential.auth; default resolution persists the concrete credential name; and prototype-property names retain named errors.
+Also assert exact Codex, Gemini, Antigravity, Kimi, and Pi OAuth kinds; Gemini mode derived from credential.auth; default resolution persists the concrete credential name; and prototype-property names retain named errors. The table must include Claude's default `opus_bedrock`, explicit `opus_bedrock`, and `opus5_bedrock`, plus a synthetic compatible bedrock-bearer credential without `api_key_env` that fails with a named error. Retain `CONVENTIONAL_API_KEY_ENV` as the exported, exact-map-tested fallback for only the reviewed conventional families; Mantle never uses it.
 
 - [ ] **Step 2: Run RED**
 
@@ -206,7 +207,7 @@ Expected: old union interface and zero-material Copilot behavior fail.
 
 - [ ] **Step 3: Implement the minimal closed resolver**
 
-Remove credentialScopeForAgents, AGENT_OAUTH_MOUNT, and the array union behavior. Keep own-property lookup. Resolve exactly one selection from evalsRoot/coding-agents and evalsRoot/credentials.yaml. For Gemini, ignore ambient GEMINI_AUTH_TYPE and derive the mode from credential.auth. Do not add compatibility wrappers for the deleted API.
+Remove credentialScopeForAgents, AGENT_OAUTH_MOUNT, and the array union behavior. Keep own-property lookup. Resolve exactly one selection from evalsRoot/coding-agents and evalsRoot/credentials.yaml. For Gemini, ignore ambient GEMINI_AUTH_TYPE and derive the mode from credential.auth. The current corpus has no Gemini OAuth credential; authorize a synthetic evals-root fixture that adds one compatible record so this closed delivery row is behavior-tested without changing the committed corpus. Do not add compatibility wrappers for the deleted API.
 
 - [ ] **Step 4: Run GREEN and gates**
 
@@ -311,6 +312,10 @@ export function activateScopedCredentialMaterial(
   staged: StagedCredentialMaterial,
 ): ActiveCredentialMaterial;
 
+export function discardStagedCredentialMaterial(
+  loaded: LoadedApplianceConfig,
+): void;
+
 export function recoverScopedCredentialActivation(
   loaded: LoadedApplianceConfig,
 ): void;
@@ -333,9 +338,14 @@ The active paths are fixed:
 - state/credentials-scoped/active/agent.env
 - state/credentials-scoped/active/supervisor.exec.env for live scopes only
 - state/credentials-scoped/active/auth/<mount-name>/...
+- state/credentials-scoped/staging while a generation is being built
+- state/credentials-scoped/recovery only during an interrupted active swap
 
-Stage beneath a fresh sibling directory whose name carries no secret or scope
-data. `assertScopedCredentialStateBoundary` validates every existing component
+Stage into the one fixed `staging` slot. Before writing, validate its complete
+no-follow chain and remove only that slot; a partial staging failure performs
+the same best-effort cleanup, and the next invocation safely clears an
+interrupted stage before retrying. `discardStagedCredentialMaterial` never
+touches `active` or `recovery`. `assertScopedCredentialStateBoundary` validates every existing component
 no-follow and rejects any ancestor/descendant overlap between
 `state/credentials-scoped` and evals, Superpowers, Gauntlet, or results; probe
 staging calls only this helper and never inspects the blessed bundle.
@@ -345,7 +355,7 @@ helpers before evaluation. Activation cannot rename over a nonempty directory:
 if active exists, rename it to one fixed recovery slot, rename the complete
 stage to the now-absent active path, then remove the recovery slot. If the
 second rename fails, restore the old active directory before returning the
-error. Staging never mutates `active` or the recovery slot.
+error. Staging and staging cleanup never mutate `active` or the recovery slot.
 `recoverScopedCredentialActivation` may run only from
 `reconcileScopedContainer` after the configured container is confirmed down;
 it resolves an interrupted swap before the new activation, never guesses
@@ -353,13 +363,13 @@ between two complete generations, and fails closed on an ambiguous shape.
 
 Exact OAuth projections:
 
-| Kind | Blessed source | Active destination |
+| Kind | Blessed source | Active source and container destination |
 |---|---|---|
-| codex | codex/auth.json | auth/codex/auth.json |
-| gemini | gemini/oauth_creds.json and gemini/google_accounts.json | auth/gemini with exactly those files |
-| antigravity | gemini/antigravity-cli/antigravity-oauth-token | auth/gemini/antigravity-cli/antigravity-oauth-token only |
-| kimi | kimi-code/config.toml and kimi-code/credentials/kimi-code.json required; kimi-code/oauth/kimi-code optional | auth/kimi with the same relative paths |
-| pi | parse pi/agent/auth.json and select only the own-property scope.oauth.provider entry | auth/pi/agent/auth.json containing exactly that entry |
+| codex | codex/auth.json | auth/codex/auth.json -> /auth/codex/auth.json |
+| gemini | gemini/oauth_creds.json and gemini/google_accounts.json | auth/gemini with exactly those files -> /auth/gemini |
+| antigravity | gemini/antigravity-cli/antigravity-oauth-token | auth/gemini/antigravity-cli/antigravity-oauth-token only -> /auth/gemini at the same relative path |
+| kimi | kimi-code/config.toml and kimi-code/credentials/kimi-code.json required; kimi-code/oauth/kimi-code optional | auth/kimi with the same relative paths -> /auth/kimi-code; the wrapper's `kimi` mount name is deliberately mapped to this adapter-owned destination |
+| pi | parse pi/agent/auth.json as a flat top-level provider-keyed record and select only the own-property entry keyed by `scope.oauth.provider` | auth/pi/agent/auth.json containing exactly `{ [provider]: entry }` -> /auth/pi; settings.json is not projected because the provider is explicit in the scope |
 
 Agent env behavior:
 
@@ -383,9 +393,10 @@ Supervisor behavior:
 Runner behavior:
 
 - In `appliance-scoped` mode, gauntletEnvBase projects the existing non-secret
-  contract, reads each QUORUM_GRADER_* source, and writes only its mapped
-  canonical name into the returned Gauntlet child env. Missing aliases fail;
-  canonical values are never a fallback in this mode.
+  contract, reads each present QUORUM_GRADER_* source, and writes only its mapped
+  canonical name into the returned Gauntlet child env. Absent aliases are
+  omitted, but zero nonempty auth aliases fails; canonical values are never a
+  fallback in this mode.
 - With the source-mode marker absent, gauntletEnvBase preserves the existing
   trusted-local canonical grader input contract. Unknown or empty explicit
   mode values fail closed rather than choosing a source implicitly.
@@ -417,12 +428,13 @@ mode. Also cover
 all-pairs distinct-value enforcement (including differently named agent and
 grader auth channels), hostile unrelated provider/AWS names, missing values,
 contradictory Gemini mode, CR/LF, symlink/FIFO/device inputs, malformed Pi
-JSON, traversal, permissions, rotation, and forced first/second rename
-failures. Add a parent-env test containing distinct agent
+JSON, traversal, permissions, rotation, fixed-stage cleanup after a partial
+write and on the next invocation, and forced first/second rename failures. Add a parent-env test containing distinct agent
 ANTHROPIC_API_KEY and QUORUM_GRADER_ANTHROPIC_API_KEY values: the ordinary
 agent adapter input remains the agent value, gauntletEnvBase returns the grader
 value under ANTHROPIC_API_KEY, and neither child projection contains the
-alias. The second-rename failure must restore the prior active tree
+alias. The Pi fixture is the repository's witnessed flat two-provider shape;
+the projection retains exactly the selected top-level entry. The second-rename failure must restore the prior active tree
 byte-for-byte and metadata-for-metadata; an interrupted-swap fixture must
 recover deterministically before a new stage is activated.
 
@@ -441,7 +453,7 @@ Expected: modules and shared constants are missing.
 
 - [ ] **Step 3: Implement staging and activation**
 
-Use no-follow helpers and writePrivateText. Project source files through regular-file reads and destination writes; never recursive-copy a bundle directory. activateScopedCredentialMaterial is called only after the previous container is down and performs the recoverable active-to-recovery, stage-to-active swap above. gauntletEnvBase imports the source-to-runtime map from grader.ts; Copilot composes that function before its own routing projection.
+Use no-follow helpers and writePrivateText. Project source files through regular-file reads and destination writes; never recursive-copy a bundle directory. Clear only the fixed staging slot before a new stage and after a failed stage; interrupted staging is therefore recovered on the next invocation without accumulating secret directories. activateScopedCredentialMaterial is called only after the previous container is down and performs the recoverable active-to-recovery, stage-to-active swap above. gauntletEnvBase imports the source-to-runtime map from grader.ts; Copilot composes that function before its own routing projection.
 
 - [ ] **Step 4: Run GREEN and gates**
 
@@ -471,12 +483,10 @@ git commit -m "feat: project exact agent and supervisor credentials (F13)"
 
 **Files:**
 - Modify: src/appliance/container.ts
-- Modify: src/appliance/safe-fs.ts
 - Modify: src/appliance/doctor.ts
 - Modify: scripts/evals-container
 - Modify: container/bin/quorum
 - Create: test/appliance-container.test.ts
-- Modify: test/appliance-safe-fs.test.ts
 - Modify: test/appliance-doctor.test.ts
 - Modify: test/evals-container.test.ts
 - Modify: test/container-shims.test.ts
@@ -546,6 +556,7 @@ The wrapper adds --no-default-auth, --exec-env-file, and --expected-container-id
 - exec args do not call baseContainerArgs and do not rediscover bundle paths. They contain only configured name, expected immutable ID, optional exec env file, exec, and the command.
 - Before exec, the wrapper requires the configured name to resolve to the expected ID, then targets that immutable ID.
 - --exec-env-file is valid only for exec, validated no-follow as an absolute readable regular file, and emitted after docker exec and before the immutable ID.
+- After `up`, the wrapper resolves the configured name once and runs its internal results-mount probe against that immutable ID, never against the mutable name. The returned lease carries the same ID.
 
 container/bin/quorum first unsets CODEX_AUTH_HOME, GEMINI_OAUTH_HOME, AGY_OAUTH_HOME, KIMI_OAUTH_HOME, and PI_OAUTH_HOME, then exports only variables whose projected mount exists. Extract only the auth-root selection into a sourceable shell helper if necessary for behavior testing; do not assert large rendered script strings.
 
@@ -558,18 +569,21 @@ commit type-correct without pretending the migration is complete. Task 5 owns
 the single caller cutover and deletes the old TypeScript full-bundle
 `baseContainerArgs` / `upContainerArgs` / `execContainerArgs` /
 `reconcileContainer` / `runInContainer` path in the same commit. No appliance
-live job or manual Docker gate may run from the intermediate Task 3 commit.
+live job or manual Docker gate may run after Task 3 or Task 4 until Task 5's
+atomic cutover lands. Task 4 may persist scope/provenance while the old
+full-bundle execution path still exists, so its intermediate commit is also
+non-executable.
 
 - [ ] **Step 1: Write RED argument, wrapper, shim, and capability tests**
 
-Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; configured-name replacement fails before child execution; and absent projected mounts remove hostile image-baked OAuth vars.
+Behavior tests prove asserted empty creates an empty file and no auth mounts; explicit projected mounts are exact; hostile host auth dirs remain absent; --no-default-auth refuses stale-container reuse; supervisor path appears only in exec argv; configured-name replacement fails before child execution; the internal results-mount probe targets the resolved immutable ID; and absent projected mounts remove hostile inherited/injected OAuth vars.
 
 Add hostile topology fixtures showing that symlinked/intermediate-symlink paths or credential state/bundle beneath code/results mounts fail with zero Docker calls.
 
 - [ ] **Step 2: Run RED**
 
 ~~~bash
-bun test test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+bun test test/appliance-container.test.ts \
   test/appliance-doctor.test.ts test/evals-container.test.ts \
   test/container-shims.test.ts
 ~~~
@@ -587,7 +601,7 @@ offer an omission mode.
 - [ ] **Step 4: Run GREEN and gates**
 
 ~~~bash
-bun test test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+bun test test/appliance-container.test.ts \
   test/appliance-doctor.test.ts test/evals-container.test.ts \
   test/container-shims.test.ts
 bun test test/appliance-*.test.ts
@@ -598,9 +612,9 @@ bun run quorum check
 - [ ] **Step 5: Commit and review**
 
 ~~~bash
-git add src/appliance/container.ts src/appliance/safe-fs.ts \
+git add src/appliance/container.ts \
   src/appliance/doctor.ts scripts/evals-container container/bin/quorum \
-  test/appliance-container.test.ts test/appliance-safe-fs.test.ts \
+  test/appliance-container.test.ts \
   test/appliance-doctor.test.ts test/evals-container.test.ts \
   test/container-shims.test.ts
 git commit -m "feat: bind scoped containers to immutable leases (F13)"
@@ -616,11 +630,13 @@ git commit -m "feat: bind scoped containers to immutable leases (F13)"
 - Modify: src/appliance/jobs.ts
 - Modify: src/appliance/git.ts
 - Modify: src/appliance/import.ts
+- Modify: src/appliance/preflight.ts
 - Modify: src/appliance/provenance.ts
 - Test: test/appliance-contracts.test.ts
 - Test: test/appliance-cli.test.ts
 - Test: test/appliance-jobs.test.ts
 - Test: test/appliance-import.test.ts
+- Test: test/appliance-preflight.test.ts
 - Create: test/appliance-provenance.test.ts
 
 **Interfaces:**
@@ -637,9 +653,9 @@ export interface CreateJobRequest {
   readonly superpowersRef: string;
   readonly argv: readonly string[];
   readonly runId?: string;
-  readonly credentialSelection: CredentialSelection | null;
-  readonly credentialScope: CredentialScope | null;
-  readonly credentialScopeSourceEvalsSha: string | null;
+  readonly credentialSelection?: CredentialSelection | null;
+  readonly credentialScope?: CredentialScope | null;
+  readonly credentialScopeSourceEvalsSha?: string | null;
   readonly requester: {
     readonly agent: string | null;
     readonly thread?: string | null;
@@ -665,6 +681,12 @@ Every new writer supplies all three explicitly:
 - run/run-all: non-null selection, live scope, and source SHA;
 - prepare: null selection, EMPTY_CREDENTIAL_SCOPE, null source SHA;
 - import: all null.
+
+The three request properties remain TypeScript-optional so unchanged test and
+helper callers continue to mean the schema-v1 read default of null. `createJob`
+normalizes omission through the schemas; it does not invent a live scope. A
+writer-exhaustiveness behavior suite drives every production writer and proves
+that run, run-all, prepare, and import each pass the explicit values above.
 
 Missing fields remain read-compatible. Live preflight must reject null scope; this task does not provide a legacy execution path.
 
@@ -697,6 +719,10 @@ prepare, explicit-null import, and job-authoritative provenance. Prove the
 normalized direct-run credential reaches both `ApplianceActions.run` and the
 persisted Quorum argv; no later layer reparses it.
 
+Drive the prepare writer through `preflight.ts` in this task and prove it
+persists explicit `EMPTY_CREDENTIAL_SCOPE`; do not postpone that production
+writer to Task 5 merely because Task 5 later changes execution ordering.
+
 Pin that serialized job/provenance/CLI output contains neither credential paths nor the string credentials-scoped.
 
 - [ ] **Step 2: Run RED**
@@ -704,7 +730,7 @@ Pin that serialized job/provenance/CLI output contains neither credential paths 
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
 ~~~
 
 - [ ] **Step 3: Implement atomic request persistence**
@@ -716,7 +742,7 @@ Add a current managed-checkout HEAD helper through CommandRunner in git.ts. Put 
 ~~~bash
 bun test test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
 bun test test/appliance-*.test.ts
 bun run check
 bun run quorum check
@@ -726,10 +752,11 @@ bun run quorum check
 
 ~~~bash
 git add src/appliance/types.ts src/appliance/cli.ts src/appliance/jobs.ts \
-  src/appliance/git.ts src/appliance/import.ts src/appliance/provenance.ts \
+  src/appliance/git.ts src/appliance/import.ts src/appliance/preflight.ts \
+  src/appliance/provenance.ts \
   test/appliance-contracts.test.ts test/appliance-cli.test.ts \
   test/appliance-jobs.test.ts test/appliance-import.test.ts \
-  test/appliance-provenance.test.ts
+  test/appliance-preflight.test.ts test/appliance-provenance.test.ts
 git commit -m "feat: persist one authoritative credential request (F13)"
 ~~~
 
@@ -881,12 +908,14 @@ Document:
 - exact OAuth projections rather than whole source directories;
 - immutable container-ID behavior for live/liveness/cancel;
 - docker exec --env-file capability diagnostics;
-- fixed active generation lifecycle, interrupted-swap recovery, and bundle-retirement procedure: down the container, then remove state/credentials-scoped;
-- the required bundle migration to distinct QUORUM_GRADER_* sources, with no fallback to the agent's canonical secret names and a named error when the migration is incomplete;
+- fixed active generation lifecycle, fixed staging-slot cleanup after failure or interruption, interrupted-swap recovery, and bundle-retirement procedure: down the container, then remove state/credentials-scoped;
+- the required bundle migration to QUORUM_GRADER_* sources whose secret values are distinct from every selected agent secret value, not merely differently named; duplicating one Anthropic key under agent and grader aliases is refused, and remediation requires a separate grader key;
+- rollback is a paired code-and-bundle operation: keep a versioned backup of the pre-migration bundle and restore it when rolling code back before the scoped cutover; code-only rollback after alias migration is unsupported and can strand the grader or change auth semantics;
 - the explicit grader source-mode boundary: appliance-scoped mode is
   alias-only, while trusted local runs with no marker retain the canonical
   host contract; unknown or empty explicit modes are errors;
 - no-follow/disjointness errors and repair guidance;
+- source-SHA drift after any upstream evals update is an expected refusal; resubmit from a freshly loaded appliance process so the persisted resolver code, selection, and SHA agree;
 - mount signatures are not comparable across this upgrade;
 - same-UID /proc inspection remains outside filesystem closure.
 
@@ -895,16 +924,22 @@ Document:
 After Drew explicitly authorizes the manual gate, use a temporary synthetic bundle containing unique non-secret marker names/files for every declared delivery class (including the currently trusted-maintainer-only Antigravity projector). For each scope, execute a fake agent reader in the real container and record only marker presence booleans:
 
 - API-key env projection;
+- Claude Mantle/Bedrock bearer projection, including record-derived Mantle mode and region without ambient bundle passthrough;
 - Claude OAuth env projection;
 - Copilot alias canonicalization;
 - Codex auth.json only;
 - Gemini personal files without Antigravity token;
 - Antigravity token without Gemini personal files;
 - Kimi required files plus optional marker behavior;
-- Pi selected provider without the hostile second provider;
+- Pi flat top-level two-provider auth map, with the selected provider present and the hostile second provider absent;
 - grader source marker present only in the Quorum supervisor process, translated to its runtime name only in the Gauntlet child, and absent from mounts/agent file.
 
 Every scope must observe its own marker and reject every disallowed marker by env and filesystem. Do not print file contents or real bundle values.
+The Gemini OAuth row uses the plan's synthetic compatible evals-root fixture,
+because the committed credential corpus does not currently contain that pair.
+The Pi canary proves the witnessed projection shape only; the single real auth
+gate below remains Codex, so this plan does not claim physical Pi OAuth
+authentication was validated.
 
 - [ ] **Step 3: Run one real disjoint Codex-subscription appliance job**
 
@@ -940,7 +975,7 @@ No push without Drew's explicit approval after he reviews the final evidence.
 
 **Spec coverage:** The isolation unit now equals one agent plus one credential, so no cell shares a union with another. Env delivery is exact, OAuth delivery is exact by adapter file/entry, probes are empty, the grader file is host-only, and live execution binds to the scoped container that preflight recorded.
 
-**Failure-mode coverage:** Unknown/prototype names; missing defaults; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal agent/grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs; staging interruption; stale active generation; missing Docker capability; replacement containers; private path serialization; null live records; and probe credential exposure all have explicit behavior tests.
+**Failure-mode coverage:** Unknown/prototype names; missing defaults; missing Mantle api_key_env; mixed selections; bare/blank/duplicate/custom-registry flags; stale source SHA; recomputed-scope disagreement; missing or equal agent/grader values; contradictory Gemini mode; whole-directory overexposure; Pi multi-provider overexposure; symlinks/nonregular inputs; staging interruption and abandoned-stage cleanup; stale active generation; missing Docker capability; replacement containers; private path serialization; null live records; and probe credential exposure all have explicit behavior tests.
 
 **Type consistency:** Task 1 defines CredentialSelection and CredentialScope.
 Task 2 produces staged/active material. Task 3 adds independently testable
@@ -952,7 +987,7 @@ LivePreflightResult without serializing credential paths.
 
 **Compatibility:** Drew approved read-only parsing of old missing fields and explicit refusal to execute old/null live records. No compatibility wrapper preserves the deleted union resolver. Direct wrapper omission remains break-glass legacy; appliance calls always assert a scope.
 
-**Secret lifecycle:** One fixed active generation exists. New material is staged while the old container may still reference active; after the container is down, a recoverable two-rename swap installs the staged tree and the new container mounts it. Interrupted or failed swaps restore/fail closed before a later job. Rotation downs the container before clearing active. No secret value or value-derived hash appears outside the files.
+**Secret lifecycle:** One fixed active generation, one fixed staging slot, and one transient recovery slot exist. New material is staged while the old container may still reference active; failed/abandoned staging clears only the staging slot, and the next invocation repeats that cleanup. After the container is down, a recoverable two-rename swap installs the staged tree and the new container mounts it. Interrupted or failed swaps restore/fail closed before a later job. Rotation downs the container before clearing active. No secret value or value-derived hash appears outside the files.
 
 **Deliberate exclusions:** No mixed-scope Phase 1 jobs, per-cell containers, UID separation, Windows guest/password remediation, or automated live eval in CI. These exclusions are stated as limitations, not claimed as F13 closure.
 
