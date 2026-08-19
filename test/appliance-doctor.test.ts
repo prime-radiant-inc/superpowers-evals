@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -120,5 +120,23 @@ describe('appliance doctor', () => {
       stderr: 'container bad\n',
     };
     expect(() => doctorPayload(cfg, runner)).toThrow(ApplianceError);
+  });
+});
+
+// Doctor is credential-aware (it reports validated bundle METADATA), but the
+// payload files are never opened: a dangling credentials.env symlink cannot
+// break it. Bundle-metadata faults themselves fail typed in the
+// credential-aware loader before doctorPayload ever runs (appliance-config
+// tests pin that refusal).
+describe('doctor bundle access', () => {
+  test('doctorPayload never opens bundle payload files', () => {
+    const cfg = loaded();
+    symlinkSync(
+      join(cfg.config.root, 'nowhere'),
+      join(cfg.config.credential_bundle.path, 'credentials.env'),
+    );
+    const payload = doctorPayload(cfg, new FakeRunner());
+    expect(payload.ok).toBe(true);
+    expect(payload.credential_bundle.bundle_id).toBe('bundle-1');
   });
 });

@@ -112,11 +112,17 @@ const JobContainerSchema = z.object({
   mount_signature: z.string(),
 });
 
+// A signalable process group id: `kill -0/-INT -- -PGID` targets the whole
+// group, so 0 (caller's group), 1 (init), negatives, and non-integers are
+// never recordable. runRecordedContainerLifecycle repeats this exact check at
+// its own runtime boundary before any signal is issued.
+export const ProcessGroupIdSchema = z.number().int().safe().gt(1);
+
 const JobProcessSchema = z.object({
   host_pid: z.number().int(),
-  host_pgid: z.number().int(),
+  host_pgid: ProcessGroupIdSchema,
   container_pid: z.number().int().nullable(),
-  container_pgid: z.number().int().nullable(),
+  container_pgid: ProcessGroupIdSchema.nullable(),
 });
 
 const JobProgressSchema = z.object({
@@ -251,13 +257,26 @@ export const AnyProvenanceRecordSchema = z.union([
   ProvenanceRecordSchema,
 ]);
 
-export interface LoadedApplianceConfig {
+// The structural half of a loaded appliance config: everything read and
+// recovery operations (status/show/costs, jobs, locks, import, prune,
+// identity-verified cancellation) need, and nothing credential-shaped. It is
+// produced by loadStateConfig, which never stats or reads the credential
+// bundle — so a missing, unreadable, or unsafe bundle cannot strand those
+// operations. Credential-aware operations require LoadedApplianceConfig,
+// whose extra `bundle` field only exists after loadCredentialConfig has
+// validated the bundle boundary and read metadata.json no-follow. `bundle`
+// is deliberately NOT an optional field on one shared type: the compiler,
+// not a runtime check, enforces which operations may touch bundle metadata.
+export interface LoadedApplianceStateConfig {
   readonly config: ApplianceConfig;
-  readonly bundle: CredentialBundleMetadata;
   readonly configPath: string;
   readonly paths: {
     readonly jobs: string;
     readonly locks: string;
     readonly provenance: string;
   };
+}
+
+export interface LoadedApplianceConfig extends LoadedApplianceStateConfig {
+  readonly bundle: CredentialBundleMetadata;
 }

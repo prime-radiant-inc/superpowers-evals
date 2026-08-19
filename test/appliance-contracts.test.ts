@@ -11,12 +11,16 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../src/appliance/config.ts';
+import {
+  loadCredentialConfig,
+  loadStateConfig,
+} from '../src/appliance/config.ts';
 import { ApplianceError, toErrorJson } from '../src/appliance/errors.ts';
 import { atomicWriteJson } from '../src/appliance/fs.ts';
 import {
   JobRecordSchema,
   LockRecordSchema,
+  ProcessGroupIdSchema,
   ProvenanceRecordSchema,
 } from '../src/appliance/types.ts';
 
@@ -74,7 +78,7 @@ function fixture(): { root: string; configPath: string } {
 describe('appliance config', () => {
   test('loads host config and bundle metadata', () => {
     const { root, configPath } = fixture();
-    const loaded = loadConfig(configPath, { ensureState: true });
+    const loaded = loadCredentialConfig(configPath, { ensureState: true });
     expect(loaded.config.root).toBe(root);
     expect(loaded.bundle.bundle_id).toBe('blessed-2026-06-18-a');
     expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700);
@@ -91,11 +95,17 @@ describe('appliance config', () => {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     raw.credential_bundle.name = 'personal';
     writeFileSync(configPath, JSON.stringify(raw));
-    expect(() => loadConfig(configPath)).toThrow(/blessed/);
+    expect(() => loadCredentialConfig(configPath)).toThrow(/blessed/);
+    expect(() => loadStateConfig(configPath)).toThrow(/blessed/);
   });
 
   test('read-only load does not create or chmod state directories', () => {
-    const root = mkdtempSync(join(tmpdir(), 'appliance-config-readonly-'));
+    // Canonical (realpath) fixture root: the bundle boundary validates every
+    // absolute path component no-follow, and macOS tmpdir paths traverse the
+    // /var symlink.
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'appliance-config-readonly-')),
+    );
     for (const dir of [
       'superpowers-evals',
       'superpowers',
@@ -139,10 +149,85 @@ describe('appliance config', () => {
       }),
     );
 
-    const loaded = loadConfig(configPath);
+    const loaded = loadCredentialConfig(configPath);
 
     expect(loaded.paths.jobs).toBe(join(root, 'state/jobs'));
     expect(existsSync(join(root, 'state'))).toBe(false);
+  });
+});
+
+describe('process group id contract', () => {
+  test('accepts only safe integers strictly greater than 1', () => {
+    expect(ProcessGroupIdSchema.safeParse(2).success).toBe(true);
+    expect(ProcessGroupIdSchema.safeParse(456).success).toBe(true);
+    for (const invalid of [
+      0,
+      1,
+      -456,
+      456.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      2 ** 53,
+    ]) {
+      expect(ProcessGroupIdSchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+
+  test('job records reject unsafe host/container process groups', () => {
+    const base = {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    };
+    const record = (process: unknown): unknown => ({
+      schema_version: 1,
+      job_id: 'job-1',
+      kind: 'run',
+      status: 'running',
+      created_at: '2026-06-18T00:00:00Z',
+      updated_at: '2026-06-18T00:00:00Z',
+      started_at: null,
+      finished_at: null,
+      requester: {
+        agent: null,
+        thread: null,
+        task: null,
+        host_user: 'drew',
+        remote_identity: 'local:drew',
+      },
+      command: { argv: ['quorum', 'run'], sanitized: true },
+      request: { superpowers_ref: 'main' },
+      refs: null,
+      credential_bundle: null,
+      container: null,
+      process,
+      artifacts: {
+        run_id: null,
+        batch_id: null,
+        stdout_log: '/tmp/out.log',
+        stderr_log: '/tmp/err.log',
+        provenance: '/tmp/prov.json',
+      },
+      progress: null,
+      result: { exit_code: null, summary: null },
+      error: null,
+    });
+    expect(JobRecordSchema.safeParse(record(base)).success).toBe(true);
+    expect(
+      JobRecordSchema.safeParse(record({ ...base, container_pgid: null }))
+        .success,
+    ).toBe(true);
+    expect(
+      JobRecordSchema.safeParse(record({ ...base, host_pgid: 1 })).success,
+    ).toBe(false);
+    expect(
+      JobRecordSchema.safeParse(record({ ...base, container_pgid: 0 })).success,
+    ).toBe(false);
+    expect(
+      JobRecordSchema.safeParse(record({ ...base, container_pgid: -456 }))
+        .success,
+    ).toBe(false);
   });
 });
 

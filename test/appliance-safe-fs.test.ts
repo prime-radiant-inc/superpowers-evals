@@ -393,3 +393,17 @@ test('ensurePrivateDirNoFollow rejects a base reached through an intermediate sy
   // Nothing was created through the link:
   expect(realExistsSync(join(real, 'approot', 'state'))).toBe(false);
 });
+
+// The quarantine seam is structural: it accepts a state-only loaded config
+// (no bundle field) because prune/import recovery must survive a broken
+// credential bundle.
+test('moveToQuarantine operates on the structural state config', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'app-structural-')));
+  const full = fakeLoaded(root);
+  const { bundle: _bundle, ...structural } = full;
+  const src = join(structural.config.container.results_root, 'run-s');
+  tree(src, { 'v.txt': 'v' });
+  const dest = moveToQuarantine(structural, src, 'run-s');
+  expect(realExistsSync(dest)).toBe(true);
+  expect(realExistsSync(src)).toBe(false);
+});

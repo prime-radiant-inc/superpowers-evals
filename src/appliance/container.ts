@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CommandRunner } from '../agents/command-runner.ts';
+import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import {
+  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
+  ProcessGroupIdSchema,
+} from './types.ts';
 
 type AuthMountName = 'codex' | 'gemini' | 'kimi' | 'pi';
 type ContainerState = 'missing' | 'stopped' | 'running';
@@ -56,7 +60,7 @@ function requireContainerCommand(
   }
 }
 
-export function evalsContainerPath(loaded: LoadedApplianceConfig): string {
+export function evalsContainerPath(loaded: LoadedApplianceStateConfig): string {
   return join(loaded.config.evals.path, 'scripts/evals-container');
 }
 
@@ -101,7 +105,11 @@ export function downContainerArgs(loaded: LoadedApplianceConfig): string[] {
   return ['--name', loaded.config.container.name, 'down'];
 }
 
-export function statusContainerArgs(loaded: LoadedApplianceConfig): string[] {
+// Name-only wrapper invocation: no bundle env-file or auth mounts ride the
+// status subcommand, so structural callers (doctor's probe) may use it.
+export function statusContainerArgs(
+  loaded: LoadedApplianceStateConfig,
+): string[] {
   return ['--name', loaded.config.container.name, 'status'];
 }
 
@@ -231,7 +239,7 @@ function stringField(record: unknown, key: string): string | null {
 }
 
 export function inspectContainerIdentity(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   runner: CommandRunner,
 ): ContainerIdentity {
   const result = runner.run('docker', [
@@ -267,4 +275,94 @@ export function runInContainer(
   );
   requireContainerCommand(result, code, action);
   return result;
+}
+
+export interface RecordedContainerIdentity {
+  readonly name: string;
+  readonly id: string;
+}
+
+export type RecordedLifecycleOperation =
+  | 'probe-process-group'
+  | 'interrupt-process-group';
+
+function recordedLifecycleFault(message: string): ApplianceError {
+  return new ApplianceError('config_invalid', 'container', message);
+}
+
+/**
+ * The closed lifecycle seam for containers RECORDED on a job: probe or
+ * interrupt one in-container process group, targeting the immutable recorded
+ * container ID directly with exactly one fixed `docker exec`. It never rides
+ * the wrapper's full-bundle argument path — no env-file, no auth mounts, no
+ * arbitrary command, environment, mount, scope, or bundle path can reach it.
+ *
+ * Validation happens BEFORE any runner call: the recorded id must be
+ * nonblank, the recorded name must equal the configured container name, the
+ * process group id must be a safe integer > 1 (repeating JobProcessSchema's
+ * check at this boundary), and the operation switch is runtime-exhaustive.
+ * The configured name is then inspected and the current container ID must
+ * equal the recorded ID — a replacement container is a typed refusal after
+ * inspect, with no exec (liveness callers report lost; cancellation sends no
+ * signal). Host-side process group handling lives elsewhere and is
+ * unchanged.
+ */
+export function runRecordedContainerLifecycle(
+  loaded: LoadedApplianceStateConfig,
+  runner: CommandRunner,
+  identity: RecordedContainerIdentity,
+  operation: RecordedLifecycleOperation,
+  processGroupId: number,
+): CommandResult {
+  if (identity.id.trim() === '') {
+    throw recordedLifecycleFault(
+      'recorded container id is blank; refusing to signal',
+    );
+  }
+  if (identity.name !== loaded.config.container.name) {
+    throw recordedLifecycleFault(
+      `recorded container name '${identity.name}' does not match configured '${loaded.config.container.name}'`,
+    );
+  }
+  if (
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 1 ||
+    !ProcessGroupIdSchema.safeParse(processGroupId).success
+  ) {
+    throw recordedLifecycleFault(
+      `process group id must be a safe integer greater than 1, got: ${processGroupId}`,
+    );
+  }
+  let signal: string;
+  switch (operation) {
+    case 'probe-process-group':
+      signal = '-0';
+      break;
+    case 'interrupt-process-group':
+      signal = '-INT';
+      break;
+    default:
+      throw recordedLifecycleFault(
+        `unknown recorded lifecycle operation: ${String(operation)}`,
+      );
+  }
+
+  const current = inspectContainerIdentity(loaded, runner);
+  if (current.id === null) {
+    throw recordedLifecycleFault(
+      `configured container '${identity.name}' is not inspectable; recorded container ${identity.id} is gone`,
+    );
+  }
+  if (current.id !== identity.id) {
+    throw recordedLifecycleFault(
+      `configured container '${identity.name}' is a replacement (current id does not match the recorded id); refusing to signal it`,
+    );
+  }
+  return runner.run('docker', [
+    'exec',
+    identity.id,
+    'bash',
+    '-c',
+    `kill ${signal} -- -${processGroupId}`,
+  ]);
 }

@@ -965,3 +965,12 @@ test('an exact stage name with a dotted run id is still recognized', () => {
   ]);
   expect(result.candidates[0]?.reason).toBe('stale_stage');
 });
+
+// Prune is a structural read/quarantine operation: it accepts the state-only
+// loaded config, so a broken credential bundle cannot strand it.
+test('prune dry-run operates on the structural state config', () => {
+  const full = loaded();
+  const { bundle: _bundle, ...structural } = full;
+  const result = prune(structural, { apply: false, olderThanDays: 7 });
+  expect(result.dry_run).toBe(true);
+});

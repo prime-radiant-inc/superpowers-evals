@@ -193,3 +193,19 @@ describe('appliance locks', () => {
     expect(inspectLock(join(cfg.paths.locks, 'run.lock')).state).toBe('stale');
   });
 });
+
+// Locks are structural state: the API accepts a state-only loaded config
+// carrying no bundle metadata.
+test('acquireLock operates on the structural state config', () => {
+  const full = loaded();
+  const { bundle: _bundle, ...structural } = full;
+  const handle = acquireLock({
+    loaded: structural,
+    name: 'run.lock',
+    jobId: 'job-structural',
+    command: 'prepare',
+  });
+  expect(existsSync(handle.path)).toBe(true);
+  handle.release();
+  expect(existsSync(handle.path)).toBe(false);
+});

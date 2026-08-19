@@ -24,7 +24,7 @@ import {
   sep,
 } from 'node:path';
 import { ApplianceError } from './errors.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import type { LoadedApplianceStateConfig } from './types.ts';
 
 // Resolve target against root and refuse the root itself or any escape —
 // lexically, and via symlink through the nearest existing ancestor. Dangling
@@ -199,7 +199,7 @@ export function ensurePrivateDirNoFollow(
   chmodSync(t, 0o700);
 }
 
-export function quarantineRoot(loaded: LoadedApplianceConfig): string {
+export function quarantineRoot(loaded: LoadedApplianceStateConfig): string {
   return join(loaded.config.root, 'state', 'quarantine');
 }
 
@@ -208,7 +208,9 @@ export function quarantineRoot(loaded: LoadedApplianceConfig): string {
 // quarantine roots. Creates and chmods nothing — missing state dirs are
 // fine (mutation paths ensure them); symlinked or non-directory ones are
 // config faults that need manual repair.
-export function assertApplianceNamespaces(loaded: LoadedApplianceConfig): void {
+export function assertApplianceNamespaces(
+  loaded: LoadedApplianceStateConfig,
+): void {
   const root = loaded.config.root;
   assertRealDirNoFollow(root, 'appliance root');
   assertRealDirNoFollow(loaded.config.container.results_root, 'results_root');
@@ -279,7 +281,7 @@ export function dirsEquivalent(
 // same-volume by construction; a cross-volume surprise is a typed error, not a
 // copy-delete fallback.
 export function moveToQuarantine(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   sourcePath: string,
   name: string,
 ): string {

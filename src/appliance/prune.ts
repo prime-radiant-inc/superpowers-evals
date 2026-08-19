@@ -17,7 +17,7 @@ import { isImportStageName } from './import.ts';
 import { readAllJobsStrict } from './jobs.ts';
 import { acquireLock } from './locks.ts';
 import { assertApplianceNamespaces, moveToQuarantine } from './safe-fs.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import type { LoadedApplianceStateConfig } from './types.ts';
 
 export interface PruneArgs {
   readonly apply: boolean;
@@ -81,7 +81,7 @@ function requireRegularFile(path: string, label: string): void {
 // apply re-plans under run.lock). Job records go through the same strict
 // integrity-boundary reader as the exact lookups.
 export function collectReferencedRunIds(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
 ): Set<string> {
   const refs = new Set<string>();
   const resultsRoot = loaded.config.container.results_root;
@@ -162,7 +162,7 @@ export function collectReferencedRunIds(
 // an entry the scan cannot honestly read could be hiding a reference, so it
 // fails closed rather than being skipped.
 export function collectCampaignProtected(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   names: readonly string[],
 ): Set<string> {
   const protectedNames = new Set<string>();
@@ -238,7 +238,7 @@ function dirSizeBytes(dir: string): number {
 }
 
 export function planPrune(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   olderThanDays: number,
 ): PruneResult {
   // Independent of any CLI validation: a non-positive, fractional, or NaN
@@ -308,7 +308,7 @@ export function planPrune(
 }
 
 export function prune(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   args: PruneArgs,
 ): PruneResult {
   if (!args.apply) {

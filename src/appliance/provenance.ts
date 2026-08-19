@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { atomicWriteJson } from './fs.ts';
 import {
   type JobRecord,
-  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
   type ProvenanceRecord,
   ProvenanceRecordSchema,
   type RefSnapshot,
@@ -29,7 +29,7 @@ export interface ProvenanceSource {
 }
 
 function artifactProvenanceTargets(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
 ): string[] {
   const targets: string[] = [];
@@ -56,14 +56,14 @@ function artifactProvenanceTargets(
 }
 
 export function provenancePath(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): string {
   return join(loaded.paths.provenance, `${jobId}.json`);
 }
 
 export function writeProvenance(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   result: ProvenanceSource,
   command: readonly string[],

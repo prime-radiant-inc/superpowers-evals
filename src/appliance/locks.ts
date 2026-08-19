@@ -6,14 +6,14 @@ import { atomicWriteJson } from './fs.ts';
 import { ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
   type ApplianceCommandKind,
-  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
   type LockRecord,
   LockRecordSchema,
   type RefSnapshot,
 } from './types.ts';
 
 export interface AcquireLockArgs {
-  readonly loaded: LoadedApplianceConfig;
+  readonly loaded: LoadedApplianceStateConfig;
   readonly name: LockRecord['name'];
   readonly jobId: string;
   readonly command: ApplianceCommandKind;
@@ -150,7 +150,7 @@ export function updateLockRefs(handle: LockHandle, refs: RefSnapshot): void {
 }
 
 export async function withMutationLocks<T>(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   command: ApplianceCommandKind,
   fn: () => Promise<T>,

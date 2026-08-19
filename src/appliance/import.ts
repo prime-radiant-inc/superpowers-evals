@@ -24,7 +24,7 @@ import {
 import {
   ImportedProvenanceRecordSchema,
   type JobRecord,
-  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
   type Origin,
 } from './types.ts';
 
@@ -279,7 +279,7 @@ function validateBundle(bundleDir: string, manifest: BundleManifest): void {
 // per-entry failure so damaged legacy state gets repaired manually, never
 // papered over with a duplicate record.
 function resolveJobForRun(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   runId: string,
 ): JobRecord | null {
   try {
@@ -298,7 +298,7 @@ function resolveJobForRun(
 // THIS job's imported provenance record is corrupt state for manual
 // repair: never skipped over, healed around, followed, or deleted.
 function classifyProvenanceMarker(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): 'missing' | 'valid' {
   const path = provenancePath(loaded, jobId);
@@ -348,7 +348,7 @@ function classifyProvenanceMarker(
 // which a retry must repair rather than skip — and a marker of any other
 // shape is corrupt state that must fail typed, never pass as complete.
 function importRecordingComplete(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
 ): boolean {
   // A non-import job claiming the run (a live run/run-all record) is not
@@ -380,7 +380,7 @@ function importedProvenanceRecord(job: JobRecord, origin: Origin): unknown {
 // State-side provenance: the sanctioned visibility record under state/. This
 // is the only provenance write healing is allowed to make.
 function writeStateProvenance(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   origin: Origin,
 ): string {
@@ -431,7 +431,7 @@ function buildOrigin(
 // convergent — one run_id, one job record, however many attempts landing
 // took. Writes into the STATE dir only, never inside a run directory.
 function reserveImportJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   entry: BundleManifest['entries'][number],
   manifest: BundleManifest,
   importedAt: string,
@@ -478,7 +478,7 @@ function reserveImportJob(
 // rewrites the same bytes, so a retry after a partial failure converges
 // without duplicates.
 function finishImportJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   entry: BundleManifest['entries'][number],
   origin: Origin,
@@ -512,7 +512,7 @@ function cleanupStageBestEffort(staged: string): string | null {
 }
 
 export function importBundle(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   args: ImportArgs,
 ): ImportResult {
   // Every mutable namespace this command writes through — results root,
@@ -537,7 +537,7 @@ export function importBundle(
 }
 
 function importLocked(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   args: ImportArgs,
 ): ImportResult {
   assertBundleRoot(args.bundleDir);

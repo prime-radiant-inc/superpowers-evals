@@ -7,7 +7,10 @@ import {
 import { evalsContainerPath, statusContainerArgs } from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { inspectLock } from './locks.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import type {
+  LoadedApplianceConfig,
+  LoadedApplianceStateConfig,
+} from './types.ts';
 
 export interface DoctorPayload {
   readonly ok: true;
@@ -43,8 +46,12 @@ function containerState(stdout: string): DoctorPayload['container']['state'] {
   return 'not_checked';
 }
 
+// Container status is a structural probe: only the wrapper's name-scoped
+// status subcommand runs here, never a bundle-bearing invocation. doctorPayload
+// itself stays credential-aware — it reports validated bundle METADATA (and
+// only metadata; payload files are never opened).
 function inspectContainer(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   runner: CommandRunner,
 ): DoctorPayload['container'] {
   const command = evalsContainerPath(loaded);

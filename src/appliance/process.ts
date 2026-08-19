@@ -16,7 +16,12 @@ import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { BatchHeaderSchema } from '../contracts/batch.ts';
 import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { envSnapshot } from '../env.ts';
-import { evalsContainerPath, execContainerArgs } from './container.ts';
+import {
+  evalsContainerPath,
+  execContainerArgs,
+  type RecordedContainerIdentity,
+  runRecordedContainerLifecycle,
+} from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate } from './fs.ts';
 import { readJob, updateJob } from './jobs.ts';
@@ -27,7 +32,13 @@ import {
   preflightForJob,
 } from './preflight.ts';
 import { writeProvenance } from './provenance.ts';
-import type { JobRecord, JobStatus, LoadedApplianceConfig } from './types.ts';
+import { assertScopedCredentialCutover } from './scoped-cutover.ts';
+import type {
+  JobRecord,
+  JobStatus,
+  LoadedApplianceConfig,
+  LoadedApplianceStateConfig,
+} from './types.ts';
 
 const PID_DIR = '/workspace/evals/results/.appliance-pids';
 const PID_POLL_INTERVAL_MS = 100;
@@ -87,7 +98,10 @@ function isTerminal(status: JobStatus): boolean {
   return terminalStatuses().has(status);
 }
 
-function pidFilePath(loaded: LoadedApplianceConfig, jobId: string): string {
+function pidFilePath(
+  loaded: LoadedApplianceStateConfig,
+  jobId: string,
+): string {
   return join(
     loaded.config.container.results_root,
     '.appliance-pids',
@@ -100,7 +114,7 @@ function containerPidPath(jobId: string): string {
 }
 
 async function pollContainerPid(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   timeoutMs: number,
 ): Promise<number | null> {
@@ -123,7 +137,7 @@ async function pollContainerPid(
 }
 
 function updateProcess(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   processInfo: LiveProcessInfo,
   containerPid: number | null,
@@ -155,7 +169,7 @@ function updateProcess(
 }
 
 function hasTerminalArtifact(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   artifacts: ParsedArtifacts,
 ): boolean {
   if (artifacts.batchId !== null) {
@@ -195,7 +209,7 @@ function hasTerminalArtifact(
 }
 
 function runArtifactStopped(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   runId: string,
 ): boolean {
   const verdictPath = join(
@@ -217,7 +231,7 @@ function runArtifactStopped(
 }
 
 function cancellationTerminal(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   artifacts: ParsedArtifacts,
 ): {
   readonly status: 'cancelled' | 'done';
@@ -263,7 +277,7 @@ function runIdentity(job: JobRecord): {
 }
 
 function discoverRunArtifact(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
 ): string | null {
   const identity = runIdentity(job);
@@ -321,7 +335,7 @@ function discoverRunArtifact(
 }
 
 function discoverBatchArtifact(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
 ): string | null {
   if (job.kind !== 'run-all') {
@@ -364,7 +378,7 @@ function discoverBatchArtifact(
 }
 
 function currentArtifacts(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): ParsedArtifacts {
   const job = readJob(loaded, jobId);
@@ -392,7 +406,7 @@ function currentArtifacts(
 }
 
 async function waitForTerminalArtifact(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   graceMs: number,
   pollIntervalMs: number,
@@ -429,7 +443,7 @@ function parseArtifacts(stdout: string): ParsedArtifacts {
 }
 
 function updateArtifacts(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   artifacts: ParsedArtifacts,
 ): JobRecord {
@@ -447,7 +461,7 @@ function updateArtifacts(
 }
 
 function liveStatus(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   result: LiveCommandResult,
   artifacts: ParsedArtifacts,
   current: JobRecord,
@@ -503,7 +517,7 @@ function hasContainerProcessGroup(job: JobRecord): boolean {
 }
 
 function markTerminal(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   status: JobStatus,
   result: LiveCommandResult,
@@ -549,16 +563,50 @@ function interruptHostProcessGroup(child: ChildProcess): void {
   }, 250).unref();
 }
 
+// The recorded container identity a job carries, or null when the job never
+// captured one (no signal can be verified against a container we cannot
+// name). Liveness and cancellation of recorded containers go ONLY through
+// runRecordedContainerLifecycle — the fixed docker inspect + exec seam —
+// never through the wrapper's full-bundle argument path.
+function recordedContainerIdentity(
+  job: JobRecord,
+): RecordedContainerIdentity | null {
+  const name = job.container?.name ?? null;
+  const id = job.container?.id ?? null;
+  if (name === null || id === null || id.trim() === '') {
+    return null;
+  }
+  return { name, id };
+}
+
 function containerProcessGroupAlive(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
+  job: JobRecord,
   pgid: number,
   runner: CommandRunner,
 ): boolean {
-  const result = runner.run(
-    evalsContainerPath(loaded),
-    execContainerArgs(loaded, ['bash', '-lc', `kill -0 -${pgid}`]),
-  );
-  return result.status === 0;
+  const identity = recordedContainerIdentity(job);
+  if (identity === null) {
+    return false;
+  }
+  try {
+    return (
+      runRecordedContainerLifecycle(
+        loaded,
+        runner,
+        identity,
+        'probe-process-group',
+        pgid,
+      ).status === 0
+    );
+  } catch (error) {
+    if (error instanceof ApplianceError) {
+      // A replacement container (or an unverifiable identity) reports lost:
+      // the recorded process group cannot be proven alive.
+      return false;
+    }
+    throw error;
+  }
 }
 
 function hostProcessGroupAlive(pgid: number): boolean {
@@ -580,20 +628,20 @@ function signalHostProcessGroup(pgid: number): boolean {
 }
 
 function jobProcessGroupAlive(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   runner: CommandRunner,
 ): boolean {
   const containerPgid = job.process?.container_pgid ?? null;
   if (containerPgid !== null) {
-    return containerProcessGroupAlive(loaded, containerPgid, runner);
+    return containerProcessGroupAlive(loaded, job, containerPgid, runner);
   }
   const hostPgid = job.process?.host_pgid ?? null;
   return hostPgid !== null && hostProcessGroupAlive(hostPgid);
 }
 
 async function waitForLiveTerminalArtifact(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   runner: CommandRunner,
   result: LiveCommandResult,
@@ -626,7 +674,7 @@ async function waitForLiveTerminalArtifact(
 }
 
 function markFailed(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   error: ApplianceError,
 ): void {
@@ -650,7 +698,7 @@ function markFailed(
 }
 
 function writeArtifactProvenance(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   preflight: PreflightResult,
 ): void {
@@ -802,19 +850,25 @@ export async function launchLiveCommand(
 }
 
 export function spawnDetachedWorker(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): void {
   const processModule = new URL('./process.ts', import.meta.url).href;
   const configModule = new URL('./config.ts', import.meta.url).href;
+  const cutoverModule = new URL('./scoped-cutover.ts', import.meta.url).href;
   const script = `
-const { loadConfig } = await import(${JSON.stringify(configModule)});
+const { loadStateConfig, loadCredentialConfig } = await import(${JSON.stringify(configModule)});
+const { assertScopedCredentialCutover } = await import(${JSON.stringify(cutoverModule)});
 const { runWorker } = await import(${JSON.stringify(processModule)});
 const jobId = Bun.env.EVALS_APPLIANCE_JOB_ID;
 if (jobId === undefined) {
   throw new Error('EVALS_APPLIANCE_JOB_ID is required');
 }
-const loaded = loadConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
+// Structural validation first, then the Tasks 2-4 cutover freeze, then the
+// credential-aware loader for the live worker (post-Task-5).
+loadStateConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
+assertScopedCredentialCutover('detached worker resume');
+const loaded = loadCredentialConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
 await runWorker(loaded, jobId);
 `;
   const child = spawn(process.execPath, ['--eval', script], {
@@ -827,7 +881,7 @@ await runWorker(loaded, jobId);
 }
 
 export function detachedWorkerEnv(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   _source: Readonly<Record<string, string | undefined>> = envSnapshot(),
 ): Record<string, string> {
@@ -845,6 +899,11 @@ export async function runWorker(
   jobId: string,
   runner?: CommandRunner,
 ): Promise<void> {
+  // TEMPORARY (Tasks 2-4): run/run-all workers — including the detached
+  // resume path — are frozen until the scoped credential cutover lands.
+  // Refuse BEFORE lock acquisition or any job mutation; Task 5 deletes this
+  // with the complete caller cutover.
+  assertScopedCredentialCutover('run worker');
   let runLock: LockHandle | null = null;
   let syncLock: LockHandle | null = null;
   let preflight: PreflightResult | null = null;
@@ -981,7 +1040,7 @@ export async function runWorker(
 }
 
 export async function cancelJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   runner: CommandRunner,
   options: CancelOptions = {},
@@ -1008,15 +1067,27 @@ export async function cancelJob(
   if (job.status === 'running') {
     let interrupted = false;
     if (containerPgid !== null) {
-      const result = runner.run(
-        evalsContainerPath(loaded),
-        execContainerArgs(loaded, [
-          'bash',
-          '-lc',
-          `kill -INT -${containerPgid}`,
-        ]),
-      );
-      interrupted = result.status === 0;
+      // Identity-verified cancellation: the SIGINT goes only through the
+      // fixed recorded-container seam. A replacement container (or a job
+      // with no verifiable recorded identity) receives no signal at all.
+      const identity = recordedContainerIdentity(job);
+      if (identity !== null) {
+        try {
+          interrupted =
+            runRecordedContainerLifecycle(
+              loaded,
+              runner,
+              identity,
+              'interrupt-process-group',
+              containerPgid,
+            ).status === 0;
+        } catch (error) {
+          if (!(error instanceof ApplianceError)) {
+            throw error;
+          }
+          interrupted = false;
+        }
+      }
     } else if (hostPgid !== null) {
       interrupted = signalHostProcessGroup(hostPgid);
     }

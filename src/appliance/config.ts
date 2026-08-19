@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEnv } from '../env.ts';
+import { assertCredentialBundleBoundary } from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
 import { readJsonFile } from './fs.ts';
 import { ensurePrivateDirNoFollow } from './safe-fs.ts';
@@ -8,6 +9,7 @@ import {
   ApplianceConfigSchema,
   CredentialBundleMetadataSchema,
   type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
 } from './types.ts';
 
 const DEFAULT_CONFIG_PATH = '/srv/quorum/config/appliance.json';
@@ -22,10 +24,25 @@ function requirePath(path: string, label: string): void {
   }
 }
 
-export function loadConfig(
+function configError(error: unknown): ApplianceError {
+  if (error instanceof ApplianceError) {
+    return new ApplianceError('config_invalid', 'config', error.message);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new ApplianceError('config_invalid', 'config', message);
+}
+
+/**
+ * Load the STRUCTURAL appliance config: parse and validate the config file,
+ * require the appliance root, and derive the state namespace paths. Never
+ * stats or reads the credential bundle, so status/show/costs, jobs, locks,
+ * import, prune, and identity-verified cancellation cannot be stranded by a
+ * missing, unreadable, or unsafe bundle.
+ */
+export function loadStateConfig(
   configPath?: string,
   options: LoadConfigOptions = {},
-): LoadedApplianceConfig {
+): LoadedApplianceStateConfig {
   const resolvedConfigPath =
     configPath ?? getEnv('EVALS_APPLIANCE_CONFIG') ?? DEFAULT_CONFIG_PATH;
 
@@ -37,16 +54,6 @@ export function loadConfig(
     );
 
     requirePath(config.root, 'configured root');
-    requirePath(config.evals.path, 'evals repo');
-    requirePath(config.superpowers.path, 'superpowers repo');
-    requirePath(config.gauntlet.path, 'gauntlet repo');
-    requirePath(config.credential_bundle.path, 'credential bundle');
-
-    const bundle = readJsonFile(
-      join(config.credential_bundle.path, 'metadata.json'),
-      CredentialBundleMetadataSchema,
-      'credential bundle metadata',
-    );
 
     const stateRoot = join(config.root, 'state');
     const paths = {
@@ -69,12 +76,55 @@ export function loadConfig(
 
     return {
       config,
-      bundle,
       configPath: resolvedConfigPath,
       paths,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new ApplianceError('config_invalid', 'config', message);
+    throw configError(error);
+  }
+}
+
+/**
+ * Load the CREDENTIAL-AWARE appliance config: the structural value plus
+ * validated bundle metadata. The code repos must exist, the bundle boundary
+ * must hold (real no-follow directory, no code/results overlap), and
+ * metadata.json must be a no-follow regular file before it is read.
+ * metadata.json is the ONLY bundle access — neither credentials.env nor any
+ * OAuth payload is touched by config loading.
+ */
+export function loadCredentialConfig(
+  configPath?: string,
+  options: LoadConfigOptions = {},
+): LoadedApplianceConfig {
+  const state = loadStateConfig(configPath, options);
+  try {
+    requirePath(state.config.evals.path, 'evals repo');
+    requirePath(state.config.superpowers.path, 'superpowers repo');
+    requirePath(state.config.gauntlet.path, 'gauntlet repo');
+
+    assertCredentialBundleBoundary(state.config);
+    const metadataPath = join(
+      state.config.credential_bundle.path,
+      'metadata.json',
+    );
+    const metadataStats = lstatSync(metadataPath, { throwIfNoEntry: false });
+    if (metadataStats === undefined) {
+      throw new Error(
+        `credential bundle metadata does not exist: ${metadataPath}`,
+      );
+    }
+    if (metadataStats.isSymbolicLink() || !metadataStats.isFile()) {
+      throw new Error(
+        `credential bundle metadata must be a no-follow regular file: ${metadataPath}`,
+      );
+    }
+    const bundle = readJsonFile(
+      metadataPath,
+      CredentialBundleMetadataSchema,
+      'credential bundle metadata',
+    );
+    return { ...state, bundle };
+  } catch (error) {
+    throw configError(error);
   }
 }

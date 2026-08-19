@@ -3,9 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,6 +23,11 @@ import {
 } from '../src/appliance/process.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
+const CONTAINER_ID =
+  'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+// Recorded-container fake: liveness and cancellation of recorded containers
+// go through docker inspect + one fixed docker exec, never the wrapper.
 class FakeRunner implements CommandRunner {
   calls: {
     command: string;
@@ -32,14 +35,7 @@ class FakeRunner implements CommandRunner {
     options?: CommandOptions;
   }[] = [];
 
-  liveResult: CommandResult = {
-    status: 0,
-    stdout: 'artifacts: results/batches/batch-1\n',
-    stderr: '',
-  };
-  onLiveCommand?: () => void;
-  dirtyAfterLiveCommand = false;
-  private liveCommandSeen = false;
+  currentContainerId: string | null = CONTAINER_ID;
   processGroupAlive = false;
   cancelSignalFails = false;
 
@@ -51,74 +47,41 @@ class FakeRunner implements CommandRunner {
     this.calls.push(
       options === undefined ? { command, args } : { command, args, options },
     );
-    if (command === 'git' && args.includes('status')) {
-      if (this.dirtyAfterLiveCommand && this.liveCommandSeen) {
-        return { status: 0, stdout: ' M mutated.txt\n', stderr: '' };
+    if (
+      command === 'docker' &&
+      args[0] === 'container' &&
+      args[1] === 'inspect'
+    ) {
+      if (this.currentContainerId === null) {
+        return { status: 1, stdout: '', stderr: 'no such container\n' };
       }
-      return { status: 0, stdout: '', stderr: '' };
-    }
-    if (
-      command === 'git' &&
-      args.includes('rev-parse') &&
-      args.some((arg) => arg.startsWith('refs/tags/'))
-    ) {
-      return { status: 1, stdout: '', stderr: 'missing tag\n' };
-    }
-    if (command === 'git' && args.includes('rev-parse')) {
-      return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
-    }
-    if (command === 'git' && args.includes('cat-file')) {
-      return { status: 0, stdout: '', stderr: '' };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('status')
-    ) {
       return {
         status: 0,
-        stdout: 'quorum-appliance: exists, running\n',
+        stdout: JSON.stringify([{ Id: this.currentContainerId, Image: 'i' }]),
         stderr: '',
       };
     }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.join(' ').includes('kill -0 -456')
-    ) {
-      return this.processGroupAlive
-        ? { status: 0, stdout: '', stderr: '' }
-        : { status: 1, stdout: '', stderr: '' };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.join(' ').includes('kill -INT -456')
-    ) {
-      return this.cancelSignalFails
-        ? { status: 1, stdout: '', stderr: 'still running\n' }
-        : { status: 0, stdout: '', stderr: '' };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.join(' ').includes('setsid')
-    ) {
-      this.liveCommandSeen = true;
-      this.onLiveCommand?.();
-      return this.liveResult;
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('exec') &&
-      args.includes('evals-tool-versions')
-    ) {
-      return { status: 0, stdout: 'bun 1.3.11\n', stderr: '' };
-    }
-    if (
-      command.endsWith('scripts/evals-container') &&
-      args.includes('exec') &&
-      args.includes('quorum')
-    ) {
-      return { status: 0, stdout: 'ok\n', stderr: '' };
+    if (command === 'docker' && args[0] === 'exec') {
+      const script = args.join(' ');
+      if (script.includes('kill -0 -- -456')) {
+        return this.processGroupAlive
+          ? { status: 0, stdout: '', stderr: '' }
+          : { status: 1, stdout: '', stderr: '' };
+      }
+      if (script.includes('kill -INT -- -456')) {
+        return this.cancelSignalFails
+          ? { status: 1, stdout: '', stderr: 'still running\n' }
+          : { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'unexpected exec\n' };
     }
     return { status: 0, stdout: '', stderr: '' };
+  }
+
+  interruptCalls(): number {
+    return this.calls.filter((call) =>
+      call.args.join(' ').includes('kill -INT'),
+    ).length;
   }
 }
 
@@ -173,30 +136,35 @@ function loaded(): LoadedApplianceConfig {
   };
 }
 
-function writePid(cfg: LoadedApplianceConfig, jobId: string, pid = 456): void {
-  const pidDir = join(cfg.config.container.results_root, '.appliance-pids');
-  mkdirSync(pidDir, { recursive: true });
-  writeFileSync(join(pidDir, `${jobId}.pid`), `${pid}\n`);
-}
-
-function writeFinishedBatch(
+// Mark a job running with a recorded in-container process group AND the
+// recorded container identity the safe signal seam verifies against.
+function markRunning(
   cfg: LoadedApplianceConfig,
-  batchId = 'batch-1',
+  jobId: string,
+  opts: {
+    status?: 'running' | 'stopping';
+    containerId?: string | null;
+  } = {},
 ): void {
-  const batchDir = join(cfg.config.container.results_root, 'batches', batchId);
-  const now = Date.now();
-  mkdirSync(batchDir, { recursive: true });
-  writeFileSync(
-    join(batchDir, 'batch.json'),
-    JSON.stringify({
-      schema_version: 1,
-      id: batchId,
-      started_at: new Date(now - 1_000).toISOString(),
-      finished_at: new Date(now).toISOString(),
-      coding_agents: ['codex'],
-      jobs: 1,
-    }),
-  );
+  updateJob(cfg, jobId, (current) => ({
+    ...current,
+    status: opts.status ?? 'running',
+    container:
+      opts.containerId === null
+        ? null
+        : {
+            name: 'quorum-appliance',
+            id: opts.containerId ?? CONTAINER_ID,
+            image_id: null,
+            mount_signature: 'sig',
+          },
+    process: {
+      host_pid: 123,
+      host_pgid: 123,
+      container_pid: 456,
+      container_pgid: 456,
+    },
+  }));
 }
 
 test('liveCommandArgs launches quorum in a signalable in-container process group', () => {
@@ -321,171 +289,6 @@ test('launchLiveCommand interrupts the host process group when spawn setup fails
   expect(result.stderr).toContain('missing container pid');
 });
 
-test('runWorker preflights, runs live command, records artifacts, and releases locks', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
-  });
-  writeFinishedBatch(cfg);
-  writePid(cfg, job.job_id);
-  let liveLockRefs: unknown = null;
-  runner.onLiveCommand = () => {
-    liveLockRefs = JSON.parse(
-      readFileSync(join(cfg.paths.locks, 'run.lock/lock.json'), 'utf8'),
-    ).refs;
-  };
-
-  await runWorker(cfg, job.job_id, runner);
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('done');
-  expect(updated.artifacts.batch_id).toBe('batch-1');
-  expect(updated.result).toEqual({
-    exit_code: 0,
-    summary: 'live command completed',
-  });
-  expect(updated.process?.host_pid).toBe(process.pid);
-  expect(liveLockRefs).toEqual(updated.refs);
-  expect(
-    statSync(join(cfg.config.container.results_root, '.appliance-pids')).mode &
-      0o777,
-  ).toBe(0o700);
-  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
-  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
-  expect(
-    existsSync(
-      join(
-        cfg.config.container.results_root,
-        'batches/batch-1/appliance-provenance.json',
-      ),
-    ),
-  ).toBe(true);
-  expect(readFileSync(updated.artifacts.stdout_log, 'utf8')).toContain(
-    'artifacts: results/batches/batch-1',
-  );
-});
-
-test('runWorker waits for a terminal single-run artifact after an early zero wrapper exit', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  runner.liveResult = { status: 0, stdout: '', stderr: '' };
-  runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run', 'scenario-a', '--coding-agent', 'codex'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
-  });
-  const runId = 'scenario-a-codex-linux-20260618T000000Z-abcd';
-  writePid(cfg, job.job_id);
-  runner.onLiveCommand = () => {
-    setTimeout(() => {
-      mkdirSync(join(cfg.config.container.results_root, runId), {
-        recursive: true,
-      });
-      writeFileSync(
-        join(cfg.config.container.results_root, runId, 'verdict.json'),
-        JSON.stringify({
-          schema: 1,
-          final: 'pass',
-          final_reason: 'ok',
-          gauntlet: null,
-          checks: [],
-          error: null,
-          economics: null,
-          scenario: 'scenario-a',
-          coding_agent: 'codex',
-          started_at: new Date(Date.now() - 1000).toISOString(),
-          finished_at: new Date().toISOString(),
-        }),
-      );
-    }, 10);
-  };
-
-  await runWorker(cfg, job.job_id, runner);
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('done');
-  expect(updated.artifacts.run_id).toBe(runId);
-  expect(
-    existsSync(
-      join(
-        cfg.config.container.results_root,
-        runId,
-        'appliance-provenance.json',
-      ),
-    ),
-  ).toBe(true);
-});
-
-test('runWorker discovers a terminal batch after an early zero wrapper exit without stdout', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  runner.liveResult = { status: 0, stdout: '', stderr: '' };
-  runner.processGroupAlive = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-8' },
-  });
-  writePid(cfg, job.job_id);
-  runner.onLiveCommand = () => {
-    setTimeout(() => writeFinishedBatch(cfg, 'batch-detached'), 10);
-  };
-
-  await runWorker(cfg, job.job_id, runner);
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('done');
-  expect(updated.artifacts.batch_id).toBe('batch-detached');
-  expect(
-    existsSync(
-      join(
-        cfg.config.container.results_root,
-        'batches/batch-detached/appliance-provenance.json',
-      ),
-    ),
-  ).toBe(true);
-});
-
-test('runWorker throws and leaves a quarantined record when postflight finds a dirty repo', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  runner.dirtyAfterLiveCommand = true;
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
-  });
-  writeFinishedBatch(cfg);
-  writePid(cfg, job.job_id);
-
-  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
-    code: 'repo_dirty',
-    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
-  });
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('quarantined');
-  expect(updated.finished_at).not.toBe(null);
-  expect(updated.result).toEqual({
-    exit_code: 0,
-    summary: `postflight dirty check failed: dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
-  });
-  expect(updated.error).toMatchObject({
-    code: 'repo_dirty',
-    message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
-  });
-  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
-  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
-});
-
 test('liveCommandArgs exports detached signal mode for appliance run-all', () => {
   const cfg = loaded();
   const runAllArgs = liveCommandArgs(cfg, 'job-run-all', [
@@ -510,36 +313,12 @@ test('liveCommandArgs exports detached signal mode for appliance run-all', () =>
   );
 });
 
-test('runWorker fails when a nonzero live command only created a batch shell', async () => {
-  const cfg = loaded();
-  const runner = new FakeRunner();
-  runner.liveResult = {
-    status: 1,
-    stdout: 'batch batch-1\nartifacts: results/batches/batch-1\n',
-    stderr: 'boom\n',
-  };
-  const job = createJob(cfg, {
-    kind: 'run-all',
-    superpowersRef: 'feature/ref',
-    argv: ['quorum', 'run-all', '--tier', 'sentinel'],
-    requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
-  });
-  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
-    recursive: true,
-  });
-  writePid(cfg, job.job_id);
-
-  await runWorker(cfg, job.job_id, runner);
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('failed');
-  expect(updated.result).toEqual({
-    exit_code: 1,
-    summary: 'live command exited 1',
-  });
-});
-
-test('runWorker fails a successful live command without a captured container process group', async () => {
+// Through Tasks 2-4 the detached worker resume path is frozen behind the
+// scoped credential cutover guard: it must refuse with the exact typed error
+// BEFORE acquiring locks, mutating the job record, or calling the runner.
+// Task 5 replaces these expectations with the scoped end-state behavior in
+// the same commit that deletes the guard.
+test('runWorker refuses with the typed scoped-cutover error', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
   const job = createJob(cfg, {
@@ -548,19 +327,22 @@ test('runWorker fails a successful live command without a captured container pro
     argv: ['quorum', 'run-all', '--tier', 'sentinel'],
     requester: { agent: 'codex', thread: 'thread-1', task: 'task-6' },
   });
-  mkdirSync(join(cfg.config.container.results_root, 'batches/batch-1'), {
-    recursive: true,
+
+  await expect(runWorker(cfg, job.job_id, runner)).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'scoped-cutover',
+    message: expect.stringContaining('scoped credential cutover incomplete'),
   });
 
-  await runWorker(cfg, job.job_id, runner);
-
-  const updated = readJob(cfg, job.job_id);
-  expect(updated.status).toBe('failed');
-  expect(updated.result.summary).toBe('container process id was not captured');
-  expect(updated.process?.container_pgid).toBe(null);
+  const after = readJob(cfg, job.job_id);
+  expect(after.status).toBe('preflighting');
+  expect(after.started_at).toBe(null);
+  expect(runner.calls).toEqual([]);
+  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
+  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
 });
 
-test('cancel sends SIGINT to the recorded in-container process group', async () => {
+test('cancel sends one fixed SIGINT to the recorded container id only', async () => {
   const cfg = loaded();
   const runner = new FakeRunner();
   const job = createJob(cfg, {
@@ -569,20 +351,63 @@ test('cancel sends SIGINT to the recorded in-container process group', async () 
     argv: ['quorum', 'run-all'],
     requester: { agent: null, thread: null, task: null },
   });
-  updateJob(cfg, job.job_id, (current) => ({
-    ...current,
-    status: 'running',
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
-  }));
+  markRunning(cfg, job.job_id);
+
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
-  expect(
-    runner.calls.some((call) => call.args.join(' ').includes('kill -INT -456')),
-  ).toBe(true);
+
+  const interrupt = runner.calls.find((call) =>
+    call.args.join(' ').includes('kill -INT'),
+  );
+  expect(interrupt).toEqual({
+    command: 'docker',
+    args: ['exec', CONTAINER_ID, 'bash', '-c', 'kill -INT -- -456'],
+  });
+  // The safe signal seam is the ONLY container access: docker inspect/exec,
+  // never the wrapper, never bundle env-files or auth mounts.
+  for (const call of runner.calls) {
+    expect(call.command).toBe('docker');
+    expect(call.args.join(' ')).not.toContain('--env-file');
+    expect(call.args.join(' ')).not.toContain('--auth');
+    expect(call.args.join(' ')).not.toContain('evals-container');
+  }
+  expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+test('cancel of a replaced container emits no signal and reports lost', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.currentContainerId = 'replacement-container-id';
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  markRunning(cfg, job.job_id);
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  expect(runner.interruptCalls()).toBe(0);
+  expect(runner.calls.every((call) => call.command === 'docker')).toBe(true);
+  expect(readJob(cfg, job.job_id).status).toBe('lost');
+});
+
+test('cancel of a job with no recorded container identity emits no signal', async () => {
+  const cfg = loaded();
+  const runner = new FakeRunner();
+  runner.processGroupAlive = true;
+  const job = createJob(cfg, {
+    kind: 'run-all',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run-all'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  markRunning(cfg, job.job_id, { containerId: null });
+
+  await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
+
+  expect(runner.interruptCalls()).toBe(0);
   expect(readJob(cfg, job.job_id).status).toBe('lost');
 });
 
@@ -615,16 +440,10 @@ test('cancel records cancelled for a stopped single-run verdict discovered after
       finished_at: new Date().toISOString(),
     }),
   );
+  markRunning(cfg, job.job_id);
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
-    status: 'running',
     started_at: new Date(Date.now() - 2000).toISOString(),
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
   }));
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -663,16 +482,10 @@ test('cancel records done for a completed single-run verdict discovered after SI
       finished_at: new Date().toISOString(),
     }),
   );
+  markRunning(cfg, job.job_id);
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
-    status: 'running',
     started_at: new Date(Date.now() - 2000).toISOString(),
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
   }));
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
@@ -693,16 +506,7 @@ test('cancel leaves a running job retryable when SIGINT fails and the process is
     argv: ['quorum', 'run-all'],
     requester: { agent: null, thread: null, task: null },
   });
-  updateJob(cfg, job.job_id, (current) => ({
-    ...current,
-    status: 'running',
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
-  }));
+  markRunning(cfg, job.job_id);
 
   let message = '';
   try {
@@ -726,16 +530,7 @@ test('cancel keeps a job stopping when the process group is still alive after gr
     argv: ['quorum', 'run-all'],
     requester: { agent: null, thread: null, task: null },
   });
-  updateJob(cfg, job.job_id, (current) => ({
-    ...current,
-    status: 'running',
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
-  }));
+  markRunning(cfg, job.job_id);
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
 
@@ -753,23 +548,12 @@ test('cancel retry classifies an exited stopping process without sending another
     argv: ['quorum', 'run-all'],
     requester: { agent: null, thread: null, task: null },
   });
-  updateJob(cfg, job.job_id, (current) => ({
-    ...current,
-    status: 'stopping',
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
-  }));
+  markRunning(cfg, job.job_id, { status: 'stopping' });
 
   await cancelJob(cfg, job.job_id, runner, { graceMs: 0 });
 
   expect(readJob(cfg, job.job_id).status).toBe('lost');
-  expect(
-    runner.calls.some((call) => call.args.join(' ').includes('kill -INT -456')),
-  ).toBe(false);
+  expect(runner.interruptCalls()).toBe(0);
 });
 
 test('cancel records cancelled when a terminal batch footer is visible', async () => {
@@ -795,15 +579,9 @@ test('cancel records cancelled when a terminal batch footer is visible', async (
       jobs: 1,
     }),
   );
+  markRunning(cfg, job.job_id);
   updateJob(cfg, job.job_id, (current) => ({
     ...current,
-    status: 'running',
-    process: {
-      host_pid: 123,
-      host_pgid: 123,
-      container_pid: 456,
-      container_pgid: 456,
-    },
     artifacts: {
       ...current.artifacts,
       batch_id: 'batch-1',

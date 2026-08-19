@@ -360,3 +360,18 @@ test('a jobs-root enumeration failure is typed config_invalid, never a raw fs er
   expect(err.step).toBe('job');
   expect(err.message).toContain('EACCES');
 });
+
+// Job persistence is part of the structural state boundary: the whole API
+// accepts a state-only loaded config carrying no bundle metadata.
+test('job lifecycle operates on the structural state config', () => {
+  const full = loaded();
+  const { bundle: _bundle, ...structural } = full;
+  const job = createJob(structural, {
+    kind: 'run',
+    superpowersRef: 'main',
+    argv: ['quorum', 'run'],
+    requester: { agent: null, thread: null, task: null },
+  });
+  expect(readJob(structural, job.job_id).job_id).toBe(job.job_id);
+  expect(readJobById(structural, job.job_id)?.job_id).toBe(job.job_id);
+});

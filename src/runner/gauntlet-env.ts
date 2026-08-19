@@ -1,3 +1,10 @@
+import {
+  APPLIANCE_SCOPED_GRADER_MODE,
+  GRADER_AUTH_RUNTIME_NAMES,
+  GRADER_SOURCE_ENV_BY_RUNTIME_NAME,
+  QUORUM_GRADER_SOURCE_MODE,
+} from '../credentials/grader.ts';
+
 // The gauntlet child is quorum's own QA driver, but the agent under test
 // shares its UID — and a same-UID process can read a peer's environment
 // (/proc/<pid>/environ on Linux, `ps eww` on macOS). The child therefore gets
@@ -95,16 +102,65 @@ export const GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
   'ANTHROPIC_BASE_URL',
 ];
 
+// The four canonical grader names above, as a set: in `appliance-scoped`
+// mode they are filled ONLY from the QUORUM_GRADER_* aliases, never from the
+// host's canonical values (which belong to the agent under test there).
+const GRADER_RUNTIME_NAME_SET: ReadonlySet<string> = new Set(
+  Object.keys(GRADER_SOURCE_ENV_BY_RUNTIME_NAME),
+);
+
+function scopedGraderProjection(
+  host: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const name of GAUNTLET_ENV_ALLOWLIST) {
+    if (GRADER_RUNTIME_NAME_SET.has(name)) continue;
+    const value = host[name];
+    if (value !== undefined) out[name] = value;
+  }
+  for (const [runtimeName, alias] of Object.entries(
+    GRADER_SOURCE_ENV_BY_RUNTIME_NAME,
+  )) {
+    const value = host[alias];
+    if (value !== undefined) out[runtimeName] = value;
+  }
+  const hasAuth = GRADER_AUTH_RUNTIME_NAMES.some((name) => {
+    const value = out[name];
+    return value !== undefined && value !== '';
+  });
+  if (!hasAuth) {
+    throw new Error(
+      'appliance-scoped grader projection: no nonempty QUORUM_GRADER_* auth source ' +
+        '(a base URL alone is not auth); canonical grader values are never a fallback in this mode',
+    );
+  }
+  return out;
+}
+
 /**
  * Project the host env onto {@link GAUNTLET_ENV_ALLOWLIST}. Undefined host
- * values are omitted, never passed through as empty strings. Copilot does not
- * use this: it keeps its copilotGauntletEnv — this standard list PLUS
- * copilot's evidenced routing names (a superset, never smaller), with
- * credentialed-proxy rejection.
+ * values are omitted, never passed through as empty strings. With
+ * QUORUM_GRADER_SOURCE_MODE absent, the trusted-local canonical grader input
+ * contract applies unchanged. With the explicit `appliance-scoped` mode, the
+ * grader credential is read only from the QUORUM_GRADER_* aliases and written
+ * under the mapped canonical names; unknown or empty explicit modes fail
+ * closed rather than choosing a source implicitly. Alias names (and the mode
+ * marker itself) never appear in the returned child env. Copilot composes
+ * this function first, then adds its own evidenced routing names
+ * (copilotGauntletEnv in src/agents/copilot.ts).
  */
 export function gauntletEnvBase(
   host: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> {
+  const mode = host[QUORUM_GRADER_SOURCE_MODE];
+  if (mode !== undefined) {
+    if (mode !== APPLIANCE_SCOPED_GRADER_MODE) {
+      throw new Error(
+        `unknown ${QUORUM_GRADER_SOURCE_MODE} '${mode}': expected the marker to be absent or exactly '${APPLIANCE_SCOPED_GRADER_MODE}'`,
+      );
+    }
+    return scopedGraderProjection(host);
+  }
   const out: Record<string, string | undefined> = {};
   for (const name of GAUNTLET_ENV_ALLOWLIST) {
     const value = host[name];

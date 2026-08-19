@@ -11,6 +11,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { copilotGauntletEnv } from '../src/agents/copilot.ts';
+import {
+  APPLIANCE_SCOPED_GRADER_MODE,
+  QUORUM_GRADER_SOURCE_MODE,
+} from '../src/credentials/grader.ts';
+import { resolveApiKey } from '../src/credentials/resolve.ts';
 import { envSnapshot } from '../src/env.ts';
 import {
   GAUNTLET_ENV_ALLOWLIST,
@@ -468,5 +474,127 @@ test('adapter provision env is consumed pre-spawn and cannot enter the gauntlet 
     for (const dir of [shimDir, runDir, home, cwd]) {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+// --- grader source-mode projection ------------------------------------------
+// In `appliance-scoped` mode, the grader credential comes ONLY from the
+// QUORUM_GRADER_* aliases; canonical values in the parent env are never a
+// fallback. With the marker absent, the trusted-local canonical contract is
+// preserved unchanged. Unknown or empty explicit modes fail closed.
+
+test('scoped mode maps grader aliases onto canonical names and ignores canonical input', () => {
+  const env = gauntletEnvBase({
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+    QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+    QUORUM_GRADER_ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+    ANTHROPIC_API_KEY: 'agent-key',
+    CLAUDE_CODE_OAUTH_TOKEN: 'agent-oauth',
+    PATH: '/usr/bin:/bin',
+    TMUX_TMPDIR: '/tmp/tmux',
+  });
+  expect(env['ANTHROPIC_API_KEY']).toBe('grader-key');
+  expect(env['ANTHROPIC_BASE_URL']).toBe('https://gateway.example/v1');
+  // Canonical agent credentials in the parent are ignored; absent aliases
+  // are omitted, never backfilled from canonical values.
+  expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
+  expect(env['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
+  // The non-secret contract still projects, and neither the aliases nor the
+  // mode marker leak into the child env.
+  expect(env['PATH']).toBe('/usr/bin:/bin');
+  expect(env['TMUX_TMPDIR']).toBe('/tmp/tmux');
+  for (const name of Object.keys(env)) {
+    expect(name.startsWith('QUORUM_GRADER_')).toBe(false);
+  }
+});
+
+test('scoped mode with a partial alias set maps the present aliases only', () => {
+  const env = gauntletEnvBase({
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+    QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN: 'grader-token',
+  });
+  expect(env['ANTHROPIC_AUTH_TOKEN']).toBe('grader-token');
+  expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
+  expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
+  expect(env['ANTHROPIC_BASE_URL']).toBeUndefined();
+});
+
+test('scoped mode fails when zero nonempty auth aliases are present', () => {
+  // No aliases at all, only a base URL, and only empty auth values: base URL
+  // alone is not auth, and canonical values are never consulted.
+  const cases: Record<string, string | undefined>[] = [
+    { ANTHROPIC_API_KEY: 'agent-key' },
+    { QUORUM_GRADER_ANTHROPIC_BASE_URL: 'https://gateway.example/v1' },
+    { QUORUM_GRADER_ANTHROPIC_API_KEY: '' },
+  ];
+  for (const host of cases) {
+    expect(() =>
+      gauntletEnvBase({
+        [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+        ...host,
+      }),
+    ).toThrow(/auth/);
+  }
+});
+
+test('unknown or empty explicit source modes fail closed', () => {
+  for (const mode of ['', 'appliance', 'legacy', 'APPLIANCE-SCOPED']) {
+    expect(() =>
+      gauntletEnvBase({
+        [QUORUM_GRADER_SOURCE_MODE]: mode,
+        QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+        ANTHROPIC_API_KEY: 'agent-key',
+      }),
+    ).toThrow(/QUORUM_GRADER_SOURCE_MODE/);
+  }
+});
+
+test('with the marker absent the canonical trusted-local contract is unchanged', () => {
+  const env = gauntletEnvBase({
+    ANTHROPIC_API_KEY: 'agent-key',
+    QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+  });
+  expect(env['ANTHROPIC_API_KEY']).toBe('agent-key');
+  for (const name of Object.keys(env)) {
+    expect(name.startsWith('QUORUM_GRADER_')).toBe(false);
+  }
+});
+
+// Parent env carrying BOTH a canonical agent key and a grader alias: the
+// ordinary agent adapter input stays the agent value while the grader
+// projection returns the grader value under the canonical name, and neither
+// projection contains the alias.
+test('agent adapter input and grader projection split cleanly in scoped mode', () => {
+  const restore = swapEnv({
+    ANTHROPIC_API_KEY: 'agent-key',
+    QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+  });
+  try {
+    const resolution = resolveApiKey(
+      {
+        model: 'claude-x',
+        harnesses: ['claude'],
+        api: 'anthropic',
+        auth: 'api-key',
+        compat: {},
+      },
+      'ANTHROPIC_API_KEY',
+    );
+    expect(resolution).toEqual({ kind: 'env', value: 'agent-key' });
+
+    const graderEnv = gauntletEnvBase(envSnapshot());
+    expect(graderEnv['ANTHROPIC_API_KEY']).toBe('grader-key');
+    expect(
+      Object.keys(graderEnv).some((name) => name.startsWith('QUORUM_GRADER_')),
+    ).toBe(false);
+
+    const copilotEnv = copilotGauntletEnv(envSnapshot());
+    expect(copilotEnv['ANTHROPIC_API_KEY']).toBe('grader-key');
+    expect(
+      Object.keys(copilotEnv).some((name) => name.startsWith('QUORUM_GRADER_')),
+    ).toBe(false);
+  } finally {
+    restore();
   }
 });

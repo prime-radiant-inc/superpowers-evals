@@ -18,7 +18,11 @@ import type {
 } from '../src/agents/command-runner.ts';
 import { toErrorJson } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
-import { preflightForJob, prepare } from '../src/appliance/preflight.ts';
+import {
+  postflightDirtyCheck,
+  preflightForJob,
+  prepare,
+} from '../src/appliance/preflight.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 
 class FakeRunner implements CommandRunner {
@@ -344,9 +348,15 @@ test('preflight maps container build failures to image_build_failed', async () =
   });
 });
 
-test('prepare records a failed job when run.lock is already held', async () => {
+// Through Tasks 2-4 the production prepare action is frozen behind the scoped
+// credential cutover guard: it refuses with the exact typed error BEFORE
+// creating a job, acquiring locks, or calling the runner. The lock-busy
+// failed-job recording and the postflight quarantine flow this entry point
+// used to exercise return in Task 5 with the guard's removal; the postflight
+// quarantine contract itself stays covered below through its direct seam.
+test('prepare refuses with the typed scoped-cutover error before any state mutation', async () => {
   const cfg = loaded();
-  mkdirSync(join(cfg.paths.locks, 'run.lock'), { recursive: true });
+  const runner = new FakeRunner();
 
   let caught: unknown = null;
   try {
@@ -355,100 +365,61 @@ test('prepare records a failed job when run.lock is already held', async () => {
       superpowersRef: 'main',
       argv: ['prepare'],
       requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
-      runner: new FakeRunner(),
+      runner,
     });
   } catch (error) {
     caught = error;
   }
 
   expect(caught).toMatchObject({
-    code: 'lock_busy',
-    step: 'lock',
-    message: 'run.lock is held',
+    code: 'config_invalid',
+    step: 'scoped-cutover',
+    message: expect.stringContaining('scoped credential cutover incomplete'),
   });
-  expect(toErrorJson(caught)).toEqual({
+  expect(toErrorJson(caught)).toMatchObject({
     ok: false,
-    error: {
-      code: 'lock_busy',
-      step: 'lock',
-      message: 'run.lock is held',
-    },
+    error: { code: 'config_invalid', step: 'scoped-cutover' },
   });
-
-  const jobIds = readdirSync(cfg.paths.jobs);
-  expect(jobIds).toHaveLength(1);
-  const jobId = jobIds[0];
-  if (jobId === undefined) {
-    throw new Error('expected prepare job record');
-  }
-  const job = readJob(cfg, jobId);
-  expect(job.status).toBe('failed');
-  expect(job.finished_at).not.toBe(null);
-  expect(job.result).toEqual({
-    exit_code: 1,
-    summary: 'run.lock is held',
-  });
-  expect(job.error).toEqual({
-    code: 'lock_busy',
-    step: 'lock',
-    message: 'run.lock is held',
-  });
+  expect(readdirSync(cfg.paths.jobs)).toHaveLength(0);
+  expect(existsSync(join(cfg.paths.locks, 'run.lock'))).toBe(false);
+  expect(existsSync(join(cfg.paths.locks, 'sync.lock'))).toBe(false);
+  expect(runner.calls).toHaveLength(0);
 });
 
-test('prepare quarantines a job when postflight finds a dirty managed repo', async () => {
+// Direct seam for the postflight quarantine contract (previously reached via
+// prepare()): a dirty managed repo quarantines the job with the typed
+// repo_dirty error; a clean tree returns null and leaves the record alone.
+test('postflightDirtyCheck quarantines the job on a dirty managed repo', () => {
   const cfg = loaded();
   const runner = new FakeRunner();
-  let quorumCheckSeen = false;
-  runner.results.push(
-    {
-      match: (command, args) =>
-        command === 'git' &&
-        args.includes('status') &&
-        quorumCheckSeen === true,
-      result: { status: 0, stdout: ' M mutated.txt\n', stderr: '' },
-    },
-    {
-      match: (command, args) => {
-        const matched =
-          command.endsWith('scripts/evals-container') &&
-          args.includes('exec') &&
-          args.includes('quorum') &&
-          args.includes('check');
-        if (matched) {
-          quorumCheckSeen = true;
-        }
-        return matched;
-      },
-      result: { status: 0, stdout: 'ok\n', stderr: '' },
-    },
-  );
+  const job = createJob(cfg, {
+    kind: 'prepare',
+    superpowersRef: 'main',
+    argv: ['prepare'],
+    requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
+  });
 
-  await expect(
-    prepare({
-      loaded: cfg,
-      superpowersRef: 'main',
-      argv: ['prepare'],
-      requester: { agent: 'codex', thread: 'thread-1', task: 'task-7' },
-      runner,
-    }),
-  ).rejects.toMatchObject({
+  const clean = postflightDirtyCheck(cfg, job.job_id, runner);
+  expect(clean).toBe(null);
+  expect(readJob(cfg, job.job_id).status).toBe('preflighting');
+
+  runner.results.push({
+    match: (command, args) => command === 'git' && args.includes('status'),
+    result: { status: 0, stdout: ' M mutated.txt\n', stderr: '' },
+  });
+  const dirty = postflightDirtyCheck(cfg, job.job_id, runner);
+  expect(dirty).toMatchObject({
     code: 'repo_dirty',
     message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
   });
 
-  const jobIds = readdirSync(cfg.paths.jobs);
-  expect(jobIds).toHaveLength(1);
-  const jobId = jobIds[0];
-  if (jobId === undefined) {
-    throw new Error('expected prepare job record');
-  }
-  const job = readJob(cfg, jobId);
-  expect(job.status).toBe('quarantined');
-  expect(job.finished_at).not.toBe(null);
-  expect(job.result.summary).toBe(
+  const updated = readJob(cfg, job.job_id);
+  expect(updated.status).toBe('quarantined');
+  expect(updated.finished_at).not.toBe(null);
+  expect(updated.result.summary).toBe(
     `postflight dirty check failed: dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
   );
-  expect(job.error).toMatchObject({
+  expect(updated.error).toMatchObject({
     code: 'repo_dirty',
     message: `dirty worktree at ${cfg.config.evals.path}: M mutated.txt`,
   });

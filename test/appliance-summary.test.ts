@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
+import * as fs from 'node:fs';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadStateConfig } from '../src/appliance/config.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
@@ -490,5 +492,86 @@ test('costs normalizes missing batch files to artifact_missing', () => {
   } catch (error) {
     expect(error).toBeInstanceOf(ApplianceError);
     expect((error as ApplianceError).code).toBe('artifact_missing');
+  }
+});
+
+// --- structural readability with a broken credential bundle ------------------
+// Status/show/costs accept the structural state config: a missing,
+// unreadable, final-symlink, or intermediate-symlink bundle metadata cannot
+// strand those read operations.
+test('status, show, and costs remain readable over every broken-bundle shape', () => {
+  const shapes = ['missing', 'unreadable', 'final-symlink', 'mid-symlink'];
+  for (const shape of shapes) {
+    const { realpathSync: realpath } = fs;
+    const root = realpath(
+      fs.mkdtempSync(join(tmpdir(), `appliance-summary-bundle-${shape}-`)),
+    );
+    for (const dir of [
+      'state/jobs',
+      'superpowers-evals/results/run-1',
+      'credentials',
+    ]) {
+      fs.mkdirSync(join(root, dir), { recursive: true });
+    }
+    const bundleDir = join(root, 'credentials/blessed');
+    if (shape === 'mid-symlink') {
+      fs.mkdirSync(join(root, 'aside/blessed'), { recursive: true });
+      fs.rmSync(join(root, 'credentials'), { recursive: true, force: true });
+      fs.symlinkSync(join(root, 'aside'), join(root, 'credentials'));
+    } else {
+      fs.mkdirSync(bundleDir, { recursive: true });
+      if (shape === 'unreadable') {
+        fs.writeFileSync(join(bundleDir, 'metadata.json'), '{}');
+        fs.chmodSync(join(bundleDir, 'metadata.json'), 0o000);
+      } else if (shape === 'final-symlink') {
+        fs.symlinkSync(
+          join(root, 'nowhere.json'),
+          join(bundleDir, 'metadata.json'),
+        );
+      }
+    }
+    const configPath = join(root, 'appliance.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        root,
+        evals: {
+          path: join(root, 'superpowers-evals'),
+          remote: 'origin',
+          ref: 'main',
+        },
+        superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+        gauntlet: {
+          path: join(root, 'gauntlet'),
+          remote: 'origin',
+          ref: 'main',
+        },
+        credential_bundle: { name: 'blessed', path: bundleDir },
+        container: {
+          name: 'quorum-appliance',
+          results_root: join(root, 'superpowers-evals/results'),
+        },
+      }),
+    );
+    fs.writeFileSync(
+      join(root, 'superpowers-evals/results/run-1/verdict.json'),
+      JSON.stringify({
+        schema: 1,
+        final: 'pass',
+        final_reason: 'ok',
+        gauntlet: null,
+        checks: [],
+        error: null,
+        economics: null,
+      }),
+    );
+
+    const structural = loadStateConfig(configPath);
+    const status = statusPayload(structural, 'run-1');
+    expect(status.status).toBe('done');
+    expect(showPayload(structural, 'run-1', true)).toMatchObject({
+      final: 'pass',
+    });
+    expect(costsPayload(structural, 'run-1', true)).toBeDefined();
   }
 });

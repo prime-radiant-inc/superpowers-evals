@@ -17,7 +17,7 @@ import { inspectLock } from './locks.ts';
 import type {
   JobRecord,
   JobStatus,
-  LoadedApplianceConfig,
+  LoadedApplianceStateConfig,
   Origin,
 } from './types.ts';
 
@@ -137,11 +137,11 @@ function parseJson<T>(schema: z.ZodType<T>, path: string, step: string): T {
   return parsed.data;
 }
 
-function batchDir(loaded: LoadedApplianceConfig, batchId: string): string {
+function batchDir(loaded: LoadedApplianceStateConfig, batchId: string): string {
   return join(loaded.config.container.results_root, 'batches', batchId);
 }
 
-function runDir(loaded: LoadedApplianceConfig, runId: string): string {
+function runDir(loaded: LoadedApplianceStateConfig, runId: string): string {
   return join(loaded.config.container.results_root, runId);
 }
 
@@ -162,7 +162,7 @@ function classifyResolvedTarget(path: string, job: JobRecord | null): Target {
 }
 
 function matchingArtifactJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   id: string,
 ): JobRecord | null {
   try {
@@ -236,7 +236,7 @@ function jobHostProcessAlive(job: JobRecord): boolean {
 }
 
 function jobRunLockActive(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
 ): boolean {
   const lock = inspectLock(join(loaded.paths.locks, 'run.lock'));
@@ -254,7 +254,7 @@ function inStartupGrace(job: JobRecord): boolean {
 }
 
 function effectiveJobStatus(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   hasTerminalArtifact: boolean,
 ): JobStatus {
@@ -273,7 +273,10 @@ function effectiveJobStatus(
   return 'lost';
 }
 
-function resolveJobArtifact(loaded: LoadedApplianceConfig, id: string): Target {
+function resolveJobArtifact(
+  loaded: LoadedApplianceStateConfig,
+  id: string,
+): Target {
   const job = readJob(loaded, id);
   if (job.artifacts.batch_id !== null) {
     return {
@@ -295,7 +298,7 @@ function resolveJobArtifact(loaded: LoadedApplianceConfig, id: string): Target {
 }
 
 function resolveSummaryTarget(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   id: string,
 ): Target {
   const resultsRoot = loaded.config.container.results_root;
@@ -393,7 +396,7 @@ function cellVerdict(
 }
 
 function batchSummary(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   batchPath: string,
 ): {
   readonly header: z.infer<typeof BatchHeaderSchema>;
@@ -439,7 +442,7 @@ function costsTarget(target: Target): string | undefined {
 }
 
 export function statusPayload(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   id: string,
 ): StatusPayload {
   const target = resolveSummaryTarget(loaded, id);
@@ -496,7 +499,7 @@ export function statusPayload(
 }
 
 export function showPayload(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   id: string,
   json: boolean,
 ): string | unknown {
@@ -523,7 +526,7 @@ export function showPayload(
 }
 
 export function costsPayload(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   id: string,
   json: boolean,
 ): string | unknown {

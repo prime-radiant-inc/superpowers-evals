@@ -8,7 +8,7 @@ import {
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
 import { getEnv } from '../env.ts';
-import { loadConfig as loadApplianceConfig } from './config.ts';
+import { loadCredentialConfig, loadStateConfig } from './config.ts';
 import { doctorPayload } from './doctor.ts';
 import { ApplianceError, toErrorJson } from './errors.ts';
 import { importBundle } from './import.ts';
@@ -16,8 +16,9 @@ import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
 import { prune as pruneResults } from './prune.ts';
+import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import type { LoadedApplianceStateConfig } from './types.ts';
 
 interface BaseCommandArgs {
   readonly json: boolean;
@@ -92,7 +93,9 @@ export interface ApplianceCliDeps {
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly setExitCode?: (code: number) => void;
-  readonly loadConfig?: () => LoadedApplianceConfig;
+  // Argument validation only needs the structural config; the credential
+  // bundle is never consulted at this layer.
+  readonly loadConfig?: () => LoadedApplianceStateConfig;
   readonly actions?: Partial<ApplianceActions>;
 }
 
@@ -241,7 +244,7 @@ function assertNoForbiddenRunAllFlags(args: readonly string[]): void {
 
 function assertSupportedRunAllArgs(
   args: readonly string[],
-  loadConfig: () => LoadedApplianceConfig,
+  loadConfig: () => LoadedApplianceStateConfig,
 ): void {
   assertNoDuplicateOption(args, '--coding-agents');
   assertNoDuplicateOption(args, '--os');
@@ -283,7 +286,7 @@ function assertSupportedRunAllArgs(
 
 function normalizeScenarioPath(
   scenario: string,
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
 ): string {
   const value = scenario.trim();
   const scenariosRoot = join(loaded.config.evals.path, 'scenarios');
@@ -331,11 +334,17 @@ function normalizeScenarioPath(
 function defaultActions(): ApplianceActions {
   return {
     doctor: async () => {
-      const loaded = loadApplianceConfig();
+      const loaded = loadCredentialConfig();
       return doctorPayload(loaded);
     },
     prepare: async (args) => {
-      const loaded = loadApplianceConfig(undefined, { ensureState: true });
+      // TEMPORARY (Tasks 2-4): structural-config validation, then the scoped
+      // cutover freeze — BEFORE job creation, state mutation, the
+      // credential-aware loader, bundle access, or Docker. Task 5 deletes
+      // the guard in the same commit as the complete caller cutover.
+      loadStateConfig();
+      assertScopedCredentialCutover('prepare');
+      const loaded = loadCredentialConfig(undefined, { ensureState: true });
       const job = createJob(loaded, {
         kind: 'prepare',
         superpowersRef: args.superpowersRef,
@@ -352,10 +361,15 @@ function defaultActions(): ApplianceActions {
       return { ok: true, job_id: job.job_id, ...result };
     },
     run: async (args) => {
-      const loaded = loadApplianceConfig();
-      const scenario = normalizeScenarioPath(args.scenario, loaded);
-      const codingAgentsDir = join(loaded.config.evals.path, 'coding-agents');
+      const structural = loadStateConfig();
+      const scenario = normalizeScenarioPath(args.scenario, structural);
+      const codingAgentsDir = join(
+        structural.config.evals.path,
+        'coding-agents',
+      );
       assertSupportedAgent(args.agent, codingAgentsDir);
+      // TEMPORARY (Tasks 2-4): see prepare above.
+      assertScopedCredentialCutover('run');
       const argv = ['quorum', 'run', scenario, '--coding-agent', args.agent];
       return submitLiveJob({
         kind: 'run',
@@ -364,38 +378,43 @@ function defaultActions(): ApplianceActions {
         detach: args.detach,
       });
     },
-    runAll: async (args) =>
-      submitLiveJob({
+    runAll: async (args) => {
+      // Argument validation ran in the command action; validate the
+      // structural config, then the Tasks 2-4 cutover freeze (see prepare).
+      loadStateConfig();
+      assertScopedCredentialCutover('run-all');
+      return submitLiveJob({
         kind: 'run-all',
         superpowersRef: args.superpowersRef,
         argv: ['quorum', 'run-all', ...args.quorumArgs],
         detach: args.detach,
-      }),
+      });
+    },
     status: async (args) => {
-      const loaded = loadApplianceConfig();
+      const loaded = loadStateConfig();
       return statusPayload(loaded, args.id);
     },
     cancel: async (args) => {
-      const loaded = loadApplianceConfig();
+      const loaded = loadStateConfig();
       return cancelJob(loaded, args.id, defaultCommandRunner);
     },
     show: async (args) => {
-      const loaded = loadApplianceConfig();
+      const loaded = loadStateConfig();
       return showPayload(loaded, args.id, args.json);
     },
     costs: async (args) => {
-      const loaded = loadApplianceConfig();
+      const loaded = loadStateConfig();
       return costsPayload(loaded, args.id, args.json);
     },
     import: async (args) => {
-      const loaded = loadApplianceConfig(undefined, { ensureState: true });
+      const loaded = loadStateConfig(undefined, { ensureState: true });
       return importBundle(loaded, { bundleDir: args.bundleDir });
     },
     prune: async (args) => {
       // No ensureState: a default dry-run is read-only and must not create
       // or re-chmod state dirs; apply's own mutation helpers (lock acquire,
       // quarantine move) create exactly what they own.
-      const loaded = loadApplianceConfig();
+      const loaded = loadStateConfig();
       return pruneResults(loaded, {
         apply: args.apply,
         olderThanDays: args.olderThanDays,
@@ -410,7 +429,7 @@ async function submitLiveJob(args: {
   readonly argv: readonly string[];
   readonly detach: boolean;
 }): Promise<unknown> {
-  const loaded = loadApplianceConfig(undefined, { ensureState: true });
+  const loaded = loadCredentialConfig(undefined, { ensureState: true });
   const job = createJob(loaded, {
     kind: args.kind,
     superpowersRef: args.superpowersRef,
@@ -526,8 +545,7 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
       }),
   };
   const actions = mergedActions(deps.actions);
-  const loadConfigForValidation =
-    deps.loadConfig ?? (() => loadApplianceConfig());
+  const loadConfigForValidation = deps.loadConfig ?? (() => loadStateConfig());
   const program = new Command();
 
   program

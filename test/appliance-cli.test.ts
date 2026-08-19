@@ -1261,3 +1261,203 @@ test('install wrapper embeds the requested root and strict checkout checks', () 
   expect(hostile.stderr).not.toContain('intercepted exec');
   expect(existsSync(marker)).toBe(false);
 });
+
+// --- scoped credential cutover freeze (Tasks 2-4) ---------------------------
+// Real subprocesses against the DEFAULT actions: the production prepare/run/
+// run-all actions must refuse with the exact typed cutover error AFTER
+// argument and structural-config validation but BEFORE job creation, state
+// mutation, credential-aware loading, bundle payload access, or Docker.
+// Task 5 replaces these expectations with the scoped end-state behavior in
+// the same commit that removes the guard.
+
+interface RealConfigFixture {
+  readonly root: string;
+  readonly configPath: string;
+  readonly evalsPath: string;
+  readonly bundleDir: string;
+}
+
+// A structurally valid on-disk appliance config whose credential bundle is
+// BROKEN (no metadata.json): production actions that consult the bundle would
+// fail on it, so any refusal these tests observe happened before bundle
+// access.
+function writeRealConfig(): RealConfigFixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-cli-real-')));
+  for (const sub of [
+    'evals/results',
+    'superpowers',
+    'gauntlet',
+    'credentials/blessed',
+  ]) {
+    mkdirSync(join(root, sub), { recursive: true });
+  }
+  const configPath = join(root, 'appliance.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      root,
+      evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
+      superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+      gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'credentials/blessed'),
+      },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(root, 'evals/results'),
+      },
+    }),
+  );
+  return {
+    root,
+    configPath,
+    evalsPath: join(root, 'evals'),
+    bundleDir: join(root, 'credentials/blessed'),
+  };
+}
+
+interface CliJson {
+  readonly ok: boolean;
+  readonly error?: {
+    readonly code: string;
+    readonly step: string;
+    readonly message: string;
+  };
+}
+
+function runCli(fx: RealConfigFixture, args: readonly string[]) {
+  const proc = spawnSync('bun', ['src/appliance/cli.ts', ...args], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...envSnapshot(), EVALS_APPLIANCE_CONFIG: fx.configPath },
+  });
+  return proc;
+}
+
+test('production prepare refuses with the cutover error before state mutation or bundle access', () => {
+  const fx = writeRealConfig();
+  const proc = runCli(fx, ['prepare', '--superpowers-ref', 'main', '--json']);
+  expect(proc.status).toBe(1);
+  const payload = JSON.parse(proc.stdout) as CliJson;
+  expect(payload.ok).toBe(false);
+  expect(payload.error?.code).toBe('config_invalid');
+  expect(payload.error?.step).toBe('scoped-cutover');
+  expect(payload.error?.message).toContain(
+    'scoped credential cutover incomplete',
+  );
+  // No job creation, no state mutation.
+  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+});
+
+test('production run refuses with the cutover error after argument validation', () => {
+  const fx = writeRealConfig();
+  writeScenario(fx.evalsPath, 'writing-plans');
+  writeAgentYaml(fx.evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/rollout-*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  const proc = runCli(fx, [
+    'run',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'writing-plans',
+    '--coding-agent',
+    'codex',
+    '--json',
+  ]);
+  expect(proc.status).toBe(1);
+  const payload = JSON.parse(proc.stdout) as CliJson;
+  expect(payload.error?.step).toBe('scoped-cutover');
+  expect(payload.error?.message).toContain(
+    'scoped credential cutover incomplete',
+  );
+  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+
+  // Ordering: a bad argument fails BEFORE the guard with its own error.
+  const badScenario = runCli(fx, [
+    'run',
+    '--superpowers-ref',
+    'main',
+    '--scenario',
+    'no-such-scenario',
+    '--coding-agent',
+    'codex',
+    '--json',
+  ]);
+  expect(badScenario.status).toBe(1);
+  const badPayload = JSON.parse(badScenario.stdout) as CliJson;
+  expect(badPayload.error?.message).toContain('trusted scenario not found');
+  expect(badPayload.error?.step).not.toBe('scoped-cutover');
+});
+
+test('production run-all refuses with the cutover error after argument validation', () => {
+  const fx = writeRealConfig();
+  writeAgentYaml(fx.evalsPath, 'codex', [
+    'name: codex',
+    'binary: codex',
+    'home_config_subdir: ".codex"',
+    'session_log_dir: "${QUORUM_AGENT_HOME}/.codex/sessions"',
+    'session_log_glob: "**/rollout-*.jsonl"',
+    'normalizer: codex',
+    'required_env: []',
+  ]);
+  const proc = runCli(fx, [
+    'run-all',
+    '--superpowers-ref',
+    'main',
+    '--json',
+    '--',
+    '--coding-agents',
+    'codex',
+  ]);
+  expect(proc.status).toBe(1);
+  const payload = JSON.parse(proc.stdout) as CliJson;
+  expect(payload.error?.step).toBe('scoped-cutover');
+  expect(existsSync(join(fx.root, 'state'))).toBe(false);
+
+  // Ordering: missing --coding-agents is an argument error, not the guard.
+  const badArgs = runCli(fx, [
+    'run-all',
+    '--superpowers-ref',
+    'main',
+    '--json',
+  ]);
+  expect(badArgs.status).toBe(1);
+  const badPayload = JSON.parse(badArgs.stdout) as CliJson;
+  expect(badPayload.error?.message).toContain(
+    'requires explicit --coding-agents',
+  );
+  expect(badPayload.error?.step).not.toBe('scoped-cutover');
+});
+
+test('structural status and cancel stay available while the bundle is broken', () => {
+  const fx = writeRealConfig();
+  // The bundle has no metadata.json at all; a credential-aware load would
+  // fail. Structural read/recovery operations answer anyway.
+  const status = runCli(fx, ['status', 'job-none', '--json']);
+  expect(status.status).toBe(1);
+  const statusPayload = JSON.parse(status.stdout) as CliJson;
+  expect(statusPayload.error?.code).toBe('job_not_found');
+
+  const cancel = runCli(fx, ['cancel', 'job-none', '--json']);
+  expect(cancel.status).toBe(1);
+  const cancelPayload = JSON.parse(cancel.stdout) as CliJson;
+  expect(cancelPayload.error?.code).toBe('job_not_found');
+});
+
+test('doctor requires the credential-aware loader and fails typed on a broken bundle', () => {
+  const fx = writeRealConfig();
+  const proc = runCli(fx, ['doctor', '--json']);
+  expect(proc.status).toBe(1);
+  const payload = JSON.parse(proc.stdout) as CliJson;
+  expect(payload.error?.code).toBe('config_invalid');
+  expect(payload.error?.step).toBe('config');
+  expect(payload.error?.message).toContain('metadata');
+});

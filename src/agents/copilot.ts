@@ -11,8 +11,12 @@ import {
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import type { AgentConfig } from '../contracts/agent-config.ts';
+import { COPILOT_SUPERVISOR_ENV_NAMES } from '../credentials/grader.ts';
 import { envSnapshot, getEnv } from '../env.ts';
-import { GAUNTLET_ENV_ALLOWLIST } from '../runner/gauntlet-env.ts';
+import {
+  GAUNTLET_ENV_ALLOWLIST,
+  gauntletEnvBase,
+} from '../runner/gauntlet-env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
@@ -104,18 +108,12 @@ export const COPILOT_PROXY_ENV_NAMES: readonly string[] = [
 // mode-0600 env file the launcher sources.
 export const COPILOT_GAUNTLET_ENV_ALLOWLIST: readonly string[] = [
   ...GAUNTLET_ENV_ALLOWLIST,
-  // GitHub host selection for copilot's stored-auth routing.
-  'GH_HOST',
-  'COPILOT_GH_HOST',
-  // Copilot model/offline knobs (non-BYOK; BYOK values ride the env file).
-  'COPILOT_MODEL',
-  'COPILOT_OFFLINE',
-  // The launcher forwards the full proxy set + the extra CA-bundle names into
-  // the copilot binary; the standard list carries the rest of both families.
-  'ALL_PROXY',
-  'all_proxy',
-  'REQUESTS_CA_BUNDLE',
-  'CURL_CA_BUNDLE',
+  // Copilot routing: GitHub host selection, model/offline knobs (non-BYOK;
+  // BYOK values ride the env file), and the extra proxy/CA-bundle names the
+  // launcher forwards into the copilot binary. The shared name list lives in
+  // src/credentials/grader.ts so the appliance supervisor emitter and this
+  // projection cannot drift.
+  ...COPILOT_SUPERVISOR_ENV_NAMES,
 ];
 
 // Single-quote a value for a POSIX shell, escaping embedded single quotes.
@@ -411,25 +409,35 @@ function proxyUrlHasUserinfo(value: string): boolean {
   }
 }
 
-// RUNNER-side building block. Project `host_env` down to the allowlist; reject a
-// proxy var that carries credentialed userinfo (so the proxy password is never
-// forwarded into the agent process). Exported for the runner's spawnGauntlet env;
-// provisioning does not call it.
+// RUNNER-side building block. Begins with gauntletEnvBase(hostEnv) — which
+// owns the grader source-mode contract (canonical trusted-local input, or the
+// appliance-scoped QUORUM_GRADER_* alias mapping) — then adds only copilot's
+// evidenced routing names, and rejects a proxy var that carries credentialed
+// userinfo (so the proxy password is never forwarded into the agent process).
+// It never loops over canonical grader names itself. Exported for the
+// runner's spawnGauntlet env; provisioning does not call it.
 export function copilotGauntletEnv(
   hostEnv: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const name of COPILOT_GAUNTLET_ENV_ALLOWLIST) {
-    const value = hostEnv[name];
-    if (value === undefined) {
-      continue;
+  for (const [name, value] of Object.entries(gauntletEnvBase(hostEnv))) {
+    if (value !== undefined) {
+      env[name] = value;
     }
-    if (COPILOT_PROXY_ENV_NAMES.includes(name) && proxyUrlHasUserinfo(value)) {
+  }
+  for (const name of COPILOT_SUPERVISOR_ENV_NAMES) {
+    const value = hostEnv[name];
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+  for (const name of COPILOT_PROXY_ENV_NAMES) {
+    const value = env[name];
+    if (value !== undefined && proxyUrlHasUserinfo(value)) {
       throw new ProvisionError(
         `${name} contains credentialed proxy URL; remove proxy userinfo`,
       );
     }
-    env[name] = value;
   }
   return env;
 }

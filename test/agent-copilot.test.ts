@@ -24,6 +24,10 @@ import {
   agentConfigDir,
   resolveSessionLogDir,
 } from '../src/contracts/agent-config.ts';
+import {
+  APPLIANCE_SCOPED_GRADER_MODE,
+  QUORUM_GRADER_SOURCE_MODE,
+} from '../src/credentials/grader.ts';
 import { GAUNTLET_ENV_ALLOWLIST } from '../src/runner/gauntlet-env.ts';
 import { FakeCommandRunner } from './fake-command-runner.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -974,4 +978,49 @@ test('gh auth token subprocess env carries GH_HOST/GH_CONFIG_DIR routing, drops 
     cleanup();
     sp.cleanup();
   }
+});
+
+// --- gauntletEnvBase composition --------------------------------------------
+// Copilot's projection begins with gauntletEnvBase (which owns the grader
+// source-mode contract) and then adds only copilot's evidenced routing names;
+// it never loops over canonical grader names itself.
+
+test('copilotGauntletEnv composes the scoped grader projection with routing extras', () => {
+  const env = copilotGauntletEnv({
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+    QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+    QUORUM_GRADER_ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+    ANTHROPIC_API_KEY: 'agent-key',
+    GH_HOST: 'github.example',
+    COPILOT_MODEL: 'gpt-x',
+    PATH: '/usr/bin:/bin',
+  });
+  expect(env['ANTHROPIC_API_KEY']).toBe('grader-key');
+  expect(env['ANTHROPIC_BASE_URL']).toBe('https://gateway.example/v1');
+  expect(env['GH_HOST']).toBe('github.example');
+  expect(env['COPILOT_MODEL']).toBe('gpt-x');
+  expect(env['PATH']).toBe('/usr/bin:/bin');
+  for (const name of Object.keys(env)) {
+    expect(name.startsWith('QUORUM_GRADER_')).toBe(false);
+  }
+});
+
+test('copilotGauntletEnv fails closed in scoped mode without a grader auth alias', () => {
+  expect(() =>
+    copilotGauntletEnv({
+      [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+      ANTHROPIC_API_KEY: 'agent-key',
+      GH_HOST: 'github.example',
+    }),
+  ).toThrow(/auth/);
+});
+
+test('copilotGauntletEnv keeps credentialed-proxy rejection after composition', () => {
+  expect(() =>
+    copilotGauntletEnv({
+      [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+      QUORUM_GRADER_ANTHROPIC_API_KEY: 'grader-key',
+      ALL_PROXY: 'http://user:pass@proxy.example:8080',
+    }),
+  ).toThrow(/proxy/);
 });

@@ -19,7 +19,7 @@ import {
   type ApplianceCommandKind,
   type JobRecord,
   JobRecordSchema,
-  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
 } from './types.ts';
 
 export interface CreateJobRequest {
@@ -52,11 +52,11 @@ function newJobId(now: Date): string {
   return `job-${compactIsoTimestamp(now)}-${randomBytes(2).toString('hex')}`;
 }
 
-function jobDir(loaded: LoadedApplianceConfig, jobId: string): string {
+function jobDir(loaded: LoadedApplianceStateConfig, jobId: string): string {
   return join(loaded.paths.jobs, jobId);
 }
 
-function jobPath(loaded: LoadedApplianceConfig, jobId: string): string {
+function jobPath(loaded: LoadedApplianceStateConfig, jobId: string): string {
   return join(jobDir(loaded, jobId), 'job.json');
 }
 
@@ -84,7 +84,7 @@ function createEmptyLog(path: string): void {
 }
 
 function allocateJobDir(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   now: Date,
 ): {
   id: string;
@@ -122,7 +122,7 @@ function allocateJobDir(
 }
 
 export function createJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   request: CreateJobRequest,
 ): JobRecord {
   const now = new Date();
@@ -178,7 +178,7 @@ export function createJob(
 }
 
 export function readJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobOrArtifactId: string,
 ): JobRecord {
   const directPath = jobPath(loaded, jobOrArtifactId);
@@ -234,7 +234,7 @@ export function readJob(
 // send updateJob writing into a DIFFERENT directory — none of them can prove
 // absence, so all fail closed as config_invalid for manual repair.
 function readJobDirStrict(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   dirName: string,
 ): JobRecord {
   const path = jobPath(loaded, dirName);
@@ -304,7 +304,7 @@ function rejectSymlinkedJobDir(name: string): never {
 // non-directory) entry is null; a symlink or a directory that exists but is
 // malformed fails closed as config_invalid, because it can prove nothing.
 export function readJobById(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): JobRecord | null {
   // The jobs root itself is part of the boundary: an entry probed through a
@@ -333,7 +333,9 @@ export function readJobById(
 // config_invalid, because state that cannot be read may have claimed
 // anything. Shared by exact run-id resolution and prune's reference
 // collection.
-export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
+export function readAllJobsStrict(
+  loaded: LoadedApplianceStateConfig,
+): JobRecord[] {
   const jobs: JobRecord[] = [];
   // A symlinked jobs root would enumerate records from outside the
   // namespace and hide the real ones — including the reference that makes a
@@ -379,7 +381,7 @@ export function readAllJobsStrict(loaded: LoadedApplianceConfig): JobRecord[] {
 // config_invalid: absence cannot be proven over ambiguous or corrupt state,
 // which needs manual repair, not a guess.
 export function readJobByRunId(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   runId: string,
 ): JobRecord {
   const matches = readAllJobsStrict(loaded).filter(
@@ -405,7 +407,7 @@ export function readJobByRunId(
 }
 
 export function updateJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   patcher: JobPatcher,
 ): JobRecord {

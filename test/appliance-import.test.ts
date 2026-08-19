@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { loadStateConfig } from '../src/appliance/config.ts';
 import {
   ApplianceError,
   type ApplianceErrorCode,
@@ -1640,4 +1641,46 @@ test('a malformed manifest is a config error, not a crash', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bundle-bad-'));
   writeFileSync(join(dir, 'manifest.json'), '{"schema_version": 99}');
   expectCode(() => importBundle(cfg, { bundleDir: dir }), 'config_invalid');
+});
+
+// Import is a structural read/land operation: it accepts the state-only
+// loaded config and never inspects the credential bundle, so an unreadable
+// blessed metadata payload cannot strand an ingest.
+test('import operates on structural state and never inspects the credential bundle', () => {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'appliance-import-bundlefault-')),
+  );
+  mkdirSync(join(root, 'evals/results'), { recursive: true });
+  mkdirSync(join(root, 'credentials/blessed'), { recursive: true });
+  writeFileSync(join(root, 'credentials/blessed/metadata.json'), 'not json');
+  fs.chmodSync(join(root, 'credentials/blessed/metadata.json'), 0o000);
+  const configPath = join(root, 'appliance.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      root,
+      evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
+      superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+      gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'credentials/blessed'),
+      },
+      container: {
+        name: 'quorum-appliance',
+        results_root: join(root, 'evals/results'),
+      },
+    }),
+  );
+  try {
+    const cfg = loadStateConfig(configPath, { ensureState: true });
+    const result = importBundle(cfg, { bundleDir: makeBundle() });
+    expect(result.imported).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(
+      existsSync(join(root, 'evals/results', RUN_ID, 'verdict.json')),
+    ).toBe(true);
+  } finally {
+    fs.chmodSync(join(root, 'credentials/blessed/metadata.json'), 0o600);
+  }
 });

@@ -23,10 +23,12 @@ import {
 import { createJob, readJob, updateJob } from './jobs.ts';
 import { withMutationLocks } from './locks.ts';
 import { writeProvenance } from './provenance.ts';
+import { assertScopedCredentialCutover } from './scoped-cutover.ts';
 import type {
   ApplianceCommandKind,
   JobStatus,
   LoadedApplianceConfig,
+  LoadedApplianceStateConfig,
   RefSnapshot,
 } from './types.ts';
 
@@ -68,7 +70,7 @@ export interface PreflightResult {
   readonly provenance_path: string;
 }
 
-function repos(loaded: LoadedApplianceConfig) {
+function repos(loaded: LoadedApplianceStateConfig) {
   return [
     loaded.config.evals.path,
     loaded.config.superpowers.path,
@@ -89,7 +91,7 @@ function isTerminalJobStatus(status: JobStatus): boolean {
 }
 
 function failJob(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   error: ApplianceError,
 ): void {
@@ -120,14 +122,14 @@ function stableError(error: unknown, step = 'preflight'): ApplianceError {
 }
 
 function jobToolVersionsPath(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
 ): string {
   return join(loaded.paths.jobs, jobId, 'evals-tool-versions.txt');
 }
 
 export function postflightDirtyCheck(
-  loaded: LoadedApplianceConfig,
+  loaded: LoadedApplianceStateConfig,
   jobId: string,
   runner: CommandRunner,
 ): ApplianceError | null {
@@ -305,6 +307,10 @@ export async function preflightForJob(
 }
 
 export async function prepare(args: PrepareArgs): Promise<PreflightResult> {
+  // TEMPORARY (Tasks 2-4): the production prepare path is frozen until the
+  // scoped credential cutover lands. The guard runs before job creation and
+  // lock acquisition; Task 5 deletes it with the complete caller cutover.
+  assertScopedCredentialCutover('prepare');
   const job =
     args.jobId === undefined
       ? createJob(args.loaded, {
