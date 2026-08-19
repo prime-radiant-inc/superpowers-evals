@@ -541,9 +541,9 @@ function readRelativeNoFollow(
  * Read one regular file at anchorDir/parts through the pinned-descriptor
  * walk: the anchor is pinned by an absolute walk from the filesystem root and
  * each component is opened no-follow relative to its pinned parent, so a
- * component swapped after validation cannot redirect the read. Exported ONLY
- * as the shared no-follow read seam for loadCredentialConfig's metadata read
- * — not part of the approved material interface.
+ * component swapped after validation cannot redirect the read. This is the
+ * shared byte-read seam for credential metadata and scoped-container payload
+ * binding; it does not expose a general material-writing interface.
  */
 export function readPinnedNoFollowFile(
   anchorDir: string,

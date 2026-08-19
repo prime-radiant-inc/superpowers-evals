@@ -735,16 +735,21 @@ describe('persisted credential request', () => {
   });
 
   test('every audited oauth projection round-trips through the scope schema', () => {
-    // Typed as the union, so a new projection member is a compile error here
-    // until the persisted schema learns it too.
-    const projections: OAuthProjection[] = [
-      { kind: 'codex', mountName: 'codex' },
-      { kind: 'gemini', mountName: 'gemini' },
-      { kind: 'antigravity', mountName: 'gemini' },
-      { kind: 'kimi', mountName: 'kimi' },
-      { kind: 'pi', mountName: 'pi', provider: 'openai-codex' },
-    ];
-    for (const oauth of projections) {
+    // The mapped type makes a new projection kind a compile error until this
+    // persisted-schema round-trip table learns it too.
+    const projections = {
+      codex: { kind: 'codex', mountName: 'codex' },
+      gemini: { kind: 'gemini', mountName: 'gemini' },
+      antigravity: { kind: 'antigravity', mountName: 'gemini' },
+      kimi: { kind: 'kimi', mountName: 'kimi' },
+      pi: { kind: 'pi', mountName: 'pi', provider: 'openai-codex' },
+    } satisfies {
+      readonly [Kind in OAuthProjection['kind']]: Extract<
+        OAuthProjection,
+        { readonly kind: Kind }
+      >;
+    };
+    for (const oauth of Object.values(projections)) {
       const scope: CredentialScope = {
         schemaVersion: 1,
         kind: 'live',
