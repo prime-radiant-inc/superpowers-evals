@@ -4,7 +4,11 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
-import { evalsContainerPath, statusContainerArgs } from './container.ts';
+import {
+  dockerExecEnvFileSupport,
+  evalsContainerPath,
+  statusContainerArgs,
+} from './container.ts';
 import { ApplianceError } from './errors.ts';
 import { inspectLock } from './locks.ts';
 import type {
@@ -30,6 +34,11 @@ export interface DoctorPayload {
   readonly container: {
     readonly state: 'running' | 'stopped' | 'missing' | 'not_checked';
     readonly detail: string;
+  };
+  // Host docker capabilities the scoped credential path depends on. Doctor
+  // only REPORTS them; preflight enforces them at cutover.
+  readonly docker: {
+    readonly exec_env_file: boolean;
   };
 }
 
@@ -96,5 +105,8 @@ export function doctorPayload(
       sync: inspectLock(join(loaded.paths.locks, 'sync.lock')),
     },
     container: inspectContainer(loaded, runner),
+    docker: {
+      exec_env_file: dockerExecEnvFileSupport(runner),
+    },
   };
 }

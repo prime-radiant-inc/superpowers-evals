@@ -9,6 +9,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -17,6 +18,8 @@ import { join, resolve } from 'node:path';
 
 const REPO = resolve(import.meta.dir, '..');
 const WRAPPER = join(REPO, 'scripts', 'evals-container');
+const FAKE_CONTAINER_ID =
+  'deadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567';
 
 const FAKE_DOCKER = `#!/usr/bin/env bash
 set -euo pipefail
@@ -27,6 +30,7 @@ state_file="\${EVALS_CONTAINER_DOCKER_STATE:?}"
 exists=false
 running=false
 name=
+id=
 
 if [[ -f "$state_file" ]]; then
   # shellcheck disable=SC1090
@@ -38,6 +42,7 @@ write_state() {
     printf 'exists=%q\\n' "$exists"
     printf 'running=%q\\n' "$running"
     printf 'name=%q\\n' "$name"
+    printf 'id=%q\\n' "$id"
   } > "$state_file"
 }
 
@@ -100,6 +105,9 @@ case "$1" in
       if [[ "\${4:-}" == "{{.State.Running}}" ]]; then
         printf '%s\\n' "$running"
       fi
+      if [[ "\${4:-}" == "{{.Id}}" ]]; then
+        printf '%s\\n' "$id"
+      fi
       exit 0
     fi
 
@@ -116,7 +124,10 @@ case "$1" in
     fi
     exists=true
     running=true
+    id="\${EVALS_CONTAINER_FAKE_CONTAINER_ID:?}"
     write_state
+    # Real docker run -d prints the new container's full id on stdout.
+    printf '%s\\n' "$id"
     exit 0
     ;;
   start)
@@ -136,7 +147,14 @@ case "$1" in
     exit 0
     ;;
   rm)
-    if [[ "$exists" != true || "\${2:-}" != "$name" ]]; then
+    shift
+    if [[ "\${1:-}" == "-f" ]]; then
+      shift
+    fi
+    if [[ "$exists" != true ]]; then
+      exit 1
+    fi
+    if [[ "\${1:-}" != "$name" && "\${1:-}" != "$id" ]]; then
       exit 1
     fi
     exists=false
@@ -179,6 +197,7 @@ function makeHarness(extraEnv: NodeJS.ProcessEnv = {}): {
       ...extraEnv,
       EVALS_CONTAINER_DOCKER_LOG: dockerLog,
       EVALS_CONTAINER_DOCKER_STATE: dockerState,
+      EVALS_CONTAINER_FAKE_CONTAINER_ID: FAKE_CONTAINER_ID,
       EVALS_CONTAINER_FAKE_RESULTS_HOST_DIR: join(REPO, 'results'),
       GAUNTLET_ROOT: gauntletRoot,
       PATH: `${bin}:${Bun.env['PATH'] ?? ''}`,
@@ -188,7 +207,7 @@ function makeHarness(extraEnv: NodeJS.ProcessEnv = {}): {
 
 function writeDockerState(
   harness: ReturnType<typeof makeHarness>,
-  state: { exists: boolean; running: boolean; name: string },
+  state: { exists: boolean; running: boolean; name: string; id?: string },
 ): void {
   writeFileSync(
     harness.dockerState,
@@ -196,6 +215,7 @@ function writeDockerState(
       `exists=${state.exists ? 'true' : 'false'}`,
       `running=${state.running ? 'true' : 'false'}`,
       `name=${state.name}`,
+      `id=${state.id ?? ''}`,
       '',
     ].join('\n'),
   );
@@ -1119,6 +1139,447 @@ describe('scripts/evals-container', () => {
       expect(execs.some((args) => args[2] === 'quorum')).toBe(false);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+});
+
+// A host home stuffed with every OAuth auth directory the wrapper would
+// otherwise fall back to — scoped mode must never mount any of them.
+function makeHostileHome(root: string): string {
+  const home = join(root, 'hostile-home');
+  for (const dir of ['.codex', '.gemini', '.kimi-code', '.pi']) {
+    mkdirSync(join(home, dir), { recursive: true });
+  }
+  return home;
+}
+
+function authMountTargets(args: string[]): string[] {
+  return mountArgs(args)
+    .flatMap((mount) => mount.split(','))
+    .filter((part) => part.startsWith('target=/auth/'))
+    .map((part) => part.slice('target='.length));
+}
+
+describe('scripts/evals-container scoped mode', () => {
+  test('--no-default-auth up ignores every host-home auth fallback and prints the captured container id', () => {
+    const harness = makeHarness();
+    harness.env['HOME'] = makeHostileHome(harness.root);
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const envFile = join(harness.root, 'agent.env');
+      writeFileSync(envFile, '');
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--env-file',
+        envFile,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      expect(proc.stdout).toBe(`${FAKE_CONTAINER_ID}\n`);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(authMountTargets(args)).toEqual([]);
+      const envMount = mountForTarget(args, '/run/evals/credentials.env');
+      expectMountSource(envMount, envFile);
+      expectReadonly(envMount);
+    } finally {
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('legacy up without --no-default-auth still applies host-home auth fallbacks', () => {
+    const harness = makeHarness();
+    const home = makeHostileHome(harness.root);
+    harness.env['HOME'] = home;
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(authMountTargets(args).sort()).toEqual([
+        '/auth/codex',
+        '/auth/gemini',
+        '/auth/kimi-code',
+        '/auth/pi',
+      ]);
+      expectMountSource(
+        mountForTarget(args, '/auth/codex'),
+        join(home, '.codex'),
+      );
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('--no-default-auth up mounts exactly the explicit auth directory and probes results against the captured id', () => {
+    const harness = makeHarness();
+    harness.env['HOME'] = makeHostileHome(harness.root);
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const envFile = writeEnvFile(harness.root);
+      const geminiAuth = join(harness.root, 'gemini-auth');
+      mkdirSync(geminiAuth);
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--env-file',
+        envFile,
+        '--auth',
+        `gemini=${geminiAuth}`,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      expect(proc.stdout).toBe(`${FAKE_CONTAINER_ID}\n`);
+      const args = dockerCommand(harness.dockerLog, 'run');
+      expect(authMountTargets(args)).toEqual(['/auth/gemini']);
+      expectMountSource(mountForTarget(args, '/auth/gemini'), geminiAuth);
+
+      // The scoped results probe targets the immutable captured id, never
+      // the mutable configured name.
+      const execs = dockerCommandsNamed(harness.dockerLog, 'exec');
+      expect(execs).toHaveLength(1);
+      expect(execs[0]?.slice(1, 4)).toEqual([FAKE_CONTAINER_ID, 'bash', '-lc']);
+      expect(execs[0]?.[4]).toContain('/workspace/evals/results');
+      expect(resultProbeFiles()).toEqual([]);
+    } finally {
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('--no-default-auth refuses stale-container reuse', () => {
+    const harness = makeHarness();
+    try {
+      const name = 'evals-scoped-stale';
+      writeDockerState(harness, {
+        exists: true,
+        running: true,
+        name,
+        id: FAKE_CONTAINER_ID,
+      });
+      const proc = runWrapper(harness, [
+        '--name',
+        name,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('down');
+      expect(dockerCommandsNamed(harness.dockerLog, 'run')).toEqual([]);
+      expect(dockerCommandsNamed(harness.dockerLog, 'start')).toEqual([]);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('--no-default-auth is accepted and behaviorally inert outside up', () => {
+    const statusHarness = makeHarness();
+    const downHarness = makeHarness();
+    try {
+      const name = 'evals-scoped-inert';
+      const statusProc = runWrapper(statusHarness, [
+        '--name',
+        name,
+        '--no-default-auth',
+        'status',
+      ]);
+      expect(statusProc.error).toBeUndefined();
+      expect(statusProc.status).toBe(0);
+      expect(statusProc.stdout).toContain('missing');
+
+      writeDockerState(downHarness, {
+        exists: true,
+        running: true,
+        name,
+        id: FAKE_CONTAINER_ID,
+      });
+      const downProc = runWrapper(downHarness, [
+        '--name',
+        name,
+        '--no-default-auth',
+        'down',
+      ]);
+      expect(downProc.error).toBeUndefined();
+      expect(downProc.status).toBe(0);
+      expect(dockerCommand(downHarness.dockerLog, 'rm')).toBeDefined();
+    } finally {
+      rmSync(statusHarness.root, { recursive: true, force: true });
+      rmSync(downHarness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('a scoped up whose results probe fails rolls back the captured id, never the configured name', () => {
+    const harness = makeHarness({ EVALS_CONTAINER_RESULTS_PROBE_FAIL: 'true' });
+    removeResultProbeFiles();
+    try {
+      const superpowersRoot = makeSuperpowersRoot(harness.root);
+      const envFile = writeEnvFile(harness.root);
+
+      const proc = runWrapper(harness, [
+        '--superpowers-root',
+        superpowersRoot,
+        '--env-file',
+        envFile,
+        '--no-default-auth',
+        'up',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('results');
+      const rms = dockerCommandsNamed(harness.dockerLog, 'rm');
+      expect(rms).toEqual([['rm', '-f', FAKE_CONTAINER_ID]]);
+      expect(dockerCommandsNamed(harness.dockerLog, 'stop')).toEqual([]);
+    } finally {
+      removeResultProbeFiles();
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('exec with --expected-container-id verifies the configured name resolves to the id and targets the immutable id', () => {
+    const harness = makeHarness();
+    try {
+      const name = 'evals-scoped-exec';
+      writeDockerState(harness, {
+        exists: true,
+        running: true,
+        name,
+        id: FAKE_CONTAINER_ID,
+      });
+
+      const proc = runWrapper(harness, [
+        '--name',
+        name,
+        '--expected-container-id',
+        FAKE_CONTAINER_ID,
+        'exec',
+        'quorum',
+        'list',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      const commands = dockerCommands(harness.dockerLog);
+      expect(commands).toEqual([
+        ['container', 'inspect', '-f', '{{.Id}}', name],
+        ['exec', FAKE_CONTAINER_ID, 'quorum', 'list'],
+      ]);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('--exec-env-file is emitted after docker exec and before the immutable id', () => {
+    const harness = makeHarness();
+    try {
+      const name = 'evals-scoped-exec-env';
+      writeDockerState(harness, {
+        exists: true,
+        running: true,
+        name,
+        id: FAKE_CONTAINER_ID,
+      });
+      const execEnvFile = join(harness.root, 'supervisor.exec.env');
+      writeFileSync(execEnvFile, 'ANTHROPIC_API_KEY=grader\n');
+
+      const proc = runWrapper(harness, [
+        '--name',
+        name,
+        '--expected-container-id',
+        FAKE_CONTAINER_ID,
+        '--exec-env-file',
+        execEnvFile,
+        'exec',
+        'quorum',
+        'run',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).toBe(0);
+      expect(dockerCommand(harness.dockerLog, 'exec')).toEqual([
+        'exec',
+        '--env-file',
+        execEnvFile,
+        FAKE_CONTAINER_ID,
+        'quorum',
+        'run',
+      ]);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('a configured-name replacement fails before any child execution', () => {
+    const harness = makeHarness();
+    try {
+      const name = 'evals-scoped-replaced';
+      writeDockerState(harness, {
+        exists: true,
+        running: true,
+        name,
+        id: 'replacement0123456789abcdef0123456789abcdef0123456789abcdef0123',
+      });
+
+      const proc = runWrapper(harness, [
+        '--name',
+        name,
+        '--expected-container-id',
+        FAKE_CONTAINER_ID,
+        'exec',
+        'quorum',
+        'list',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(proc.stderr).toContain('replacement');
+      expect(dockerCommands(harness.dockerLog)).toEqual([
+        ['container', 'inspect', '-f', '{{.Id}}', name],
+      ]);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing configured container fails the id verification before any child execution', () => {
+    const harness = makeHarness();
+    try {
+      const proc = runWrapper(harness, [
+        '--name',
+        'evals-scoped-missing',
+        '--expected-container-id',
+        FAKE_CONTAINER_ID,
+        'exec',
+        'quorum',
+        'list',
+      ]);
+
+      expect(proc.error).toBeUndefined();
+      expect(proc.status).not.toBe(0);
+      expect(dockerCommandsNamed(harness.dockerLog, 'exec')).toEqual([]);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('--exec-env-file and --expected-container-id are validated before any docker call', () => {
+    const cases: {
+      label: string;
+      prepare: (harness: ReturnType<typeof makeHarness>) => string[];
+    }[] = [
+      {
+        label: 'relative exec env file',
+        prepare: () => [
+          '--expected-container-id',
+          FAKE_CONTAINER_ID,
+          '--exec-env-file',
+          'relative/agent.env',
+          'exec',
+          'quorum',
+        ],
+      },
+      {
+        label: 'symlinked exec env file',
+        prepare: (harness) => {
+          const real = join(harness.root, 'real.env');
+          const link = join(harness.root, 'link.env');
+          writeFileSync(real, 'X=1\n');
+          symlinkSync(real, link);
+          return [
+            '--expected-container-id',
+            FAKE_CONTAINER_ID,
+            '--exec-env-file',
+            link,
+            'exec',
+            'quorum',
+          ];
+        },
+      },
+      {
+        label: 'missing exec env file',
+        prepare: (harness) => [
+          '--expected-container-id',
+          FAKE_CONTAINER_ID,
+          '--exec-env-file',
+          join(harness.root, 'missing.env'),
+          'exec',
+          'quorum',
+        ],
+      },
+      {
+        label: 'unreadable exec env file',
+        prepare: (harness) => {
+          const file = join(harness.root, 'unreadable.env');
+          writeFileSync(file, 'X=1\n');
+          chmodSync(file, 0o000);
+          return [
+            '--expected-container-id',
+            FAKE_CONTAINER_ID,
+            '--exec-env-file',
+            file,
+            'exec',
+            'quorum',
+          ];
+        },
+      },
+      {
+        label: 'exec env file without an expected container id',
+        prepare: (harness) => {
+          const file = join(harness.root, 'agent.env');
+          writeFileSync(file, 'X=1\n');
+          return ['--exec-env-file', file, 'exec', 'quorum'];
+        },
+      },
+      {
+        label: 'exec env file outside exec',
+        prepare: (harness) => {
+          const file = join(harness.root, 'agent.env');
+          writeFileSync(file, 'X=1\n');
+          return [
+            '--expected-container-id',
+            FAKE_CONTAINER_ID,
+            '--exec-env-file',
+            file,
+            'status',
+          ];
+        },
+      },
+      {
+        label: 'expected container id outside exec',
+        prepare: () => ['--expected-container-id', FAKE_CONTAINER_ID, 'status'],
+      },
+    ];
+
+    for (const { prepare } of cases) {
+      const harness = makeHarness();
+      try {
+        const proc = runWrapper(harness, prepare(harness));
+
+        expect(proc.error).toBeUndefined();
+        expect(proc.status).not.toBe(0);
+        expect(dockerLogLines(harness.dockerLog)).toEqual([]);
+      } finally {
+        rmSync(harness.root, { recursive: true, force: true });
+      }
     }
   });
 });

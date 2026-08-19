@@ -24,6 +24,13 @@ class FakeRunner implements CommandRunner {
     stderr: '',
   };
 
+  // The docker exec --env-file capability probe (docker exec --help).
+  dockerHelpResult: CommandResult = {
+    status: 0,
+    stdout: 'Usage: docker exec\n  --env-file list\n',
+    stderr: '',
+  };
+
   run(
     command: string,
     args: readonly string[],
@@ -32,6 +39,9 @@ class FakeRunner implements CommandRunner {
     this.calls.push(
       options === undefined ? { command, args } : { command, args, options },
     );
+    if (command === 'docker') {
+      return this.dockerHelpResult;
+    }
     return this.result;
   }
 }
@@ -93,7 +103,11 @@ describe('appliance doctor', () => {
     expect(payload.credential_bundle.bundle_id).toBe('bundle-1');
     expect(payload.locks.run.state).toBe('missing');
     expect(payload.container.state).toBe('not_checked');
-    expect(runner.calls).toEqual([]);
+    expect(payload.docker.exec_env_file).toBe(true);
+    // Only the docker capability probe runs; the missing wrapper is skipped.
+    expect(runner.calls).toEqual([
+      { command: 'docker', args: ['exec', '--help'] },
+    ]);
   });
 
   test('runs container status when helper exists and fails closed on errors', () => {
@@ -120,6 +134,29 @@ describe('appliance doctor', () => {
       stderr: 'container bad\n',
     };
     expect(() => doctorPayload(cfg, runner)).toThrow(ApplianceError);
+  });
+
+  test('reports the docker exec --env-file capability honestly and never throws for it', () => {
+    const cfg = loaded();
+
+    const unsupported = new FakeRunner();
+    unsupported.dockerHelpResult = {
+      status: 0,
+      stdout: 'Usage: docker exec\n  --env list\n',
+      stderr: '',
+    };
+    expect(doctorPayload(cfg, unsupported).docker.exec_env_file).toBe(false);
+
+    const probeFailed = new FakeRunner();
+    probeFailed.dockerHelpResult = {
+      status: 1,
+      stdout: '',
+      stderr: 'docker: command not found\n',
+    };
+    expect(doctorPayload(cfg, probeFailed).docker.exec_env_file).toBe(false);
+
+    const supported = new FakeRunner();
+    expect(doctorPayload(cfg, supported).docker.exec_env_file).toBe(true);
   });
 });
 

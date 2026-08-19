@@ -11,6 +11,9 @@ options:
   --gauntlet-root <dir>
   --env-file <file>
   --auth <codex|gemini|kimi|pi>=<dir>
+  --no-default-auth
+  --expected-container-id <id>   (exec only)
+  --exec-env-file <file>         (exec only, requires --expected-container-id)
 USAGE
 }
 
@@ -50,6 +53,14 @@ auth_codex_explicit=false
 auth_gemini_explicit=false
 auth_kimi_explicit=false
 auth_pi_explicit=false
+
+# Scoped mode (F13): --no-default-auth disables every host-home auth
+# fallback during up; --expected-container-id binds exec to one immutable
+# container id captured from `docker run`; --exec-env-file passes the
+# supervisor env file through `docker exec --env-file` (process-local).
+no_default_auth=false
+expected_container_id=""
+exec_env_file=""
 
 parse_auth() {
   local spec name dir
@@ -115,6 +126,22 @@ while [[ $# -gt 0 ]]; do
       parse_auth "$2"
       shift 2
       ;;
+    --no-default-auth)
+      no_default_auth=true
+      shift
+      ;;
+    --expected-container-id)
+      [[ $# -ge 2 ]] || die "missing value for --expected-container-id"
+      [[ -n "$2" ]] || die "empty value for --expected-container-id"
+      expected_container_id=$2
+      shift 2
+      ;;
+    --exec-env-file)
+      [[ $# -ge 2 ]] || die "missing value for --exec-env-file"
+      [[ -n "$2" ]] || die "empty value for --exec-env-file"
+      exec_env_file=$2
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -150,6 +177,21 @@ esac
 
 if [[ "$command" != exec && $# -gt 0 ]]; then
   die "unexpected argument after $command: $1 (put options before the command)"
+fi
+
+# Scoped-exec flag validation: both flags are exec-only, --exec-env-file
+# additionally requires the immutable id and must be an absolute, readable,
+# regular file reached WITHOUT following a symlink. All of this happens
+# before any Docker call.
+if [[ -n "$expected_container_id" || -n "$exec_env_file" ]]; then
+  [[ "$command" == exec ]] || die "--expected-container-id and --exec-env-file are valid only for exec"
+fi
+if [[ -n "$exec_env_file" ]]; then
+  [[ -n "$expected_container_id" ]] || die "--exec-env-file requires --expected-container-id"
+  [[ "$exec_env_file" == /* ]] || die "--exec-env-file must be an absolute path: $exec_env_file"
+  [[ ! -L "$exec_env_file" ]] || die "--exec-env-file must not be a symlink: $exec_env_file"
+  [[ -f "$exec_env_file" ]] || die "--exec-env-file is not a regular file: $exec_env_file"
+  [[ -r "$exec_env_file" ]] || die "--exec-env-file is not readable: $exec_env_file"
 fi
 
 if [[ -z "$container_name" ]]; then
@@ -227,29 +269,29 @@ reject_mount_source() {
 if [[ "$auth_codex_explicit" == true ]]; then
   validate_auth_dir codex "$auth_codex"
   auth_codex=$(physical_dir "$auth_codex")
-elif [[ -d "$HOME/.codex" ]]; then
-  auth_codex="$HOME/.codex"
+elif [[ "$no_default_auth" != true && -d "$HOME/.codex" ]]; then
+  auth_codex=$(physical_dir "$HOME/.codex")
 fi
 
 if [[ "$auth_gemini_explicit" == true ]]; then
   validate_auth_dir gemini "$auth_gemini"
   auth_gemini=$(physical_dir "$auth_gemini")
-elif [[ -d "$HOME/.gemini" ]]; then
-  auth_gemini="$HOME/.gemini"
+elif [[ "$no_default_auth" != true && -d "$HOME/.gemini" ]]; then
+  auth_gemini=$(physical_dir "$HOME/.gemini")
 fi
 
 if [[ "$auth_kimi_explicit" == true ]]; then
   validate_auth_dir kimi "$auth_kimi"
   auth_kimi=$(physical_dir "$auth_kimi")
-elif [[ -d "$HOME/.kimi-code" ]]; then
-  auth_kimi="$HOME/.kimi-code"
+elif [[ "$no_default_auth" != true && -d "$HOME/.kimi-code" ]]; then
+  auth_kimi=$(physical_dir "$HOME/.kimi-code")
 fi
 
 if [[ "$auth_pi_explicit" == true ]]; then
   validate_auth_dir pi "$auth_pi"
   auth_pi=$(physical_dir "$auth_pi")
-elif [[ -d "$HOME/.pi" ]]; then
-  auth_pi="$HOME/.pi"
+elif [[ "$no_default_auth" != true && -d "$HOME/.pi" ]]; then
+  auth_pi=$(physical_dir "$HOME/.pi")
 fi
 
 reject_mount_source "evals root" "$evals_root"
@@ -284,7 +326,8 @@ mount_config_explicit() {
     || "$auth_codex_explicit" == true \
     || "$auth_gemini_explicit" == true \
     || "$auth_kimi_explicit" == true \
-    || "$auth_pi_explicit" == true ]]
+    || "$auth_pi_explicit" == true \
+    || "$no_default_auth" == true ]]
 }
 
 ensure_private_results_root() {
@@ -292,7 +335,13 @@ ensure_private_results_root() {
   chmod 0700 "$evals_root/results"
 }
 
-probe_results_mount() {
+# Create and remove the host-visible results probe for one exec TARGET
+# (the configured container name in legacy mode, the immutable captured id
+# in scoped mode). Returns 0 on success, 1 when the in-container probe
+# fails, 2 when the probe file is not host-visible; the caller decides how
+# to fail.
+run_results_probe() {
+  local target=$1
   local cleanup_probe host_probe_path probe probe_name
   ensure_private_results_root
   probe_name=".evals-container-probe.$$.$RANDOM"
@@ -304,16 +353,43 @@ test -w "$results_dir"
 : > "$results_dir/'"$probe_name"'"'
   cleanup_probe='rm -f /workspace/evals/results/'"$probe_name"
 
-  if ! docker exec "$container_name" bash -lc "$probe"; then
-    die "results directory is not usable at /workspace/evals/results"
+  if ! docker exec "$target" bash -lc "$probe"; then
+    return 1
   fi
 
   if [[ ! -f "$host_probe_path" ]]; then
-    docker exec "$container_name" bash -lc "$cleanup_probe" >/dev/null 2>&1 || true
-    die "results directory is not host-visible at /workspace/evals/results"
+    docker exec "$target" bash -lc "$cleanup_probe" >/dev/null 2>&1 || true
+    return 2
   fi
 
   rm -f "$host_probe_path" || true
+}
+
+probe_results_mount() {
+  local probe_status=0
+  run_results_probe "$container_name" || probe_status=$?
+  if [[ "$probe_status" == 1 ]]; then
+    die "results directory is not usable at /workspace/evals/results"
+  fi
+  if [[ "$probe_status" == 2 ]]; then
+    die "results directory is not host-visible at /workspace/evals/results"
+  fi
+}
+
+# Scoped up: the results-mount probe runs against the immutable captured
+# id. If it fails, roll back exactly that captured container — a replacement
+# under the configured name is never stopped — retaining the original
+# failure and appending any rollback failure without secret values.
+scoped_probe_with_rollback() {
+  local target=$1
+  local probe_status=0
+  run_results_probe "$target" || probe_status=$?
+  if [[ "$probe_status" != 0 ]]; then
+    if ! docker rm -f "$target" >/dev/null 2>&1; then
+      die "scoped up failed its results-mount probe at /workspace/evals/results and rollback of container $target also failed"
+    fi
+    die "scoped up failed its results-mount probe at /workspace/evals/results; rolled back container $target"
+  fi
 }
 
 run_up() {
@@ -409,21 +485,43 @@ run_up() {
   # --init runs tini as PID 1 so orphaned children (e.g. a run-all child whose
   # parent was killed before it could SIGINT them) are reaped instead of piling
   # up as <defunct> zombies; the bare `sleep infinity` PID 1 never reaps.
-  docker run \
-    -d \
-    --init \
-    --name "$container_name" \
-    --user "$(id -u):$(id -g)" \
-    --workdir /workspace/evals \
-    --env "HOME=$container_home" \
-    --env "XDG_CACHE_HOME=$container_cache_home" \
-    --env "XDG_CONFIG_HOME=$container_config_home" \
-    --env "XDG_STATE_HOME=$container_state_home" \
-    --env "TMPDIR=/tmp" \
-    "${provenance_env[@]+"${provenance_env[@]}"}" \
-    "${mounts[@]}" \
-    "$image_tag" \
+  local run_args=(
+    -d
+    --init
+    --name "$container_name"
+    --user "$(id -u):$(id -g)"
+    --workdir /workspace/evals
+    --env "HOME=$container_home"
+    --env "XDG_CACHE_HOME=$container_cache_home"
+    --env "XDG_CONFIG_HOME=$container_config_home"
+    --env "XDG_STATE_HOME=$container_state_home"
+    --env "TMPDIR=/tmp"
+  )
+  run_args+=("${provenance_env[@]+"${provenance_env[@]}"}")
+  run_args+=("${mounts[@]}")
+  run_args+=(
+    "$image_tag"
     bash -lc 'mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" && exec sleep infinity'
+  )
+
+  if [[ "$no_default_auth" == true ]]; then
+    # Scoped up: capture the new container's id from `docker run` stdout —
+    # it is the immutable lease identity, never re-derived from the mutable
+    # configured name — probe the results mount against exactly that id, and
+    # print the id for the caller.
+    local captured_id
+    if ! captured_id=$(docker run "${run_args[@]}"); then
+      die "docker run failed for $container_name"
+    fi
+    if [[ -z "$captured_id" || "$captured_id" == *[[:space:]]* ]]; then
+      die "docker run did not print a single container id on stdout for $container_name"
+    fi
+    scoped_probe_with_rollback "$captured_id"
+    printf '%s\n' "$captured_id"
+    return 0
+  fi
+
+  docker run "${run_args[@]}"
 }
 
 case "$command" in
@@ -464,6 +562,21 @@ case "$command" in
     ;;
   exec)
     [[ $# -gt 0 ]] || die "missing command for exec"
+    if [[ -n "$expected_container_id" ]]; then
+      # Scoped exec: require the configured NAME to resolve to the expected
+      # immutable id right now, then target that id directly. No bundle
+      # rediscovery, no mount args, no exec-time results probe (scoped up
+      # already probed against this exact id).
+      current_id=$(docker container inspect -f '{{.Id}}' "$container_name") \
+        || die "configured container $container_name is not inspectable; refusing to exec against expected container id"
+      if [[ "$current_id" != "$expected_container_id" ]]; then
+        die "configured container $container_name is a replacement (current id $current_id does not match the expected id); refusing to exec into it"
+      fi
+      if [[ -n "$exec_env_file" ]]; then
+        exec docker exec --env-file "$exec_env_file" "$expected_container_id" "$@"
+      fi
+      exec docker exec "$expected_container_id" "$@"
+    fi
     if [[ "${1:-}" == "quorum" ]]; then
       probe_results_mount
     fi
