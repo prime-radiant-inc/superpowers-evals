@@ -1832,6 +1832,47 @@ test('a same-shape agent-env relabel of a live scope fails before any runner cal
   expect(existsSync(fx.stagingDir)).toBe(true);
 });
 
+test('a tampered GEMINI_AUTH_TYPE mode value in agent.env fails typed before any runner call and leaves the stage byte-for-byte unchanged', () => {
+  // The corpus pair (gemini × gemini_oauth_fx) canonically derives mode
+  // 'oauth-personal'. The staged agent.env is rewritten to carry every other
+  // mode-shaped value: the name/count binding still passes (exactly one
+  // GEMINI_AUTH_TYPE line in the expected position), so only the exact
+  // mode-value check can catch the tamper.
+  const tamperedModes: readonly string[] = [
+    "GEMINI_AUTH_TYPE='gemini-api-key'\n", // the other canonical mode
+    'GEMINI_AUTH_TYPE=gemini-api-key\n', // bare tampered token
+    "GEMINI_AUTH_TYPE='oauth-personal '\n", // near-miss trailing space
+    "GEMINI_AUTH_TYPE=''\n", // empty
+    "GEMINI_AUTH_TYPE='OAuth-Personal'\n", // case-mangled
+  ];
+  for (const tamperedMode of tamperedModes) {
+    const fx = makeGeminiCorpusFixture();
+    seedGeminiBundle(fx);
+    const staged = stageLiveCredentialMaterial(fx.loaded, geminiCorpusScope());
+    writeFileSync(join(fx.stagingDir, 'agent.env'), tamperedMode);
+    const stageBefore = fingerprintTree(fx.stagingDir);
+
+    const runner = new ScopedFakeRunner();
+    const caught = captureError(() =>
+      reconcileScopedContainer(fx.loaded, runner, staged),
+    );
+
+    expect(caught).toBeInstanceOf(ApplianceError);
+    const err = caught as ApplianceError;
+    expect(err.code).toBe('config_invalid');
+    expect(err.message).toContain('GEMINI_AUTH_TYPE');
+    // The refusal must never echo the value: a tampered entry may carry
+    // secret-shaped material, so only the variable NAME may appear.
+    expect(err.message).not.toContain('gemini-api-key');
+    expect(err.message).not.toContain('OAuth-Personal');
+    expect(err.message).not.toContain('oauth-personal ');
+    // Fails BEFORE any wrapper or docker call, and the staged material is
+    // byte-for-byte unchanged (paths, kinds, modes, bytes).
+    expect(runner.calls).toHaveLength(0);
+    expect(fingerprintTree(fx.stagingDir)).toBe(stageBefore);
+  }
+});
+
 test('a pi provider relabel at the same projected path fails before any runner call', () => {
   // The staged auth/pi/agent/auth.json carries exactly the canonical
   // provider's own-property key (openai-codex); the scope object is

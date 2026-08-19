@@ -642,6 +642,33 @@ function requireProjectedAuthTree(
   }
 }
 
+// One NAME=VALUE agent env line. value is null when the line carries no
+// '=' at all (such a line can never match an expected destination name).
+interface AgentEnvLine {
+  readonly name: string;
+  readonly value: string | null;
+}
+
+function parseAgentEnvLine(line: string): AgentEnvLine {
+  const eq = line.indexOf('=');
+  if (eq === -1) {
+    return { name: line, value: null };
+  }
+  return { name: line.slice(0, eq), value: line.slice(eq + 1) };
+}
+
+// Derive the shell value of one agent env entry, understanding the POSIX
+// single-quoted form the staging projector writes (including its escaped-
+// embedded-quote idiom). A bare token derives to itself; every other shape
+// derives to its literal bytes, so only the exact canonical mode value ever
+// compares equal.
+function deriveAgentEnvValue(raw: string): string {
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) {
+    return raw.slice(1, -1).replaceAll("'\\''", "'");
+  }
+  return raw;
+}
+
 // Complete scope-to-payload binding for a live generation, checked BEFORE
 // any runner call so a relabeled scope object can never reach a container.
 //
@@ -650,8 +677,9 @@ function requireProjectedAuthTree(
 //    relabel (different agentEnv destinations, or a different pi provider)
 //    fails even when every structural path/file check would pass.
 // 2. The fixed agent.env must contain exactly the rederived destination
-//    variable names, and the derived GEMINI_AUTH_TYPE mode when the scope
-//    carries one — not merely a plausible env file.
+//    variable names, and — when the scope derives a gemini mode — a
+//    GEMINI_AUTH_TYPE entry whose VALUE is exactly that mode — not merely a
+//    plausible env file.
 // 3. For a pi oauth projection, the projected agent/auth.json must hold
 //    exactly the single canonical provider's own-property key, so a
 //    same-path provider relabel fails.
@@ -708,7 +736,8 @@ function requireScopeToPayloadBinding(
     );
   }
   const lines = envBody.split('\n').filter((line) => line !== '');
-  const actualNames = lines.map((line) => line.slice(0, line.indexOf('=')));
+  const parsedLines = lines.map(parseAgentEnvLine);
+  const actualNames = parsedLines.map((entry) => entry.name);
   const expectedNames = [
     ...canonical.agentEnv.map((projection) => projection.destinationName),
     ...(canonical.geminiAuthType !== null ? ['GEMINI_AUTH_TYPE'] : []),
@@ -720,6 +749,31 @@ function requireScopeToPayloadBinding(
     throw scopedContainerFault(
       `${label} agent env file does not bind the canonically rederived destinations (expected: ${expectedNames.join(', ')})`,
     );
+  }
+
+  // Exact mode binding: when the canonical scope derives a gemini mode, the
+  // GEMINI_AUTH_TYPE entry must carry exactly that value — the projector's
+  // single-quoted form or the bare token both derive to it, anything else
+  // fails. The name binding above guarantees exactly one such line (the
+  // canonical scope derives no destination of that name, and a mode-bearing
+  // canonical scope is always gemini-family, whose destinations are
+  // GEMINI_API_KEY at most). When the canonical mode is null, that same name
+  // binding keeps GEMINI_AUTH_TYPE absent. The refusal names the variable
+  // and the selection, never the value — a tampered entry may carry
+  // secret-shaped material.
+  if (canonical.geminiAuthType !== null) {
+    const modeLine = parsedLines.find(
+      (entry) => entry.name === 'GEMINI_AUTH_TYPE',
+    );
+    if (
+      modeLine === undefined ||
+      modeLine.value === null ||
+      deriveAgentEnvValue(modeLine.value) !== canonical.geminiAuthType
+    ) {
+      throw scopedContainerFault(
+        `${label} agent env file GEMINI_AUTH_TYPE does not carry the mode canonically rederived for agent '${scope.agent}' credential '${scope.credential}'`,
+      );
+    }
   }
 
   const oauth = canonical.oauth;
