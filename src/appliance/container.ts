@@ -13,6 +13,7 @@ import {
   type ProjectedAuthMount,
   readPinnedNoFollowFile,
   recoverScopedCredentialActivation,
+  retireScopedCredentialMaterial,
   type StagedCredentialMaterial,
 } from './credential-scope.ts';
 import { ApplianceError, type ApplianceErrorCode } from './errors.ts';
@@ -1278,6 +1279,93 @@ function inspectCapturedContainer(
   return stringField(record, 'Image') ?? stringField(record, 'ImageID');
 }
 
+function stableReconcileError(error: unknown): ApplianceError {
+  if (error instanceof ApplianceError) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new ApplianceError(
+    'container_unhealthy',
+    'container',
+    `scoped container reconciliation failed: ${message}`,
+  );
+}
+
+function appendReconcileCleanupFailure(
+  original: ApplianceError,
+  message: string,
+): ApplianceError {
+  return new ApplianceError(
+    original.code,
+    original.step,
+    `${original.message}; ${message}`,
+  );
+}
+
+function cleanupFailedScopedReconcile(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+  capturedId: string | null,
+  error: unknown,
+): ApplianceError {
+  const original = stableReconcileError(error);
+  if (capturedId === null) {
+    let state: ContainerState;
+    try {
+      state = inspectContainerState(loaded, runner);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error
+          ? cleanupError.message
+          : String(cleanupError);
+      return appendReconcileCleanupFailure(
+        original,
+        `could not prove the container absent after failed scoped activation: ${message}`,
+      );
+    }
+    if (state !== 'missing') {
+      return appendReconcileCleanupFailure(
+        original,
+        `could not prove the container absent after failed scoped activation (status=${state})`,
+      );
+    }
+  } else {
+    let cleanup: CommandResult;
+    try {
+      cleanup = runner.run('docker', ['rm', '-f', capturedId]);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error
+          ? cleanupError.message
+          : String(cleanupError);
+      return appendReconcileCleanupFailure(
+        original,
+        `rollback of captured container ${capturedId} also failed: ${message}`,
+      );
+    }
+    if (cleanup.status !== 0) {
+      return appendReconcileCleanupFailure(
+        original,
+        `rollback of captured container ${capturedId} also failed`,
+      );
+    }
+  }
+
+  try {
+    retireScopedCredentialMaterial(loaded);
+  } catch (cleanupError) {
+    const message =
+      cleanupError instanceof Error
+        ? cleanupError.message
+        : String(cleanupError);
+    return appendReconcileCleanupFailure(
+      original,
+      `credential-material cleanup after failed scoped activation also failed: ${message}`,
+    );
+  }
+  return original;
+}
+
 /**
  * Reconcile the configured container onto one staged scoped generation and
  * return its immutable lease: validate the discriminated material and both
@@ -1292,6 +1380,9 @@ function inspectCapturedContainer(
  * touched). A post-up failure rolls back the captured ID directly — a
  * replacement under the configured name is never stopped — retaining the
  * original typed failure and appending any cleanup failure without values.
+ * If activation succeeds but no immutable ID is returned, material is retired
+ * only after the configured container is proved absent; otherwise it remains
+ * available for safe operator recovery.
  */
 export function reconcileScopedContainer(
   loaded: LoadedApplianceConfig,
@@ -1332,35 +1423,36 @@ export function reconcileScopedContainer(
 
   const active = activateScopedCredentialMaterial(loaded, staged);
 
-  const upResult = runner.run(
-    evalsContainerPath(loaded),
-    scopedUpContainerArgs(loaded, active),
-  );
-  requireContainerCommand(
-    upResult,
-    'container_unhealthy',
-    'scoped container up failed',
-  );
-  const capturedId = upResult.stdout.trim();
-  if (capturedId === '' || /\s/.test(capturedId)) {
-    throw new ApplianceError(
-      'container_unhealthy',
-      'container',
-      'scoped up did not return a single non-blank container id on stdout',
-    );
-  }
-  if (!/^[0-9a-f]{64}$/.test(capturedId)) {
-    // The lease id is used verbatim as the rollback target and the exec
-    // identity, so a name-like or truncated token must never be blessed as
-    // a container id: docker full ids are exactly 64 lowercase hex chars.
-    throw new ApplianceError(
-      'container_unhealthy',
-      'container',
-      `scoped up did not return a full 64-hex docker container id on stdout (expected 64 lowercase hex characters): ${capturedId}`,
-    );
-  }
-
+  let capturedId: string | null = null;
   try {
+    const upResult = runner.run(
+      evalsContainerPath(loaded),
+      scopedUpContainerArgs(loaded, active),
+    );
+    requireContainerCommand(
+      upResult,
+      'container_unhealthy',
+      'scoped container up failed',
+    );
+    const stdoutId = upResult.stdout.trim();
+    if (stdoutId === '' || /\s/.test(stdoutId)) {
+      throw new ApplianceError(
+        'container_unhealthy',
+        'container',
+        'scoped up did not return a single non-blank container id on stdout',
+      );
+    }
+    if (!/^[0-9a-f]{64}$/.test(stdoutId)) {
+      // The lease id is used verbatim as the rollback target and the exec
+      // identity, so a name-like or truncated token must never be blessed as
+      // a container id: docker full ids are exactly 64 lowercase hex chars.
+      throw new ApplianceError(
+        'container_unhealthy',
+        'container',
+        `scoped up did not return a full 64-hex docker container id on stdout (expected 64 lowercase hex characters): ${stdoutId}`,
+      );
+    }
+    capturedId = stdoutId;
     const imageId = inspectCapturedContainer(
       loaded,
       runner,
@@ -1375,15 +1467,7 @@ export function reconcileScopedContainer(
       credentialScope: active.credentialScope,
     };
   } catch (error) {
-    const cleanup = runner.run('docker', ['rm', '-f', capturedId]);
-    if (cleanup.status !== 0 && error instanceof ApplianceError) {
-      throw new ApplianceError(
-        error.code,
-        error.step,
-        `${error.message}; rollback of captured container ${capturedId} also failed`,
-      );
-    }
-    throw error;
+    throw cleanupFailedScopedReconcile(loaded, runner, capturedId, error);
   }
 }
 

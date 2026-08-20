@@ -511,12 +511,7 @@ export async function preflightLiveJob(
       probed.probeLease,
       () => stageLiveCredentialMaterial(args.loaded, plan.scope),
     );
-    const lease = withPreflightLeaseCleanup(
-      args.loaded,
-      runner,
-      probed.probeLease,
-      () => reconcileScopedContainer(args.loaded, runner, staged),
-    );
+    const lease = reconcileScopedContainer(args.loaded, runner, staged);
     return withPreflightLeaseCleanup(args.loaded, runner, lease, () => {
       return {
         evidence: commitPreflightEvidence(

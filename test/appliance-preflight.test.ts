@@ -654,6 +654,55 @@ test('a live-staging failure removes the exact probe container before retiring i
   expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
 });
 
+test('a live-up failure retires activated material only after reconciliation proves the new container absent', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+  runner.results.push(
+    {
+      match: (command, args) =>
+        command.endsWith('scripts/evals-container') &&
+        args[args.length - 1] === 'up' &&
+        runner.ups === 1,
+      result: { status: 1, stdout: '', stderr: 'live up failed\n' },
+    },
+    {
+      match: (command, args) =>
+        command.endsWith('scripts/evals-container') &&
+        args[args.length - 1] === 'status' &&
+        runner.calls.filter(
+          (call) =>
+            call.command.endsWith('scripts/evals-container') &&
+            call.args[call.args.length - 1] === 'status',
+        ).length >= 3,
+      result: {
+        status: 0,
+        stdout: 'quorum-appliance: missing\n',
+        stderr: '',
+      },
+    },
+  );
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'container_unhealthy',
+    step: 'container',
+    message: expect.stringContaining('scoped container up failed'),
+  });
+
+  expect(exactContainerRemovals(runner)).toEqual([]);
+  expect(runner.ups).toBe(1);
+  expect(existsSync(fx.activeDir)).toBe(false);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
+});
+
 test('a leased-container cleanup failure is appended and keeps material that may still be mounted', async () => {
   const fx = fixture();
   const runner = new FakeRunner();

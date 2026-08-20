@@ -1403,8 +1403,38 @@ test('a scoped up that returns no container id fails typed with no rollback targ
 
   expectContainerError(caught, 'container id');
   expect((caught as ApplianceError).code).toBe('container_unhealthy');
-  // status + up only: no inspect, no docker rm without a captured id.
-  expect(runner.calls).toHaveLength(2);
+  // No docker rm without a captured id. Reconciliation instead proves the
+  // configured name absent before it retires the activated generation.
+  expect(runner.calls).toHaveLength(3);
+  expect(runner.calls[2]).toEqual({
+    command: evalsContainerPath(fx.loaded),
+    args: ['--name', 'quorum-appliance', 'status'],
+  });
+  expect(existsSync(fx.activeDir)).toBe(false);
+  expect(runner.calls.some((call) => call.command === 'docker')).toBe(false);
+});
+
+test('a failed scoped up preserves active material when container absence cannot be proved', () => {
+  const fx = makeScopedFixture();
+  const staged = stageProbeCredentialMaterial(fx.loaded);
+  const runner = new ScopedFakeRunner();
+  runner.statusStdout = 'quorum-appliance: exists, running\n';
+  runner.upStatus = 1;
+
+  const caught = captureError(() =>
+    reconcileScopedContainer(fx.loaded, runner, staged),
+  );
+
+  const error = expectContainerError(caught, 'scoped container up failed');
+  expect(error.message).toContain('could not prove the container absent');
+  expect(
+    runner.calls.filter(
+      (call) =>
+        call.command === evalsContainerPath(fx.loaded) &&
+        call.args[call.args.length - 1] === 'status',
+    ),
+  ).toHaveLength(2);
+  expect(existsSync(fx.activeDir)).toBe(true);
   expect(runner.calls.some((call) => call.command === 'docker')).toBe(false);
 });
 
@@ -1433,9 +1463,14 @@ test('a scoped up that returns a name-like or non-64-hex token on stdout is refu
     expect(err.message).toMatch(
       /non-blank container id|full 64-hex docker container id/,
     );
-    // No inspect and no docker rollback on an unusable captured id: status
-    // + up only.
-    expect(runner.calls).toHaveLength(2);
+    // No docker rollback on an unusable captured id. A second status proves
+    // the container absent before the generation is retired.
+    expect(runner.calls).toHaveLength(3);
+    expect(runner.calls[2]).toEqual({
+      command: evalsContainerPath(fx.loaded),
+      args: ['--name', 'quorum-appliance', 'status'],
+    });
+    expect(existsSync(fx.activeDir)).toBe(false);
     expect(runner.calls.some((call) => call.command === 'docker')).toBe(false);
   }
 });
@@ -1468,6 +1503,7 @@ test('malformed or replaced post-up inspection rolls back only the captured id, 
     expect(caught).toBeInstanceOf(ApplianceError);
     const last = runner.calls[runner.calls.length - 1];
     expect(last).toEqual({ command: 'docker', args: ['rm', '-f', SCOPED_ID] });
+    expect(existsSync(fx.activeDir)).toBe(false);
     // The configured name is never targeted after up: no wrapper down.
     const wrapper = evalsContainerPath(fx.loaded);
     expect(
@@ -1493,6 +1529,7 @@ test('a rollback failure is appended to the original typed error without masking
 
   const err = expectContainerError(caught, SCOPED_ID);
   expect(err.message).toContain('rollback');
+  expect(existsSync(fx.activeDir)).toBe(true);
 });
 
 test('the mount signature describes scope and destinations, never secret values', () => {
