@@ -28,7 +28,7 @@ die() {
 # regular readable file. A final-component-only -L check would let an
 # intermediate symlink redirect the read, so the whole chain is walked.
 validate_no_follow_file() {
-  local path=$1 label=$2 component rest path_so_far
+  local path=$1 label=$2 component rest path_so_far=""
   [[ "$path" == /* ]] || die "$label must be an absolute path: $path"
   rest=${path#/}
   while [[ -n "$rest" ]]; do
