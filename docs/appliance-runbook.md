@@ -283,9 +283,12 @@ canonical names. Neither host-only delivery of the supervisor exec env file
 nor the `QUORUM_GRADER_*` aliasing is a defence against such an observer. The
 Coding-Agent under test runs at that same privilege: intentional delivery
 never hands it the grader's values, but nothing stops it from reading them out
-of a peer process's environment. Same-UID inspection also reaches the fixed
-staging slot, which such a process can race and displace while a generation is
-being written.
+of a peer process's environment. The Quorum parent and the `run-all` child also
+retain the operator's full host provider bundle in their process environments
+on host-driven paths, so same-UID inspection can expose every host provider
+credential, not only the selected agent and grader credentials. Same-UID
+inspection also reaches the fixed staging slot, which such a process can race
+and displace while a generation is being written.
 
 Staging detects that displacement and fails closed: the fixed path must still
 identify the exact inode that was written, or the job is refused rather than
@@ -302,12 +305,22 @@ open, not fixed.
 
 ### Physical verification status
 
-Everything above is enforced by automated behavior tests. The physical gate has
-not been run: no Docker canary of the projection matrix, no
-`docker exec --env-file` value round-trip against a real Docker client and
-server, and no real Codex-subscription appliance job have been executed against
-this code. Do not claim physical verification, and do not cite this section as
-evidence of it, until that gate runs and its experiment record exists.
+Automated behavior tests enforce the contract above. The local Docker canary
+physically projected all ten credential rows and round-tripped all five
+`docker exec --env-file` value forms; guest observation succeeded for eight of
+ten rows. Antigravity and Kimi-without-optional intermittently could not see
+their single-file bind under macOS/OrbStack even though Docker inspect reported
+it, and focused probes did not reproduce that observation.
+
+Two real Linux-appliance smoke jobs passed end to end: OpenCode with an API-key
+credential and Claude with the Bedrock/Mantle bearer. Both exposed exactly the
+selected agent file in the container, kept the supervisor file host-only, and
+restored the original appliance checkout, bundle, locks, and legacy container
+afterward. The attempted Codex-subscription job failed after the asserted-empty
+Docker probe because the blessed bundle has no approved `codex/auth.json`; the
+Codex path remains physically unverified and unavailable until that bundle
+migration occurs. See the full positive and negative evidence in
+[the F13 experiment receipt](experiments/2026-08-19-f13-filesystem-credential-scoping.md).
 
 ## Sentinel Batch
 

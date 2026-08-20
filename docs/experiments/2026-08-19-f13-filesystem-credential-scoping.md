@@ -66,12 +66,14 @@ The temporary live bundle was
 
 ### Codex subscription bundle was incomplete
 
-Job `job-20260820T005820Z-acce` selected `codex_sub` and failed before Docker
-with typed `config_invalid/credential-scope`: the blessed bundle did not
-contain `codex/auth.json`. The appliance runner and root homes also contained
-no Codex auth file. No personal local OAuth material was copied to the shared
-appliance. This establishes a required bundle-migration item before Codex
-subscription cells can run under scoped delivery.
+Job `job-20260820T005820Z-acce` selected `codex_sub` and failed after the
+asserted-empty Docker probe, but before live credential staging,
+reconciliation, or Quorum execution. The typed
+`config_invalid/credential-scope` error reported that the blessed bundle did
+not contain `codex/auth.json`. The appliance runner and root homes also
+contained no Codex auth file. No personal local OAuth material was copied to
+the shared appliance. This establishes a required bundle-migration item before
+Codex subscription cells can run under scoped delivery.
 
 ### Linux Bash exposed an uninitialized local
 

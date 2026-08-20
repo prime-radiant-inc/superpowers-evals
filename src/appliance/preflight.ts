@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import {
+  type CommandResult,
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
@@ -20,6 +21,8 @@ import {
 } from './container.ts';
 import { buildLiveCredentialRequest } from './credential-request.ts';
 import {
+  retireScopedCredentialMaterial,
+  type StagedCredentialMaterial,
   stageLiveCredentialMaterial,
   stageProbeCredentialMaterial,
 } from './credential-scope.ts';
@@ -145,6 +148,71 @@ function stableError(error: unknown, step = 'preflight'): ApplianceError {
   }
   const message = error instanceof Error ? error.message : String(error);
   return new ApplianceError('config_invalid', step, message);
+}
+
+function appendCleanupFailure(
+  original: ApplianceError,
+  message: string,
+): ApplianceError {
+  return new ApplianceError(
+    original.code,
+    original.step,
+    `${original.message}; ${message}`,
+  );
+}
+
+function cleanupPreflightLease(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+  lease: ContainerLease,
+  error: unknown,
+): ApplianceError {
+  const stable = stableError(error);
+  let removal: CommandResult;
+  try {
+    removal = runner.run('docker', ['rm', '-f', lease.id]);
+  } catch (cleanupError) {
+    const message =
+      cleanupError instanceof Error
+        ? cleanupError.message
+        : String(cleanupError);
+    return appendCleanupFailure(
+      stable,
+      `cleanup of leased container ${lease.id} failed: ${message}`,
+    );
+  }
+  if (removal.status !== 0) {
+    return appendCleanupFailure(
+      stable,
+      `cleanup of leased container ${lease.id} failed with exit ${removal.status}`,
+    );
+  }
+  try {
+    retireScopedCredentialMaterial(loaded);
+  } catch (cleanupError) {
+    const message =
+      cleanupError instanceof Error
+        ? cleanupError.message
+        : String(cleanupError);
+    return appendCleanupFailure(
+      stable,
+      `credential-material cleanup after removing leased container ${lease.id} failed: ${message}`,
+    );
+  }
+  return stable;
+}
+
+function withPreflightLeaseCleanup<T>(
+  loaded: LoadedApplianceConfig,
+  runner: CommandRunner,
+  lease: ContainerLease,
+  operation: () => T,
+): T {
+  try {
+    return operation();
+  } catch (error) {
+    throw cleanupPreflightLease(loaded, runner, lease, error);
+  }
 }
 
 function jobToolVersionsPath(
@@ -354,33 +422,34 @@ async function preflightThroughEmptyProbe(
     runner,
     stageProbeCredentialMaterial(loaded),
   );
+  return withPreflightLeaseCleanup(loaded, runner, probeLease, () => {
+    const toolVersions = runInLeasedContainer(
+      loaded,
+      runner,
+      probeLease,
+      ['evals-tool-versions'],
+      'tool_versions_failed',
+      'evals-tool-versions failed',
+    );
+    const toolVersionsPath = jobToolVersionsPath(loaded, args.jobId);
+    writePrivateText(toolVersionsPath, toolVersions.stdout);
 
-  const toolVersions = runInLeasedContainer(
-    loaded,
-    runner,
-    probeLease,
-    ['evals-tool-versions'],
-    'tool_versions_failed',
-    'evals-tool-versions failed',
-  );
-  const toolVersionsPath = jobToolVersionsPath(loaded, args.jobId);
-  writePrivateText(toolVersionsPath, toolVersions.stdout);
+    runInLeasedContainer(
+      loaded,
+      runner,
+      probeLease,
+      ['quorum', 'check'],
+      'quorum_check_failed',
+      'quorum check failed',
+    );
 
-  runInLeasedContainer(
-    loaded,
-    runner,
-    probeLease,
-    ['quorum', 'check'],
-    'quorum_check_failed',
-    'quorum check failed',
-  );
-
-  return {
-    refs,
-    probeLease,
-    toolVersionsPath,
-    toolVersionsText: toolVersions.stdout,
-  };
+    return {
+      refs,
+      probeLease,
+      toolVersionsPath,
+      toolVersionsText: toolVersions.stdout,
+    };
+  });
 }
 
 /**
@@ -436,16 +505,30 @@ export async function preflightLiveJob(
   try {
     const plan = livePlanForJob(readJob(args.loaded, args.jobId));
     const probed = await preflightThroughEmptyProbe(args, plan);
-    const lease = reconcileScopedContainer(
+    const staged: StagedCredentialMaterial = withPreflightLeaseCleanup(
       args.loaded,
       runner,
-      stageLiveCredentialMaterial(args.loaded, plan.scope),
+      probed.probeLease,
+      () => stageLiveCredentialMaterial(args.loaded, plan.scope),
     );
-    return {
-      evidence: commitPreflightEvidence(args.loaded, args.jobId, probed, lease),
-      lease,
-      supervisorExecEnvFile: activeSupervisorExecEnvFile(args.loaded),
-    };
+    const lease = withPreflightLeaseCleanup(
+      args.loaded,
+      runner,
+      probed.probeLease,
+      () => reconcileScopedContainer(args.loaded, runner, staged),
+    );
+    return withPreflightLeaseCleanup(args.loaded, runner, lease, () => {
+      return {
+        evidence: commitPreflightEvidence(
+          args.loaded,
+          args.jobId,
+          probed,
+          lease,
+        ),
+        lease,
+        supervisorExecEnvFile: activeSupervisorExecEnvFile(args.loaded),
+      };
+    });
   } catch (error) {
     const stable = stableError(error);
     try {
@@ -497,11 +580,17 @@ async function preflightPrepareJob(
   try {
     requirePrepareRecord(readJob(args.loaded, args.jobId));
     const probed = await preflightThroughEmptyProbe(args, null);
-    return commitPreflightEvidence(
+    return withPreflightLeaseCleanup(
       args.loaded,
-      args.jobId,
-      probed,
+      args.runner ?? defaultCommandRunner,
       probed.probeLease,
+      () =>
+        commitPreflightEvidence(
+          args.loaded,
+          args.jobId,
+          probed,
+          probed.probeLease,
+        ),
     );
   } catch (error) {
     const stable = stableError(error);

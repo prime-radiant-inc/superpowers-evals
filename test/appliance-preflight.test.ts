@@ -100,6 +100,7 @@ class FakeRunner implements CommandRunner {
   mounts = new Map<string, readonly FakeInspectMount[]>();
   upIds: string[] = [PROBE_ID, LIVE_ID];
   ups = 0;
+  beforeRun: ((command: string, args: readonly string[]) => void) | null = null;
 
   run(
     command: string,
@@ -109,6 +110,7 @@ class FakeRunner implements CommandRunner {
     this.calls.push(
       options === undefined ? { command, args } : { command, args, options },
     );
+    this.beforeRun?.(command, args);
     const configured = this.results.find((entry) => entry.match(command, args));
     if (configured !== undefined) {
       return configured.result;
@@ -351,6 +353,12 @@ function dockerCalls(runner: FakeRunner): readonly unknown[] {
     (call) =>
       call.command === 'docker' ||
       call.command.endsWith('scripts/evals-container'),
+  );
+}
+
+function exactContainerRemovals(runner: FakeRunner): readonly string[][] {
+  return runner.calls.flatMap((call) =>
+    call.command === 'docker' && call.args[0] === 'rm' ? [[...call.args]] : [],
   );
 }
 
@@ -621,6 +629,100 @@ test('preflightLiveJob requires docker exec --env-file before build or staging',
   expect(existsSync(fx.scopedRoot)).toBe(false);
 });
 
+test('a live-staging failure removes the exact probe container before retiring its material', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+  rmSync(join(fx.bundleDir, 'credentials.env'));
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'credential-scope',
+  });
+
+  expect(exactContainerRemovals(runner)).toEqual([['rm', '-f', PROBE_ID]]);
+  expect(runner.ups).toBe(1);
+  expect(existsSync(fx.activeDir)).toBe(false);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
+});
+
+test('a leased-container cleanup failure is appended and keeps material that may still be mounted', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+  rmSync(join(fx.bundleDir, 'credentials.env'));
+  runner.results.push({
+    match: (command, args) =>
+      command === 'docker' &&
+      args[0] === 'rm' &&
+      args[1] === '-f' &&
+      args[2] === PROBE_ID,
+    result: { status: 1, stdout: '', stderr: 'cleanup failed' },
+  });
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({
+    code: 'config_invalid',
+    step: 'credential-scope',
+    message: expect.stringContaining(
+      `cleanup of leased container ${PROBE_ID} failed with exit 1`,
+    ),
+  });
+
+  expect(exactContainerRemovals(runner)).toEqual([['rm', '-f', PROBE_ID]]);
+  expect(existsSync(fx.activeDir)).toBe(true);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
+});
+
+test('an evidence-commit failure removes the exact live container before retiring its material', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = liveJob(fx);
+  const jobPath = join(fx.loaded.paths.jobs, job.job_id, 'job.json');
+  runner.beforeRun = (command, args) => {
+    if (
+      command === 'docker' &&
+      args[0] === 'container' &&
+      args[1] === 'inspect' &&
+      args[2] === LIVE_ID
+    ) {
+      const record = JSON.parse(readFileSync(jobPath, 'utf8'));
+      writeFileSync(
+        jobPath,
+        JSON.stringify({ ...record, job_id: 'different-job' }),
+      );
+    }
+  };
+
+  await expect(
+    preflightLiveJob({
+      loaded: fx.loaded,
+      jobId: job.job_id,
+      superpowersRef: 'main',
+      runner,
+    }),
+  ).rejects.toMatchObject({ code: 'config_invalid', step: 'job' });
+
+  expect(exactContainerRemovals(runner)).toEqual([['rm', '-f', LIVE_ID]]);
+  expect(existsSync(fx.activeDir)).toBe(false);
+});
+
 // Records written before the credential triple existed read back with a null
 // scope. They stay readable and cancellable, but they can never execute: there
 // is no legacy full-bundle path to fall back to.
@@ -704,6 +806,8 @@ test('a provenance fault leaves committed job evidence a retry heals without cha
   expect(failed.refs?.evals_resolved_sha).toBe(RESOLVED_SHA);
   expect(failed.credential_bundle?.bundle_id).toBe('blessed-2026-06-18-a');
   expect(failed.credential_scope).toEqual(corpusScope());
+  expect(exactContainerRemovals(runner)).toEqual([['rm', '-f', LIVE_ID]]);
+  expect(existsSync(fx.activeDir)).toBe(false);
 
   // The retry heals only the derived file, from the job.
   rmSync(fx.loaded.paths.provenance);
@@ -761,6 +865,30 @@ test('prepare stops after the empty probe and never evaluates the blessed bundle
   const provenance = JSON.parse(readFileSync(result.provenance_path, 'utf8'));
   expect(provenance.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
   expect(provenance.container.id).toBe(PROBE_ID);
+});
+
+test('a prepare provenance failure removes the exact probe container before retiring its material', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  const job = createJob(fx.loaded, prepareJobRequest());
+  rmSync(fx.loaded.paths.provenance, { recursive: true });
+  writeFileSync(fx.loaded.paths.provenance, 'not a directory\n');
+
+  await expect(
+    prepare({
+      loaded: fx.loaded,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: null },
+      runner,
+      jobId: job.job_id,
+    }),
+  ).rejects.toMatchObject({ code: 'config_invalid' });
+
+  expect(exactContainerRemovals(runner)).toEqual([['rm', '-f', PROBE_ID]]);
+  expect(existsSync(fx.activeDir)).toBe(false);
+  expect(readJob(fx.loaded, job.job_id).status).toBe('failed');
 });
 
 test('prepare refuses a live job record instead of probing it', async () => {
