@@ -13,6 +13,7 @@ build/
 .claude/
 .superpowers/
 .clearance-rendered-preview-*/
+corpus/
 # roborev snapshots
 /.roborev/
 node_modules/
