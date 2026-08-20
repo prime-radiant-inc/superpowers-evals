@@ -1,8 +1,9 @@
 # F13 filesystem credential scoping: local and appliance gates
 
-**Date:** 2026-08-19 (appliance execution 2026-08-20T00:53–01:09Z)
+**Date:** 2026-08-19 (appliance execution 2026-08-20T00:53–01:50Z)
 **Branch:** `worktree-f13-filesystem-credential-scoping`
-**Passing commit:** `2dbb77e785b7cea9544face1b9fd440375227f96`
+**Passing commits:** `2dbb77e785b7cea9544face1b9fd440375227f96`
+and `1fb839480f7e8fab9e0b4eda5f952844e1bd5f0f`
 **Superpowers commit:** `2d4b675b498b466df249304e2ba8a4640ccaa01f`
 
 ## Hypothesis
@@ -117,6 +118,48 @@ The Gauntlet-Agent used `claude-sonnet-5`; OpenCode used `gpt-5.5`. The Coding-
 Agent produced the requested file and both deterministic post-checks passed.
 No raw transcript or credential value was read during appliance diagnosis.
 
+## Passing Bedrock appliance job
+
+Drew approved Bedrock as the real disjoint agent credential after the Codex
+bundle fault. This avoided copying a personal Codex OAuth credential onto the
+shared appliance: Claude received the existing Bedrock bearer while the
+Gauntlet-Agent received the existing, value-distinct Anthropic key.
+
+The second gate used backup
+`/srv/quorum/credentials/backups/blessed-pre-f13-bedrock-20260820T014635Z`
+and temporary bundle `blessed-f13-bedrock-20260820T014635Z`. `prepare` passed
+at exact evals commit `1fb8394` with container lease `62024b2faa785568…`, the
+same image ID, and asserted-empty mount signature `4187a79eabd7bdff…`.
+
+Job `job-20260820T014714Z-49c8` ran the smoke scenario with Claude and
+`opus_bedrock`.
+
+| Evidence | Result |
+|---|---|
+| Job terminal state | `done`, exit 0 |
+| Final verdict | `pass` |
+| Final reason | Gauntlet-Agent passed; 2 post-checks passed |
+| Run | `00-quorum-smoke-hello-world-claude-opus_bedrock-linux-20260820T014729Z-3378` |
+| Immutable container ID | `c7a73ee9cca67ff1…` |
+| Image ID | `sha256:47c2c3dd02c7…` |
+| Mount signature | `1d051ba43a93a1a3…` |
+| Captured container PID / PGID | 29 / 29 |
+| Estimated total cost | $0.369006 |
+
+Docker inspect by immutable ID again showed exactly one read-only credential
+bind: `active/agent.env` at `/run/evals/credentials.env`. It contained only
+the name `AWS_BEARER_TOKEN_BEDROCK`; the unmounted supervisor file contained
+only `QUORUM_GRADER_SOURCE_MODE` and
+`QUORUM_GRADER_ANTHROPIC_API_KEY`. No bundle, OAuth directory, or supervisor
+file was mounted. The recorded lease matched the inspected container, PID and
+PGID were captured as 29, and a real `claude` process was observed while the
+job was live.
+
+The Coding-Agent used `claude-opus-4-8` through the Mantle/Bedrock bearer
+path, while the Gauntlet-Agent used `claude-sonnet-5` through the scoped
+Anthropic grader alias. The Coding-Agent produced the requested file and both
+post-checks passed.
+
 ## Restoration
 
 After the terminal verdict, both appliance locks were absent. The scoped
@@ -128,14 +171,15 @@ The evals checkout returned to its pre-gate main commit
 pending origin commits. The legacy container was recreated from the existing
 image with the original explicit inputs. Final doctor reported `ok: true`,
 both locks missing, and the container running. The SSM parameter remained
-unchanged throughout.
+unchanged throughout. The same restore sequence was repeated after the
+Bedrock gate from its separate versioned backup, with the same final state.
 
 ## Conclusion
 
-The scoped API-key path is physically verified end to end on the Linux
-appliance, including immutable lease binding, filesystem separation, grader
-delivery, real Gauntlet/Coding-Agent execution, and restoration. The Codex
-subscription path is not physically verified and is not deployable until its
-approved `auth.json` is added to the blessed bundle. The local OrbStack mount
-observation remains unresolved but did not reproduce on the passing Linux
-job.
+The scoped API-key and Bedrock/Mantle bearer paths are physically verified end
+to end on the Linux appliance, including immutable lease binding, filesystem
+separation, grader delivery, real Gauntlet/Coding-Agent execution, and
+restoration. The Codex subscription path remains unavailable until an approved
+`auth.json` is added to the blessed bundle; Drew approved the value-distinct
+Bedrock gate in its place for this change. The local OrbStack mount observation
+remains unresolved but did not reproduce on either passing Linux job.
