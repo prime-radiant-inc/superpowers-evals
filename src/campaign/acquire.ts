@@ -1,10 +1,13 @@
 // src/campaign/acquire.ts
+
+import type { Stats } from 'node:fs';
 import {
   copyFileSync,
-  existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -49,13 +52,68 @@ export interface SelectionManifest {
   missing_run_ids: string[];
 }
 
+/** A run id must be a single safe path component: no separators, no
+ *  traversal, no NUL bytes, not empty. Anything else is rejected up front
+ *  so it can never steer a copy outside the roots. */
+function isValidRunId(id: string): boolean {
+  return (
+    id.length > 0 &&
+    !id.includes('/') &&
+    !id.includes('\\') &&
+    !id.includes('..') &&
+    !id.includes('\0')
+  );
+}
+
+/** lstat — does NOT follow symlinks — so a symlink never passes the
+ *  isDirectory()/isFile() checks below. Returns null when missing. */
+function tryLstat(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function isRegularFile(path: string): boolean {
+  const st = tryLstat(path);
+  return st?.isFile() ?? false;
+}
+
+function isRegularDir(path: string): boolean {
+  const st = tryLstat(path);
+  return st?.isDirectory() ?? false;
+}
+
+/** A failed run: listed in missing_run_ids, with the reason in a per-run
+ *  notes entry (empty files), and nothing copied for it. */
+function failRun(
+  manifest: SelectionManifest,
+  runId: string,
+  reason: string,
+): void {
+  manifest.missing_run_ids.push(runId);
+  manifest.runs.push({ run_id: runId, files: [], notes: [reason] });
+}
+
 function sha256File(path: string): string {
   return Bun.SHA256.hash(readFileSync(path), 'hex');
 }
 
-function writePrivate(path: string, body: string): void {
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(path, body, { mode: 0o600 });
+/** Publish the manifest atomically: write a private temporary sibling,
+ *  then rename over the final path, so interruption can never leave a
+ *  truncated selection-manifest.json behind. */
+function writeManifestAtomic(
+  outDir: string,
+  manifest: SelectionManifest,
+): void {
+  const finalPath = join(outDir, 'selection-manifest.json');
+  const tmpPath = `${finalPath}.tmp`;
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(tmpPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  renameSync(tmpPath, finalPath);
 }
 
 function copyRecorded(
@@ -65,10 +123,12 @@ function copyRecorded(
 ): SelectionFileEntry {
   mkdirSync(join(destAbs, '..'), { recursive: true });
   copyFileSync(srcAbs, destAbs);
+  // Hash and size the COMPLETED destination so the manifest always
+  // describes the copied bytes, never a concurrently-mutating source.
   return {
     path: relPath,
-    sha256: sha256File(srcAbs),
-    bytes: statSync(srcAbs).size,
+    sha256: sha256File(destAbs),
+    bytes: statSync(destAbs).size,
   };
 }
 
@@ -88,73 +148,148 @@ export async function acquireCorpus(
   const wanted = new Set(args.runIds);
 
   for (const runId of [...wanted].sort()) {
+    if (!isValidRunId(runId)) {
+      failRun(manifest, runId, `invalid run id: ${JSON.stringify(runId)}`);
+      continue;
+    }
     const runDir = join(args.resultsRoot, runId);
-    if (!existsSync(runDir) || !statSync(runDir).isDirectory()) {
+    const runStat = tryLstat(runDir);
+    if (runStat === null) {
       manifest.missing_run_ids.push(runId);
       continue;
     }
-    const files: SelectionFileEntry[] = [];
+    if (!runStat.isDirectory()) {
+      failRun(manifest, runId, 'run dir is a symlink or not a directory');
+      continue;
+    }
+
+    // Gauntlet result cardinality is validated BEFORE anything is copied:
+    // exactly one gauntlet-agent/results/<id> dir, reached only through
+    // regular directories.
+    const gResults = join(runDir, 'gauntlet-agent', 'results');
+    if (
+      !isRegularDir(join(runDir, 'gauntlet-agent')) ||
+      !isRegularDir(gResults)
+    ) {
+      failRun(
+        manifest,
+        runId,
+        'gauntlet-agent/results missing or not a regular directory',
+      );
+      continue;
+    }
+    const idEntries = readdirSync(gResults, { withFileTypes: true }).filter(
+      (e) => e.isDirectory(),
+    );
+    if (idEntries.length !== 1) {
+      failRun(
+        manifest,
+        runId,
+        `gauntlet-agent/results holds ${idEntries.length} run dirs (expected 1)`,
+      );
+      continue;
+    }
+    const id = idEntries[0]?.name;
+    if (id === undefined) {
+      failRun(
+        manifest,
+        runId,
+        'gauntlet-agent/results holds 0 run dirs (expected 1)',
+      );
+      continue;
+    }
+    const resultRel = join('gauntlet-agent', 'results', id, 'result.json');
+    const resultJsonAbs = join(gResults, id, 'result.json');
+
+    // Validate every payload source (lstat: symlinks and irregular files
+    // fail the run) before copying anything for it.
     const notes: string[] = [];
+    const sources: Array<{ srcAbs: string; rel: string }> = [];
+    let failed = false;
     for (const rel of PAYLOAD_RUN_FILES) {
       const srcAbs = join(runDir, rel);
-      if (!existsSync(srcAbs)) {
+      const st = tryLstat(srcAbs);
+      if (st === null) {
         notes.push(`missing payload file: ${rel}`);
         continue;
       }
-      files.push(copyRecorded(srcAbs, join(args.outDir, runId, rel), rel));
-    }
-    // gauntlet-agent/results/<id>/result.json — exactly one id expected.
-    const gResults = join(runDir, 'gauntlet-agent', 'results');
-    if (existsSync(gResults)) {
-      const ids = readdirSync(gResults, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .sort();
-      if (ids.length !== 1) {
-        notes.push(
-          `gauntlet-agent/results holds ${ids.length} run dirs (expected 1)`,
+      if (!st.isFile()) {
+        failRun(
+          manifest,
+          runId,
+          `payload file is a symlink or not a regular file: ${rel}`,
         );
+        failed = true;
+        break;
       }
-      for (const id of ids) {
-        const rel = join('gauntlet-agent', 'results', id, 'result.json');
-        const srcAbs = join(gResults, id, 'result.json');
-        if (existsSync(srcAbs)) {
-          files.push(copyRecorded(srcAbs, join(args.outDir, runId, rel), rel));
-        }
-      }
+      sources.push({ srcAbs, rel });
+    }
+    if (failed) continue;
+
+    const resultStat = tryLstat(resultJsonAbs);
+    if (resultStat === null) {
+      notes.push(`missing payload file: ${resultRel}`);
+    } else if (!resultStat.isFile()) {
+      failRun(
+        manifest,
+        runId,
+        `payload file is a symlink or not a regular file: ${resultRel}`,
+      );
+      continue;
     } else {
-      notes.push('no gauntlet-agent/results dir');
+      sources.push({ srcAbs: resultJsonAbs, rel: resultRel });
+    }
+
+    const files: SelectionFileEntry[] = [];
+    for (const { srcAbs, rel } of sources) {
+      files.push(copyRecorded(srcAbs, join(args.outDir, runId, rel), rel));
     }
     manifest.runs.push({ run_id: runId, files, notes });
   }
 
-  // Batch metadata: any batch whose results.jsonl references a wanted run.
+  // Batch metadata: any batch whose results.jsonl carries a line whose
+  // parsed run_id EQUALS a wanted id (substring matches never select;
+  // unparseable lines are skipped).
   const batchesRoot = join(args.resultsRoot, 'batches');
-  if (existsSync(batchesRoot)) {
+  if (isRegularDir(batchesRoot)) {
     for (const batch of readdirSync(batchesRoot, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort()) {
       const resultsJsonl = join(batchesRoot, batch, 'results.jsonl');
-      if (!existsSync(resultsJsonl)) continue;
+      if (!isRegularFile(resultsJsonl)) continue;
       const text = readFileSync(resultsJsonl, 'utf8');
-      if (![...wanted].some((id) => text.includes(id))) continue;
-      const files: SelectionFileEntry[] = [];
-      for (const rel of ['batch.json', 'results.jsonl']) {
-        const srcAbs = join(batchesRoot, batch, rel);
-        if (existsSync(srcAbs)) {
-          files.push(
-            copyRecorded(srcAbs, join(args.outDir, 'batches', batch, rel), rel),
-          );
+      const referenced = text.split('\n').some((line) => {
+        try {
+          const parsed = JSON.parse(line) as { run_id?: unknown };
+          return typeof parsed.run_id === 'string' && wanted.has(parsed.run_id);
+        } catch {
+          return false;
         }
+      });
+      if (!referenced) continue;
+      const files: SelectionFileEntry[] = [];
+      const batchJsonAbs = join(batchesRoot, batch, 'batch.json');
+      if (isRegularFile(batchJsonAbs)) {
+        files.push(
+          copyRecorded(
+            batchJsonAbs,
+            join(args.outDir, 'batches', batch, 'batch.json'),
+            'batch.json',
+          ),
+        );
       }
+      files.push(
+        copyRecorded(
+          resultsJsonl,
+          join(args.outDir, 'batches', batch, 'results.jsonl'),
+          'results.jsonl',
+        ),
+      );
       manifest.batches.push({ batch_id: batch, files });
     }
   }
 
-  writePrivate(
-    join(args.outDir, 'selection-manifest.json'),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
+  writeManifestAtomic(args.outDir, manifest);
   return manifest;
 }

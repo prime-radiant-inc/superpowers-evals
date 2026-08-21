@@ -1,10 +1,13 @@
 // test/campaign-acquire.test.ts
 import { expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -93,6 +96,134 @@ test('acquireCorpus copies the payload, never homes, and writes the selection ma
   expect(sel.source_host).toBe('quorum-appliance');
   expect(sel.pulled_at).toBe('2026-08-20T00:00:00.000Z');
   expect(sel.runs[0].files[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+  rmSync(src, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
+test('a symlinked payload file fails the run and copies nothing', async () => {
+  const src = mkdtempSync(join(tmpdir(), 'acquire-src-'));
+  const out = mkdtempSync(join(tmpdir(), 'acquire-out-'));
+  const run = 'run-sym-payload-linux-20260820T000000Z-aa';
+  const runDir = join(src, run);
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'g1'), {
+    recursive: true,
+  });
+  writeFileSync(join(runDir, 'trajectory.json'), '{"steps":[]}');
+  writeFileSync(join(runDir, 'coding-agent-token-usage.json'), '{}');
+  writeFileSync(
+    join(runDir, 'gauntlet-agent', 'results', 'g1', 'result.json'),
+    '{}',
+  );
+  // verdict.json is a symlink to a secret-bearing file outside the payload:
+  writeFileSync(join(src, 'secret'), 'TOPSECRET');
+  symlinkSync(join(src, 'secret'), join(runDir, 'verdict.json'));
+  const manifest = await acquireCorpus({
+    resultsRoot: src,
+    runIds: [run],
+    outDir: out,
+    sourceHost: 'quorum-appliance',
+    now: '2026-08-20T00:00:00.000Z',
+    command: 'quorum campaign acquire --runs-file runs.txt',
+  });
+  expect(manifest.missing_run_ids).toEqual([run]);
+  const entry = manifest.runs.find((r) => r.run_id === run);
+  expect(entry).toBeDefined();
+  expect(entry!.files).toHaveLength(0);
+  expect(entry!.notes.length).toBeGreaterThan(0);
+  expect(existsSync(join(out, run))).toBe(false);
+  rmSync(src, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
+test("a run id of '../escape' is rejected, not copied", async () => {
+  const src = mkdtempSync(join(tmpdir(), 'acquire-src-'));
+  const out = mkdtempSync(join(tmpdir(), 'acquire-out-'));
+  const manifest = await acquireCorpus({
+    resultsRoot: src,
+    runIds: ['../escape'],
+    outDir: out,
+    sourceHost: 'quorum-appliance',
+    now: '2026-08-20T00:00:00.000Z',
+    command: 'quorum campaign acquire --runs-file runs.txt',
+  });
+  expect(manifest.missing_run_ids).toEqual(['../escape']);
+  const entry = manifest.runs.find((r) => r.run_id === '../escape');
+  expect(entry).toBeDefined();
+  expect(entry!.files).toHaveLength(0);
+  expect(entry!.notes.length).toBeGreaterThan(0);
+  expect(readdirSync(out)).toEqual(['selection-manifest.json']);
+  rmSync(src, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
+test('a run with two gauntlet result dirs is failed, nothing copied', async () => {
+  const src = mkdtempSync(join(tmpdir(), 'acquire-src-'));
+  const out = mkdtempSync(join(tmpdir(), 'acquire-out-'));
+  const run = 'run-ambiguous-claude-opus_anthropic-linux-20260820T000000Z-bb';
+  const runDir = join(src, run);
+  for (const g of ['g1', 'g2']) {
+    mkdirSync(join(runDir, 'gauntlet-agent', 'results', g), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(runDir, 'gauntlet-agent', 'results', g, 'result.json'),
+      '{}',
+    );
+  }
+  writeFileSync(join(runDir, 'verdict.json'), '{"final":"pass"}');
+  writeFileSync(join(runDir, 'trajectory.json'), '{"steps":[]}');
+  writeFileSync(join(runDir, 'coding-agent-token-usage.json'), '{}');
+  const manifest = await acquireCorpus({
+    resultsRoot: src,
+    runIds: [run],
+    outDir: out,
+    sourceHost: 'quorum-appliance',
+    now: '2026-08-20T00:00:00.000Z',
+    command: 'quorum campaign acquire --runs-file runs.txt',
+  });
+  expect(manifest.missing_run_ids).toEqual([run]);
+  const entry = manifest.runs.find((r) => r.run_id === run);
+  expect(entry).toBeDefined();
+  expect(entry!.files).toHaveLength(0);
+  expect(entry!.notes[0]).toContain('2');
+  expect(existsSync(join(out, run))).toBe(false);
+  rmSync(src, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
+test('batch selection requires exact run_id equality, not substring', async () => {
+  const src = mkdtempSync(join(tmpdir(), 'acquire-src-'));
+  const out = mkdtempSync(join(tmpdir(), 'acquire-out-'));
+  const run = 'sdd-run-x';
+  // substring-only match: must NOT be selected
+  mkdirSync(join(src, 'batches', 'batch-substring'), { recursive: true });
+  writeFileSync(
+    join(src, 'batches', 'batch-substring', 'batch.json'),
+    '{"id":"batch-substring"}',
+  );
+  writeFileSync(
+    join(src, 'batches', 'batch-substring', 'results.jsonl'),
+    `${JSON.stringify({ run_id: `prefix-${run}-suffix` })}\n`,
+  );
+  // exact match on the second line, with an unparseable first line: selected
+  mkdirSync(join(src, 'batches', 'batch-exact'), { recursive: true });
+  writeFileSync(
+    join(src, 'batches', 'batch-exact', 'batch.json'),
+    '{"id":"batch-exact"}',
+  );
+  writeFileSync(
+    join(src, 'batches', 'batch-exact', 'results.jsonl'),
+    `not json at all\n${JSON.stringify({ scenario: 'sdd', coding_agent: 'claude', run_id: run })}\n`,
+  );
+  const manifest = await acquireCorpus({
+    resultsRoot: src,
+    runIds: [run],
+    outDir: out,
+    sourceHost: 'quorum-appliance',
+    now: '2026-08-20T00:00:00.000Z',
+    command: 'quorum campaign acquire --runs-file runs.txt',
+  });
+  expect(manifest.batches.map((b) => b.batch_id)).toEqual(['batch-exact']);
   rmSync(src, { recursive: true });
   rmSync(out, { recursive: true });
 });
