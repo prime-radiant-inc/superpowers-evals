@@ -18,7 +18,6 @@ import {
 import {
   loadCorpus,
   loadManifest,
-  ReplayLoadError,
   recordFromRunDir,
 } from '../campaign/replay.ts';
 import {
@@ -107,6 +106,11 @@ interface InclusionManifest {
   credential_pools?: Record<string, string>;
 }
 
+/** Parse the committed inclusion manifest, rejecting malformed entries
+ *  LOUDLY: the manifest is a frozen, reviewed set, so a non-string
+ *  run_ids member or hash/credential_pools value is a usage error naming
+ *  the offending index/key — never a silent filter that quietly changes
+ *  what gets estimated. */
 function parseInclusion(path: string): InclusionManifest {
   let raw: unknown;
   try {
@@ -118,40 +122,45 @@ function parseInclusion(path: string): InclusionManifest {
     cliError(`--inclusion must be a JSON object: ${path}`);
   }
   const obj = raw as Record<string, unknown>;
-  const runIds = obj['run_ids'];
-  if (!Array.isArray(runIds)) {
+  const runIdsRaw = obj['run_ids'];
+  if (!Array.isArray(runIdsRaw)) {
     cliError(`--inclusion run_ids must be an array: ${path}`);
   }
-  const hashes = obj['hashes'];
-  if (hashes !== undefined && (typeof hashes !== 'object' || hashes === null)) {
-    cliError(`--inclusion hashes must be an object: ${path}`);
+  const runIds: string[] = [];
+  for (const [i, entry] of runIdsRaw.entries()) {
+    if (typeof entry !== 'string') {
+      cliError(
+        `--inclusion run_ids[${i}] must be a string, got ${typeof entry}`,
+      );
+    }
+    runIds.push(entry);
   }
-  const credentialPools = obj['credential_pools'];
-  if (
-    credentialPools !== undefined &&
-    (typeof credentialPools !== 'object' || credentialPools === null)
-  ) {
-    cliError(`--inclusion credential_pools must be an object: ${path}`);
-  }
+  const readStringMap = (
+    field: 'hashes' | 'credential_pools',
+  ): Record<string, string> | undefined => {
+    const value = obj[field];
+    if (value === undefined) return undefined;
+    if (typeof value !== 'object' || value === null) {
+      cliError(`--inclusion ${field} must be an object: ${path}`);
+    }
+    const out: Record<string, string> = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (typeof v !== 'string') {
+        cliError(
+          `--inclusion ${field}[${key}] must be a string, got ${typeof v}`,
+        );
+      }
+      out[key] = v;
+    }
+    return out;
+  };
+  const hashes = readStringMap('hashes');
+  const credentialPools = readStringMap('credential_pools');
   return {
-    run_ids: runIds.filter((x): x is string => typeof x === 'string'),
-    ...(hashes !== undefined
-      ? {
-          hashes: Object.fromEntries(
-            Object.entries(hashes).filter(
-              (e): e is [string, string] => typeof e[1] === 'string',
-            ),
-          ),
-        }
-      : {}),
+    run_ids: runIds,
+    ...(hashes !== undefined ? { hashes } : {}),
     ...(credentialPools !== undefined
-      ? {
-          credential_pools: Object.fromEntries(
-            Object.entries(credentialPools).filter(
-              (e): e is [string, string] => typeof e[1] === 'string',
-            ),
-          ),
-        }
+      ? { credential_pools: credentialPools }
       : {}),
   };
 }
@@ -259,15 +268,21 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
         try {
           record = recordFromRunDir(dir, runId);
         } catch (err) {
-          // Parse tolerance: only ReplayLoadError skips a run — loudly,
-          // with its reason. Anything else propagates.
-          if (!(err instanceof ReplayLoadError)) throw err;
-          process.stdout.write(`skipped ${runId}: ${err.message}\n`);
-          continue;
+          // The inclusion manifest is a frozen, committed set: a run_id
+          // that fails to load — for ANY reason — aborts the verb. No
+          // skips, no partial artifact.
+          cliError(
+            `inclusion run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
         const verdict = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
-          finished_at: string;
+          finished_at?: unknown;
         };
+        if (typeof verdict.finished_at !== 'string') {
+          cliError(
+            `inclusion run ${runId}: verdict.json finished_at missing/not a string`,
+          );
+        }
         // v1 pool identity: the gate-era credential map embedded in the
         // inclusion manifest, falling back to the credential name
         // (estimates aggregate over pools; they never dispatch on them).

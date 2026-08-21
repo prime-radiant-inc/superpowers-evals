@@ -373,6 +373,7 @@ test('campaign estimates --inclusion verifies committed hashes (mismatch is a lo
     estimatesPath,
   ]);
   expect(good.status).toBe(0);
+  expect(good.stdout).not.toContain('skipped');
   const artifact = JSON.parse(readFileSync(estimatesPath, 'utf8'));
   expect(artifact.corpus.run_count).toBe(3);
   // Median of [600, 600, 660] seconds.
@@ -466,4 +467,101 @@ test('campaign simulate rejects --sweep together with --config', () => {
   expect(sim.stderr).toContain('mutually exclusive');
   rmSync(corpus, { recursive: true });
   rmSync(out, { recursive: true });
+});
+
+test('campaign estimates --inclusion aborts when a committed run fails to load (ReplayLoadError is fatal)', () => {
+  const { corpus, manifest } = fixture();
+  const results = mkdtempSync(join(tmpdir(), 'cli-incl-fatal-'));
+  // Valid identity + matching committed hash, but finished_at is missing,
+  // so recordFromRunDir throws ReplayLoadError. The committed set must not
+  // quietly shrink: exit non-zero naming the run, no artifact written.
+  const badDir = join(results, 'run-nofinish');
+  mkdirSync(join(badDir, 'gauntlet-agent', 'results', 'g1'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(badDir, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: 'pass',
+      scenario: 's',
+      coding_agent: 'claude',
+      credential: 'opus_bedrock',
+      os: 'linux',
+      started_at: '2026-08-08T00:00:00.000Z',
+      provenance: {},
+      economics: {},
+    }),
+  );
+  writeFileSync(join(badDir, 'trajectory.json'), JSON.stringify({ steps: [] }));
+  writeFileSync(join(badDir, 'coding-agent-token-usage.json'), '{}');
+  writeFileSync(
+    join(badDir, 'gauntlet-agent', 'results', 'g1', 'result.json'),
+    '{}',
+  );
+  const hash = Bun.SHA256.hash(
+    readFileSync(join(badDir, 'verdict.json')),
+    'hex',
+  );
+  const incl = join(corpus, 'inclusion-nofinish.json');
+  writeFileSync(
+    incl,
+    JSON.stringify({
+      run_ids: ['run-nofinish'],
+      hashes: { 'run-nofinish': hash },
+    }),
+  );
+  const estimatesPath = join(corpus, 'estimates.json');
+  const res = run([
+    'campaign',
+    'estimates',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--scan-results',
+    results,
+    '--inclusion',
+    incl,
+    '--out',
+    estimatesPath,
+  ]);
+  expect(res.status).not.toBe(0);
+  expect(res.stderr).toContain('run-nofinish');
+  expect(res.stderr).toContain('finished_at');
+  expect(res.stdout).not.toContain('skipped');
+  expect(existsSync(estimatesPath)).toBe(false); // no partial artifact
+  rmSync(results, { recursive: true });
+  rmSync(corpus, { recursive: true });
+});
+
+test('campaign estimates --inclusion rejects malformed entries loudly (non-string run_id names its index)', () => {
+  const { corpus, manifest } = fixture();
+  const results = mkdtempSync(join(tmpdir(), 'cli-incl-malformed-'));
+  writeRun(join(results, 'run-extra'), BASE, 600_000);
+  const incl = join(corpus, 'inclusion-malformed.json');
+  writeFileSync(
+    incl,
+    JSON.stringify({ run_ids: ['run-extra', 42], hashes: {} }),
+  );
+  const estimatesPath = join(corpus, 'estimates.json');
+  const res = run([
+    'campaign',
+    'estimates',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--scan-results',
+    results,
+    '--inclusion',
+    incl,
+    '--out',
+    estimatesPath,
+  ]);
+  expect(res.status).not.toBe(0);
+  expect(res.stderr).toContain('run_ids[1]');
+  expect(existsSync(estimatesPath)).toBe(false);
+  rmSync(results, { recursive: true });
+  rmSync(corpus, { recursive: true });
 });
