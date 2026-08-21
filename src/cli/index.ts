@@ -459,11 +459,20 @@ campaign
   .description(
     'build quorum.estimates/v1 from a corpus (+ optional local inclusion)',
   )
-  .requiredOption('--corpus <dir>', 'corpus dir')
-  .requiredOption('--manifest <path>', 'replay manifest')
+  .option(
+    '--corpus <dir>',
+    'corpus dir (required unless --scan-results is used alone)',
+  )
+  .option(
+    '--manifest <path>',
+    'replay manifest (required unless --scan-results is used alone)',
+  )
   .option('--scan-results <dir>', 'print a local-results inclusion manifest')
   .option('--inclusion <path>', 'consume a committed inclusion manifest')
-  .requiredOption('--out <path>', 'artifact output path')
+  .option(
+    '--out <path>',
+    'artifact output path (required unless --scan-results is used alone)',
+  )
   .action((opts: CampaignEstimatesOptions) => campaignEstimates(opts));
 campaign
   .command('simulate')
@@ -471,7 +480,10 @@ campaign
   .requiredOption('--corpus <dir>', 'corpus dir')
   .requiredOption('--manifest <path>', 'replay manifest')
   .requiredOption('--estimates <path>', 'estimates artifact')
-  .option('--sweep <name>', 'sweep preset', 'default')
+  .option(
+    '--sweep <name>',
+    'sweep preset: default|oracle|grader-active (defaults to default)',
+  )
   .option('--config <json>', 'single explicit configuration')
   .option(
     '--pool-identity <target|legacy>',

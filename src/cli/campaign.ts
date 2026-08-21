@@ -18,6 +18,7 @@ import {
 import {
   loadCorpus,
   loadManifest,
+  ReplayLoadError,
   recordFromRunDir,
 } from '../campaign/replay.ts';
 import {
@@ -29,6 +30,7 @@ import {
   toSimBlocks,
 } from '../campaign/simulate.ts';
 import { EstimatesArtifactSchema } from '../contracts/estimates.ts';
+import type { ReplayRecord } from '../contracts/replay.ts';
 
 /** CLI-boundary error: message to stderr, exit 1 (the run-all pattern). */
 function cliError(message: string): never {
@@ -90,83 +92,194 @@ export async function campaignAcquire(
 }
 
 export interface CampaignEstimatesOptions {
-  corpus: string;
-  manifest: string;
+  corpus?: string;
+  manifest?: string;
   scanResults?: string;
   inclusion?: string;
-  out: string;
+  out?: string;
+}
+
+/** Committed inclusion manifest: what `--scan-results` prints and a
+ *  maintainer reviews + commits before `--inclusion` consumes it. */
+interface InclusionManifest {
+  run_ids: string[];
+  hashes?: Record<string, string>;
+  credential_pools?: Record<string, string>;
+}
+
+function parseInclusion(path: string): InclusionManifest {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    cliError(`--inclusion unreadable: ${path}: ${String(err)}`);
+  }
+  if (typeof raw !== 'object' || raw === null) {
+    cliError(`--inclusion must be a JSON object: ${path}`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const runIds = obj['run_ids'];
+  if (!Array.isArray(runIds)) {
+    cliError(`--inclusion run_ids must be an array: ${path}`);
+  }
+  const hashes = obj['hashes'];
+  if (hashes !== undefined && (typeof hashes !== 'object' || hashes === null)) {
+    cliError(`--inclusion hashes must be an object: ${path}`);
+  }
+  const credentialPools = obj['credential_pools'];
+  if (
+    credentialPools !== undefined &&
+    (typeof credentialPools !== 'object' || credentialPools === null)
+  ) {
+    cliError(`--inclusion credential_pools must be an object: ${path}`);
+  }
+  return {
+    run_ids: runIds.filter((x): x is string => typeof x === 'string'),
+    ...(hashes !== undefined
+      ? {
+          hashes: Object.fromEntries(
+            Object.entries(hashes).filter(
+              (e): e is [string, string] => typeof e[1] === 'string',
+            ),
+          ),
+        }
+      : {}),
+    ...(credentialPools !== undefined
+      ? {
+          credential_pools: Object.fromEntries(
+            Object.entries(credentialPools).filter(
+              (e): e is [string, string] => typeof e[1] === 'string',
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
+/** Scan-print mode: local runs whose verdict parses with valid
+ *  wall/identity become the inclusion manifest for maintainer review +
+ *  commit. Printed to stdout only — no artifact is written. */
+function scanAndPrintInclusion(resultsRoot: string): void {
+  requireDir('--scan-results', resultsRoot);
+  const rows: Array<{ run_id: string; sha256: string }> = [];
+  for (const name of readdirSync(resultsRoot).sort()) {
+    const dir = join(resultsRoot, name);
+    if (!existsSync(join(dir, 'verdict.json'))) continue;
+    try {
+      // recordFromRunDir throws on missing identity/invalid wall —
+      // exactly the exclusion rule for inclusion candidates.
+      recordFromRunDir(dir, name);
+    } catch {
+      continue; // invalid wall/identity → excluded from inclusion
+    }
+    rows.push({
+      run_id: name,
+      sha256: Bun.SHA256.hash(readFileSync(join(dir, 'verdict.json')), 'hex'),
+    });
+  }
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        run_ids: rows.map((r) => r.run_id),
+        hashes: Object.fromEntries(
+          rows.map((r): [string, string] => [r.run_id, r.sha256]),
+        ),
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 export function campaignEstimates(opts: CampaignEstimatesOptions): void {
   try {
-    const manifest = loadManifest(opts.manifest);
-    const loaded = loadCorpus(opts.corpus, manifest);
+    // Scan-only mode: --scan-results without --inclusion prints the
+    // inclusion manifest and nothing else — no corpus, no replay manifest,
+    // no artifact. It runs BEFORE any corpus loading, so a bare scan never
+    // requires (or touches) the other flags.
+    if (opts.scanResults !== undefined && opts.inclusion === undefined) {
+      scanAndPrintInclusion(opts.scanResults);
+      return;
+    }
+    // Artifact mode (including --scan-results + --inclusion, where the scan
+    // root only names where inclusion reads from) needs the corpus triple;
+    // a missing one is a usage error, not a library crash.
+    if (
+      opts.corpus === undefined ||
+      opts.manifest === undefined ||
+      opts.out === undefined
+    ) {
+      cliError(
+        '--corpus, --manifest, and --out are required (only a bare --scan-results scan omits them)',
+      );
+    }
+    const corpus = opts.corpus;
+    const manifestPath = opts.manifest;
+    const outPath = opts.out;
+    const manifest = loadManifest(manifestPath);
+    const loaded = loadCorpus(corpus, manifest);
     const inputs = [...loaded.records.values()].map((record) => {
       // finished_at re-read for generated_at derivation: wall + started.
       const verdict = JSON.parse(
-        readFileSync(join(opts.corpus, record.run_id, 'verdict.json'), 'utf8'),
+        readFileSync(join(corpus, record.run_id, 'verdict.json'), 'utf8'),
       ) as { finished_at: string };
       return { record, finished_at: verdict.finished_at };
     });
-    if (opts.scanResults !== undefined && opts.inclusion === undefined) {
-      // Inclusion-scan PRINT mode (no artifact written): emit the inclusion
-      // manifest for maintainer review + commit. When --inclusion is also
-      // set, --scan-results instead names the results root inclusion reads
-      // from (default 'results').
-      requireDir('--scan-results', opts.scanResults);
-      const rows: Array<{ run_id: string; sha256: string }> = [];
-      for (const name of readdirSync(opts.scanResults).sort()) {
-        const dir = join(opts.scanResults, name);
-        if (!existsSync(join(dir, 'verdict.json'))) continue;
-        try {
-          // recordFromRunDir throws on missing identity/invalid wall —
-          // exactly the exclusion rule for inclusion candidates.
-          recordFromRunDir(dir, name);
-        } catch {
-          continue; // invalid wall/identity → excluded from inclusion
-        }
-        rows.push({
-          run_id: name,
-          sha256: Bun.SHA256.hash(
-            readFileSync(join(dir, 'verdict.json')),
-            'hex',
-          ),
-        });
-      }
-      process.stdout.write(
-        `${JSON.stringify(
-          {
-            run_ids: rows.map((r) => r.run_id),
-            hashes: Object.fromEntries(
-              rows.map((r): [string, string] => [r.run_id, r.sha256]),
-            ),
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      return;
-    }
     if (opts.inclusion !== undefined) {
-      const inclusion = JSON.parse(readFileSync(opts.inclusion, 'utf8')) as {
-        run_ids: string[];
-      };
+      const inclusion = parseInclusion(opts.inclusion);
+      const committedHashes = inclusion.hashes ?? {};
+      const resultsRoot = opts.scanResults ?? 'results';
       for (const runId of inclusion.run_ids) {
-        const dir = join(opts.scanResults ?? 'results', runId);
-        try {
-          const record = recordFromRunDir(dir, runId);
-          const verdict = JSON.parse(
-            readFileSync(join(dir, 'verdict.json'), 'utf8'),
-          ) as { finished_at: string };
-          // v1 pool identity: pool_id = the credential name (estimates
-          // aggregate over pools; they never dispatch on them).
-          inputs.push({
-            record: { ...record, pool_id: record.credential },
-            finished_at: verdict.finished_at,
-          });
-        } catch {
-          // invalid runs are excluded; the inclusion manifest records the set
+        const dir = join(resultsRoot, runId);
+        if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+          cliError(`inclusion run ${runId}: no run dir at ${dir}`);
         }
+        const verdictPath = join(dir, 'verdict.json');
+        if (!existsSync(verdictPath)) {
+          cliError(
+            `inclusion run ${runId}: verdict.json missing at ${verdictPath}`,
+          );
+        }
+        // Integrity gate: every included run must match the reviewed,
+        // committed hash — a missing entry or a changed verdict is
+        // divergence from the reviewed manifest, never a silent skip.
+        const committed = committedHashes[runId];
+        if (committed === undefined) {
+          cliError(
+            `inclusion run ${runId}: no committed hash in ${opts.inclusion}`,
+          );
+        }
+        const actual = Bun.SHA256.hash(readFileSync(verdictPath), 'hex');
+        if (actual !== committed) {
+          cliError(
+            `inclusion run ${runId}: verdict.json hash mismatch (committed ${committed}, found ${actual})`,
+          );
+        }
+        let record: ReplayRecord;
+        try {
+          record = recordFromRunDir(dir, runId);
+        } catch (err) {
+          // Parse tolerance: only ReplayLoadError skips a run — loudly,
+          // with its reason. Anything else propagates.
+          if (!(err instanceof ReplayLoadError)) throw err;
+          process.stdout.write(`skipped ${runId}: ${err.message}\n`);
+          continue;
+        }
+        const verdict = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
+          finished_at: string;
+        };
+        // v1 pool identity: the gate-era credential map embedded in the
+        // inclusion manifest, falling back to the credential name
+        // (estimates aggregate over pools; they never dispatch on them).
+        inputs.push({
+          record: {
+            ...record,
+            pool_id:
+              inclusion.credential_pools?.[record.credential] ??
+              record.credential,
+          },
+          finished_at: verdict.finished_at,
+        });
       }
     }
     // buildEstimates throws on zero inputs; surface that as a CLI error.
@@ -177,20 +290,22 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
     }
     const artifact = buildEstimates(inputs, {
       sources: [
-        opts.corpus,
-        ...(opts.inclusion !== undefined
-          ? [opts.scanResults ?? 'results']
-          : []),
+        corpus,
+        ...(opts.inclusion !== undefined ? [resultsRootOf(opts)] : []),
       ],
     });
-    mkdirSync(dirname(opts.out), { recursive: true });
-    writeFileSync(opts.out, serializeEstimates(artifact), { mode: 0o644 });
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, serializeEstimates(artifact), { mode: 0o644 });
     process.stdout.write(
-      `estimates: ${artifact.entries.length} entries, ${artifact.corpus.run_count} runs → ${opts.out}\n`,
+      `estimates: ${artifact.entries.length} entries, ${artifact.corpus.run_count} runs → ${outPath}\n`,
     );
   } catch (err: unknown) {
     catchCliError(err);
   }
+}
+
+function resultsRootOf(opts: CampaignEstimatesOptions): string {
+  return opts.scanResults ?? 'results';
 }
 
 interface SweepConfig extends SimConfig {
@@ -199,6 +314,9 @@ interface SweepConfig extends SimConfig {
 
 type SweepPreset = 'default' | 'oracle' | 'grader-active';
 type PoolIdentity = 'target' | 'legacy';
+/** Every emitted row (jsonl, table, stdout) names its provenance so an
+ *  overridden sensitivity sweep can never masquerade as another preset. */
+type SweepLabel = SweepPreset | 'config';
 
 export interface CampaignSimulateOptions {
   corpus: string;
@@ -338,6 +456,13 @@ function parseExplicitConfig(json: string): ExplicitConfig {
 
 export function campaignSimulate(opts: CampaignSimulateOptions): void {
   try {
+    // Documented alternatives: passing both must be loud, never a silent
+    // --config-wins.
+    if (opts.sweep !== undefined && opts.config !== undefined) {
+      cliError(
+        '--sweep and --config are mutually exclusive — pass one or the other',
+      );
+    }
     const poolIdentity = opts.poolIdentity ?? 'target';
     if (poolIdentity !== 'target' && poolIdentity !== 'legacy') {
       cliError('--pool-identity must be target|legacy');
@@ -412,14 +537,17 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
 
     const runOne = (
       cfg: SweepConfig,
+      label: SweepLabel,
     ): SimResult & {
       config: SweepConfig;
+      label: SweepLabel;
       allowance_inclusive_makespan_ms: number;
     } => {
       const result = simulate(blocksFor(cfg.pool_identity), cfg);
       return {
         ...result,
         config: cfg,
+        label,
         allowance_inclusive_makespan_ms: result.makespan_ms + allowanceMs,
       };
     };
@@ -442,7 +570,9 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
         ordering: opts.ordering ?? raw.ordering,
         grader_occupancy: opts.graderOccupancy ?? raw.grader_occupancy,
       };
-      process.stdout.write(`${JSON.stringify(runOne(cfg), null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(runOne(cfg, 'config'), null, 2)}\n`,
+      );
       return;
     }
 
@@ -463,7 +593,7 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
       opts.graderOccupancy ??
       (preset === 'grader-active' ? 'gauntlet-active' : 'gauntlet');
     const configs = sweepConfigs(preset, poolsFor, ordering, occupancy);
-    const results = configs.map(runOne);
+    const results = configs.map((cfg) => runOne(cfg, preset));
     const eightHoursMs = 8 * 3_600_000;
 
     // Reserve stress (spec-pinned): per cell, duplicate the slowest
@@ -510,15 +640,15 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
     );
     const hrs = (ms: number): string => `${(ms / 3_600_000).toFixed(2)}h`;
     const table = [
-      '| pool_identity | subject_cap | global_cap | grader_cap | nominal | +reserve stress | +allowance | 8h verdict | busiest pool (attributed wait ms) |',
-      '|---|---|---|---|---|---|---|---|---|',
+      '| label | pool_identity | subject_cap | global_cap | grader_cap | nominal | +reserve stress | +allowance | 8h verdict | busiest pool (attributed wait ms) |',
+      '|---|---|---|---|---|---|---|---|---|---|',
       ...results.map((r, i) => {
         const stress = expectAt(stressResults, i, 'stress result');
         const busiest = Object.entries(r.per_pool)
           .filter(([p]) => p !== '__global__')
           .sort((a, b) => b[1].attributed_wait_ms - a[1].attributed_wait_ms)[0];
         const subjectCap = Object.values(r.config.subject_caps)[0];
-        return `| ${r.config.pool_identity} | ${subjectCap ?? '—'} | ${r.config.global_cap} | ${r.config.grader_cap} | ${hrs(r.makespan_ms)} | ${hrs(stress)} | ${hrs(r.allowance_inclusive_makespan_ms)} | ${r.config.pool_identity === 'target' && r.config.ordering === 'estimates' && r.allowance_inclusive_makespan_ms <= eightHoursMs ? 'PASS' : '—'} | ${busiest?.[0] ?? '—'} (${Math.round(busiest?.[1].attributed_wait_ms ?? 0)}) |`;
+        return `| ${r.label} | ${r.config.pool_identity} | ${subjectCap ?? '—'} | ${r.config.global_cap} | ${r.config.grader_cap} | ${hrs(r.makespan_ms)} | ${hrs(stress)} | ${hrs(r.allowance_inclusive_makespan_ms)} | ${r.config.pool_identity === 'target' && r.config.ordering === 'estimates' && r.allowance_inclusive_makespan_ms <= eightHoursMs ? 'PASS' : '—'} | ${busiest?.[0] ?? '—'} (${Math.round(busiest?.[1].attributed_wait_ms ?? 0)}) |`;
       }),
     ].join('\n');
     writeFileSync(
