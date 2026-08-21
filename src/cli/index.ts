@@ -32,6 +32,14 @@ import {
   newScenario,
   ScaffoldError,
 } from '../scaffold.ts';
+import {
+  type CampaignAcquireOptions,
+  type CampaignEstimatesOptions,
+  type CampaignSimulateOptions,
+  campaignAcquire,
+  campaignEstimates,
+  campaignSimulate,
+} from './campaign.ts';
 import { costsJson, loadCostRows, renderCosts } from './costs.ts';
 import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
@@ -435,6 +443,46 @@ program
     );
     process.exit(0);
   });
+
+const campaign = program
+  .command('campaign')
+  .description('campaign platform (Phase 0: corpus, estimates, simulation)');
+campaign
+  .command('acquire')
+  .description('pull a run-ID-selected corpus (runs on the appliance)')
+  .requiredOption('--runs-file <path>', 'newline-delimited run IDs')
+  .requiredOption('--results-root <dir>', 'results root to read')
+  .requiredOption('--out <dir>', 'corpus output dir')
+  .action((opts: CampaignAcquireOptions) => campaignAcquire(opts));
+campaign
+  .command('estimates')
+  .description(
+    'build quorum.estimates/v1 from a corpus (+ optional local inclusion)',
+  )
+  .requiredOption('--corpus <dir>', 'corpus dir')
+  .requiredOption('--manifest <path>', 'replay manifest')
+  .option('--scan-results <dir>', 'print a local-results inclusion manifest')
+  .option('--inclusion <path>', 'consume a committed inclusion manifest')
+  .requiredOption('--out <path>', 'artifact output path')
+  .action((opts: CampaignEstimatesOptions) => campaignEstimates(opts));
+campaign
+  .command('simulate')
+  .description('replay the corpus through the campaign dispatch policy')
+  .requiredOption('--corpus <dir>', 'corpus dir')
+  .requiredOption('--manifest <path>', 'replay manifest')
+  .requiredOption('--estimates <path>', 'estimates artifact')
+  .option('--sweep <name>', 'sweep preset', 'default')
+  .option('--config <json>', 'single explicit configuration')
+  .option(
+    '--pool-identity <target|legacy>',
+    'pool identity for --config',
+    'target',
+  )
+  .option('--ordering <mode>', 'ordering override')
+  .option('--grader-occupancy <mode>', 'grader occupancy override')
+  .option('--seal-allowance-min <n>', 'seal/report allowance minutes', '15')
+  .requiredOption('--out <dir>', 'output dir')
+  .action((opts: CampaignSimulateOptions) => campaignSimulate(opts));
 
 program
   .command('show')

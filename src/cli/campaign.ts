@@ -1,0 +1,535 @@
+// src/cli/campaign.ts
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { hostname } from 'node:os';
+import { dirname, join } from 'node:path';
+import { acquireCorpus } from '../campaign/acquire.ts';
+import {
+  buildEstimates,
+  lookupEstimate,
+  serializeEstimates,
+} from '../campaign/estimates.ts';
+import {
+  loadCorpus,
+  loadManifest,
+  recordFromRunDir,
+} from '../campaign/replay.ts';
+import {
+  type SimBlock,
+  type SimConfig,
+  SimConfigError,
+  type SimResult,
+  simulate,
+  toSimBlocks,
+} from '../campaign/simulate.ts';
+import { EstimatesArtifactSchema } from '../contracts/estimates.ts';
+
+/** CLI-boundary error: message to stderr, exit 1 (the run-all pattern). */
+function cliError(message: string): never {
+  process.stderr.write(`error: ${message}\n`);
+  process.exit(1);
+}
+
+function catchCliError(err: unknown): never {
+  return cliError(err instanceof Error ? err.message : String(err));
+}
+
+/** Guard-cast: bookkeeping arrays built in lockstep with the loop index, so
+ * a miss is an internal invariant violation — loud, never defaulted. */
+function expectAt<T>(arr: readonly T[], i: number, what: string): T {
+  const v = arr[i];
+  if (v === undefined) cliError(`internal: no ${what} at index ${i}`);
+  return v;
+}
+
+function requireDir(flag: string, dir: string): void {
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    cliError(`${flag} does not exist or is not a directory: ${dir}`);
+  }
+}
+
+export interface CampaignAcquireOptions {
+  runsFile: string;
+  resultsRoot: string;
+  out: string;
+}
+
+export async function campaignAcquire(
+  opts: CampaignAcquireOptions,
+): Promise<void> {
+  try {
+    if (!existsSync(opts.runsFile)) {
+      cliError(`--runs-file does not exist: ${opts.runsFile}`);
+    }
+    requireDir('--results-root', opts.resultsRoot);
+    const runIds = readFileSync(opts.runsFile, 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'));
+    const command = `quorum campaign acquire --runs-file ${opts.runsFile} --results-root ${opts.resultsRoot} --out ${opts.out}`;
+    const manifest = await acquireCorpus({
+      resultsRoot: opts.resultsRoot,
+      runIds,
+      outDir: opts.out,
+      sourceHost: hostname(),
+      now: new Date().toISOString(), // CLI boundary: wall time OK here (recorded, not hashed)
+      command,
+    });
+    process.stdout.write(
+      `acquired ${manifest.runs.length} runs (${manifest.missing_run_ids.length} missing) + ${manifest.batches.length} batches → ${opts.out}\n`,
+    );
+  } catch (err: unknown) {
+    catchCliError(err);
+  }
+}
+
+export interface CampaignEstimatesOptions {
+  corpus: string;
+  manifest: string;
+  scanResults?: string;
+  inclusion?: string;
+  out: string;
+}
+
+export function campaignEstimates(opts: CampaignEstimatesOptions): void {
+  try {
+    const manifest = loadManifest(opts.manifest);
+    const loaded = loadCorpus(opts.corpus, manifest);
+    const inputs = [...loaded.records.values()].map((record) => {
+      // finished_at re-read for generated_at derivation: wall + started.
+      const verdict = JSON.parse(
+        readFileSync(join(opts.corpus, record.run_id, 'verdict.json'), 'utf8'),
+      ) as { finished_at: string };
+      return { record, finished_at: verdict.finished_at };
+    });
+    if (opts.scanResults !== undefined && opts.inclusion === undefined) {
+      // Inclusion-scan PRINT mode (no artifact written): emit the inclusion
+      // manifest for maintainer review + commit. When --inclusion is also
+      // set, --scan-results instead names the results root inclusion reads
+      // from (default 'results').
+      requireDir('--scan-results', opts.scanResults);
+      const rows: Array<{ run_id: string; sha256: string }> = [];
+      for (const name of readdirSync(opts.scanResults).sort()) {
+        const dir = join(opts.scanResults, name);
+        if (!existsSync(join(dir, 'verdict.json'))) continue;
+        try {
+          // recordFromRunDir throws on missing identity/invalid wall —
+          // exactly the exclusion rule for inclusion candidates.
+          recordFromRunDir(dir, name);
+        } catch {
+          continue; // invalid wall/identity → excluded from inclusion
+        }
+        rows.push({
+          run_id: name,
+          sha256: Bun.SHA256.hash(
+            readFileSync(join(dir, 'verdict.json')),
+            'hex',
+          ),
+        });
+      }
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            run_ids: rows.map((r) => r.run_id),
+            hashes: Object.fromEntries(
+              rows.map((r): [string, string] => [r.run_id, r.sha256]),
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+    if (opts.inclusion !== undefined) {
+      const inclusion = JSON.parse(readFileSync(opts.inclusion, 'utf8')) as {
+        run_ids: string[];
+      };
+      for (const runId of inclusion.run_ids) {
+        const dir = join(opts.scanResults ?? 'results', runId);
+        try {
+          const record = recordFromRunDir(dir, runId);
+          const verdict = JSON.parse(
+            readFileSync(join(dir, 'verdict.json'), 'utf8'),
+          ) as { finished_at: string };
+          // v1 pool identity: pool_id = the credential name (estimates
+          // aggregate over pools; they never dispatch on them).
+          inputs.push({
+            record: { ...record, pool_id: record.credential },
+            finished_at: verdict.finished_at,
+          });
+        } catch {
+          // invalid runs are excluded; the inclusion manifest records the set
+        }
+      }
+    }
+    // buildEstimates throws on zero inputs; surface that as a CLI error.
+    if (inputs.length === 0) {
+      cliError(
+        'no records to estimate — corpus is empty and no inclusion runs loaded',
+      );
+    }
+    const artifact = buildEstimates(inputs, {
+      sources: [
+        opts.corpus,
+        ...(opts.inclusion !== undefined
+          ? [opts.scanResults ?? 'results']
+          : []),
+      ],
+    });
+    mkdirSync(dirname(opts.out), { recursive: true });
+    writeFileSync(opts.out, serializeEstimates(artifact), { mode: 0o644 });
+    process.stdout.write(
+      `estimates: ${artifact.entries.length} entries, ${artifact.corpus.run_count} runs → ${opts.out}\n`,
+    );
+  } catch (err: unknown) {
+    catchCliError(err);
+  }
+}
+
+interface SweepConfig extends SimConfig {
+  pool_identity: 'target' | 'legacy';
+}
+
+type SweepPreset = 'default' | 'oracle' | 'grader-active';
+type PoolIdentity = 'target' | 'legacy';
+
+export interface CampaignSimulateOptions {
+  corpus: string;
+  manifest: string;
+  estimates: string;
+  sweep?: string;
+  config?: string;
+  poolIdentity?: PoolIdentity;
+  ordering?: SimConfig['ordering'];
+  graderOccupancy?: SimConfig['grader_occupancy'];
+  sealAllowanceMin?: string;
+  out: string;
+}
+
+const SUBJECT_CAPS = [5, 15, 20];
+const GLOBAL_CAPS = [8, 12, 20, 24];
+const GRADER_CAPS = [5, 15, 20];
+const ORDERINGS: ReadonlyArray<SimConfig['ordering']> = [
+  'estimates',
+  'oracle',
+  'historical-fifo',
+];
+const OCCUPANCIES: ReadonlyArray<SimConfig['grader_occupancy']> = [
+  'gauntlet',
+  'gauntlet-active',
+  'wall',
+];
+
+/** The `default` preset: both pool identities × 36 cap grids. The
+ * sensitivity presets (`oracle`, `grader-active`) pin one dimension and run
+ * the target identity only. Explicit --ordering/--grader-occupancy flags
+ * override whatever the preset would pin. */
+function sweepConfigs(
+  preset: SweepPreset,
+  poolsFor: (identity: PoolIdentity) => string[],
+  ordering: SimConfig['ordering'],
+  occupancy: SimConfig['grader_occupancy'],
+): SweepConfig[] {
+  const identities: ReadonlyArray<PoolIdentity> =
+    preset === 'default' ? ['target', 'legacy'] : ['target'];
+  const configs: SweepConfig[] = [];
+  for (const pool_identity of identities) {
+    const pools = poolsFor(pool_identity);
+    for (const sc of SUBJECT_CAPS) {
+      for (const gc of GLOBAL_CAPS) {
+        for (const rc of GRADER_CAPS) {
+          configs.push({
+            pool_identity,
+            subject_caps: Object.fromEntries(
+              pools.map((p): [string, number] => [p, sc]),
+            ),
+            grader_cap: rc,
+            global_cap: gc,
+            ordering,
+            grader_occupancy: occupancy,
+          });
+        }
+      }
+    }
+  }
+  return configs;
+}
+
+interface ExplicitConfig {
+  subject_caps: Record<string, number>;
+  grader_cap: number;
+  global_cap: number;
+  ordering: SimConfig['ordering'];
+  grader_occupancy: SimConfig['grader_occupancy'];
+}
+
+function parseExplicitConfig(json: string): ExplicitConfig {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    cliError('--config is not valid JSON');
+  }
+  if (typeof raw !== 'object' || raw === null) {
+    cliError('--config must be a JSON object');
+  }
+  const obj = raw as Record<string, unknown>;
+  const subjectCaps = obj['subject_caps'];
+  if (typeof subjectCaps !== 'object' || subjectCaps === null) {
+    cliError('--config.subject_caps must be an object');
+  }
+  for (const [pool, cap] of Object.entries(subjectCaps)) {
+    if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1) {
+      cliError(`--config.subject_caps[${pool}] must be an integer >= 1`);
+    }
+  }
+  const graderCap = obj['grader_cap'];
+  if (
+    typeof graderCap !== 'number' ||
+    !Number.isInteger(graderCap) ||
+    graderCap < 1
+  ) {
+    cliError('--config.grader_cap must be an integer >= 1');
+  }
+  const globalCap = obj['global_cap'];
+  if (
+    typeof globalCap !== 'number' ||
+    !Number.isInteger(globalCap) ||
+    globalCap < 1
+  ) {
+    cliError('--config.global_cap must be an integer >= 1');
+  }
+  const ordering = obj['ordering'];
+  if (
+    typeof ordering !== 'string' ||
+    !ORDERINGS.includes(ordering as SimConfig['ordering'])
+  ) {
+    cliError(`--config.ordering must be one of ${ORDERINGS.join('|')}`);
+  }
+  const occupancy = obj['grader_occupancy'];
+  if (
+    typeof occupancy !== 'string' ||
+    !OCCUPANCIES.includes(occupancy as SimConfig['grader_occupancy'])
+  ) {
+    cliError(
+      `--config.grader_occupancy must be one of ${OCCUPANCIES.join('|')}`,
+    );
+  }
+  return {
+    subject_caps: Object.fromEntries(
+      Object.entries(subjectCaps).map(([p, c]): [string, number] => [
+        p,
+        c as number,
+      ]),
+    ),
+    grader_cap: graderCap,
+    global_cap: globalCap,
+    ordering: ordering as SimConfig['ordering'],
+    grader_occupancy: occupancy as SimConfig['grader_occupancy'],
+  };
+}
+
+export function campaignSimulate(opts: CampaignSimulateOptions): void {
+  try {
+    const poolIdentity = opts.poolIdentity ?? 'target';
+    if (poolIdentity !== 'target' && poolIdentity !== 'legacy') {
+      cliError('--pool-identity must be target|legacy');
+    }
+    if (opts.ordering !== undefined && !ORDERINGS.includes(opts.ordering)) {
+      cliError(`--ordering must be one of ${ORDERINGS.join('|')}`);
+    }
+    if (
+      opts.graderOccupancy !== undefined &&
+      !OCCUPANCIES.includes(opts.graderOccupancy)
+    ) {
+      cliError(`--grader-occupancy must be one of ${OCCUPANCIES.join('|')}`);
+    }
+    const sealRaw = opts.sealAllowanceMin ?? '15';
+    if (!/^\d+$/.test(sealRaw)) {
+      cliError('--seal-allowance-min must be a non-negative integer');
+    }
+    const allowanceMs = Number.parseInt(sealRaw, 10) * 60_000;
+
+    const manifest = loadManifest(opts.manifest);
+    const loaded = loadCorpus(opts.corpus, manifest);
+    const estimates = EstimatesArtifactSchema.parse(
+      JSON.parse(readFileSync(opts.estimates, 'utf8')),
+    );
+
+    // Pool identity selection: legacy swaps subject_pool per comparison.
+    const legacyByComparison = new Map(
+      manifest.comparisons.map(
+        (c) => [c.comparison_id, c.legacy_pool_id] as const,
+      ),
+    );
+    const estimateFor = (runId: string): number => {
+      const rec = loaded.records.get(runId);
+      if (rec === undefined) {
+        throw new SimConfigError(`missing record for ${runId}`);
+      }
+      return (
+        lookupEstimate(estimates, {
+          scenario: rec.scenario,
+          agent: rec.agent,
+          credential: rec.credential,
+          os: rec.os,
+        }).duration_s * 1000
+      );
+    };
+    const blocksFor = (identity: PoolIdentity): SimBlock[] =>
+      toSimBlocks(loaded, estimateFor).map((b) =>
+        identity === 'target'
+          ? b
+          : {
+              ...b,
+              samples: b.samples.map((s) => ({
+                ...s,
+                subject_pool:
+                  legacyByComparison.get(b.comparison_id) ?? s.subject_pool,
+              })),
+            },
+      );
+    // Caps must be keyed by the pool names the identity's blocks actually
+    // carry: target blocks name comparison pool_ids, legacy blocks name
+    // legacy_pool_ids.
+    const poolsFor = (identity: PoolIdentity): string[] =>
+      identity === 'target'
+        ? [
+            ...new Set(
+              loaded.blocks.flatMap((b) =>
+                b.samples.map((s) => s.subject_pool),
+              ),
+            ),
+          ]
+        : [...new Set(manifest.comparisons.map((c) => c.legacy_pool_id))];
+
+    const runOne = (
+      cfg: SweepConfig,
+    ): SimResult & {
+      config: SweepConfig;
+      allowance_inclusive_makespan_ms: number;
+    } => {
+      const result = simulate(blocksFor(cfg.pool_identity), cfg);
+      return {
+        ...result,
+        config: cfg,
+        allowance_inclusive_makespan_ms: result.makespan_ms + allowanceMs,
+      };
+    };
+
+    mkdirSync(opts.out, { recursive: true });
+
+    if (opts.config !== undefined) {
+      const raw = parseExplicitConfig(opts.config);
+      const pools = poolsFor(poolIdentity);
+      const star = raw.subject_caps['*'];
+      const subject_caps =
+        star !== undefined
+          ? Object.fromEntries(pools.map((p): [string, number] => [p, star]))
+          : raw.subject_caps;
+      const cfg: SweepConfig = {
+        pool_identity: poolIdentity,
+        subject_caps,
+        grader_cap: raw.grader_cap,
+        global_cap: raw.global_cap,
+        ordering: opts.ordering ?? raw.ordering,
+        grader_occupancy: opts.graderOccupancy ?? raw.grader_occupancy,
+      };
+      process.stdout.write(`${JSON.stringify(runOne(cfg), null, 2)}\n`);
+      return;
+    }
+
+    const sweepName = opts.sweep ?? 'default';
+    if (
+      sweepName !== 'default' &&
+      sweepName !== 'oracle' &&
+      sweepName !== 'grader-active'
+    ) {
+      cliError(
+        `unknown --sweep preset: ${sweepName} (default|oracle|grader-active)`,
+      );
+    }
+    const preset = sweepName as SweepPreset;
+    const ordering: SimConfig['ordering'] =
+      opts.ordering ?? (preset === 'oracle' ? 'oracle' : 'estimates');
+    const occupancy: SimConfig['grader_occupancy'] =
+      opts.graderOccupancy ??
+      (preset === 'grader-active' ? 'gauntlet-active' : 'gauntlet');
+    const configs = sweepConfigs(preset, poolsFor, ordering, occupancy);
+    const results = configs.map(runOne);
+    const eightHoursMs = 8 * 3_600_000;
+
+    // Reserve stress (spec-pinned): per cell, duplicate the slowest
+    // ceil(20%) of its blocks (the gate's authorized +20% retry budget),
+    // tagged synthetic-reserve; rerun the same configs on the inflated set.
+    const stressedBlocks = (identity: PoolIdentity): SimBlock[] => {
+      const base = blocksFor(identity);
+      const byCell = new Map<string, SimBlock[]>();
+      for (const b of base) {
+        const g = byCell.get(b.cell) ?? [];
+        g.push(b);
+        byCell.set(b.cell, g);
+      }
+      const out = [...base];
+      for (const cellBlocks of byCell.values()) {
+        const slowest = [...cellBlocks]
+          .sort(
+            (a, b) =>
+              Math.max(...b.samples.map((s) => s.wall_ms)) -
+              Math.max(...a.samples.map((s) => s.wall_ms)),
+          )
+          .slice(0, Math.ceil(cellBlocks.length * 0.2));
+        for (const b of slowest) {
+          out.push({ ...b, block_id: `${b.block_id}/synthetic-reserve` });
+        }
+      }
+      return out;
+    };
+    const stressResults = configs.map(
+      (cfg) => simulate(stressedBlocks(cfg.pool_identity), cfg).makespan_ms,
+    );
+
+    writeFileSync(
+      join(opts.out, 'sweep-results.jsonl'),
+      results
+        .map((r, i) =>
+          JSON.stringify({
+            ...r,
+            stress_makespan_ms: expectAt(stressResults, i, 'stress result'),
+          }),
+        )
+        .join('\n') + '\n',
+      { mode: 0o644 },
+    );
+    const hrs = (ms: number): string => `${(ms / 3_600_000).toFixed(2)}h`;
+    const table = [
+      '| pool_identity | subject_cap | global_cap | grader_cap | nominal | +reserve stress | +allowance | 8h verdict | busiest pool (attributed wait ms) |',
+      '|---|---|---|---|---|---|---|---|---|',
+      ...results.map((r, i) => {
+        const stress = expectAt(stressResults, i, 'stress result');
+        const busiest = Object.entries(r.per_pool)
+          .filter(([p]) => p !== '__global__')
+          .sort((a, b) => b[1].attributed_wait_ms - a[1].attributed_wait_ms)[0];
+        const subjectCap = Object.values(r.config.subject_caps)[0];
+        return `| ${r.config.pool_identity} | ${subjectCap ?? '—'} | ${r.config.global_cap} | ${r.config.grader_cap} | ${hrs(r.makespan_ms)} | ${hrs(stress)} | ${hrs(r.allowance_inclusive_makespan_ms)} | ${r.config.pool_identity === 'target' && r.config.ordering === 'estimates' && r.allowance_inclusive_makespan_ms <= eightHoursMs ? 'PASS' : '—'} | ${busiest?.[0] ?? '—'} (${Math.round(busiest?.[1].attributed_wait_ms ?? 0)}) |`;
+      }),
+    ].join('\n');
+    writeFileSync(
+      join(opts.out, 'sweep-table.md'),
+      `# 8h verdict rule: target identity + estimates ordering + allowance-inclusive only. The stress column adds the +20% registered-reserve draw.\n\n${table}\n`,
+      { mode: 0o644 },
+    );
+    process.stdout.write(
+      `sweep: ${results.length} runs → ${opts.out}/sweep-results.jsonl, sweep-table.md\n`,
+    );
+  } catch (err: unknown) {
+    catchCliError(err);
+  }
+}
