@@ -6,6 +6,7 @@ import {
   lookupEstimate,
   serializeEstimates,
 } from '../src/campaign/estimates.ts';
+import { EstimatesArtifactSchema } from '../src/contracts/estimates.ts';
 import type { ReplayRecord } from '../src/contracts/replay.ts';
 
 function rec(over: Partial<ReplayRecord>): ReplayRecord {
@@ -159,6 +160,68 @@ test('duplicate run_id: first input wins, duplicates excluded from stats', () =>
   expect(art.entries[0]!.duration_n).toBe(1);
   expect(art.entries[0]!.duration_s_median).toBe(100);
   expect(art.corpus.run_count).toBe(1);
+});
+
+test('grouping is collision-safe across field boundaries', () => {
+  // 'ab'+'c' and 'a'+'bc' pack to the same string under naive
+  // concatenation; structural grouping must keep them distinct.
+  const inputs = [
+    input(rec({ run_id: 'p', scenario: 'ab', agent: 'c', wall_ms: 100_000 })),
+    input(rec({ run_id: 'q', scenario: 'a', agent: 'bc', wall_ms: 300_000 })),
+  ];
+  const art = buildEstimates(inputs, { sources: ['fixture'] });
+  expect(art.entries).toHaveLength(2);
+  const ab = art.entries.find((e) => e.scenario === 'ab' && e.agent === 'c')!;
+  const a = art.entries.find((e) => e.scenario === 'a' && e.agent === 'bc')!;
+  expect(ab.duration_s_median).toBe(100);
+  expect(a.duration_s_median).toBe(300);
+  expect(art.fallbacks.scenario_agent).toHaveLength(2);
+  const saAb = art.fallbacks.scenario_agent.find(
+    (e) => e.scenario === 'ab' && e.agent === 'c',
+  )!;
+  expect(saAb.duration_s_median).toBe(100);
+  // Fieldwise sort: at the scenario field, 'a' sorts before 'ab'.
+  expect(art.entries[0]!.scenario).toBe('a');
+});
+
+test('NUL bytes in field values never corrupt grouping or fields', () => {
+  const inputs = [
+    input(rec({ run_id: 'n1', scenario: 'weird\u0000sc', wall_ms: 100_000 })),
+    input(rec({ run_id: 'n2', scenario: 'weird\u0000sc', wall_ms: 300_000 })),
+    input(
+      rec({
+        run_id: 'n3',
+        scenario: 'weird',
+        credential: 'sc\u0000x',
+        wall_ms: 500_000,
+      }),
+    ),
+  ];
+  const art = buildEstimates(inputs, { sources: ['fixture'] });
+  // Two entries: the NUL-scenario pair grouped together, plus the
+  // NUL-credential single.
+  expect(art.entries).toHaveLength(2);
+  const nulScenario = art.entries.find((e) => e.scenario === 'weird\u0000sc')!;
+  expect(nulScenario.agent).toBe('claude');
+  expect(nulScenario.duration_n).toBe(2);
+  expect(nulScenario.duration_s_median).toBe(200);
+  const nulCredential = art.entries.find((e) => e.credential === 'sc\u0000x')!;
+  expect(nulCredential.scenario).toBe('weird');
+  expect(nulCredential.duration_s_median).toBe(500);
+  // scenario_agent tier equally intact.
+  expect(art.fallbacks.scenario_agent).toHaveLength(2);
+  const sa = art.fallbacks.scenario_agent.find(
+    (e) => e.scenario === 'weird\u0000sc',
+  )!;
+  expect(sa.agent).toBe('claude');
+  expect(sa.duration_s_median).toBe(200);
+  // NUL survives pinned serialization (JSON escape) and schema parse.
+  const back = EstimatesArtifactSchema.parse(
+    JSON.parse(serializeEstimates(art)),
+  );
+  expect(
+    back.entries.find((e) => e.scenario === 'weird\u0000sc')?.duration_s_median,
+  ).toBe(200);
 });
 
 test('generated_at is max finished_at; serialization is byte-stable', () => {

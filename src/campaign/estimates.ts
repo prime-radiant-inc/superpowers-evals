@@ -25,27 +25,49 @@ export interface EstimateLookup {
   confidence: 'high' | 'medium' | 'low' | null;
 }
 
-/** Joins multi-part group keys. NUL cannot appear in scenario/agent/
- *  credential/os identifiers, so the split round-trips each part exactly. */
-const KEY_SEP = '\u0000';
-
 type EntryFields = Pick<
   ReplayRecord,
   'scenario' | 'agent' | 'credential' | 'os'
 >;
 type ScenarioAgentFields = Pick<ReplayRecord, 'scenario' | 'agent'>;
 
-const entryKey = (r: EntryFields): string =>
-  [r.scenario, r.agent, r.credential, r.os].join(KEY_SEP);
+type EntryTuple = [
+  scenario: string,
+  agent: string,
+  credential: string,
+  os: string,
+];
+type ScenarioAgentTuple = [scenario: string, agent: string];
 
-const saKey = (r: ScenarioAgentFields): string =>
-  [r.scenario, r.agent].join(KEY_SEP);
+const entryTuple = (r: EntryFields): EntryTuple => [
+  r.scenario,
+  r.agent,
+  r.credential,
+  r.os,
+];
+
+const saTuple = (r: ScenarioAgentFields): ScenarioAgentTuple => [
+  r.scenario,
+  r.agent,
+];
 
 /** Code-unit comparison, deliberately not localeCompare: the artifact must
  *  serialize byte-identically on any host, and locale collation is
  *  ICU-dependent. */
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Fieldwise code-unit comparison of key tuples: compare each field in
+ *  turn rather than a concatenated string, which would conflate field
+ *  boundaries. */
+function cmpTuple(a: readonly string[], b: readonly string[]): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const c = cmp(a[i] as string, b[i] as string);
+    if (c !== 0) return c;
+  }
+  return a.length - b.length;
 }
 
 function median(sorted: number[]): number {
@@ -98,16 +120,28 @@ function statsOf(records: ReplayRecord[]): EstimateStats {
   };
 }
 
-function byKey<K>(
+/** A structural group: the original key tuple plus its records, so no
+ *  field is ever recovered by splitting a packed string. */
+interface Group<K extends string[]> {
+  tuple: K;
+  records: ReplayRecord[];
+}
+
+/** Groups records by an arbitrary string tuple. The Map id is the tuple's
+ *  JSON encoding — injective for string tuples, so distinct tuples (even
+ *  ones containing NUL or boundary-blurring characters) can never collapse
+ *  into one group. */
+function byKey<K extends string[]>(
   records: ReplayRecord[],
   keyOf: (r: ReplayRecord) => K,
-): Map<K, ReplayRecord[]> {
-  const groups = new Map<K, ReplayRecord[]>();
+): Map<string, Group<K>> {
+  const groups = new Map<string, Group<K>>();
   for (const r of records) {
-    const k = keyOf(r);
-    const g = groups.get(k);
-    if (g) g.push(r);
-    else groups.set(k, [r]);
+    const tuple = keyOf(r);
+    const id = JSON.stringify(tuple);
+    const g = groups.get(id);
+    if (g) g.records.push(r);
+    else groups.set(id, { tuple, records: [r] });
   }
   return groups;
 }
@@ -128,36 +162,31 @@ export function buildEstimates(
   }
   if (records.length === 0) throw new Error('buildEstimates: no inputs');
 
-  const entries: EstimateEntry[] = [...byKey(records, entryKey).entries()]
-    .map(([key, rs]): EstimateEntry => {
-      const [scenario, agent, credential, os] = key.split(KEY_SEP);
-      return {
-        scenario: scenario as string,
-        agent: agent as string,
-        credential: credential as string,
-        os: os as string,
-        ...statsOf(rs),
-      };
+  const entries: EstimateEntry[] = [...byKey(records, entryTuple).values()]
+    .map(({ tuple, records: rs }): EstimateEntry => {
+      const [scenario, agent, credential, os] = tuple;
+      return { scenario, agent, credential, os, ...statsOf(rs) };
     })
-    .sort((a, b) => cmp(entryKey(a), entryKey(b)));
+    .sort((a, b) => cmpTuple(entryTuple(a), entryTuple(b)));
 
   const scenarioAgent: ScenarioAgentStats[] = [
-    ...byKey(records, saKey).entries(),
+    ...byKey(records, saTuple).values(),
   ]
-    .map(([key, rs]): ScenarioAgentStats => {
-      const [scenario, agent] = key.split(KEY_SEP);
-      return {
-        scenario: scenario as string,
-        agent: agent as string,
-        ...statsOf(rs),
-      };
+    .map(({ tuple, records: rs }): ScenarioAgentStats => {
+      const [scenario, agent] = tuple;
+      return { scenario, agent, ...statsOf(rs) };
     })
-    .sort((a, b) => cmp(saKey(a), saKey(b)));
+    .sort((a, b) => cmpTuple(saTuple(a), saTuple(b)));
 
   const scenario: ScenarioStats[] = [
-    ...byKey(records, (r) => r.scenario).entries(),
+    ...byKey(records, (r): [string] => [r.scenario]).values(),
   ]
-    .map(([sc, rs]): ScenarioStats => ({ scenario: sc, ...statsOf(rs) }))
+    .map(
+      ({ tuple, records: rs }): ScenarioStats => ({
+        scenario: tuple[0],
+        ...statsOf(rs),
+      }),
+    )
     .sort((a, b) => cmp(a.scenario, b.scenario));
 
   const digest = Bun.SHA256.hash([...seen].sort().join('\n'), 'hex');
