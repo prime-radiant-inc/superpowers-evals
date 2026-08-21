@@ -49,7 +49,13 @@ function manifest(
 function writeRun(
   dir: string,
   rev: string | null,
-  opts?: { wallMs?: number; gauntletMs?: number | null; firstStepTs?: string },
+  opts?: {
+    wallMs?: number;
+    gauntletMs?: number | null;
+    firstStepTs?: string;
+    resultMs?: number;
+    noCredential?: boolean;
+  },
 ) {
   const wallMs = opts?.wallMs ?? 600_000;
   mkdirSync(join(dir, 'gauntlet-agent', 'results', 'g1'), { recursive: true });
@@ -60,7 +66,7 @@ function writeRun(
       final: 'pass',
       scenario: 'sdd-escalates',
       coding_agent: 'claude',
-      credential: 'opus_bedrock',
+      ...(opts?.noCredential ? {} : { credential: 'opus_bedrock' }),
       os: 'linux',
       started_at: '2026-08-08T00:00:00.000Z',
       finished_at: new Date(
@@ -86,7 +92,9 @@ function writeRun(
   writeFileSync(join(dir, 'coding-agent-token-usage.json'), '{}');
   writeFileSync(
     join(dir, 'gauntlet-agent', 'results', 'g1', 'result.json'),
-    '{}',
+    opts?.resultMs === undefined
+      ? '{}'
+      : JSON.stringify({ duration_ms: opts.resultMs }),
   );
 }
 
@@ -173,5 +181,50 @@ test('retry-load samples become single-sample blocks; a block missing an arm err
   );
   expect(loaded.blocks).toHaveLength(2);
   expect(loaded.blocks.every((b) => b.samples.length === 1)).toBe(true);
+  for (const b of loaded.blocks) {
+    // collision-safe retry block_id; order_key's final component is the block_id
+    expect(b.block_id.startsWith('opus_bedrock/sdd-escalates/1/retry-')).toBe(
+      true,
+    );
+    const parts = b.order_key.split('|');
+    expect(parts).toHaveLength(4);
+    expect(parts[0]).toBe('opus_bedrock');
+    expect(parts[1]).toBe('sdd-escalates');
+    expect(parts[2]).toBe('0001');
+    expect(parts[3]).toBe(b.block_id);
+  }
+  rmSync(corpus, { recursive: true });
+});
+
+test('result.json duration_ms wins over economics.gauntlet when both present', () => {
+  const corpus = mkdtempSync(join(tmpdir(), 'corpus-'));
+  writeRun(join(corpus, 'run-base'), BASE, { resultMs: 480_000 }); // economics says 560_000
+  writeRun(join(corpus, 'run-treat'), TREAT);
+  const loaded = loadCorpus(
+    corpus,
+    manifest([
+      { run_id: 'run-base', arm: 'baseline' },
+      { run_id: 'run-treat', arm: 'treatment' },
+    ]),
+  );
+  expect(loaded.records.get('run-base')!.gauntlet_ms).toBe(480_000); // result.json wins
+  // preserved anomaly: 480_000 < coding 500_000 — recorded, never clamped
+  expect(loaded.coverage.gauntlet_lt_coding_anomalies).toContain('run-base');
+  rmSync(corpus, { recursive: true });
+});
+
+test('missing identity field in verdict.json is a loud error naming the run', () => {
+  const corpus = mkdtempSync(join(tmpdir(), 'corpus-'));
+  writeRun(join(corpus, 'run-base'), BASE, { noCredential: true });
+  writeRun(join(corpus, 'run-treat'), TREAT);
+  expect(() =>
+    loadCorpus(
+      corpus,
+      manifest([
+        { run_id: 'run-base', arm: 'baseline' },
+        { run_id: 'run-treat', arm: 'treatment' },
+      ]),
+    ),
+  ).toThrow(/run-base.*credential/);
   rmSync(corpus, { recursive: true });
 });

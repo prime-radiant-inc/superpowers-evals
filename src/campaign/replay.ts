@@ -75,12 +75,30 @@ function expectEntry<T>(v: T | null | undefined, what: string): T {
   return v;
 }
 
-/** Tolerant economics read (the src/cli/costs.ts pattern): the economics
- *  block is opaque in FinalVerdictSchema; pick fields defensively. */
+/** Identity fields are validated loudly (a missing/empty one is a
+ *  ReplayLoadError naming the run_id); only the economics block stays
+ *  tolerant (the src/cli/costs.ts pattern — opaque in FinalVerdictSchema,
+ *  picked defensively, nulls are legitimate data). */
 export function recordFromRunDir(runDir: string, runId: string): ReplayRecord {
   const verdict = readJson(join(runDir, 'verdict.json'));
   if (!verdict)
     throw new ReplayLoadError(`${runId}: verdict.json missing/unparseable`);
+  const scenario = str(verdict['scenario']);
+  const agent = str(verdict['coding_agent']);
+  const credential = str(verdict['credential']);
+  const os = str(verdict['os']);
+  for (const [field, value] of [
+    ['scenario', scenario],
+    ['coding_agent', agent],
+    ['credential', credential],
+    ['os', os],
+  ] as Array<[string, string | null]>) {
+    if (value === null) {
+      throw new ReplayLoadError(
+        `${runId}: verdict.json identity field ${field} missing/empty`,
+      );
+    }
+  }
   const startedAt = Date.parse(str(verdict['started_at']) ?? '');
   const finishedAt = Date.parse(str(verdict['finished_at']) ?? '');
   if (
@@ -94,19 +112,22 @@ export function recordFromRunDir(runDir: string, runId: string): ReplayRecord {
   const coding = (economics['coding_agent'] ?? {}) as Record<string, unknown>;
   const gauntlet = (economics['gauntlet'] ?? {}) as Record<string, unknown>;
 
-  let gauntletMs = num(gauntlet['duration_ms']);
-  if (gauntletMs === null) {
-    const gResultsDir = join(runDir, 'gauntlet-agent', 'results');
-    if (existsSync(gResultsDir)) {
-      for (const id of readdirSync(gResultsDir)) {
-        const result = readJson(join(gResultsDir, id, 'result.json'));
-        const d = result ? num(result['duration_ms']) : null;
-        if (d !== null) {
-          gauntletMs = d;
-          break;
-        }
+  // gauntlet_ms precedence: the grader-side result.json is the source of
+  // truth; economics.gauntlet is only a cached copy, consulted as fallback.
+  let gauntletMs: number | null = null;
+  const gResultsDir = join(runDir, 'gauntlet-agent', 'results');
+  if (existsSync(gResultsDir)) {
+    for (const id of readdirSync(gResultsDir)) {
+      const result = readJson(join(gResultsDir, id, 'result.json'));
+      const d = result ? num(result['duration_ms']) : null;
+      if (d !== null) {
+        gauntletMs = d;
+        break;
       }
     }
+  }
+  if (gauntletMs === null) {
+    gauntletMs = num(gauntlet['duration_ms']);
   }
 
   let preExposureMs: number | null = null;
@@ -131,10 +152,10 @@ export function recordFromRunDir(runDir: string, runId: string): ReplayRecord {
 
   return {
     run_id: runId,
-    scenario: str(verdict['scenario']) ?? '?',
-    agent: str(verdict['coding_agent']) ?? '?',
-    credential: str(verdict['credential']) ?? '?',
-    os: str(verdict['os']) ?? 'linux',
+    scenario: scenario ?? '?',
+    agent: agent ?? '?',
+    credential: credential ?? '?',
+    os: os ?? 'linux',
     pool_id: '', // assigned by loadCorpus from the manifest
     arm: 'single', // assigned by loadCorpus
     wall_ms: finishedAt - startedAt,
@@ -269,7 +290,7 @@ export function loadCorpus(
         comparison_id: meta.comparisonId,
         cell: meta.cell,
         replicate: meta.replicate,
-        order_key: `${meta.comparisonId}|${meta.cell}|${String(meta.replicate).padStart(4, '0')}|retry-${runId}`,
+        order_key: `${meta.comparisonId}|${meta.cell}|${String(meta.replicate).padStart(4, '0')}|${meta.blockId}/retry-${runId}`,
         historical_job: meta.historicalJob,
         samples: [
           {
@@ -287,7 +308,7 @@ export function loadCorpus(
   for (const [blockId, runIds] of scoredGroups) {
     if (runIds.length !== 2) {
       throw new ReplayLoadError(
-        `scored block ${blockId} has ${runIds.length} samples (expected 2)`,
+        `scored block ${blockId} has ${runIds.length} samples (expected 2): [${runIds.join(', ')}]`,
       );
     }
     const arms = new Set(
@@ -295,7 +316,7 @@ export function loadCorpus(
     );
     if (arms.size !== 2) {
       throw new ReplayLoadError(
-        `scored block ${blockId} does not hold one baseline + one treatment`,
+        `scored block ${blockId} does not hold one baseline + one treatment: [${runIds.join(', ')}]`,
       );
     }
     const firstId = runIds[0];
