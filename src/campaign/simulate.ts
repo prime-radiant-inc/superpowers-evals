@@ -202,16 +202,28 @@ export function simulate(blocks: SimBlock[], config: SimConfig): SimResult {
     return n;
   };
 
-  const nextAvailable = (pool: string, t: number): number => {
-    const cap = poolCap(caps, pool);
-    if (activeCount(pool, t) < cap) return t;
+  // Earliest instant at which `pool` has `need` free slots. Demand-aware:
+  // one free slot does not satisfy a two-slot block. Only releases that
+  // belong to THIS pool count (subject pools: their own samples' subject
+  // holds; __grader__: grader holds; __global__: every sample's subject
+  // hold) — another pool's earlier release must not contaminate the answer.
+  const nextAvailable = (pool: string, t: number, need: number): number => {
+    const free = poolCap(caps, pool) - activeCount(pool, t);
+    if (free >= need) return t;
     const releases = active
+      .filter(
+        (a) =>
+          pool === GRADER_POOL ||
+          pool === GLOBAL_POOL ||
+          a.subjectPool === pool,
+      )
       .map((a) =>
         pool === GRADER_POOL ? a.graderReleaseAt : a.subjectReleaseAt,
       )
       .filter((x) => x > t)
       .sort((x, y) => x - y);
-    return releases[0] ?? t;
+    const release = releases[need - free - 1];
+    return release ?? t;
   };
 
   const fits = (b: SimBlock, t: number): boolean => {
@@ -255,11 +267,17 @@ export function simulate(blocks: SimBlock[], config: SimConfig): SimResult {
       if (!fits(b, t)) {
         if (!firstWaitAt.has(b.block_id)) {
           firstWaitAt.set(b.block_id, t);
-          const demanded = [...demandOf(b).keys()];
-          const latest = Math.max(...demanded.map((p) => nextAvailable(p, t)));
+          // Binding pools = demanded pools whose demand-aware next-available
+          // instant is latest; ties split the charge.
+          const demanded = [...demandOf(b)];
+          const latest = Math.max(
+            ...demanded.map(([p, need]) => nextAvailable(p, t, need)),
+          );
           waitBinding.set(
             b.block_id,
-            demanded.filter((p) => nextAvailable(p, t) === latest),
+            demanded
+              .filter(([p, need]) => nextAvailable(p, t, need) === latest)
+              .map(([p]) => p),
           );
         }
         continue;

@@ -79,7 +79,7 @@ test('global cap counts runs: two-arm block needs 2 global slots', () => {
   expect(r.makespan_ms).toBe(200); // b1 fills both slots; b2 waits
 });
 
-test('oracle ordering: longest first; backfill admits shorter blocks past a waiting giant', () => {
+test('multi-slot demand accounting: two-slot blocks cannot squeeze into one free slot (makespan floor 350)', () => {
   // giant needs 2 slots of cap 3; two smalls need 1 each.
   const giant = block('giant', 'p1', [300, 300]);
   const small1 = block('small1', 'p1', [100]);
@@ -87,14 +87,16 @@ test('oracle ordering: longest first; backfill admits shorter blocks past a wait
   const filler = block('filler', 'p1', [50, 50], 'aaa-filler');
   // oracle sorts by max wall desc → giant, small1, small2, filler.
   // cap 3: t=0 giant (2 slots) + small1 (1 slot) fill the pool; small2 and
-  // filler both wait. t=100: small1's ONE slot frees → small2 backfills it
-  // (3/3 again); filler (2 slots) still cannot fit. t=200: small2 done, only
-  // 1 free — filler still blocked by giant's 2. t=300: giant releases →
-  // filler admits, finishing at 350.
+  // filler both wait. t=100: small1's ONE slot frees → small2 takes it
+  // (3/3 again); filler (2 slots) cannot fit into 1 free slot. t=200:
+  // small2 done, only 1 free — filler still blocked by giant's 2. t=300:
+  // giant releases → filler admits, finishing at 350.
   // NOTE (corrected from the brief's 300): a 300 makespan is impossible for
   // ANY schedule — giant (2×300) and filler (2×50) would need 4 concurrent
   // slots to overlap, so under cap 3 one must fully follow the other:
-  // makespan ≥ 300 + 50 = 350.
+  // makespan ≥ 300 + 50 = 350. (Renamed in fix round 1: at t=100 small2 is
+  // the queue HEAD and fits, so head-of-line scheduling produces the same
+  // sequence — backfill itself is discriminated by a separate test below.)
   const r = simulate(
     [giant, small1, small2, filler],
     CFG({ subject_caps: { p1: 3 } }),
@@ -104,17 +106,102 @@ test('oracle ordering: longest first; backfill admits shorter blocks past a wait
   expect(r.per_pool['p1']!.busy_slot_ms).toBe(300 + 300 + 100 + 100 + 100);
 });
 
-test('wait attribution: waiting block charges the binding pool', () => {
+test('backfill discriminates from head-of-line: small bypasses a blocked big2', () => {
+  const giant = block('giant', 'p1', [300, 300]);
+  const big2 = block('big2', 'p1', [200, 200]);
+  const small = block('small', 'p1', [100]);
+  const r = simulate([giant, big2, small], CFG({ subject_caps: { p1: 3 } }));
+  // t=0: giant admits (2/3). big2 needs 2 slots, only 1 free — it waits.
+  // small needs 1 slot and FITS: backfill admits it past the blocked big2.
+  // big2 then starts at t=300 (at t=100 only ONE slot has freed — giant
+  // still holds 2 — which cannot satisfy big2's 2-slot demand) and finishes
+  // at 500. A head-of-line engine would stall small behind big2, yielding
+  // sequence [giant, big2, small] — the sequence is what discriminates
+  // here (both schedules end at 500: small always fits alongside big2 once
+  // giant releases).
+  expect(r.makespan_ms).toBe(500);
+  expect(r.admission_sequence).toEqual(['giant', 'small', 'big2']);
+  expect(r.admission_sequence.indexOf('small')).toBeLessThan(
+    r.admission_sequence.indexOf('big2'),
+  );
+});
+
+test('wait attribution: waiting block charges the binding pool (ties split)', () => {
   const a = block('a', 'p1', [200, 200]);
   const b = block('b', 'p2', [200, 200], 'bbb');
   const r = simulate(
     [a, b],
     CFG({ subject_caps: { p1: 2, p2: 2 }, grader_cap: 3, global_cap: 2 }),
   );
-  // global cap 2: a fits (2 slots), b waits 200ms on __global__.
+  // Demand-aware binding at b's first failed instant (t=0): p2 has both
+  // slots free (available now); __global__ is full — a holds 2 of 2, so b's
+  // need of 2 is next satisfiable at 200 — and __grader__ has 1 of 3 free
+  // vs b's need of 2 (also next satisfiable at 200). A genuine tie for
+  // latest → the 200ms charge splits evenly across __global__ and
+  // __grader__. (The brief's original "b waits 200ms on __global__"
+  // expectation was calibrated to the demand-blind nextAvailable, which
+  // returned 0 for __grader__ despite 1 free slot < 2 needed.)
   expect(r.makespan_ms).toBe(400);
-  expect(r.per_pool['__global__']!.attributed_wait_ms).toBe(200);
+  expect(r.per_pool['__global__']!.attributed_wait_ms).toBe(100);
+  expect(r.per_pool['__grader__']!.attributed_wait_ms).toBe(100);
   expect(r.per_pool['p2']!.attributed_wait_ms).toBe(0);
+});
+
+test('demand-aware binding: one free slot of a cap-2 pool does not satisfy a 2-slot block', () => {
+  // warm holds 1 of 2 p1 slots until t=500; `two` needs 2 p1 slots and so
+  // fails at t=0 even though a slot is nominally free. nextAvailable(p1, 0, 2)
+  // must be 500 (the held slot's release), not 0 — grader and global have
+  // headroom, so the binding pool is p1 ALONE and the whole wait lands there.
+  const warm = block('warm', 'p1', [500]);
+  const two = block('two', 'p1', [100, 100]);
+  const r = simulate([warm, two], CFG({ subject_caps: { p1: 2 } }));
+  expect(r.admission_sequence).toEqual(['warm', 'two']);
+  expect(r.makespan_ms).toBe(600);
+  expect(r.per_pool['p1']!.attributed_wait_ms).toBe(500);
+  expect(r.per_pool['__grader__']!.attributed_wait_ms).toBe(0);
+  expect(r.per_pool['__global__']!.attributed_wait_ms).toBe(0);
+});
+
+test('binding selection counts only the evaluated pool\u2019s own releases', () => {
+  // occA holds pA full until 600; occB holds pB full until 300. A mixed
+  // block needing 1 slot from each pool binds on pA (next available 600),
+  // not pB (300) — occB's earlier release must not contaminate pA's answer.
+  const occA = block('occA', 'pA', [600, 600]);
+  const occB = block('occB', 'pB', [300, 300]);
+  const mixed: SimBlock = {
+    block_id: 'mixed',
+    comparison_id: 'cmp',
+    cell: 'cell',
+    replicate: 1,
+    order_key: 'zzz-mixed',
+    samples: [
+      {
+        run_id: 'mixed-a',
+        subject_pool: 'pA',
+        wall_ms: 100,
+        gauntlet_ms: 100,
+        coding_ms: 100,
+        pre_exposure_ms: null,
+        estimate_ms: 100,
+      },
+      {
+        run_id: 'mixed-b',
+        subject_pool: 'pB',
+        wall_ms: 100,
+        gauntlet_ms: 100,
+        coding_ms: 100,
+        pre_exposure_ms: null,
+        estimate_ms: 100,
+      },
+    ],
+  };
+  const r = simulate(
+    [occA, occB, mixed],
+    CFG({ subject_caps: { pA: 2, pB: 2 } }),
+  );
+  expect(r.makespan_ms).toBe(700);
+  expect(r.per_pool['pA']!.attributed_wait_ms).toBe(600);
+  expect(r.per_pool['pB']!.attributed_wait_ms).toBe(0);
 });
 
 test('historical-fifo preserves manifest order regardless of wall length', () => {
