@@ -111,3 +111,20 @@ test('supersedes and errata support the amendment chain', () => {
   });
   expect(ReportSchema.parse(superseding).supersedes).toBe('cmp-0000');
 });
+
+test('gating report without a verdict rejects', () => {
+  const gating = gatingReport();
+  delete (gating as Record<string, unknown>)['verdict'];
+  expect(() => ReportSchema.parse(gating)).toThrow();
+});
+
+test('descriptive report without a stamp rejects', () => {
+  const descriptive = gatingReport({
+    profile: 'descriptive_v1',
+    verdict: undefined,
+    stamp: 'DESCRIPTIVE',
+  });
+  delete (descriptive as Record<string, unknown>)['verdict'];
+  delete (descriptive as Record<string, unknown>)['stamp'];
+  expect(() => ReportSchema.parse(descriptive)).toThrow();
+});
