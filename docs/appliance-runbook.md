@@ -401,6 +401,41 @@ The helper sends SIGINT to the tracked process group and waits for stopped
 verdicts or a batch footer. If cancellation returns `lost`, do not retry a new
 live job until `doctor --json` explains the lock and process state.
 
+## Exporting a Simulation Corpus
+
+Phase-0 capacity work needs an appliance→workstation pull of scrubbed run
+artifacts — the reverse direction of the import path. Use the `campaign
+acquire` verb. It selects run dirs by an exact ID allowlist, refuses symlink
+or non-regular sources, copies only the simulation payload (`verdict.json`,
+`trajectory.json`, `coding-agent-token-usage.json`,
+`gauntlet-agent/results/<id>/result.json` — never homes, transcripts, or
+workdirs), pulls the referencing batches' metadata, and writes a checksummed
+`selection-manifest.json` (run IDs, per-file SHA-256, source host, command)
+atomically.
+
+Two proven ways to run it:
+
+1. **On the appliance** (when the evals checkout there carries the verb):
+
+   ```bash
+   bun run quorum campaign acquire \
+     --runs-file <allowlist.txt> --results-root /srv/quorum/superpowers-evals/results \
+     --out /srv/quorum/corpus-export/<name>
+   ```
+
+   then transfer the output directory to the workstation.
+
+2. **Stage-then-acquire** (when the verb only exists in a local branch, as
+   during the 2026-08-20 Phase 0 bring-up): rsync the allowlisted payload
+   paths to a local staging tree, then run `quorum campaign acquire`
+   locally against it — the same confinement validation, checksums, and
+   selection manifest apply. Run IDs in the staging tree are re-validated;
+   symlinked payload files are refused.
+
+Corpora land in the gitignored `corpus/` directory and are treated as
+sensitive: verdicts and trajectories can carry prompt and tool-output
+content.
+
 ## Importing Locally-Run Results
 
 Runs produced on a workstation before the appliance existed are moved in two
