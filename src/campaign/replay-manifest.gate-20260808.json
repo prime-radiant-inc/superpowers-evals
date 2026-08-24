@@ -1,0 +1,3386 @@
+{
+  "schema_version": "quorum.replay-manifest/v1",
+  "name": "gate-20260808",
+  "source_docs": [
+    "docs/experiments/2026-08-08-fresh-release-gate.md",
+    "docs/experiments/2026-08-09-fresh-release-gate-readout.md"
+  ],
+  "arms": {
+    "baseline_sha": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+    "treatment_sha": "2d4b675b498b466df249304e2ba8a4640ccaa01f"
+  },
+  "comparisons": [
+    {
+      "comparison_id": "opus_bedrock",
+      "credential": "opus_bedrock",
+      "pool_id": "opus_bedrock|mantle|anthropic.claude-opus-4-8",
+      "legacy_pool_id": "opus_bedrock|mantle",
+      "cells": [
+        {
+          "scenario": "sdd-escalates-broken-plan",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T043126Z-1b2e",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T045627Z-9832",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T070239Z-7880",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T072221Z-0696",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T093244Z-2126",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T095151Z-73c5",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T114312Z-e998",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T120256Z-9491",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T134854Z-e435",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T134854Z-a562",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T140357Z-a0f4",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T140357Z-908e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T154913Z-9bcd",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T154913Z-9bcf",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T160417Z-ca60",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T160417Z-b04a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T175433Z-eb3f",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T175433Z-3147",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T180936Z-073b",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T180936Z-e0e9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T193451Z-94e7",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T193451Z-8c7b",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T194954Z-e948",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T194954Z-02e6",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T214011Z-4048",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T214011Z-a248",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T215514Z-55b6",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T215514Z-9d0a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T224023Z-e3ca",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T224022Z-5148",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-claude-opus_bedrock-linux-20260808T225525Z-07fd",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "opus_bedrock/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T225525Z-287d",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T042729Z-41e6",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T045233Z-5c86",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T065752Z-0fb9",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T071755Z-22ee",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T092814Z-e7b2",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T094817Z-128d",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T113834Z-02b0",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T115838Z-0f6f",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T134854Z-304b",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T134854Z-a562",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T140357Z-90b4",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T140357Z-908e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T154913Z-00f2",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T154913Z-9bcf",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T160417Z-987a",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T160417Z-b04a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T175433Z-25ea",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T175433Z-3147",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T180936Z-f1c5",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T180936Z-e0e9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T193451Z-3652",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T193451Z-8c7b",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T194954Z-9058",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T194954Z-02e6",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T214011Z-56c4",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/9",
+              "historical_job": "batch-20260808T214011Z-a248",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T215514Z-f159",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/9",
+              "historical_job": "batch-20260808T215514Z-9d0a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T224023Z-5636",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/10",
+              "historical_job": "batch-20260808T224022Z-5148",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus_bedrock-linux-20260808T225525Z-80f3",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "opus_bedrock/sdd-breaker-rules-and-continues/10",
+              "historical_job": "batch-20260808T225525Z-287d",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-structural-blocks",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T043006Z-29db",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T045512Z-f882",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T070018Z-ec02",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T072005Z-587a",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T093027Z-aeeb",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T095029Z-a47d",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T114025Z-442a",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-claude-opus_bedrock-linux-20260808T120053Z-b24e",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-spec-plan-duplication",
+          "class": "probe",
+          "samples": [
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T042729Z-e75e",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T045233Z-3ee9",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T065752Z-1f96",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T071755Z-8943",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T092814Z-6abb",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T094817Z-4a04",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T113834Z-ad59",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T115838Z-6b2f",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T134854Z-1a4f",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T134854Z-a562",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T140357Z-8b17",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T140357Z-908e",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T154913Z-2543",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T154913Z-9bcf",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T160417Z-9961",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T160417Z-b04a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T175433Z-1fa6",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T175433Z-3147",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T180936Z-9c7a",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T180936Z-e0e9",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T193451Z-01b7",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T193451Z-8c7b",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T194954Z-c4f3",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T194954Z-02e6",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T214011Z-af3c",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T214011Z-a248",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T215514Z-2a1b",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T215514Z-9d0a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T224023Z-390b",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T224022Z-5148",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-claude-opus_bedrock-linux-20260808T225525Z-e375",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "opus_bedrock/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T225525Z-287d",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "finishing-branch-untracked-plan-at-cleanup",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T042729Z-da00",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T045233Z-bb54",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T065752Z-9091",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T071755Z-df5c",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T092814Z-b1f6",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T094817Z-2f34",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T113834Z-cc4a",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T115838Z-ccf1",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T134854Z-582d",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T134854Z-a562",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T140357Z-d38c",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T140357Z-908e",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T154913Z-d592",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T154913Z-9bcf",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-claude-opus_bedrock-linux-20260808T160417Z-b0ea",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "opus_bedrock/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T160417Z-b04a",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "writing-plans-no-spec-conversational",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T044251Z-879e",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T050603Z-3bc4",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T071336Z-6e47",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T072942Z-0ed1",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T093535Z-491a",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T095449Z-e938",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T114800Z-0984",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "writing-plans-no-spec-conversational-claude-opus_bedrock-linux-20260808T120508Z-4498",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/writing-plans-no-spec-conversational/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-trivial-task-review-fanout",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T042729Z-e674",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T045233Z-2e95",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T065752Z-e9fe",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T071755Z-ed3f",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T092814Z-ad11",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/3",
+              "historical_job": "batch-20260808T092813Z-75fc",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T094817Z-db58",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/3",
+              "historical_job": "batch-20260808T094817Z-dfff",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T113834Z-9244",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/4",
+              "historical_job": "batch-20260808T113834Z-be85",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-trivial-task-review-fanout-claude-opus_bedrock-linux-20260808T115838Z-2579",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/cost-trivial-task-review-fanout/4",
+              "historical_job": "batch-20260808T115838Z-c19c",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260808T233533Z-b807",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260808T233533Z-43ea",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T005040Z-d2cf",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260809T005040Z-0d82",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T020801Z-63a9",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T020801Z-a54e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T030804Z-5ddf",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T030803Z-f219",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T043817Z-5c4e",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T043817Z-bbae",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T054318Z-79b6",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T054317Z-e72a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T071333Z-8a01",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T071333Z-1a9c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T092150Z-f069",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T092150Z-98c8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T104156Z-2afd",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T104156Z-ec7c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus_bedrock-linux-20260809T114201Z-00a0",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus_bedrock/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T114201Z-21c3",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "superpowers-bootstrap",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T043541Z-1edb",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/superpowers-bootstrap/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T050050Z-406f",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/superpowers-bootstrap/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T070831Z-9238",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/superpowers-bootstrap/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T072459Z-09d1",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/superpowers-bootstrap/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "triggering-test-driven-development",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "triggering-test-driven-development-claude-opus_bedrock-linux-20260808T044037Z-7552",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/triggering-test-driven-development/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-test-driven-development-claude-opus_bedrock-linux-20260808T050302Z-8221",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/triggering-test-driven-development/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-test-driven-development-claude-opus_bedrock-linux-20260808T071035Z-c63c",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/triggering-test-driven-development/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-test-driven-development-claude-opus_bedrock-linux-20260808T072655Z-f429",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/triggering-test-driven-development/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "verification-phantom-completion",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "verification-phantom-completion-claude-opus_bedrock-linux-20260808T044241Z-7397",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/verification-phantom-completion/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "verification-phantom-completion-claude-opus_bedrock-linux-20260808T050458Z-8d47",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/verification-phantom-completion/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "verification-phantom-completion-claude-opus_bedrock-linux-20260808T071056Z-3cff",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/verification-phantom-completion/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "verification-phantom-completion-claude-opus_bedrock-linux-20260808T072825Z-90cb",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/verification-phantom-completion/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "triggering-finishing-a-development-branch",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "triggering-finishing-a-development-branch-claude-opus_bedrock-linux-20260808T043746Z-d043",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/triggering-finishing-a-development-branch/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-finishing-a-development-branch-claude-opus_bedrock-linux-20260808T050250Z-a48d",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/triggering-finishing-a-development-branch/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-finishing-a-development-branch-claude-opus_bedrock-linux-20260808T070942Z-16bc",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/triggering-finishing-a-development-branch/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "triggering-finishing-a-development-branch-claude-opus_bedrock-linux-20260808T072607Z-8d8d",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/triggering-finishing-a-development-branch/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "worktree-no-drift-to-main",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "worktree-no-drift-to-main-claude-opus_bedrock-linux-20260808T044246Z-17ac",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus_bedrock/worktree-no-drift-to-main/1",
+              "historical_job": "batch-20260808T042729Z-e831",
+              "role": "scored"
+            },
+            {
+              "run_id": "worktree-no-drift-to-main-claude-opus_bedrock-linux-20260808T050539Z-310f",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus_bedrock/worktree-no-drift-to-main/1",
+              "historical_job": "batch-20260808T045232Z-3fc9",
+              "role": "scored"
+            },
+            {
+              "run_id": "worktree-no-drift-to-main-claude-opus_bedrock-linux-20260808T071231Z-49f0",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus_bedrock/worktree-no-drift-to-main/2",
+              "historical_job": "batch-20260808T065751Z-c33c",
+              "role": "scored"
+            },
+            {
+              "run_id": "worktree-no-drift-to-main-claude-opus_bedrock-linux-20260808T072836Z-432f",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus_bedrock/worktree-no-drift-to-main/2",
+              "historical_job": "batch-20260808T071755Z-71ca",
+              "role": "scored"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "comparison_id": "opus5_bedrock",
+      "credential": "opus5_bedrock",
+      "pool_id": "opus5_bedrock|mantle|anthropic.claude-opus-5",
+      "legacy_pool_id": "opus5_bedrock|mantle",
+      "cells": [
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T062747Z-f2aa",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T062747Z-d3ee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T063749Z-227c",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T063748Z-1b6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T084809Z-89dd",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T084808Z-db66",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T090810Z-8666",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T090810Z-c4d9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T110829Z-3399",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T110829Z-c437",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T112332Z-1380",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T112331Z-bfab",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T131850Z-6eff",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T131849Z-5201",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T133352Z-692c",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T133351Z-3053",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T151408Z-f36a",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T151408Z-6a69",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T153411Z-9aa6",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T153410Z-dbb9",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T171429Z-e1e6",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T171428Z-2f06",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T173430Z-2e46",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T173430Z-7124",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T190446Z-1684",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T190446Z-8199",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T191448Z-74f5",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T191447Z-b496",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T210006Z-85bd",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T210005Z-8a8b",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-claude-opus5_bedrock-linux-20260808T212008Z-9165",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "opus5_bedrock/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T212008Z-6e94",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260808T233533Z-aa9c",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260808T233533Z-43ea",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T005040Z-0fb4",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260809T005040Z-0d82",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T020801Z-0224",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T020801Z-a54e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T030804Z-bf5f",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T030803Z-f219",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T043817Z-e8f1",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T043817Z-bbae",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T054318Z-6289",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T054317Z-e72a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T071333Z-cb08",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T071333Z-1a9c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T092150Z-ce99",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T092150Z-98c8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T104156Z-b2f1",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T104156Z-ec7c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-claude-opus5_bedrock-linux-20260809T114201Z-2ace",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "opus5_bedrock/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T114201Z-21c3",
+              "role": "scored"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "comparison_id": "openai_responses_56sol",
+      "credential": "openai_responses_56sol",
+      "pool_id": "https://api.openai.com/v1|openai-responses|gpt-5.6-sol",
+      "legacy_pool_id": "https://api.openai.com/v1|openai-responses",
+      "cells": [
+        {
+          "scenario": "sdd-escalates-broken-plan",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T052739Z-a86d",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T060603Z-a090",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T075455Z-7aed",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T082929Z-3054",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T102447Z-804e",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T105509Z-61d4",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T123511Z-f3a1",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T130857Z-7389",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T143315Z-a0d6",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T150108Z-b570",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T163056Z-9f79",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T170240Z-2102",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T183407Z-2864",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T185401Z-264d",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T202411Z-8650",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T204831Z-9f80",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T221517Z-a940",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T221517Z-048a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T223020Z-c5d1",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T223019Z-2dee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T231028Z-766f",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T231027Z-2c92",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56sol-linux-20260808T232531Z-d441",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "openai_responses_56sol/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T232530Z-8984",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T052022Z-f8c5",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T055725Z-e6ba",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T074659Z-0a5e",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T082232Z-1a29",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T101756Z-2b86",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T104603Z-597b",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T122714Z-2e85",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T130106Z-36d3",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T142858Z-0947",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T145917Z-03a2",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T162830Z-2d2c",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T165907Z-047e",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T182833Z-57bb",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T185144Z-7673",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T201722Z-726a",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56sol-linux-20260808T204238Z-c4cb",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-structural-blocks",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T052421Z-8e5e",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T060148Z-0c01",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T075002Z-494b",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T082609Z-f8d9",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T102049Z-2c98",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T105048Z-8be7",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T123247Z-51ff",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56sol-linux-20260808T130437Z-2de2",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-spec-plan-duplication",
+          "class": "probe",
+          "samples": [
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T051543Z-7e9f",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T055058Z-9b29",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T074016Z-0a51",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T081553Z-f5c5",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T101116Z-509e",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T104055Z-fbfe",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T122211Z-af36",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T125618Z-c9eb",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T142226Z-0046",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T145206Z-e7ab",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T162149Z-bf46",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T165312Z-36ec",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T182439Z-ae61",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T184442Z-6d47",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T201458Z-6c54",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T204002Z-402a",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T221517Z-31ff",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T221517Z-048a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T223020Z-3d92",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T223019Z-2dee",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T231028Z-4b58",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T231027Z-2c92",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56sol-linux-20260808T232531Z-cd17",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "openai_responses_56sol/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T232530Z-8984",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "finishing-branch-untracked-plan-at-cleanup",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T051902Z-9f68",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T055505Z-a4c4",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T074443Z-c681",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T081852Z-18c5",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T101453Z-1519",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T104303Z-084f",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T122339Z-dcb1",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T125856Z-62cc",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T142549Z-e7ea",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T145647Z-f791",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T162652Z-cafe",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56sol-linux-20260808T165643Z-3f88",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "codex-subagent-wait-mapping",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T051235Z-dc42",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T054741Z-c50d",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T073758Z-4045",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T081304Z-0125",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T100820Z-a3fc",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T103825Z-72c2",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T121841Z-4de2",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T125346Z-1f5b",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T141900Z-833e",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T144904Z-39c1",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T161919Z-e5e3",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T164924Z-f1df",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T182439Z-7a68",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T184442Z-0f38",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T201458Z-8eb0",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56sol-linux-20260808T204002Z-27ad",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56sol/codex-subagent-wait-mapping/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "brainstorming-resists-jump-to-implementation",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T051235Z-74bb",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T054741Z-9110",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T073758Z-597f",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T081304Z-412d",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T100820Z-906e",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T103825Z-d6b7",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T121841Z-ea87",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T125346Z-3ee4",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T141900Z-f0ae",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T144904Z-2de6",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T161919Z-af84",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56sol-linux-20260808T164924Z-06e9",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56sol/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-survives-compaction",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56sol-linux-20260808T053430Z-31b1",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-survives-compaction/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56sol-linux-20260808T061233Z-3295",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-survives-compaction/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56sol-linux-20260808T075531Z-a9c4",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-survives-compaction/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56sol-linux-20260808T083349Z-6329",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-survives-compaction/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260808T233533Z-9f8a",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260808T233533Z-43ea",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T005040Z-d845",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260809T005040Z-0d82",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T020801Z-143a",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T020801Z-a54e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T030804Z-f2d7",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T030803Z-f219",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T043817Z-27ac",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T043817Z-bbae",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T054318Z-27d8",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T054317Z-e72a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T071333Z-e23d",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T071333Z-1a9c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T092150Z-d8ec",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T092150Z-98c8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T104156Z-a289",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T104156Z-ec7c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260809T114201Z-3a53",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56sol/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T114201Z-21c3",
+              "role": "scored"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "comparison_id": "openai_responses_56luna",
+      "credential": "openai_responses_56luna",
+      "pool_id": "https://api.openai.com/v1|openai-responses|gpt-5.6-luna",
+      "legacy_pool_id": "https://api.openai.com/v1|openai-responses",
+      "cells": [
+        {
+          "scenario": "sdd-escalates-broken-plan",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T052716Z-c7d2",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T060444Z-f0f8",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T075245Z-d256",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T082820Z-72ef",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T102349Z-ec3c",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T105212Z-4452",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T123407Z-a3e2",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T130753Z-eac9",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T142928Z-ec81",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T150105Z-0fa0",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T162947Z-9766",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T170019Z-2027",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T183140Z-35c1",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T185152Z-6b38",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T202222Z-1c4e",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T204721Z-e46e",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T221517Z-edf7",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T221517Z-048a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T223020Z-d157",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/9",
+              "historical_job": "batch-20260808T223019Z-2dee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T231028Z-e3ac",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T231027Z-2c92",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux-20260808T232531Z-5d15",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "openai_responses_56luna/sdd-escalates-broken-plan/10",
+              "historical_job": "batch-20260808T232530Z-8984",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T051943Z-e492",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T055538Z-0364",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T074525Z-888e",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T082020Z-d925",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T101728Z-61c2",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T104541Z-3da0",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T122557Z-37dc",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T130014Z-5d7b",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T142630Z-a1bd",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T145829Z-bd23",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T162658Z-f200",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T165729Z-8318",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T182624Z-b44e",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T184706Z-5b37",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T201715Z-b09b",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-codex-openai_responses_56luna-linux-20260808T204227Z-bb69",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/sdd-breaker-rules-and-continues/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-structural-blocks",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T052143Z-a697",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T055806Z-0e96",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T074747Z-6bb8",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T082304Z-6892",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T101822Z-5e92",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T104846Z-6281",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T122843Z-0280",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-codex-openai_responses_56luna-linux-20260808T130147Z-eb40",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-breaker-structural-blocks/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-spec-plan-duplication",
+          "class": "probe",
+          "samples": [
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T051459Z-9ec2",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T055000Z-7d81",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T073923Z-8a12",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T081546Z-2829",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T101049Z-13e6",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T104037Z-135a",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T122020Z-de59",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T125554Z-a270",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T142143Z-a024",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T145130Z-da01",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T162145Z-fb00",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T165231Z-b653",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T182439Z-fa06",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T184442Z-cc34",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T201458Z-d6f7",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T204002Z-5c07",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T221517Z-3417",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T221517Z-048a",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T223020Z-8f24",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/9",
+              "historical_job": "batch-20260808T223019Z-2dee",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T231028Z-6e85",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T231027Z-2c92",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-codex-openai_responses_56luna-linux-20260808T232531Z-a293",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "openai_responses_56luna/cost-spec-plan-duplication/10",
+              "historical_job": "batch-20260808T232530Z-8984",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "finishing-branch-untracked-plan-at-cleanup",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T051620Z-b0e9",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T055453Z-5e9f",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T074209Z-028b",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T081653Z-89b2",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T101326Z-0bcf",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T104254Z-ed09",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T122312Z-3d9e",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T125627Z-d5e2",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T142326Z-2b12",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T145610Z-ed7b",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T162335Z-3a46",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-codex-openai_responses_56luna-linux-20260808T165501Z-584e",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "codex-subagent-wait-mapping",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T051235Z-ea0d",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T054741Z-7bfd",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T073758Z-7002",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T081304Z-ccf9",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T100820Z-2e78",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T103825Z-b9cf",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T121841Z-ad5d",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T125346Z-502c",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T141900Z-24a9",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T144904Z-e091",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T161919Z-3490",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T164924Z-66ef",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T182439Z-0423",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/7",
+              "historical_job": "batch-20260808T182438Z-9eac",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T184442Z-feab",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/7",
+              "historical_job": "batch-20260808T184442Z-7fee",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T201458Z-4551",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/8",
+              "historical_job": "batch-20260808T201457Z-704d",
+              "role": "scored"
+            },
+            {
+              "run_id": "codex-subagent-wait-mapping-codex-openai_responses_56luna-linux-20260808T204002Z-712f",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "openai_responses_56luna/codex-subagent-wait-mapping/8",
+              "historical_job": "batch-20260808T204002Z-ff5f",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "brainstorming-resists-jump-to-implementation",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T051235Z-f803",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T054741Z-3834",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T073758Z-d42c",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T081304Z-fb5e",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T100820Z-d0fb",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "batch-20260808T100820Z-4e9a",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T103825Z-a631",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "batch-20260808T103824Z-cfa8",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T121841Z-66bb",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "batch-20260808T121841Z-f391",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T125346Z-59aa",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "batch-20260808T125345Z-ed6c",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T141900Z-61e6",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "batch-20260808T141859Z-9751",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T144904Z-4512",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "batch-20260808T144904Z-dcfb",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T161919Z-6eea",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "batch-20260808T161919Z-d903",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-codex-openai_responses_56luna-linux-20260808T164924Z-7b22",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "openai_responses_56luna/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "batch-20260808T164923Z-a759",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-survives-compaction",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56luna-linux-20260808T052933Z-fe37",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-survives-compaction/1",
+              "historical_job": "batch-20260808T051235Z-cb0c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56luna-linux-20260808T060613Z-62b3",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-survives-compaction/1",
+              "historical_job": "batch-20260808T054741Z-d8dd",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56luna-linux-20260808T075513Z-99e8",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-survives-compaction/2",
+              "historical_job": "batch-20260808T073758Z-bdd8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-survives-compaction-codex-openai_responses_56luna-linux-20260808T083035Z-5971",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-survives-compaction/2",
+              "historical_job": "batch-20260808T081303Z-1f86",
+              "role": "scored"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260808T233533Z-4463",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260808T233533Z-43ea",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T005040Z-6475",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/1",
+              "historical_job": "batch-20260809T005040Z-0d82",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T020801Z-a0fd",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T020801Z-a54e",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T030804Z-6e8e",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/2",
+              "historical_job": "batch-20260809T030803Z-f219",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T043817Z-31f7",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T043817Z-bbae",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T054318Z-764f",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/3",
+              "historical_job": "batch-20260809T054317Z-e72a",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T071333Z-f45a",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T071333Z-1a9c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T092150Z-4e73",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/4",
+              "historical_job": "batch-20260809T092150Z-98c8",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T104156Z-6a5c",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T104156Z-ec7c",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-codex-openai_responses_56luna-linux-20260809T114201Z-5c9f",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "openai_responses_56luna/sdd-go-fractals-opus48/5",
+              "historical_job": "batch-20260809T114201Z-21c3",
+              "role": "scored"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "excluded_run_ids": [
+    {
+      "run_id": "sdd-escalates-broken-plan-codex-openai_responses_56luna-linux20260808T202222Z-1c4e",
+      "reason": "malformed-name duplicate allocation of run nonce 1c4e (no verdict; properly-named sibling carries the data)"
+    },
+    {
+      "run_id": "superpowers-bootstrap-claude-opus5_bedrock-linux-20260808T041742Z-dafb",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-claude-opus5_bedrock-linux-20260808T042418Z-a402",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T041742Z-0ca0",
+      "reason": "smoke (pre-battery bootstrap pair); rider cell kept its latest planned replicates"
+    },
+    {
+      "run_id": "superpowers-bootstrap-claude-opus_bedrock-linux-20260808T042418Z-cd7b",
+      "reason": "smoke (pre-battery bootstrap pair); rider cell kept its latest planned replicates"
+    },
+    {
+      "run_id": "superpowers-bootstrap-codex-openai_responses_56luna-linux-20260808T041742Z-7006",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-codex-openai_responses_56luna-linux-20260808T042418Z-55e7",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-codex-openai_responses_56sol-linux-20260808T041742Z-aa6f",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-codex-openai_responses_56sol-linux-20260808T042418Z-aa4a",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    }
+  ]
+}

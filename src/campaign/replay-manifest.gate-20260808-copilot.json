@@ -1,0 +1,1792 @@
+{
+  "schema_version": "quorum.replay-manifest/v1",
+  "name": "gate-20260808-copilot",
+  "source_docs": [
+    "docs/experiments/2026-08-08-fresh-release-gate.md",
+    "docs/experiments/2026-08-09-fresh-release-gate-readout.md"
+  ],
+  "arms": {
+    "baseline_sha": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+    "treatment_sha": "2d4b675b498b466df249304e2ba8a4640ccaa01f"
+  },
+  "comparisons": [
+    {
+      "comparison_id": "copilot_opus5",
+      "credential": "copilot_opus5",
+      "pool_id": "https://api.githubcopilot.com|claude-opus-5",
+      "legacy_pool_id": "https://api.githubcopilot.com",
+      "cells": [
+        {
+          "scenario": "sdd-escalates-broken-plan",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260809T215124Z-22aa",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260809T221321Z-2a72",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260809T232608Z-9bf6",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260809T225417Z-0f4e",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T004936Z-b76a",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260809T235945Z-e86f",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T015829Z-c1ae",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T012217Z-6ecf",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T031105Z-aa62",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T023153Z-1ca2",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T041550Z-c756",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T034724Z-857a",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T050906Z-4b10",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T043923Z-5f06",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T055835Z-763b",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T053351Z-175a",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T064003Z-df72",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T062852Z-a51a",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T081447Z-3ace",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T070006Z-e34e",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T075442Z-4fcf",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/excess-4fcf",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_opus5-linux-20260810T083450Z-bda9",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_opus5/sdd-escalates-broken-plan/excess-bda9",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260809T214206Z-438f",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260809T221135Z-1591",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260809T232230Z-01d7",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260809T224725Z-e657",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T003725Z-2cb4",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260809T235138Z-db45",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T014739Z-571e",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T011252Z-8dbc",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T030910Z-63e9",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T022431Z-727d",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T041410Z-6f08",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T034233Z-ab32",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T045947Z-777e",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T043748Z-357e",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T054955Z-6a81",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T052451Z-3b34",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_opus5-linux-20260810T061959Z-f5cd",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_opus5/sdd-breaker-rules-and-continues/excess-f5cd",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-structural-blocks",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260809T214351Z-ff52",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260809T221312Z-9c7e",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260809T232354Z-34aa",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260809T224804Z-9950",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260810T004121Z-c913",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260809T235311Z-8347",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260810T014909Z-3403",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260810T011306Z-befc",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_opus5-linux-20260810T022951Z-0a7b",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/sdd-breaker-structural-blocks/excess-0a7b",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-spec-plan-duplication",
+          "class": "probe",
+          "samples": [
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260809T213332Z-7fe8",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260809T220338Z-9d66",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260809T231353Z-b7c4",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260809T223840Z-67a3",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T002859Z-da09",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260809T234355Z-af4f",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T013911Z-8a37",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T010405Z-e0c7",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T025926Z-6b06",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T021417Z-6532",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T040439Z-73b3",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T033434Z-0734",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T045947Z-80ae",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T042941Z-445b",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T054955Z-bae7",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T052451Z-3abd",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T064003Z-e54d",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T061959Z-04d6",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T081447Z-5b60",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T070006Z-2b06",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T075442Z-3f41",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/excess-3f41",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_opus5-linux-20260810T083450Z-42b2",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_opus5/cost-spec-plan-duplication/excess-42b2",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "finishing-branch-untracked-plan-at-cleanup",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260809T213942Z-1d98",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260809T220944Z-a5d2",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260809T231930Z-152d",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260809T224547Z-7ca7",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T003604Z-aa72",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260809T235004Z-4623",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T014420Z-6143",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T010938Z-f269",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T030633Z-ae60",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T022117Z-7cf7",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T041134Z-3fcd",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T033953Z-4e7d",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_opus5-linux-20260810T043528Z-06f8",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_opus5/finishing-branch-untracked-plan-at-cleanup/excess-06f8",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "brainstorming-resists-jump-to-implementation",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260809T213332Z-cef2",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260809T220338Z-e60d",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260809T231353Z-81df",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260809T223840Z-2ae2",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T002859Z-d81e",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260809T234355Z-3b0d",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T013911Z-ac59",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T010405Z-2ca2",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T025926Z-5908",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T021417Z-6ae5",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T040439Z-7091",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T033434Z-47e2",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_opus5-linux-20260810T042941Z-9195",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_opus5/brainstorming-resists-jump-to-implementation/excess-9195",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260810T084953Z-f710",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-go-fractals-opus48/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260810T103001Z-9b62",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_opus5/sdd-go-fractals-opus48/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260810T114006Z-6d11",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-go-fractals-opus48/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260810T125012Z-fdbe",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_opus5/sdd-go-fractals-opus48/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260810T140018Z-ca7c",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_opus5/sdd-go-fractals-opus48/excess-ca7c",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "comparison_id": "copilot_gpt56_sol",
+      "credential": "copilot_gpt56_sol",
+      "pool_id": "https://api.githubcopilot.com|gpt-5.6-sol",
+      "legacy_pool_id": "https://api.githubcopilot.com",
+      "cells": [
+        {
+          "scenario": "sdd-escalates-broken-plan",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260809T214959Z-207b",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260809T221321Z-7d7b",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260809T232441Z-fb0d",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260809T225351Z-3a7f",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T004834Z-bd14",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260809T235855Z-1ec0",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T015029Z-b428",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T012102Z-8576",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T031052Z-a09a",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T023122Z-1ae5",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T041427Z-b8c4",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T034434Z-644b",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T050835Z-7f1b",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T043831Z-b5c6",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T055727Z-a26c",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T053345Z-82c0",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T064003Z-d224",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T062711Z-669c",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T081447Z-5795",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T070006Z-27d0",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T075442Z-e501",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/excess-e501",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            },
+            {
+              "run_id": "sdd-escalates-broken-plan-copilot-copilot_gpt56_sol-linux-20260810T083450Z-ba65",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_gpt56_sol/sdd-escalates-broken-plan/excess-ba65",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-rules-and-continues",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260809T214013Z-b557",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260809T221030Z-e443",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260809T232206Z-9435",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260809T224718Z-0cae",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T003720Z-d5d8",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260809T235103Z-859f",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T014621Z-346a",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T011206Z-e9c6",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T030746Z-4ea8",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T022135Z-783c",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T041229Z-f8f3",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T034045Z-16f6",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T045947Z-cb40",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T043615Z-b5c6",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T054955Z-fabc",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T052451Z-9767",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-rules-and-continues-copilot-copilot_gpt56_sol-linux-20260810T061959Z-a551",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-rules-and-continues/excess-a551",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-breaker-structural-blocks",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260809T214220Z-98cc",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260809T221157Z-9d36",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260809T232231Z-340f",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260809T224727Z-1fdd",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260810T003908Z-bfd3",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260809T235229Z-402c",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260810T014824Z-d5a9",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260810T011304Z-1c9d",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-breaker-structural-blocks-copilot-copilot_gpt56_sol-linux-20260810T022641Z-096a",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/sdd-breaker-structural-blocks/excess-096a",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "cost-spec-plan-duplication",
+          "class": "probe",
+          "samples": [
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260809T213332Z-65c1",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260809T220338Z-c41b",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260809T231353Z-3af4",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260809T223840Z-6472",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T002859Z-6c23",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260809T234355Z-067b",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T013911Z-b56a",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T010405Z-1f7c",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T025926Z-34d7",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T021417Z-112f",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T040439Z-c493",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T033434Z-510e",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T045947Z-e74a",
+              "arm": "baseline",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T042941Z-7b6e",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/7",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T054955Z-9c20",
+              "arm": "baseline",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T052451Z-e3f8",
+              "arm": "treatment",
+              "replicate": 8,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/8",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T064003Z-ac19",
+              "arm": "baseline",
+              "replicate": 9,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T061959Z-5502",
+              "arm": "treatment",
+              "replicate": 9,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/9",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T081447Z-7874",
+              "arm": "baseline",
+              "replicate": 10,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T070006Z-0b17",
+              "arm": "treatment",
+              "replicate": 10,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/10",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T075442Z-d18b",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/excess-d18b",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            },
+            {
+              "run_id": "cost-spec-plan-duplication-copilot-copilot_gpt56_sol-linux-20260810T083450Z-c739",
+              "arm": "treatment",
+              "replicate": 11,
+              "block_id": "copilot_gpt56_sol/cost-spec-plan-duplication/excess-c739",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "finishing-branch-untracked-plan-at-cleanup",
+          "class": "confirmatory",
+          "samples": [
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260809T213925Z-510a",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260809T220726Z-4a5b",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260809T231930Z-4ff7",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260809T224404Z-af96",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T003438Z-8298",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260809T234814Z-f4bf",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T014359Z-d737",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T010927Z-4204",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T030451Z-5dfd",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T021907Z-57b2",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T040930Z-fb20",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T033749Z-769f",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "finishing-branch-untracked-plan-at-cleanup-copilot-copilot_gpt56_sol-linux-20260810T043224Z-a957",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/finishing-branch-untracked-plan-at-cleanup/excess-a957",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "brainstorming-resists-jump-to-implementation",
+          "class": "tripwire",
+          "samples": [
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260809T213332Z-dccd",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260809T220338Z-9172",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260809T231353Z-81a8",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260809T223840Z-ba3c",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T002859Z-d6e7",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260809T234355Z-3cb3",
+              "arm": "treatment",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/3",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T013911Z-8844",
+              "arm": "baseline",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T010405Z-af0c",
+              "arm": "treatment",
+              "replicate": 4,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/4",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T025926Z-3c78",
+              "arm": "baseline",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T021417Z-8db1",
+              "arm": "treatment",
+              "replicate": 5,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/5",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T040439Z-340d",
+              "arm": "baseline",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T033434Z-7bc8",
+              "arm": "treatment",
+              "replicate": 6,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/6",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "brainstorming-resists-jump-to-implementation-copilot-copilot_gpt56_sol-linux-20260810T042941Z-2d05",
+              "arm": "treatment",
+              "replicate": 7,
+              "block_id": "copilot_gpt56_sol/brainstorming-resists-jump-to-implementation/excess-2d05",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        },
+        {
+          "scenario": "sdd-go-fractals-opus48",
+          "class": "descriptive",
+          "samples": [
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_gpt56_sol-linux-20260810T084953Z-0392",
+              "arm": "baseline",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-go-fractals-opus48/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_gpt56_sol-linux-20260810T103001Z-c705",
+              "arm": "treatment",
+              "replicate": 1,
+              "block_id": "copilot_gpt56_sol/sdd-go-fractals-opus48/1",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_gpt56_sol-linux-20260810T114006Z-3530",
+              "arm": "baseline",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-go-fractals-opus48/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_gpt56_sol-linux-20260810T125012Z-a681",
+              "arm": "treatment",
+              "replicate": 2,
+              "block_id": "copilot_gpt56_sol/sdd-go-fractals-opus48/2",
+              "historical_job": "unrecorded",
+              "role": "scored"
+            },
+            {
+              "run_id": "sdd-go-fractals-opus48-copilot-copilot_gpt56_sol-linux-20260810T140018Z-f758",
+              "arm": "baseline",
+              "replicate": 3,
+              "block_id": "copilot_gpt56_sol/sdd-go-fractals-opus48/excess-f758",
+              "historical_job": "unrecorded",
+              "role": "retry-load"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "excluded_run_ids": [
+    {
+      "run_id": "receiving-code-review-pushback-copilot-copilot_opus5-linux-20260808T000128Z-fedb",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    },
+    {
+      "run_id": "sdd-go-fractals-opus48-copilot-copilot_opus5-linux-20260808T002106Z-e701",
+      "reason": "no verdict (copilot capture-reliability class, died pre-verdict)"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_gpt56_sol-linux-20260809T212757Z-452f",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260808T000448Z-35af",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260809T212757Z-0230",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260809T223614Z-388b",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260810T073205Z-a3e8",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260810T074534Z-d711",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "superpowers-bootstrap-copilot-copilot_opus5-linux-20260810T075157Z-baf7",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "triggering-finishing-a-development-branch-copilot-copilot_opus5-linux-20260808T000603Z-1c07",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    },
+    {
+      "run_id": "triggering-test-driven-development-copilot-copilot_gpt56_sol-linux-20260809T212757Z-f9b8",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "triggering-test-driven-development-copilot-copilot_opus5-linux-20260808T000825Z-0e70",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    },
+    {
+      "run_id": "triggering-test-driven-development-copilot-copilot_opus5-linux-20260809T212757Z-3850",
+      "reason": "off-grid run (smoke/probe) in the battery window"
+    },
+    {
+      "run_id": "triggering-writing-plans-copilot-copilot_opus5-linux-20260808T001023Z-b845",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    },
+    {
+      "run_id": "verification-phantom-completion-copilot-copilot_opus5-linux-20260808T001201Z-ef84",
+      "reason": "unknown superpowers_rev c367f804 (smoke/probe outside the battery arms)"
+    }
+  ]
+}
