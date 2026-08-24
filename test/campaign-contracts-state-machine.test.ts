@@ -225,3 +225,59 @@ test('crash windows: all-samples-terminal without sealed means regenerate report
   ]);
   expect(sealed.campaign).toBe('none');
 });
+
+test("crash windows: budget_stopped retires the stopped sample's attempt", () => {
+  // budget_stopped is sample-terminal (budget_stopped ∈ TERMINAL_STATES), so
+  // recovery must not kill and rerun a block the budget policy already
+  // stopped — that would be a double-spend recommendation.
+  const windows = resolveCrashWindows([
+    event(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    event(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    event(3, 'budget_stopped', { sample_ids: ['s1'] }),
+    // Crash.
+  ]);
+  expect(windows.attempts).toEqual([]);
+});
+
+test("crash windows: sample_disposition retires the disposed sample's attempt", () => {
+  const windows = resolveCrashWindows([
+    event(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    event(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    event(3, 'sample_disposition', {
+      sample_id: 's1',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'r2',
+    }),
+    // Crash.
+  ]);
+  expect(windows.attempts).toEqual([]);
+});
+
+test('crash windows: block-scoped aborted does not retire attempts at this layer', () => {
+  // aborted carries only block_id; this layer has no block->samples map, so
+  // the attempt still yields its rerun window and D3's block rule owns abort
+  // retirement during recovery.
+  const windows = resolveCrashWindows([
+    event(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    event(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    event(3, 'aborted', { block_id: 'b1' }),
+    // Crash.
+  ]);
+  expect(windows.attempts).toEqual([
+    { attempt_id: 'a1', resolution: 'kill_pgid_rerun_block', pgid: 42 },
+  ]);
+});
+
+test('crash windows: sample-scoped terminals without a known attempt are no-ops', () => {
+  // Malformed prefix (missing attempt_created binding): lookups miss the
+  // sample->attempt map and must not throw.
+  const windows = resolveCrashWindows([
+    event(1, 'budget_stopped', { sample_ids: ['s-unknown'] }),
+    event(2, 'sample_disposition', {
+      sample_id: 's-unknown',
+      disposition: 'included',
+    }),
+  ]);
+  expect(windows.attempts).toEqual([]);
+  expect(windows.campaign).toBe('none');
+});

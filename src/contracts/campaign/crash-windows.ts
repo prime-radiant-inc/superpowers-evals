@@ -22,6 +22,7 @@ export interface CrashWindowReport {
 export function resolveCrashWindows(events: JournalEvent[]): CrashWindowReport {
   const allocated = new Map<string, number>(); // attempt_id -> pgid
   const created = new Set<string>();
+  const sampleToAttempt = new Map<string, string>(); // sample_id -> attempt_id
   const terminal = new Set<string>();
   let sealed = false;
 
@@ -30,6 +31,10 @@ export function resolveCrashWindows(events: JournalEvent[]): CrashWindowReport {
     switch (event.type) {
       case 'attempt_created':
         created.add(String(payload['attempt_id']));
+        sampleToAttempt.set(
+          String(payload['sample_id']),
+          String(payload['attempt_id']),
+        );
         break;
       case 'run_allocated':
         allocated.set(String(payload['attempt_id']), Number(payload['pgid']));
@@ -38,11 +43,30 @@ export function resolveCrashWindows(events: JournalEvent[]): CrashWindowReport {
       case 'instrument_failure':
         terminal.add(String(payload['attempt_id']));
         break;
+      case 'budget_stopped': {
+        // Sample-scoped terminal: retire each stopped sample's attempt via
+        // the attempt_created binding (misses are no-ops, not throws).
+        const sampleIds = payload['sample_ids'];
+        if (Array.isArray(sampleIds)) {
+          for (const sampleId of sampleIds) {
+            const attemptId = sampleToAttempt.get(String(sampleId));
+            if (attemptId !== undefined) terminal.add(attemptId);
+          }
+        }
+        break;
+      }
+      case 'sample_disposition': {
+        // Sample-scoped terminal (the innocent arm's override): retire the
+        // disposed sample's attempt (misses are no-ops, not throws).
+        const attemptId = sampleToAttempt.get(String(payload['sample_id']));
+        if (attemptId !== undefined) terminal.add(attemptId);
+        break;
+      }
       case 'aborted':
-      case 'budget_stopped':
-        // Block-scoped terminals retire their attempts too; without the
-        // sample->attempt map at this layer, D3 recovery applies the block
-        // rule directly. Attempt-level terminals below cover the common path.
+      case 'skew_excluded':
+        // Block-scoped payloads (block_id only): this layer has no
+        // block->samples map, so these cannot resolve to attempts here. D3's
+        // block rule covers them during recovery.
         break;
       case 'sealed':
         sealed = true;
