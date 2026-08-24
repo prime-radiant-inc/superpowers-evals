@@ -26,6 +26,7 @@ import {
   stageLiveCredentialMaterial,
   stageProbeCredentialMaterial,
 } from './credential-scope.ts';
+import { installEvalsDeps } from './deps.ts';
 import { ApplianceError } from './errors.ts';
 import { writePrivateText } from './fs.ts';
 import {
@@ -340,7 +341,8 @@ interface ProbedPreflight {
 
 /**
  * Everything both preflight kinds do, in the one binding order: sync the
- * managed repos, gate a live plan's freshness, require the docker capability
+ * managed repos (reconciling the evals checkout's deps from the frozen
+ * lockfile), gate a live plan's freshness, require the docker capability
  * scoped delivery depends on, build, then run the probes inside an
  * ASSERTED-EMPTY container. No credential material exists at any point here.
  */
@@ -378,6 +380,9 @@ async function preflightThroughEmptyProbe(
     },
     runner,
   );
+  // node_modules must match the just-synced lockfile before anything builds
+  // or executes from this checkout (PRI-2833).
+  installEvalsDeps(loaded.config.evals.path, runner);
   const gauntletBuiltSha = fastForwardManagedRepo(
     {
       path: loaded.config.gauntlet.path,

@@ -9,6 +9,7 @@ export const ApplianceErrorCodeSchema = z.enum([
   'ref_not_found',
   'checkout_failed',
   'image_build_failed',
+  'deps_install_failed',
   'container_recreate_required',
   'container_unhealthy',
   'tool_versions_failed',

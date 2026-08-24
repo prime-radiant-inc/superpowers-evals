@@ -1050,6 +1050,65 @@ test('prepare probes a resumed record that carries the exact prepare triple', as
   expect(record.credential_scope_source_evals_sha).toBe(null);
 });
 
+// PRI-2833: a package.json bump must never silently execute stale
+// node_modules. prepare reconciles deps from the frozen lockfile right after
+// ref sync, before anything builds or probes.
+test('prepare reconciles evals deps from the frozen lockfile after ref sync, before build', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+
+  await prepare({
+    loaded: fx.loaded,
+    superpowersRef: 'main',
+    argv: ['prepare'],
+    requester: { agent: null },
+    runner,
+  });
+
+  const bunCalls = runner.calls.filter((call) => call.command === 'bun');
+  expect(bunCalls).toHaveLength(1);
+  const install = bunCalls[0];
+  expect(install?.args).toEqual(['install', '--frozen-lockfile']);
+  expect(install?.options?.cwd).toBe(fx.loaded.config.evals.path);
+
+  const installIndex = runner.calls.findIndex((call) => call.command === 'bun');
+  const firstFastForward = runner.calls.findIndex(
+    (call) => call.command === 'git' && call.args.includes('--ff-only'),
+  );
+  const firstContainerCall = runner.calls.findIndex((call) =>
+    call.command.endsWith('scripts/evals-container'),
+  );
+  expect(firstFastForward).toBeGreaterThanOrEqual(0);
+  expect(firstContainerCall).toBeGreaterThan(installIndex);
+  expect(installIndex).toBeGreaterThan(firstFastForward);
+});
+
+test('a frozen-lockfile install failure fails prepare loudly before any container work', async () => {
+  const fx = fixture();
+  const runner = new FakeRunner();
+  seedMounts(fx, runner);
+  runner.results.push({
+    match: (command, args) => command === 'bun' && args[0] === 'install',
+    result: { status: 1, stdout: '', stderr: 'error: lockfile out of date\n' },
+  });
+
+  await expect(
+    prepare({
+      loaded: fx.loaded,
+      superpowersRef: 'main',
+      argv: ['prepare'],
+      requester: { agent: null },
+      runner,
+    }),
+  ).rejects.toMatchObject({ code: 'deps_install_failed', step: 'deps' });
+
+  expect(dockerCalls(runner)).toEqual([]);
+  const jobs = readdirSync(fx.loaded.paths.jobs);
+  expect(jobs).toHaveLength(1);
+  expect(readJob(fx.loaded, jobs[0] ?? '').status).toBe('failed');
+});
+
 test('preflight maps container build failures to image_build_failed', async () => {
   const fx = fixture();
   const runner = new FakeRunner();
