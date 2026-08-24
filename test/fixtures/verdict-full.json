@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "final": "pass",
+  "final_reason": "Gauntlet-Agent passed; 4/4 deterministic checks",
+  "gauntlet": {
+    "status": "pass",
+    "summary": "ACs met with evidence",
+    "reasoning": "Output verified against fixture expectations",
+    "run_id": "cost-checkbox-copilot-linux-20260805T211930Z-e719"
+  },
+  "checks": [
+    {
+      "check": "file-exists",
+      "args": ["out.txt"],
+      "negated": false,
+      "passed": true,
+      "detail": null,
+      "phase": "post"
+    }
+  ],
+  "error": null,
+  "economics": {
+    "coding_agent": { "duration_ms": 42000 },
+    "gauntlet": { "duration_ms": 75000 }
+  },
+  "scenario": "cost-checkbox-over-trigger",
+  "coding_agent": "copilot",
+  "started_at": "2026-08-05T21:19:30Z",
+  "finished_at": "2026-08-05T21:22:10Z",
+  "credential": "copilot_opus5",
+  "os": "linux",
+  "provenance": {
+    "superpowers_rev": null,
+    "superpowers_dirty": null,
+    "harness_rev": "f93e95b",
+    "agent_cli_version": "0.0.300",
+    "gauntlet_version": "0.1.0"
+  },
+  "campaign": {
+    "campaign_id": "cmp-0001",
+    "comparison_id": "c1",
+    "block_id": "b1",
+    "sample_id": "s1",
+    "execution_attempt_id": "a1"
+  }
+}

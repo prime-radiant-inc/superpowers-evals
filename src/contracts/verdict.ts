@@ -81,5 +81,18 @@ export const FinalVerdictSchema = z.object({
       host_platform: z.string().optional(),
     })
     .optional(),
+  // Campaign identity sub-block (parent Identity): stamped by the runner
+  // before the first provider token. Optional — legacy runs and the
+  // dashboard never carry it.
+  campaign: z
+    .object({
+      campaign_id: z.string().min(1),
+      comparison_id: z.string().min(1),
+      block_id: z.string().min(1),
+      sample_id: z.string().min(1),
+      execution_attempt_id: z.string().min(1),
+    })
+    .strict()
+    .optional(),
 });
 export type FinalVerdict = z.infer<typeof FinalVerdictSchema>;
