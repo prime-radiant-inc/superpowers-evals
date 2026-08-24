@@ -32,6 +32,13 @@ export const CheckRecordSchema = z.object({
   passed: z.boolean(),
   detail: z.string().nullable(),
   phase: z.enum(CHECK_PHASES),
+  // smevals-style check-result extensions (parent Checks): optional runtime
+  // values; manifests pin identity fields only, so expected-check matching
+  // is unaffected.
+  score: z.number().optional(),
+  metrics: z.record(z.string(), z.number()).optional(),
+  tags: z.array(z.string()).optional(),
+  notes: z.string().optional(),
 });
 export type CheckRecord = z.infer<typeof CheckRecordSchema>;
 

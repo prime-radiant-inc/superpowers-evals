@@ -14,6 +14,7 @@ import {
   CheckRecordSchema,
 } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
+import { foldUnknownKeys } from './record-fold.ts';
 
 // A check verb emits one of these per line into QUORUM_RECORD_SINK. The verbs
 // are bash functions (defined by the sourced prelude, src/checks/prelude.sh)
@@ -210,7 +211,9 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
     if (!line.trim()) {
       continue;
     }
-    const parsed = SinkRecordSchema.parse(JSON.parse(line) as unknown);
+    const parsed = SinkRecordSchema.parse(
+      foldUnknownKeys(JSON.parse(line) as Record<string, unknown>),
+    );
     records.push({ ...parsed, phase });
   }
   return records;
