@@ -30,6 +30,10 @@ export interface LoadedCorpus {
     null_gauntlet_ms: number;
     null_pre_exposure_ms: number;
     gauntlet_lt_coding_anomalies: string[];
+    /** Runs whose verdict final_reason (or error field, when present)
+     * carries 429 / rate-limit evidence — the spec's load-time corpus
+     * verification for throttle evidence. */
+    rate_limit_evidence_runs: string[];
   };
 }
 
@@ -238,6 +242,7 @@ export function loadCorpus(
     null_gauntlet_ms: 0,
     null_pre_exposure_ms: 0,
     gauntlet_lt_coding_anomalies: [] as string[],
+    rate_limit_evidence_runs: [] as string[],
   };
 
   const records = new Map<string, ReplayRecord>();
@@ -251,6 +256,16 @@ export function loadCorpus(
       'verdict.json',
     );
     const provenance = (verdict['provenance'] ?? {}) as Record<string, unknown>;
+    // Load-time 429 verification (spec-pinned): scan the verdict's
+    // final_reason and error field (when present) for throttle evidence.
+    // A bare '429' or 'rate limit', case-insensitive — the spec's wording.
+    const reasonEvidence = [
+      str(verdict['final_reason']),
+      str(verdict['error']),
+    ].filter((s): s is string => s !== null);
+    if (reasonEvidence.some((s) => /429|rate limit/i.test(s))) {
+      coverage.rate_limit_evidence_runs.push(runId);
+    }
     const rev = str(provenance['superpowers_rev']);
     const expected =
       meta.arm === 'baseline'

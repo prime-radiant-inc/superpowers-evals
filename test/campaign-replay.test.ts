@@ -55,6 +55,8 @@ function writeRun(
     firstStepTs?: string;
     resultMs?: number;
     noCredential?: boolean;
+    finalReason?: string;
+    error?: string;
   },
 ) {
   const wallMs = opts?.wallMs ?? 600_000;
@@ -72,6 +74,10 @@ function writeRun(
       finished_at: new Date(
         Date.parse('2026-08-08T00:00:00.000Z') + wallMs,
       ).toISOString(),
+      ...(opts?.finalReason === undefined
+        ? {}
+        : { final_reason: opts.finalReason }),
+      ...(opts?.error === undefined ? {} : { error: opts.error }),
       provenance: rev === null ? {} : { superpowers_rev: rev },
       economics: {
         coding_agent: { duration_ms: 500_000, est_cost_usd: 1.0 },
@@ -210,6 +216,33 @@ test('result.json duration_ms wins over economics.gauntlet when both present', (
   expect(loaded.records.get('run-base')!.gauntlet_ms).toBe(480_000); // result.json wins
   // preserved anomaly: 480_000 < coding 500_000 — recorded, never clamped
   expect(loaded.coverage.gauntlet_lt_coding_anomalies).toContain('run-base');
+  rmSync(corpus, { recursive: true });
+});
+
+test('loadCorpus reports 429 / rate-limit evidence from final_reason and error fields', () => {
+  const corpus = mkdtempSync(join(tmpdir(), 'corpus-'));
+  writeRun(join(corpus, 'run-base'), BASE, {
+    finalReason: 'halted: upstream API error 429 Too Many Requests',
+  });
+  writeRun(join(corpus, 'run-treat'), TREAT, {
+    error: 'provider Rate limit exceeded during grading',
+  });
+  // No evidence in either field → never listed.
+  writeRun(join(corpus, 'run-clean'), TREAT, {
+    finalReason: 'grading budget exceeded',
+  });
+  const loaded = loadCorpus(
+    corpus,
+    manifest([
+      { run_id: 'run-base', arm: 'baseline' },
+      { run_id: 'run-treat', arm: 'treatment' },
+      { run_id: 'run-clean', arm: 'treatment', role: 'retry-load' },
+    ]),
+  );
+  expect(loaded.coverage.rate_limit_evidence_runs).toEqual([
+    'run-base',
+    'run-treat',
+  ]);
   rmSync(corpus, { recursive: true });
 });
 

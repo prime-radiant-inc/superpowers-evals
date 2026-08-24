@@ -487,8 +487,7 @@ campaign
   .option('--config <json>', 'single explicit configuration')
   .option(
     '--pool-identity <target|legacy>',
-    'pool identity for --config',
-    'target',
+    'pool identity (valid only with --config; default target)',
   )
   .option('--ordering <mode>', 'ordering override')
   .option('--grader-occupancy <mode>', 'grader occupancy override')

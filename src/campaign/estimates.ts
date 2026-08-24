@@ -154,8 +154,12 @@ export function buildEstimates(
   const seen = new Set<string>();
   const records: ReplayRecord[] = [];
   const finishedAts: string[] = [];
+  let duplicatesExcluded = 0;
   for (const { record, finished_at } of inputs) {
-    if (seen.has(record.run_id)) continue;
+    if (seen.has(record.run_id)) {
+      duplicatesExcluded++;
+      continue;
+    }
     seen.add(record.run_id);
     records.push(record);
     finishedAts.push(finished_at);
@@ -197,7 +201,12 @@ export function buildEstimates(
   return {
     schema_version: 'quorum.estimates/v1',
     generated_at: generatedAt,
-    corpus: { sources: opts.sources, run_count: records.length, digest },
+    corpus: {
+      sources: opts.sources,
+      run_count: records.length,
+      duplicates_excluded: duplicatesExcluded,
+      digest,
+    },
     entries,
     fallbacks: {
       scenario_agent: scenarioAgent,

@@ -42,6 +42,69 @@ export interface SimResult {
   blocks_completed: number;
   samples_completed: number;
   admission_sequence: string[];
+  /** Measured pre-exposure skew over the INPUT block set — a corpus
+   *  statistic, not a simulation output. Under atomic co-launch the
+   *  engine's own exposure deltas are 0 by construction, so only measured
+   *  per-arm pre_exposure_ms pairs are ever aggregated (no fabricated
+   *  simulated deltas). */
+  skew: SkewDistribution;
+}
+
+export interface SkewDistribution {
+  measured_pairs: number;
+  dropped_pairs: number;
+  p50_ms: number | null;
+  p90_ms: number | null;
+  max_ms: number | null;
+}
+
+/** Percentile of a sorted array by linear interpolation (the numpy
+ * 'linear' convention): p50 reproduces the averaged-median for even n.
+ * Null on an empty array — an honest "no evidence" rather than a 0. */
+function percentileOf(sorted: number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  const vLo = sorted[lo];
+  const vHi = sorted[hi];
+  if (vLo === undefined || vHi === undefined) {
+    throw new SimConfigError('internal: percentile index out of range');
+  }
+  return vLo + (vHi - vLo) * (idx - lo);
+}
+
+/** |Δ pre_exposure_ms| per two-arm block, measured pairs only: a null on
+ * either arm drops the pair and is counted. Single-sample blocks (retry
+ * load) are not pairs and do not participate. */
+function skewOf(blocks: SimBlock[]): SkewDistribution {
+  const deltas: number[] = [];
+  let dropped = 0;
+  for (const b of blocks) {
+    if (b.samples.length !== 2) continue;
+    const [a, c] = b.samples;
+    if (a === undefined || c === undefined) {
+      throw new SimConfigError(`internal: short block ${b.block_id}`);
+    }
+    if (a.pre_exposure_ms === null || c.pre_exposure_ms === null) {
+      dropped++;
+      continue;
+    }
+    deltas.push(Math.abs(a.pre_exposure_ms - c.pre_exposure_ms));
+  }
+  deltas.sort((x, y) => x - y);
+  const maxIdx = deltas.length - 1;
+  const max = maxIdx >= 0 ? deltas[maxIdx] : null;
+  if (max === undefined) {
+    throw new SimConfigError('internal: max index out of range');
+  }
+  return {
+    measured_pairs: deltas.length,
+    dropped_pairs: dropped,
+    p50_ms: percentileOf(deltas, 0.5),
+    p90_ms: percentileOf(deltas, 0.9),
+    max_ms: max,
+  };
 }
 
 export const GRADER_POOL = '__grader__';
@@ -344,5 +407,6 @@ export function simulate(blocks: SimBlock[], config: SimConfig): SimResult {
     blocks_completed: admissionSequence.length,
     samples_completed: samplesCompleted,
     admission_sequence: admissionSequence,
+    skew: skewOf(blocks),
   };
 }

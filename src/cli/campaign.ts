@@ -478,6 +478,12 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
         '--sweep and --config are mutually exclusive — pass one or the other',
       );
     }
+    // --pool-identity selects the identity for ONE explicit config; in sweep
+    // mode (explicit or defaulted) it has no meaning and would be silently
+    // ignored — a usage error, never a quiet no-op.
+    if (opts.poolIdentity !== undefined && opts.config === undefined) {
+      cliError('--pool-identity is valid only with --config');
+    }
     const poolIdentity = opts.poolIdentity ?? 'target';
     if (poolIdentity !== 'target' && poolIdentity !== 'legacy') {
       cliError('--pool-identity must be target|legacy');
@@ -654,21 +660,33 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
       { mode: 0o644 },
     );
     const hrs = (ms: number): string => `${(ms / 3_600_000).toFixed(2)}h`;
+    // 8h-verdict eligibility (I1): the default preset's primary reading —
+    // target identity AND estimates ordering AND gauntlet occupancy AND
+    // the default label, allowance-inclusive. Sensitivity sweeps (oracle,
+    // grader-active, config, or any flag-overridden default run) are NEVER
+    // PASS-eligible: their entries say so and the table must not contradict
+    // them.
+    const passEligible = (r: (typeof results)[number]): boolean =>
+      r.label === 'default' &&
+      r.config.pool_identity === 'target' &&
+      r.config.ordering === 'estimates' &&
+      r.config.grader_occupancy === 'gauntlet' &&
+      r.allowance_inclusive_makespan_ms <= eightHoursMs;
     const table = [
-      '| label | pool_identity | subject_cap | global_cap | grader_cap | nominal | +reserve stress | +allowance | 8h verdict | busiest pool (attributed wait ms) |',
-      '|---|---|---|---|---|---|---|---|---|---|',
+      '| label | pool_identity | subject_cap | global_cap | grader_cap | nominal | +reserve stress | +stress+allowance | +allowance | 8h verdict | busiest pool (attributed wait ms) |',
+      '|---|---|---|---|---|---|---|---|---|---|---|',
       ...results.map((r, i) => {
         const stress = expectAt(stressResults, i, 'stress result');
         const busiest = Object.entries(r.per_pool)
           .filter(([p]) => p !== '__global__')
           .sort((a, b) => b[1].attributed_wait_ms - a[1].attributed_wait_ms)[0];
         const subjectCap = Object.values(r.config.subject_caps)[0];
-        return `| ${r.label} | ${r.config.pool_identity} | ${subjectCap ?? '—'} | ${r.config.global_cap} | ${r.config.grader_cap} | ${hrs(r.makespan_ms)} | ${hrs(stress)} | ${hrs(r.allowance_inclusive_makespan_ms)} | ${r.config.pool_identity === 'target' && r.config.ordering === 'estimates' && r.allowance_inclusive_makespan_ms <= eightHoursMs ? 'PASS' : '—'} | ${busiest?.[0] ?? '—'} (${Math.round(busiest?.[1].attributed_wait_ms ?? 0)}) |`;
+        return `| ${r.label} | ${r.config.pool_identity} | ${subjectCap ?? '—'} | ${r.config.global_cap} | ${r.config.grader_cap} | ${hrs(r.makespan_ms)} | ${hrs(stress)} | ${hrs(stress + allowanceMs)} | ${hrs(r.allowance_inclusive_makespan_ms)} | ${passEligible(r) ? 'PASS' : '—'} | ${busiest?.[0] ?? '—'} (${Math.round(busiest?.[1].attributed_wait_ms ?? 0)}) |`;
       }),
     ].join('\n');
     writeFileSync(
       join(opts.out, 'sweep-table.md'),
-      `# 8h verdict rule: target identity + estimates ordering + allowance-inclusive only. The stress column adds the +20% registered-reserve draw.\n\n${table}\n`,
+      `# 8h verdict rule: default preset only (target identity + estimates ordering + gauntlet occupancy) + allowance-inclusive. The stress columns add the +20% registered-reserve draw; +stress+allowance applies the same seal allowance to the stressed makespan.\n\n${table}\n`,
       { mode: 0o644 },
     );
     process.stdout.write(

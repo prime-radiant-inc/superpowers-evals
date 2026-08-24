@@ -104,7 +104,12 @@ test('EstimatesArtifactSchema round-trips a minimal artifact', () => {
   const artifact = {
     schema_version: 'quorum.estimates/v1',
     generated_at: '2026-08-09T00:00:00.000Z',
-    corpus: { sources: ['corpus/gate-20260808'], run_count: 0, digest: 'x' },
+    corpus: {
+      sources: ['corpus/gate-20260808'],
+      run_count: 0,
+      duplicates_excluded: 0,
+      digest: 'x',
+    },
     entries: [],
     fallbacks: {
       scenario_agent: [],
@@ -131,7 +136,12 @@ test('EstimatesArtifactSchema exercises full entries + fallback tiers', () => {
   const artifact = {
     schema_version: 'quorum.estimates/v1',
     generated_at: '2026-08-09T00:00:00.000Z',
-    corpus: { sources: ['corpus/gate-20260808'], run_count: 12, digest: 'x' },
+    corpus: {
+      sources: ['corpus/gate-20260808'],
+      run_count: 12,
+      duplicates_excluded: 3,
+      digest: 'x',
+    },
     entries: [
       {
         scenario: 'sdd-escalates',
@@ -176,6 +186,16 @@ test('EstimatesArtifactSchema exercises full entries + fallback tiers', () => {
   expect(parsed.fallbacks.scenario).toHaveLength(1);
   expect(scenarioStats.scenario).toBe('sdd-escalates');
   expect(scenarioStats.confidence).toBe('high');
+  // The merge rule's dedupe count round-trips through the corpus block.
+  expect(parsed.corpus.duplicates_excluded).toBe(3);
+  // A corpus block without the dedupe count is off-schema (merge rule
+  // "counts recorded" is enforced by the schema, not by convention).
+  expect(() =>
+    EstimatesArtifactSchema.parse({
+      ...artifact,
+      corpus: { sources: [], run_count: 12, digest: 'x' },
+    }),
+  ).toThrow();
   // An unknown confidence tier must be rejected.
   expect(() =>
     EstimatesArtifactSchema.parse({

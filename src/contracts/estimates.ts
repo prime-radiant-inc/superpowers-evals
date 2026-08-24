@@ -41,6 +41,9 @@ export const EstimatesArtifactSchema = z.object({
   corpus: z.object({
     sources: z.array(z.string()),
     run_count: z.number().int().nonnegative(),
+    /** Merge rule "counts recorded": duplicate run_ids excluded by the
+     * union-by-run_id first-wins rule are never dropped silently. */
+    duplicates_excluded: z.number().int().nonnegative(),
     digest: z.string(),
   }),
   entries: z.array(EstimateEntrySchema),

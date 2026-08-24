@@ -189,9 +189,20 @@ test('campaign simulate --sweep default emits results.jsonl + table.md with 8h v
   const first = JSON.parse(lines[0]!);
   expect(first.config.pool_identity).toBeDefined();
   expect(typeof first.allowance_inclusive_makespan_ms).toBe('number');
-  expect(readFileSync(join(out, 'sweep-table.md'), 'utf8')).toContain(
-    '8h verdict',
-  );
+  // Skew is carried on every row: both fixture arms carry pre_exposure
+  // 30,000ms → exactly one measured pair, delta 0.
+  expect(first.skew.measured_pairs).toBe(1);
+  expect(first.skew.dropped_pairs).toBe(0);
+  expect(first.skew.p50_ms).toBe(0);
+  expect(first.skew.p90_ms).toBe(0);
+  expect(first.skew.max_ms).toBe(0);
+  const table = readFileSync(join(out, 'sweep-table.md'), 'utf8');
+  expect(table).toContain('8h verdict');
+  // +stress+allowance column: stress duplicates the fixture's single block
+  // (ceil(20%·1)=1), both copies co-fit under every cap, so stress makespan
+  // = 660,000ms; + 15min allowance = 1,560,000ms = 0.43h.
+  expect(table).toContain('+stress+allowance');
+  expect(table).toContain('| 0.43h |');
   rmSync(corpus, { recursive: true });
   rmSync(out, { recursive: true });
 });
@@ -431,6 +442,66 @@ test('campaign simulate --sweep oracle labels every row (target identity, 36 con
   rmSync(out, { recursive: true });
 });
 
+test('campaign simulate --sweep grader-active never renders an 8h-verdict PASS (all rows ≤8h)', () => {
+  const { corpus, manifest } = fixture();
+  const estimatesPath = join(corpus, 'estimates.json');
+  expect(
+    run([
+      'campaign',
+      'estimates',
+      '--corpus',
+      corpus,
+      '--manifest',
+      manifest,
+      '--out',
+      estimatesPath,
+    ]).status,
+  ).toBe(0);
+  const out = mkdtempSync(join(tmpdir(), 'cli-sweep-grader-active-'));
+  const sim = run([
+    'campaign',
+    'simulate',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--estimates',
+    estimatesPath,
+    '--sweep',
+    'grader-active',
+    '--out',
+    out,
+  ]);
+  expect(sim.status).toBe(0);
+  const lines = readFileSync(join(out, 'sweep-results.jsonl'), 'utf8')
+    .trim()
+    .split('\n');
+  expect(lines).toHaveLength(36);
+  for (const line of lines) {
+    const row = JSON.parse(line);
+    expect(row.label).toBe('grader-active');
+    expect(row.config.pool_identity).toBe('target');
+    expect(row.config.grader_occupancy).toBe('gauntlet-active');
+    // Every row is well under 8h allowance-inclusive — a PASS here would be
+    // exactly the I1 bug (sensitivity rows are never 8h-verdict-eligible).
+    expect(row.allowance_inclusive_makespan_ms).toBeLessThan(8 * 3_600_000);
+  }
+  const table = readFileSync(join(out, 'sweep-table.md'), 'utf8');
+  expect(table).not.toContain('PASS');
+  // The 8h-verdict cell of every data row is the em dash, not PASS.
+  const tableLines = table.split('\n').filter((l) => l.startsWith('|'));
+  const headerCells = tableLines[0]!.split('|').map((c) => c.trim());
+  const verdictCol = headerCells.indexOf('8h verdict');
+  expect(verdictCol).toBeGreaterThan(0);
+  for (const rowLine of tableLines.slice(2)) {
+    const cells = rowLine.split('|').map((c) => c.trim());
+    expect(cells[1]).toBe('grader-active');
+    expect(cells[verdictCol]).toBe('—');
+  }
+  rmSync(corpus, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
 test('campaign simulate rejects --sweep together with --config', () => {
   const { corpus, manifest } = fixture();
   const estimatesPath = join(corpus, 'estimates.json');
@@ -465,6 +536,46 @@ test('campaign simulate rejects --sweep together with --config', () => {
   ]);
   expect(sim.status).not.toBe(0);
   expect(sim.stderr).toContain('mutually exclusive');
+  rmSync(corpus, { recursive: true });
+  rmSync(out, { recursive: true });
+});
+
+test('campaign simulate rejects --pool-identity outside --config (e.g. with --sweep)', () => {
+  const { corpus, manifest } = fixture();
+  const estimatesPath = join(corpus, 'estimates.json');
+  expect(
+    run([
+      'campaign',
+      'estimates',
+      '--corpus',
+      corpus,
+      '--manifest',
+      manifest,
+      '--out',
+      estimatesPath,
+    ]).status,
+  ).toBe(0);
+  const out = mkdtempSync(join(tmpdir(), 'cli-sweep-poolid-'));
+  // --pool-identity would be silently ignored by the sweep path — loud error.
+  const sim = run([
+    'campaign',
+    'simulate',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--estimates',
+    estimatesPath,
+    '--sweep',
+    'default',
+    '--pool-identity',
+    'legacy',
+    '--out',
+    out,
+  ]);
+  expect(sim.status).not.toBe(0);
+  expect(sim.stderr).toContain('--pool-identity');
+  expect(sim.stderr).toContain('--config');
   rmSync(corpus, { recursive: true });
   rmSync(out, { recursive: true });
 });

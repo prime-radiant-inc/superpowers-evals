@@ -40,6 +40,60 @@ const CFG = (
   ...over,
 });
 
+// Skew is a corpus statistic over the INPUT blocks' measured
+// pre_exposure_ms (under atomic co-launch, simulated exposure deltas are
+// 0 by construction — measured deltas only, never fabricated ones).
+function pair(id: string, preA: number | null, preB: number | null): SimBlock {
+  return {
+    block_id: id,
+    comparison_id: 'cmp',
+    cell: 'cell',
+    replicate: 1,
+    order_key: id,
+    samples: [preA, preB].map((pre, i) => ({
+      run_id: `${id}-s${i}`,
+      subject_pool: 'p1',
+      wall_ms: 100,
+      gauntlet_ms: 100,
+      coding_ms: 100,
+      pre_exposure_ms: pre,
+      estimate_ms: 100,
+    })),
+  };
+}
+
+test('skew distribution: exact p50/p90/max over measured two-arm pairs; null pair dropped and counted', () => {
+  const r = simulate(
+    [
+      pair('b1', 10_000, 40_000), // Δ 30,000
+      pair('b2', 20_000, 20_000), // Δ 0
+      pair('b3', 50_000, 140_000), // Δ 90,000
+      pair('b4', null, 5_000), // null arm → dropped, counted
+      block('single', 'p1', [100]), // retry-load single: not a pair, ignored
+    ],
+    CFG({ subject_caps: { p1: 16 }, grader_cap: 16, global_cap: 16 }),
+  );
+  // Sorted deltas [0, 30,000, 90,000]: p50 = 30,000 (idx 1);
+  // p90 = 30,000 + 0.8·(90,000 − 30,000) = 78,000 (linear interpolation).
+  expect(r.skew.measured_pairs).toBe(3);
+  expect(r.skew.dropped_pairs).toBe(1);
+  expect(r.skew.p50_ms).toBe(30_000);
+  expect(r.skew.p90_ms).toBe(78_000);
+  expect(r.skew.max_ms).toBe(90_000);
+});
+
+test('skew distribution: no measured pairs → null percentiles, zero measured', () => {
+  const r = simulate(
+    [pair('b1', null, 5_000), pair('b2', null, null)],
+    CFG({ subject_caps: { p1: 8 }, grader_cap: 8, global_cap: 8 }),
+  );
+  expect(r.skew.measured_pairs).toBe(0);
+  expect(r.skew.dropped_pairs).toBe(2);
+  expect(r.skew.p50_ms).toBeNull();
+  expect(r.skew.p90_ms).toBeNull();
+  expect(r.skew.max_ms).toBeNull();
+});
+
 test('single block: makespan = max arm wall; busy slots accumulate per sample', () => {
   const r = simulate([block('b1', 'p1', [100, 200])], CFG({}));
   expect(r.makespan_ms).toBe(200);

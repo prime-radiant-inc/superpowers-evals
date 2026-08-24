@@ -151,15 +151,27 @@ test('fallback chain: credential-specific, then scenario_agent, scenario, corpus
   expect(co.duration_s).toBe(art.fallbacks.corpus_median.duration_s);
 });
 
-test('duplicate run_id: first input wins, duplicates excluded from stats', () => {
+test('duplicate run_id: first input wins, duplicates excluded from stats and counted', () => {
   const dup = rec({ run_id: 'a', wall_ms: 100_000 });
   const art = buildEstimates(
-    [input(dup), input(rec({ run_id: 'a', wall_ms: 9_000_000 }))],
+    [
+      input(dup),
+      input(rec({ run_id: 'a', wall_ms: 9_000_000 })),
+      input(rec({ run_id: 'a', wall_ms: 5_000_000 })),
+    ],
     { sources: ['fixture'] },
   );
   expect(art.entries[0]!.duration_n).toBe(1);
   expect(art.entries[0]!.duration_s_median).toBe(100);
   expect(art.corpus.run_count).toBe(1);
+  // Merge rule "counts recorded": the artifact names how many duplicate
+  // inputs were deduped away — never silently.
+  expect(art.corpus.duplicates_excluded).toBe(2);
+  // And the field survives the pinned serialization round-trip.
+  expect(
+    EstimatesArtifactSchema.parse(JSON.parse(serializeEstimates(art))).corpus
+      .duplicates_excluded,
+  ).toBe(2);
 });
 
 test('grouping is collision-safe across field boundaries', () => {

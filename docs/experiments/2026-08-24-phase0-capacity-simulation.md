@@ -68,7 +68,9 @@ Configs: subject caps {5,15,20} × global {8,12,20,24} × grader {5,15,20};
 target identity = per-model pool split (`(base_url ?? name)|api|model`,
 frozen from gate-era credentials.yaml @ `64b99fc`); legacy = merged
 `limiterKey`. Ordering: estimate-artifact medians. Grader occupancy:
-`gauntlet_ms` (full drive). Allowance: +15min seal/report. Full tables:
+`gauntlet_ms` (full drive). Allowance: +15min seal/report. The 36-config
+grid strictly contains the parent spec's {5,15,20}×{8,12,20,24} readings,
+with grader-tied-to-subject as the diagonal. Full tables:
 `corpus/sweep-target/sweep-table.md` (gitignored corpus; regenerate with
 `quorum campaign simulate --sweep default`).
 
