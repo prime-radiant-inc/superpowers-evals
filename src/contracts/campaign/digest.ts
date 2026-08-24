@@ -6,6 +6,8 @@
 // mode this replaces: hashing non-canonicalized JSON.stringify output (see
 // src/appliance/container.ts's plain-stringify hash — never do that here).
 
+import type { Campaign } from './campaign.ts';
+
 /** Canonicalize a JSON-domain value per RFC 8785. Throws on non-JSON inputs
  *  (undefined, functions, symbols, NaN, Infinity). */
 export function jcsCanonicalize(value: unknown): string {
@@ -37,4 +39,31 @@ export function jcsCanonicalize(value: unknown): string {
 /** SHA-256 over the UTF-8 bytes of `text`, hex-encoded. */
 export function sha256Hex(text: string): string {
   return Bun.SHA256.hash(new TextEncoder().encode(text), 'hex');
+}
+
+/** Strip the advisory/re-derivable fields out of a campaign before
+ *  canonicalization (parent Appendix B digest definition): estimates_by_arm
+ *  in every cell, budget.surcharge_applied, budget.priced_coverage,
+ *  registered_at, registered_by, campaign_id, and digest itself.
+ *  budget.usd_all_in (the registered figure) stays in. */
+export function digestInput(campaign: Campaign): Record<string, unknown> {
+  const {
+    campaign_id: _id,
+    registered_at: _at,
+    registered_by: _by,
+    digest: _digest,
+    ...rest
+  } = campaign;
+  return {
+    ...rest,
+    cells: campaign.cells.map(({ estimates_by_arm: _e, ...cell }) => cell),
+    budget: { usd_all_in: campaign.budget.usd_all_in },
+  };
+}
+
+/** The campaign's identity: SHA-256 over the JCS-canonicalized digest input,
+ *  hex-encoded. Refreshing estimates never forks identity — only the frozen
+ *  grid, refs, suite, and registered budget figure do. */
+export function campaignDigest(campaign: Campaign): string {
+  return sha256Hex(jcsCanonicalize(digestInput(campaign)));
 }
