@@ -16,6 +16,7 @@ export const CREDENTIAL_AUTHS = [
 const LABEL_VALUE_RE = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
 const DISPLAY_LABEL_RE = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 const API_KEY_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const QUOTA_POOL_RE = /^[a-z0-9_]+$/;
 const CANONICAL_BASE_URL_RE = /^https?:\/\//i;
 
 const BaseUrlSchema = z
@@ -87,8 +88,34 @@ export const CredentialSchema = z
     // mantle by quorum check; it must be declared here to survive strict parsing.
     region: z.string().min(1).optional(),
     labels: CredentialLabelsSchema.optional(),
+    // Quota pool key (parent Appendix B): when set, campaigns key admission
+    // on this instead of the v1 derivation (base_url ?? name)|api|model.
+    quota_pool: z.string().regex(QUOTA_POOL_RE).optional(),
+    // Multi-key pool (Decision D-1, proposed parent erratum E4): env-var
+    // names selected per child at spawn time. Mutually exclusive with
+    // api_key_env; api-key auth only. The pool-level cap is
+    // max_concurrency; per-key selection is D3's KeySelector.
+    key_pool: z.array(z.string().regex(API_KEY_ENV_RE)).min(1).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((cred, ctx) => {
+    if (cred.key_pool === undefined) return;
+    if (cred.api_key_env !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_pool'],
+        message: 'key_pool is mutually exclusive with api_key_env',
+      });
+    }
+    if (cred.auth !== 'api-key') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_pool'],
+        message:
+          'key_pool requires auth: api-key (no key material to pool otherwise)',
+      });
+    }
+  });
 export type Credential = z.infer<typeof CredentialSchema>;
 
 const NAME_RE = /^[a-z0-9_]+$/;
