@@ -649,14 +649,14 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
 
     writeFileSync(
       join(opts.out, 'sweep-results.jsonl'),
-      results
+      `${results
         .map((r, i) =>
           JSON.stringify({
             ...r,
             stress_makespan_ms: expectAt(stressResults, i, 'stress result'),
           }),
         )
-        .join('\n') + '\n',
+        .join('\n')}\n`,
       { mode: 0o644 },
     );
     const hrs = (ms: number): string => `${(ms / 3_600_000).toFixed(2)}h`;
