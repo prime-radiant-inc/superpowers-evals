@@ -40,15 +40,26 @@ interface PrefixFold {
   readonly created: Set<string>;
   readonly attemptSample: Map<string, string>;
   readonly allocated: Map<string, number>; // attempt_id -> pgid
+  /** sample_id -> its latest-created attempt: the sample's current attempt
+   *  under the parent Identity contract. */
+  readonly currentAttempt: Map<string, string>;
+  /** Attempts retired by their own terminal event (run_completed,
+   *  instrument_failure). Attempt-scoped: a stale terminal for a superseded
+   *  attempt is quarantined here and never widens to the sample. */
+  readonly terminalAttempts: Set<string>;
+  /** Samples retired by sample/block-terminal facts (slot_exhausted,
+   *  budget_stopped, aborted, skew_excluded, replacement disposition) —
+   *  independent of attempt ordering. */
   readonly terminalSamples: Set<string>;
   readonly sealed: boolean;
   readonly cancelled: boolean;
 }
 
-/** One pass over the prefix: attempt bindings, allocations, per-sample
- *  terminality (block-scoped terminals fan out through the universe's
- *  block -> samples map), and campaign-terminal markers. Events naming
- *  unknown samples, blocks, or attempts are no-ops, never throws. */
+/** One pass over the prefix: attempt bindings, allocations, attempt-terminal
+ *  and sample/block-terminal facts kept separate (block-scoped terminals fan
+ *  out through the universe's block -> samples map), and campaign-terminal
+ *  markers. Events naming unknown samples, blocks, or attempts are no-ops,
+ *  never throws. */
 function foldPrefix(
   universe: CampaignUniverse,
   events: readonly JournalEvent[],
@@ -59,27 +70,28 @@ function foldPrefix(
   const created = new Set<string>();
   const attemptSample = new Map<string, string>();
   const allocated = new Map<string, number>();
+  const currentAttempt = new Map<string, string>();
+  const terminalAttempts = new Set<string>();
   const terminalSamples = new Set<string>();
   let sealed = false;
   let cancelled = false;
-
-  const retireAttemptSample = (attemptId: string): void => {
-    const sampleId = attemptSample.get(attemptId);
-    if (sampleId !== undefined) terminalSamples.add(sampleId);
-  };
 
   for (const event of events) {
     switch (event.type) {
       case 'attempt_created':
         created.add(event.payload.attempt_id);
         attemptSample.set(event.payload.attempt_id, event.payload.sample_id);
+        currentAttempt.set(event.payload.sample_id, event.payload.attempt_id);
         break;
       case 'run_allocated':
         allocated.set(event.payload.attempt_id, event.payload.pgid);
         break;
       case 'run_completed':
       case 'instrument_failure':
-        retireAttemptSample(event.payload.attempt_id);
+        // Attempt-scoped terminality; unbound attempt ids stay no-ops.
+        if (attemptSample.has(event.payload.attempt_id)) {
+          terminalAttempts.add(event.payload.attempt_id);
+        }
         break;
       case 'sample_disposition':
         // Payload-sensitive: only the replacement disposition is terminal;
@@ -119,19 +131,31 @@ function foldPrefix(
     created,
     attemptSample,
     allocated,
+    currentAttempt,
+    terminalAttempts,
     terminalSamples,
     sealed,
     cancelled,
   };
 }
 
+/** A sample is terminal when a sample/block-terminal fact retired it, or when
+ *  its CURRENT (latest-created) attempt reached a terminal event. A stale
+ *  terminal for a superseded attempt never retires the newer attempt (parent
+ *  Identity: stale late events are quarantined by attempt-id mismatch). */
+function sampleTerminal(fold: PrefixFold, sampleId: string): boolean {
+  if (fold.terminalSamples.has(sampleId)) return true;
+  const current = fold.currentAttempt.get(sampleId);
+  return current !== undefined && fold.terminalAttempts.has(current);
+}
+
 function allSamplesTerminal(
   universe: CampaignUniverse,
-  terminalSamples: ReadonlySet<string>,
+  fold: PrefixFold,
 ): boolean {
   return (
     universe.samples.length > 0 &&
-    universe.samples.every((sample) => terminalSamples.has(sample.sample_id))
+    universe.samples.every((sample) => sampleTerminal(fold, sample.sample_id))
   );
 }
 
@@ -142,10 +166,7 @@ export function sealPredicateHolds(
   universe: CampaignUniverse,
   events: readonly JournalEvent[],
 ): boolean {
-  return allSamplesTerminal(
-    universe,
-    foldPrefix(universe, events).terminalSamples,
-  );
+  return allSamplesTerminal(universe, foldPrefix(universe, events));
 }
 
 export function resolveCrashWindows(
@@ -160,9 +181,12 @@ export function resolveCrashWindows(
   if (!fold.cancelled) {
     for (const attemptId of fold.created) {
       const sampleId = fold.attemptSample.get(attemptId);
-      if (sampleId !== undefined && fold.terminalSamples.has(sampleId)) {
-        continue;
-      }
+      if (sampleId === undefined) continue;
+      // Only the sample's current (latest-created) attempt drives recovery;
+      // a superseded attempt gets no action of its own — D3's recovery kills
+      // journaled pgids first, unconditionally.
+      if (fold.currentAttempt.get(sampleId) !== attemptId) continue;
+      if (sampleTerminal(fold, sampleId)) continue;
       const pgid = fold.allocated.get(attemptId);
       if (pgid !== undefined) {
         attempts.push({
@@ -180,9 +204,7 @@ export function resolveCrashWindows(
   }
 
   const campaign =
-    !fold.sealed &&
-    !fold.cancelled &&
-    allSamplesTerminal(universe, fold.terminalSamples)
+    !fold.sealed && !fold.cancelled && allSamplesTerminal(universe, fold)
       ? 'regenerate_report'
       : 'none';
   return { attempts, campaign };

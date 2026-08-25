@@ -392,6 +392,33 @@ test('beginSealing is guarded by the full seal predicate', () => {
   expect(sealPredicateHolds({ samples: [], blocks: [] }, [])).toBe(false);
 });
 
+test("sealing stays blocked while a registered sample's latest attempt is live", () => {
+  // Attempt-scoped terminality (parent Identity): a stale terminal for
+  // superseded attempt a1 is quarantined — it must not satisfy the seal
+  // predicate while the sample's current attempt a2 is still in flight.
+  const staleTerminal = [
+    ev(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    ev(3, 'attempt_created', { sample_id: 's1', attempt_id: 'a2' }),
+    ev(4, 'run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 43 }),
+    ev(5, 'run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+  ];
+  expect(sealPredicateHolds(ONE_SAMPLE_UNIVERSE, staleTerminal)).toBe(false);
+  expect(
+    beginSealing('running', ONE_SAMPLE_UNIVERSE, staleTerminal).result,
+  ).toBe('reject');
+  // The quarantined stale event does not poison sealing once the current
+  // attempt itself terminates.
+  const currentTerminal = [
+    ...staleTerminal,
+    ev(6, 'run_completed', { attempt_id: 'a2', outcome: 'fail' }),
+  ];
+  expect(sealPredicateHolds(ONE_SAMPLE_UNIVERSE, currentTerminal)).toBe(true);
+  expect(beginSealing('running', ONE_SAMPLE_UNIVERSE, currentTerminal)).toEqual(
+    { result: 'apply', next: 'sealing' },
+  );
+});
+
 test('crash windows: pre-run_allocated voids, post-run_allocated reruns', () => {
   const windows = resolveCrashWindows(TWO_SAMPLE_UNIVERSE, [
     ev(1, 'campaign_opened', { campaign_id: 'c', digest: 'd'.repeat(64) }),
@@ -507,6 +534,57 @@ test('crash windows: a skew-excluded block is terminal — its attempts are neve
   ]);
   expect(windows.attempts).toEqual([]);
   // Both samples are terminal via the block event; the report regenerates.
+  expect(windows.campaign).toBe('regenerate_report');
+});
+
+test('crash windows: a late terminal for a superseded attempt never retires the current attempt', () => {
+  // Retry identity (parent Identity contract): terminality is attempt-
+  // scoped. A stale run_completed for old attempt a1 must not suppress the
+  // still-allocated current attempt a2 or open the report window.
+  const windows = resolveCrashWindows(ONE_SAMPLE_UNIVERSE, [
+    ev(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    ev(3, 'attempt_created', { sample_id: 's1', attempt_id: 'a2' }),
+    ev(4, 'run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 43 }),
+    ev(5, 'run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    // Crash: current attempt a2 is still in flight.
+  ]);
+  expect(windows.attempts).toEqual([
+    { attempt_id: 'a2', resolution: 'kill_pgid_rerun_block', pgid: 43 },
+  ]);
+  expect(windows.campaign).toBe('none');
+});
+
+test('crash windows: the current attempt completing opens the report window', () => {
+  // The latest-attempt counterpart: when the CURRENT attempt a2 is the one
+  // that completed, the sample is terminal and the report regenerates. The
+  // superseded a1 produces no action of its own (D3's recovery kills
+  // journaled pgids first, unconditionally).
+  const windows = resolveCrashWindows(ONE_SAMPLE_UNIVERSE, [
+    ev(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    ev(3, 'attempt_created', { sample_id: 's1', attempt_id: 'a2' }),
+    ev(4, 'run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 43 }),
+    ev(5, 'run_completed', { attempt_id: 'a2', outcome: 'pass' }),
+    // Crash: post-predicate, pre-report.
+  ]);
+  expect(windows.attempts).toEqual([]);
+  expect(windows.campaign).toBe('regenerate_report');
+});
+
+test('crash windows: block-terminal events retire multi-attempt samples regardless of attempt order', () => {
+  // aborted is block-terminal: it retires the registered sample outright,
+  // current attempt included — attempt ordering never resurrects a sample
+  // whose block was retired.
+  const windows = resolveCrashWindows(ONE_SAMPLE_UNIVERSE, [
+    ev(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    ev(3, 'attempt_created', { sample_id: 's1', attempt_id: 'a2' }),
+    ev(4, 'run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 43 }),
+    ev(5, 'aborted', { block_id: 'b1' }),
+    // Crash.
+  ]);
+  expect(windows.attempts).toEqual([]);
   expect(windows.campaign).toBe('regenerate_report');
 });
 
