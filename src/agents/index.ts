@@ -42,7 +42,16 @@ export interface RunHome {
    *  so provisioning can consume per-scenario config fragments (e.g. codex's
    *  codex.config.toml). Undefined when the run has no scenario dir. */
   readonly scenarioDir?: string | undefined;
+  /** Kernel D2 threading: the run's superpowers spec. Undefined = legacy
+   *  ambient behavior; {mode:'none'} = explicit suppression; {mode:'root'} =
+   *  the threaded, already-materialized root. Adapters consume it through
+   *  resolveSuperpowersRoot(home) — never getEnv directly. */
+  readonly superpowers?: import('./superpowers.ts').SuperpowersSpec | undefined;
 }
+
+// Runner-side ergonomics: the spec type re-exported beside the RunHome field
+// that carries it (type-only — no value-level cycle with ./superpowers.ts).
+export type { SuperpowersSpec } from './superpowers.ts';
 
 /** Behavior contract for a coding agent (§5.4): config plus a single
  *  provisioning motion that seeds the isolated config dir and returns the extra
@@ -341,6 +350,34 @@ const CUSTOM_AGENTS: Readonly<
   antigravity: (config) => new AntigravityAgent(config),
   serf: (config) => new SerfAgent(config),
 };
+
+/** Per-family superpowers mode capability. Absence means unsupported —
+ *  default-deny: a YAML claim could drift from implementation, and a false
+ *  "supported" claim is the "up and lying" failure class. D2 flags claude
+ *  only, after its two-mode live smoke; each further adapter's flip is a
+ *  platform PR carrying the same smoke, landed before the qualification
+ *  campaign. */
+export interface SuperpowersCapability {
+  readonly ref: boolean;
+  readonly none: boolean;
+}
+
+const SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> =
+  {};
+
+/** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()
+ *  computes it. Takes the loaded AgentConfig (or an already-resolved family
+ *  string) — never a bare name looked up from disk, so a registry read never
+ *  triggers ambient required_env or CLI-version probes. */
+export function superpowersCapability(
+  config: AgentConfig | string,
+): SuperpowersCapability {
+  const family =
+    typeof config === 'string'
+      ? config
+      : (config.runtime_family ?? config.name);
+  return SUPERPOWERS_CAPABILITY[family] ?? { ref: false, none: false };
+}
 
 /** Resolve the agent implementation for a config.
  *
