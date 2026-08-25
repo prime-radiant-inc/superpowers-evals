@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -92,13 +93,48 @@ test('materializes both trees, installs, builds the gauntlet wrapper, writes the
   expect(installs.map((c) => c.options?.cwd).sort()).toEqual(
     [handle.evalsRoot, handle.gauntletRoot].sort(),
   );
-  // Wrapper exists, is executable, and execs the snapshot's gauntlet entrypoint:
+  // Wrapper exists, is executable, and execs the snapshot's gauntlet
+  // entrypoint (POSIX single-quoted — destDir is not restricted to
+  // shell-safe paths; the spaces-and-quote regression below covers the
+  // metacharacter case behaviorally):
   const wrapper = readFileSync(handle.gauntletBin, 'utf8');
   expect(wrapper).toBe(
-    `#!/bin/sh\nexec bun ${join(destDir, 'gauntlet')}/src/index.ts "$@"\n`,
+    `#!/bin/sh\nexec bun '${join(destDir, 'gauntlet', 'src', 'index.ts')}' "$@"\n`,
   );
   expect(statSync(handle.gauntletBin).mode & 0o111).not.toBe(0);
   expect(existsSync(join(destDir, '.quorum-snapshot-ok'))).toBe(true);
+});
+
+// Regression (review round 1): the wrapper interpolates the gauntlet
+// entrypoint path, and destDir may legally contain whitespace and shell
+// metacharacters — the interface imposes no safe-path restriction. The path
+// must arrive POSIX single-quoted (' -> '\''), and /bin/sh must parse the
+// wrapper into exactly ONE entrypoint argv element. Both are asserted: the
+// expected wrapper text below hand-writes the quoting of the
+// metacharacter-bearing suffix (not derived from the implementation's own
+// transform), and a stub `bun` first on PATH records the argv the shell
+// actually produced.
+test('wrapper survives a destination containing spaces and a single quote', () => {
+  const runner = new RecordingRunner();
+  const base = mkdtempSync(join(tmpdir(), 'snap-'));
+  const destDir = join(base, "campaign dir with space's and a 'quote'");
+  const handle = materializeEvalsSnapshot(snapArgs(runner, destDir));
+  expect(readFileSync(handle.gauntletBin, 'utf8')).toBe(
+    `#!/bin/sh\nexec bun '${base}/campaign dir with space'\\''s and a '\\''quote'\\''/gauntlet/src/index.ts' "$@"\n`,
+  );
+  const stubDir = mkdtempSync(join(tmpdir(), 'snap-stub-'));
+  const stubBun = join(stubDir, 'bun');
+  const recFile = join(stubDir, 'argv');
+  writeFileSync(stubBun, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$ARGV_RECORD"\n');
+  chmodSync(stubBun, 0o755);
+  const res = spawnSync(handle.gauntletBin, ['--version'], {
+    env: { PATH: stubDir, ARGV_RECORD: recFile },
+    encoding: 'utf8',
+  });
+  expect(res.status).toBe(0);
+  expect(readFileSync(recFile, 'utf8')).toBe(
+    `${join(handle.gauntletRoot, 'src', 'index.ts')}\n--version\n`,
+  );
 });
 
 test('minimal env on every subprocess call', () => {
@@ -278,7 +314,7 @@ test('real git + real bun: materialize, re-enter, verify, drift', () => {
   expect(realHead(handle.gauntletRoot)).toBe(gauntletSha);
   expect(statSync(handle.gauntletBin).mode & 0o111).not.toBe(0);
   expect(readFileSync(handle.gauntletBin, 'utf8')).toBe(
-    `#!/bin/sh\nexec bun ${join(handle.gauntletRoot, 'src', 'index.ts')} "$@"\n`,
+    `#!/bin/sh\nexec bun '${join(handle.gauntletRoot, 'src', 'index.ts')}' "$@"\n`,
   );
   expect(existsSync(join(destDir, '.quorum-snapshot-ok'))).toBe(true);
   // Re-entry with the marker present: trees reused, nothing re-installed.

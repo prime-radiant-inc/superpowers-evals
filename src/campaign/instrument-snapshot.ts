@@ -99,17 +99,27 @@ function bunInstall(runner: CommandRunner, cwd: string): void {
   }
 }
 
+/** POSIX single-quote a literal for interpolation into the wrapper: each
+ *  `'` becomes `'\''`. destDir is caller-supplied and the interface imposes
+ *  no safe-path restriction — whitespace and shell metacharacters are all
+ *  valid — so the embedded entrypoint path is always quoted, never
+ *  interpolated bare. */
+function shellQuote(literal: string): string {
+  return `'${literal.replaceAll("'", "'\\''")}'`;
+}
+
 /** The snapshot-local gauntlet wrapper, mirroring the container's approach
  *  (container/Dockerfile:33): install deps, then a wrapper that execs the
- *  snapshot's gauntlet entrypoint. GAUNTLET_ROOT stays out of the gauntlet
- *  child env — the wrapper is an absolute path, not an env channel. */
+ *  snapshot's gauntlet entrypoint (path shell-quoted — see shellQuote).
+ *  GAUNTLET_ROOT stays out of the gauntlet child env — the wrapper is an
+ *  absolute path, not an env channel. */
 function buildGauntletBin(destDir: string, gauntletRoot: string): string {
   const bin = join(destDir, 'bin');
   mkdirSync(bin, { recursive: true });
   const gauntletBin = join(bin, 'gauntlet');
   writeFileSync(
     gauntletBin,
-    `#!/bin/sh\nexec bun ${join(gauntletRoot, 'src', 'index.ts')} "$@"\n`,
+    `#!/bin/sh\nexec bun ${shellQuote(join(gauntletRoot, 'src', 'index.ts'))} "$@"\n`,
   );
   chmodSync(gauntletBin, 0o755);
   return gauntletBin;
