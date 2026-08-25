@@ -68,3 +68,37 @@ export function readQuorumTier(
 export function readStoryStatus(storyPath: string): string {
   return frontmatter(storyPath).get('status') ?? 'ready';
 }
+
+/** The story's `requires_superpowers`, or `null` when omitted (the scan
+ *  default applies downstream). Throws {@link StoryMetaError} outside
+ *  true/false. */
+export function readRequiresSuperpowers(storyPath: string): boolean | null {
+  const v = frontmatter(storyPath).get('requires_superpowers');
+  if (v === undefined) return null;
+  if (v !== 'true' && v !== 'false') {
+    throw new StoryMetaError(`invalid requires_superpowers: ${v}`);
+  }
+  return v === 'true';
+}
+
+export const COUPLING_VALUES = [
+  'pins-skill-names',
+  'embeds-skill-fixtures',
+  'arm-independent',
+] as const;
+export type CouplingValue = (typeof COUPLING_VALUES)[number];
+
+/** The story's `coupling` override, or `null` when omitted. Throws
+ *  {@link StoryMetaError} outside the closed vocabulary. */
+export function readCoupling(storyPath: string): CouplingValue | null {
+  const v = frontmatter(storyPath).get('coupling');
+  if (v === undefined) return null;
+  if (
+    v !== 'pins-skill-names' &&
+    v !== 'embeds-skill-fixtures' &&
+    v !== 'arm-independent'
+  ) {
+    throw new StoryMetaError(`invalid coupling: ${v}`);
+  }
+  return v;
+}
