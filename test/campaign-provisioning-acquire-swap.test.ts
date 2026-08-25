@@ -21,14 +21,34 @@
 import { expect, mock, test } from 'bun:test';
 import * as realFsNS from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, posix, win32 } from 'node:path';
 
 // Snapshot the real fs BEFORE mocking, so the double calls through to real
 // operations instead of recursing into itself.
 const REAL = { ...realFsNS };
 
 const SHA = 'a'.repeat(40);
-const OWNER_WRITE_RE = /\.lock\/owner-[0-9a-f-]+$/;
+const OWNER_BASE_RE = /^owner-[0-9a-f-]+$/;
+
+/** The owner-token write inside tryAcquireLock, identified by path SHAPE, not
+ *  separator: an `owner-<uuid>` file inside a `<...>.lock` directory. The path
+ *  is built with platform-native `join`, so it is decomposed with the matching
+ *  platform's `basename`/`dirname` (defaulting to the host's, which is what the
+ *  module's `join` produced). Returns the lock dir to swap, or null. The
+ *  `sep`-aware `pth` parameter lets the tests below prove BOTH conventions arm. */
+function ownerLockWrite(
+  path: string,
+  pth: Pick<typeof posix, 'basename' | 'dirname'>,
+): string | null {
+  const parent = pth.dirname(path);
+  if (
+    OWNER_BASE_RE.test(pth.basename(path)) &&
+    pth.basename(parent).endsWith('.lock')
+  ) {
+    return parent;
+  }
+  return null;
+}
 
 let trap = '';
 let aside = '';
@@ -43,14 +63,12 @@ mock.module('node:fs', () => ({
     // symlink to the trap at the lock path. The real write then lands in the
     // trap through the link, reproducing exactly the state the attacker
     // creates by winning the mkdir->check race.
-    if (
-      swapArmed &&
-      !swapped &&
-      typeof path === 'string' &&
-      OWNER_WRITE_RE.test(path)
-    ) {
+    const lockDir =
+      swapArmed && !swapped && typeof path === 'string'
+        ? ownerLockWrite(path, { basename, dirname })
+        : null;
+    if (lockDir !== null) {
       swapped = true;
-      const lockDir = path.slice(0, path.lastIndexOf('/'));
       REAL.renameSync(lockDir, aside);
       REAL.symlinkSync(trap, lockDir);
     }
@@ -61,6 +79,35 @@ mock.module('node:fs', () => ({
     );
   },
 }));
+
+test('injector arms on both separator conventions (POSIX + Windows paths)', () => {
+  // The module builds the owner path with platform-native `join`; the matcher
+  // must recognize it under either separator. Prove both by pairing each
+  // path-module with its own `join`/`basename`/`dirname` — the old hardcoded
+  // `/` matcher never armed on the Windows shape, so the finding went
+  // unexercised on Windows.
+  const posixPath = posix.join(
+    '/tmp/w/superpowers-abc.lock',
+    'owner-dead-beef',
+  );
+  const winPath = win32.join(
+    'C:\\Users\\w\\superpowers-abc.lock',
+    'owner-dead-beef',
+  );
+  expect(posixPath).toContain('/');
+  expect(winPath).toContain('\\');
+  expect(ownerLockWrite(posixPath, posix)).toBe('/tmp/w/superpowers-abc.lock');
+  expect(ownerLockWrite(winPath, win32)).toBe(
+    'C:\\Users\\w\\superpowers-abc.lock',
+  );
+  // A non-owner write is ignored under either separator.
+  expect(
+    ownerLockWrite(posix.join('/tmp/w/superpowers-abc', 'HEAD'), posix),
+  ).toBeNull();
+  expect(
+    ownerLockWrite(win32.join('C:\\w\\superpowers-abc', 'HEAD'), win32),
+  ).toBeNull();
+});
 
 test('acquire-window swap: mismatch cleanup never unlinks through the lock path', async () => {
   // Imported dynamically AFTER the mock so its `import { writeFileSync }`
