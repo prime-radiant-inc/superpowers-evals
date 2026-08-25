@@ -10,6 +10,7 @@ import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
+import { checkArmSuiteFiles } from '../campaign/arm-suite-check.ts';
 import {
   extractManifest,
   ManifestExtractionError,
@@ -284,6 +285,27 @@ program
         }
       } else {
         process.stdout.write('ok   credentials\n');
+      }
+
+      // Validate arms/ and suites/ documents (parent Testing: "quorum check
+      // validates arm and suite files including profile parameters").
+      const armSuite = checkArmSuiteFiles({
+        repoRoot: process.cwd(),
+        codingAgentsDir: resolve(opts.codingAgentsDir),
+        credentialsPath: resolve(opts.credentialsFile ?? 'credentials.yaml'),
+        scenariosRoot: root,
+      });
+      for (const warning of armSuite.warnings) {
+        process.stdout.write(`warn ${warning}\n`);
+      }
+      if (!armSuite.ok) {
+        failed += 1;
+        process.stdout.write('FAIL arms/suites\n');
+        for (const err of armSuite.errors) {
+          process.stdout.write(`  - ${err}\n`);
+        }
+      } else {
+        process.stdout.write('ok   arms/suites\n');
       }
 
       if (failed > 0) {
