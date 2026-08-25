@@ -12,7 +12,11 @@ import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
 import { scanCouplingDefault } from '../contracts/campaign/scenario-meta.ts';
 import { type Suite, SuiteSchema } from '../contracts/campaign/suite.ts';
 import { parseCredentialsFile } from '../contracts/credential.ts';
-import { type CouplingValue, readCoupling } from '../story-meta.ts';
+import {
+  type CouplingValue,
+  readCoupling,
+  readRequiresSuperpowers,
+} from '../story-meta.ts';
 
 export interface ArmSuiteCheckOptions {
   readonly repoRoot: string;
@@ -92,12 +96,14 @@ export function checkArmSuiteFiles(
       );
       continue;
     }
-    if (suite.profile !== undefined && suite.profile_params !== undefined) {
+    if (suite.profile !== undefined) {
       const schema = profileParamsSchema(suite.profile);
       if (schema === undefined) {
         errors.push(`suites/${file}: unknown profile '${suite.profile}'`);
       } else {
-        const result = schema.safeParse(suite.profile_params);
+        // Omitted profile_params parse as {} so required release_gate_v1
+        // fields (alpha, floors, deltas) cannot be skipped by omission.
+        const result = schema.safeParse(suite.profile_params ?? {});
         if (!result.success) {
           errors.push(
             `suites/${file}: profile_params for ${suite.profile}: ${result.error.issues
@@ -106,6 +112,10 @@ export function checkArmSuiteFiles(
           );
         }
       }
+    } else if (suite.profile_params !== undefined) {
+      errors.push(
+        `suites/${file}: profile_params set without a profile (suite.profile is unset)`,
+      );
     }
     for (const comparison of suite.comparisons) {
       const refs =
@@ -113,7 +123,7 @@ export function checkArmSuiteFiles(
           ? [comparison.arm]
           : [comparison.baseline, comparison.treatment];
       for (const ref of refs) {
-        if (armNames.size > 0 && !armNames.has(ref)) {
+        if (!armNames.has(ref)) {
           errors.push(
             `suites/${file}: comparison references unknown arm '${ref}'`,
           );
@@ -126,18 +136,26 @@ export function checkArmSuiteFiles(
           const scenarioDir = join(opts.scenariosRoot, scenarioName);
           const storyPath = join(scenarioDir, 'story.md');
           if (!existsSync(storyPath)) continue;
-          let declared: CouplingValue | null;
+          let declaredCoupling: CouplingValue | null;
+          let declaredRequires: boolean | null;
           try {
-            declared = readCoupling(storyPath);
+            declaredCoupling = readCoupling(storyPath);
+            declaredRequires = readRequiresSuperpowers(storyPath);
           } catch {
             continue; // malformed frontmatter is scenario validation's job
           }
-          if (
-            declared !== null &&
-            declared !== scanCouplingDefault(scenarioDir)
-          ) {
+          const scanDefault = scanCouplingDefault(scenarioDir);
+          if (declaredCoupling !== null && declaredCoupling !== scanDefault) {
             warnings.push(
-              `scenarios/${scenarioName}: declared coupling '${declared}' contradicts the static scan default`,
+              `scenarios/${scenarioName}: declared coupling '${declaredCoupling}' contradicts the static scan default`,
+            );
+          }
+          // Skill references or embedded skill fixtures imply the scenario
+          // needs superpowers; only arm-independent scans read as false.
+          const scanRequires = scanDefault !== 'arm-independent';
+          if (declaredRequires !== null && declaredRequires !== scanRequires) {
+            warnings.push(
+              `scenarios/${scenarioName}: declared requires_superpowers ${declaredRequires} contradicts the static scan default`,
             );
           }
         }
