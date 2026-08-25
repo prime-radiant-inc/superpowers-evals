@@ -221,3 +221,18 @@ test('direct run validates an arbitrary external credentials file before allocat
   expect(proc.stderr).toContain('route-attestation labels');
   expect(readdirSync(outRoot)).toEqual([]);
 });
+
+test('quorum run emits run_allocated before the exit run-id line', () => {
+  const { status, stdout } = runCli('pass');
+  expect(status).toBe(0);
+  const lines = stdout.split('\n');
+  const allocatedIndex = lines.findIndex((l) =>
+    l.startsWith('run_allocated: '),
+  );
+  const runIdIndex = lines.findIndex((l) => l.startsWith('run-id:'));
+  expect(allocatedIndex).toBeGreaterThanOrEqual(0);
+  expect(runIdIndex).toBeGreaterThan(allocatedIndex);
+  expect(lines[allocatedIndex]).toBe(
+    `run_allocated: ${lines[runIdIndex]?.slice('run-id: '.length)}`,
+  );
+});

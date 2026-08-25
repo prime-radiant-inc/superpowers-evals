@@ -42,6 +42,14 @@ function runId(path: string): string {
   return last !== undefined && last !== '' ? last : path;
 }
 
+/** The machine-facing allocation line (parent Identity): emitted at run-dir
+ *  allocation, before the first provider token, so a spawner can bind
+ *  attempt -> run_id without waiting for exit. Legacy human output (the
+ *  exit-time 'run-id:' line + rendered verdict) is unchanged. */
+export function runAllocatedLine(runDir: string): string {
+  return `run_allocated: ${runId(runDir)}\n`;
+}
+
 // Shared by the public `quorum run` command and run-all's narrow internal child
 // entrypoint. The caller fixes credential origin; no user input selects it.
 export async function executeRunCommand(
@@ -96,6 +104,7 @@ export async function executeRunCommand(
     graderModel: opts.graderModel,
     onRunDir: (dir) => {
       runDirForStop = dir;
+      process.stdout.write(runAllocatedLine(dir));
     },
     onCredentialLabels: (labels) => {
       labelsForStop = labels;
