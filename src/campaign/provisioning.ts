@@ -140,8 +140,10 @@ function gitOut(runner: CommandRunner, args: readonly string[]): string {
  *  - the lock is a DIRECTORY (atomic mkdir acquire — EEXIST means contended);
  *  - ownership is pinned by a uniquely-named `owner-<uuid>` file inside it,
  *    so the owner's identity is the file NAME — an unforgeable token;
- *  - release unlinks exactly our own owner file, then rmdirs the dir only if
- *    empty: an old owner can therefore never delete a successor's lock;
+ *  - release re-establishes identity (the dir mkdir created, by dev+ino),
+ *    severs it to a unique trash name, and deletes only beneath the severed
+ *    path — anything else at the lock path (a successor's fresh lock, a
+ *    swapped symlink) is left untouched;
  *  - reclaim removes owner files older than LOCK_STALE_MS by their OBSERVED
  *    unique names: two contenders observing the same stale lock can never
  *    remove a file a third party has freshly created, because every fresh
@@ -152,8 +154,13 @@ function gitOut(runner: CommandRunner, args: readonly string[]): string {
 function withDestLock<T>(lockPath: string, fn: () => T): T {
   const ownerFile = join(lockPath, `owner-${randomUUID()}`);
   let emptySince: number | null = null;
+  let acquired: Stats;
   for (;;) {
-    if (tryAcquireLock(lockPath, ownerFile)) break;
+    const mine = tryAcquireLock(lockPath, ownerFile);
+    if (mine !== null) {
+      acquired = mine;
+      break;
+    }
     const progressed = reclaimStaleLock(lockPath, emptySince);
     if (!progressed) {
       // Distinguish "waiting on a live owner" (fine, keep polling) from
@@ -171,22 +178,68 @@ function withDestLock<T>(lockPath: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    // Ownership-safe release: unlink exactly our uniquely-named owner file
-    // (a successor's file carries a different name and cannot be touched),
-    // then rmdir — which only succeeds when the dir is empty, i.e. when no
-    // other owner exists. Fully best-effort: this runs in finally and must
-    // never mask the guarded section's result or its exceptions.
+    releaseLock(lockPath, ownerFile, acquired);
+  }
+}
+
+/** Release the lock we acquired. Deletion discipline (the module idiom):
+ *  never delete through a path whose identity is unestablished — the lock
+ *  path is mutable and a swap can redirect any unlink through it into the
+ *  swap's target. So: confirm the path still identifies the directory we
+ *  created (dev+ino), sever it to a unique trash name (rename never
+ *  follows a symlink swapped in after the check, and the rename itself
+ *  frees the lock path for successors), then delete only beneath the
+ *  severed path. Anything else found at the lock path — a successor's
+ *  fresh lock after our lease expired, a swapped symlink — is left
+ *  untouched: our uniquely-named owner file is inert wherever it landed,
+ *  and the stale-reclaim path owns any leftover cleanup. Fully
+ *  best-effort: runs in finally and must never mask the guarded section's
+ *  result or its exceptions. */
+function releaseLock(lockPath: string, ownerFile: string, mine: Stats): void {
+  const now = tryLstat(lockPath);
+  if (
+    now === null ||
+    !now.isDirectory() ||
+    now.dev !== mine.dev ||
+    now.ino !== mine.ino
+  ) {
+    return; // not the directory we created: reclaimed, severed, or swapped
+  }
+  const trash = `${lockPath}.trash-${randomUUID()}`;
+  try {
+    renameSync(lockPath, trash);
+  } catch {
+    return; // raced away under us: nothing of ours left to remove
+  }
+  const trashStat = tryLstat(trash);
+  if (trashStat === null) return;
+  if (
+    !trashStat.isDirectory() ||
+    trashStat.dev !== mine.dev ||
+    trashStat.ino !== mine.ino
+  ) {
+    // A swap landed between the check and the rename: we grabbed something
+    // we did not create. Put it back untouched; if the lock path was
+    // re-taken meanwhile, leave the uniquely-named orphan inert instead —
+    // never delete what we cannot identify as ours.
     try {
-      rmSync(ownerFile, { force: true });
+      renameSync(trash, lockPath);
     } catch {
-      // raced a reclaimer's teardown, or a permanent FS fault — either way
-      // the stale-reclaim path will clean up after LOCK_STALE_MS.
+      // re-taken: orphan rather than touch it
     }
-    try {
-      rmdirSync(lockPath);
-    } catch {
-      // Non-empty (another owner holds it) or already reclaimed: not ours.
-    }
+    return;
+  }
+  // Our directory, under our private unguessable name: no path through the
+  // original lock path can redirect these deletions.
+  try {
+    rmSync(join(trash, basename(ownerFile)), { force: true });
+  } catch {
+    // permanent FS fault: the orphaned trash dir is inert
+  }
+  try {
+    rmdirSync(trash);
+  } catch {
+    // non-empty (foreign strays landed in it): inert under its unique name
   }
 }
 
@@ -205,21 +258,25 @@ function isTransientLockRace(err: unknown): boolean {
  *  lock — and the caller retries.
  *  Swap check: after writing the owner file, the lock path must STILL be
  *  the directory we created (same dev+ino). If a symlink was planted over
- *  it in between, the write landed in the swap target — remove our own
- *  uniquely-named stray (best-effort net-zero) and retry. */
-function tryAcquireLock(lockPath: string, ownerFile: string): boolean {
+ *  it in between, the write landed in the swap target — leave the
+ *  uniquely-named stray inert and retry. Deleting it through the mutable
+ *  lock path is forbidden: a second swap could redirect that unlink into
+ *  an external directory holding the observed token name (module idiom:
+ *  never delete through a path whose identity is unestablished).
+ *  Returns the created directory's identity when acquired, null when not. */
+function tryAcquireLock(lockPath: string, ownerFile: string): Stats | null {
   let mine: Stats | null;
   try {
     mkdirSync(lockPath);
     mine = tryLstat(lockPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    return false;
+    return null;
   }
   try {
     writeFileSync(ownerFile, `${process.pid}\n`, { flag: 'wx' });
   } catch (err) {
-    if (isTransientLockRace(err)) return false; // torn down mid-acquire
+    if (isTransientLockRace(err)) return null; // torn down mid-acquire
     throw err;
   }
   const now = tryLstat(lockPath);
@@ -231,14 +288,9 @@ function tryAcquireLock(lockPath: string, ownerFile: string): boolean {
     now.dev !== mine.dev ||
     now.ino !== mine.ino
   ) {
-    try {
-      rmSync(ownerFile, { force: true });
-    } catch {
-      // best effort: a stray uniquely-named file is inert
-    }
-    return false;
+    return null;
   }
-  return true;
+  return now;
 }
 
 /** Reclaim a lock whose owner died mid-flight. Returns whether the acquire

@@ -2,10 +2,12 @@ import { expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmdirSync,
   rmSync,
   symlinkSync,
@@ -811,6 +813,63 @@ test('real FS: a swapped lock path never deletes through the link', async () => 
     expect(readFileSync(join(victim, name), 'utf8')).toBe('honeypot\n');
   }
 }, 20000);
+
+// Release-path confinement: the release must never unlink through a lock
+// path whose identity it has not re-established — a swap during the
+// critical section redirects that unlink into the link's target. The
+// runner seam executes inside the critical section, so the swap is
+// deterministic: the runner steals the real lock dir aside and plants a
+// symlink to a victim dir holding a file named exactly like the observed
+// owner token. An identity-checking release leaves everything inert; a
+// release that deletes through the lock path destroys the victim's file.
+test('release never unlinks through a swapped lock path', () => {
+  const destParent = tmp();
+  const dest = join(destParent, `superpowers-${SHA_A}`);
+  const lock = `${dest}.lock`;
+  // Pre-existing clean destination: the critical section runs rev-parse +
+  // status through the runner, giving the swap its in-section hook.
+  mkdirSync(dest);
+  const victim = tmp();
+  const aside = join(tmp(), 'stolen-lock');
+  let swapped = false;
+  const runner: CommandRunner = {
+    run(_command, cmdArgs) {
+      if (!swapped) {
+        swapped = true;
+        // Observe the unique owner token, then swap: steal the lock dir
+        // aside and plant the symlink at the lock path.
+        const owner = readdirSync(lock).find((n) => n.startsWith('owner-'));
+        if (owner === undefined) throw new Error('owner token not observed');
+        writeFileSync(join(victim, owner), 'precious\n');
+        renameSync(lock, aside);
+        symlinkSync(victim, lock);
+      }
+      if (cmdArgs.includes('rev-parse')) {
+        return { status: 0, stdout: `${SHA_A}\n`, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  };
+  const root = materializeSuperpowersWorktree({
+    sourceCheckout: '/src/sp',
+    sha: SHA_A,
+    destParent,
+    runner,
+  });
+  expect(root).toBe(dest);
+  expect(swapped).toBe(true);
+  // The stolen dir still holds the (now inert) owner token; recover its
+  // name to check the victim.
+  const strays = readdirSync(aside).filter((n) => n.startsWith('owner-'));
+  expect(strays).toHaveLength(1);
+  const owner = strays[0] as string;
+  // THE confinement assertion: nothing was deleted through the link — the
+  // victim still holds the same-named file, untouched.
+  expect(readFileSync(join(victim, owner), 'utf8')).toBe('precious\n');
+  expect(readdirSync(victim)).toEqual([owner]);
+  // The planted link itself is left in place, inert.
+  expect(lstatSync(lock).isSymbolicLink()).toBe(true);
+});
 
 test('real tmp git repo: materialize, reuse, then drift rejection', () => {
   const src = tmp();
