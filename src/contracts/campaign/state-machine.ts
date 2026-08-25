@@ -5,6 +5,9 @@
 // block may already be completed when its sibling fails — so a two-valued
 // table would make canonical event streams illegal.
 
+import { type CampaignUniverse, sealPredicateHolds } from './crash-windows.ts';
+import type { JournalEvent, JournalEventType } from './journal-events.ts';
+
 export const SAMPLE_STATES = [
   'planned',
   'admitted',
@@ -37,6 +40,17 @@ export type TransitionOutcome =
   | { result: 'ignore-late' }
   | { result: 'reject' };
 
+/** The reducer's typed discriminated input: a journal event's {type, payload}
+ *  projection, distributed so each type keeps its own payload shape. A full
+ *  JournalEvent (envelope included) is structurally assignable. */
+type EventInput<E> = E extends {
+  type: infer T extends string;
+  payload: infer P;
+}
+  ? { readonly type: T; readonly payload: P }
+  : never;
+export type JournalEventInput = EventInput<JournalEvent>;
+
 const apply = (next: SampleState): TransitionOutcome => ({
   result: 'apply',
   next,
@@ -48,19 +62,22 @@ function isTerminal(state: SampleState): boolean {
   return (TERMINAL_STATES as readonly string[]).includes(state);
 }
 
-/** Advance one sample by one journal event type. Block-scoped events
+/** Advance one sample by one typed journal event. Block-scoped events
  *  (block_admitted, skew_excluded, aborted) apply per sample of the block;
- *  callers fan them out. */
+ *  callers fan them out. Payload-sensitive edges (sample_disposition)
+ *  discriminate on the payload, never on the event name alone. */
 export function applySampleEvent(
   state: SampleState,
-  eventType: string,
+  event: JournalEventInput,
 ): TransitionOutcome {
-  switch (eventType) {
+  switch (event.type) {
     case 'block_admitted':
       return state === 'planned' ? apply('admitted') : REJECT;
     case 'attempt_created':
-      // Binding only (sample <-> attempt); no state change outside terminals.
-      return isTerminal(state) ? REJECT : apply(state);
+      // Binding only (sample <-> attempt), no state change — journaled
+      // between admission and spawn (parent Identity: attempt ids are
+      // journaled before spawn), so admitted is the only legal source.
+      return state === 'admitted' ? apply('admitted') : REJECT;
     case 'run_allocated':
       return state === 'admitted' ? apply('spawned') : REJECT;
     case 'exposure_started':
@@ -78,12 +95,23 @@ export function applySampleEvent(
       }
       if (state === 'excluded_block_replaced') return LATE;
       return REJECT;
-    case 'sample_disposition':
-      // The innocent arm's override; superseded_by set by the payload.
+    case 'sample_disposition': {
+      if (event.payload.disposition !== 'excluded_block_replaced') {
+        // included: a seal-time inclusion record on a completed sample —
+        // a non-mutating bind, never the replacement edge.
+        return state === 'completed' ? apply('completed') : REJECT;
+      }
+      // Defensive re-check of the schema's iff: the replacement edge must
+      // name its superseding sample even on a hand-built event.
+      const superseded: unknown = (event.payload as { superseded_by?: unknown })
+        .superseded_by;
+      if (typeof superseded !== 'string' || superseded === '') return REJECT;
+      // The innocent arm's override; its run dir is retained.
       if (state === 'spawned' || state === 'exposed' || state === 'completed') {
         return apply('excluded_block_replaced');
       }
       return REJECT;
+    }
     case 'skew_excluded':
       // Fail-closed absence: a sample whose exposure never established can
       // still be skew-excluded from spawned (exposure-measurement contract).
@@ -127,10 +155,11 @@ export type CampaignTransitionOutcome =
 
 /** Campaign edge -> event mapping (pinned). `sealing` is a transient
  *  computation state (completeness predicate running) witnessed by `sealed`;
- *  the crash-window resolver covers post-predicate pre-report. */
+ *  it is entered by beginSealing, not by an event. The crash-window resolver
+ *  covers post-predicate pre-report. */
 export function applyCampaignEvent(
   state: CampaignState,
-  eventType: string,
+  eventType: JournalEventType,
 ): CampaignTransitionOutcome {
   const applyC = (next: CampaignState): CampaignTransitionOutcome => ({
     result: 'apply',
@@ -170,4 +199,19 @@ export function applyCampaignEvent(
     case 'cancelled':
       return { result: 'reject' };
   }
+}
+
+/** running -> sealing, guarded by the full seal predicate: every registered
+ *  sample of the frozen campaign universe is terminal in the journal prefix.
+ *  Pure — the D3 sealer calls this before running the report; the edge is
+ *  witnessed in the journal by the subsequent `sealed` event. */
+export function beginSealing(
+  state: CampaignState,
+  universe: CampaignUniverse,
+  events: readonly JournalEvent[],
+): CampaignTransitionOutcome {
+  if (state !== 'running') return { result: 'reject' };
+  return sealPredicateHolds(universe, events)
+    ? { result: 'apply', next: 'sealing' }
+    : { result: 'reject' };
 }
