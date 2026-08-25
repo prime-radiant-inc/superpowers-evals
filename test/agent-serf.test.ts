@@ -382,3 +382,76 @@ test('provision rejects subscription and oauth Serf credentials before launch', 
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const spA = join(plainHome.workdir, '..', 'sp-d2-threaded');
+  const ambient = join(plainHome.workdir, '..', 'sp-d2-ambient');
+  mkdirSync(spA, { recursive: true });
+  stageSuperpowers(spA);
+  // An ambient root missing every required file: consulting it would throw.
+  mkdirSync(ambient, { recursive: true });
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+
+  try {
+    withEnv(ambient, () => {
+      const env = new SerfAgent(serfConfig()).provision(
+        home,
+        new FakeCommandRunner(),
+      );
+      // Provision succeeded validating the threaded root, not the invalid
+      // ambient one.
+      expect(env).toEqual({});
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+  const apiKey = `d2-serf-${crypto.randomUUID()}`;
+
+  try {
+    withEnv(undefined, () => {
+      withEnvValue('TASK3A_SERF_OPENROUTER_KEY', apiKey, () => {
+        const env = new SerfAgent(serfConfig()).provision(
+          home,
+          new FakeCommandRunner(),
+          openRouterCredential,
+        );
+        // No ProvisionError; the stock arm still seeds the credential env file.
+        expect(env).toEqual({});
+        expect(existsSync(join(home.configDir, SERF_API_ENV_FILE_NAME))).toBe(
+          true,
+        );
+      });
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(undefined, () => {
+      expect(() =>
+        new SerfAgent(serfConfig()).provision(home, new FakeCommandRunner()),
+      ).toThrow(
+        'SUPERPOWERS_ROOT not set; cannot point serf --plugin-dir at Superpowers',
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});

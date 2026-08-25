@@ -17,6 +17,7 @@ import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
 import { provisionSubprocessEnv } from './subprocess-env.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Gemini-family provisioning: install the Superpowers CLI extension into an
 // isolated GEMINI_CLI_HOME without invoking the model. Writes
@@ -212,21 +213,27 @@ export class GeminiAgent implements CodingAgent {
     const { configDir } = home;
 
     // SUPERPOWERS_ROOT must be set and carry the required extension files. The
-    // raw value is expanduser()'d before every filesystem touch.
-    const superpowersRaw = getEnv('SUPERPOWERS_ROOT') ?? '';
-    if (!superpowersRaw) {
+    // raw value is expanduser()'d before every filesystem touch. (Kernel D2:
+    // the root is threaded via the home spec — ambient env is consulted only
+    // on the legacy undefined path; none = the explicit stock arm, which skips
+    // every superpowers staging step below; missing preserves the pre-D2
+    // hard-fail.)
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install Gemini Superpowers extension',
       );
     }
-    const superpowersRoot = expanduser(superpowersRaw);
-    const missingRoot = GEMINI_REQUIRED_SUPERPOWERS_FILES.filter(
-      (rel) => !existsSync(join(superpowersRoot, rel)),
-    );
-    if (missingRoot.length > 0) {
-      throw new ProvisionError(
-        `SUPERPOWERS_ROOT is missing required Gemini Superpowers files: ${missingRoot.join(', ')}`,
+    if (sp.kind === 'root') {
+      const superpowersRoot = expanduser(sp.root);
+      const missingRoot = GEMINI_REQUIRED_SUPERPOWERS_FILES.filter(
+        (rel) => !existsSync(join(superpowersRoot, rel)),
       );
+      if (missingRoot.length > 0) {
+        throw new ProvisionError(
+          `SUPERPOWERS_ROOT is missing required Gemini Superpowers files: ${missingRoot.join(', ')}`,
+        );
+      }
     }
 
     // Fail fast if the gemini CLI is not on PATH, right after the
@@ -319,44 +326,47 @@ export class GeminiAgent implements CodingAgent {
       GEMINI_CLI_HOME: configDir,
     });
 
-    // gemini extensions link <SUPERPOWERS_ROOT> --consent
-    const link = runner.run(
-      'gemini',
-      ['extensions', 'link', superpowersRoot, '--consent'],
-      { cwd: configDir, env: subprocessEnv },
-    );
-    if (link.status !== 0) {
-      throw new ProvisionError(
-        `gemini extensions link failed (exit ${String(link.status)}); stderr: ${geminiStderrExcerpt(link.stderr, apiKey)}`,
+    // gemini extensions link <SUPERPOWERS_ROOT> --consent, then the listing +
+    // manifest verification — all superpowers staging, skipped on the none arm.
+    if (sp.kind === 'root') {
+      const link = runner.run(
+        'gemini',
+        ['extensions', 'link', expanduser(sp.root), '--consent'],
+        { cwd: configDir, env: subprocessEnv },
       );
-    }
+      if (link.status !== 0) {
+        throw new ProvisionError(
+          `gemini extensions link failed (exit ${String(link.status)}); stderr: ${geminiStderrExcerpt(link.stderr, apiKey)}`,
+        );
+      }
 
-    // gemini extensions list — verify superpowers appears.
-    const listing = runner.run('gemini', ['extensions', 'list'], {
-      cwd: configDir,
-      env: subprocessEnv,
-    });
-    if (listing.status !== 0) {
-      throw new ProvisionError(
-        `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${geminiStderrExcerpt(listing.stderr, apiKey)}`,
-      );
-    }
-    if (
-      !extensionListShowsSuperpowers(`${listing.stdout}\n${listing.stderr}`)
-    ) {
-      throw new ProvisionError(
-        'gemini extensions list did not show Superpowers extension',
-      );
-    }
+      // gemini extensions list — verify superpowers appears.
+      const listing = runner.run('gemini', ['extensions', 'list'], {
+        cwd: configDir,
+        env: subprocessEnv,
+      });
+      if (listing.status !== 0) {
+        throw new ProvisionError(
+          `gemini extensions list failed (exit ${String(listing.status)}); stderr: ${geminiStderrExcerpt(listing.stderr, apiKey)}`,
+        );
+      }
+      if (
+        !extensionListShowsSuperpowers(`${listing.stdout}\n${listing.stderr}`)
+      ) {
+        throw new ProvisionError(
+          'gemini extensions list did not show Superpowers extension',
+        );
+      }
 
-    // The link must have written its install manifests.
-    const missingManifests = GEMINI_EXTENSION_MANIFESTS.filter(
-      (rel) => !existsSync(join(configDir, rel)),
-    );
-    if (missingManifests.length > 0) {
-      throw new ProvisionError(
-        `gemini extension link completed but expected metadata files are missing: ${missingManifests.join(', ')}`,
+      // The link must have written its install manifests.
+      const missingManifests = GEMINI_EXTENSION_MANIFESTS.filter(
+        (rel) => !existsSync(join(configDir, rel)),
       );
+      if (missingManifests.length > 0) {
+        throw new ProvisionError(
+          `gemini extension link completed but expected metadata files are missing: ${missingManifests.join(', ')}`,
+        );
+      }
     }
 
     // Provisioning must not have run the model.

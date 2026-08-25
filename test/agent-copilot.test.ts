@@ -1024,3 +1024,97 @@ test('copilotGauntletEnv keeps credentialed-proxy rejection after composition', 
     }),
   ).toThrow(/proxy/);
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const spA = makeSuperpowersRoot();
+  const spB = makeSuperpowersRoot();
+  // Distinct plugin.json versions prove WHICH root the staging copied.
+  writeFileSync(
+    join(spA.root, '.claude-plugin', 'plugin.json'),
+    `${JSON.stringify({ name: 'superpowers', version: 'd2-threaded' })}\n`,
+  );
+  writeFileSync(
+    join(spB.root, '.claude-plugin', 'plugin.json'),
+    `${JSON.stringify({ name: 'superpowers', version: 'd2-ambient' })}\n`,
+  );
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'root', root: spA.root },
+  });
+
+  try {
+    withProvisionEnv(
+      {
+        ...clearedAuthEnv(),
+        SUPERPOWERS_ROOT: spB.root,
+        COPILOT_GITHUB_TOKEN: 'ghp_d2_root',
+      },
+      () => {
+        new CopilotAgent(CONFIG).provision(home, copilotPresentRunner());
+        const staged: unknown = JSON.parse(
+          readFileSync(
+            join(
+              home.configDir,
+              'plugins',
+              'superpowers',
+              '.claude-plugin',
+              'plugin.json',
+            ),
+            'utf8',
+          ),
+        );
+        expect(staged).toEqual({ name: 'superpowers', version: 'd2-threaded' });
+      },
+    );
+  } finally {
+    cleanup();
+    spB.cleanup();
+    spA.cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withProvisionEnv(
+      { ...clearedAuthEnv(), COPILOT_GITHUB_TOKEN: 'ghp_d2_none' },
+      () => {
+        const runner = copilotPresentRunner();
+        new CopilotAgent(CONFIG).provision(home, runner);
+        // No ProvisionError; the stock arm still writes the secret env file...
+        expect(existsSync(join(home.configDir, '.copilot-env'))).toBe(true);
+        // ...and staged no superpowers plugin.
+        expect(existsSync(join(home.configDir, 'plugins', 'superpowers'))).toBe(
+          false,
+        );
+        expect(runner.calls).toEqual([]);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withProvisionEnv(
+      { ...clearedAuthEnv(), COPILOT_GITHUB_TOKEN: 'ghp_d2_missing' },
+      () => {
+        expect(() =>
+          new CopilotAgent(CONFIG).provision(home, copilotPresentRunner()),
+        ).toThrow(
+          'SUPERPOWERS_ROOT not set; cannot install Copilot Superpowers plugin',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});

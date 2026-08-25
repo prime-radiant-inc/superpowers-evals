@@ -20,6 +20,7 @@ import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Kimi-family provisioning. The heaviest adapter: it (1) resolves the kimi
 // binary on PATH, (2) computes the effective model env from host overrides,
@@ -134,8 +135,12 @@ export class KimiAgent implements CodingAgent {
     const { configDir, workdir } = home;
 
     // SUPERPOWERS_ROOT is required up front. Read env only through env.ts.
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT');
-    if (superpowersRoot === undefined || superpowersRoot === '') {
+    // (Kernel D2: the root is threaded via the home spec — ambient env is
+    // consulted only on the legacy undefined path; none = the explicit stock
+    // arm, which skips the plugin install at step 4; missing preserves the
+    // pre-D2 hard-fail.)
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin',
       );
@@ -191,8 +196,11 @@ export class KimiAgent implements CodingAgent {
     }
 
     // 4. Validate the local checkout, then register it as the only enabled
-    //    plugin (plugins/installed.json).
-    installKimiSuperpowersPlugin(configDir, superpowersRoot);
+    //    plugin (plugins/installed.json). Superpowers staging — skipped on the
+    //    none arm.
+    if (sp.kind === 'root') {
+      installKimiSuperpowersPlugin(configDir, sp.root);
+    }
 
     // 5. Build the launcher's runtime env file. pinHome is false — the launcher
     //    pins HOME/XDG via $QUORUM_HOME_ENV and kimi finds KIMI_CODE_HOME via its

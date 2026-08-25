@@ -21,6 +21,7 @@ import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
 import { provisionSubprocessEnv } from './subprocess-env.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Copilot provisioning adapter. provision() is SETUP: it verifies the copilot
 // binary is on PATH, stages the isolated COPILOT_HOME, writes a mode-0600 secret
@@ -527,9 +528,20 @@ export class CopilotAgent implements CodingAgent {
     sessionId: string,
   ): CopilotProvisioning {
     const copilotHome = home.configDir;
-    const spRoot = requireCopilotSuperpowersRoot(
-      getEnv('SUPERPOWERS_ROOT') ?? '',
-    );
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: zero superpowers staging (spRoot stays undefined, so the
+    // stage call below is skipped); missing preserves the pre-D2 hard-fail.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
+      throw new ProvisionError(
+        'SUPERPOWERS_ROOT not set; cannot install Copilot Superpowers plugin',
+      );
+    }
+    let spRoot: string | undefined;
+    if (sp.kind === 'root') {
+      spRoot = requireCopilotSuperpowersRoot(sp.root);
+    }
     requireCopilotBinaryOnPath(this.config.binary);
 
     // Resolve auth first so a missing/invalid credential fails before any dir
@@ -555,7 +567,9 @@ export class CopilotAgent implements CodingAgent {
       );
     }
 
-    stageCopilotSuperpowersPlugin(spRoot, copilotHome);
+    if (spRoot !== undefined) {
+      stageCopilotSuperpowersPlugin(spRoot, copilotHome);
+    }
 
     return {
       sessionId,

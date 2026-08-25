@@ -16,6 +16,7 @@ import { envSnapshot, getEnv } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Map credential.api values to pi's internal api name. openai-chat and
 // openai-responses are supported on the api-key custom-endpoint path (pi's
@@ -38,16 +39,6 @@ function shlexQuote(value: string): string {
     return value;
   }
   return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-// Require an env value via the sanctioned env module. An unset OR empty value is
-// a setup failure.
-function requirePiEnv(name: string, purpose: string): string {
-  const value = getEnv(name);
-  if (value === undefined || value === '') {
-    throw new ProvisionError(`${name} not set; cannot ${purpose}`);
-  }
-  return value;
 }
 
 // Write pi.env (mode 0600). Shlex-quoted export lines for PI_PROVIDER / PI_MODEL
@@ -317,15 +308,21 @@ export class PiAgent implements CodingAgent {
       throw new ProvisionError('pi requires a credential');
     }
 
-    // SUPERPOWERS_ROOT is required in both auth paths; verify it first.
-    const superpowersRaw = requirePiEnv(
-      'SUPERPOWERS_ROOT',
-      'load Pi Superpowers extension',
-    );
-
-    // Verify SUPERPOWERS_ROOT carries the Pi support files, then that the pi
-    // binary is on PATH — both before any filesystem mutation.
-    requirePiSuperpowersSource(expanduser(superpowersRaw));
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: zero superpowers validation/staging; missing preserves the
+    // pre-D2 hard-fail. The pi binary check applies to every arm — the stock
+    // agent still launches pi — and stays before any filesystem mutation.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
+      throw new ProvisionError(
+        'SUPERPOWERS_ROOT not set; cannot load Pi Superpowers extension',
+      );
+    }
+    if (sp.kind === 'root') {
+      // Verify SUPERPOWERS_ROOT carries the Pi support files.
+      requirePiSuperpowersSource(expanduser(sp.root));
+    }
     requirePiOnPath();
 
     if (credential.auth === 'oauth') {

@@ -1466,3 +1466,93 @@ test('provision throws when manifest is missing skills field', () => {
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading. root stages from the threaded root
+// (ambient env is never consulted), none runs zero superpowers staging, and an
+// undefined spec keeps legacy ambient behavior (missing → same ProvisionError).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const spA = join(plainHome.workdir, '..', 'sp-d2-threaded');
+  const spB = join(plainHome.workdir, '..', 'sp-d2-ambient');
+  mkdirSync(spA, { recursive: true });
+  stageSuperpowers(spA);
+  writeFileSync(join(spA, 'skills', 'd2-root-marker.md'), 'threaded\n');
+  mkdirSync(spB, { recursive: true });
+  stageSuperpowers(spB);
+  writeFileSync(join(spB, 'skills', 'd2-root-marker.md'), 'ambient\n');
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+  const runner = unusedRunner();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: spB, CODEX_B4_TEST_API_KEY: 'd2-root-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, runner, makeApiKeyCredential());
+        const pluginRoot = join(
+          home.configDir,
+          'plugins',
+          'cache',
+          'debug',
+          'superpowers',
+          'local',
+        );
+        expect(
+          readFileSync(join(pluginRoot, 'skills', 'd2-root-marker.md'), 'utf8'),
+        ).toBe('threaded\n');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+  const runner = unusedRunner();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: undefined, CODEX_B4_TEST_API_KEY: 'd2-none-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        const env = agent.provision(home, runner, makeApiKeyCredential());
+        // No ProvisionError; the stock arm still writes the api-key env file.
+        expect(env).toEqual({});
+        expect(existsSync(join(home.configDir, 'codex-api.env'))).toBe(true);
+        // Zero superpowers staging writes: no plugin cache, no plugin config.
+        expect(existsSync(join(home.configDir, 'plugins'))).toBe(false);
+        expect(existsSync(join(home.configDir, 'config.toml'))).toBe(false);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: undefined, CODEX_B4_TEST_API_KEY: 'd2-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        expect(() =>
+          agent.provision(home, unusedRunner(), makeApiKeyCredential()),
+        ).toThrow(
+          'SUPERPOWERS_ROOT not set; cannot install codex plugin hooks',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});

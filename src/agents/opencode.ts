@@ -27,6 +27,7 @@ import {
   type SpawnFn,
 } from './opencode-capture.ts';
 import { provisionSubprocessEnv } from './subprocess-env.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // OpenCode-family provisioning. provision() is SETUP ONLY: it stages Superpowers
 // into an XDG-isolated OpenCode home, builds the provider config from the
@@ -273,9 +274,12 @@ export class OpenCodeAgent implements CodingAgent {
 
     const opencodeHome = home.configDir;
 
-    // SUPERPOWERS_ROOT is required. Read env ONLY via the sanctioned env module.
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT');
-    if (superpowersRoot === undefined || superpowersRoot === '') {
+    // SUPERPOWERS_ROOT is threaded via the home spec (Kernel D2: ambient env
+    // is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: zero superpowers staging (every guard below skips on none);
+    // missing preserves the pre-D2 hard-fail.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install opencode Superpowers plugin',
       );
@@ -291,22 +295,19 @@ export class OpenCodeAgent implements CodingAgent {
     }
 
     // Verify the required Superpowers OpenCode plugin source files exist.
-    const pluginSrc = join(
-      superpowersRoot,
-      '.opencode',
-      'plugins',
-      'superpowers.js',
-    );
-    const required = [
-      pluginSrc,
-      join(superpowersRoot, 'skills', 'using-superpowers', 'SKILL.md'),
-      join(superpowersRoot, 'skills', 'brainstorming', 'SKILL.md'),
-    ];
-    const missing = required.filter((path) => !existsSync(path));
-    if (missing.length > 0) {
-      throw new ProvisionError(
-        `SUPERPOWERS_ROOT is missing OpenCode plugin files: ${missing.join(', ')}`,
-      );
+    if (sp.kind === 'root') {
+      const pluginSrc = join(sp.root, '.opencode', 'plugins', 'superpowers.js');
+      const required = [
+        pluginSrc,
+        join(sp.root, 'skills', 'using-superpowers', 'SKILL.md'),
+        join(sp.root, 'skills', 'brainstorming', 'SKILL.md'),
+      ];
+      const missing = required.filter((path) => !existsSync(path));
+      if (missing.length > 0) {
+        throw new ProvisionError(
+          `SUPERPOWERS_ROOT is missing OpenCode plugin files: ${missing.join(', ')}`,
+        );
+      }
     }
 
     // Refuse to proceed if pre-existing session exports already sit under the
@@ -329,7 +330,9 @@ export class OpenCodeAgent implements CodingAgent {
 
     // Reject any symlink under SUPERPOWERS_ROOT/skills before copying it into the
     // isolated home.
-    rejectSymlinks(join(superpowersRoot, 'skills'), 'SUPERPOWERS_ROOT skills');
+    if (sp.kind === 'root') {
+      rejectSymlinks(join(sp.root, 'skills'), 'SUPERPOWERS_ROOT skills');
+    }
 
     // Resolve the API key before writing any files so a missing key is caught early.
     let resolution: ApiKeyResolution;
@@ -372,50 +375,54 @@ export class OpenCodeAgent implements CodingAgent {
     // Stage the whole plugin into package_root via the shared helper, then
     // symlink config/plugins/superpowers.js -> the staged plugin entry. The helper
     // drops eval output + VCS/build cruft; .opencode/plugins/superpowers.js and
-    // skills/ come along as part of the plugin payload.
-    const packageRoot = join(opencodeConfigDir, 'superpowers');
-    stageSuperpowersPlugin(superpowersRoot, packageRoot);
-    const stagedPlugin = join(
-      packageRoot,
-      '.opencode',
-      'plugins',
-      'superpowers.js',
-    );
-    const stagedSkills = join(packageRoot, 'skills');
+    // skills/ come along as part of the plugin payload. The entire block is
+    // superpowers staging — the none arm skips it (no staged plugin, no
+    // node --check, no under-home proofs for plugin files that do not exist).
+    if (sp.kind === 'root') {
+      const packageRoot = join(opencodeConfigDir, 'superpowers');
+      stageSuperpowersPlugin(sp.root, packageRoot);
+      const stagedPlugin = join(
+        packageRoot,
+        '.opencode',
+        'plugins',
+        'superpowers.js',
+      );
+      const stagedSkills = join(packageRoot, 'skills');
 
-    const pluginLinkDir = join(opencodeConfigDir, 'plugins');
-    const pluginLink = join(pluginLinkDir, 'superpowers.js');
-    mkdirSync(pluginLinkDir, { recursive: true });
-    if (existsSync(pluginLink) || isSymlink(pluginLink)) {
-      rmSync(pluginLink, { force: true });
-    }
-    symlinkSync(stagedPlugin, pluginLink);
-
-    // node --check the staged plugin ONLY when node is on PATH: a host without
-    // node skips the check and proceeds, rather than failing on an unspawnable
-    // binary. A non-zero check when node IS present is a hard ProvisionError.
-    if (binaryOnPath('node')) {
-      const node = getEnv('OPENCODE_NODE_BIN') ?? 'node';
-      // The syntax check runs on the non-secret provision allowlist (F13),
-      // no extras: node needs no credentials to parse a plugin file.
-      const nodeCheck = runner.run(node, ['--check', stagedPlugin], {
-        env: provisionSubprocessEnv(),
-      });
-      if (nodeCheck.status !== 0) {
-        throw new ProvisionError(
-          `staged OpenCode Superpowers plugin failed node --check: ${nodeCheck.stderr.trim().slice(0, 300)}`,
-        );
+      const pluginLinkDir = join(opencodeConfigDir, 'plugins');
+      const pluginLink = join(pluginLinkDir, 'superpowers.js');
+      mkdirSync(pluginLinkDir, { recursive: true });
+      if (existsSync(pluginLink) || isSymlink(pluginLink)) {
+        rmSync(pluginLink, { force: true });
       }
-    }
+      symlinkSync(stagedPlugin, pluginLink);
 
-    // Prove the staged plugin, the plugin symlink, the staged skills dir, and
-    // every file beneath it resolve under the isolated home (no escape via
-    // symlink or traversal).
-    requireUnderHome(stagedPlugin, opencodeHome);
-    requireUnderHome(pluginLink, opencodeHome);
-    requireUnderHome(stagedSkills, opencodeHome);
-    for (const path of walk(stagedSkills)) {
-      requireUnderHome(path, opencodeHome);
+      // node --check the staged plugin ONLY when node is on PATH: a host without
+      // node skips the check and proceeds, rather than failing on an unspawnable
+      // binary. A non-zero check when node IS present is a hard ProvisionError.
+      if (binaryOnPath('node')) {
+        const node = getEnv('OPENCODE_NODE_BIN') ?? 'node';
+        // The syntax check runs on the non-secret provision allowlist (F13),
+        // no extras: node needs no credentials to parse a plugin file.
+        const nodeCheck = runner.run(node, ['--check', stagedPlugin], {
+          env: provisionSubprocessEnv(),
+        });
+        if (nodeCheck.status !== 0) {
+          throw new ProvisionError(
+            `staged OpenCode Superpowers plugin failed node --check: ${nodeCheck.stderr.trim().slice(0, 300)}`,
+          );
+        }
+      }
+
+      // Prove the staged plugin, the plugin symlink, the staged skills dir, and
+      // every file beneath it resolve under the isolated home (no escape via
+      // symlink or traversal).
+      requireUnderHome(stagedPlugin, opencodeHome);
+      requireUnderHome(pluginLink, opencodeHome);
+      requireUnderHome(stagedSkills, opencodeHome);
+      for (const path of walk(stagedSkills)) {
+        requireUnderHome(path, opencodeHome);
+      }
     }
 
     // Provider preflight: throwaway isolated home with the same provider config,

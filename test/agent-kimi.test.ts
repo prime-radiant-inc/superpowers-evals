@@ -1571,3 +1571,106 @@ test('oauth path accepts the default credential.model (kimi_default unchanged)',
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const spA = join(plainHome.workdir, '..', 'kimi-sp-d2-threaded');
+  const spB = join(plainHome.workdir, '..', 'kimi-sp-d2-ambient');
+  mkdirSync(spA, { recursive: true });
+  stageSuperpowers(spA);
+  mkdirSync(spB, { recursive: true });
+  stageSuperpowers(spB);
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: spB,
+        KIMI_MODEL_API_KEY: API_KEY,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        KIMI_MODEL_NAME: undefined,
+      },
+      () => {
+        const runner = new FakeCommandRunner(happyResponder);
+        new KimiAgent(KIMI_CONFIG).provision(home, runner);
+        const installed = JSON.parse(
+          readFileSync(
+            join(home.configDir, 'plugins', 'installed.json'),
+            'utf8',
+          ),
+        );
+        const plugin = installed.plugins[0];
+        // The registered plugin root is the THREADED checkout, never ambient.
+        expect(plugin.root).toContain('kimi-sp-d2-threaded');
+        expect(plugin.root).not.toContain('ambient');
+        expect(plugin.originalSource).toBe(plugin.root);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: undefined,
+        KIMI_MODEL_API_KEY: API_KEY,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        KIMI_MODEL_NAME: undefined,
+      },
+      () => {
+        const runner = new FakeCommandRunner(happyResponder);
+        const env = new KimiAgent(KIMI_CONFIG).provision(home, runner);
+        // No ProvisionError; the stock arm still ran the auth preflight and
+        // wrote the runtime env file.
+        expect(runner.calls.length).toBe(1);
+        expect(existsSync(env['KIMI_ENV_FILE'] ?? '')).toBe(true);
+        // Zero superpowers staging: no plugin registration at all.
+        expect(
+          existsSync(join(home.configDir, 'plugins', 'installed.json')),
+        ).toBe(false);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      {
+        SUPERPOWERS_ROOT: undefined,
+        KIMI_MODEL_API_KEY: API_KEY,
+        QUORUM_KIMI_PREFLIGHT_SENTINEL: undefined,
+        KIMI_MODEL_NAME: undefined,
+      },
+      () => {
+        expect(() =>
+          new KimiAgent(KIMI_CONFIG).provision(
+            home,
+            new FakeCommandRunner(happyResponder),
+          ),
+        ).toThrow(
+          'SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});

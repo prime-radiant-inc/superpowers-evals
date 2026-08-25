@@ -17,6 +17,7 @@ import type { AppServerClient } from './codex-app-server.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Codex-family provisioning. provision() is SETUP ONLY: it seeds the per-run
 // CODEX_HOME so the agent boots past the sign-in picker with Superpowers staged
@@ -98,8 +99,12 @@ export class CodexAgent implements CodingAgent {
     const { configDir, workdir, skeletonRoot } = home;
     const family = this.config.runtime_family ?? 'codex';
 
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT');
-    if (superpowersRoot === undefined || superpowersRoot === '') {
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: zero superpowers staging; missing preserves the pre-D2
+    // hard-fail. The staging call sites below guard on kind === 'root'.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install codex plugin hooks',
       );
@@ -120,7 +125,9 @@ export class CodexAgent implements CodingAgent {
       // 1. Copy the host's ChatGPT subscription auth into the fresh CODEX_HOME.
       this.seedCodexAuth(configDir);
       // 2. Stage Superpowers with bare features/plugins config (no model block).
-      this.installPluginHooksSubscription(configDir, workdir, superpowersRoot);
+      if (sp.kind === 'root') {
+        this.installPluginHooksSubscription(configDir, workdir, sp.root);
+      }
     } else if (credential.auth === 'api-key') {
       // Resolve the API key from the credential's api_key_env. There is no
       // codex-conventional key env, so pass undefined as the harness env arg.
@@ -148,14 +155,16 @@ export class CodexAgent implements CodingAgent {
       const wireApi = mapWireApi(credential.api);
 
       // Stage Superpowers with a full model_providers config.toml.
-      this.installPluginHooksApiKey(
-        configDir,
-        workdir,
-        superpowersRoot,
-        credential.model,
-        baseUrl,
-        wireApi,
-      );
+      if (sp.kind === 'root') {
+        this.installPluginHooksApiKey(
+          configDir,
+          workdir,
+          sp.root,
+          credential.model,
+          baseUrl,
+          wireApi,
+        );
+      }
 
       // Write the mode-0600 env file the launcher sources so the provider's
       // env_key carries the API key to codex. Secrets live in files, never env.

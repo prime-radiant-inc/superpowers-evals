@@ -850,3 +850,74 @@ test('pi launch-agent isolates HOME, omits PI_CODING_AGENT_DIR and --session-dir
     '--session-dir "$PI_CODING_AGENT_DIR/sessions"',
   );
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const spA = makeSuperpowersRoot();
+  // An ambient root missing every Pi support file: consulting it would throw.
+  const ambient = mkdtempSync(join(tmpdir(), 'quorum-pi-d2-ambient-'));
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'root', root: spA.root },
+  });
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: ambient, PI_API_KEY_FIXTURE: 'd2-root-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        // Provision succeeds against the threaded root (validation never
+        // consulted the invalid ambient one) and the api-key stock arm ran.
+        agent.provision(home, stubRunner, makeApiKeyCredential());
+        expect(existsSync(join(home.configDir, 'models.json'))).toBe(true);
+      },
+    );
+  } finally {
+    cleanup();
+    rmSync(ambient, { recursive: true, force: true });
+    spA.cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: undefined, PI_API_KEY_FIXTURE: 'd2-none-key' },
+      () => {
+        const agent = new PiAgent(piConfig());
+        agent.provision(home, stubRunner, makeApiKeyCredential());
+        expect(existsSync(join(home.configDir, 'models.json'))).toBe(true);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: undefined, PI_API_KEY_FIXTURE: 'd2-key' },
+      () => {
+        expect(() =>
+          new PiAgent(piConfig()).provision(
+            home,
+            stubRunner,
+            makeApiKeyCredential(),
+          ),
+        ).toThrow(
+          'SUPERPOWERS_ROOT not set; cannot load Pi Superpowers extension',
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});

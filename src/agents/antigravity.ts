@@ -22,6 +22,7 @@ import { agyLogShowsRateLimit } from './agy-watch.ts';
 import type { CommandResult, CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { provisionSubprocessEnv } from './subprocess-env.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Antigravity-family provisioning. provision() is SETUP ONLY: it seeds the
 // per-run ANTIGRAVITY_CONFIG_DIR/.gemini tree so the agy CLI boots against an
@@ -152,8 +153,12 @@ export class AntigravityAgent implements CodingAgent {
   provision(home: RunHome, runner: CommandRunner): Record<string, string> {
     const { configDir, workdir } = home;
 
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT');
-    if (superpowersRoot === undefined || superpowersRoot === '') {
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: the plugin install (step 3) and its verification (step 4) are
+    // skipped entirely; missing preserves the pre-D2 hard-fail.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot install antigravity Superpowers plugin',
       );
@@ -192,36 +197,39 @@ export class AntigravityAgent implements CodingAgent {
     //    to the isolated run home. Install from a CLEAN staged copy (sans
     //    evals/.git/node_modules) rather than the raw SUPERPOWERS_ROOT, so
     //    agy's deep-copy never recurses into nested eval output.
-    const geminiDir = join(configDir, '.gemini');
-    const stagedPlugin = stageAntigravityPluginSource(superpowersRoot);
-    let installResult: CommandResult;
-    try {
-      installResult = runner.run(
-        'agy',
-        [`--gemini_dir=${geminiDir}`, 'plugin', 'install', stagedPlugin],
-        {
-          cwd: configDir,
-          env: antigravitySubprocessEnv(configDir),
-        },
-      );
-    } finally {
-      rmSync(stagedPlugin, { recursive: true, force: true });
-    }
-    if (installResult.status !== 0) {
-      throw new ProvisionError(
-        `agy plugin install failed (exit ${installResult.status}); stderr: ${installResult.stderr.trim().slice(0, 300)}`,
-      );
-    }
+    // 4. Verify the required Superpowers plugin files landed. Both steps are
+    //    superpowers staging — the none arm skips them.
+    if (sp.kind === 'root') {
+      const geminiDir = join(configDir, '.gemini');
+      const stagedPlugin = stageAntigravityPluginSource(sp.root);
+      let installResult: CommandResult;
+      try {
+        installResult = runner.run(
+          'agy',
+          [`--gemini_dir=${geminiDir}`, 'plugin', 'install', stagedPlugin],
+          {
+            cwd: configDir,
+            env: antigravitySubprocessEnv(configDir),
+          },
+        );
+      } finally {
+        rmSync(stagedPlugin, { recursive: true, force: true });
+      }
+      if (installResult.status !== 0) {
+        throw new ProvisionError(
+          `agy plugin install failed (exit ${installResult.status}); stderr: ${installResult.stderr.trim().slice(0, 300)}`,
+        );
+      }
 
-    // 4. Verify the required Superpowers plugin files landed.
-    const pluginRoot = join(geminiDir, 'config', 'plugins', 'superpowers');
-    const missing = REQUIRED_PLUGIN_FILES.filter(
-      (rel) => !existsSync(join(pluginRoot, rel)),
-    );
-    if (missing.length > 0) {
-      throw new ProvisionError(
-        `agy plugin install completed but expected Superpowers plugin files are missing: ${missing.join(', ')}`,
+      const pluginRoot = join(geminiDir, 'config', 'plugins', 'superpowers');
+      const missing = REQUIRED_PLUGIN_FILES.filter(
+        (rel) => !existsSync(join(pluginRoot, rel)),
       );
+      if (missing.length > 0) {
+        throw new ProvisionError(
+          `agy plugin install completed but expected Superpowers plugin files are missing: ${missing.join(', ')}`,
+        );
+      }
     }
 
     // 5. Persist no-prompt settings for the isolated run.

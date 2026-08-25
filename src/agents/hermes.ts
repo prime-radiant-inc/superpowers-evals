@@ -16,6 +16,7 @@ import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
 import { provisionSubprocessEnv } from './subprocess-env.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // Hermes support files a usable SUPERPOWERS_ROOT must contain. The plugin dir
 // and the using-superpowers skill + hermes-tools reference are what make a
@@ -80,14 +81,6 @@ function expanduser(p: string): string {
   return p;
 }
 
-function requireHermesEnv(name: string, purpose: string): string {
-  const value = getEnv(name);
-  if (value === undefined || value === '') {
-    throw new ProvisionError(`${name} not set; cannot ${purpose}`);
-  }
-  return value;
-}
-
 function requireHermesSuperpowersSource(superpowersRoot: string): void {
   const missing = HERMES_SUPPORT_FILES.map((rel) =>
     join(superpowersRoot, rel),
@@ -130,13 +123,19 @@ export class HermesAgent implements CodingAgent {
     runner: CommandRunner,
     credential?: Credential,
   ): Record<string, string> {
-    const superpowersRoot = expanduser(
-      requireHermesEnv(
-        'SUPERPOWERS_ROOT',
-        'stage the Superpowers plugin for Hermes',
-      ),
-    );
-    requireHermesSuperpowersSource(superpowersRoot);
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: zero superpowers staging; missing preserves the pre-D2
+    // hard-fail. The staging block below guards on kind === 'root'.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
+      throw new ProvisionError(
+        'SUPERPOWERS_ROOT not set; cannot stage the Superpowers plugin for Hermes',
+      );
+    }
+    if (sp.kind === 'root') {
+      requireHermesSuperpowersSource(expanduser(sp.root));
+    }
 
     if (
       Bun.which(this.config.binary, { PATH: envSnapshot()['PATH'] ?? '' }) ===
@@ -202,40 +201,44 @@ export class HermesAgent implements CodingAgent {
     // .hermes-plugin/ (falling back to ./skills). Mirror that layout under
     // plugins/superpowers/ rather than flattening .hermes-plugin/* into it.
     // Reject any symlink in the source trees first so cpSync can never copy
-    // in a live symlink that escapes the staged plugin dir.
-    rejectHermesStagingSourceSymlinks(superpowersRoot);
-    const pluginDir = join(configDir, 'plugins', 'superpowers');
-    mkdirSync(pluginDir, { recursive: true });
-    cpSync(
-      join(superpowersRoot, '.hermes-plugin'),
-      join(pluginDir, '.hermes-plugin'),
-      { recursive: true },
-    );
-    cpSync(join(superpowersRoot, 'skills'), join(pluginDir, 'skills'), {
-      recursive: true,
-      dereference: true,
-    });
-
-    // Enable through the CLI (documented: `hermes plugins enable <name>`),
-    // with HOME pinned to the run home so it edits the throwaway config.
-    // The subprocess runs on the non-secret provision allowlist plus these
-    // pinned extras (F13): no host credentials reach the third-party CLI.
-    const runHomeDir = dirname(configDir);
-    const result = runner.run(
-      this.config.binary,
-      ['plugins', 'enable', 'superpowers'],
-      {
-        env: provisionSubprocessEnv({
-          HOME: runHomeDir,
-          HERMES_HOME: configDir,
-        }),
-      },
-    );
-    if (result.status !== 0) {
-      throw new ProvisionError(
-        `hermes plugins enable failed (status ${String(result.status)}): ` +
-          `${result.stderr || result.stdout}`,
+    // in a live symlink that escapes the staged plugin dir. All of this is
+    // superpowers staging — the none arm skips it entirely.
+    if (sp.kind === 'root') {
+      const superpowersRoot = expanduser(sp.root);
+      rejectHermesStagingSourceSymlinks(superpowersRoot);
+      const pluginDir = join(configDir, 'plugins', 'superpowers');
+      mkdirSync(pluginDir, { recursive: true });
+      cpSync(
+        join(superpowersRoot, '.hermes-plugin'),
+        join(pluginDir, '.hermes-plugin'),
+        { recursive: true },
       );
+      cpSync(join(superpowersRoot, 'skills'), join(pluginDir, 'skills'), {
+        recursive: true,
+        dereference: true,
+      });
+
+      // Enable through the CLI (documented: `hermes plugins enable <name>`),
+      // with HOME pinned to the run home so it edits the throwaway config.
+      // The subprocess runs on the non-secret provision allowlist plus these
+      // pinned extras (F13): no host credentials reach the third-party CLI.
+      const runHomeDir = dirname(configDir);
+      const result = runner.run(
+        this.config.binary,
+        ['plugins', 'enable', 'superpowers'],
+        {
+          env: provisionSubprocessEnv({
+            HOME: runHomeDir,
+            HERMES_HOME: configDir,
+          }),
+        },
+      );
+      if (result.status !== 0) {
+        throw new ProvisionError(
+          `hermes plugins enable failed (status ${String(result.status)}): ` +
+            `${result.stderr || result.stdout}`,
+        );
+      }
     }
 
     return {};

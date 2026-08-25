@@ -1017,3 +1017,83 @@ test('provision subprocess env drops host credentials, carries gemini extras', (
     spCleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: spAHome, cleanup: spACleanup } = makeTempHome();
+  const { home: spBHome, cleanup: spBCleanup } = makeTempHome();
+  const spA = spAHome.configDir;
+  const spB = spBHome.configDir;
+  mkdirSync(spA, { recursive: true });
+  seedSuperpowersRoot(spA);
+  mkdirSync(spB, { recursive: true });
+  seedSuperpowersRoot(spB);
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'root', root: spA },
+  });
+
+  try {
+    withEnv({ GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: spB }, () => {
+      const runner = new FakeCommandRunner(successResponder(home.configDir));
+      new GeminiAgent(CONFIG).provision(home, runner);
+      // The link command pointed at the threaded root, never the ambient one.
+      expect(runner.calls.length).toBe(2);
+      const linkCall = runner.calls[0];
+      expect(linkCall?.args).toEqual(['extensions', 'link', spA, '--consent']);
+    });
+  } finally {
+    cleanup();
+    spBCleanup();
+    spACleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnv({ GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: undefined }, () => {
+      const runner = new FakeCommandRunner(successResponder(home.configDir));
+      const env = new GeminiAgent(CONFIG).provision(home, runner);
+      // No ProvisionError; the stock arm still writes settings + env file.
+      expect(env).toEqual({
+        GEMINI_CLI_TRUST_WORKSPACE: 'true',
+        GEMINI_DEFAULT_AUTH_TYPE: 'gemini-api-key',
+      });
+      expect(existsSync(join(home.configDir, '.gemini', 'settings.json'))).toBe(
+        true,
+      );
+      expect(existsSync(join(home.configDir, '.gemini-env'))).toBe(true);
+      // Zero superpowers staging: no link/list subprocess, no manifests.
+      expect(runner.calls.length).toBe(0);
+      for (const rel of EXTENSION_MANIFESTS) {
+        expect(existsSync(join(home.configDir, rel))).toBe(false);
+      }
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv({ GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: undefined }, () => {
+      expect(() =>
+        new GeminiAgent(CONFIG).provision(
+          home,
+          new FakeCommandRunner(successResponder(home.configDir)),
+        ),
+      ).toThrow(
+        'SUPERPOWERS_ROOT not set; cannot install Gemini Superpowers extension',
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});

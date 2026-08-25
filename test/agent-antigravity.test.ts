@@ -1307,3 +1307,110 @@ test('provision subprocess env drops host credentials, carries the agy extra', (
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+// Stage a D2 superpowers root whose staged-plugin contents identify the source.
+function makeD2SpRoot(parent: string, marker: string): string {
+  const root = join(parent, `sp-d2-${marker}`);
+  mkdirSync(join(root, 'skills', 'using-superpowers'), { recursive: true });
+  writeFileSync(
+    join(root, 'skills', 'using-superpowers', 'SKILL.md'),
+    `#${marker}\n`,
+  );
+  writeFileSync(join(root, 'gemini-extension.json'), '{"name":"superpowers"}');
+  return root;
+}
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const parent = join(plainHome.workdir, '..');
+  const spA = makeD2SpRoot(parent, 'threaded');
+  const spB = makeD2SpRoot(parent, 'ambient');
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+
+  try {
+    withRoot(spB, () => {
+      // Capture the staged-plugin SKILL.md at install time (the staged temp
+      // copy is removed right after the subprocess returns).
+      const captured: { skill: string | undefined } = { skill: undefined };
+      const responder = (
+        command: string,
+        args: readonly string[],
+      ): CommandResult => {
+        if (command === 'agy' && isPluginInstall(args)) {
+          const stagedPath = args[3];
+          if (stagedPath !== undefined) {
+            captured.skill = readFileSync(
+              join(stagedPath, 'skills', 'using-superpowers', 'SKILL.md'),
+              'utf8',
+            );
+          }
+        }
+        return happyResponder(command, args);
+      };
+      new AntigravityAgent(ANTIGRAVITY_CONFIG).provision(
+        home,
+        new FakeCommandRunner(responder),
+      );
+      expect(captured.skill).toBe('#threaded\n');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withRoot(undefined, () => {
+      const runner = new FakeCommandRunner(happyResponder);
+      const env = new AntigravityAgent(ANTIGRAVITY_CONFIG).provision(
+        home,
+        runner,
+      );
+      // No ProvisionError; the stock arm still preflighted + wrote settings.
+      expect(env).toEqual({});
+      expect(runner.calls.length).toBe(1); // the auth preflight only
+      expect(
+        existsSync(
+          join(home.configDir, '.gemini', 'antigravity-cli', 'settings.json'),
+        ),
+      ).toBe(true);
+      // Zero superpowers staging: no installed plugin tree.
+      expect(
+        existsSync(
+          join(home.configDir, '.gemini', 'config', 'plugins', 'superpowers'),
+        ),
+      ).toBe(false);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withRoot(undefined, () => {
+      expect(() =>
+        new AntigravityAgent(ANTIGRAVITY_CONFIG).provision(
+          home,
+          new FakeCommandRunner(happyResponder),
+        ),
+      ).toThrow(
+        'SUPERPOWERS_ROOT not set; cannot install antigravity Superpowers plugin',
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});

@@ -7,7 +7,7 @@ import {
   isSerfOpenRouterCampaignCredentialV1,
   SERF_OPENROUTER_V1_API_KEY_ENV,
 } from '../credentials/serf-openrouter-profile.ts';
-import { envSnapshot, getEnv } from '../env.ts';
+import { envSnapshot } from '../env.ts';
 import type { CommandRunner } from './command-runner.ts';
 import {
   type CodingAgent,
@@ -16,6 +16,7 @@ import {
   shellSingleQuote,
 } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
+import { resolveSuperpowersRoot } from './superpowers.ts';
 
 // The private per-run env file provision writes into the serf config dir: one
 // line, `<SELECTED_NAME>='<value>'`, mode 0600. The launcher unsets the
@@ -84,20 +85,26 @@ export class SerfAgent implements CodingAgent {
       );
     }
 
-    const superpowersRoot = getEnv('SUPERPOWERS_ROOT') ?? '';
-    if (superpowersRoot === '') {
+    // Kernel D2: the superpowers root is threaded via the home spec (ambient
+    // env is consulted only on the legacy undefined path). none = the explicit
+    // stock arm: no superpowers source validation (launcher --plugin-dir
+    // threading is a Task-8 concern); missing preserves the pre-D2 hard-fail.
+    const sp = resolveSuperpowersRoot(home);
+    if (sp.kind === 'missing') {
       throw new ProvisionError(
         'SUPERPOWERS_ROOT not set; cannot point serf --plugin-dir at Superpowers',
       );
     }
-    const root = resolve(superpowersRoot);
-    const missing = SERF_REQUIRED_SUPERPOWERS_FILES.filter(
-      (rel) => !isFile(join(root, rel)),
-    );
-    if (missing.length > 0) {
-      throw new ProvisionError(
-        `SUPERPOWERS_ROOT is missing required Superpowers plugin files: ${missing.join(', ')}`,
+    if (sp.kind === 'root') {
+      const root = resolve(sp.root);
+      const missing = SERF_REQUIRED_SUPERPOWERS_FILES.filter(
+        (rel) => !isFile(join(root, rel)),
       );
+      if (missing.length > 0) {
+        throw new ProvisionError(
+          `SUPERPOWERS_ROOT is missing required Superpowers plugin files: ${missing.join(', ')}`,
+        );
+      }
     }
 
     if (credential !== undefined) {

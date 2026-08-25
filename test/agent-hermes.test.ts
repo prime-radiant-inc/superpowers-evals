@@ -313,3 +313,99 @@ test('provision subprocess env drops host credentials, keeps pinned HOME/HERMES_
   expect(env['PATH']).toBe(process.env['PATH']);
   cleanup();
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const spA = join(plainHome.workdir, '..', 'sp-d2-threaded');
+  const spB = join(plainHome.workdir, '..', 'sp-d2-ambient');
+  mkdirSync(spA, { recursive: true });
+  stageSuperpowers(spA);
+  writeFileSync(
+    join(spA, 'skills', 'using-superpowers', 'references', 'd2-marker.md'),
+    'threaded\n',
+  );
+  mkdirSync(spB, { recursive: true });
+  stageSuperpowers(spB);
+  writeFileSync(
+    join(spB, 'skills', 'using-superpowers', 'references', 'd2-marker.md'),
+    'ambient\n',
+  );
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+
+  try {
+    withEnvVars(
+      { SUPERPOWERS_ROOT: spB, OPENROUTER_API_KEY: 'or-key-123' },
+      () => {
+        const runner = new FakeCommandRunner();
+        new HermesAgent(HERMES_CONFIG).provision(home, runner, OPENROUTER_CRED);
+        const staged = join(
+          home.configDir,
+          'plugins',
+          'superpowers',
+          'skills',
+          'using-superpowers',
+          'references',
+          'd2-marker.md',
+        );
+        expect(readFileSync(staged, 'utf8')).toBe('threaded\n');
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnvVars(
+      { SUPERPOWERS_ROOT: undefined, OPENROUTER_API_KEY: 'or-key-123' },
+      () => {
+        const runner = new FakeCommandRunner();
+        const env = new HermesAgent(HERMES_CONFIG).provision(
+          home,
+          runner,
+          OPENROUTER_CRED,
+        );
+        expect(env).toEqual({});
+        // The stock arm still writes the credential config...
+        expect(existsSync(join(home.configDir, 'config.yaml'))).toBe(true);
+        expect(existsSync(join(home.configDir, '.env'))).toBe(true);
+        // ...and zero superpowers staging ran: no plugin dir, no enable call.
+        expect(existsSync(join(home.configDir, 'plugins'))).toBe(false);
+        expect(runner.calls.length).toBe(0);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnvVars({ SUPERPOWERS_ROOT: undefined }, () => {
+      expect(() =>
+        new HermesAgent(HERMES_CONFIG).provision(
+          home,
+          new FakeCommandRunner(),
+          OPENROUTER_CRED,
+        ),
+      ).toThrow(
+        'SUPERPOWERS_ROOT not set; cannot stage the Superpowers plugin for Hermes',
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});

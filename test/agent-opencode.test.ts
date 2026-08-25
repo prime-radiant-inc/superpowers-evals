@@ -1187,3 +1187,115 @@ test('provision node --check env drops host credentials (base allowlist only)', 
     cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Kernel D2: home.superpowers threading (root / none / legacy undefined).
+// ---------------------------------------------------------------------------
+
+test('superpowers root mode stages from the threaded root, not ambient env', () => {
+  const { home: plainHome, cleanup } = makeTempHome();
+  const spA = join(plainHome.workdir, '..', 'sp-d2-threaded');
+  const spB = join(plainHome.workdir, '..', 'sp-d2-ambient');
+  mkdirSync(spA, { recursive: true });
+  stageSuperpowers(spA);
+  mkdirSync(join(spA, 'skills', 'd2-root-marker'), { recursive: true });
+  writeFileSync(
+    join(spA, 'skills', 'd2-root-marker', 'SKILL.md'),
+    'threaded\n',
+  );
+  mkdirSync(spB, { recursive: true });
+  stageSuperpowers(spB);
+  mkdirSync(join(spB, 'skills', 'd2-root-marker'), { recursive: true });
+  writeFileSync(join(spB, 'skills', 'd2-root-marker', 'SKILL.md'), 'ambient\n');
+  const home = {
+    ...plainHome,
+    superpowers: { mode: 'root', root: spA } as const,
+  };
+
+  try {
+    withEnv(spB, 'd2-root-key', () => {
+      const { spawn } = makeHappySpawn();
+      const agent = new OpenCodeAgent(OPENCODE_CONFIG, spawn);
+      agent.provision(
+        home,
+        new FakeCommandRunner(happyResponder),
+        makeCredential(),
+      );
+      const staged = join(
+        home.configDir,
+        '.config',
+        'opencode',
+        'superpowers',
+        'skills',
+        'd2-root-marker',
+        'SKILL.md',
+      );
+      expect(readFileSync(staged, 'utf8')).toBe('threaded\n');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers none mode runs zero superpowers staging', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnv(undefined, 'd2-none-key', () => {
+      const { spawn } = makeHappySpawn();
+      const runner = new FakeCommandRunner(happyResponder);
+      const env = new OpenCodeAgent(OPENCODE_CONFIG, spawn).provision(
+        home,
+        runner,
+        makeCredential(),
+      );
+      // No ProvisionError; the stock arm still wrote the provider config...
+      expect(
+        existsSync(
+          join(home.configDir, '.config', 'opencode', 'opencode.json'),
+        ),
+      ).toBe(true);
+      expect(env['OPENCODE_CONFIG_DIR']).toBeDefined();
+      // ...and staged zero superpowers plugin content.
+      expect(
+        existsSync(join(home.configDir, '.config', 'opencode', 'superpowers')),
+      ).toBe(false);
+      expect(
+        existsSync(
+          join(
+            home.configDir,
+            '.config',
+            'opencode',
+            'plugins',
+            'superpowers.js',
+          ),
+        ),
+      ).toBe(false);
+      // No node --check subprocess: no staged plugin to check.
+      expect(runner.calls.length).toBe(0);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('superpowers undefined spec keeps the legacy missing-root ProvisionError', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv(undefined, 'd2-key', () => {
+      expect(() =>
+        new OpenCodeAgent(OPENCODE_CONFIG, makeHappySpawn().spawn).provision(
+          home,
+          new FakeCommandRunner(happyResponder),
+          makeCredential(),
+        ),
+      ).toThrow(
+        'SUPERPOWERS_ROOT not set; cannot install opencode Superpowers plugin',
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
