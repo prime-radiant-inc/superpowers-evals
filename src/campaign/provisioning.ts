@@ -158,8 +158,19 @@ function tryAcquireLock(lockPath: string, ownerFile: string): boolean {
 }
 
 /** Reclaim a lock whose owner died mid-flight. Returns whether the acquire
- *  should be retried immediately (progress was made). */
+ *  should be retried immediately (progress was made).
+ *  No-follow confinement: the lock path is lstat'd FIRST and must be a real
+ *  directory — a symlink (or any non-directory) at the lock path is not a
+ *  lock we own; it is never traversed, so reclamation can never read or
+ *  delete through it (a crafted lock symlink must not reach the target). */
 function reclaimStaleLock(lockPath: string): boolean {
+  const lockStat = tryLstat(lockPath);
+  if (lockStat === null) return true; // vanished: retry the acquire
+  if (!lockStat.isDirectory()) {
+    throw new ProvisioningError(
+      `refusing to reclaim non-directory or symlinked lock path: ${lockPath}`,
+    );
+  }
   let entries: string[];
   try {
     entries = readdirSync(lockPath);
@@ -168,11 +179,11 @@ function reclaimStaleLock(lockPath: string): boolean {
     return true; // vanished: retry the acquire immediately
   }
   if (entries.length === 0) {
-    const st = tryLstat(lockPath);
-    if (st !== null && Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+    if (Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
       // A contender or reclaimer crashed before finishing its teardown.
       // rmdir only succeeds while empty, so an owner file landing
-      // concurrently makes this a no-op.
+      // concurrently makes this a no-op. rmdir never follows a symlink, so
+      // a path swapped for one between our lstat and here fails harmlessly.
       try {
         rmdirSync(lockPath);
       } catch {
@@ -186,7 +197,10 @@ function reclaimStaleLock(lockPath: string): boolean {
   for (const name of entries) {
     const ownerPath = join(lockPath, name);
     const st = tryLstat(ownerPath);
-    if (st === null) continue;
+    // Only regular files or symlinks are ever unlinked — and unlink never
+    // follows the final path component, so a symlink child removes only the
+    // link itself. A directory child is foreign junk: never touched.
+    if (st === null || !(st.isFile() || st.isSymbolicLink())) continue;
     if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
       // The unique name IS the ownership token: this unlink can only ever
       // remove the exact stale owner we observed, never a successor's fresh

@@ -115,6 +115,32 @@ test('materializes with the exact git argv and minimal env', () => {
 
 test('rejects a non-hex sha before any path construction or subprocess', () => {
   const runner = new RecordingRunner();
+  // Distinguishability trap: a destParent containing a NUL byte makes ANY
+  // destination handling fail with a raw Node TypeError
+  // (ERR_INVALID_ARG_VALUE) rather than a ProvisioningError — so if SHA
+  // validation were moved after destination handling (lock mkdir / dest
+  // lstat), this test would observe the wrong error class and fail.
+  // Validation-first never touches the filesystem and its error wins.
+  const nulParent = join(tmp(), 'par\0ent');
+  expect(() =>
+    materializeSuperpowersWorktree({
+      sourceCheckout: '/src/sp',
+      sha: '../../../tmp/evil',
+      destParent: nulParent,
+      runner,
+    }),
+  ).toThrow(ProvisioningError);
+  expect(() =>
+    materializeSuperpowersWorktree({
+      sourceCheckout: '/src/sp',
+      sha: '../../../tmp/evil',
+      destParent: nulParent,
+      runner,
+    }),
+  ).toThrow(/non-SHA ref/);
+  // And on a usable destParent, rejection still precedes destination
+  // handling: no lock dir, no stray sibling — a traversal-shaped sha never
+  // reached the filesystem.
   const destParent = tmp();
   expect(() =>
     materializeSuperpowersWorktree({
@@ -125,9 +151,35 @@ test('rejects a non-hex sha before any path construction or subprocess', () => {
     }),
   ).toThrow(ProvisioningError);
   expect(runner.calls).toHaveLength(0);
-  // Rejection observably precedes destination handling: no lock dir, no
-  // stray sibling — a traversal-shaped sha never reached the filesystem.
   expect(readdirSync(destParent)).toEqual([]);
+});
+
+test('a symlinked lock path is refused, never traversed', () => {
+  const runner = new RecordingRunner();
+  const destParent = tmp();
+  // The victim directory the crafted lock symlink points at, holding a
+  // stale-aged file that an unsafe reclaimer would delete through the link.
+  const victim = tmp();
+  const precious = join(victim, 'precious.txt');
+  writeFileSync(precious, 'keep\n');
+  utimesSync(precious, new Date(0), new Date(0));
+  const lock = join(destParent, `superpowers-${SHA_A}.lock`);
+  symlinkSync(victim, lock);
+  let err: unknown;
+  try {
+    materializeSuperpowersWorktree(args(runner, destParent));
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(ProvisioningError);
+  expect((err as ProvisioningError).message).toContain(
+    'non-directory or symlinked lock path',
+  );
+  // Nothing beyond destParent was read or deleted; the symlink stands.
+  expect(readFileSync(precious, 'utf8')).toBe('keep\n');
+  expect(readdirSync(victim)).toEqual(['precious.txt']);
+  expect(existsSync(lock)).toBe(true);
+  expect(runner.calls).toHaveLength(0);
 });
 
 test('accepts 64-char hex sha256 SHAs', () => {
