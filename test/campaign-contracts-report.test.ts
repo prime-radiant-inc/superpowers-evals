@@ -57,6 +57,20 @@ test('a gating report round-trips', () => {
   expect(ReportSchema.parse(gatingReport())).toMatchObject({ verdict: 'SHIP' });
 });
 
+test('report numbers are finite (byte-stable rendering cannot carry Infinity)', () => {
+  const infDelta = gatingReport();
+  (infDelta.comparisons as Array<{ cells: Array<{ delta?: number }> }>)[0]!
+    .cells[0]!.delta = Number.POSITIVE_INFINITY;
+  expect(() => ReportSchema.parse(infDelta)).toThrow();
+  expect(() =>
+    ReportSchema.parse(
+      gatingReport({
+        cannot_answer: [{ cell: 'scn@c1', mde: Number.POSITIVE_INFINITY }],
+      }),
+    ),
+  ).toThrow();
+});
+
 test('verdict is present iff gating; stamp iff descriptive', () => {
   // Descriptive: stamp present, verdict structurally absent.
   const descriptive = {

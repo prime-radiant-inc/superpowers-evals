@@ -1,5 +1,6 @@
 // src/contracts/campaign/report.ts
 import { z } from 'zod';
+import { FiniteNumberSchema } from '../finite.ts';
 import { CELL_CLASSES } from './suite.ts';
 
 export const REPORT_VERDICTS = [
@@ -26,7 +27,7 @@ export const ReportSchema = z
     verdict: z.enum(REPORT_VERDICTS).optional(),
     cannot_answer: z.array(
       z
-        .object({ cell: z.string().min(1), mde: z.number().positive() })
+        .object({ cell: z.string().min(1), mde: FiniteNumberSchema.positive() })
         .strict(),
     ),
     comparisons: z.array(
@@ -39,9 +40,9 @@ export const ReportSchema = z
                 scenario: z.string().min(1),
                 class: z.enum(CELL_CLASSES),
                 n: z.number().int().nonnegative(),
-                delta: z.number().optional(),
-                fisher_p: z.number().min(0).max(1).optional(),
-                mde: z.number().positive().optional(),
+                delta: FiniteNumberSchema.optional(),
+                fisher_p: FiniteNumberSchema.min(0).max(1).optional(),
+                mde: FiniteNumberSchema.positive().optional(),
               })
               .strict(),
           ),

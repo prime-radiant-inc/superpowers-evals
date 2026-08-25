@@ -5,20 +5,21 @@
 // editing this file, never a campaign-time extension.
 
 import { z } from 'zod';
+import { FiniteNumberSchema } from '../finite.ts';
 
 export const ReleaseGateV1ParamsSchema = z
   .object({
     // Per-cell two-sided significance level for confirmatory cells.
-    alpha: z.number().gt(0).lt(1),
+    alpha: FiniteNumberSchema.gt(0).lt(1),
     // Determinate-n floor per confirmatory cell (below floor reads
     // UNDERPOWERED and joins the cannot-answer list).
     determinate_n_floor: z.number().int().positive(),
     // The 08-08 completion-collapse tripwire threshold: cross-arm
     // completion divergence beyond this fires the tripwire family.
-    completion_divergence_max: z.number().gt(0).lte(1),
+    completion_divergence_max: FiniteNumberSchema.gt(0).lte(1),
     // Pre-registered minimum-detectable-effect per scenario carrying
     // confirmatory cells ("deltas") — rendered on every SHIP.
-    mde_by_scenario: z.record(z.string(), z.number().positive()),
+    mde_by_scenario: z.record(z.string(), FiniteNumberSchema.positive()),
   })
   .strict();
 export type ReleaseGateV1Params = z.infer<typeof ReleaseGateV1ParamsSchema>;

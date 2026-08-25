@@ -1,6 +1,10 @@
 // test/campaign-contracts-digest.test.ts
 import { expect, test } from 'bun:test';
-import { campaignDigest } from '../src/contracts/campaign/digest.ts';
+import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
+import {
+  campaignDigest,
+  jcsCanonicalize,
+} from '../src/contracts/campaign/digest.ts';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -9,6 +13,9 @@ const C = 'c'.repeat(40);
 // Inferred type (same shape as the fixture in
 // campaign-contracts-campaign.test.ts): a Record<string, unknown> annotation
 // would force bracket access under noPropertyAccessFromIndexSignature.
+// Digest-only fixture, never schema-parsed: its role-labelled sample arms
+// predate the block arm-set invariant, and updating them would churn the
+// golden hash for no canonicalization change.
 function goldenCampaign() {
   return {
     schema_version: 1,
@@ -119,4 +126,33 @@ test('a present digest field is excluded from its own computation', () => {
   expect(campaignDigest(withDigest as never)).toBe(
     campaignDigest(without as never),
   );
+});
+
+test('digest creation accepts a pre-digest campaign (no placeholder digest)', () => {
+  // Registration computes the digest BEFORE the document carries one: the
+  // statically-typed pre-digest shape (digest absent) must be accepted and
+  // produce the same digest as the completed document.
+  const parsed = CampaignSchema.parse({
+    ...goldenCampaign(),
+    samples: [
+      { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+      { sample_id: 's2', cell: 'scn_a@c1', arm: 'treat_arm', replicate: 1 },
+    ],
+    digest: '0'.repeat(64),
+  });
+  const { digest: _placeholder, ...preDigest } = parsed;
+  expect(campaignDigest(preDigest)).toBe(campaignDigest(parsed));
+});
+
+test('lone UTF-16 surrogates reject in string values and object keys (RFC 8785)', () => {
+  // A high surrogate with no low partner is not a Unicode string; JCS
+  // requires well-formed input before JSON quoting.
+  expect(() => jcsCanonicalize('broken \ud800 value')).toThrow(/surrogate/);
+  expect(() => jcsCanonicalize({ ok: 'broken \udfff tail' })).toThrow(
+    /surrogate/,
+  );
+  expect(() => jcsCanonicalize({ 'key\ud800': 1 })).toThrow(/surrogate/);
+  // Valid surrogate PAIRS stay supported in both positions.
+  expect(jcsCanonicalize('😀')).toBe('"😀"');
+  expect(jcsCanonicalize({ '😀': 1 })).toBe('{"😀":1}');
 });

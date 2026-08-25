@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CredentialLabelsSchema } from './credential.ts';
+import { FiniteNumberSchema } from './finite.ts';
 
 export const GAUNTLET_STATUSES = [
   'pass',
@@ -34,9 +35,9 @@ export const CheckRecordSchema = z.object({
   phase: z.enum(CHECK_PHASES),
   // smevals-style check-result extensions (parent Checks): optional runtime
   // values; manifests pin identity fields only, so expected-check matching
-  // is unaffected.
-  score: z.number().optional(),
-  metrics: z.record(z.string(), z.number()).optional(),
+  // is unaffected. Values are finite — they feed report aggregation.
+  score: FiniteNumberSchema.optional(),
+  metrics: z.record(z.string(), FiniteNumberSchema).optional(),
   tags: z.array(z.string()).optional(),
   notes: z.string().optional(),
 });

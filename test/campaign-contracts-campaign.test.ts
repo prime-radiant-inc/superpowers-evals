@@ -48,9 +48,11 @@ export function goldenCampaign(overrides: Record<string, unknown> = {}) {
       },
     ],
     excluded_cells: [],
+    // Sample arms are ARM NAMES: each block's sample-arm set must equal its
+    // comparison's distinct arm set, one sample per arm.
     samples: [
-      { sample_id: 's1', cell: 'scn_a@c1', arm: 'baseline', replicate: 1 },
-      { sample_id: 's2', cell: 'scn_a@c1', arm: 'treatment', replicate: 1 },
+      { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+      { sample_id: 's2', cell: 'scn_a@c1', arm: 'treat_arm', replicate: 1 },
     ],
     comparisons: [
       { comparison_id: 'c1', baseline: 'base_arm', treatment: 'treat_arm' },
@@ -75,7 +77,7 @@ test('a single-arm campaign parses (one-sample blocks)', () => {
     comparisons: [{ comparison_id: 'c1', arm: 'base_arm' }],
     cells: [{ ...goldenCampaign().cells[0], arms: ['baseline'] }],
     samples: [
-      { sample_id: 's1', cell: 'scn_a@c1', arm: 'baseline', replicate: 1 },
+      { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
     ],
     blocks: [{ block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1'] }],
   });
@@ -151,4 +153,135 @@ test('digest is 64 lowercase hex chars', () => {
 
 test('campaign documents are strict', () => {
   expect(() => CampaignSchema.parse(goldenCampaign({ extra: 1 }))).toThrow();
+});
+
+test('comparison, block, and sample ids are unique', () => {
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        comparisons: [
+          { comparison_id: 'c1', baseline: 'base_arm', treatment: 'treat_arm' },
+          { comparison_id: 'c1', arm: 'base_arm' },
+        ],
+      }),
+    ),
+  ).toThrow(/duplicate comparison/);
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        samples: [
+          { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+          { sample_id: 's1', cell: 'scn_a@c1', arm: 'treat_arm', replicate: 1 },
+        ],
+        blocks: [
+          { block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's1'] },
+        ],
+      }),
+    ),
+  ).toThrow(/duplicate sample/);
+  const dupBlocks = goldenCampaign({
+    comparisons: [
+      { comparison_id: 'c1', baseline: 'base_arm', treatment: 'treat_arm' },
+      { comparison_id: 'c2', arm: 'base_arm' },
+    ],
+    samples: [
+      { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+      { sample_id: 's2', cell: 'scn_a@c1', arm: 'treat_arm', replicate: 1 },
+      { sample_id: 's3', cell: 'scn_a@c2', arm: 'base_arm', replicate: 1 },
+    ],
+    blocks: [
+      { block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] },
+      { block_id: 'b1', comparison_id: 'c2', sample_ids: ['s3'] },
+    ],
+  });
+  expect(() => CampaignSchema.parse(dupBlocks)).toThrow(/duplicate block/);
+});
+
+test('block comparison references must resolve (no dangling comparison_id)', () => {
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        blocks: [
+          { block_id: 'b1', comparison_id: 'ghost', sample_ids: ['s1', 's2'] },
+        ],
+      }),
+    ),
+  ).toThrow(/unknown comparison/);
+});
+
+test("each block's sample-arm set equals its comparison's distinct arm set", () => {
+  // Duplicate arm: two samples of the same arm in one block.
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        samples: [
+          { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+          { sample_id: 's2', cell: 'scn_a@c1', arm: 'base_arm', replicate: 2 },
+        ],
+      }),
+    ),
+  ).toThrow(/arm set/);
+  // Missing arm: a rogue arm displaces the comparison's treatment arm.
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        samples: [
+          { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+          { sample_id: 's2', cell: 'scn_a@c1', arm: 'rogue_arm', replicate: 1 },
+        ],
+      }),
+    ),
+  ).toThrow(/arm set/);
+});
+
+test('reverse cardinality: a single-arm block cannot hold two samples', () => {
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        comparisons: [{ comparison_id: 'c1', arm: 'base_arm' }],
+        samples: [
+          { sample_id: 's1', cell: 'scn_a@c1', arm: 'base_arm', replicate: 1 },
+          { sample_id: 's2', cell: 'scn_a@c1', arm: 'base_arm', replicate: 2 },
+        ],
+        blocks: [
+          { block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] },
+        ],
+      }),
+    ),
+  ).toThrow(/arm count/);
+});
+
+test('registered_at must be an ISO-8601 datetime', () => {
+  expect(() =>
+    CampaignSchema.parse(goldenCampaign({ registered_at: 'yesterday' })),
+  ).toThrow();
+  expect(() =>
+    CampaignSchema.parse(goldenCampaign({ registered_at: '2026-08-24' })),
+  ).toThrow();
+  expect(
+    CampaignSchema.parse(
+      goldenCampaign({ registered_at: '2026-08-24T12:30:00+02:00' }),
+    ).registered_at,
+  ).toBe('2026-08-24T12:30:00+02:00');
+});
+
+test('campaign numbers are finite (estimates and budget reject Infinity)', () => {
+  const infEstimates = goldenCampaign();
+  (
+    infEstimates.cells as Array<{
+      estimates_by_arm: Record<string, { duration_s: number }>;
+    }>
+  )[0]!.estimates_by_arm['baseline']!.duration_s = Number.POSITIVE_INFINITY;
+  expect(() => CampaignSchema.parse(infEstimates)).toThrow();
+  expect(() =>
+    CampaignSchema.parse(
+      goldenCampaign({
+        budget: {
+          usd_all_in: Number.POSITIVE_INFINITY,
+          surcharge_applied: 5,
+          priced_coverage: 0.95,
+        },
+      }),
+    ),
+  ).toThrow();
 });

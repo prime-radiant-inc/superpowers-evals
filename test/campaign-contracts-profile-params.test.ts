@@ -35,6 +35,13 @@ test('parameter ranges are enforced', () => {
   expect(() =>
     ReleaseGateV1ParamsSchema.parse({ ...VALID, mde_by_scenario: { s: -1 } }),
   ).toThrow();
+  // Finite discipline: a positive-only bound would admit Infinity.
+  expect(() =>
+    ReleaseGateV1ParamsSchema.parse({
+      ...VALID,
+      mde_by_scenario: { s: Number.POSITIVE_INFINITY },
+    }),
+  ).toThrow();
 });
 
 test('the registry is a frozen built-in map, not a mutable global', () => {

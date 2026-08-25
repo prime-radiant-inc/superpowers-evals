@@ -133,13 +133,14 @@ test('gating suite profile params validate against the registry', () => {
     '  mde_by_scenario: { scn_a: 0.15 }',
     'comparisons:',
     '  - baseline: claude_fx',
-    '    treatment: claude_fx',
+    '    treatment: claude_fx2',
     '    scenarios: [scn_a]',
     '    n: 5',
     '    cells: { scn_a: { class: confirmatory } }',
   ].join('\n');
   const root = repo({
     'arms/claude_fx.yaml': ARM,
+    'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
     'suites/gate_fx.yaml': gating,
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
@@ -154,6 +155,7 @@ test('gating suite profile params validate against the registry', () => {
   const badParams = gating.replace('alpha: 0.05', 'alpha: 2');
   const badRoot = repo({
     'arms/claude_fx.yaml': ARM,
+    'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
     'suites/gate_fx.yaml': badParams,
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
@@ -211,7 +213,7 @@ test('profile without profile_params fails on required fields', () => {
     'max_exposure_skew: 600',
     'comparisons:',
     '  - baseline: claude_fx',
-    '    treatment: claude_fx',
+    '    treatment: claude_fx2',
     '    scenarios: [scn_a]',
     '    n: 5',
     '    cells: { scn_a: { class: confirmatory } }',

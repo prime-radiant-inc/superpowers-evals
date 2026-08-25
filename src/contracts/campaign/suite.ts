@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FiniteNumberSchema } from '../finite.ts';
 
 export const CELL_CLASSES = [
   'confirmatory',
@@ -60,16 +61,16 @@ export const SuiteSchema = z
     schema_version: z.literal(1),
     name: z.string().regex(NAME_RE),
     kind: z.enum(SUITE_KINDS),
-    budget_usd: z.number().positive(),
+    budget_usd: FiniteNumberSchema.positive(),
     profile: z.enum(PROFILE_NAMES).optional(),
     // Validated against the profile parameter registry (profile-params.ts)
     // by quorum check and registration — kept open-typed here.
     profile_params: z.record(z.unknown()).optional(),
     reserve: z.number().int().nonnegative().optional(),
-    max_exposure_skew: z.number().positive().optional(),
+    max_exposure_skew: FiniteNumberSchema.positive().optional(),
     attempt_bounds: z
       .object({
-        max_time_s: z.number().positive().optional(),
+        max_time_s: FiniteNumberSchema.positive().optional(),
         max_attempts: z.number().int().positive().optional(),
       })
       .strict()
@@ -90,11 +91,14 @@ export const SuiteSchema = z
   .strict()
   .superRefine((suite, ctx) => {
     if (suite.kind === 'gating') {
-      if (suite.profile === undefined) {
+      // Suite/profile compatibility: gating IS release-gating — only the
+      // release_gate_v1 profile can decide a gate; descriptive profiles are
+      // exploratory-only.
+      if (suite.profile !== 'release_gate_v1') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['profile'],
-          message: 'gating suites require a decision profile',
+          message: 'gating suites require profile: release_gate_v1',
         });
       }
       if (suite.reserve === undefined) {
@@ -111,16 +115,41 @@ export const SuiteSchema = z
           message: 'gating suites require a registered exposure-skew bound',
         });
       }
+    } else if (suite.profile === 'release_gate_v1') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['profile'],
+        message: 'release_gate_v1 is a gating profile (kind: gating only)',
+      });
     }
     suite.comparisons.forEach((comparison, i) => {
+      // Release scope: every release-gate comparison pairs exactly two
+      // distinct arms — a single-arm unit or a self-comparison cannot gate.
+      if (
+        suite.kind === 'gating' &&
+        (!('baseline' in comparison) ||
+          comparison.baseline === comparison.treatment)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['comparisons', i],
+          message: 'release-gate comparisons require two distinct arms',
+        });
+      }
       if (!('cells' in comparison) || comparison.cells === undefined) return;
       for (const [scenario, cell] of Object.entries(comparison.cells)) {
-        if (cell.class === 'tripwire' && cell.tripwire_expect === undefined) {
+        // The firing criterion is a gating concern: exploratory tripwire
+        // cells are descriptive-only and need no expectation.
+        if (
+          suite.kind === 'gating' &&
+          cell.class === 'tripwire' &&
+          cell.tripwire_expect === undefined
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['comparisons', i, 'cells', scenario, 'tripwire_expect'],
             message:
-              'tripwire cells must declare tripwire_expect (the v1 firing criterion)',
+              'gating tripwire cells must declare tripwire_expect (the v1 firing criterion)',
           });
         }
       }

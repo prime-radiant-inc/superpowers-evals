@@ -24,6 +24,17 @@ test('CheckRecord keeps its base shape and gains optional extensions', () => {
     notes: 'borderline',
   };
   expect(CheckRecordSchema.parse(extended)).toEqual(extended);
+  // score and metric values are finite: an unbounded number field would
+  // otherwise admit Infinity into report aggregation.
+  expect(() =>
+    CheckRecordSchema.parse({ ...base, score: Number.POSITIVE_INFINITY }),
+  ).toThrow();
+  expect(() =>
+    CheckRecordSchema.parse({
+      ...base,
+      metrics: { latency_ms: Number.NEGATIVE_INFINITY },
+    }),
+  ).toThrow();
 });
 
 test('unknown keys fold into detail with the pinned format', () => {

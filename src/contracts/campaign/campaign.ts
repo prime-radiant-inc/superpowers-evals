@@ -1,5 +1,6 @@
 // src/contracts/campaign/campaign.ts
 import { z } from 'zod';
+import { FiniteNumberSchema } from '../finite.ts';
 import { CELL_CLASSES, SuiteSchema } from './suite.ts';
 
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
@@ -9,8 +10,8 @@ const DIGEST_RE = /^[0-9a-f]{64}$/;
 // (src/contracts/estimates.ts).
 export const EstimateSchema = z
   .object({
-    duration_s: z.number().positive(),
-    cost_usd: z.number().nonnegative(),
+    duration_s: FiniteNumberSchema.positive(),
+    cost_usd: FiniteNumberSchema.nonnegative(),
     confidence: z.enum(['high', 'medium', 'low']),
   })
   .strict();
@@ -78,7 +79,7 @@ export const PricingOverrideSchema = z
   .object({
     arm: z.string().min(1),
     scenario: z.string().min(1).optional(),
-    per_token_usd: z.number().positive(),
+    per_token_usd: FiniteNumberSchema.positive(),
     rationale: z.string().min(1),
   })
   .strict();
@@ -112,37 +113,84 @@ export const CampaignSchema = z
     pricing_overrides: z.array(PricingOverrideSchema).optional(),
     budget: z
       .object({
-        usd_all_in: z.number().positive(),
-        surcharge_applied: z.number().nonnegative(),
-        priced_coverage: z.number().min(0).max(1),
+        usd_all_in: FiniteNumberSchema.positive(),
+        surcharge_applied: FiniteNumberSchema.nonnegative(),
+        priced_coverage: FiniteNumberSchema.min(0).max(1),
       })
       .strict(),
-    registered_at: z.string().min(1),
+    // ISO-8601 datetime with a timezone designator (Z or offset).
+    registered_at: z.string().datetime({ offset: true }),
     registered_by: z.string().min(1),
     digest: z.string().regex(DIGEST_RE),
   })
   .strict()
   .superRefine((campaign, ctx) => {
-    // Cardinality invariants (parent Identity): a two-arm comparison's block
-    // holds two samples; a single-arm unit's block holds one; every sample
-    // belongs to exactly one block.
-    const armsByComparison = new Map<string, number>();
-    for (const comparison of campaign.comparisons) {
-      armsByComparison.set(
+    // Referential integrity + cardinality invariants (parent Identity): ids
+    // are unique, every block references a registered comparison, a two-arm
+    // comparison's block holds two samples, a single-arm unit's block holds
+    // one, every sample belongs to exactly one block, and each block's
+    // sample-arm set equals its comparison's distinct arm set (one sample
+    // per arm).
+    const armCountByComparison = new Map<string, number>();
+    const armSetByComparison = new Map<string, Set<string>>();
+    campaign.comparisons.forEach((comparison, i) => {
+      if (armCountByComparison.has(comparison.comparison_id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['comparisons', i],
+          message: `duplicate comparison id ${comparison.comparison_id}`,
+        });
+        return;
+      }
+      armCountByComparison.set(
         comparison.comparison_id,
         'arm' in comparison ? 1 : 2,
       );
-    }
-    const seen = new Set<string>();
-    for (const block of campaign.blocks) {
-      const arms = armsByComparison.get(block.comparison_id);
-      if (arms !== undefined && block.sample_ids.length !== arms) {
+      armSetByComparison.set(
+        comparison.comparison_id,
+        'arm' in comparison
+          ? new Set([comparison.arm])
+          : new Set([comparison.baseline, comparison.treatment]),
+      );
+    });
+    const armBySample = new Map<string, string>();
+    campaign.samples.forEach((sample, i) => {
+      if (armBySample.has(sample.sample_id)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['blocks', campaign.blocks.indexOf(block), 'sample_ids'],
+          path: ['samples', i],
+          message: `duplicate sample id ${sample.sample_id}`,
+        });
+        return;
+      }
+      armBySample.set(sample.sample_id, sample.arm);
+    });
+    const seenBlocks = new Set<string>();
+    const seen = new Set<string>();
+    campaign.blocks.forEach((block, blockIndex) => {
+      if (seenBlocks.has(block.block_id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['blocks', blockIndex],
+          message: `duplicate block id ${block.block_id}`,
+        });
+      }
+      seenBlocks.add(block.block_id);
+      const arms = armCountByComparison.get(block.comparison_id);
+      if (arms === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['blocks', blockIndex, 'comparison_id'],
+          message: `block ${block.block_id} references unknown comparison ${block.comparison_id}`,
+        });
+      } else if (block.sample_ids.length !== arms) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['blocks', blockIndex, 'sample_ids'],
           message: `block ${block.block_id} sample count must match its comparison's arm count (${arms})`,
         });
       }
+      let allSamplesKnown = true;
       for (const sampleId of block.sample_ids) {
         if (seen.has(sampleId)) {
           ctx.addIssue({
@@ -152,7 +200,8 @@ export const CampaignSchema = z
           });
         }
         seen.add(sampleId);
-        if (!campaign.samples.some((s) => s.sample_id === sampleId)) {
+        if (!armBySample.has(sampleId)) {
+          allSamplesKnown = false;
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['blocks'],
@@ -160,7 +209,27 @@ export const CampaignSchema = z
           });
         }
       }
-    }
+      // One sample per arm: the block's sample arms, as a multiset, must be
+      // its comparison's distinct arm set exactly once each.
+      const expectedArms = armSetByComparison.get(block.comparison_id);
+      if (expectedArms !== undefined && allSamplesKnown) {
+        const blockArms = block.sample_ids.flatMap((sampleId) => {
+          const arm = armBySample.get(sampleId);
+          return arm === undefined ? [] : [arm];
+        });
+        const armMatches =
+          blockArms.length === expectedArms.size &&
+          new Set(blockArms).size === blockArms.length &&
+          blockArms.every((arm) => expectedArms.has(arm));
+        if (!armMatches) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['blocks', blockIndex, 'sample_ids'],
+            message: `block ${block.block_id} sample-arm set must equal its comparison's distinct arm set (one sample per arm)`,
+          });
+        }
+      }
+    });
     for (const sample of campaign.samples) {
       if (!seen.has(sample.sample_id)) {
         ctx.addIssue({

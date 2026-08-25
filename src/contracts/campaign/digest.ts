@@ -8,8 +8,19 @@
 
 import type { Campaign } from './campaign.ts';
 
+/** Quote one string per ES6 JSON.stringify after the RFC 8785 well-formedness
+ *  check: a lone UTF-16 surrogate is not a Unicode string, so it must reject
+ *  loud rather than be escape-mangled into the canonical bytes. Applies to
+ *  values and object keys alike. */
+function jcsQuoteString(value: string): string {
+  if (!value.isWellFormed()) {
+    throw new Error('JCS rejects lone UTF-16 surrogates (RFC 8785)');
+  }
+  return JSON.stringify(value);
+}
+
 /** Canonicalize a JSON-domain value per RFC 8785. Throws on non-JSON inputs
- *  (undefined, functions, symbols, NaN, Infinity). */
+ *  (undefined, functions, symbols, NaN, Infinity, lone surrogates). */
 export function jcsCanonicalize(value: unknown): string {
   if (value === null) return 'null';
   const t = typeof value;
@@ -20,7 +31,7 @@ export function jcsCanonicalize(value: unknown): string {
     }
     return JSON.stringify(value);
   }
-  if (t === 'string') return JSON.stringify(value);
+  if (t === 'string') return jcsQuoteString(value as string);
   if (Array.isArray(value)) {
     return `[${value.map((item) => jcsCanonicalize(item)).join(',')}]`;
   }
@@ -30,7 +41,7 @@ export function jcsCanonicalize(value: unknown): string {
     // RFC 8785 key ordering.
     const keys = Object.keys(record).sort();
     return `{${keys
-      .map((key) => `${JSON.stringify(key)}:${jcsCanonicalize(record[key])}`)
+      .map((key) => `${jcsQuoteString(key)}:${jcsCanonicalize(record[key])}`)
       .join(',')}}`;
   }
   throw new Error(`JCS rejects non-JSON values of type ${t}`);
@@ -41,12 +52,22 @@ export function sha256Hex(text: string): string {
   return Bun.SHA256.hash(new TextEncoder().encode(text), 'hex');
 }
 
+/** A campaign before registration stamps its digest: the digest field is the
+ *  one document field that CANNOT exist when the digest is being computed,
+ *  so digest creation accepts its absence instead of demanding a
+ *  placeholder. */
+export type PreDigestCampaign = Omit<Campaign, 'digest'> & {
+  readonly digest?: string;
+};
+
 /** Strip the advisory/re-derivable fields out of a campaign before
  *  canonicalization (parent Appendix B digest definition): estimates_by_arm
  *  in every cell, budget.surcharge_applied, budget.priced_coverage,
  *  registered_at, registered_by, campaign_id, and digest itself.
  *  budget.usd_all_in (the registered figure) stays in. */
-export function digestInput(campaign: Campaign): Record<string, unknown> {
+export function digestInput(
+  campaign: PreDigestCampaign,
+): Record<string, unknown> {
   const {
     campaign_id: _id,
     registered_at: _at,
@@ -64,6 +85,6 @@ export function digestInput(campaign: Campaign): Record<string, unknown> {
 /** The campaign's identity: SHA-256 over the JCS-canonicalized digest input,
  *  hex-encoded. Refreshing estimates never forks identity — only the frozen
  *  grid, refs, suite, and registered budget figure do. */
-export function campaignDigest(campaign: Campaign): string {
+export function campaignDigest(campaign: PreDigestCampaign): string {
   return sha256Hex(jcsCanonicalize(digestInput(campaign)));
 }
