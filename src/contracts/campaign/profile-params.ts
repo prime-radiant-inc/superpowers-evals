@@ -33,5 +33,9 @@ export const PROFILE_PARAM_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> =
   });
 
 export function profileParamsSchema(profile: string): z.ZodTypeAny | undefined {
-  return PROFILE_PARAM_SCHEMAS[profile];
+  // Own-property guard: prototype keys like toString/constructor/__proto__
+  // must miss (undefined), never surface inherited Object.prototype values.
+  return Object.hasOwn(PROFILE_PARAM_SCHEMAS, profile)
+    ? PROFILE_PARAM_SCHEMAS[profile]
+    : undefined;
 }

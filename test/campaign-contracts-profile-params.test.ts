@@ -58,3 +58,12 @@ test('unknown parameter keys reject (strict)', () => {
     ReleaseGateV1ParamsSchema.parse({ ...VALID, p_hacking: true }),
   ).toThrow();
 });
+
+test('prototype-key lookups miss, returning undefined', () => {
+  // Unknown names must never surface inherited Object.prototype values
+  // (a caller treating a truthy miss as a schema would TypeError on .parse).
+  expect(profileParamsSchema('toString')).toBeUndefined();
+  expect(profileParamsSchema('constructor')).toBeUndefined();
+  expect(profileParamsSchema('__proto__')).toBeUndefined();
+  expect(profileParamsSchema('hasOwnProperty')).toBeUndefined();
+});
