@@ -10,11 +10,13 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
+  renameSync,
   rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import { getEnv } from '../env.ts';
 
@@ -37,8 +39,18 @@ export interface MaterializeSuperpowersArgs {
 }
 
 const FULL_HEX_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// An owner token: owner-<uuid> name AND a parseable pid body (what
+// tryAcquireLock writes). Anything else inside a lock dir is junk —
+// corruption or sabotage — and is treated as such, never as a live owner.
+const OWNER_NAME_RE =
+  /^owner-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const LOCK_POLL_MS = 250;
+// How long an EMPTY lock dir with a fresh mtime is treated as a contender
+// mid-acquire (mkdir and owner-file create are two steps, µs apart). Past
+// this grace the emptiness is a crash, and the dir is severed — the poll
+// loop must always be able to make progress or fail loudly, never hang.
+const LOCK_EMPTY_GRACE_MS = 100;
 
 /** The minimal env every materializer subprocess gets — PATH/HOME/TMPDIR only.
  *  Read through src/env.ts (§6.5): the gate forbids direct process.env reads
@@ -61,20 +73,57 @@ function tryLstat(path: string): Stats | null {
   }
 }
 
-/** Validate sha as a full 40/64-char hex object id. Called before ANY path
- *  construction (materializeSuperpowersWorktree runs this ahead of join) and
- *  re-run by ensureWorktreeAt, which must stand alone as the shared core —
- *  a traversal-shaped ref must never reach join() or the filesystem. */
-function assertFullSha(sha: string): void {
+declare const validatedShaBrand: unique symbol;
+
+/** A SHA that passed FULL_HEX_SHA_RE. A branded nominal type: the dest-path
+ *  constructor below accepts ONLY it, so raw caller input physically cannot
+ *  reach path construction — validating after `join` stops being merely a
+ *  test away from happening and becomes a compile error. (The ordering of
+ *  validation vs a pure join() is not runtime-observable in a hermetic
+ *  test: join is pure and both orderings produce identical filesystem and
+ *  subprocess effects. The type system is the enforceable guard.) */
+type ValidatedSha = string & { readonly [validatedShaBrand]: true };
+
+/** The single validation site (Decision D-2: refs never reach here — full
+ *  40/64 hex only). Each public entry validates its raw input exactly once,
+ *  at the boundary, before anything else runs. */
+function validateSha(sha: string): ValidatedSha {
   if (!FULL_HEX_SHA_RE.test(sha)) {
     throw new ProvisioningError(
       `refusing to materialize non-SHA ref ${JSON.stringify(sha)} (expected full 40/64 hex)`,
     );
   }
+  return sha as ValidatedSha;
+}
+
+/** The ONLY `superpowers-<sha>` path construction. Branded parameter: an
+ *  unvalidated ref cannot be joined into a destination. */
+function superpowersDest(destParent: string, sha: ValidatedSha): string {
+  return join(destParent, `superpowers-${sha}`);
 }
 
 function runGit(runner: CommandRunner, args: readonly string[]): CommandResult {
   return runner.run('git', args, { env: materializeEnv() });
+}
+
+/** Read an owner file's pid body; null when it is not an owner token. */
+function ownerPid(path: string, stats: Stats): number | null {
+  if (!stats.isFile() || !OWNER_NAME_RE.test(basename(path))) return null;
+  try {
+    const m = /^([0-9]+)\n?$/.exec(readFileSync(path, 'utf8'));
+    return m === null ? null : Number(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/** readdirSync that never throws for the emptiness probe (null on error). */
+function readdirSafe(path: string): string[] {
+  try {
+    return readdirSync(path);
+  } catch {
+    return [];
+  }
 }
 
 function gitOut(runner: CommandRunner, args: readonly string[]): string {
@@ -102,9 +151,22 @@ function gitOut(runner: CommandRunner, args: readonly string[]): string {
  *  between its two teardown steps: poll, never touch. */
 function withDestLock<T>(lockPath: string, fn: () => T): T {
   const ownerFile = join(lockPath, `owner-${randomUUID()}`);
+  let emptySince: number | null = null;
   for (;;) {
     if (tryAcquireLock(lockPath, ownerFile)) break;
-    if (!reclaimStaleLock(lockPath)) Bun.sleepSync(LOCK_POLL_MS);
+    const progressed = reclaimStaleLock(lockPath, emptySince);
+    if (!progressed) {
+      // Distinguish "waiting on a live owner" (fine, keep polling) from
+      // "stuck on an empty mid-acquire dir" (a crash after LOCK_EMPTY_GRACE_MS
+      // — sever it so the loop always progresses).
+      const st = tryLstat(lockPath);
+      const empty =
+        st?.isDirectory() === true && readdirSafe(lockPath).length === 0;
+      emptySince = empty ? (emptySince ?? Date.now()) : null;
+      Bun.sleepSync(LOCK_POLL_MS);
+    } else {
+      emptySince = null;
+    }
   }
   try {
     return fn();
@@ -140,10 +202,16 @@ function isTransientLockRace(err: unknown): boolean {
 /** Atomic acquire: mkdir succeeds for exactly one contender. Ownership is
  *  then pinned by the uniquely-named owner file; a teardown racing between
  *  the two steps surfaces as a transient ENOENT/EINVAL — we never held the
- *  lock — and the caller retries. */
+ *  lock — and the caller retries.
+ *  Swap check: after writing the owner file, the lock path must STILL be
+ *  the directory we created (same dev+ino). If a symlink was planted over
+ *  it in between, the write landed in the swap target — remove our own
+ *  uniquely-named stray (best-effort net-zero) and retry. */
 function tryAcquireLock(lockPath: string, ownerFile: string): boolean {
+  let mine: Stats | null;
   try {
     mkdirSync(lockPath);
+    mine = tryLstat(lockPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     return false;
@@ -154,16 +222,48 @@ function tryAcquireLock(lockPath: string, ownerFile: string): boolean {
     if (isTransientLockRace(err)) return false; // torn down mid-acquire
     throw err;
   }
+  const now = tryLstat(lockPath);
+  if (
+    mine === null ||
+    !mine.isDirectory() ||
+    now === null ||
+    !now.isDirectory() ||
+    now.dev !== mine.dev ||
+    now.ino !== mine.ino
+  ) {
+    try {
+      rmSync(ownerFile, { force: true });
+    } catch {
+      // best effort: a stray uniquely-named file is inert
+    }
+    return false;
+  }
   return true;
 }
 
 /** Reclaim a lock whose owner died mid-flight. Returns whether the acquire
- *  should be retried immediately (progress was made).
- *  No-follow confinement: the lock path is lstat'd FIRST and must be a real
- *  directory — a symlink (or any non-directory) at the lock path is not a
- *  lock we own; it is never traversed, so reclamation can never read or
- *  delete through it (a crafted lock symlink must not reach the target). */
-function reclaimStaleLock(lockPath: string): boolean {
+ *  loop should retry immediately (progress was made).
+ *  Confinement rules, in order:
+ *  1. lstat the lock path FIRST and refuse any symlink/non-directory — a
+ *     pre-existing symlink is never traversed.
+ *  2. Decide from READ-ONLY lstats whether anything is reclaimable; a lock
+ *     holding any fresh owner is live: poll, never touch it.
+ *  3. Before deleting ANYTHING, sever the swap window: rename the lock path
+ *     to a unique trash name. POSIX rename never follows a symlink — if the
+ *     path was swapped for one since our lstat, we rename the LINK, detect
+ *     that (trash is not a directory), and unlink the link itself; the
+ *     symlink's target is unreachable. Every deletion then happens under
+ *     the unguessable trash path, which cannot be redirected through the
+ *     original lock path.
+ *  4. Unexpected entry types (a directory child) fail LOUDLY — never a
+ *     silent skip, never an unbounded poll.
+ *  5. If a fresh owner appears under trash (it landed between the read-only
+ *     pass and the rename), restore the lock and poll: a live lock is never
+ *     deleted, at most orphaned if the original path was re-taken. */
+function reclaimStaleLock(
+  lockPath: string,
+  emptySince: number | null,
+): boolean {
   const lockStat = tryLstat(lockPath);
   if (lockStat === null) return true; // vanished: retry the acquire
   if (!lockStat.isDirectory()) {
@@ -178,49 +278,118 @@ function reclaimStaleLock(lockPath: string): boolean {
     if (!isTransientLockRace(err)) throw err;
     return true; // vanished: retry the acquire immediately
   }
-  if (entries.length === 0) {
-    if (Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
-      // A contender or reclaimer crashed before finishing its teardown.
-      // rmdir only succeeds while empty, so an owner file landing
-      // concurrently makes this a no-op. rmdir never follows a symlink, so
-      // a path swapped for one between our lstat and here fails harmlessly.
-      try {
-        rmdirSync(lockPath);
-      } catch {
-        // An owner landed: not ours to remove.
-      }
-      return true;
-    }
-    return false; // someone is mid-acquire: poll
-  }
-  let reclaimed = false;
+  // Read-only pass: decide without deleting anything. A LIVE owner (fresh
+  // valid owner token) means wait; stale anything is reclaimable; a FRESH
+  // non-owner entry is corruption/sabotage and fails loudly — polling on it
+  // forever would be an unbounded hang.
+  let anyStale = false;
   for (const name of entries) {
-    const ownerPath = join(lockPath, name);
-    const st = tryLstat(ownerPath);
-    // Only regular files or symlinks are ever unlinked — and unlink never
-    // follows the final path component, so a symlink child removes only the
-    // link itself. A directory child is foreign junk: never touched.
-    if (st === null || !(st.isFile() || st.isSymbolicLink())) continue;
+    const st = tryLstat(join(lockPath, name));
+    if (st === null) continue;
+    if (!st.isFile() && !st.isSymbolicLink()) {
+      throw new ProvisioningError(
+        `unexpected non-file entry in lock dir (sabotage or corruption): ${join(lockPath, name)}`,
+      );
+    }
     if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-      // The unique name IS the ownership token: this unlink can only ever
-      // remove the exact stale owner we observed, never a successor's fresh
-      // file (and an already-released file yields a harmless no-op).
-      try {
-        rmSync(ownerPath, { force: true });
-      } catch (err) {
-        if (!isTransientLockRace(err)) throw err;
-      }
-      reclaimed = true;
+      anyStale = true;
+      continue;
     }
+    if (ownerPid(join(lockPath, name), st) === null) {
+      throw new ProvisioningError(
+        `unexpected fresh non-owner entry in lock dir (sabotage or corruption): ${join(lockPath, name)}`,
+      );
+    }
+    // A live owner coexisting with stale entries: partial reclaim below —
+    // sever, delete only the stale ones, then restore the lock for it.
   }
-  if (reclaimed) {
+  if (entries.length === 0) {
+    // Empty: a contender mid-acquire (mkdir and owner-file create are two
+    // steps, µs apart) — poll, but never indefinitely: past
+    // LOCK_EMPTY_GRACE_MS of observed emptiness (or a stale-aged dir) the
+    // emptiness is a crash and the dir is severed below.
+    const graceExpired =
+      emptySince !== null && Date.now() - emptySince > LOCK_EMPTY_GRACE_MS;
+    if (Date.now() - lockStat.mtimeMs <= LOCK_STALE_MS && !graceExpired) {
+      return false;
+    }
+    anyStale = true;
+  }
+  if (!anyStale) return false; // live lock: poll untouched
+
+  // Sever the swap window: from here on, operate only under our private
+  // name, never through the original lock path.
+  const trash = `${lockPath}.trash-${randomUUID()}`;
+  try {
+    renameSync(lockPath, trash);
+  } catch (err) {
+    if (!isTransientLockRace(err)) throw err;
+    return true; // raced away under us: retry the acquire
+  }
+  const trashStat = tryLstat(trash);
+  if (trashStat === null) return true;
+  if (!trashStat.isDirectory()) {
+    // The lock path was swapped for a symlink before our rename: we hold
+    // the LINK. Remove the link itself — its target is unreachable — and
+    // retry the acquire on the now-free path.
     try {
-      rmdirSync(lockPath);
+      rmSync(trash, { force: true });
     } catch {
-      // A fresh owner already moved in: poll instead.
+      // best effort: a leftover uniquely-named link redirects nothing
+    }
+    return true;
+  }
+  let sawFresh = false;
+  try {
+    entries = readdirSync(trash);
+  } catch (err) {
+    if (!isTransientLockRace(err)) throw err;
+    return true;
+  }
+  for (const name of entries) {
+    const ownerPath = join(trash, name);
+    const st = tryLstat(ownerPath);
+    if (st === null) continue;
+    if (!st.isFile() && !st.isSymbolicLink()) {
+      throw new ProvisioningError(
+        `unexpected non-file entry in lock dir (sabotage or corruption): ${ownerPath}`,
+      );
+    }
+    if (Date.now() - st.mtimeMs <= LOCK_STALE_MS) {
+      if (ownerPid(ownerPath, st) === null) {
+        throw new ProvisioningError(
+          `unexpected fresh non-owner entry in lock dir (sabotage or corruption): ${ownerPath}`,
+        );
+      }
+      sawFresh = true;
+      continue;
+    }
+    // The unique name IS the ownership token: this unlink can only ever
+    // remove the exact stale owner we observed under OUR private trash
+    // path, never a successor's fresh file.
+    try {
+      rmSync(ownerPath, { force: true });
+    } catch (err) {
+      if (!isTransientLockRace(err)) throw err;
     }
   }
-  return reclaimed;
+  if (sawFresh) {
+    // A live owner landed between the read-only pass and the rename: put
+    // the lock back. If the original path was re-acquired meanwhile, leave
+    // the orphan — fresh owners are never deleted.
+    try {
+      renameSync(trash, lockPath);
+    } catch {
+      // re-acquired: orphan rather than delete a live lock
+    }
+    return false;
+  }
+  try {
+    rmdirSync(trash);
+  } catch {
+    // raced (an owner landed): handled on a later pass
+  }
+  return true;
 }
 
 export function ensureWorktreeAt(args: {
@@ -229,8 +398,19 @@ export function ensureWorktreeAt(args: {
   readonly dest: string;
   readonly runner: CommandRunner;
 }): void {
+  ensureValidatedWorktree({ ...args, sha: validateSha(args.sha) });
+}
+
+/** The shared core (Task 2's instrument-snapshot consumes it): only ever
+ *  reached with an already-validated SHA — the branded parameter makes an
+ *  unvalidated call a compile error. */
+function ensureValidatedWorktree(args: {
+  readonly sourceCheckout: string;
+  readonly sha: ValidatedSha;
+  readonly dest: string;
+  readonly runner: CommandRunner;
+}): void {
   const { sourceCheckout, sha, dest, runner } = args;
-  assertFullSha(sha);
   withDestLock(`${dest}.lock`, () => {
     const st = tryLstat(dest);
     if (st !== null) {
@@ -296,10 +476,11 @@ export function ensureWorktreeAt(args: {
 export function materializeSuperpowersWorktree(
   args: MaterializeSuperpowersArgs,
 ): string {
-  // Before join(): the sha must never reach path construction unvalidated
-  // (ensureWorktreeAt re-validates because it is also called directly).
-  assertFullSha(args.sha);
-  const dest = join(args.destParent, `superpowers-${args.sha}`);
-  ensureWorktreeAt({ ...args, dest });
+  // Validate FIRST — the only join() this module performs on caller input
+  // (superpowersDest) accepts the branded type, so a reorder is a compile
+  // error rather than a latent regression.
+  const sha = validateSha(args.sha);
+  const dest = superpowersDest(args.destParent, sha);
+  ensureValidatedWorktree({ ...args, sha, dest });
   return dest;
 }

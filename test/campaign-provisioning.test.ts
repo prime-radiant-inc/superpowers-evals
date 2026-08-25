@@ -443,11 +443,12 @@ test('real FS: reclaim removes only the observed stale owner, never a fresh one'
   const dest = join(destParent, `superpowers-${SHA_A}`);
   const lock = `${dest}.lock`;
   const staleName = 'owner-00000000-0000-0000-0000-00000000dead';
-  const freshName = 'owner-11111111-2222-3333-4444-5555555555alive';
+  const freshName = 'owner-11111111-2222-4333-8444-55555555555f';
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, staleName), '');
   utimesSync(join(lock, staleName), new Date(0), new Date(0));
-  writeFileSync(join(lock, freshName), ''); // mtime = now: a live owner
+  // mtime = now, valid owner token (owner-<uuid> name + pid body): live
+  writeFileSync(join(lock, freshName), '4321\n');
 
   const modPath = join(
     import.meta.dir,
@@ -523,6 +524,293 @@ test('real FS: reclaim removes only the observed stale owner, never a fresh one'
   expect(lines.filter((l) => l.startsWith('done '))).toHaveLength(1);
   expect(existsSync(lock)).toBe(false);
 }, 30000);
+
+// F3: unexpected entry types inside the lock dir must fail LOUDLY. A silent
+// skip makes reclaimStaleLock report no progress and the acquire loop poll
+// forever — a synchronous hang, so the call runs in a child the test can
+// kill: a regressed build either logs the wrong outcome or never finishes.
+test('a directory child in the lock dir fails loudly instead of polling forever', async () => {
+  const destParent = tmp();
+  const dest = join(destParent, `superpowers-${SHA_A}`);
+  const lock = `${dest}.lock`;
+  const foreign = join(lock, 'foreign-dir');
+  mkdirSync(foreign, { recursive: true });
+  utimesSync(foreign, new Date(0), new Date(0));
+
+  const modPath = join(
+    import.meta.dir,
+    '..',
+    'src',
+    'campaign',
+    'provisioning.ts',
+  );
+  const log = join(destParent, 'log');
+  writeFileSync(log, '');
+  const childScript = join(destParent, 'child.ts');
+  writeFileSync(
+    childScript,
+    [
+      "import { appendFileSync } from 'node:fs';",
+      `import { materializeSuperpowersWorktree } from ${JSON.stringify(modPath)};`,
+      'const logPath = process.argv[2];',
+      'const destParent = process.argv[3];',
+      `const SHA = ${JSON.stringify(SHA_A)};`,
+      'const runner = { run: () => ({ status: 0, stdout: "", stderr: "" }) };',
+      'try {',
+      '  materializeSuperpowersWorktree({ sourceCheckout: "/src/sp", sha: SHA, destParent, runner });',
+      '  appendFileSync(logPath, "ok\\n");',
+      '} catch (e) {',
+      '  appendFileSync(logPath, `err ${(e as Error).name}: ${(e as Error).message}\\n`);',
+      '}',
+    ].join('\n'),
+  );
+  const child = spawn(process.execPath, [childScript, log, destParent], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  let finished = false;
+  const exited = new Promise<number>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code) => {
+      finished = true;
+      resolve(code ?? -1);
+    });
+  });
+  const hardDeadline = Date.now() + 3000;
+  // async sleep: the wait must yield so the child's exit event can fire.
+  while (!finished && Date.now() < hardDeadline) await Bun.sleep(10);
+  if (!finished) {
+    child.kill('SIGKILL');
+    await exited;
+    throw new Error('materializer hung on a directory child in the lock dir');
+  }
+  expect(await exited).toBe(0);
+  const outcome = readFileSync(log, 'utf8').trim();
+  expect(outcome).toMatch(
+    /^err ProvisioningError:.*unexpected non-file entry in lock dir.*foreign-dir/s,
+  );
+}, 15000);
+
+// F2: the lock path can be swapped for a symlink between the reclaim's
+// checks and its deletions; operations through the original path would then
+// follow the link into its target. A saboteur child storms the swap while a
+// contender child hammers the public API. The victim carries same-named
+// stale honeypots so that ANY deletion routed through the original lock path
+// — the exact regression under review — destroys one. Confinement property:
+// the contender must always terminate, and the victim must come out with
+// exactly the files it started with.
+test('real FS: a swapped lock path never deletes through the link', async () => {
+  const destParent = tmp();
+  const dest = join(destParent, `superpowers-${SHA_A}`);
+  const lock = `${dest}.lock`;
+  // 1000 children widen the vulnerable lstat→readdir→unlink span from
+  // microseconds to tens of milliseconds — wide enough that the saboteur's
+  // swap cycle deterministically lands inside it. (The hazard itself is
+  // unchanged: any deletion routed through the original lock path during
+  // that span destroys victim files.)
+  const HONEYPOTS = Array.from(
+    { length: 3000 },
+    (_, i) => `owner-dead-${String(i).padStart(4, '0')}`,
+  );
+  const victim = tmp();
+  const precious = join(victim, 'precious.txt');
+  writeFileSync(precious, 'keep\n');
+  utimesSync(precious, new Date(0), new Date(0));
+  for (const name of HONEYPOTS) {
+    writeFileSync(join(victim, name), 'honeypot\n');
+    utimesSync(join(victim, name), new Date(0), new Date(0));
+  }
+
+  // The planted stale lock: same-named stale children.
+  mkdirSync(lock, { recursive: true });
+  for (const name of HONEYPOTS) {
+    writeFileSync(join(lock, name), '');
+    utimesSync(join(lock, name), new Date(0), new Date(0));
+  }
+  utimesSync(lock, new Date(0), new Date(0));
+
+  const modPath = join(
+    import.meta.dir,
+    '..',
+    'src',
+    'campaign',
+    'provisioning.ts',
+  );
+
+  // Saboteur, split into two cooperating children. The flapper alternates
+  // SLOW, REGULAR phases: ~100ms with the real (stale-marked) lock dir at
+  // the lock path, then ~100ms with a symlink to the victim planted there.
+  // The phase lengths are the point: a reclamation pass that starts in a
+  // dir-phase (its lstat sees a directory, as required) cannot finish its
+  // post-pass operations before the symlink phase begins — so any deletion
+  // routed through the original lock path lands in the victim, while the
+  // severed implementation never routes a deletion through that path at
+  // all. A pass starting in a symlink phase is refused loudly instead.
+  // A lock dir whose own mtime is fresh — a live owner's — is never touched.
+  const flapperScript = join(destParent, 'flapper.ts');
+  writeFileSync(
+    flapperScript,
+    [
+      "import { existsSync, lstatSync, renameSync, symlinkSync, unlinkSync, utimesSync, appendFileSync } from 'node:fs';",
+      'const lock = process.argv[2];',
+      'const victim = process.argv[3];',
+      'const deadline = Date.now() + Number(process.argv[4]);',
+      'const FRESH_MS = 60000;',
+      'const EPOCH = new Date(0);',
+      'const DIR_PHASE_MS = 10;',
+      'const LINK_PHASE_MS = 200;',
+      'function swappable(p) {',
+      '  try {',
+      '    const st = lstatSync(p);',
+      '    return st.isDirectory() && Date.now() - st.mtimeMs > FRESH_MS;',
+      '  } catch { return false; }',
+      '}',
+      'let swaps = 0;',
+      'while (Date.now() < deadline) {',
+      '  // Dir phase: the real lock dir sits at the lock path.',
+      '  Bun.sleepSync(DIR_PHASE_MS);',
+      '  // Link phase: move it aside, plant the honeypot symlink, HOLD.',
+      '  if (!swappable(lock)) continue;',
+      '  try {',
+      '    renameSync(lock, lock + ".flap");',
+      '    symlinkSync(victim, lock);',
+      '    swaps++;',
+      '    Bun.sleepSync(LINK_PHASE_MS);',
+      '    unlinkSync(lock);',
+      '    renameSync(lock + ".flap", lock);',
+      '    utimesSync(lock, EPOCH, EPOCH);',
+      '  } catch {',
+      '    try {',
+      '      if (existsSync(lock)) unlinkSync(lock);',
+      '      if (existsSync(lock + ".flap")) renameSync(lock + ".flap", lock);',
+      '    } catch {}',
+      '  }',
+      '}',
+      `appendFileSync(${JSON.stringify(join(destParent, 'swaps.log'))}, String(swaps) + "\\n");`,
+    ].join('\n'),
+  );
+
+  const replanterScript = join(destParent, 'replanter.ts');
+  writeFileSync(
+    replanterScript,
+    [
+      "import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      'const lock = process.argv[2];',
+      'const deadline = Date.now() + Number(process.argv[4]);',
+      'const EPOCH = new Date(0);',
+      `const HONEYPOTS = ${JSON.stringify(HONEYPOTS)};`,
+      'while (Date.now() < deadline) {',
+      '  Bun.sleepSync(30);',
+      '  if (existsSync(lock)) continue;',
+      '  // Debounce: the flapper frees the name for microseconds at a time —',
+      '  // only replant when the absence persists (the fixture was consumed).',
+      '  Bun.sleepSync(30);',
+      '  if (existsSync(lock)) continue;',
+      '  try {',
+      '    mkdirSync(lock);',
+      '    for (const name of HONEYPOTS) {',
+      '      writeFileSync(join(lock, name), "");',
+      '      utimesSync(join(lock, name), EPOCH, EPOCH);',
+      '    }',
+      '    utimesSync(lock, EPOCH, EPOCH);',
+      '  } catch {}',
+      '}',
+    ].join('\n'),
+  );
+
+  // Contender: hammer the public API until its own deadline; every call must
+  // return (success or ProvisioningError) and be logged.
+  const contenderScript = join(destParent, 'contender.ts');
+  const cLog = join(destParent, 'calls.log');
+  writeFileSync(cLog, '');
+  writeFileSync(
+    contenderScript,
+    [
+      "import { appendFileSync } from 'node:fs';",
+      `import { materializeSuperpowersWorktree, ProvisioningError } from ${JSON.stringify(modPath)};`,
+      'const logPath = process.argv[2];',
+      'const destParent = process.argv[3];',
+      'const deadline = Date.now() + Number(process.argv[4]);',
+      `const SHA = ${JSON.stringify(SHA_A)};`,
+      'const runner = { run: () => ({ status: 0, stdout: "", stderr: "" }) };',
+      'let n = 0;',
+      'while (Date.now() < deadline) {',
+      '  n++;',
+      '  Bun.sleepSync(25);',
+      '  try {',
+      '    materializeSuperpowersWorktree({ sourceCheckout: "/src/sp", sha: SHA, destParent, runner });',
+      '    appendFileSync(logPath, "ok\\n");',
+      '  } catch (e) {',
+      '    if (!(e instanceof ProvisioningError)) { appendFileSync(logPath, `bad ${(e as Error).name}\\n`); process.exit(2); }',
+      '    appendFileSync(logPath, "err\\n");',
+      '  }',
+      '}',
+      'appendFileSync(logPath, `LOOP-DONE ${n}\\n`);',
+    ].join('\n'),
+  );
+
+  const flapper = spawn(
+    process.execPath,
+    [flapperScript, lock, victim, '3500'],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  );
+  const replanter = spawn(process.execPath, [replanterScript, lock, '3500'], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  const contender = spawn(
+    process.execPath,
+    [contenderScript, cLog, destParent, '4000'],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  );
+  const exitOf = (p: ReturnType<typeof spawn>) =>
+    new Promise<number>((resolve, reject) => {
+      p.on('error', reject);
+      p.on('close', (code) => resolve(code ?? -1));
+    });
+  // Attach BOTH exit promises at spawn time: the saboteur can outpace the
+  // contender, and a listener attached after an already-fired close never
+  // resolves.
+  const saboteurExit = Promise.all([exitOf(flapper), exitOf(replanter)]).then(
+    (codes) => Math.max(...codes),
+  );
+  let contenderDone = false;
+  const contenderExit = exitOf(contender).then((c) => {
+    contenderDone = true;
+    return c;
+  });
+  const hardDeadline = Date.now() + 8000;
+  // async sleep: the wait must yield so the child's exit event can fire.
+  while (!contenderDone && Date.now() < hardDeadline) await Bun.sleep(10);
+  // A contender wedged on a fresh owner token (the storm can fabricate one
+  // by disrupting a release) is legitimate lease behavior, not a confinement
+  // failure — the properties under test are asserted below regardless of
+  // whether every call completed.
+  if (!contenderDone) contender.kill('SIGKILL');
+  await contenderExit;
+  expect(await saboteurExit).toBe(0);
+
+  const callsLog = readFileSync(cLog, 'utf8');
+  expect(callsLog).not.toContain('bad');
+  const completions = callsLog
+    .split('\n')
+    .filter((l) => l === 'ok' || l === 'err').length;
+  expect(completions).toBeGreaterThan(0);
+  // The storm actually ran.
+  expect(
+    Number(readFileSync(join(destParent, 'swaps.log'), 'utf8')),
+  ).toBeGreaterThan(0);
+  // THE confinement assertion: the victim holds exactly what it started
+  // with — nothing deleted through the link, nothing created in it either.
+  expect(readFileSync(precious, 'utf8')).toBe('keep\n');
+  expect(
+    readdirSync(victim)
+      .filter((n) => n !== 'precious.txt')
+      .sort(),
+  ).toEqual([...HONEYPOTS].sort());
+  for (const name of HONEYPOTS) {
+    expect(readFileSync(join(victim, name), 'utf8')).toBe('honeypot\n');
+  }
+}, 20000);
 
 test('real tmp git repo: materialize, reuse, then drift rejection', () => {
   const src = tmp();
