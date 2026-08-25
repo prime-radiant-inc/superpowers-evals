@@ -14,6 +14,14 @@ function repo(files: Record<string, string>): string {
   return root;
 }
 
+function check(root: string) {
+  return checkArmSuiteFiles({
+    repoRoot: root,
+    codingAgentsDir: join(root, 'coding-agents'),
+    credentialsPath: join(root, 'credentials.yaml'),
+  });
+}
+
 const AGENT_YAML = [
   'name: claude',
   'runtime_family: claude',
@@ -53,13 +61,7 @@ const SUITE = [
 
 test('missing arms/ and suites/ directories are tolerated (v1 has none yet)', () => {
   const root = repo({});
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
-  expect(result).toEqual({ ok: true, errors: [], warnings: [] });
+  expect(check(root)).toEqual({ ok: true, errors: [], warnings: [] });
 });
 
 test('valid arm + suite files cross-reference cleanly', () => {
@@ -69,12 +71,7 @@ test('valid arm + suite files cross-reference cleanly', () => {
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
   });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.errors).toEqual([]);
   expect(result.ok).toBe(true);
 });
@@ -88,12 +85,7 @@ test('arm cross-references fail loud', () => {
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
   });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(
     /agent 'ghost' has no coding-agents/,
@@ -103,16 +95,58 @@ test('arm cross-references fail loud', () => {
   );
 });
 
+test("an explicit arm credential must list the agent's harness family", () => {
+  // Finding 10: harness compatibility is checked for every explicit arm
+  // credential, not only agent default_credentials.
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS.replace(
+      'harnesses: [claude]',
+      'harnesses: [codex]',
+    ),
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors).toContain(
+    "arms/claude_fx.yaml: credential 'opus_fx' does not list harness 'claude'",
+  );
+});
+
+test('an invalid credential registry yields one marker, not cascades', () => {
+  // Deferred-ledger repair: the registry parse error is checkCredentials'
+  // diagnosis — arm/suite checking must not duplicate it, and must not
+  // report every arm as credential-not-found against a registry that never
+  // loaded.
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': 'opus_fx:\n  model: 42\n  bogus: [',
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  const flat = result.errors.join('\n');
+  expect(flat).toMatch(/credential references not checked/);
+  expect(flat).not.toMatch(/not in credentials/);
+  expect(result.errors.filter((e) => /credential/.test(e))).toHaveLength(1);
+});
+
+test('a missing credential registry with arms present yields the same single marker', () => {
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'coding-agents/claude.yaml': AGENT_YAML,
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/credential references not checked/);
+  expect(result.errors.join('\n')).not.toMatch(/not in credentials/);
+});
+
 test('suite schema errors surface with the file name', () => {
   const root = repo({
     'suites/broken.yaml': SUITE.replace('budget_usd: 50', 'budget_usd: -5'),
   });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(/broken\.yaml/);
 });
@@ -145,12 +179,7 @@ test('gating suite profile params validate against the registry', () => {
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
   });
-  const okResult = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const okResult = check(root);
   expect(okResult.errors).toEqual([]);
   const badParams = gating.replace('alpha: 0.05', 'alpha: 2');
   const badRoot = repo({
@@ -160,44 +189,14 @@ test('gating suite profile params validate against the registry', () => {
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
   });
-  const badResult = checkArmSuiteFiles({
-    repoRoot: badRoot,
-    codingAgentsDir: join(badRoot, 'coding-agents'),
-    credentialsPath: join(badRoot, 'credentials.yaml'),
-    scenariosRoot: join(badRoot, 'scenarios'),
-  });
+  const badResult = check(badRoot);
   expect(badResult.ok).toBe(false);
   expect(badResult.errors.join('\n')).toMatch(/alpha/);
 });
 
-test('frontmatter overrides contradicting the scan warn (not error)', () => {
-  const root = repo({
-    'arms/claude_fx.yaml': ARM,
-    'suites/compare_fx.yaml': SUITE,
-    'coding-agents/claude.yaml': AGENT_YAML,
-    'credentials.yaml': CREDENTIALS,
-    'scenarios/scn_a/story.md':
-      '---\ncoupling: pins-skill-names\n---\nPlain story with no skill refs.',
-    'scenarios/scn_a/checks.sh': 'pre() { :; }\npost() { :; }\n',
-  });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
-  expect(result.ok).toBe(true);
-  expect(result.warnings.join('\n')).toMatch(/scn_a.*coupling|coupling.*scn_a/);
-});
-
 test('suite with arm references and no arm documents fails loud', () => {
   const root = repo({ 'suites/compare_fx.yaml': SUITE });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(/unknown arm 'claude_fx'/);
 });
@@ -219,12 +218,7 @@ test('profile without profile_params fails on required fields', () => {
     '    cells: { scn_a: { class: confirmatory } }',
   ].join('\n');
   const root = repo({ 'suites/gate_fx.yaml': profileOnly });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(/alpha/);
   expect(result.errors.join('\n')).toMatch(/determinate_n_floor/);
@@ -245,36 +239,9 @@ test('profile_params without profile fails with a clear error', () => {
     '    n: 1',
   ].join('\n');
   const root = repo({ 'suites/orphan.yaml': orphanParams });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
+  const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(
     /profile_params set without a profile/,
-  );
-});
-
-test('requires_superpowers contradiction warns (not error)', () => {
-  const root = repo({
-    'arms/claude_fx.yaml': ARM,
-    'suites/compare_fx.yaml': SUITE,
-    'coding-agents/claude.yaml': AGENT_YAML,
-    'credentials.yaml': CREDENTIALS,
-    'scenarios/scn_a/story.md':
-      '---\nrequires_superpowers: false\n---\nStory citing skills/writing-plans/SKILL.md.',
-    'scenarios/scn_a/checks.sh': 'pre() { :; }\npost() { :; }\n',
-  });
-  const result = checkArmSuiteFiles({
-    repoRoot: root,
-    codingAgentsDir: join(root, 'coding-agents'),
-    credentialsPath: join(root, 'credentials.yaml'),
-    scenariosRoot: join(root, 'scenarios'),
-  });
-  expect(result.ok).toBe(true);
-  expect(result.warnings.join('\n')).toMatch(
-    /scn_a.*requires_superpowers|requires_superpowers.*scn_a/,
   );
 });

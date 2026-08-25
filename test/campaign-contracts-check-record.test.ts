@@ -1,10 +1,17 @@
 // test/campaign-contracts-check-record.test.ts
 import { expect, test } from 'bun:test';
-// readRecords is module-private; drive it through runPhase's public surface
-// is too heavy for a contract test, so this suite covers the schema half
-// and the fold half via the exported fold helper (implemented in step 3).
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+// The schema half plus the write-side fold rule: unit tests over the
+// exported fold helper, and one REAL sink-line integration through
+// runPhase/readRecords (a bash pre() emitting a raw record with unknown
+// keys into QUORUM_RECORD_SINK).
+import { runPhase } from '../src/checks/index.ts';
 import { foldUnknownKeys } from '../src/checks/record-fold.ts';
 import { CheckRecordSchema } from '../src/contracts/verdict.ts';
+
+const REPO = resolve(import.meta.dir, '..');
 
 test('CheckRecord keeps its base shape and gains optional extensions', () => {
   const base = {
@@ -38,6 +45,8 @@ test('CheckRecord keeps its base shape and gains optional extensions', () => {
 });
 
 test('unknown keys fold into detail with the pinned format', () => {
+  // Pinned fold format (D1 spec, CheckRecord extension): pairs `key=value`,
+  // joined by `; ` — nothing more when detail is null.
   const folded = foldUnknownKeys({
     check: 'custom-verb',
     args: [],
@@ -48,12 +57,12 @@ test('unknown keys fold into detail with the pinned format', () => {
     verbosity: 3,
     note: 'ad hoc',
   });
-  expect(folded['detail']).toBe('folded: note=ad hoc; verbosity=3');
+  expect(folded['detail']).toBe('note=ad hoc; verbosity=3');
   expect('verbosity' in folded).toBe(false);
   expect('note' in folded).toBe(false);
 });
 
-test('fold appends after an existing detail with a separator', () => {
+test('fold appends after an existing detail with a ` | ` separator', () => {
   const folded = foldUnknownKeys({
     check: 'c',
     args: [],
@@ -62,7 +71,19 @@ test('fold appends after an existing detail with a separator', () => {
     detail: 'original',
     extra: 'x',
   });
-  expect(folded['detail']).toBe('original | folded: extra=x');
+  expect(folded['detail']).toBe('original | extra=x');
+});
+
+test('an empty-string detail is non-null: it is preserved, not treated as absent', () => {
+  const folded = foldUnknownKeys({
+    check: 'c',
+    args: [],
+    negated: false,
+    passed: true,
+    detail: '',
+    extra: 'x',
+  });
+  expect(folded['detail']).toBe(' | extra=x');
 });
 
 test('no unknown keys means untouched output', () => {
@@ -86,5 +107,40 @@ test('folded non-string values serialize as JSON', () => {
     detail: null,
     cfg: { a: 1 },
   });
-  expect(folded['detail']).toBe('folded: cfg={"a":1}');
+  expect(folded['detail']).toBe('cfg={"a":1}');
+});
+
+test('a real sink line with unknown keys folds through runPhase/readRecords', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  const line = JSON.stringify({
+    check: 'custom-emitter',
+    args: ['x'],
+    negated: false,
+    passed: true,
+    detail: 'seen',
+    confidence: 0.9,
+    verdict_hint: 'pass',
+  });
+  writeFileSync(
+    checksSh,
+    `pre() {\n  printf '%s\\n' '${line}' >> "$QUORUM_RECORD_SINK"\n}\npost() { :; }\n`,
+  );
+  const { records, exitCode } = await runPhase({
+    checksSh,
+    phase: 'pre',
+    workdir,
+    repoRoot: REPO,
+  });
+  expect(exitCode).toBe(0);
+  expect(records).toEqual([
+    {
+      check: 'custom-emitter',
+      args: ['x'],
+      negated: false,
+      passed: true,
+      detail: 'seen | confidence=0.9; verdict_hint=pass',
+      phase: 'pre',
+    },
+  ]);
 });

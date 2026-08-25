@@ -1,28 +1,29 @@
 // quorum check's arm/suite validation (parent Testing: "quorum check
 // validates arm and suite files including profile parameters"). Discovery:
 // arms/ and suites/ at the repo root (parent Concepts examples); missing
-// dirs are tolerated — v1 ships no documents yet.
+// dirs are tolerated — v1 ships no documents yet. Scenario frontmatter is
+// validated separately over the complete inventory (scenario-meta-check.ts),
+// never keyed off suite references.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { loadAgentConfigForValidation } from '../contracts/agent-config.ts';
+import {
+  agentRuntimeFamily,
+  loadAgentConfigForValidation,
+} from '../contracts/agent-config.ts';
 import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
-import { scanCouplingDefault } from '../contracts/campaign/scenario-meta.ts';
 import { type Suite, SuiteSchema } from '../contracts/campaign/suite.ts';
-import { parseCredentialsFile } from '../contracts/credential.ts';
 import {
-  type CouplingValue,
-  readCoupling,
-  readRequiresSuperpowers,
-} from '../story-meta.ts';
+  type Credential,
+  parseCredentialsFile,
+} from '../contracts/credential.ts';
 
 export interface ArmSuiteCheckOptions {
   readonly repoRoot: string;
   readonly codingAgentsDir: string;
   readonly credentialsPath: string;
-  readonly scenariosRoot: string;
 }
 
 export interface ArmSuiteCheckResult {
@@ -44,22 +45,26 @@ export function checkArmSuiteFiles(
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  const credentialNames = new Set<string>();
+  // The credential registry, when it loads. A missing or unparseable
+  // registry is checkCredentials' diagnosis (quorum check reports it once,
+  // with the parse detail) — re-reporting the parse error here would
+  // duplicate it, and checking arms against an empty registry would cascade
+  // one credential-not-found error per arm. Skip credential cross-references
+  // and say so with a single marker instead.
+  let credentials: Record<string, Credential> | undefined;
   if (existsSync(opts.credentialsPath)) {
     try {
-      const parsed = parseCredentialsFile(
+      credentials = parseCredentialsFile(
         parseYaml(readFileSync(opts.credentialsPath, 'utf8')),
       );
-      for (const name of Object.keys(parsed)) credentialNames.add(name);
-    } catch (err) {
-      errors.push(
-        `credentials file error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    } catch {
+      credentials = undefined;
     }
   }
 
   const armNames = new Set<string>();
-  for (const file of yamlFiles(join(opts.repoRoot, 'arms'))) {
+  const armFiles = yamlFiles(join(opts.repoRoot, 'arms'));
+  for (const file of armFiles) {
     const path = join(opts.repoRoot, 'arms', file);
     let arm: Arm;
     try {
@@ -71,18 +76,41 @@ export function checkArmSuiteFiles(
       continue;
     }
     armNames.add(arm.name);
+    let agentConfig:
+      | ReturnType<typeof loadAgentConfigForValidation>
+      | undefined;
     try {
-      loadAgentConfigForValidation(opts.codingAgentsDir, arm.agent);
+      agentConfig = loadAgentConfigForValidation(
+        opts.codingAgentsDir,
+        arm.agent,
+      );
     } catch {
       errors.push(
         `arms/${file}: agent '${arm.agent}' has no coding-agents/${arm.agent}.yaml`,
       );
     }
-    if (!credentialNames.has(arm.credential)) {
-      errors.push(
-        `arms/${file}: credential '${arm.credential}' not in credentials.yaml`,
-      );
+    if (credentials !== undefined) {
+      const credential = credentials[arm.credential];
+      if (credential === undefined) {
+        errors.push(
+          `arms/${file}: credential '${arm.credential}' not in credentials.yaml`,
+        );
+      } else if (agentConfig !== undefined) {
+        // Harness compatibility for EVERY explicit arm credential — the
+        // same family predicate checkCredentials applies to agent defaults.
+        const family = agentRuntimeFamily(agentConfig);
+        if (!credential.harnesses.includes(family)) {
+          errors.push(
+            `arms/${file}: credential '${arm.credential}' does not list harness '${family}'`,
+          );
+        }
+      }
     }
+  }
+  if (credentials === undefined && armFiles.length > 0) {
+    errors.push(
+      'arms/: credentials.yaml missing or invalid; arm credential references not checked',
+    );
   }
 
   for (const file of yamlFiles(join(opts.repoRoot, 'suites'))) {
@@ -127,37 +155,6 @@ export function checkArmSuiteFiles(
           errors.push(
             `suites/${file}: comparison references unknown arm '${ref}'`,
           );
-        }
-      }
-      // Frontmatter-vs-scan contradiction warnings for explicit scenario
-      // lists (tier selectors expand at registration, D3).
-      if (Array.isArray(comparison.scenarios)) {
-        for (const scenarioName of comparison.scenarios) {
-          const scenarioDir = join(opts.scenariosRoot, scenarioName);
-          const storyPath = join(scenarioDir, 'story.md');
-          if (!existsSync(storyPath)) continue;
-          let declaredCoupling: CouplingValue | null;
-          let declaredRequires: boolean | null;
-          try {
-            declaredCoupling = readCoupling(storyPath);
-            declaredRequires = readRequiresSuperpowers(storyPath);
-          } catch {
-            continue; // malformed frontmatter is scenario validation's job
-          }
-          const scanDefault = scanCouplingDefault(scenarioDir);
-          if (declaredCoupling !== null && declaredCoupling !== scanDefault) {
-            warnings.push(
-              `scenarios/${scenarioName}: declared coupling '${declaredCoupling}' contradicts the static scan default`,
-            );
-          }
-          // Skill references or embedded skill fixtures imply the scenario
-          // needs superpowers; only arm-independent scans read as false.
-          const scanRequires = scanDefault !== 'arm-independent';
-          if (declaredRequires !== null && declaredRequires !== scanRequires) {
-            warnings.push(
-              `scenarios/${scenarioName}: declared requires_superpowers ${declaredRequires} contradicts the static scan default`,
-            );
-          }
         }
       }
     }

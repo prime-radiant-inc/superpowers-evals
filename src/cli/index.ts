@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
 import { checkArmSuiteFiles } from '../campaign/arm-suite-check.ts';
+import { checkScenarioMeta } from '../campaign/scenario-meta-check.ts';
 import {
   extractManifest,
   ManifestExtractionError,
@@ -256,7 +257,11 @@ program
             process.stdout.write(`fixed +x ${basename(dir)}/${fixed}\n`);
           }
         }
-        const problems = checkScenario(dir);
+        // Structural problems plus campaign frontmatter validation
+        // (requires_superpowers/coupling) for the complete inventory —
+        // malformed values FAIL; scan contradictions warn below.
+        const meta = checkScenarioMeta(dir, basename(dir));
+        const problems = [...checkScenario(dir), ...meta.problems];
         if (problems.length > 0) {
           failed += 1;
           process.stdout.write(`FAIL ${basename(dir)}\n`);
@@ -265,6 +270,9 @@ program
           }
         } else {
           process.stdout.write(`ok   ${basename(dir)}\n`);
+        }
+        for (const warning of meta.warnings) {
+          process.stdout.write(`warn ${warning}\n`);
         }
       }
 
@@ -293,7 +301,6 @@ program
         repoRoot: process.cwd(),
         codingAgentsDir: resolve(opts.codingAgentsDir),
         credentialsPath: resolve(opts.credentialsFile ?? 'credentials.yaml'),
-        scenariosRoot: root,
       });
       for (const warning of armSuite.warnings) {
         process.stdout.write(`warn ${warning}\n`);
