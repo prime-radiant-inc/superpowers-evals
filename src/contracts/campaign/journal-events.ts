@@ -1,18 +1,28 @@
 // src/contracts/campaign/journal-events.ts
 import { z } from 'zod';
+import { EnvVarNameSchema } from '../credential.ts';
+import { FiniteNumberSchema } from '../finite.ts';
 import { INSTRUMENT_CAUSES } from './typed-failures.ts';
 
 /** Envelope (pinned here): single writer under flock makes seq monotonic;
- *  replay in seq order deterministically reconstructs state. The SQLite
- *  store's schema_version row is D3's storage obligation, not part of the
- *  per-event envelope. */
-function envelope<T extends z.ZodTypeAny>(type: string, payload: T) {
-  return z.object({
-    seq: z.number().int().positive(),
-    ts_ms: z.number().int().nonnegative(),
-    type: z.literal(type),
-    payload,
-  });
+ *  replay in seq order deterministically reconstructs state. Strict: an
+ *  unknown top-level key on a journal row is corruption, never stripped.
+ *  The literal `type` parameter keeps JournalEventType a closed union so
+ *  transition tables stay statically exhaustive. The SQLite store's
+ *  schema_version row is D3's storage obligation, not part of the per-event
+ *  envelope. */
+function envelope<Type extends string, T extends z.ZodTypeAny>(
+  type: Type,
+  payload: T,
+) {
+  return z
+    .object({
+      seq: z.number().int().positive(),
+      ts_ms: z.number().int().nonnegative(),
+      type: z.literal(type),
+      payload,
+    })
+    .strict();
 }
 
 const DigestStr = z.string().regex(/^[0-9a-f]{64}$/);
@@ -41,8 +51,9 @@ export const RunAllocatedEvent = envelope(
       run_id: z.string().min(1),
       pgid: z.number().int().positive(),
       // Key grant (Decision D-1): name only, never the value, so key-grant
-      // accounting is reconstructable from the journal.
-      key_env: z.string().min(1).optional(),
+      // accounting is reconstructable from the journal. The shared env-name
+      // schema rejects secret-shaped strings outright.
+      key_env: EnvVarNameSchema.optional(),
     })
     .strict(),
 );
@@ -84,13 +95,24 @@ export const BlockReplacedEvent = envelope(
 );
 export const SampleDispositionEvent = envelope(
   'sample_disposition',
-  z
-    .object({
-      sample_id: z.string().min(1),
-      disposition: z.enum(['included', 'excluded_block_replaced']),
-      superseded_by: z.string().min(1).optional(),
-    })
-    .strict(),
+  // superseded_by is required exactly for the replacement disposition (the
+  // innocent arm's override names its superseding sample) and forbidden for
+  // included — the strict shapes enforce the iff.
+  z.discriminatedUnion('disposition', [
+    z
+      .object({
+        sample_id: z.string().min(1),
+        disposition: z.literal('included'),
+      })
+      .strict(),
+    z
+      .object({
+        sample_id: z.string().min(1),
+        disposition: z.literal('excluded_block_replaced'),
+        superseded_by: z.string().min(1),
+      })
+      .strict(),
+  ]),
 );
 export const SlotExhaustedEvent = envelope(
   'slot_exhausted',
@@ -118,7 +140,7 @@ export const BudgetEventEvent = envelope(
   z
     .object({
       kind: z.enum(['spend', 'estimate_inflight']),
-      amount_usd: z.number().nonnegative(),
+      amount_usd: FiniteNumberSchema.nonnegative(),
     })
     .strict(),
 );
@@ -127,7 +149,7 @@ export const AmendmentEvent = envelope(
   z
     .object({
       kind: z.literal('budget_raise'),
-      amount_usd: z.number().positive(),
+      amount_usd: FiniteNumberSchema.positive(),
       ts: z.number().int().nonnegative(),
     })
     .strict(),

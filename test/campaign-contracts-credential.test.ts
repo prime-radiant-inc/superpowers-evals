@@ -61,6 +61,16 @@ test('key_pool requires auth: api-key', () => {
   ).toThrow(/key_pool/);
 });
 
+test('key_pool entries must be unique (a duplicated env var is one key, not two)', () => {
+  expect(() =>
+    CredentialSchema.parse({
+      ...BASE,
+      api_key_env: undefined,
+      key_pool: ['GRADER_KEY_1', 'GRADER_KEY_2', 'GRADER_KEY_1'],
+    }),
+  ).toThrow(/unique/);
+});
+
 test('key_pool rejects empty arrays and invalid env names', () => {
   expect(() =>
     CredentialSchema.parse({ ...BASE, api_key_env: undefined, key_pool: [] }),

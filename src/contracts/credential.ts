@@ -17,6 +17,12 @@ const LABEL_VALUE_RE = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
 const DISPLAY_LABEL_RE = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 const API_KEY_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const QUOTA_POOL_RE = /^[a-z0-9_]+$/;
+
+/** Environment-variable name discipline shared by every key-identity field:
+ *  api_key_env, key_pool entries, and the journal's run_allocated key_env.
+ *  The name-shaped regex rejects secret-shaped strings (dashes, '=', spaces)
+ *  so a key VALUE can never pass where a key NAME belongs. */
+export const EnvVarNameSchema = z.string().regex(API_KEY_ENV_RE);
 const CANONICAL_BASE_URL_RE = /^https?:\/\//i;
 
 const BaseUrlSchema = z
@@ -75,7 +81,7 @@ export const CredentialSchema = z
     api: z.enum(CREDENTIAL_APIS).default('openai-chat'),
     base_url: BaseUrlSchema.optional(),
     auth: z.enum(CREDENTIAL_AUTHS).default('api-key'),
-    api_key_env: z.string().regex(API_KEY_ENV_RE).optional(),
+    api_key_env: EnvVarNameSchema.optional(),
     // Explicit pi provider name for the OAuth path (e.g. 'openai-codex'). When set,
     // it overrides the host pi settings.json defaultProvider so eval runs use a
     // reproducible provider instead of inheriting a mutable host setting.
@@ -95,11 +101,19 @@ export const CredentialSchema = z
     // names selected per child at spawn time. Mutually exclusive with
     // api_key_env; api-key auth only. The pool-level cap is
     // max_concurrency; per-key selection is D3's KeySelector.
-    key_pool: z.array(z.string().regex(API_KEY_ENV_RE)).min(1).optional(),
+    key_pool: z.array(EnvVarNameSchema).min(1).optional(),
   })
   .strict()
   .superRefine((cred, ctx) => {
     if (cred.key_pool === undefined) return;
+    if (new Set(cred.key_pool).size !== cred.key_pool.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_pool'],
+        message:
+          'key_pool entries must be unique (a duplicated env var is one key, not two)',
+      });
+    }
     if (cred.api_key_env !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
