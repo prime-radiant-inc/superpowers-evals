@@ -362,7 +362,7 @@ export interface SuperpowersCapability {
   readonly none: boolean;
 }
 
-const SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> =
+let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> =
   {};
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()
@@ -377,6 +377,25 @@ export function superpowersCapability(
       ? config
       : (config.runtime_family ?? config.name);
   return SUPERPOWERS_CAPABILITY[family] ?? { ref: false, none: false };
+}
+
+/** Scoped test seam (kernel D2): temporarily seed the capability registry for
+ *  `body`, restoring the empty default-deny map afterward — even on throw.
+ *  Production code never calls this (the setAgyWhichForTesting precedent,
+ *  body-scoped so a test can never leak a seeded entry); it exists because the
+ *  `runtime_family ?? name` key selection is unobservable against an empty
+ *  registry — every lookup returns the identical default-deny value. */
+export function withSuperpowersCapabilityForTesting(
+  entries: Readonly<Record<string, SuperpowersCapability>>,
+  body: () => void,
+): void {
+  const saved = SUPERPOWERS_CAPABILITY;
+  SUPERPOWERS_CAPABILITY = entries;
+  try {
+    body();
+  } finally {
+    SUPERPOWERS_CAPABILITY = saved;
+  }
 }
 
 /** Resolve the agent implementation for a config.

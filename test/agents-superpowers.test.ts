@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { RunHome } from '../src/agents/index.ts';
-import { superpowersCapability } from '../src/agents/index.ts';
+import {
+  superpowersCapability,
+  withSuperpowersCapabilityForTesting,
+} from '../src/agents/index.ts';
 import {
   projectSuperpowersEnv,
   resolveSuperpowersRoot,
@@ -13,6 +16,34 @@ const home = (superpowers?: RunHome['superpowers']): RunHome => ({
   skeletonRoot: undefined,
   superpowers,
 });
+
+// Set (or clear) ambient SUPERPOWERS_ROOT around `body`, snapshotting and
+// restoring the prior host value even on throw — the withRoot pattern from
+// test/agent-antigravity.test.ts. This file sits outside biome's
+// test/agent-*.test.ts noProcessEnv exemption glob, so each direct process.env
+// line carries a suppression comment.
+function withRoot(superpowersRoot: string | undefined, body: () => void): void {
+  // biome-ignore lint/style/noProcessEnv: snapshot the host value to restore in finally
+  const prev = process.env['SUPERPOWERS_ROOT'];
+  try {
+    if (superpowersRoot === undefined) {
+      // biome-ignore lint/style/noProcessEnv: clear ambient for the assertions
+      delete process.env['SUPERPOWERS_ROOT'];
+    } else {
+      // biome-ignore lint/style/noProcessEnv: set ambient for the assertions
+      process.env['SUPERPOWERS_ROOT'] = superpowersRoot;
+    }
+    body();
+  } finally {
+    if (prev === undefined) {
+      // biome-ignore lint/style/noProcessEnv: restore the snapshotted host value
+      delete process.env['SUPERPOWERS_ROOT'];
+    } else {
+      // biome-ignore lint/style/noProcessEnv: restore the snapshotted host value
+      process.env['SUPERPOWERS_ROOT'] = prev;
+    }
+  }
+}
 
 test('resolveSuperpowersRoot: root mode returns the threaded root', () => {
   expect(
@@ -27,23 +58,20 @@ test('resolveSuperpowersRoot: none mode suppresses', () => {
 });
 
 test('resolveSuperpowersRoot: undefined falls back to ambient', () => {
-  // biome-ignore lint/style/noProcessEnv: set ambient SUPERPOWERS_ROOT for this one assertion (this file is outside the test/agent-*.test.ts noProcessEnv exemption)
-  process.env['SUPERPOWERS_ROOT'] = '/ambient/sp';
-  try {
+  withRoot('/ambient/sp', () => {
     expect(resolveSuperpowersRoot(home(undefined))).toEqual({
       kind: 'root',
       root: '/ambient/sp',
     });
-  } finally {
-    // biome-ignore lint/style/noProcessEnv: clear ambient after the assertion
-    delete process.env['SUPERPOWERS_ROOT'];
-  }
+  });
 });
 
 test('resolveSuperpowersRoot: undefined with ambient absent is missing', () => {
-  // biome-ignore lint/style/noProcessEnv: clear ambient to exercise the missing arm
-  delete process.env['SUPERPOWERS_ROOT'];
-  expect(resolveSuperpowersRoot(home(undefined))).toEqual({ kind: 'missing' });
+  withRoot(undefined, () => {
+    expect(resolveSuperpowersRoot(home(undefined))).toEqual({
+      kind: 'missing',
+    });
+  });
 });
 
 test('projectSuperpowersEnv: root overrides, none strips, undefined is a no-op', () => {
@@ -68,17 +96,14 @@ test('superpowersPluginArgs: claude root/legacy/none expansion', () => {
   ).toBe('--plugin-dir "/wt/abc"');
   expect(superpowersPluginArgs('claude', { mode: 'none' })).toBe('');
   // Legacy byte-identity: today's substituted bytes, ambient set and unset.
-  // biome-ignore lint/style/noProcessEnv: set ambient for the legacy-expansion assertion
-  process.env['SUPERPOWERS_ROOT'] = '/ambient/sp';
-  try {
+  withRoot('/ambient/sp', () => {
     expect(superpowersPluginArgs('claude', undefined)).toBe(
       '--plugin-dir "/ambient/sp"',
     );
-  } finally {
-    // biome-ignore lint/style/noProcessEnv: clear ambient after the assertion
-    delete process.env['SUPERPOWERS_ROOT'];
-  }
-  expect(superpowersPluginArgs('claude', undefined)).toBe('--plugin-dir ""');
+  });
+  withRoot(undefined, () => {
+    expect(superpowersPluginArgs('claude', undefined)).toBe('--plugin-dir ""');
+  });
 });
 
 test('superpowersPluginArgs: serf mirrors claude; pi has extension+skill', () => {
@@ -105,10 +130,27 @@ test('superpowersCapability: default-deny for undeclared families', () => {
 });
 
 test('superpowersCapability: keyed by runtime_family ?? name', () => {
-  expect(
-    superpowersCapability({
-      name: 'builder-alias',
-      runtime_family: 'serf',
-    } as never),
-  ).toEqual(superpowersCapability('serf'));
+  // Seed one entry so key selection is OBSERVABLE: against the empty registry
+  // both arms return the identical default-deny value, so an always-`name`
+  // mutant would pass. With serf flagged, the alias config must resolve
+  // through its runtime_family, and the bare alias name must NOT inherit the
+  // family's entry.
+  withSuperpowersCapabilityForTesting(
+    { serf: { ref: true, none: true } },
+    () => {
+      expect(
+        superpowersCapability({
+          name: 'builder-alias',
+          runtime_family: 'serf',
+        } as never),
+      ).toEqual(superpowersCapability('serf'));
+      expect(superpowersCapability('serf')).toEqual({ ref: true, none: true });
+      expect(superpowersCapability('builder-alias')).toEqual({
+        ref: false,
+        none: false,
+      });
+    },
+  );
+  // The seam restores the empty default-deny registry afterward.
+  expect(superpowersCapability('serf')).toEqual({ ref: false, none: false });
 });
