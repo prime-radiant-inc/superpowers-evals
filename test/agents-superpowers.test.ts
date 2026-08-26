@@ -1,4 +1,9 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RunHome } from '../src/agents/index.ts';
 import {
   superpowersCapability,
@@ -93,7 +98,7 @@ test('projectSuperpowersEnv: root overrides, none strips, undefined is a no-op',
 test('superpowersPluginArgs: claude root/legacy/none expansion', () => {
   expect(
     superpowersPluginArgs('claude', { mode: 'root', root: '/wt/abc' }),
-  ).toBe('--plugin-dir "/wt/abc"');
+  ).toBe("--plugin-dir '/wt/abc'");
   expect(superpowersPluginArgs('claude', { mode: 'none' })).toBe('');
   // Legacy byte-identity: today's substituted bytes, ambient set and unset.
   withRoot('/ambient/sp', () => {
@@ -108,12 +113,57 @@ test('superpowersPluginArgs: claude root/legacy/none expansion', () => {
 
 test('superpowersPluginArgs: serf mirrors claude; pi has extension+skill', () => {
   expect(superpowersPluginArgs('serf', { mode: 'root', root: '/wt/abc' })).toBe(
-    '--plugin-dir "/wt/abc"',
+    "--plugin-dir '/wt/abc'",
   );
   expect(superpowersPluginArgs('pi', { mode: 'root', root: '/wt/abc' })).toBe(
-    '--extension "/wt/abc" --skill "/wt/abc/skills"',
+    "--extension '/wt/abc' --skill '/wt/abc/skills'",
   );
   expect(superpowersPluginArgs('pi', { mode: 'none' })).toBe('');
+});
+
+// Root-mode expansions are spliced UNQUOTED into executable launcher text
+// (populateContextDir substitutes the rendered string straight into the exec
+// line, which bash then evaluates). A hostile explicit root must therefore
+// reach the agent CLI as literal argv bytes — never word-split, expanded, or
+// executed. Proven against real bash argv, not the rendered string.
+test('superpowersPluginArgs: root mode is bash-inert for hostile paths', () => {
+  const base = mkdtempSync(join(tmpdir(), 'sp-quote-'));
+  const markerA = join(base, 'PROBE_SUBST');
+  const markerB = join(base, 'PROBE_BACKTICK');
+  const hostileRoots = [
+    join(base, 'sp dir with spaces'),
+    join(base, "sp'single"),
+    join(base, 'sp"double'),
+    join(base, `sp$(touch ${markerA})`),
+    join(base, `sp\`touch ${markerB}\``),
+    join(base, 'sp\\back\\\\slash'),
+  ];
+  // Run `printf '%s\n' <rendered>` through real bash — the same unquoted
+  // splice position the launcher uses — and return the argv it produced.
+  const argvOf = (rendered: string): string[] => {
+    const out = join(base, `argv-${randomUUID()}`);
+    const script = join(base, `probe-${randomUUID()}.sh`);
+    writeFileSync(
+      script,
+      `#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' ${rendered} > '${out}'\n`,
+    );
+    const res = spawnSync('bash', [script], { encoding: 'utf8' });
+    expect(res.status).toBe(0);
+    return readFileSync(out, 'utf8').split('\n').slice(0, -1);
+  };
+  for (const root of hostileRoots) {
+    for (const family of ['claude', 'serf'] as const) {
+      expect(
+        argvOf(superpowersPluginArgs(family, { mode: 'root', root })),
+      ).toEqual(['--plugin-dir', root]);
+    }
+    expect(argvOf(superpowersPluginArgs('pi', { mode: 'root', root }))).toEqual(
+      ['--extension', root, '--skill', `${root}/skills`],
+    );
+  }
+  // The command-substitution and backtick payloads never executed.
+  expect(existsSync(markerA)).toBe(false);
+  expect(existsSync(markerB)).toBe(false);
 });
 
 test('superpowersPluginArgs: families without launcher references expand empty', () => {

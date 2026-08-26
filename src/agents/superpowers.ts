@@ -43,19 +43,41 @@ export function projectSuperpowersEnv(
   }
 }
 
+/** POSIX single-quote a literal for splicing into launcher script text: each
+ *  `'` becomes `'\''`. Matches the ClaudeAgent shellSingleQuote (a private
+ *  copy, the adapter-module idiom — a value import from ./index.ts would
+ *  create an adapter module cycle). */
+function shellSingleQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 /** The structured launcher placeholder ($SUPERPOWERS_PLUGIN_ARGS) expansion —
  *  threading site 4. Root → the family-specific flags pointing at the threaded
- *  root; none → the flags are ELIDED (never empty-substituted); undefined →
- *  today's exact expansion (legacy byte-identity, including the absent-env
- *  `--plugin-dir ""` form today's substitution produces). Quoting mirrors the
- *  pre-migration launcher templates exactly — double quotes, this flag order. */
+ *  root, each argument POSIX single-quoted independently: the expansion is
+ *  spliced unquoted into executable launcher text, and an explicit root is a
+ *  caller-supplied path with no safe-path restriction, so it must arrive as
+ *  literal argv bytes — never word-split, expanded, or executed. None → the
+ *  flags are ELIDED (never empty-substituted). Undefined → the legacy ambient
+ *  expansion (double quotes, this flag order, including the absent-env
+ *  `--plugin-dir ""` form), byte-locked by the whole-body launcher-equality
+ *  tests. */
 export function superpowersPluginArgs(
   family: string,
   spec: SuperpowersSpec | undefined,
 ): string {
   if (spec?.mode === 'none') return '';
-  const root =
-    spec?.mode === 'root' ? spec.root : (getEnv('SUPERPOWERS_ROOT') ?? '');
+  if (spec?.mode === 'root') {
+    switch (family) {
+      case 'claude':
+      case 'serf':
+        return `--plugin-dir ${shellSingleQuote(spec.root)}`;
+      case 'pi':
+        return `--extension ${shellSingleQuote(spec.root)} --skill ${shellSingleQuote(`${spec.root}/skills`)}`;
+      default:
+        return '';
+    }
+  }
+  const root = getEnv('SUPERPOWERS_ROOT') ?? '';
   switch (family) {
     case 'claude':
     case 'serf':

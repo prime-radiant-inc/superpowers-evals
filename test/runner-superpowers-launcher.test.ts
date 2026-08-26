@@ -44,7 +44,7 @@ test('root mode: launcher placeholder expands to the threaded root flags', () =>
     family: 'claude',
     superpowers: { mode: 'root', root: '/wt/abc' },
   });
-  expect(subs['$SUPERPOWERS_PLUGIN_ARGS']).toBe('--plugin-dir "/wt/abc"');
+  expect(subs['$SUPERPOWERS_PLUGIN_ARGS']).toBe("--plugin-dir '/wt/abc'");
   expect(subs['$SUPERPOWERS_ROOT']).toBe('/wt/abc');
 });
 

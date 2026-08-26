@@ -133,7 +133,7 @@ test('--superpowers-root: provenance reads the threaded root, not ambient', () =
     join(runDir, 'gauntlet-agent', 'context', 'launch-agent'),
     'utf8',
   );
-  expect(launcher).toContain(`--plugin-dir "${dir}"`);
+  expect(launcher).toContain(`--plugin-dir '${dir}'`);
 });
 
 test('--no-superpowers: provenance null, launcher elides plugin flags, no ambient demanded', () => {
