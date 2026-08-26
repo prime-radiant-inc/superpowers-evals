@@ -305,8 +305,8 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // overlays are the quorum-owned QUORUM_AGENT_CWD / QUORUM_AGENT_HOME,
   // applied after the base so nothing can override them.
   readonly envBase: Readonly<Record<string, string | undefined>>;
-  // Snapshot-local gauntlet wrapper; when absent the spawn seam resolves
-  // 'gauntlet' via PATH (legacy).
+  // Snapshot-local gauntlet wrapper; when absent, the seam resolves
+  // 'gauntlet' through PATH.
   readonly gauntletBin?: string | undefined;
 }
 
@@ -433,8 +433,8 @@ export interface RunScenarioArgs {
   // already-materialized root. Explicit modes never fall back to host env.
   readonly superpowers?: SuperpowersSpec | undefined;
   // The snapshot-local gauntlet wrapper. When present, the gauntlet spawn
-  // seam and the gauntlet version probe use it; when absent, legacy PATH
-  // resolution, unchanged.
+  // seam and the gauntlet version probe execute it; when absent, both
+  // resolve 'gauntlet' through PATH.
   readonly gauntletBin?: string | undefined;
 }
 
