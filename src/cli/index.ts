@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
 import { checkArmSuiteFiles } from '../campaign/arm-suite-check.ts';
 import { checkScenarioMeta } from '../campaign/scenario-meta-check.ts';
@@ -47,7 +47,11 @@ import type { ShowMode } from './render.ts';
 import { render } from './render.ts';
 import { batchJson, isBatchDir, renderBatch } from './render-batch.ts';
 import { resolveTarget, ShowError } from './resolve-target.ts';
-import { executeRunCommand, type RunCommandOptions } from './run-command.ts';
+import {
+  executeRunCommand,
+  normalizeRunCommandOptions,
+  type RunCommandOptions,
+} from './run-command.ts';
 import {
   resolveScenarioDir,
   scenarioDirFor,
@@ -138,12 +142,23 @@ program
     '--grader-model <id>',
     'Gauntlet-Agent (grader) model (default: claude-sonnet-5)',
   )
-  .action((scenario: string, opts: RunCommandOptions) =>
-    executeRunCommand(
-      scenario,
-      opts,
-      opts.credentialsFile === undefined ? undefined : 'external-campaign',
-    ),
+  .addOption(
+    // The conflicts target is the negated flag's derived option name —
+    // commander parses `--no-superpowers` as `superpowers`, not
+    // `noSuperpowers`.
+    new Option(
+      '--superpowers-root <path>',
+      'explicit superpowers root (campaign child runs)',
+    ).conflicts('superpowers'),
+  )
+  .option('--no-superpowers', 'run stock — suppress all superpowers staging')
+  .action(
+    (scenario: string, opts: RunCommandOptions & { superpowers?: boolean }) =>
+      executeRunCommand(
+        scenario,
+        normalizeRunCommandOptions(opts),
+        opts.credentialsFile === undefined ? undefined : 'external-campaign',
+      ),
   );
 
 program

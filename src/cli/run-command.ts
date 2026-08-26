@@ -1,9 +1,15 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { SuperpowersSpec } from '../agents/superpowers.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalStatus } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { assertNever } from '../invariant.ts';
-import { currentGauntletChild, runScenario } from '../runner/index.ts';
+import {
+  currentGauntletChild,
+  RunnerError,
+  runScenario,
+} from '../runner/index.ts';
 import { writeStoppedVerdict } from '../runner/stopped.ts';
 import { render } from './render.ts';
 import { resolveScenarioDir, scenarioName } from './scenario.ts';
@@ -20,6 +26,23 @@ export interface RunCommandOptions {
   // Snapshot-local gauntlet wrapper (internal: the run-child parser is the
   // only flag surface; the public `quorum run` command does not expose it).
   readonly gauntletBin?: string;
+  // Explicit superpowers mode. `superpowersRoot` is an already-materialized
+  // root (resolved here, never a ref); `noSuperpowers` runs stock. Both unset
+  // = legacy ambient behavior.
+  readonly superpowersRoot?: string;
+  readonly noSuperpowers?: boolean;
+}
+
+/** Project commander's parsed options onto RunCommandOptions. The
+ *  `--no-superpowers` flag parses as the NEGATED boolean `superpowers`
+ *  (default true, false only when passed); the shared executor instead reads
+ *  the mode off `noSuperpowers`, so the negation is folded here, once, for
+ *  both CLI parsers. */
+export function normalizeRunCommandOptions(
+  opts: RunCommandOptions & { superpowers?: boolean },
+): RunCommandOptions {
+  const { superpowers: suppressed, ...rest } = opts;
+  return { ...rest, ...(suppressed === false ? { noSuperpowers: true } : {}) };
 }
 
 export type RunCredentialsOrigin =
@@ -90,6 +113,20 @@ export async function executeRunCommand(
     process.exit(2);
   };
   process.once('SIGINT', onSigint);
+  // Explicit superpowers mode from the CLI projection. Resolved paths only —
+  // materialization/verification belongs to the spawning campaign.
+  const superpowers: SuperpowersSpec | undefined =
+    opts.superpowersRoot !== undefined
+      ? { mode: 'root', root: resolve(opts.superpowersRoot) }
+      : opts.noSuperpowers === true
+        ? { mode: 'none' }
+        : undefined;
+  if (superpowers?.mode === 'root' && !existsSync(superpowers.root)) {
+    throw new RunnerError(
+      `--superpowers-root does not exist: ${superpowers.root}`,
+      'setup',
+    );
+  }
   const { runDir, verdict } = await runScenario({
     scenarioDir: resolve(scn),
     codingAgent: opts.codingAgent,
@@ -108,6 +145,7 @@ export async function executeRunCommand(
     ...(opts.gauntletBin !== undefined
       ? { gauntletBin: resolve(opts.gauntletBin) }
       : {}),
+    ...(superpowers !== undefined ? { superpowers } : {}),
     onRunDir: (dir) => {
       runDirForStop = dir;
       process.stdout.write(runAllocatedLine(dir));

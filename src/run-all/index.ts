@@ -83,6 +83,11 @@ export interface InvokeChildArgs {
   // Grader model to forward to the child as --grader-model. Absent means no
   // flag is appended (the child falls back to the GRADER_MODEL default).
   readonly graderModel?: string;
+  // Explicit superpowers mode forwarded to the child as --superpowers-root /
+  // --no-superpowers. Absent means neither flag is appended (legacy ambient
+  // behavior); the campaign orchestrator threads the mode through its cells.
+  readonly superpowersRoot?: string | undefined;
+  readonly noSuperpowers?: boolean | undefined;
   readonly timeoutSeconds?: number;
   readonly extraEnv?: Readonly<Record<string, string>>;
   // Called once with the spawned child's OS pid, right after spawn. The
@@ -196,6 +201,12 @@ export function buildChildRunArgs(args: InvokeChildArgs): string[] {
   }
   if (args.graderModel !== undefined && args.graderModel !== '') {
     childArgs.push('--grader-model', args.graderModel);
+  }
+  if (args.superpowersRoot !== undefined) {
+    childArgs.push('--superpowers-root', args.superpowersRoot);
+  }
+  if (args.noSuperpowers === true) {
+    childArgs.push('--no-superpowers');
   }
   return childArgs;
 }

@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
-import { Command } from 'commander';
-import { executeRunCommand, type RunCommandOptions } from './run-command.ts';
+import { Command, Option } from 'commander';
+import {
+  executeRunCommand,
+  normalizeRunCommandOptions,
+  type RunCommandOptions,
+} from './run-command.ts';
 
 const program = new Command();
 program
@@ -16,8 +20,23 @@ program
   .requiredOption('--credentials-file <path>')
   .option('--grader-model <id>')
   .option('--gauntlet-bin <path>')
-  .action((scenario: string, opts: RunCommandOptions) =>
-    executeRunCommand(scenario, opts, 'canonical-snapshot'),
+  .addOption(
+    // The conflicts target is the negated flag's derived option name —
+    // commander parses `--no-superpowers` as `superpowers`, not
+    // `noSuperpowers`.
+    new Option(
+      '--superpowers-root <path>',
+      'explicit superpowers root (campaign child runs)',
+    ).conflicts('superpowers'),
+  )
+  .option('--no-superpowers', 'run stock — suppress all superpowers staging')
+  .action(
+    (scenario: string, opts: RunCommandOptions & { superpowers?: boolean }) =>
+      executeRunCommand(
+        scenario,
+        normalizeRunCommandOptions(opts),
+        'canonical-snapshot',
+      ),
   );
 
 await program.parseAsync(process.argv);
