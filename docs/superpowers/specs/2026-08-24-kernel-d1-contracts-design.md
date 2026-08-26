@@ -1,7 +1,8 @@
 # Kernel Deliverable 1 — Campaign Platform Contracts: Design
 
 **Date:** 2026-08-24 (revision 2, post three-seat review)
-**Status:** proposed
+**Status:** implemented (contracts on main @ `41b9e2b`) — amended by
+ratified erratum E7 (2026-08-26, Errata below)
 **Parent spec:** `docs/superpowers/specs/2026-08-17-quorum-campaign-platform-design.md`
   (the campaign platform design; "the parent" below)
 **Prerequisite:** Phase 0 capacity simulation (merged `f93e95b`;
@@ -881,6 +882,21 @@ E1/E2, which remain unaffected-by and orthogonal to D1):
 - **SHA-256 note:** the parent delegates the digest hash choice; this
   spec's SHA-256 selection completes the identity record (no parent
   text change strictly required).
+- **E7 — rerun/replacement lifecycle expressibility (D1 erratum,
+  RATIFIED 2026-08-26):** this spec's recovery contract orders
+  "kill pgid, rerun block whole," but its sample machine has no legal
+  post-`run_allocated` rerun continuation and its seal predicate cannot
+  see replacement instances. E7 adds the binding-only `quarantined`
+  event (21st), widens `block_replaced` to carry `kind`/`reason`/
+  `reserve_activation` and the successor roster at mint, adds the
+  `block_admitted { rerun_of }` re-entry edge, makes block fan-out
+  terminal-tolerant (`ignore-late`), adds role-tagged
+  `run_allocated.key_grants`, and rewrites the seal predicate over the
+  instance-aware fold. Full normative text: the D3 spec's Errata
+  (E7.0–E7.7, `2026-08-26-kernel-d3-campaign-engine-design.md`);
+  ratification + review provenance:
+  `docs/experiments/2026-08-26-kernel-d3-spec-review.md`. The contract
+  code changes land with D3 task 1.
 - **Parent inconsistency reconciled (not an erratum):** Concepts says
   operator-declared per-token pricing overrides are "recorded in
   `campaign.json`"; Appendix B's field list omits them — D1 adds
