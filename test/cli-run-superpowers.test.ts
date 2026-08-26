@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   mkdtempSync,
@@ -279,38 +280,54 @@ test('run-child parser: --superpowers-root threads the explicit root', () => {
 
 // Decision D-5's hostile test: a child spawned through a DIFFERENT checkout's
 // entrypoint must execute that checkout's content, not the originating one —
-// the instrument-snapshot mechanism rests on it. Proven at both layers: the
-// worktree's own buildChildRunArgs must name the worktree's run-child (the
-// entry is derived from the executing module's URL, never from the spawner's
-// checkout), and spawning that generated entrypoint must run the worktree's
-// parser, not the originating checkout's.
+// the instrument-snapshot mechanism rests on it. The second checkout is a
+// detached worktree at HEAD carrying a startup marker injected locally by
+// this test (content, not history, is the discriminator — no ancestor-count
+// or repo-depth dependency). Proven at both layers: the worktree's own
+// buildChildRunArgs must name the worktree's run-child (the entry derives
+// from the executing module's URL, never from the spawner's checkout), and
+// spawning that generated entrypoint must exhibit the marker only the
+// worktree's copy prints.
 test('D-5: a child executing another checkout reports THAT checkout as root', () => {
   const repo = resolve(import.meta.dir, '..');
   const wt = mkdtempSync(join(tmpdir(), 'reentry-'));
+  const marker = `d5-child-marker-${randomUUID()}`;
   // macOS tmpdir is a symlink (/var → /private/var) and derived paths may or
   // may not carry a trailing slash — compare realpath-normalized, slash-
   // trimmed.
   const norm = (p: string) => realpathSync(p.replace(/\/+$/, ''));
-  const sha = spawnSync('git', ['rev-parse', 'HEAD~20'], {
-    cwd: repo,
-    encoding: 'utf8',
-  }).stdout?.trim();
-  expect(sha).toBeTruthy();
-  const add = spawnSync('git', ['worktree', 'add', '--detach', wt, sha ?? ''], {
-    cwd: repo,
-    encoding: 'utf8',
-  });
-  expect(add.status).toBe(0);
-  // buildChildRunArgs imports commander/zod, so the worktree needs its own
-  // install; asserting it keeps a broken install from masquerading as a
-  // re-entry failure.
-  const install = spawnSync('bun', ['install', '--frozen-lockfile'], {
-    cwd: wt,
-    encoding: 'utf8',
-  });
-  expect(install.status).toBe(0);
   let removeStatus: number | null = null;
+  let registered = false;
   try {
+    // Detached at HEAD: always available, no history-depth requirement. The
+    // worktree's content differs from the originating checkout exactly by the
+    // marker injected below.
+    const add = spawnSync('git', ['worktree', 'add', '--detach', wt], {
+      cwd: repo,
+      encoding: 'utf8',
+    });
+    expect(add.status).toBe(0);
+    registered = add.status === 0;
+    // buildChildRunArgs imports commander/zod, so the worktree needs its own
+    // install; asserting it keeps a broken install from masquerading as a
+    // re-entry failure. Inside the try: a failed install still cleans up the
+    // registered worktree in the finally below.
+    const install = spawnSync('bun', ['install', '--frozen-lockfile'], {
+      cwd: wt,
+      encoding: 'utf8',
+    });
+    expect(install.status).toBe(0);
+    // The discriminator: a startup line that exists ONLY in the worktree's
+    // copy of the internal parser. The parse line is the file's stable tail;
+    // the count assertion fails loud if that shape ever drifts.
+    const runChildPath = join(wt, 'src', 'cli', 'run-child.ts');
+    const parseLine = 'await program.parseAsync(process.argv);';
+    const source = readFileSync(runChildPath, 'utf8');
+    expect(source.split(parseLine).length - 1).toBe(1);
+    writeFileSync(
+      runChildPath,
+      source.replace(parseLine, `console.error('${marker}');\n${parseLine}`),
+    );
     // Layer 1 (module): the worktree's own argv builder names the worktree's
     // run-child — never the originating checkout's.
     const entry = spawnSync(
@@ -323,17 +340,12 @@ test('D-5: a child executing another checkout reports THAT checkout as root', ()
       { cwd: wt, encoding: 'utf8' },
     );
     expect(entry.status).toBe(0);
-    expect(norm(entry.stdout.trim())).toBe(
-      norm(join(wt, 'src', 'cli', 'run-child.ts')),
-    );
-    expect(norm(entry.stdout.trim())).not.toBe(
-      norm(join(repo, 'src', 'cli', 'run-child.ts')),
-    );
-    // Layer 2 (execution): spawning the generated entrypoint from the
-    // worktree runs THAT checkout's parser. This worktree predates the
-    // superpowers flags, so its parser rejects --superpowers-root as unknown;
-    // a child that silently executed the originating checkout would accept
-    // the flag and fail later with a different error.
+    expect(norm(entry.stdout.trim())).toBe(norm(runChildPath));
+    expect(norm(entry.stdout.trim())).not.toBe(norm(RUN_CHILD));
+    // Layer 2 (execution): spawning the generated entrypoint runs THAT
+    // checkout's parser — the marker appears in its stderr output only if the
+    // worktree's (modified) copy executed; the originating checkout's parser
+    // never prints it.
     const child = spawnSync(
       'bun',
       [
@@ -347,20 +359,28 @@ test('D-5: a child executing another checkout reports THAT checkout as root', ()
         mkdtempSync(join(tmpdir(), 'out-')),
         '--credentials-file',
         REPO_CREDENTIALS,
-        '--superpowers-root',
-        '/tmp/x',
       ],
       { cwd: wt, encoding: 'utf8' },
     );
     expect(child.status).not.toBe(0);
-    expect(child.stderr).toContain("unknown option '--superpowers-root'");
+    expect(child.stderr).toContain(marker);
   } finally {
-    // Cleanup removes exactly this test's worktree — never a repository-wide
-    // prune, which could drop unrelated worktree registrations.
-    const remove = spawnSync('git', ['worktree', 'remove', '--force', wt], {
-      cwd: repo,
-    });
-    removeStatus = remove.status;
+    // Cleanup runs on every exit path (setup failure included, tracked by
+    // `registered`) and removes exactly this test's worktree — never a
+    // repository-wide prune. A failed removal is surfaced on stderr here, so
+    // it is visible even when the body already threw, and recorded for the
+    // assertion below.
+    if (registered) {
+      const remove = spawnSync('git', ['worktree', 'remove', '--force', wt], {
+        cwd: repo,
+      });
+      removeStatus = remove.status;
+      if (removeStatus !== 0) {
+        process.stderr.write(
+          `D-5 cleanup failed: git worktree remove exited ${removeStatus} (${wt})\n`,
+        );
+      }
+    }
   }
   expect(removeStatus).toBe(0);
 });
