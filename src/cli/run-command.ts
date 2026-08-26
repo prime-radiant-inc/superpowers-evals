@@ -17,6 +17,9 @@ export interface RunCommandOptions {
   readonly credential?: string;
   readonly credentialsFile?: string;
   readonly graderModel?: string;
+  // Snapshot-local gauntlet wrapper (internal: the run-child parser is the
+  // only flag surface; the public `quorum run` command does not expose it).
+  readonly gauntletBin?: string;
 }
 
 export type RunCredentialsOrigin =
@@ -102,6 +105,9 @@ export async function executeRunCommand(
         }
       : {}),
     graderModel: opts.graderModel,
+    ...(opts.gauntletBin !== undefined
+      ? { gauntletBin: resolve(opts.gauntletBin) }
+      : {}),
     onRunDir: (dir) => {
       runDirForStop = dir;
       process.stdout.write(runAllocatedLine(dir));

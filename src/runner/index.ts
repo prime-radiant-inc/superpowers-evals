@@ -305,6 +305,9 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
   // overlays are the quorum-owned QUORUM_AGENT_CWD / QUORUM_AGENT_HOME,
   // applied after the base so nothing can override them.
   readonly envBase: Readonly<Record<string, string | undefined>>;
+  // Snapshot-local gauntlet wrapper; when absent the spawn seam resolves
+  // 'gauntlet' via PATH (legacy).
+  readonly gauntletBin?: string | undefined;
 }
 
 // The gauntlet child currently in flight for this process (one run per process),
@@ -329,7 +332,7 @@ interface GauntletExit {
 // is published via currentGauntletChild() for the duration.
 function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   return new Promise<GauntletExit>((resolvePromise, rejectPromise) => {
-    const child = spawn('gauntlet', buildGauntletArgv(a), {
+    const child = spawn(a.gauntletBin ?? 'gauntlet', buildGauntletArgv(a), {
       cwd: a.runDir,
       env: {
         ...a.envBase,
@@ -429,6 +432,10 @@ export interface RunScenarioArgs {
   // {mode:'none'} = explicit suppression; {mode:'root'} = the threaded,
   // already-materialized root. Explicit modes never fall back to host env.
   readonly superpowers?: SuperpowersSpec | undefined;
+  // The snapshot-local gauntlet wrapper. When present, the gauntlet spawn
+  // seam and the gauntlet version probe use it; when absent, legacy PATH
+  // resolution, unchanged.
+  readonly gauntletBin?: string | undefined;
 }
 
 export interface RunScenarioResult {
@@ -1097,6 +1104,7 @@ export async function runScenario(
     agentBinary: agentRunnable ? (runAgentCache.config?.binary ?? null) : null,
     runHomeDir: provenanceRunHome,
     superpowers: a.superpowers,
+    gauntletBinary: a.gauntletBin,
   });
   const identified: FinalVerdict = {
     ...verdict,
@@ -1780,6 +1788,7 @@ async function runInnerBody(
       launchCwd,
       runHomeDir,
       envBase: gauntletEnvBaseValue,
+      gauntletBin: a.gauntletBin,
     }));
   } finally {
     if (watcher !== null) {

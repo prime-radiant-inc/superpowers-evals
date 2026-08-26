@@ -108,6 +108,7 @@
         "test/runner-unit.test.ts",
         "test/runner-guards.test.ts",
         "test/runner-cascade.test.ts",
+        "test/runner-gauntlet-bin.test.ts",
         "test/cli-run.test.ts",
         "test/cli-run-sigint.test.ts",
         "test/gauntlet-env.test.ts",

@@ -15,6 +15,7 @@ program
   .option('--credential <name>')
   .requiredOption('--credentials-file <path>')
   .option('--grader-model <id>')
+  .option('--gauntlet-bin <path>')
   .action((scenario: string, opts: RunCommandOptions) =>
     executeRunCommand(scenario, opts, 'canonical-snapshot'),
   );
