@@ -17,10 +17,17 @@
 // QUORUM_SUPERPOWERS_REV / QUORUM_SUPERPOWERS_DIRTY. Those env overrides win
 // when present; the in-container git probe remains the fallback for direct
 // (non-evals-container) invocations and normal, non-worktree checkouts.
+//
+// An explicit superpowers spec changes the contract: root mode probes the
+// threaded root directly (the git probe is authoritative — the container
+// overrides are NOT consulted), and none mode records null for both fields
+// (nothing superpowers-related ran). An absent spec keeps the legacy path
+// above, byte-identical to the original behavior.
 
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { captureBaseEnv } from '../agents/capture-env.ts';
+import type { SuperpowersSpec } from '../agents/superpowers.ts';
 import { getEnv } from '../env.ts';
 
 export interface RunProvenance {
@@ -42,16 +49,42 @@ export function collectProvenance(args: {
   // The run-local throwaway home (<run>/home). The version-probe children's
   // HOME/XDG_CONFIG_HOME are pinned to it — never the operator's home.
   runHomeDir: string;
+  // Explicit superpowers mode. Undefined = legacy (ambient env +
+  // QUORUM_SUPERPOWERS_REV container override).
+  superpowers?: SuperpowersSpec | undefined;
+  // Snapshot-local gauntlet wrapper; when absent the version probe resolves
+  // 'gauntlet' via PATH (legacy).
+  gauntletBinary?: string | undefined;
 }): RunProvenance {
-  const sproot = getEnv('SUPERPOWERS_ROOT');
+  const spec = args.superpowers;
+  // Root: the threaded root's real HEAD is authoritative (the REV override is
+  // honored only on the legacy path — under an explicit mode it is rejected
+  // at run start, so it can never reach here).
+  const sproot =
+    spec === undefined
+      ? getEnv('SUPERPOWERS_ROOT')
+      : spec.mode === 'root'
+        ? spec.root
+        : undefined;
   return {
-    superpowers_rev: sproot ? (hostRev() ?? gitRev(sproot)) : null,
-    superpowers_dirty: sproot ? (hostDirty() ?? gitDirty(sproot)) : null,
+    superpowers_rev: sproot
+      ? spec === undefined
+        ? (hostRev() ?? gitRev(sproot))
+        : gitRev(sproot)
+      : null,
+    superpowers_dirty: sproot
+      ? spec === undefined
+        ? (hostDirty() ?? gitDirty(sproot))
+        : gitDirty(sproot)
+      : null,
     harness_rev: gitRev(args.repoRoot),
     agent_cli_version: args.agentBinary
       ? versionLine(args.agentBinary, args.runHomeDir)
       : null,
-    gauntlet_version: versionLine('gauntlet', args.runHomeDir),
+    gauntlet_version: versionLine(
+      args.gauntletBinary ?? 'gauntlet',
+      args.runHomeDir,
+    ),
     host_platform: process.platform,
   };
 }
