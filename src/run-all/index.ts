@@ -83,6 +83,10 @@ export interface InvokeChildArgs {
   // Grader model to forward to the child as --grader-model. Absent means no
   // flag is appended (the child falls back to the GRADER_MODEL default).
   readonly graderModel?: string;
+  // Snapshot-local gauntlet wrapper (SnapshotHandle.gauntletBin) forwarded to
+  // the child as --gauntlet-bin. Absent means no flag is appended and the
+  // child resolves `gauntlet` via PATH (legacy).
+  readonly gauntletBin?: string;
   // Explicit superpowers mode forwarded to the child as --superpowers-root /
   // --no-superpowers. Absent means neither flag is appended (legacy ambient
   // behavior). Callers select the mode per cell; run-all's own matrix
@@ -202,6 +206,9 @@ export function buildChildRunArgs(args: InvokeChildArgs): string[] {
   }
   if (args.graderModel !== undefined && args.graderModel !== '') {
     childArgs.push('--grader-model', args.graderModel);
+  }
+  if (args.gauntletBin !== undefined) {
+    childArgs.push('--gauntlet-bin', args.gauntletBin);
   }
   if (args.superpowersRoot !== undefined) {
     childArgs.push('--superpowers-root', args.superpowersRoot);
