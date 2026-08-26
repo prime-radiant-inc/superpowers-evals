@@ -981,10 +981,11 @@ export async function runScenario(
   a: RunScenarioArgs,
 ): Promise<RunScenarioResult> {
   // Loud-at-start rejections: an explicit superpowers mode is a contract that
-  // the run's provenance is exact. The REV override (container path) would
-  // stamp a rev the run never used, and the Windows path has no explicit-mode
-  // support (parent non-goal). Both fire before any side effect — no run dir
-  // is allocated for an invalid combination.
+  // the run's provenance is exact. The REV override (the container path's
+  // host-resolved rev) would stamp a rev the run never used, and the Windows
+  // guest path stages no superpowers content — explicit modes are linux-only.
+  // Both fire before any side effect — no run dir is allocated for an
+  // invalid combination.
   if (a.superpowers !== undefined && getEnv('QUORUM_SUPERPOWERS_REV')) {
     throw new RunnerError(
       'QUORUM_SUPERPOWERS_REV is set while an explicit superpowers mode is active — it would stamp a rev the run never used',

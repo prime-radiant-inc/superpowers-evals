@@ -21,8 +21,9 @@
 // An explicit superpowers spec changes the contract: root mode probes the
 // threaded root directly (the git probe is authoritative — the container
 // overrides are NOT consulted), and none mode records null for both fields
-// (nothing superpowers-related ran). An absent spec keeps the legacy path
-// above, byte-identical to the original behavior.
+// (nothing superpowers-related ran). A spec-less caller gets exactly the
+// ambient path above: the ambient root read, with the container overrides
+// winning over the in-container probe.
 
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
