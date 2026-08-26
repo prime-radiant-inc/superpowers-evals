@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # quorum-generated launcher for Claude Code (the agent under test).
 #
-# The cd, Claude auth env, throwaway-$HOME pin, plugin-dir, and flags are baked
-# in here so the QA agent launches Claude with ONE token and cannot skip the
-# prepared workdir. quorum substitutes the $… values below at runtime, so the
-# installed copy contains literal absolute paths (no env inheritance needed —
-# tmux strips env from new sessions).
+# The cd, Claude auth env, throwaway-$HOME pin, Superpowers plugin splice,
+# and flags are baked in here so the QA agent launches Claude with ONE token
+# and cannot skip the prepared workdir. quorum substitutes the $… values below
+# at runtime, so the installed copy contains literal absolute paths (no env
+# inheritance needed — tmux strips env from new sessions).
 #
 # No CLAUDE_CONFIG_DIR is set: the launcher pins HOME to the throwaway home via
 # $QUORUM_HOME_ENV, and provisioning seeds the config INTO <HOME>/.claude
@@ -45,7 +45,7 @@
 #          CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 \
 #          <ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" on the direct path, else
 #           CLAUDE_CODE_USE_MANTLE/AWS_REGION/AWS_BEARER_TOKEN_BEDROCK on Mantle> \
-#     claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL"
+#     claude --dangerously-skip-permissions $SUPERPOWERS_PLUGIN_ARGS --model "$CLAUDE_MODEL"
 #
 # Auth is either ANTHROPIC_API_KEY (direct API) or CLAUDE_CODE_USE_MANTLE +
 # AWS_REGION + AWS_BEARER_TOKEN_BEDROCK (Bedrock/Mantle), whichever
@@ -107,4 +107,4 @@ exec env -i \
   "${env_args[@]}" \
   $QUORUM_HOME_ENV \
   CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 \
-  claude --dangerously-skip-permissions --plugin-dir "$SUPERPOWERS_ROOT" --model "$CLAUDE_MODEL" "$@"
+  claude --dangerously-skip-permissions $SUPERPOWERS_PLUGIN_ARGS --model "$CLAUDE_MODEL" "$@"

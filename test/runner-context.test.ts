@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { shellSingleQuote } from '../src/agents/index.ts';
+import { superpowersPluginArgs } from '../src/agents/superpowers.ts';
 import { populateContextDir } from '../src/runner/context.ts';
 import { RunnerError } from '../src/runner/errors.ts';
 import { homeEnvSubstitutions } from '../src/runner/index.ts';
@@ -42,6 +43,12 @@ function claudeSubstitutions(opts: {
     $QUORUM_AGENT_CWD: launchCwd,
     $QUORUM_AGENT_CWD_SH: shellSingleQuote(launchCwd),
     $SUPERPOWERS_ROOT: superpowersRoot,
+    // The structured launcher placeholder the claude template splices
+    // (root-mode expansion at the same root — the runner's map shape).
+    $SUPERPOWERS_PLUGIN_ARGS: superpowersPluginArgs('claude', {
+      mode: 'root',
+      root: superpowersRoot,
+    }),
     $QUORUM_LAUNCH_AGENT: launchAgentPath,
     $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(launchAgentPath),
     $CLAUDE_ENV_FILE: claudeEnvFile,
@@ -279,13 +286,21 @@ function installSerfLauncher(
     );
   }
 
+  // The superpowers root the serf launcher's $SUPERPOWERS_PLUGIN_ARGS splice
+  // expands to (root mode, the runner's map shape).
+  const superpowersRoot = mkdtempSync(join(tmpdir(), 'serf-superpowers-'));
+
   populateContextDir({
     codingAgentsDir: REAL_CODING_AGENTS,
     codingAgent: 'serf',
     runDir,
     substitutions: {
       $QUORUM_AGENT_CWD: workdir,
-      $SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'serf-superpowers-')),
+      $SUPERPOWERS_ROOT: superpowersRoot,
+      $SUPERPOWERS_PLUGIN_ARGS: superpowersPluginArgs('serf', {
+        mode: 'root',
+        root: superpowersRoot,
+      }),
       $SERF_MODEL: model,
       $SERF_MODEL_SH: shellSingleQuote(model),
       $SERF_API_KEY_ENV: selectedName,

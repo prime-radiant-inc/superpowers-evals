@@ -79,9 +79,8 @@ exec env -i \
     --provider "$PI_PROVIDER" \
     --model "$PI_MODEL" \
     --no-extensions \
-    --extension "$SUPERPOWERS_ROOT" \
+    $SUPERPOWERS_PLUGIN_ARGS \
     --extension "$PI_SUBAGENTS_PKG" \
     --no-skills \
-    --skill "$SUPERPOWERS_ROOT/skills" \
     --tools read,bash,edit,write,grep,find,ls,subagent \
     "$@"

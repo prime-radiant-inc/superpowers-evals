@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { shellSingleQuote } from '../src/agents/index.ts';
+import { superpowersPluginArgs } from '../src/agents/superpowers.ts';
 import { populateContextDir } from '../src/runner/context.ts';
 import { homeEnvSubstitutions } from '../src/runner/index.ts';
 
@@ -222,10 +223,18 @@ function installLauncher(
     envFileSubs = fixture.envFile.substitutions(envFile);
   }
 
+  // The superpowers root the claude/serf/pi launchers' splice expands to
+  // (root mode — the runner's map shape; the helper is inert '' for the other
+  // families, matching the runner's always-present key).
+  const superpowersRoot = mkdtempSync(join(tmpdir(), 'sp-'));
   const substitutions: Record<string, string> = {
     $QUORUM_AGENT_CWD: cwd,
     $QUORUM_AGENT_CWD_SH: shellSingleQuote(cwd),
-    $SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sp-')),
+    $SUPERPOWERS_ROOT: superpowersRoot,
+    $SUPERPOWERS_PLUGIN_ARGS: superpowersPluginArgs(agent, {
+      mode: 'root',
+      root: superpowersRoot,
+    }),
     ...homeEnvSubstitutions(home),
     ...envFileSubs,
     ...(fixture.substitutions?.(ctx) ?? {}),

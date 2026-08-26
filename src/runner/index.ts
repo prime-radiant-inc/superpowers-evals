@@ -48,6 +48,10 @@ import {
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
 import { SERF_API_ENV_FILE_NAME } from '../agents/serf.ts';
+import {
+  type SuperpowersSpec,
+  superpowersPluginArgs,
+} from '../agents/superpowers.ts';
 import { WindowsHost } from '../agents/windows-host.ts';
 import type { AtifTrajectory } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
@@ -421,6 +425,10 @@ export interface RunScenarioArgs {
   readonly openRouterAttestationWriter?:
     | ((runDir: string, attestation: OpenRouterAttestation) => void)
     | undefined;
+  // The run's superpowers spec. Undefined = legacy ambient behavior;
+  // {mode:'none'} = explicit suppression; {mode:'root'} = the threaded,
+  // already-materialized root. Explicit modes never fall back to host env.
+  readonly superpowers?: SuperpowersSpec | undefined;
 }
 
 export interface RunScenarioResult {
@@ -898,6 +906,43 @@ export function homeEnvSubstitutions(
   };
 }
 
+/** The populateContextDir substitution map — its mode-independent base (the
+ *  runner adds the per-family env-file/model keys at the call site). Extracted
+ *  as a pure exported function so the superpowers spec threading is
+ *  unit-testable. `family` is `config.runtime_family ?? config.name`. */
+export function buildContextSubstitutions(args: {
+  readonly launchCwd: string;
+  readonly launchAgentPath: string;
+  readonly runHomeDir: string;
+  readonly family: string;
+  readonly superpowers?: SuperpowersSpec | undefined;
+}): Record<string, string> {
+  const spec = args.superpowers;
+  const substitutions: Record<string, string> = {
+    $QUORUM_AGENT_CWD: args.launchCwd,
+    $QUORUM_AGENT_CWD_SH: shellSingleQuote(args.launchCwd),
+    // The structured launcher placeholder the claude/serf/pi templates splice
+    // (a flags splice, unquoted): root → the family flags pointing at the
+    // threaded root; none → elided; undefined → today's exact expansion.
+    $SUPERPOWERS_PLUGIN_ARGS: superpowersPluginArgs(args.family, spec),
+    $QUORUM_LAUNCH_AGENT: args.launchAgentPath,
+    $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(args.launchAgentPath),
+    // Throwaway-$HOME isolation for the coding agent (always on). Each launcher
+    // splices $QUORUM_HOME_ENV into its `exec env …` line.
+    ...homeEnvSubstitutions(args.runHomeDir),
+  };
+  // $SUPERPOWERS_ROOT: absent under none mode (a surviving raw reference
+  // there is an instrument bug — the fail-loud forbiddenPlaceholders rule
+  // catches it); the threaded root under root mode; ambient (or today's
+  // empty-string form) under legacy.
+  if (spec?.mode === 'root') {
+    substitutions['$SUPERPOWERS_ROOT'] = spec.root;
+  } else if (spec === undefined) {
+    substitutions['$SUPERPOWERS_ROOT'] = getEnv('SUPERPOWERS_ROOT') ?? '';
+  }
+  return substitutions;
+}
+
 // Reap the agent runtime's secret temp dirs. Each dir is removed recursively; an
 // already-absent dir is fine, but any other removal failure — or a path that
 // survives removal —
@@ -1370,6 +1415,9 @@ async function runInnerBody(
     // fragments (codex's codex.config.toml) from the same place setup.sh and
     // checks.sh live.
     scenarioDir: a.scenarioDir,
+    // The run's superpowers spec, threaded to every adapter (undefined =
+    // legacy ambient behavior; explicit modes never fall back to host env).
+    superpowers: a.superpowers,
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner
@@ -1540,16 +1588,13 @@ async function runInnerBody(
     'context',
     'launch-agent',
   );
-  const substitutions: Record<string, string> = {
-    $QUORUM_AGENT_CWD: launchCwd,
-    $QUORUM_AGENT_CWD_SH: shellSingleQuote(launchCwd),
-    $SUPERPOWERS_ROOT: getEnv('SUPERPOWERS_ROOT') ?? '',
-    $QUORUM_LAUNCH_AGENT: launchAgentPath,
-    $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(launchAgentPath),
-    // Throwaway-$HOME isolation for the coding agent (always on). Each launcher
-    // splices $QUORUM_HOME_ENV into its `exec env …` line.
-    ...homeEnvSubstitutions(runHomeDir),
-  };
+  const substitutions = buildContextSubstitutions({
+    launchCwd,
+    launchAgentPath,
+    runHomeDir,
+    family,
+    superpowers: a.superpowers,
+  });
   // Provision-supplied substitutions. For LOCAL claude these are the auth
   // env-file path the launcher sources; the path is deterministic
   // (configDir/.claude-env, written by ClaudeAgent.provision), so the runner
@@ -1626,20 +1671,29 @@ async function runInnerBody(
   if (os !== 'linux') {
     Object.assign(substitutions, provisionEnv);
   }
+  // $SUPERPOWERS_PLUGIN_ARGS must never survive substitution (it always has
+  // an expansion); under none mode a surviving raw $SUPERPOWERS_ROOT anywhere
+  // in populated context — launcher or scenario-authored content — is a loud
+  // setup error, since the templates splice the structured placeholder and
+  // the map drops the raw key entirely.
+  const forbiddenPlaceholders = [
+    ...(family === 'claude' && !isRemote
+      ? ['$CLAUDE_MODEL']
+      : family === 'serf'
+        ? ['$SERF_MODEL', '$SERF_API_KEY_ENV']
+        : cfg.name === 'copilot'
+          ? ['$COPILOT_MODEL_SH']
+          : []),
+    '$SUPERPOWERS_PLUGIN_ARGS',
+    ...(a.superpowers?.mode === 'none' ? ['$SUPERPOWERS_ROOT'] : []),
+  ];
   populateContextDir({
     codingAgentsDir: a.codingAgentsDir,
     codingAgent: contextDirName(cfg, os),
     runDir,
     substitutions,
     required: family === 'claude' || family === 'serf',
-    forbiddenPlaceholders:
-      family === 'claude' && !isRemote
-        ? ['$CLAUDE_MODEL']
-        : family === 'serf'
-          ? ['$SERF_MODEL', '$SERF_API_KEY_ENV']
-          : cfg.name === 'copilot'
-            ? ['$COPILOT_MODEL_SH']
-            : [],
+    forbiddenPlaceholders,
   });
 
   // The gauntlet child env base: every agent gets the GAUNTLET_ENV_ALLOWLIST
