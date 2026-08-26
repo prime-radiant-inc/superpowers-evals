@@ -365,8 +365,13 @@ export interface SuperpowersCapability {
 let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   // Flipped by the D2 live smoke (2026-08-25): two-mode claude smoke passed
   // — root-mode provenance readback + burned-in launcher path; none-mode
-  // null rev + elided plugin flags. Each further adapter's flip is a
-  // platform PR carrying the same two-mode live smoke.
+  // null rev + elided plugin flags. Evidence (the run dirs are gitignored,
+  // so these identifiers are the durable record): superpowers v6.2.0 commit
+  // 3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9, differing from the ambient
+  // checkout HEAD b36e0829c6d0140e93cfef2ca599b1b07d4a7797; runs
+  // 00-quorum-smoke-hello-world-claude-opus-linux-20260826T051322Z-7292
+  // (root) and …-linux-20260826T051516Z-b699 (none). Each further adapter's
+  // flip is a platform PR carrying the same two-mode live smoke.
   claude: { ref: true, none: true },
 };
 
@@ -385,11 +390,12 @@ export function superpowersCapability(
 }
 
 /** Scoped test seam (kernel D2): temporarily seed the capability registry for
- *  `body`, restoring the empty default-deny map afterward — even on throw.
+ *  `body`, restoring the prior registry afterward — even on throw.
  *  Production code never calls this (the setAgyWhichForTesting precedent,
  *  body-scoped so a test can never leak a seeded entry); it exists because the
- *  `runtime_family ?? name` key selection is unobservable against an empty
- *  registry — every lookup returns the identical default-deny value. */
+ *  `runtime_family ?? name` key selection is unobservable when both candidate
+ *  keys are undeclared — every lookup returns the identical default-deny
+ *  value. */
 export function withSuperpowersCapabilityForTesting(
   entries: Readonly<Record<string, SuperpowersCapability>>,
   body: () => void,

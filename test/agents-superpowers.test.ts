@@ -134,11 +134,11 @@ test('superpowersCapability: claude flagged by the D2 two-mode live smoke', () =
 });
 
 test('superpowersCapability: keyed by runtime_family ?? name', () => {
-  // Seed one entry so key selection is OBSERVABLE: against the empty registry
-  // both arms return the identical default-deny value, so an always-`name`
-  // mutant would pass. With serf flagged, the alias config must resolve
-  // through its runtime_family, and the bare alias name must NOT inherit the
-  // family's entry.
+  // Seed one entry so key selection is OBSERVABLE: when both candidate keys
+  // are undeclared both arms return the identical default-deny value, so an
+  // always-`name` mutant would pass. With serf flagged, the alias config must
+  // resolve through its runtime_family, and the bare alias name must NOT
+  // inherit the family's entry.
   withSuperpowersCapabilityForTesting(
     { serf: { ref: true, none: true } },
     () => {
@@ -155,6 +155,6 @@ test('superpowersCapability: keyed by runtime_family ?? name', () => {
       });
     },
   );
-  // The seam restores the empty default-deny registry afterward.
+  // The seam restores the prior registry afterward; serf stays default-deny.
   expect(superpowersCapability('serf')).toEqual({ ref: false, none: false });
 });
