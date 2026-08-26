@@ -907,9 +907,9 @@ export function homeEnvSubstitutions(
 }
 
 /** The populateContextDir substitution map — its mode-independent base (the
- *  runner adds the per-family env-file/model keys at the call site). Extracted
- *  as a pure exported function so the superpowers spec threading is
- *  unit-testable. `family` is `config.runtime_family ?? config.name`. */
+ *  runner adds the per-family env-file/model keys at the call site). A pure
+ *  exported function so the superpowers spec threading is unit-testable.
+ *  `family` is `config.runtime_family ?? config.name`. */
 export function buildContextSubstitutions(args: {
   readonly launchCwd: string;
   readonly launchAgentPath: string;
@@ -923,7 +923,9 @@ export function buildContextSubstitutions(args: {
     $QUORUM_AGENT_CWD_SH: shellSingleQuote(args.launchCwd),
     // The structured launcher placeholder the claude/serf/pi templates splice
     // (a flags splice, unquoted): root → the family flags pointing at the
-    // threaded root; none → elided; undefined → today's exact expansion.
+    // threaded root; none → elided; undefined → the ambient expansion
+    // (byte-identical legacy behavior, including the empty-flags form when
+    // ambient is unset).
     $SUPERPOWERS_PLUGIN_ARGS: superpowersPluginArgs(args.family, spec),
     $QUORUM_LAUNCH_AGENT: args.launchAgentPath,
     $QUORUM_LAUNCH_AGENT_SH: shellSingleQuote(args.launchAgentPath),
@@ -933,8 +935,8 @@ export function buildContextSubstitutions(args: {
   };
   // $SUPERPOWERS_ROOT: absent under none mode (a surviving raw reference
   // there is an instrument bug — the fail-loud forbiddenPlaceholders rule
-  // catches it); the threaded root under root mode; ambient (or today's
-  // empty-string form) under legacy.
+  // catches it); the threaded root under root mode; the ambient root under
+  // legacy, empty when ambient is unset.
   if (spec?.mode === 'root') {
     substitutions['$SUPERPOWERS_ROOT'] = spec.root;
   } else if (spec === undefined) {

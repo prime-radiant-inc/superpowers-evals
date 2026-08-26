@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { populateContextDir } from '../src/runner/context.ts';
-// buildContextSubstitutions is extracted from runScenario by this task:
 import { buildContextSubstitutions } from '../src/runner/index.ts';
 
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
@@ -104,53 +103,123 @@ test('legacy mode: byte-identical expansion, ambient set and unset', () => {
   });
 });
 
-// The migrated claude/serf/pi templates splice $SUPERPOWERS_PLUGIN_ARGS (a
-// flags splice: unquoted) where they used to bake a literal $SUPERPOWERS_ROOT.
-// These tests substitute the REAL templates through the real builder and pin
-// the resulting bytes per mode.
+// The claude/serf/pi launcher templates splice $SUPERPOWERS_PLUGIN_ARGS on
+// their exec lines (a flags splice: unquoted, expanding to the family's
+// superpowers flags — or to nothing when superpowers is suppressed). The
+// tests below substitute the REAL templates through the real builder and pin
+// the populated bytes per mode.
 
-// The exact flag text the pre-migration templates baked from $SUPERPOWERS_ROOT
-// — the non-circular byte-identity oracle for the undefined (legacy) arm.
-const LEGACY_FLAG_TEXT = {
-  claude: '--plugin-dir "/ambient/sp"',
-  serf: '--plugin-dir "/ambient/sp"',
-  pi: '--extension "/ambient/sp" --skill "/ambient/sp/skills"',
+// The raw template text each family's splice stands in for — the byte-identity
+// oracle for the undefined (legacy) arm. pi's pair is contiguous at one
+// position: the canonical arrangement the single splice reproduces (pi's
+// parser is order-inert across these flags — --skill appends to the CLI skill
+// list while --no-skills only gates discovery — so contiguity fixes the bytes
+// without touching behavior).
+const RAW_SUPERPOWERS_FLAGS = {
+  claude: '--plugin-dir "$SUPERPOWERS_ROOT"',
+  serf: '--plugin-dir "$SUPERPOWERS_ROOT"',
+  pi: '--extension "$SUPERPOWERS_ROOT" --skill "$SUPERPOWERS_ROOT/skills"',
 } as const;
 
-test('migrated templates: legacy ambient expansion lands the exact pre-migration flag bytes', () => {
+// The exec-block flag order each launcher bakes under the legacy arm — the
+// canonical arrangement pinned on the populated bytes, independently of the
+// splice, so a template edit that interleaves other flags with the superpowers
+// pair (or moves it) fails here even though the splice itself still expands.
+// pi's $PI_SUBAGENTS_PKG resolves at launch time, so its token survives
+// substitution literally.
+const EXEC_FLAG_ORDER = {
+  claude: ['--dangerously-skip-permissions', '--plugin-dir', '--model'],
+  serf: ['--model', '--plugin-dir', '--export-atif', '--dir', '--state-dir'],
+  pi: [
+    '--provider',
+    '--model',
+    '--no-extensions',
+    '--extension "/ambient/sp"',
+    '--skill "/ambient/sp/skills"',
+    '--extension "$PI_SUBAGENTS_PKG"',
+    '--no-skills',
+    '--tools',
+  ],
+} as const;
+
+test('legacy arm: the populated launcher is byte-identical to the raw reference template', () => {
   for (const agent of ['claude', 'serf', 'pi'] as const) {
     withAmbientRoot('/ambient/sp', () => {
-      const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+      // Both sides bake the same concrete paths, so the only permitted
+      // difference between them is the splice's own expansion.
+      const actualRunDir = mkdtempSync(join(tmpdir(), 'run-'));
+      const launchCwd = join(actualRunDir, 'coding-agent-workdir');
+      const launchAgentPath = join(
+        actualRunDir,
+        'gauntlet-agent',
+        'context',
+        'launch-agent',
+      );
+      const runHomeDir = join(actualRunDir, 'home');
+      const substitutions = buildContextSubstitutions({
+        launchCwd,
+        launchAgentPath,
+        runHomeDir,
+        family: agent,
+        superpowers: undefined,
+      });
       populateContextDir({
         codingAgentsDir: REAL_CODING_AGENTS,
         codingAgent: agent,
-        runDir,
-        substitutions: buildContextSubstitutions({
-          launchCwd: join(runDir, 'coding-agent-workdir'),
-          launchAgentPath: join(
-            runDir,
-            'gauntlet-agent',
-            'context',
-            'launch-agent',
-          ),
-          runHomeDir: join(runDir, 'home'),
-          family: agent,
-          superpowers: undefined,
-        }),
+        runDir: actualRunDir,
+        substitutions,
         required: true,
       });
-      const launcher = readFileSync(
-        join(runDir, 'gauntlet-agent', 'context', 'launch-agent'),
+      const actual = readFileSync(launchAgentPath, 'utf8');
+
+      // Reference: the committed template with the splice token replaced by
+      // the pinned raw fragment — the raw template the splice must reproduce
+      // — populated with the same map minus the splice key (the legacy arm's
+      // $SUPERPOWERS_ROOT entry resolves the raw flags).
+      const refAgentsDir = mkdtempSync(join(tmpdir(), 'agents-'));
+      mkdirSync(join(refAgentsDir, `${agent}-context`), { recursive: true });
+      writeFileSync(
+        join(refAgentsDir, `${agent}-context`, 'launch-agent'),
+        readFileSync(
+          join(REAL_CODING_AGENTS, `${agent}-context`, 'launch-agent'),
+          'utf8',
+        ).replaceAll('$SUPERPOWERS_PLUGIN_ARGS', RAW_SUPERPOWERS_FLAGS[agent]),
+      );
+      const refRunDir = mkdtempSync(join(tmpdir(), 'run-'));
+      const refSubstitutions: Record<string, string> = { ...substitutions };
+      delete refSubstitutions['$SUPERPOWERS_PLUGIN_ARGS'];
+      populateContextDir({
+        codingAgentsDir: refAgentsDir,
+        codingAgent: agent,
+        runDir: refRunDir,
+        substitutions: refSubstitutions,
+        required: true,
+      });
+      const expected = readFileSync(
+        join(refRunDir, 'gauntlet-agent', 'context', 'launch-agent'),
         'utf8',
       );
-      expect(launcher).toContain(LEGACY_FLAG_TEXT[agent]);
-      expect(launcher).not.toContain('$SUPERPOWERS_PLUGIN_ARGS');
-      expect(launcher).not.toContain('$SUPERPOWERS_ROOT');
+
+      // Whole-body equality: the splice reproduces the raw reference bytes.
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain('$SUPERPOWERS_PLUGIN_ARGS');
+      expect(actual).not.toContain('$SUPERPOWERS_ROOT');
+
+      // The canonical exec-block arrangement holds on the populated bytes
+      // (the exec block, not the prose comments, which may name the flags).
+      const execBlock = actual.slice(actual.indexOf('exec env'));
+      const positions = EXEC_FLAG_ORDER[agent].map((flag) =>
+        execBlock.indexOf(flag),
+      );
+      for (const position of positions) {
+        expect(position).toBeGreaterThanOrEqual(0);
+      }
+      expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     });
   }
 });
 
-test('migrated templates: none mode elides the flags with no raw superpowers placeholder left', () => {
+test('none mode: populated launchers elide the flags with no raw superpowers placeholder left', () => {
   for (const agent of ['claude', 'serf', 'pi'] as const) {
     const runDir = mkdtempSync(join(tmpdir(), 'run-'));
     // The runner's none-mode forbidden set: neither placeholder may survive
@@ -185,7 +254,7 @@ test('migrated templates: none mode elides the flags with no raw superpowers pla
     );
     // The exec block (not the prose comments, which may name the flags)
     // carries no superpowers flags under none mode.
-    const execBlock = launcher.slice(launcher.indexOf('exec '));
+    const execBlock = launcher.slice(launcher.indexOf('exec env'));
     if (agent === 'pi') {
       expect(execBlock).not.toContain('--skill');
     } else {
