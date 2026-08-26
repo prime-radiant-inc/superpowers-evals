@@ -107,7 +107,10 @@ bun run quorum run scenarios/<name> --coding-agent claude --credential sonnet
 bun run quorum run scenarios/<name> --coding-agent claude --credential haiku
 ```
 
-The `claude` agent's default credential is `opus`.
+The `claude` agent's default credential is `opus_bedrock`, which authenticates
+with `AWS_BEARER_TOKEN_BEDROCK`. Pass `--credential opus` for the direct
+Anthropic API path (`ANTHROPIC_API_KEY`), or `--credential opus5_sub` to drive
+it from a Claude subscription with `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ## Shared Eval Appliance
 
