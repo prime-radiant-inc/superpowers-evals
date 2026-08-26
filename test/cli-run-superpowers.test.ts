@@ -56,6 +56,14 @@ function spawnQuorumRun(
   args: string[],
   envExtra: Record<string, string> = {},
 ) {
+  // QUORUM_SUPERPOWERS_REV is host-exported by the evals-container wrapper,
+  // and an explicit superpowers mode makes it a hard run-start error — a
+  // polluted host env would fail every explicit-mode case (and flip the legacy
+  // provenance probe) for a reason no test chose. Strip it from the inherited
+  // env (never from process.env itself); envExtra reintroduces it only where a
+  // test means to.
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+  delete childEnv['QUORUM_SUPERPOWERS_REV'];
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const proc = spawnSync(
     'bun',
@@ -72,7 +80,7 @@ function spawnQuorumRun(
     ],
     {
       env: {
-        ...process.env,
+        ...childEnv,
         PATH: `${mockGauntletDir('pass')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
@@ -110,7 +118,7 @@ test('--superpowers-root: provenance reads the threaded root, not ambient', () =
   const { dir, sha } = tmpGitRepo();
   // Ambient SUPERPOWERS_ROOT is empty (present-but-empty counts as missing):
   // proves the root-mode run does not depend on the ambient channel — neither
-  // for provenance nor for the required-env gate (threading site 6).
+  // for provenance nor for the required-env gate.
   const r = runCli(['--superpowers-root', dir], { SUPERPOWERS_ROOT: '' });
   expect(r.status).toBe(0);
   const verdict = readSoleVerdict(r.outRoot);
@@ -130,7 +138,7 @@ test('--superpowers-root: provenance reads the threaded root, not ambient', () =
 test('--no-superpowers: provenance null, launcher elides plugin flags, no ambient demanded', () => {
   const r = runCli(['--no-superpowers'], { SUPERPOWERS_ROOT: '' });
   // SUPERPOWERS_ROOT='' in envExtra overrides the harness seed with an empty
-  // value, proving none mode does not demand the ambient var (site 6).
+  // value, proving none mode does not demand the ambient var.
   expect(r.status).toBe(0);
   const verdict = readSoleVerdict(r.outRoot);
   expect(verdict.provenance.superpowers_rev).toBeNull();
@@ -192,7 +200,8 @@ test('--superpowers-root with a nonexistent path fails before allocation', () =>
 
 // The run-all child argv builder is a pure projection: legacy calls (no
 // superpowers fields) produce the byte-identical argv, and each field appends
-// exactly its flag pair.
+// exactly its flag pair. The internal entrypoint is pinned exactly — it is
+// the contract the D-5 re-entry test exercises across checkouts.
 test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when set', () => {
   const base = {
     scenarioDir: '/s',
@@ -200,8 +209,15 @@ test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when
     codingAgentsDir: '/a',
     outRoot: '/o',
   };
-  expect(buildChildRunArgs(base)).toEqual([
-    expect.any(String),
+  // macOS paths may differ by symlink or trailing slash — compare normalized.
+  // The `?? ''` mirrors the sole-verdict reader: a missing element fails the
+  // pinned-entry assertion below rather than escaping as undefined.
+  const norm = (p: string) => realpathSync(p.replace(/\/+$/, ''));
+  const legacy = buildChildRunArgs(base);
+  const entry = legacy[0] ?? '';
+  expect(norm(entry)).toBe(norm(RUN_CHILD));
+  expect(legacy).toEqual([
+    entry,
     '/s',
     '--coding-agent',
     'claude',
@@ -211,7 +227,7 @@ test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when
     '/o',
   ]);
   expect(buildChildRunArgs({ ...base, superpowersRoot: '/srv/sp' })).toEqual([
-    expect.any(String),
+    entry,
     '/s',
     '--coding-agent',
     'claude',
@@ -223,7 +239,7 @@ test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when
     '/srv/sp',
   ]);
   expect(buildChildRunArgs({ ...base, noSuperpowers: true })).toEqual([
-    expect.any(String),
+    entry,
     '/s',
     '--coding-agent',
     'claude',
@@ -233,9 +249,7 @@ test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when
     '/o',
     '--no-superpowers',
   ]);
-  expect(buildChildRunArgs({ ...base, noSuperpowers: false })).toEqual(
-    buildChildRunArgs(base),
-  );
+  expect(buildChildRunArgs({ ...base, noSuperpowers: false })).toEqual(legacy);
 });
 
 // The internal run-all child parser is a separate flag surface: the explicit
@@ -265,11 +279,18 @@ test('run-child parser: --superpowers-root threads the explicit root', () => {
 
 // Decision D-5's hostile test: a child spawned through a DIFFERENT checkout's
 // entrypoint must execute that checkout's content, not the originating one —
-// the instrument-snapshot mechanism rests on it. Uses a real git worktree of
-// this repo at an older SHA (no quorum run; a repoRoot probe is enough).
+// the instrument-snapshot mechanism rests on it. Proven at both layers: the
+// worktree's own buildChildRunArgs must name the worktree's run-child (the
+// entry is derived from the executing module's URL, never from the spawner's
+// checkout), and spawning that generated entrypoint must run the worktree's
+// parser, not the originating checkout's.
 test('D-5: a child executing another checkout reports THAT checkout as root', () => {
   const repo = resolve(import.meta.dir, '..');
   const wt = mkdtempSync(join(tmpdir(), 'reentry-'));
+  // macOS tmpdir is a symlink (/var → /private/var) and derived paths may or
+  // may not carry a trailing slash — compare realpath-normalized, slash-
+  // trimmed.
+  const norm = (p: string) => realpathSync(p.replace(/\/+$/, ''));
   const sha = spawnSync('git', ['rev-parse', 'HEAD~20'], {
     cwd: repo,
     encoding: 'utf8',
@@ -279,28 +300,67 @@ test('D-5: a child executing another checkout reports THAT checkout as root', ()
     cwd: repo,
     encoding: 'utf8',
   });
+  expect(add.status).toBe(0);
+  // buildChildRunArgs imports commander/zod, so the worktree needs its own
+  // install; asserting it keeps a broken install from masquerading as a
+  // re-entry failure.
+  const install = spawnSync('bun', ['install', '--frozen-lockfile'], {
+    cwd: wt,
+    encoding: 'utf8',
+  });
+  expect(install.status).toBe(0);
+  let removeStatus: number | null = null;
   try {
-    expect(add.status).toBe(0);
-    spawnSync('bun', ['install', '--frozen-lockfile'], {
-      cwd: wt,
-      encoding: 'utf8',
-    });
-    const probe = spawnSync(
+    // Layer 1 (module): the worktree's own argv builder names the worktree's
+    // run-child — never the originating checkout's.
+    const entry = spawnSync(
       'bun',
       [
         '-e',
-        'import { repoRoot } from "./src/paths.ts"; console.log(repoRoot());',
+        'import { buildChildRunArgs } from "./src/run-all/index.ts"; ' +
+          'console.log(buildChildRunArgs({ scenarioDir: "/s", codingAgent: "claude", codingAgentsDir: "/a", outRoot: "/o" })[0]);',
       ],
       { cwd: wt, encoding: 'utf8' },
     );
-    expect(probe.status).toBe(0);
-    // macOS tmpdir is a symlink (/var → /private/var) and repoRoot() may or may
-    // not carry a trailing slash — compare realpath-normalized, slash-trimmed.
-    const norm = (p: string) => realpathSync(p.replace(/\/+$/, ''));
-    expect(norm(probe.stdout.trim())).toBe(norm(wt));
-    expect(norm(probe.stdout.trim())).not.toBe(norm(repo));
+    expect(entry.status).toBe(0);
+    expect(norm(entry.stdout.trim())).toBe(
+      norm(join(wt, 'src', 'cli', 'run-child.ts')),
+    );
+    expect(norm(entry.stdout.trim())).not.toBe(
+      norm(join(repo, 'src', 'cli', 'run-child.ts')),
+    );
+    // Layer 2 (execution): spawning the generated entrypoint from the
+    // worktree runs THAT checkout's parser. This worktree predates the
+    // superpowers flags, so its parser rejects --superpowers-root as unknown;
+    // a child that silently executed the originating checkout would accept
+    // the flag and fail later with a different error.
+    const child = spawnSync(
+      'bun',
+      [
+        entry.stdout.trim(),
+        'missing-scenario',
+        '--coding-agent',
+        'claude',
+        '--coding-agents-dir',
+        '/nonexistent-coding-agents',
+        '--out-root',
+        mkdtempSync(join(tmpdir(), 'out-')),
+        '--credentials-file',
+        REPO_CREDENTIALS,
+        '--superpowers-root',
+        '/tmp/x',
+      ],
+      { cwd: wt, encoding: 'utf8' },
+    );
+    expect(child.status).not.toBe(0);
+    expect(child.stderr).toContain("unknown option '--superpowers-root'");
   } finally {
-    spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: repo });
-    spawnSync('git', ['worktree', 'prune'], { cwd: repo });
+    // Cleanup removes exactly this test's worktree — never a repository-wide
+    // prune, which could drop unrelated worktree registrations.
+    const remove = spawnSync('git', ['worktree', 'remove', '--force', wt], {
+      cwd: repo,
+    });
+    removeStatus = remove.status;
   }
+  expect(removeStatus).toBe(0);
 });

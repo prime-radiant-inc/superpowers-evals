@@ -5,11 +5,8 @@ import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalStatus } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { assertNever } from '../invariant.ts';
-import {
-  currentGauntletChild,
-  RunnerError,
-  runScenario,
-} from '../runner/index.ts';
+import { RunnerError } from '../runner/errors.ts';
+import { currentGauntletChild, runScenario } from '../runner/index.ts';
 import { writeStoppedVerdict } from '../runner/stopped.ts';
 import { render } from './render.ts';
 import { resolveScenarioDir, scenarioName } from './scenario.ts';

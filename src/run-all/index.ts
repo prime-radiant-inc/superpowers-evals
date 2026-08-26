@@ -85,7 +85,8 @@ export interface InvokeChildArgs {
   readonly graderModel?: string;
   // Explicit superpowers mode forwarded to the child as --superpowers-root /
   // --no-superpowers. Absent means neither flag is appended (legacy ambient
-  // behavior); the campaign orchestrator threads the mode through its cells.
+  // behavior). Callers select the mode per cell; run-all's own matrix
+  // construction always leaves both unset.
   readonly superpowersRoot?: string | undefined;
   readonly noSuperpowers?: boolean | undefined;
   readonly timeoutSeconds?: number;
