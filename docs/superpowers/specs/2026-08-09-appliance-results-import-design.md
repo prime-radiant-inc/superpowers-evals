@@ -127,7 +127,17 @@ quorum export-runs <results-dir> --out <bundle-dir> [--superpowers-repo <path>]
                    [--limit N] [--only <glob>]
 ```
 
-Lives in `src/export-runs/`. For each `<results-dir>/*/*/verdict.json`:
+Lives in `src/export-runs/`. A run is any directory holding a `verdict.json`,
+found at any depth: the canonical layout is `results/<label>/<run-id>/`, but
+quarantine sweeps move a whole label tree under a holding directory and put its
+runs one level deeper. The first export scanned exactly two levels and silently
+missed 55 such runs across the three corpora — they were only noticed because
+the thinning pass refused to delete homes it could not find in a manifest.
+Descent stops at the first marker found, and never enters `home/`,
+`coding-agent-workdir/`, or `gauntlet-agent/`, so a scenario that exercises
+quorum itself cannot have its nested fixture verdicts mistaken for runs.
+
+For each run directory:
 
 1. Parse the verdict with `FinalVerdictSchema`. An unparseable verdict is
    skipped and recorded in the manifest as `skipped` with its reason; it never
@@ -305,6 +315,18 @@ Measured result, 2026-08-09:
 - recovery: 294 recorded, 217 recovered, 68 tree_only, 47 inferred, 0 unknown
 - both bundles import cleanly into a throwaway appliance state dir (346 in
   8.8s, 280 in 8.0s), and a second import of each is a no-op
+
+Second pass, 2026-08-10, after the discovery depth was fixed:
+
+- 55 further runs exported incrementally (22 lane-b, 25 corpus B, 8 from a third
+  tree, `results-quarantine-setupstubs/`, found during the same sweep), each
+  bundle excluding the prior manifest so no already-thinned run was re-exported
+- recovery: 46 recorded, 9 unknown — the unknown are setup-stub and pre-check
+  failures that never installed superpowers, so no evidence exists to recover
+- 0 credential-shaped paths; grepping the three bundles for the 10 real token
+  values in the source `auth.json` files finds nothing
+- all 55 imported, 0 failed; `status`, `show`, and `costs` read them
+- appliance now holds 681 imported runs
 
 ## Out Of Scope
 

@@ -22,6 +22,7 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
 import { getEnv } from '../env.ts';
 import { exportRuns } from '../export-runs/index.ts';
+import { BundleManifestSchema } from '../export-runs/manifest.ts';
 import { runBatch } from '../run-all/index.ts';
 import {
   configureRunAllOptions,
@@ -434,6 +435,7 @@ program
 interface ExportRunsOptions {
   readonly out: string;
   readonly superpowersRepo: string | undefined;
+  readonly excludeManifest: readonly string[] | undefined;
 }
 
 program
@@ -447,6 +449,10 @@ program
     '--superpowers-repo <path>',
     'superpowers checkout used to resolve archived skill trees to commits',
   )
+  .option(
+    '--exclude-manifest <path...>',
+    'manifest.json of a previous bundle; its runs are left out of this one',
+  )
   .action((resultsDir: string, opts: ExportRunsOptions) => {
     const source = resolve(resultsDir);
     if (!existsSync(source) || !statSync(source).isDirectory()) {
@@ -459,11 +465,22 @@ program
       opts.superpowersRepo ?? getEnv('SUPERPOWERS_ROOT') ?? '.',
     );
 
+    const excludeRunIds = new Set<string>();
+    for (const path of opts.excludeManifest ?? []) {
+      const prior = BundleManifestSchema.parse(
+        JSON.parse(readFileSync(resolve(path), 'utf8')),
+      );
+      for (const entry of prior.entries) {
+        excludeRunIds.add(entry.run_id);
+      }
+    }
+
     let last = 0;
     const summary = exportRuns({
       resultsDir: source,
       outDir: resolve(opts.out),
       superpowersRepo,
+      excludeRunIds,
       runner: new SpawnCommandRunner(),
       sourceHost: hostname(),
       now: new Date().toISOString(),
@@ -482,7 +499,8 @@ program
       .join(' ');
     process.stdout.write(
       `bundle written to ${summary.bundleDir}\n` +
-        `  exported ${summary.exported}, skipped ${summary.skipped}\n` +
+        `  exported ${summary.exported}, skipped ${summary.skipped}` +
+        `${summary.excluded > 0 ? `, already exported ${summary.excluded}` : ''}\n` +
         `  superpowers rev: ${recovery}\n`,
     );
     process.exit(0);
