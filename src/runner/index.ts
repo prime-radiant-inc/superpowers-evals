@@ -1308,7 +1308,21 @@ async function runInnerBody(
       'setup',
     );
   }
-  const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent);
+  const cfg = loadAgentConfig(a.codingAgentsDir, a.codingAgent, {
+    // The run's effective environment for the required_env preflight: an
+    // explicit root spec satisfies SUPERPOWERS_ROOT with the threaded root
+    // (never the host env — explicit modes do not fall back); none mode
+    // suppresses the key; an undefined spec keeps the ambient (legacy) read.
+    env: (key) => {
+      if (key === 'SUPERPOWERS_ROOT' && a.superpowers?.mode === 'root') {
+        return a.superpowers.root;
+      }
+      return getEnv(key);
+    },
+    ...(a.superpowers?.mode === 'none'
+      ? { suppressRequired: ['SUPERPOWERS_ROOT'] }
+      : {}),
+  });
   // The run's ONE loaded config, cached for the post-run provenance stamp
   // (F13 micro corrective round 2): the stamp reads the binary from here and
   // never reloads — loadAgentConfig's pin enforcement spawns `<binary>
@@ -1396,17 +1410,11 @@ async function runInnerBody(
   }
 
   // 6. Claude-family binary PATH preflight: fail fast at setup if the CLI is
-  //    not installed, rather than deep in the gauntlet run.
+  //    not installed, rather than deep in the gauntlet run. required_env is
+  //    NOT re-checked here — it validated once, against the effective
+  //    environment, inside loadAgentConfig above.
   preflightCodingAgentBinary(cfg, os);
 
-  for (const key of cfg.required_env) {
-    if (!getEnv(key)) {
-      throw new RunnerError(
-        `${a.codingAgent}.yaml: required env var not set: ${key}`,
-        'setup',
-      );
-    }
-  }
   const agent = resolveAgent(cfg, os, osTarget, resolvedCredential?.api);
 
   // setup: isolated config + workdir, claude provisioning, then setup.sh.

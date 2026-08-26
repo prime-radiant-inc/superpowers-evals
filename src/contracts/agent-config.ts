@@ -204,6 +204,16 @@ export function loadAgentConfigForValidation(
 export function loadAgentConfig(
   codingAgentsDir: string,
   name: string,
+  opts?: {
+    /** Effective-environment reader for the required_env check: the runner
+     *  validates against the run's threaded superpowers mode, not ambient
+     *  env. Unset → ambient reads, unchanged. */
+    readonly env?: (key: string) => string | undefined;
+    /** Required names the caller suppresses (SUPERPOWERS_ROOT under an
+     *  explicit {mode:'none'} spec — absent-of-env is not itself the none
+     *  signal). */
+    readonly suppressRequired?: readonly string[];
+  },
 ): AgentConfig {
   const { path, cfg } = readAgentConfigFile(codingAgentsDir, name);
 
@@ -212,11 +222,18 @@ export function loadAgentConfig(
   // CodingAgentConfigError -> setup indeterminate.
   validateAgentConfigStatic(path, cfg, name);
 
-  // required_env must be set (a present-but-empty value counts as missing).
-  const missingEnv = cfg.required_env.filter((v) => {
-    const value = getEnv(v);
-    return value === undefined || value === '';
-  });
+  // required_env must be set (a present-but-empty value counts as missing),
+  // resolved against the caller's effective environment when one is supplied
+  // and the ambient env otherwise. This is the single required_env
+  // validation — callers do not re-check it.
+  const envReader = opts?.env ?? getEnv;
+  const suppressed = new Set(opts?.suppressRequired ?? []);
+  const missingEnv = cfg.required_env
+    .filter((v) => !suppressed.has(v))
+    .filter((v) => {
+      const value = envReader(v);
+      return value === undefined || value === '';
+    });
   if (missingEnv.length > 0) {
     throw new CodingAgentConfigError(
       `${path}: required env vars not set: ${missingEnv.join(', ')}`,
