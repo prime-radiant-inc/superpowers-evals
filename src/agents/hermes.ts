@@ -123,10 +123,11 @@ export class HermesAgent implements CodingAgent {
     runner: CommandRunner,
     credential?: Credential,
   ): Record<string, string> {
-    // Kernel D2: the superpowers root is threaded via the home spec (ambient
-    // env is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: zero superpowers staging; missing preserves the pre-D2
-    // hard-fail. The staging block below guards on kind === 'root'.
+    // The superpowers root comes from the home spec: {mode:'root'} stages the
+    // Superpowers plugin from that root, {mode:'none'} is the explicit stock
+    // arm (no plugin staging), and an undefined spec falls back to the ambient
+    // SUPERPOWERS_ROOT, whose absence is a setup failure. The staging block
+    // below guards on kind === 'root'.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

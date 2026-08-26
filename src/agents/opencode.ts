@@ -274,10 +274,10 @@ export class OpenCodeAgent implements CodingAgent {
 
     const opencodeHome = home.configDir;
 
-    // SUPERPOWERS_ROOT is threaded via the home spec (Kernel D2: ambient env
-    // is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: zero superpowers staging (every guard below skips on none);
-    // missing preserves the pre-D2 hard-fail.
+    // The superpowers root comes from the home spec: {mode:'root'} stages
+    // the plugin below, {mode:'none'} is the explicit stock arm (every
+    // superpowers guard below skips), and an undefined spec falls back to the
+    // ambient SUPERPOWERS_ROOT, whose absence is a setup failure.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

@@ -528,10 +528,11 @@ export class CopilotAgent implements CodingAgent {
     sessionId: string,
   ): CopilotProvisioning {
     const copilotHome = home.configDir;
-    // Kernel D2: the superpowers root is threaded via the home spec (ambient
-    // env is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: zero superpowers staging (spRoot stays undefined, so the
-    // stage call below is skipped); missing preserves the pre-D2 hard-fail.
+    // The superpowers root comes from the home spec: {mode:'root'} is
+    // validated and staged below, {mode:'none'} is the explicit stock arm
+    // (spRoot stays undefined, so the stage call is skipped), and an undefined
+    // spec falls back to the ambient SUPERPOWERS_ROOT, whose absence is a
+    // setup failure.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

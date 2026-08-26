@@ -99,10 +99,11 @@ export class CodexAgent implements CodingAgent {
     const { configDir, workdir, skeletonRoot } = home;
     const family = this.config.runtime_family ?? 'codex';
 
-    // Kernel D2: the superpowers root is threaded via the home spec (ambient
-    // env is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: zero superpowers staging; missing preserves the pre-D2
-    // hard-fail. The staging call sites below guard on kind === 'root'.
+    // The superpowers root comes from the home spec: 'root' stages
+    // Superpowers from that root; 'none' is the explicit stock arm and skips
+    // every superpowers staging step below (the provider configuration still
+    // applies); an undefined spec falls back to the ambient SUPERPOWERS_ROOT,
+    // whose absence is a setup failure.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(
@@ -154,12 +155,22 @@ export class CodexAgent implements CodingAgent {
 
       const wireApi = mapWireApi(credential.api);
 
-      // Stage Superpowers with a full model_providers config.toml.
+      // The provider configuration is not superpowers staging — a stock run
+      // still needs the selected credential's endpoint — so it is written on
+      // every arm; only the plugin staging and its config sections are
+      // superpowers-only.
       if (sp.kind === 'root') {
         this.installPluginHooksApiKey(
           configDir,
           workdir,
           sp.root,
+          credential.model,
+          baseUrl,
+          wireApi,
+        );
+      } else {
+        writeProviderOnlyConfig(
+          join(configDir, 'config.toml'),
           credential.model,
           baseUrl,
           wireApi,
@@ -365,41 +376,62 @@ function mapWireApi(api: string): string {
   );
 }
 
-// Subscription path: enable plugins and the superpowers@debug plugin.
-// PRI-2506: plugins-only, no hooks/plugin_hooks/trusted_hash.
+// Subscription path with Superpowers staged: enable plugins and the
+// superpowers@debug plugin. Plugins-only, no hooks/plugin_hooks/trusted_hash.
 function writePluginsOnlyConfig(configPath: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(
-    configPath,
-    [
-      '[features]',
-      'plugins = true',
-      '',
-      // Hermetic runs: an authenticated codex fetches the curated remote
-      // marketplace at session start, and its stale superpowers (6.2.0)
-      // out-competed the staged v7 plugin in a live run's skill list
-      // (2026-08-11, superpowers-bootstrap-codex). No config key suppresses
-      // the fetch itself (probed live: [plugins] recommended variants either
-      // crash the TUI or don't gate it), so disable the curated superpowers
-      // by plugin id — probed live: the curated skills leave the agent's
-      // skill list while the staged superpowers@debug still loads.
-      '[plugins."superpowers@openai-curated-remote"]',
-      'enabled = false',
-      '',
-      '[plugins."superpowers@openai-curated"]',
-      'enabled = false',
-      '',
-      '[plugins."superpowers@debug"]',
-      'enabled = true',
-      '',
-    ].join('\n'),
-  );
+  writeFileSync(configPath, pluginConfigSections().join('\n'));
 }
 
-// Api-key path: write config.toml with top-level model/model_provider BEFORE
-// any table (TOML requires root keys to lead), then the [model_providers."quorum"]
-// block, then features/plugins.
-// PRI-2506: plugins-only, no hooks/plugin_hooks/trusted_hash.
+// The plugin-specific config sections, shared by both auth arms when
+// Superpowers is staged. The curated-marketplace disables exist because an
+// authenticated codex fetches the curated remote marketplace at session
+// start and its stale superpowers (6.2.0) out-competed the staged v7 plugin
+// in a live run's skill list (2026-08-11, superpowers-bootstrap-codex). No
+// config key suppresses the fetch itself (probed live: [plugins] recommended
+// variants either crash the TUI or don't gate it), so the curated superpowers
+// is disabled by plugin id — probed live: the curated skills leave the
+// agent's skill list while the staged superpowers@debug still loads.
+function pluginConfigSections(): string[] {
+  return [
+    '[features]',
+    'plugins = true',
+    '',
+    '[plugins."superpowers@openai-curated-remote"]',
+    'enabled = false',
+    '',
+    '[plugins."superpowers@openai-curated"]',
+    'enabled = false',
+    '',
+    '[plugins."superpowers@debug"]',
+    'enabled = true',
+    '',
+  ];
+}
+
+// The provider block the selected api-key credential requires: top-level
+// model/model_provider BEFORE any table (TOML requires root keys to lead),
+// then the [model_providers."quorum"] endpoint. Not superpowers staging — a
+// stock run needs it to use the credential.
+function providerConfigSections(
+  model: string,
+  baseUrl: string,
+  wireApi: string,
+): string[] {
+  return [
+    `model = "${tomlBasicString(model)}"`,
+    `model_provider = "quorum"`,
+    '',
+    `[model_providers."quorum"]`,
+    `name = "quorum"`,
+    `base_url = "${tomlBasicString(baseUrl)}"`,
+    `env_key = "${CODEX_API_PROVIDER_ENV_KEY}"`,
+    `wire_api = "${tomlBasicString(wireApi)}"`,
+  ];
+}
+
+// Api-key path with Superpowers staged: provider block + plugin sections.
+// Plugins-only, no hooks/plugin_hooks/trusted_hash.
 function writeApiKeyConfig(
   configPath: string,
   model: string,
@@ -410,36 +442,26 @@ function writeApiKeyConfig(
   writeFileSync(
     configPath,
     [
-      `model = "${tomlBasicString(model)}"`,
-      `model_provider = "quorum"`,
+      ...providerConfigSections(model, baseUrl, wireApi),
       '',
-      `[model_providers."quorum"]`,
-      `name = "quorum"`,
-      `base_url = "${tomlBasicString(baseUrl)}"`,
-      `env_key = "${CODEX_API_PROVIDER_ENV_KEY}"`,
-      `wire_api = "${tomlBasicString(wireApi)}"`,
-      '',
-      '[features]',
-      'plugins = true',
-      '',
-      // Hermetic runs: an authenticated codex fetches the curated remote
-      // marketplace at session start, and its stale superpowers (6.2.0)
-      // out-competed the staged v7 plugin in a live run's skill list
-      // (2026-08-11, superpowers-bootstrap-codex). No config key suppresses
-      // the fetch itself (probed live: [plugins] recommended variants either
-      // crash the TUI or don't gate it), so disable the curated superpowers
-      // by plugin id — probed live: the curated skills leave the agent's
-      // skill list while the staged superpowers@debug still loads.
-      '[plugins."superpowers@openai-curated-remote"]',
-      'enabled = false',
-      '',
-      '[plugins."superpowers@openai-curated"]',
-      'enabled = false',
-      '',
-      '[plugins."superpowers@debug"]',
-      'enabled = true',
-      '',
+      ...pluginConfigSections(),
     ].join('\n'),
+  );
+}
+
+// Api-key path on the stock arm (no Superpowers): the provider block only —
+// the stock run still uses the selected credential's endpoint, with no
+// plugin sections and no staged plugin tree.
+function writeProviderOnlyConfig(
+  configPath: string,
+  model: string,
+  baseUrl: string,
+  wireApi: string,
+): void {
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    providerConfigSections(model, baseUrl, wireApi).join('\n'),
   );
 }
 
@@ -448,7 +470,9 @@ function writeApiKeyConfig(
 // before the generated content. Prepending keeps the fragment's bare keys at
 // TOML root scope — appending would place them inside the config's last
 // [table]. A run without a scenario dir, or a scenario without the fragment,
-// leaves the generated config untouched.
+// leaves the generated config untouched. A stock arm may generate no config
+// of its own (subscription is account-driven); the fragment then stands as
+// the whole file rather than failing on the absent generated config.
 function prependScenarioConfigFragment(
   configPath: string,
   scenarioDir: string | undefined,
@@ -456,7 +480,9 @@ function prependScenarioConfigFragment(
   if (scenarioDir === undefined) return;
   const fragmentPath = join(scenarioDir, 'codex.config.toml');
   if (!existsSync(fragmentPath)) return;
-  const generated = readFileSync(configPath, 'utf8');
+  const generated = existsSync(configPath)
+    ? readFileSync(configPath, 'utf8')
+    : '';
   writeFileSync(
     configPath,
     `# prepended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}\n${generated}`,

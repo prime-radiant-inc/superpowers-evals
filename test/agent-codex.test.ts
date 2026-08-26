@@ -1528,9 +1528,95 @@ test('superpowers none mode runs zero superpowers staging', () => {
         // No ProvisionError; the stock arm still writes the api-key env file.
         expect(env).toEqual({});
         expect(existsSync(join(home.configDir, 'codex-api.env'))).toBe(true);
-        // Zero superpowers staging writes: no plugin cache, no plugin config.
+        // Zero superpowers staging writes: no plugin cache. The stock arm
+        // still materializes the provider config (asserted in depth below).
         expect(existsSync(join(home.configDir, 'plugins'))).toBe(false);
-        expect(existsSync(join(home.configDir, 'config.toml'))).toBe(false);
+        expect(existsSync(join(home.configDir, 'config.toml'))).toBe(true);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// The provider configuration the selected api-key credential requires is
+// NOT superpowers staging: a stock run still needs model/model_provider and
+// the [model_providers] endpoint to use the credential. Only the
+// plugin-specific sections and the staged plugin tree are suppressed.
+test('superpowers none mode still writes the stock provider config for an api-key credential', () => {
+  const { home, cleanup } = makeTempHome({
+    superpowers: { mode: 'none' },
+  });
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: undefined, CODEX_B4_TEST_API_KEY: 'd2-none-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, unusedRunner(), makeApiKeyCredential());
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        // The full provider block the credential selected.
+        expect(configToml).toContain('model = "glm-4-9b"');
+        expect(configToml).toContain('model_provider = "quorum"');
+        expect(configToml).toContain('[model_providers."quorum"]');
+        expect(configToml).toContain('base_url = "https://example.com/v1"');
+        expect(configToml).toContain('wire_api = "responses"');
+        expect(configToml).toContain('env_key = "CODEX_PROVIDER_API_KEY"');
+        // Zero plugin-specific sections on the stock arm.
+        expect(configToml).not.toContain('[features]');
+        expect(configToml).not.toContain('plugins = true');
+        expect(configToml).not.toContain('[plugins.');
+        // And zero plugin files: no staged plugin cache.
+        expect(existsSync(join(home.configDir, 'plugins'))).toBe(false);
+        // The env file the provider block's env_key reads is still written.
+        expect(existsSync(join(home.configDir, 'codex-api.env'))).toBe(true);
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// The stock subscription arm generates no config of its own (subscription is
+// account-driven), so a scenario fragment must still materialize as the whole
+// config.toml instead of failing on the absent generated file.
+test('superpowers none mode supports a scenario codex.config.toml fragment', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(
+    base.workdir,
+    'model_context_window = 40000\n',
+  );
+  const home = {
+    ...base,
+    scenarioDir,
+    superpowers: { mode: 'none' } as const,
+  };
+  const authParent = join(base.workdir, '..', 'host-auth-d2-none-frag');
+  const codexAuthDir = join(authParent, '.codex');
+  mkdirSync(codexAuthDir, { recursive: true });
+  writeFileSync(
+    join(codexAuthDir, 'auth.json'),
+    `${JSON.stringify(SUBSCRIPTION_AUTH)}\n`,
+  );
+
+  try {
+    withEnv(
+      { CODEX_AUTH_HOME: codexAuthDir, SUPERPOWERS_ROOT: undefined },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, unusedRunner(), SUBSCRIPTION_CRED);
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        // Provenance comment first, then the fragment byte-exact as the whole
+        // file (no generated content follows on the stock subscription arm).
+        expect(configToml).toBe(
+          `${FRAGMENT_PROVENANCE}model_context_window = 40000\n\n`,
+        );
       },
     );
   } finally {

@@ -85,10 +85,12 @@ export class SerfAgent implements CodingAgent {
       );
     }
 
-    // Kernel D2: the superpowers root is threaded via the home spec (ambient
-    // env is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: no superpowers source validation (launcher --plugin-dir
-    // threading is a Task-8 concern); missing preserves the pre-D2 hard-fail.
+    // The superpowers root comes from the home spec: {mode:'root'} is
+    // validated for the required plugin files, {mode:'none'} is the explicit
+    // stock arm and skips the validation, and an undefined spec falls back to
+    // the ambient SUPERPOWERS_ROOT, whose absence is a setup failure.
+    // Provision only validates the source; the launcher owns the --plugin-dir
+    // flag that points serf at it.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

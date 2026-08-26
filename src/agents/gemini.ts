@@ -212,12 +212,12 @@ export class GeminiAgent implements CodingAgent {
   ): Record<string, string> {
     const { configDir } = home;
 
-    // SUPERPOWERS_ROOT must be set and carry the required extension files. The
-    // raw value is expanduser()'d before every filesystem touch. (Kernel D2:
-    // the root is threaded via the home spec — ambient env is consulted only
-    // on the legacy undefined path; none = the explicit stock arm, which skips
-    // every superpowers staging step below; missing preserves the pre-D2
-    // hard-fail.)
+    // The superpowers root must be set and carry the required extension
+    // files; the raw value is expanduser()'d before every filesystem touch.
+    // The root comes from the home spec ({mode:'root'} — never ambient env
+    // when set); {mode:'none'} is the explicit stock arm and skips every
+    // superpowers staging step below; an undefined spec falls back to the
+    // ambient SUPERPOWERS_ROOT, whose absence is a setup failure.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

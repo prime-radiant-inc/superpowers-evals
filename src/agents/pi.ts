@@ -308,11 +308,12 @@ export class PiAgent implements CodingAgent {
       throw new ProvisionError('pi requires a credential');
     }
 
-    // Kernel D2: the superpowers root is threaded via the home spec (ambient
-    // env is consulted only on the legacy undefined path). none = the explicit
-    // stock arm: zero superpowers validation/staging; missing preserves the
-    // pre-D2 hard-fail. The pi binary check applies to every arm — the stock
-    // agent still launches pi — and stays before any filesystem mutation.
+    // The superpowers root comes from the home spec: {mode:'root'} is
+    // validated for the Pi support files, {mode:'none'} is the explicit stock
+    // arm (no superpowers source), and an undefined spec falls back to the
+    // ambient SUPERPOWERS_ROOT, whose absence is a setup failure. The pi
+    // binary check applies to every arm — a stock run still launches pi — and
+    // stays before any filesystem mutation.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(

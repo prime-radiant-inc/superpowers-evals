@@ -134,11 +134,10 @@ export class KimiAgent implements CodingAgent {
   ): Record<string, string> {
     const { configDir, workdir } = home;
 
-    // SUPERPOWERS_ROOT is required up front. Read env only through env.ts.
-    // (Kernel D2: the root is threaded via the home spec — ambient env is
-    // consulted only on the legacy undefined path; none = the explicit stock
-    // arm, which skips the plugin install at step 4; missing preserves the
-    // pre-D2 hard-fail.)
+    // The superpowers root comes from the home spec: {mode:'root'} registers
+    // the local checkout as the sole enabled plugin (step 4), {mode:'none'} is
+    // the explicit stock arm and skips that step, and an undefined spec falls
+    // back to the ambient SUPERPOWERS_ROOT, whose absence is a setup failure.
     const sp = resolveSuperpowersRoot(home);
     if (sp.kind === 'missing') {
       throw new ProvisionError(
