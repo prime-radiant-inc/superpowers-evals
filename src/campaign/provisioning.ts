@@ -330,11 +330,16 @@ function reclaimStaleLock(
     if (!isTransientLockRace(err)) throw err;
     return true; // vanished: retry the acquire immediately
   }
-  // Read-only pass: decide without deleting anything. A LIVE owner (fresh
-  // valid owner token) means wait; stale anything is reclaimable; a FRESH
-  // non-owner entry is corruption/sabotage and fails loudly — polling on it
-  // forever would be an unbounded hang.
+  // Read-only pass: decide without deleting anything. ANY fresh valid owner
+  // makes the lock LIVE: poll without touching it, even when stale
+  // companions coexist — severing a live lock to partially reclaim them
+  // would momentarily free the lock path and let a second contender's
+  // atomic mkdir land inside the critical section alongside the owner.
+  // Companions are left for the owner's release or a later all-stale
+  // reclaim. A FRESH non-owner entry is corruption/sabotage and fails
+  // loudly — polling on it forever would be an unbounded hang.
   let anyStale = false;
+  let sawLiveOwner = false;
   for (const name of entries) {
     const st = tryLstat(join(lockPath, name));
     if (st === null) continue;
@@ -352,9 +357,9 @@ function reclaimStaleLock(
         `unexpected fresh non-owner entry in lock dir (sabotage or corruption): ${join(lockPath, name)}`,
       );
     }
-    // A live owner coexisting with stale entries: partial reclaim below —
-    // sever, delete only the stale ones, then restore the lock for it.
+    sawLiveOwner = true;
   }
+  if (sawLiveOwner) return false; // live lock: poll untouched
   if (entries.length === 0) {
     // Empty: a contender mid-acquire (mkdir and owner-file create are two
     // steps, µs apart) — poll, but never indefinitely: past

@@ -8,7 +8,6 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
-  rmdirSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -435,12 +434,14 @@ test('real FS: stale-lock handover stays ownership-safe under contention', async
   expect(existsSync(lock)).toBe(false);
 }, 30000);
 
-// Race A, deterministically: a contender observing a stale lock must
-// remove ONLY the stale owner file it observed — never a lock another
-// owner freshly holds. The lock dir is planted with one stale and one
-// fresh owner file; the contender reclaims the stale one and must then
-// patiently poll behind the fresh owner until it releases.
-test('real FS: reclaim removes only the observed stale owner, never a fresh one', async () => {
+// Race A, deterministically: a lock whose scan shows ANY fresh valid owner
+// is LIVE and must be left completely untouched — no rename, no
+// stale-companion deletion (severing it would momentarily free the lock
+// path for a second acquirer; see the displacement regression below). The
+// lock dir is planted with one stale and one fresh owner file; the
+// contender must poll behind the fresh owner, leaving the stale companion
+// for a later all-stale reclaim.
+test('real FS: a fresh owner defers reclaim entirely — stale companions untouched', async () => {
   const destParent = tmp();
   const dest = join(destParent, `superpowers-${SHA_A}`);
   const lock = `${dest}.lock`;
@@ -495,25 +496,22 @@ test('real FS: reclaim removes only the observed stale owner, never a fresh one'
     child.on('close', (code) => resolve(code ?? -1));
   });
 
-  // Let the contender run its reclaim pass (well past startup + one poll).
+  // Let the contender run its reclaim passes (well past startup + polls).
   // try/finally: a failed assertion must never leak the child process.
   let handedOver = false;
   try {
     Bun.sleepSync(800);
-    // It reclaimed the stale owner but must NOT have touched the fresh one,
-    // the lock dir, or entered the critical section.
-    expect(existsSync(join(lock, staleName))).toBe(false);
+    // The fresh owner makes the lock live: the contender must not have
+    // touched the stale companion, the fresh owner, the lock dir, or the
+    // critical section.
+    expect(existsSync(join(lock, staleName))).toBe(true);
     expect(existsSync(join(lock, freshName))).toBe(true);
     expect(existsSync(lock)).toBe(true);
     expect(readFileSync(log, 'utf8').trim()).toBe(''); // no git call yet
 
-    // The fresh owner releases; the contender may now take over.
+    // The fresh owner releases; only the stale companion remains, so the
+    // contender's next pass is an all-stale reclaim and it takes over.
     rmSync(join(lock, freshName));
-    try {
-      rmdirSync(lock);
-    } catch {
-      // the contender may already be mid-retry
-    }
     handedOver = true;
   } finally {
     if (!handedOver) child.kill('SIGKILL');
@@ -524,6 +522,194 @@ test('real FS: reclaim removes only the observed stale owner, never a fresh one'
     .filter((l) => l.trim() !== '');
   expect(lines.filter((l) => l.startsWith('error '))).toEqual([]);
   expect(lines.filter((l) => l.startsWith('done '))).toHaveLength(1);
+  expect(existsSync(lock)).toBe(false);
+}, 30000);
+
+// Displacement regression: while a fresh valid owner holds the lock, an
+// injected stale companion token must never cause a contender to sever
+// (rename) the lock dir — the rename momentarily frees the lock path, and a
+// second contender's atomic mkdir can land inside the single-flight critical
+// section alongside the owner. Three real processes:
+//  - the OWNER acquires cleanly and holds its critical section until the
+//    test writes a release file;
+//  - the WATCHER polls behind it over the injected stale companions and
+//    must make ZERO runner calls until the owner releases;
+//  - the PROBER hammers raw mkdir(lockPath) — exactly a contender's atomic
+//    acquire step — and must never succeed while the owner holds.
+// The companions are numerous so a regressed sever window (readdir + one
+// unlink per companion under trash before the restore) is wide enough that
+// the prober catches it deterministically.
+test('real FS: a fresh owner is never displaced by stale-companion reclaim', async () => {
+  const destParent = tmp();
+  const dest = join(destParent, `superpowers-${SHA_A}`);
+  const lock = `${dest}.lock`;
+  const inSection = join(destParent, 'owner-in-section');
+  const release = join(destParent, 'owner-release');
+  const proberStarted = join(destParent, 'prober-started');
+  const proberStop = join(destParent, 'prober-stop');
+  const proberLog = join(destParent, 'prober.log');
+  const watcherLog = join(destParent, 'watcher.log');
+  writeFileSync(proberLog, '');
+  writeFileSync(watcherLog, '');
+  // Valid owner tokens (OWNER_NAME_RE shape + pid body) aged past staleness.
+  const COMPANIONS = Array.from(
+    { length: 2000 },
+    (_, i) => `owner-${String(i).padStart(8, '0')}-0000-0000-0000-000000000000`,
+  );
+
+  const modPath = join(
+    import.meta.dir,
+    '..',
+    'src',
+    'campaign',
+    'provisioning.ts',
+  );
+  // Owner: acquires the (initially absent) lock, then its first runner call
+  // marks the section and blocks until the release file appears.
+  const ownerScript = join(destParent, 'owner.ts');
+  writeFileSync(
+    ownerScript,
+    [
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      `import { ensureWorktreeAt } from ${JSON.stringify(modPath)};`,
+      'const dest = process.argv[2];',
+      'const inSection = process.argv[3];',
+      'const release = process.argv[4];',
+      `const SHA = ${JSON.stringify(SHA_A)};`,
+      'const runner = {',
+      '  run(_command, args) {',
+      '    writeFileSync(inSection, "");',
+      '    const deadline = Date.now() + 20000;',
+      '    while (!existsSync(release) && Date.now() < deadline) Bun.sleepSync(10);',
+      '    if (!existsSync(release)) process.exit(3);',
+      '    if (args.includes("rev-parse")) return { status: 0, stdout: SHA + "\\n", stderr: "" };',
+      '    return { status: 0, stdout: "", stderr: "" };',
+      '  },',
+      '};',
+      'ensureWorktreeAt({ sourceCheckout: "/src/sp", sha: SHA, dest, runner });',
+    ].join('\n'),
+  );
+  // Watcher: polls behind the owner through the public API, logging every
+  // runner call (there must be none until the owner releases).
+  const watcherScript = join(destParent, 'watcher.ts');
+  writeFileSync(
+    watcherScript,
+    [
+      "import { appendFileSync } from 'node:fs';",
+      `import { ensureWorktreeAt } from ${JSON.stringify(modPath)};`,
+      'const logPath = process.argv[2];',
+      'const dest = process.argv[3];',
+      `const SHA = ${JSON.stringify(SHA_A)};`,
+      'const runner = {',
+      '  run(_command, args) {',
+      '    appendFileSync(logPath, `call ${process.pid} ${Date.now()}` + "\\n");',
+      '    if (args.includes("rev-parse")) return { status: 0, stdout: SHA + "\\n", stderr: "" };',
+      '    return { status: 0, stdout: "", stderr: "" };',
+      '  },',
+      '};',
+      'try {',
+      '  ensureWorktreeAt({ sourceCheckout: "/src/sp", sha: SHA, dest, runner });',
+      '  appendFileSync(logPath, `done ${process.pid}` + "\\n");',
+      '} catch (err) {',
+      '  appendFileSync(logPath, `error ${process.pid} ${String(err)}` + "\\n");',
+      '  process.exit(1);',
+      '}',
+    ].join('\n'),
+  );
+  // Prober: a tight raw-mkdir loop on the lock path. While the owner holds,
+  // the path must exist continuously, so every mkdir must fail EEXIST; a
+  // success is the displacement. Each success is undone (rmdir of the empty
+  // dir) so the storm never wedges the others.
+  const proberScript = join(destParent, 'prober.ts');
+  writeFileSync(
+    proberScript,
+    [
+      "import { appendFileSync, existsSync, mkdirSync, rmdirSync, writeFileSync } from 'node:fs';",
+      'const lock = process.argv[2];',
+      'const logPath = process.argv[3];',
+      'const started = process.argv[4];',
+      'const stop = process.argv[5];',
+      'writeFileSync(started, "");',
+      'const deadline = Date.now() + 20000;',
+      'while (!existsSync(stop) && Date.now() < deadline) {',
+      '  try {',
+      '    mkdirSync(lock);',
+      '    appendFileSync(logPath, `acquired ${Date.now()}` + "\\n");',
+      '    try { rmdirSync(lock); } catch {}',
+      '  } catch {}',
+      '}',
+    ].join('\n'),
+  );
+
+  const launch = (script: string, args: string[]) =>
+    spawn(process.execPath, [script, ...args], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+  const exitOf = (p: ReturnType<typeof launch>) =>
+    new Promise<number>((resolve, reject) => {
+      p.on('error', reject);
+      p.on('close', (code) => resolve(code ?? -1));
+    });
+
+  const owner = launch(ownerScript, [dest, inSection, release]);
+  const ownerExit = exitOf(owner);
+  const children: ReturnType<typeof launch>[] = [owner];
+  try {
+    // 1. Wait until the owner demonstrably holds the lock and is in-section.
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(inSection) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+    expect(existsSync(inSection)).toBe(true);
+    const ownerTokens = readdirSync(lock);
+    expect(ownerTokens).toHaveLength(1);
+    // 2. Inject the stale companions beside the live owner token.
+    for (const name of COMPANIONS) {
+      writeFileSync(join(lock, name), '1\n');
+      utimesSync(join(lock, name), new Date(0), new Date(0));
+    }
+    // 3. Prober first (so it observes every instant of the watcher's
+    //    passes), then the watcher.
+    const prober = launch(proberScript, [
+      lock,
+      proberLog,
+      proberStarted,
+      proberStop,
+    ]);
+    children.push(prober);
+    const proberExit = exitOf(prober);
+    while (!existsSync(proberStarted) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+    expect(existsSync(proberStarted)).toBe(true);
+    const watcher = launch(watcherScript, [watcherLog, dest]);
+    children.push(watcher);
+    const watcherExit = exitOf(watcher);
+    // 4. Give the watcher several reclaim passes over the live lock.
+    await Bun.sleep(1500);
+    // THE displacement assertions, while the owner still holds:
+    //  - the lock path never went absent (no prober mkdir succeeded);
+    //  - the watcher made zero runner calls;
+    //  - every stale companion is still in place (nothing was severed).
+    expect(readFileSync(proberLog, 'utf8')).toBe('');
+    expect(readFileSync(watcherLog, 'utf8')).toBe('');
+    expect(readdirSync(lock)).toHaveLength(COMPANIONS.length + 1);
+    // 5. Stop the prober before the owner releases (post-release absence of
+    //    the lock path is legitimate), then release the owner.
+    writeFileSync(proberStop, '');
+    expect(await proberExit).toBe(0);
+    writeFileSync(release, '');
+    expect(await ownerExit).toBe(0);
+    // 6. The watcher takes over once the owner's release frees the path.
+    expect(await watcherExit).toBe(0);
+  } finally {
+    for (const child of children) child.kill('SIGKILL');
+  }
+  const watcherLines = readFileSync(watcherLog, 'utf8')
+    .split('\n')
+    .filter((l) => l.trim() !== '');
+  expect(watcherLines.filter((l) => l.startsWith('error '))).toEqual([]);
+  expect(watcherLines.filter((l) => l.startsWith('done '))).toHaveLength(1);
   expect(existsSync(lock)).toBe(false);
 }, 30000);
 
