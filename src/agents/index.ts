@@ -370,8 +370,9 @@ let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   // 3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9, differing from the ambient
   // checkout HEAD b36e0829c6d0140e93cfef2ca599b1b07d4a7797; runs
   // 00-quorum-smoke-hello-world-claude-opus-linux-20260826T051322Z-7292
-  // (root) and …-linux-20260826T051516Z-b699 (none). Each further adapter's
-  // flip is a platform PR carrying the same two-mode live smoke.
+  // (root) and 00-quorum-smoke-hello-world-claude-opus-linux-20260826T051516Z-b699
+  // (none). Each further adapter's flip is a platform PR carrying the same
+  // two-mode live smoke.
   claude: { ref: true, none: true },
 };
 
