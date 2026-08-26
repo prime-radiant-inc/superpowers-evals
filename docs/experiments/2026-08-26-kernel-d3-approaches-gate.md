@@ -127,3 +127,72 @@ peaks are exactly when sampling must not lag).
 - Skeleton: `.superpowers/drafts/2026-08-25-kernel-d3-spec-skeleton.md`
 - Spec draft (next): `docs/superpowers/specs/2026-08-26-kernel-d3-campaign-engine-design.md`
 - Committee seats: sol `913d710d`, qwen `14b6367f` (both reports in Paseo history)
+
+---
+
+# OQ-11 second round — invalidation timing (2026-08-26, post-ratification)
+
+At ratification of the D3 spec (revision 4, main @ `4f1782c`), Drew
+**re-opened one facet** of the OQ-11 adjudication: when
+contention-breach-overlapping blocks are invalidated. Everything else in
+D-3/D-4/D-5 stood (admission-only halt, sensors-lead split, sidecar +
+coverage predicate, digest-frozen parameters). The material change since
+round 1: ratified erratum E7 built the full replacement/refill lifecycle,
+reducing dispatch-time refill's marginal cost to one enum literal.
+
+**Seats (fresh, independent):** sol (`aa13aa36`, fast mode, max) and
+fable (`8da477cb`, xhigh). **Both converge on (b): dispatch-time
+invalidation + reserve refill at breach RESOLUTION (window closed), with
+seal-time application retained only as the backstop for still-open-at-end
+breaches and coverage-unknown blocks.** Both independently reject (c)
+(hybrid confirm) on the same ground: a `block_replaced` mint is
+irreversible — "confirmation" is either an inexpressible rollback, a new
+hard recovery dependency on non-replay evidence, or a redundant audit.
+Both state the honest cost: the sidecar (non-replay evidence) now feeds an
+irreversible spend decision, and a correlated breach can exhaust many
+per-cell reserves at once — (b) changes the bound (spend only
+already-priced reserve capacity) but does not guarantee the "few blocks"
+outcome.
+
+**Merged pins (union of the seats' conditions; adjudicated convergent):**
+refill is `block_replaced { kind: 'replacement', reason: 'contention' }`
+— never rerun-kind (reserve count is the recurring-breach loop
+terminator); invalidation instant = breach resolution only; live
+overlapped blocks are superseded analytically, never killed — slots held
+to service end (admission-only halt untouched); exit sample fsynced
+before the dispatcher receives the closed-window notification; one pure
+evaluator owns edges/coverage/overlap/tri-state, shared verbatim by
+dispatcher and D4; tri-state precedence: breach overlap → invalid, else
+uncovered overlap → unknown (never contention), else clean; landed mints
+are journal-authoritative — later sidecar loss renders an attribution
+caveat, never rollback (D4 recompute mismatch = corruption-class
+integrity finding, no reversal; (c) not reintroduced through the back
+door); correlated obligations processed in frozen
+comparison/cell/replicate + lineage-mint order, lowest reserve ordinal
+first — never completion/outcome order; one shared per-cell reserve
+across instrument/skew/exposure-audit/contention (no partitions;
+registration guidance updated); contention refill is NOT reserve-neutral
+and passes R-DSP-6; durable budget stop → `replacement_suppressed`,
+raises never resurrect; crash mid-batch: one writer critical section,
+idempotent prefix completion, remaining mints re-derived from the sidecar
+(landed mints never duplicated); block interval =
+journal-reconstructable conservative span (earliest roster
+`attempt_created.ts_ms` → latest service-end terminal, clipped at breach
+closure for still-live samples); registration warns on zero-reserve
+suites ("contention invalidation will be shortfall-only"); operator
+output at resolution prints affected/refilled/exhausted/suppressed counts
+before "admission resumed".
+
+**Amendment scope:** per the seats' converged lists — D-3 (breach
+handling + accepted-cost paragraph replaced with shared-reserve
+guidance), D-5 (rewritten), scope/non-goals rescope ("no new event type;
+one additive E7 reason"), E7.2 `+ 'contention'`, R-DSP-5/6/11 (+ mirror
+requirement for the resolution batch), sensors handoff, R-RCV-2/R-RCV-7 +
+fate-table row extension, D4 handoff narrowed (authoritative mints;
+backstop only for open/uncovered), D4 open item narrowed
+(`contention_invalidated` → open-at-end shortfall; `unknown_coverage`
+for gaps), validation fixtures (refill, correlated draw, deterministic
+exhaustion, crash mid-batch, sidecar loss, open-at-seal backstop), task
+1/7/8/9 one-liners. D-4 unchanged. Historical records append-only.
+
+**User ratification:** RATIFIED (b) with the merged pins, 2026-08-26.

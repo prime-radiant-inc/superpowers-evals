@@ -1,13 +1,16 @@
 # Kernel Deliverable 3 — Campaign Engine (dispatcher + journal + locks): Design
 
-**Date:** 2026-08-26 (revision 4, post revision-3 verify round)
-**Status:** ratified — revision 4 + editorial minors (2026-08-26; user
-ratification: proposed D1 erratum E7, the ENOSPC fail-stop of Decision
-D-13, and the additive schema amendments of the contract-additions list).
-**One facet re-opened by the user at ratification:** Decision D-5's
-contention-invalidation timing (seal-time vs dispatch-time refill; skeleton
-OQ-11) returns to a second approaches-gate round — Decisions D-3/D-5 stand
-until that round's adjudication lands as a spec amendment.
+**Date:** 2026-08-26 (revision 4, post revision-3 verify round; amended after
+the OQ-11 second-round ratification)
+**Status:** fully ratified — revision 4 + editorial minors + ratified OQ-11
+timing amendment (2026-08-26; user ratification covers proposed D1 erratum
+E7, the ENOSPC fail-stop of Decision D-13, the contract-additions list, and
+OQ-11 option (b); no open facets).
+**Ratified amendment to revision 4 (not a revision bump):** the user ratified
+OQ-11 option (b): dispatch-time invalidation + reserve refill when a breach
+window closes, with seal-time handling only as the backstop for breaches
+still open at campaign end and coverage unknowns. The complete merged pin set
+is GATE §"OQ-11 second round — invalidation timing".
 **Review record:** `docs/experiments/2026-08-26-kernel-d3-spec-review.md`
   (round 1: two-seat review, Blockers A–E + Important bundle → landed in
   revision 2; round 2: delta re-review, Rev-3 patch list P-1…P-7 → revision
@@ -118,6 +121,14 @@ their numbering, and all 77 R-identifiers remain unchanged. The
 absolute-total netting merger stands with the Round-4 atomicity pin: every
 spend or budget-exposure membership change journals the superseding
 `estimate_inflight` snapshot in the same dispatch critical section.
+
+**Ratified OQ-11 timing amendment to revision 4 (no revision 5):** the
+second approaches-gate round replaces only the contention-invalidation
+timing and its enumerated agreement surfaces. A closed breach window now
+resolves through an E7 replacement mint from the shared per-cell reserve;
+D4 remains the seal-time backstop only for breaches still open at campaign
+end and coverage unknowns. Decision D-4's frozen parameters are unchanged
+(GATE §"OQ-11 second round — invalidation timing").
 
 **Repo idiom D3 follows** (D1 §"Inputs that shape this design"; PAR §"Testing"):
 injectable seams — `src/scheduler/clock.ts` `FakeClock` (one Clock seam named
@@ -322,7 +333,9 @@ proceeding on a surrogate.
    ordering (block priority = max expected sample duration) + backfill; 429
    cooldowns; replacement rule and E7 rerun entry; budget enforcement;
    cancellation; the materializer/`verifySnapshot` call sites and the drift
-   gate; live breach and drift halts.
+   gate; live breach and drift halts; and the deterministic closed-window
+   contention-resolution batch through the existing `block_replaced` event
+   with E7.2's one additive `contention` reason.
 5. **`spawn/key-select` module** — detached process-group-leader spawn over
    the child-spawner seam (verified mechanism), pgid validation,
    `KeySelector` implementation with derive-only wait accounting and loud
@@ -335,7 +348,9 @@ proceeding on a surrogate.
    with pinned source precedence and the per-harness `ExposureProbe` contract
    (Decision D-9); and, as lead owner of the contention guard (Decision D-3),
    the timer-driven host sampler, sidecar evidence file with coverage
-   predicate, and breach detection with liveness guard.
+   predicate, the one pure edge/coverage/overlap evaluator shared verbatim
+   with the dispatcher and D4, breach detection with liveness guard, and the
+   fsync-before-closed-window-notification handoff.
 7. **`failure-classifier` module** — the closed table-driven
    `ClassificationInput → {class, cause?}` map over verdict/outcome × stage ×
    exit/signal × role × sensor evidence, completing D1's `InstrumentCause`
@@ -344,7 +359,9 @@ proceeding on a surrogate.
    guard, journal↔run-dir reconciliation, whole-block rerun via E7,
    quarantine by attempt-id mismatch (E7 `quarantined` event), crash-window
    resolutions, `SnapshotHandle` reconstruction with the `Campaign.refs`
-   cross-check, idempotent `campaign run` resume, cancel-request precedence.
+   cross-check, idempotent completion of interrupted contention-resolution
+   batches from sidecar evidence without duplicating landed mints,
+   idempotent `campaign run` resume, cancel-request precedence.
 9. **CLI + threading surfaces (minimal, named — three of them)** —
    (a) live-spend-lock acquisition at the `run-all` entry and the direct
    `quorum run` entry (R-LCK-2 — the lock is meaningless unless all three
@@ -357,20 +374,22 @@ proceeding on a surrogate.
 
 ## Non-goals
 
-- **No journal vocabulary amendments in the gate-adjudicated areas.** D3
-  ships zero amendments for key-wait accounting (Decision D-2) and zero for
-  the contention guard (Decision D-3) — that is what the approaches gate
-  adjudicated, and the claims are scoped to exactly that (REV Blocker A).
-  Separately, **proposed D1 erratum E7** (Errata) bundles the lifecycle
-  expressibility the shipped D1 state machine cannot journal — PROPOSED
-  here, ratified with Drew after the narrow verify pass per the E1–E6
-  precedent; until ratified, the writer rejects anything beyond the D1
-  20-event vocabulary.
+- **No new journal event type for key-wait or the contention guard.** D3
+  still ships zero amendments for key-wait accounting (Decision D-2), and
+  raw contention telemetry remains outside the journal. The ratified OQ-11
+  amendment reuses E7's existing `block_replaced` event and makes exactly one
+  additive enum change — E7.2 gains reason `'contention'`; it does not add an
+  event type. Separately, **D1 erratum E7** (Errata) bundles the lifecycle
+  expressibility the shipped D1 state machine cannot journal — RATIFIED
+  2026-08-26 per the E1–E6 precedent; until task 1 lands the contract code,
+  the shipped writer still rejects anything beyond the D1 20-event
+  vocabulary.
 - **No profiles, sealing predicate, report renderer, or `campaign status`
   surface** (D4: `profiles`, `report-engine`, `status` seam rows). D3 hands
-  D4 the journal read API, the materialized tables, the contention sidecar +
-  coverage predicate, the sealer-writer API, and the pre-seal `verifySnapshot`
-  call site.
+  D4 the journal read API, the materialized tables, authoritative contention
+  mints plus the sidecar/shared evaluator for integrity audit and the
+  open-at-end/unknown-coverage backstop, the sealer-writer API, and the
+  pre-seal `verifySnapshot` call site.
 - **No `campaign report | list | status` verbs** in D3 (same reason); D3's CLI
   surface is `register | run | cancel`.
 - **No cross-host pool leases** (PAR §"Execution" → "Cross-process
@@ -389,10 +408,12 @@ proceeding on a surrogate.
 
 D-1…D-3 were adjudicated at the approaches gate (GATE) — committee
 (`gpt-5.6-sol`, `qwen3.8-max-preview`) plus user ratification, 2026-08-26.
-They are recorded here, not re-opened; revision 2 amends their text only
-where REV authorizes a clarification (D-1's release timing → service end;
-the "zero journal vocabulary amendments" claims → scoped to what the gate
-adjudicated). D-4…D-5 are the sub-decisions the gate handed to this draft;
+At ratification the user re-opened only OQ-11's invalidation timing; GATE
+§"OQ-11 second round — invalidation timing" then ratified option (b) and
+the merged pins now transcribed in D-3/D-5. No facet remains open. Revision
+2's zero-amendment clarification still governs key-wait; for contention the
+second-round amendment narrows it to **no new event type** plus E7.2's one
+additive reason. D-4 is unchanged by the amendment; D-5 is rewritten.
 D-6…D-13 settle the remaining skeleton open questions from source
 constraints. All are written as decisions so the spec-review gate can
 challenge them precisely.
@@ -482,7 +503,7 @@ needs sealed per-credential wait evidence, add a 22nd event via D1 erratum —
 the E5 pattern: a binding-only event with `attempt_created`-style semantics
 (no state change), admitted by D1's transition tables as recorded-but-
 non-mutating (D1 §"Errata and open items"; GATE §"OQ-1"). (Numbered 22nd:
-E7's `quarantined` is the proposed 21st, should both ratify.)
+E7's ratified `quarantined` is the 21st.)
 
 ### Decision D-3: the contention guard splits ownership — sensors lead, in D3 (OQ-11)
 
@@ -503,33 +524,47 @@ E7's `quarantined` is the proposed 21st, should both ratify.)
 
 **Raw telemetry never enters the fsync-per-event journal.** The parent pins
 telemetry as "recorded," not "journaled" (PAR §"Execution" → "Contention
-guard"), and the D1 20-event vocabulary has no telemetry surface. **D3 ships
-zero journal vocabulary amendments for the contention guard — scoped to the
-contention guard, which is what the gate adjudicated** (REV Blocker A). The
+guard"), and the D1 20-event vocabulary has no telemetry surface. The
+ratified amendment adds **no event type** for the contention guard: it reuses
+E7's `block_replaced` and adds exactly one E7.2 reason, `'contention'`. The
 sidecar — `<campaignDir>/contention-telemetry.jsonl` (Decision D-6) — is
-evidence like run dirs: retained under the campaign directory, cited by the
-sealed report's accounting block (D4 renders the breach windows), and **not**
-replay-required — nothing in the journal references it today, and nothing
-needs to. The journal stays self-sufficient for replay; losing the sidecar
-degrades seal-time attribution, never recovery correctness (GATE §"OQ-11",
-sub-decision list; REV minors — wording fixed).
+retained evidence like run dirs and is **not replay-required**: the journal
+alone replays every event that landed. It is nevertheless decision evidence
+for an irreversible closed-window mint, and recovery re-reads it to derive
+the unlanded suffix of an interrupted resolution batch. A landed contention
+mint is journal-authoritative; later sidecar loss produces an attribution
+caveat and coverage-unknown handling for work not yet minted, never rollback
+or duplication of that mint (GATE §"OQ-11 second round — invalidation
+timing").
 
 **Hardening bundle (REV Important, fable I-2…I-5, sol #16/#19, M-8):**
 
 - **Coverage predicate, handed to D4:** the sidecar must cover
   `[campaign_opened.ts_ms, last sample terminal ts_ms]` within N× cadence
   (N registered in the `contention` block, default 4). Any uncovered window
-  adjudicates every overlapping block **unknown** — never clean — at seal
-  (fail-closed). A torn tail (crash mid-append) truncates at the last
+  classifies every overlapping block **unknown** — never clean or
+  contention-invalid — unless a known breach overlap wins under the
+  precedence below. A torn tail (crash mid-append) truncates at the last
   complete line with a loud note; the truncated interval counts as uncovered.
 - **Frozen sampler parameters:** `cadence_ms` and `sustain_k` are digest
   members (registration-declared; defaults 10 000 ms and 3, drafted for gate
   challenge). Breach-window edges are **symmetric and complete (REV-2 P-6):**
   entry = `sustain_k` consecutive threshold crossings; exit = `sustain_k`
-  consecutive samples back inside every breached threshold — one shared
-  predicate function computes both edges, so the runtime halt and seal-time
-  invalidation can never diverge. `sustain_k` (in samples) is the only
-  hysteresis; there is no time-based hysteresis field.
+  consecutive samples back inside every breached threshold. `sustain_k` (in
+  samples) is the only hysteresis; there is no time-based hysteresis field.
+- **One pure evaluator, shared verbatim:** one exported pure function owns
+  breach edges, coverage, journal-block interval construction, overlap, and
+  the final tri-state. The dispatcher and D4 call that same implementation;
+  neither carries a second interpretation. Its precedence is **known breach
+  overlap → invalid; else uncovered overlap → unknown (never contention);
+  else clean**. This function is the only authority both at closed-window
+  resolution and at D4's narrowed backstop/audit.
+- **Journal-reconstructable conservative block interval:** for an executed
+  block, the interval begins at the earliest roster
+  `attempt_created.ts_ms` and ends at the latest service-end terminal. At a
+  breach closure, a roster sample still live is clipped to the breach-closure
+  timestamp for that evaluation. Completion/outcome arrival order is never
+  an overlap input.
 - **Dead-sampler liveness:** at every admission wave the dispatcher checks
   the sidecar's last-sample age; staleness > 2× `cadence_ms` halts admission
   (a dead sampler must not look like a quiet host).
@@ -543,22 +578,32 @@ sub-decision list; REV minors — wording fixed).
 
 **Breach handling:** a live breach **halts admission** — no new blocks while
 the breach persists; in-flight samples run to service end (admission-only
-halt). The operator sees the loud breach warning and the sidecar; recovery is
-either the breach clearing (sampler resumes admission automatically, loud at
-both edges) or SIGINT → `campaign run` resume, whose lock-acquisition
-preflight re-checks for free. Precedent: R-DSP-11's snapshot-drift admission
-halt. **Seal-time invalidation** of blocks executed inside a breach window
-renders via the already-pinned `adjudication { cell, disposition, rationale
-}` event (D1 §"Journal event vocabulary"); D4 applies the registered
-thresholds at seal over sidecar breach windows × journal block windows, with
-the coverage predicate above.
+halt), are never killed merely because they overlap the breach, and retain
+their slots until service end. When the window closes, sensors fsync the exit
+sample before notifying the dispatcher. Only then does the dispatcher run
+the shared evaluator and resolve every invalid block through R-DSP-11's one
+ordered writer batch. The original block is analytically superseded and its
+evidence retained; refill is
+`block_replaced { kind: 'replacement', reason: 'contention' }`, never rerun
+kind. A breach still open at campaign end has no dispatch-time resolution;
+D4 handles it as a seal-time shortfall backstop. Coverage-unknown blocks also
+remain D4 backstop work. At resolution the operator sees one line with
+`affected`, `refilled`, `exhausted`, and `suppressed` counts before the
+separate `admission resumed` line. Precedent: R-DSP-11's snapshot-drift
+admission halt.
 
-**Accepted cost (REV Important, records sol #7 without re-opening the gate):**
-seal-time invalidation means invalidated blocks are **shortfall, not
-refilled** — dispatch is over by then. Named here so reserve guidance is
-sized accordingly: a campaign expecting contention buys reserve for expected
-instrument replacement, and understands contention invalidation reduces n
-rather than consuming reserve.
+**Accepted cost and reserve guidance (ratified OQ-11 amendment):** every
+contention refill consumes one already-priced frozen reserve block and passes
+R-DSP-6's budget gate; it is **not reserve-neutral**. Instrument replacement,
+skew refill, exposure-audit replacement, and contention draw from **one shared
+per-cell reserve**, with no partitions. Registration guidance sizes that
+single pool for the aggregate causes and for a correlated breach draw — the
+number of same-window overlapping blocks — rather than adding independent
+"expected one-block" allowances. A correlated breach can exhaust many cells'
+reserves at once: the frozen reserve bounds incremental spend but does not
+guarantee a "few blocks" outcome. Repeated breaches against replacement
+lineages consume the next reserve ordinal until the finite reserve is
+exhausted; that reserve count is the recurring-breach loop terminator.
 
 **Finding recorded (GATE §"OQ-11", sub-decision list):** the D1 seam map
 assigns the contention guard to **no module** — it is absent from the D3 rows
@@ -620,29 +665,45 @@ recovery"). G's membership is the same decision from the admission side
 lock acquisition per the match policy above; mismatch refuses launch loudly,
 naming both fingerprints (R-LCK-2 preflight; fail-closed).
 
-### Decision D-5: contention-invalidated blocks surface at seal via `adjudication` — no new disposition value
+### Decision D-5: closed contention windows refill at resolution; D4 backstops open-at-end and unknown coverage
 
-**Decision:** blocks invalidated by a contention breach window get **no new
-disposition value and no new event** in D3. They surface at seal through the
-already-pinned `adjudication { cell, disposition, rationale }` event
-(D1 §"Journal event vocabulary"): the rationale names the breach window from
-the sidecar, and the disposition marks the cell validity-compromised with
-evidence retained — structurally `skew_excluded`-like (the parent's own
-analogy for validity-compromised-but-retained data, PAR §"Execution" →
-"Skew" rule 3). Blocks overlapped by an **uncovered** sidecar window
-adjudicate *unknown*, never clean (Decision D-3 coverage predicate). D4
-applies the thresholds and writes the adjudications at seal; D3's obligation
-ends at sampler + sidecar + coverage + breach detection + admission halt +
-evidence retention.
+**Decision:** the invalidation instant is **breach resolution**, after the
+exit sample that closes the window is durable. The dispatcher calls the
+Decision D-3 pure evaluator over that closed window and the conservative
+journal-derived block intervals. Every `invalid` block is analytically
+superseded — its processes are not killed and its slots remain held to
+service end — and the dispatcher runs the E7 replacement bundle as
+`block_replaced { kind: 'replacement', reason: 'contention' }`. This is a
+frozen-reserve activation, never a reserve-neutral rerun. It adds no event
+type: `'contention'` is the one additive E7.2 reason. A durable budget stop
+resolves a not-yet-minted obligation as `replacement_suppressed`; otherwise
+an empty shared per-cell reserve resolves it as `reserve_exhausted`, in the
+same event shapes as R-DSP-9.
 
-**Accepted cost (restated from D-3):** invalidated blocks are shortfall at
-seal, not refilled — dispatch has ended; reserve guidance is sized for
-instrument replacement, not contention invalidation (REV Important bundle).
+**One tri-state at both consumers:** known breach overlap is `invalid`;
+otherwise uncovered overlap is `unknown` (never contention); otherwise the
+block is `clean`. The dispatcher acts only on `invalid` results at a closed
+window. `unknown` remains seal-backstop work. The one evaluator owns breach
+edges, coverage, block intervals, and overlap, so D4 receives an executable
+contract rather than a second threshold interpretation (Decision D-3).
 
-**Open item handed to D4:** the disposition vocabulary has no
-`contention_invalidated` or `unknown_coverage` term, and D3 neither invents
-one nor amends the schema; the gap is recorded for D4's sealing/report
-vocabulary work (see Open items).
+**D4's narrowed backstop and integrity audit:** D4 uses that same evaluator
+at seal for two roles. Its integrity audit compares available sidecar
+evidence with closed-window landed mints. Its only backstop actions are (a)
+turning a known breach still open at campaign end into `adjudication {
+disposition: 'contention_invalidated', ... }` shortfall and (b) turning a
+coverage gap into `adjudication { disposition: 'unknown_coverage', ... }`.
+For a closed window already resolved by the dispatcher, landed contention
+mints are journal-authoritative: a recompute mismatch is a corruption-class
+integrity finding, never a reversal; sidecar loss after a mint produces an
+attribution caveat, never rollback or hybrid confirmation. No seal path
+deletes, rewrites, or counter-mints a landed replacement.
+
+**Open item handed to D4, narrowed:** D4 owns only the two seal-time
+disposition terms above: `contention_invalidated` for an open-at-end breach
+that could not refill and `unknown_coverage` for a gap. Closed-window
+contention uses E7.2's reason and the existing replacement/exhaustion/
+suppression carriers; it creates no D4 disposition work (see Open items).
 
 ### Decision D-6: campaign-dir layout = the shipped reconstruction layout (OQ-3; REV Blocker B)
 
@@ -666,8 +727,9 @@ campaigns/<digest-prefix>-<suite-name>/
   journal.db-shm               shared-memory index — both documented entries,
                                never hand-edited, checkpointed by writers)
   contention-telemetry.jsonl   sidecar evidence (Decision D-3) — appended by
-                               the sampler, fsync per sample, never
-                               replay-required
+                               the sampler, fsync per sample; decision/recovery
+                               derivation evidence, but journal replay remains
+                               sidecar-independent
   cancel-request               O_EXCL marker written by `campaign cancel`
                                (Decision D-12); absence-checked first on resume
   .storage-paused              durable ENOSPC marker (Decision D-13)
@@ -1086,7 +1148,7 @@ vocabulary):**
 |---|---|
 | **Roll back** — admission-section, uncommitted wave | `block_admitted`, `attempt_created`, `run_allocated`; likewise `budget_stopped` (nothing admits during the pause, so the stop decision re-derives at resume) |
 | **Buffer in memory + retry with original `ts_ms`** — post-fact evidence from children that terminaled before the kill landed | `run_completed`, `instrument_failure`, `exposure_started`, `budget_event` (each spend for those children lands with its run evidence and the superseding absolute `estimate_inflight` snapshot in one recovery critical section), `pool_blocked` (sensor classification racing the kill) |
-| **Recomputed/completed at resume** — block-terminal decisions racing the kill | `skew_excluded`, `sample_disposition`, `slot_exhausted`, `adjudication` (including `replacement_suppressed`/`reserve_exhausted`) re-derive from evidence. A missing `block_replaced` decision may re-derive; an already-landed mint is authoritative, never duplicated, and only its missing roster dispositions are completed (E7.1/R-RCV-2). |
+| **Recomputed/completed at resume** — block-terminal decisions racing the kill | `skew_excluded`, `sample_disposition`, `slot_exhausted`, `adjudication` (including `replacement_suppressed`/`reserve_exhausted`) re-derive from evidence. A missing `block_replaced` decision may re-derive; an already-landed mint is authoritative, never duplicated, and only its missing roster dispositions are completed (E7.1/R-RCV-2). For an interrupted contention-resolution batch, landed `reason: 'contention'` mints remain authoritative and recovery re-derives only the missing ordered suffix from the durable sidecar under one writer critical section. Sidecar loss never reverses the landed prefix; any underived coverage gap becomes D4 `unknown_coverage` plus an attribution caveat. |
 | **Journaled at resume** — killed-mid-run partial blocks | `aborted` per in-flight block (**E7 rerun entry requires it** — the re-entry edge only applies from `aborted`) |
 | **Blocked during pause** | `amendment` (refused loudly until resume), `sealed` (impossible — sealing requires `running`), `campaign_opened` (impossible mid-campaign), `quarantined` (recovery-only, post-resume) |
 | **Control-plane-reserved retry** | `campaign_cancelled` — a cancel during pause journals `aborted` + `campaign_cancelled` from the freed ballast extent before the storage marker. Under the qualified filesystem/reserve envelope this must land; inode/WAL amplification beyond D-13's honest limits returns a loud storage-fatal result with children already dead, never a fabricated terminal. |
@@ -1520,7 +1582,11 @@ default semantics per P0), declares invalidation thresholds (shape and
 defaults per Decision D-4), and freezes `cadence_ms` / `sustain_k` /
 `coverage_n` / tolerance bands into the same digest-member block. The
 parent pins the obligation, not the numbers (PAR §"Execution" → "Contention
-guard").
+guard"). Its confirmation output labels reserve as one shared per-cell pool
+for instrument, skew, exposure-audit, and contention replacements and tells
+the operator to size for correlated same-window draws. A suite with zero
+reserve is accepted only with the loud warning **"contention invalidation
+will be shortfall-only"**.
 
 **Ratification records (task 5 obligation):** registration implements the
 E1/E2-ratified estimate keying, and this spec's Errata section records the
@@ -1576,13 +1642,19 @@ replaced block gets disposition `excluded_block_replaced` with
 `superseded_by`; its run dir is retained and journal-referenced (conservation
 rule: one included outcome per primary slot, the report proves it).
 **Journal expression is E7's** (`block_replaced { kind: 'replacement',
-reason ∈ InstrumentCause }`; Errata). If no unactivated reserve exists, the
-obligation resolves only through `adjudication { disposition:
-'reserve_exhausted' }`, never `slot_exhausted`/sample `exhausted` (E7.1,
-R-DSP-9). **Post-budget-stop replacement resolution (REV fable I-8):** once
-a durable budget stop has fired, a not-yet-minted replacement obligation is
-not activated — the affected cell seals as **named shortfall** through
-E7.1's `adjudication { disposition: 'replacement_suppressed', rationale:
+reason ∈ InstrumentCause }`; Errata). **Shared-reserve rule:** instrument
+replacement, `skew_refill`, `exposure_audit`, and `contention` all consume
+the same registered per-cell reserve ordinals; there are no cause-specific
+partitions, and activation takes the lowest unactivated ordinal. Contention
+uses `block_replaced { kind: 'replacement', reason: 'contention' }` under
+R-DSP-11, never rerun kind; consuming a finite reserve is what terminates a
+recurring-breach lineage. If no unactivated reserve exists, the obligation
+resolves only through `adjudication { disposition: 'reserve_exhausted' }`,
+never `slot_exhausted`/sample `exhausted` (E7.1, R-DSP-9).
+**Post-budget-stop replacement resolution (REV fable I-8):** once a durable
+budget stop has fired, a not-yet-minted replacement obligation is not
+activated — the affected cell seals as **named shortfall** through E7.1's
+`adjudication { disposition: 'replacement_suppressed', rationale:
 'budget_stopped' }`. `budget_stopped` still terminalizes any separately
 planned/admitted samples selected by the budget stop and is never resurrected
 (E7.6); it is not the zero-witness replacement carrier.
@@ -1600,6 +1672,11 @@ overshoot bound. **Pin (REV sol Q3):** a budget raise **never resurrects**
 edge exists; E7.6 pins it; tested). Every admission, service-end/verified
 kill release, and spend append follows R-JRN-12/E7.7's same-critical-section
 superseding-snapshot rule before this budget predicate may run again.
+Contention refill is **not reserve-neutral**: each resolution-time mint must
+pass this predicate against the already-priced but still spend-bearing
+reserve activation. A durable stop produces `replacement_suppressed` in the
+resolution batch; a later raise can permit later obligations but never
+revisits that resolution or resurrects stopped samples.
 
 **R-DSP-7 — Cancellation** (D1 seam map; PAR §"Execution"; D1 §"Journal
 event vocabulary" campaign_cancelled / erratum E5): SIGINT/SIGTERM/SIGHUP
@@ -1653,6 +1730,36 @@ authorized repair = removal + re-create under D2's lock; E7 rerun re-entry).
 Same halt semantics serve the contention live breach (Decision D-3):
 admission-only halt, in-flight runs to service end, loud at entry and
 resolution; plus the dead-sampler liveness halt (>2× cadence staleness).
+Contention never inherits drift's kill/rerun mapping: overlapped processes
+are analytically superseded, never killed for contention, and their slots
+release only at service end.
+
+**Closed-window resolution batch (ratified OQ-11 amendment):** sensors fsync
+the exit sample before handing the closed window to the dispatcher. The
+shared pure evaluator classifies conservative journal-derived block
+intervals with `invalid > unknown > clean` precedence (Decision D-3). The
+dispatcher sorts the `invalid` obligations by the frozen comparison, cell,
+and replicate ordinals, then lineage-mint order — never completion or outcome
+order — and assigns the lowest available reserve ordinal. One dispatch
+writer critical section covers the whole resolution batch (each append keeps
+R-JRN-4's one-event transaction): no admission, seal, or other mint may
+interleave. For each obligation, an already-durable budget stop emits
+`replacement_suppressed`; otherwise an available reserve emits
+`block_replaced { kind: 'replacement', reason: 'contention' }` plus E7's
+ordered mint bundle; otherwise the sole resolution is `reserve_exhausted`.
+This is the R-DSP-9 replacement/exhaustion shape applied to contention and
+passed through R-DSP-6.
+
+A crash can expose only an idempotent prefix of that frozen batch. Recovery
+folds landed mints as authoritative, re-runs the same evaluator over the
+durable sidecar window, and appends only the missing suffix in the same
+order; it never duplicates or reverses a mint (R-RCV-2/R-RCV-7). Admission
+resumes only after the full derivable batch is durable. Immediately before
+the `admission resumed` line, the operator receives one resolution line whose
+`affected = refilled + exhausted + suppressed` counts describe that durable
+batch. `unknown` blocks mint nothing and remain D4 backstop work; a breach
+still open at campaign end never produces this notification and is likewise
+D4 backstop work.
 
 **Spawn-failure pool halt (REV fable I-14):** N consecutive spawn failures
 attributed to one pool (default N=3, flagged) halt admission for that pool
@@ -1813,15 +1920,21 @@ process_count, disk_free_bytes, breach: [] }` (a missed sample writes the
 `missing` gap line instead). Breach detection: a declared threshold crossed
 for `sustain_k` consecutive samples (registered; default 3) sets a non-empty
 `breach` list, signals the dispatcher to halt admission (R-DSP-11 halt
-semantics; loud warning naming the breached metrics at breach entry and
-resolution), and records the breach window for seal-time attribution
-(Decision D-5). Edge semantics are identical at runtime and seal;
-dead-sampler liveness halts admission on staleness > 2× cadence; the
-coverage predicate (window `[campaign_opened, last sample terminal]` within
-`coverage_n × cadence_ms`; uncovered ⇒ blocks adjudicated unknown) is handed
-to D4 with the sidecar. The sidecar is evidence, not replay-required; the
-journal remains self-sufficient (Decision D-3). Raw telemetry never enters
-the journal — zero amendments for the contention guard (scoped per REV).
+semantics; loud warning naming the breached metrics at breach entry). The
+same exported pure evaluator computes entry/exit edges, coverage,
+journal-derived block overlap, and the `invalid | unknown | clean` result for
+both the dispatcher and D4; there is no second seal-time implementation.
+When `sustain_k` in-bounds samples close a breach, sensors append and **fsync
+the exit sample before** notifying the dispatcher of the closed window. The
+dispatcher owns the R-DSP-11 resolution batch and its resolution/resume
+output; sensors never mint or journal. Dead-sampler liveness halts admission
+on staleness > 2× cadence. The sidecar remains non-replay evidence — replay
+of landed journal events is self-sufficient — but recovery may re-read its
+durable closed windows to derive an unlanded batch suffix. Sidecar loss never
+reverses a landed mint; it becomes an attribution caveat plus
+`unknown_coverage` backstop for any underived gap. Raw telemetry adds no
+journal event type; E7.2's `'contention'` reason is the sole additive
+contention amendment.
 
 ### failure-classifier
 
@@ -1936,6 +2049,21 @@ in-flight successor killed during recovery may itself mint one rerun
 successor. No prefix can mint a second successor for the original
 predecessor.**
 
+**Contention-mint recovery (ratified OQ-11 amendment):** before deriving any
+new contention action, recovery folds landed `block_replaced { kind:
+'replacement', reason: 'contention' }` rows and their E7 mint bundles. Those
+mints are authoritative: the landed replacement decision is never
+reclassified as rerun, suppression, exhaustion, or rollback. A later crash
+of the minted successor still follows R-RCV-2's normal whole-block rerun
+path. For a crash inside a closed-window resolution batch,
+recovery calls the same pure evaluator over the durable sidecar, rebuilds the
+same frozen comparison/cell/replicate + lineage-mint order, and appends only
+missing obligations/resolutions under one writer critical section, always
+taking the lowest still-unactivated reserve ordinal. If the evidence needed
+for an unlanded suffix is lost or uncovered, recovery does not guess: landed
+mints stand and the underived gap goes to D4 as `unknown_coverage` with an
+attribution caveat.
+
 **R-RCV-3 — Quarantine by attempt-id mismatch** (D1 seam map; PAR §"Journal
 and recovery"; PAR §"Storage semantics"): late or orphaned run dirs are
 journal-classified via **E7's binding-only `quarantined` event** (`{ run_id,
@@ -1980,9 +2108,12 @@ read this document" operator surface; PAR §"Execution"): the same command
 starts and resumes. **Pinned resume order:** check `cancel-request` first
 (complete cancellation instead of resuming — Decision D-12) → acquire the
 live-spend lock → kill/reconcile (identity-guarded; complete any partial
-mint bundle before crash-window resolver actions) → preflight (floors +
-fingerprint + key envs) → reconstruct handle + refs cross-check +
-`verifySnapshot` → admit. Every resume prints the one-line state banner
+mint bundle before crash-window resolver actions; fold authoritative landed
+contention mints and re-derive any interrupted closed-window batch suffix
+from the sidecar before admission) → preflight (floors + fingerprint + key
+envs) → reconstruct handle + refs cross-check + `verifySnapshot` → admit.
+Sidecar loss never reverses a mint and leaves underived intervals for D4's
+coverage-unknown backstop. Every resume prints the one-line state banner
 (REV M-9).
 
 ## Interfaces handed to D4
@@ -1997,10 +2128,13 @@ fingerprint + key envs) → reconstruct handle + refs cross-check +
 - **The sealer-writer API:** D4's sealing act writes `adjudication` and
   `sealed` through D3's journal writer election (R-JRN-3).
 - The contention sidecar + registered thresholds + frozen cadence/sustain +
-  **coverage predicate** (Decision D-3/D-5): D4 applies thresholds at seal
-  over breach windows × block windows, adjudicates uncovered-window blocks
-  unknown, and writes the `adjudication` entries; the disposition vocabulary
-  question is D4's open item.
+  the **same exported pure evaluator** used at dispatch (Decision D-3/D-5).
+  Closed-window landed mints are journal-authoritative; D4 neither confirms
+  nor reverses them. D4 uses the evaluator to audit available sidecar evidence
+  (recompute disagreement is a corruption-class integrity finding; sidecar
+  loss is an attribution caveat) and as the narrowed seal backstop only for
+  a breach still open at campaign end (`contention_invalidated` shortfall) or
+  uncovered overlap (`unknown_coverage`).
 - The pre-seal `verifySnapshot` call site (R-DSP-11 cadence) — D4's sealing
   invokes it; D3 owns the mapping of its failure, including the
   refuse-to-seal-pending-operator-acknowledgement handling (Decision D-11).
@@ -2042,7 +2176,9 @@ src/campaign/
                          backfill, cooldowns, replacement/rerun entry,
                          ordered mint bundle + superseded-predecessor rule,
                          absolute budget snapshots + never-resurrects,
-                         cancellation protocol, spawn-failure pool halt, halts,
+                         closed-window contention-resolution batch over the
+                         shared reserve, cancellation protocol,
+                         spawn-failure pool halt, halts,
                          materializer/verifySnapshot call sites
   spawn.ts               detached process-group-leader spawn over the
                          spawner seam; pgid validation; child-argv
@@ -2052,18 +2188,22 @@ src/campaign/
                          guard; loud warnings; spawn-gap accounting)
   sensors.ts             marker-table classification; ExposureProbe
                          measurement; decision point at block terminal
-  contention.ts          sampler, sidecar writer + coverage predicate,
-                         breach detection, liveness guard (leads the guard
-                         per Decision D-3)
+  contention.ts          sampler, fsync-before-notify sidecar writer + one
+                         pure edge/coverage/interval/overlap/tri-state
+                         evaluator shared by dispatcher and D4, breach
+                         detection, liveness guard (leads the guard per
+                         Decision D-3)
   classifier.ts          ClassificationInput → {class, cause?} table
                          (closed map)
   recovery.ts            identity-guarded pgid kill, reconciliation, E7
                          mint-bundle completion + predecessor resolver
-                         override + rerun entry, quarantine, crash windows,
+                         override + rerun entry, authoritative contention
+                         mint fold + sidecar re-derivation of interrupted
+                         resolution batches, quarantine, crash windows,
                          handle reconstruction + refs cross-check,
                          cancel-request precedence
-src/contracts/campaign/  E7 amendments (Errata; PROPOSED, ratified with
-                         Drew after the narrow verify pass):
+src/contracts/campaign/  E7 amendments (Errata; RATIFIED 2026-08-26,
+                         contract code lands with task 1):
                          journal-events.ts (+ quarantined; block_replaced
                          reason/kind/roster widening; block_admitted
                          rerun_of; run_allocated legacy/new grant union),
@@ -2191,7 +2331,11 @@ registration, cancellation, cooldowns, recovery, and sampler cadence.
   post-budget-stop `replacement_suppressed` shortfall resolution; skew
   exclusion at block terminal;
   drift-halt (affected-set correctness across the window) and breach-halt;
-  spawn-failure pool halt.
+  **closed-window contention refill**; a **correlated multi-block draw** from
+  the one shared per-cell reserve; **deterministic exhaustion order** by
+  frozen comparison/cell/replicate + lineage mint with lowest reserve
+  ordinal; durable-budget-stop suppression; operator counts before
+  `admission resumed`; spawn-failure pool halt.
 - **spawn/key-select:** spawn fixtures over the spawner seam — detached
   spawn asserted (pgid == child pid, validated before journaling); the
   snapshot-entrypoint argv (a hostile originating-checkout fixture proves
@@ -2213,9 +2357,12 @@ registration, cancellation, cooldowns, recovery, and sampler cadence.
   time, inclusion-changing divergence invalidates); fail-closed absence;
   sampler cadence + sidecar content + missing-sample gaps + **symmetric
   K-sustained breach entry and exit** over fake host-stats series; coverage
-  predicate windows; dead-sampler liveness halt; sidecar-append ENOSPC
-  signaling; sidecar never replay-required (journal replays with the
-  sidecar absent).
+  predicate windows and tri-state precedence; exit-sample-fsync-before-
+  notification; dead-sampler liveness halt; sidecar-append ENOSPC signaling;
+  **sidecar loss** after a landed mint (journal replay and mint authority
+  preserved, attribution caveat/unknown gap, no rollback); **open-at-seal
+  backstop** (`contention_invalidated` only for a still-open known breach,
+  `unknown_coverage` for a gap); replay itself remains sidecar-independent.
 - **failure-classifier:** exhaustive `ClassificationInput` table over the
   product; grader billing-exhaustion and grader 429 typed as instrument
   causes; unknown combinations stay `evidence` and never replace.
@@ -2225,7 +2372,9 @@ registration, cancellation, cooldowns, recovery, and sampler cadence.
   double spend), post-terminal (nothing rerun); refs cross-check refusal on
   a moved HEAD; idempotent `campaign run` resume converges on the same
   terminal state; cancelled campaigns refuse resume (cancel-request
-  precedence).
+  precedence); **crash mid-contention-resolution batch** after a landed
+  prefix re-derives only the missing suffix from the sidecar in frozen order,
+  without duplicate mints.
 
 **Linux-gated integration matrix (trusted-maintainer, separate from the
 portable suite):** real two-process locking on a shared filesystem; the
@@ -2305,10 +2454,10 @@ non-inheritance of the journal lease (asserted-not-proven debt).
   - `RunScenarioArgs.campaign` identity-intake field (Decision D-8).
     Home: `src/runner/index.ts`.
   - E7's amendments (payloads, edges, seal predicate, `quarantined`,
-    `InstrumentCause` additions) as drafted below — PROPOSED, ratified with
-    Drew after the narrow verify pass.
+    `InstrumentCause` additions) as drafted below — RATIFIED 2026-08-26;
+    contract code lands with task 1.
 
-### Proposed D1 erratum E7 — rerun/replacement lifecycle expressibility (PROPOSED; ratification with Drew after the narrow verify pass, E1–E6 precedent)
+### D1 erratum E7 — rerun/replacement lifecycle expressibility (RATIFIED 2026-08-26, E1–E6 precedent; recorded in the D1 spec's Errata)
 
 **Why:** REV's orchestrator verification (items 3–5, re-verified against
 main) confirmed that shipped D1 names a recovery its own state machine
@@ -2447,11 +2596,14 @@ block by id** — no out-of-band minting for the replacement path.
 
 **E7.2 — Reason set (widened `block_replaced`).**
 `BlockReplacementReason = InstrumentCause | 'dispatcher_restart' |
-'snapshot_drift' | 'storage_failure' | 'skew_refill' | 'exposure_audit'` —
-the closed block-scoped set, completed by the validity-replacement reasons
-this spec itself requires: runtime skew refill from reserve (R-DSP-9) and
-exposure-audit invalidation (Decision D-9), both `kind: 'replacement'`.
-Additions remain platform PRs. **Legacy round-trip rule:** shipped rows
+'snapshot_drift' | 'storage_failure' | 'skew_refill' | 'exposure_audit' |
+'contention'` — the closed block-scoped set, completed by the validity-
+replacement reasons this spec itself requires: runtime skew refill from
+reserve (R-DSP-9), exposure-audit invalidation (Decision D-9), and
+closed-window contention invalidation (Decisions D-3/D-5), all `kind:
+'replacement'`. Contention activates the shared frozen per-cell reserve and
+is never rerun kind. Additions remain platform PRs. **Legacy round-trip
+rule:** shipped rows
 (`cause ∈ z.enum(INSTRUMENT_CAUSES)`) parse as `{ reason: cause, kind:
 'replacement' }`; absent `roster`/`reserve_activation` replay with
 `reserve_activation: kind === 'replacement'` and `supersedes` derived by
@@ -2593,10 +2745,12 @@ else unchanged.
 
 ### Open items
 
-- **Contention disposition vocabulary (D4).** `adjudication` renders the
-  invalidation, but the disposition vocabulary has no contention or
-  unknown-coverage term; D4's sealing/report vocabulary work owns the
-  addition (Decision D-5).
+- **Contention backstop disposition vocabulary (D4), narrowed.** D4 adds
+  `contention_invalidated` only for shortfall from a known breach still open
+  at campaign end, and `unknown_coverage` for uncovered overlap. Closed
+  windows resolve during dispatch through E7.2's `'contention'` replacement
+  reason; landed mints are authoritative and never await D4 confirmation
+  (Decision D-5).
 - **Marker vocabulary is initial** (Decision D-10): seeded from the one live
   detection plus declared families; qualification is the live receipt;
   unmatched throttle evidence renders as caveats (the <5% bar sees the
@@ -2658,7 +2812,8 @@ in task 8). Requirements in parentheses.
    classifier), E7.0's `BlockSchema.slot` representation, the additive
    campaign contention/execution-surface fields, and the typed seams
    (spawner, host-stats probe, uniform Clock naming). Dependent tests gated
-   on E7 ratification. (E7; REV Blocker A; REV-2 P-1)
+   on E7 ratification. E7.2 gains `'contention'` as one replacement reason,
+   with no new event type. (E7; REV Blocker A; REV-2 P-1)
 2. **Locks + host probe.** Journal writer election = lock-dir lease beside
    `journal.db` + in-transaction `writer_generation` fencing (verified);
    host-wide live-spend lock on the D2 lock-dir protocol with heartbeat +
@@ -2709,18 +2864,24 @@ in task 8). Requirements in parentheses.
    fixtures; `ExposureProbe` per harness + decision
    point at block terminal + fail-closed absence; sampler + sidecar +
    coverage predicate + frozen cadence/sustain + dead-sampler liveness +
-   breach edge semantics; exhaustive `ClassificationInput` table.
+   breach edge semantics; one pure tri-state evaluator shared with dispatcher
+   and D4, with exit-sample fsync before closed-window notification;
+   exhaustive `ClassificationInput` table.
    (R-SNS-1..5, R-CLS-1..6; Decisions D-3, D-9, D-10)
 8. **Dispatcher.** Atomic per-block admission with per-sample global cap and
    service-end release; max-sample priority ordering + backfill; cooldowns;
-   replacement + **halt/kill/replacement mapping incl. E7 ordered mint
-   bundle, superseded-predecessor rule, successor-local rerun entry, and
-   sole reserve-exhaustion adjudication** (fable I-7 split); budget
+   replacement + **cause-specific halt/kill/replacement mapping incl. E7
+   ordered mint bundle, superseded-predecessor rule, successor-local rerun
+   entry, and sole reserve-exhaustion adjudication** (fable I-7 split); budget
    enforcement + atomic absolute snapshots + never-resurrects +
    post-budget-stop `replacement_suppressed` shortfall; spawn-failure pool
    halt; drift/breach/liveness
    halts wired to task 4's mapping; cancellation signal handling; state
-   banner. Adversarial-arrival + accounting tests. (R-DSP-1..13)
+   banner. At each closed breach it leaves overlapped processes running,
+   resolves the frozen-order batch through the shared reserve with `reason:
+   'contention'`, and prints resolution counts before resuming admission.
+   Adversarial-arrival + accounting tests.
+   (R-DSP-1..13)
 9. **Recovery + cancellation + CLI threading + D4 handoff.**
    Identity-guarded pgid kill; journal↔run-dir reconciliation incl.
    terminal-evidence rule; partial-mint disposition completion;
@@ -2730,8 +2891,11 @@ in task 8). Requirements in parentheses.
    cancel protocol both paths in the pinned order;
    `campaign register | run | cancel` verbs;
    `run-all` + direct-`run` live-spend-lock threading; sealer-writer API +
-   D4 handoff surfaces. Kill-mid-block + no-double-spend + cancel-refuse-
-   resume tests. (R-RCV-1..7; Decisions D-12, D-13)
+   D4 handoff surfaces. Interrupted contention batches preserve landed mints
+   and re-derive only their missing sidecar-backed suffix; D4 receives only
+   the open-at-end/unknown backstop plus authoritative-mint audit. Kill-mid-
+   block + no-double-spend + cancel-refuse-resume tests. (R-RCV-1..7;
+   Decisions D-12, D-13)
 
 **Cross-cutting obligations, explicit:**
 
@@ -2743,9 +2907,11 @@ in task 8). Requirements in parentheses.
   tests.
 - Decision D-2 (wait accounting) binds task 6's journaling and task 3's
   materialized stat; both use the "spawn-gap" label.
-- Decision D-3 splits across tasks 2 (preflight), 5 (declarations), and
-  7 (sampler/sidecar/breach/coverage/liveness) — task 7 is lead; the
-  host-stats probe built in task 2 is the shared seam all three consume.
+- Decision D-3 splits across tasks 2 (preflight), 5 (declarations), 7
+  (sampler/sidecar/evaluator/liveness), 8 (closed-window resolution), and 9
+  (batch recovery + D4 handoff) — task 7 is sensor lead; the host-stats probe
+  built in task 2 is the shared seam and task 7's pure evaluator is the one
+  interpretation tasks 8/9 and D4 consume.
 - The lock threading into `run-all` and direct `quorum run` ships with
   task 9's CLI threading (it is meaningless before task 8 exists to hold
   it).
@@ -2772,11 +2938,13 @@ in task 8). Requirements in parentheses.
      `aborted` → `campaign_cancelled` last); a subsequent `campaign run`
      refuses to resume, citing the cancel-request.
 - E7, the ENOSPC fail-stop override (Decision D-13), and the additive
-  D1-schema amendments (the contract-additions list) are ratified with Drew
-  after the narrow verify pass (or the dependent tests stay gated).
+  D1-schema amendments (the contract-additions list) were RATIFIED
+  2026-08-26 (with the OQ-11 second-round amendment); the dependent tests
+  are ungated.
 - D4 is handed, unblocked: the journal read API + instance-aware
-  materialized tables, the sealer-writer API, the contention sidecar +
-  coverage predicate + frozen sampler parameters, the pre-seal
-  `verifySnapshot` call site with refuse-to-seal handling, the typed-
-  failure accounting inputs, and the budget/amendment trail with the
+  materialized tables, the sealer-writer API, authoritative landed contention
+  mints + the sidecar and shared pure evaluator for integrity audit and only
+  the open-at-end/unknown-coverage backstop, the frozen sampler parameters,
+  the pre-seal `verifySnapshot` call site with refuse-to-seal handling, the
+  typed-failure accounting inputs, and the budget/amendment trail with the
   never-resurrects pin (Interfaces handed to D4).
