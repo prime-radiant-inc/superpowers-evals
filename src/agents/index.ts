@@ -42,9 +42,9 @@ export interface RunHome {
    *  so provisioning can consume per-scenario config fragments (e.g. codex's
    *  codex.config.toml). Undefined when the run has no scenario dir. */
   readonly scenarioDir?: string | undefined;
-  /** Kernel D2 threading: the run's superpowers spec. Undefined = legacy
-   *  ambient behavior; {mode:'none'} = explicit suppression; {mode:'root'} =
-   *  the threaded, already-materialized root. Adapters consume it through
+  /** The run's superpowers spec. Undefined = legacy ambient behavior;
+   *  {mode:'none'} = explicit suppression; {mode:'root'} = the threaded,
+   *  already-materialized root. Adapters consume it through
    *  resolveSuperpowersRoot(home) — never getEnv directly. */
   readonly superpowers?: import('./superpowers.ts').SuperpowersSpec | undefined;
 }
@@ -353,10 +353,9 @@ const CUSTOM_AGENTS: Readonly<
 
 /** Per-family superpowers mode capability. Absence means unsupported —
  *  default-deny: a YAML claim could drift from implementation, and a false
- *  "supported" claim is the "up and lying" failure class. D2 flags claude
- *  only, after its two-mode live smoke; each further adapter's flip is a
- *  platform PR carrying the same smoke, landed before the qualification
- *  campaign. */
+ *  "supported" claim is the "up and lying" failure class. A family is
+ *  flagged only after a two-mode live smoke; each flip is a platform PR
+ *  carrying the same smoke, landed before the qualification campaign. */
 export interface SuperpowersCapability {
   readonly ref: boolean;
   readonly none: boolean;
@@ -390,7 +389,7 @@ export function superpowersCapability(
   return SUPERPOWERS_CAPABILITY[family] ?? { ref: false, none: false };
 }
 
-/** Scoped test seam (kernel D2): temporarily seed the capability registry for
+/** Scoped test seam: temporarily seed the capability registry for
  *  `body`, restoring the prior registry afterward — even on throw.
  *  Production code never calls this (the setAgyWhichForTesting precedent,
  *  body-scoped so a test can never leak a seeded entry); it exists because the
@@ -412,8 +411,8 @@ export function withSuperpowersCapabilityForTesting(
 
 /** Resolve the agent implementation for a config.
  *
- *  - `os === 'linux'` (default) → today's resolution: ClaudeAgent for the
- *    claude family, registered custom adapters by name, else DefaultAgent.
+ *  - `os === 'linux'` (default) → the standard resolution: ClaudeAgent for
+ *    the claude family, registered custom adapters by name, else DefaultAgent.
  *  - `os === 'windows'` + family `claude` → WindowsClaudeAgent using
  *    `osTarget.remote`.
  *  - `os !== 'linux'` + any other family → throws ProvisionError.

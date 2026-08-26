@@ -906,13 +906,18 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
     withEnv(
       { SUPERPOWERS_ROOT: undefined, PI_API_KEY_FIXTURE: 'd2-key' },
       () => {
-        expect(() =>
+        let err: unknown;
+        try {
           new PiAgent(piConfig()).provision(
             home,
             stubRunner,
             makeApiKeyCredential(),
-          ),
-        ).toThrow(
+          );
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(ProvisionError);
+        expect((err as ProvisionError).message).toBe(
           'SUPERPOWERS_ROOT not set; cannot load Pi Superpowers extension',
         );
       },

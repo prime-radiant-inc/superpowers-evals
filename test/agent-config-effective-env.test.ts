@@ -29,9 +29,10 @@ function withEnv(
   }
 }
 
-// Minimal valid claude-family YAML (claude requires default_credential and a
-// non-blank model — see test/agent-config.test.ts's fixtures), with the
-// caller's required_env list.
+// Minimal valid claude-family YAML (claude requires default_credential;
+// model is optional, but a declared blank model is rejected — see
+// test/agent-config.test.ts's fixtures), with the caller's required_env
+// list.
 function agentDir(requiredEnv: readonly string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'agents-'));
   writeFileSync(

@@ -1401,12 +1401,17 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   const { home, cleanup } = makeTempHome();
   try {
     withRoot(undefined, () => {
-      expect(() =>
+      let err: unknown;
+      try {
         new AntigravityAgent(ANTIGRAVITY_CONFIG).provision(
           home,
           new FakeCommandRunner(happyResponder),
-        ),
-      ).toThrow(
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProvisionError);
+      expect((err as ProvisionError).message).toBe(
         'SUPERPOWERS_ROOT not set; cannot install antigravity Superpowers plugin',
       );
     });

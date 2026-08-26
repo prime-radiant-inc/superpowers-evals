@@ -511,8 +511,16 @@ Semantics:
   agent-family-specific flags pointing at the threaded root
   (`--plugin-dir <root>` for claude/serf; `--extension <root> --skill
   <root>/skills` for pi); none → the flags are **elided** (never
-  empty-substituted); undefined → today's expansion (legacy,
-  byte-identical). Touch list: `coding-agents/{claude,serf,pi}-context/launch-agent`.
+  empty-substituted); undefined → the legacy expansion. Legacy byte-identity
+  is literal for claude/serf; pi carries a human-ruled normalization: its two
+  superpowers flags, previously split around `--extension "$PI_SUBAGENTS_PKG"`
+  and `--no-skills`, are reordered contiguous so the single splice can
+  reproduce them — argv-equivalent, because pi's parser is order-inert across
+  these flags (`--skill` appends to the CLI skill list and always merges,
+  `--no-skills` gates only *discovered* skills, and extension relative order
+  is preserved; parser-inertness evidence in the T5 fix report's read of pi's
+  `dist/cli/args.js` / `dist/core/resource-loader.js`). Touch list:
+  `coding-agents/{claude,serf,pi}-context/launch-agent`.
 - Threading sites (explicit-wins at each):
   1. **All ten adapters** — consume `home.superpowers` via
      `resolveSuperpowersRoot` per Decision D-3: the nine `CUSTOM_AGENTS`

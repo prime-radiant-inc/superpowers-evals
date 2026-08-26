@@ -1631,9 +1631,14 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
       { SUPERPOWERS_ROOT: undefined, CODEX_B4_TEST_API_KEY: 'd2-key' },
       () => {
         const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
-        expect(() =>
-          agent.provision(home, unusedRunner(), makeApiKeyCredential()),
-        ).toThrow(
+        let err: unknown;
+        try {
+          agent.provision(home, unusedRunner(), makeApiKeyCredential());
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(ProvisionError);
+        expect((err as ProvisionError).message).toBe(
           'SUPERPOWERS_ROOT not set; cannot install codex plugin hooks',
         );
       },

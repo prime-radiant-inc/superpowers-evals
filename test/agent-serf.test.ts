@@ -445,9 +445,14 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   const { home, cleanup } = makeTempHome();
   try {
     withEnv(undefined, () => {
-      expect(() =>
-        new SerfAgent(serfConfig()).provision(home, new FakeCommandRunner()),
-      ).toThrow(
+      let err: unknown;
+      try {
+        new SerfAgent(serfConfig()).provision(home, new FakeCommandRunner());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProvisionError);
+      expect((err as ProvisionError).message).toBe(
         'SUPERPOWERS_ROOT not set; cannot point serf --plugin-dir at Superpowers',
       );
     });

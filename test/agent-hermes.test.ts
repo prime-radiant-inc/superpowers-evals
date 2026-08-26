@@ -395,13 +395,18 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   const { home, cleanup } = makeTempHome();
   try {
     withEnvVars({ SUPERPOWERS_ROOT: undefined }, () => {
-      expect(() =>
+      let err: unknown;
+      try {
         new HermesAgent(HERMES_CONFIG).provision(
           home,
           new FakeCommandRunner(),
           OPENROUTER_CRED,
-        ),
-      ).toThrow(
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProvisionError);
+      expect((err as ProvisionError).message).toBe(
         'SUPERPOWERS_ROOT not set; cannot stage the Superpowers plugin for Hermes',
       );
     });

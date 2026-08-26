@@ -37,35 +37,43 @@ function setEnv(name: string, value: string | undefined): void {
 }
 
 // Pin the ambient superpowers routing (SUPERPOWERS_ROOT plus the container
-// REV override) around `body`, snapshotting and restoring the prior host
-// values even on throw — these tests share one process, so a pin left
-// behind would leak into every later test's ambient read.
+// REV and DIRTY overrides) around `body`, snapshotting and restoring the
+// prior host values even on throw — these tests share one process, so a pin
+// left behind would leak into every later test's ambient read.
 async function withAmbient(
   root: string | undefined,
   rev: string | undefined,
+  dirty: string | undefined,
   body: () => void | Promise<void>,
 ): Promise<void> {
   // biome-ignore lint/style/noProcessEnv: snapshot the host value to restore in finally
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
   // biome-ignore lint/style/noProcessEnv: snapshot the host value to restore in finally
   const prevRev = process.env['QUORUM_SUPERPOWERS_REV'];
+  // biome-ignore lint/style/noProcessEnv: snapshot the host value to restore in finally
+  const prevDirty = process.env['QUORUM_SUPERPOWERS_DIRTY'];
   try {
     setEnv('SUPERPOWERS_ROOT', root);
     setEnv('QUORUM_SUPERPOWERS_REV', rev);
+    setEnv('QUORUM_SUPERPOWERS_DIRTY', dirty);
     await body();
   } finally {
     setEnv('SUPERPOWERS_ROOT', prevRoot);
     setEnv('QUORUM_SUPERPOWERS_REV', prevRev);
+    setEnv('QUORUM_SUPERPOWERS_DIRTY', prevDirty);
   }
 }
 
 // A rev-shaped value that is never any real repository's HEAD; set as the
-// REV override so a code path that wrongly consults it fails loudly.
+// REV override so a code path that wrongly consults it fails loudly. The
+// DIRTY override is pinned to the lying 'true' the same way: the explicit
+// modes probe clean fixture repos, so a path consulting hostDirty() flips
+// the assertion.
 const BOGUS_REV = 'deadbee0'.repeat(5);
 
-test('root mode: provenance reads the threaded root, ignoring ambient and the REV override', async () => {
+test('root mode: provenance reads the threaded root, ignoring ambient and the REV/DIRTY overrides', async () => {
   const { dir, sha } = tmpGitRepo();
-  await withAmbient('/ambient/elsewhere', BOGUS_REV, () => {
+  await withAmbient('/ambient/elsewhere', BOGUS_REV, 'true', () => {
     const p = collectProvenance({
       ...base,
       repoRoot: dir,
@@ -77,7 +85,7 @@ test('root mode: provenance reads the threaded root, ignoring ambient and the RE
 });
 
 test('none mode: rev and dirty are null even with ambient set', async () => {
-  await withAmbient('/ambient/elsewhere', BOGUS_REV, () => {
+  await withAmbient('/ambient/elsewhere', BOGUS_REV, 'true', () => {
     const p = collectProvenance({
       ...base,
       repoRoot: tmpGitRepo().dir,
@@ -90,7 +98,7 @@ test('none mode: rev and dirty are null even with ambient set', async () => {
 
 test('legacy: QUORUM_SUPERPOWERS_REV override still wins (unchanged)', async () => {
   const { dir } = tmpGitRepo();
-  await withAmbient(dir, 'deadbeef'.repeat(5), () => {
+  await withAmbient(dir, 'deadbeef'.repeat(5), undefined, () => {
     const p = collectProvenance({ ...base, repoRoot: dir });
     expect(p.superpowers_rev).toBe('deadbeef'.repeat(5));
   });
@@ -136,7 +144,7 @@ function expectLoudAtStart(
 }
 
 test('runScenario rejects QUORUM_SUPERPOWERS_REV under an explicit mode, before allocating a run dir', async () => {
-  await withAmbient(undefined, BOGUS_REV, () =>
+  await withAmbient(undefined, BOGUS_REV, undefined, () =>
     expectLoudAtStart(
       {
         scenarioDir: mkdtempSync(join(tmpdir(), 'scn-')),
@@ -150,7 +158,7 @@ test('runScenario rejects QUORUM_SUPERPOWERS_REV under an explicit mode, before 
 });
 
 test('runScenario rejects an explicit mode under a non-linux os, before allocating a run dir', async () => {
-  await withAmbient(undefined, undefined, () =>
+  await withAmbient(undefined, undefined, undefined, () =>
     expectLoudAtStart(
       {
         scenarioDir: mkdtempSync(join(tmpdir(), 'scn-')),
@@ -195,7 +203,12 @@ test('gauntletBinary: the version probe runs the supplied wrapper, never the PAT
     expect(existsSync(wrapperMarker)).toBe(true);
     expect(existsSync(pathMarker)).toBe(false);
   } finally {
-    // biome-ignore lint/style/noProcessEnv: restore the snapshotted host value
-    process.env['PATH'] = prevPath ?? '';
+    if (prevPath === undefined) {
+      // biome-ignore lint/style/noProcessEnv: restore the snapshotted host value
+      delete process.env['PATH'];
+    } else {
+      // biome-ignore lint/style/noProcessEnv: restore the snapshotted host value
+      process.env['PATH'] = prevPath;
+    }
   }
 });

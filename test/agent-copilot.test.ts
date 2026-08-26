@@ -1107,9 +1107,14 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
     withProvisionEnv(
       { ...clearedAuthEnv(), COPILOT_GITHUB_TOKEN: 'ghp_d2_missing' },
       () => {
-        expect(() =>
-          new CopilotAgent(CONFIG).provision(home, copilotPresentRunner()),
-        ).toThrow(
+        let err: unknown;
+        try {
+          new CopilotAgent(CONFIG).provision(home, copilotPresentRunner());
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(ProvisionError);
+        expect((err as ProvisionError).message).toBe(
           'SUPERPOWERS_ROOT not set; cannot install Copilot Superpowers plugin',
         );
       },

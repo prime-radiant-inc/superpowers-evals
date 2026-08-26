@@ -1660,12 +1660,17 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
         KIMI_MODEL_NAME: undefined,
       },
       () => {
-        expect(() =>
+        let err: unknown;
+        try {
           new KimiAgent(KIMI_CONFIG).provision(
             home,
             new FakeCommandRunner(happyResponder),
-          ),
-        ).toThrow(
+          );
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(ProvisionError);
+        expect((err as ProvisionError).message).toBe(
           'SUPERPOWERS_ROOT not set; cannot install Kimi Superpowers plugin',
         );
       },

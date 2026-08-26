@@ -1084,12 +1084,17 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   const { home, cleanup } = makeTempHome();
   try {
     withEnv({ GEMINI_API_KEY: API_KEY, SUPERPOWERS_ROOT: undefined }, () => {
-      expect(() =>
+      let err: unknown;
+      try {
         new GeminiAgent(CONFIG).provision(
           home,
           new FakeCommandRunner(successResponder(home.configDir)),
-        ),
-      ).toThrow(
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProvisionError);
+      expect((err as ProvisionError).message).toBe(
         'SUPERPOWERS_ROOT not set; cannot install Gemini Superpowers extension',
       );
     });

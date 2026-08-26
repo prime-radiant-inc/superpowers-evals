@@ -1,8 +1,8 @@
-// Kernel D2: the tri-state superpowers spec and the shared helpers every
-// consumption site uses. The three states are load-bearing and never
-// conflated: undefined = legacy ambient behavior (byte-identical to the
-// pre-D2 harness); {mode:'none'} = explicit suppression (a stock arm —
-// absence-of-env is NOT the none signal); {mode:'root'} = an explicit,
+// The tri-state superpowers spec and the shared helpers every consumption
+// site uses. The three states are load-bearing and never conflated:
+// undefined = legacy ambient behavior (byte-locked by the whole-body
+// launcher-equality tests); {mode:'none'} = explicit suppression (a stock
+// arm — absence-of-env is NOT the none signal); {mode:'root'} = an explicit,
 // already-materialized root (refs never reach the runner — Decision D-2).
 import { getEnv } from '../env.ts';
 import type { RunHome } from './index.ts';
@@ -12,7 +12,7 @@ export type SuperpowersSpec = { mode: 'none' } | { mode: 'root'; root: string };
 export type ResolvedSuperpowers =
   | { kind: 'none' } // explicit suppression — skip all staging
   | { kind: 'root'; root: string } // threaded root (explicit, or ambient legacy)
-  | { kind: 'missing' }; // legacy ambient absent — the pre-D2 hard-fail path
+  | { kind: 'missing' }; // legacy ambient absent — the adapter's hard-fail path
 
 /** The one tri-state helper all adapters consume (Decision D-3). */
 export function resolveSuperpowersRoot(home: RunHome): ResolvedSuperpowers {

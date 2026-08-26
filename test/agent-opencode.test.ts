@@ -1285,13 +1285,18 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   const { home, cleanup } = makeTempHome();
   try {
     withEnv(undefined, 'd2-key', () => {
-      expect(() =>
+      let err: unknown;
+      try {
         new OpenCodeAgent(OPENCODE_CONFIG, makeHappySpawn().spawn).provision(
           home,
           new FakeCommandRunner(happyResponder),
           makeCredential(),
-        ),
-      ).toThrow(
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProvisionError);
+      expect((err as ProvisionError).message).toBe(
         'SUPERPOWERS_ROOT not set; cannot install opencode Superpowers plugin',
       );
     });

@@ -359,6 +359,28 @@ test('run-child parser: --superpowers-root threads the explicit root', () => {
   expect(readSoleVerdict(r.outRoot).provenance.superpowers_rev).toBe(sha);
 });
 
+test('run-child parser: --no-superpowers runs stock — null rev, elided flags, no ambient demanded', () => {
+  const r = spawnQuorumRun(
+    [RUN_CHILD, '--credentials-file', REPO_CREDENTIALS],
+    ['--no-superpowers'],
+    // Present-but-empty ambient counts as missing: proves the child's none
+    // mode never demands the ambient channel.
+    { SUPERPOWERS_ROOT: '' },
+  );
+  expect(r.status).toBe(0);
+  const verdict = readSoleVerdict(r.outRoot);
+  expect(verdict.provenance.superpowers_rev).toBeNull();
+  const runDir = join(
+    r.outRoot,
+    readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))[0] ?? '',
+  );
+  const launcher = readFileSync(
+    join(runDir, 'gauntlet-agent', 'context', 'launch-agent'),
+    'utf8',
+  );
+  expect(launcher).not.toContain('--plugin-dir');
+});
+
 // Decision D-5's hostile test: a child spawned through a DIFFERENT checkout's
 // entrypoint must execute that checkout's content, not the originating one —
 // the instrument-snapshot mechanism rests on it. The second checkout is a

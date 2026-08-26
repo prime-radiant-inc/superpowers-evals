@@ -218,8 +218,9 @@ export function loadAgentConfig(
   const { path, cfg } = readAgentConfigFile(codingAgentsDir, name);
 
   // Loader validations, in order: name==stem, runtime_family known, claude
-  // requires a non-blank model, then required_env present. Each is a
-  // CodingAgentConfigError -> setup indeterminate.
+  // requires default_credential (a declared model must not be blank), then
+  // required_env present. Each is a CodingAgentConfigError -> setup
+  // indeterminate.
   validateAgentConfigStatic(path, cfg, name);
 
   // required_env must be set (a present-but-empty value counts as missing),
