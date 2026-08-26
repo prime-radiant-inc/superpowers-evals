@@ -362,8 +362,13 @@ export interface SuperpowersCapability {
   readonly none: boolean;
 }
 
-let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> =
-  {};
+let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
+  // Flipped by the D2 live smoke (2026-08-25): two-mode claude smoke passed
+  // — root-mode provenance readback + burned-in launcher path; none-mode
+  // null rev + elided plugin flags. Each further adapter's flip is a
+  // platform PR carrying the same two-mode live smoke.
+  claude: { ref: true, none: true },
+};
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()
  *  computes it. Takes the loaded AgentConfig (or an already-resolved family

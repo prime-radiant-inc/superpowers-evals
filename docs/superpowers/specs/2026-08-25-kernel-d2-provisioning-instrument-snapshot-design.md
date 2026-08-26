@@ -1,7 +1,7 @@
 # Kernel Deliverable 2 — Provisioning + Instrument Snapshot: Design
 
 **Date:** 2026-08-25
-**Status:** proposed — revision 2 (five-seat panel absorbed; review record: docs/experiments/2026-08-25-kernel-d2-spec-review.md)
+**Status:** implemented (pri-2952-kernel-d2 @ eeb0b40; main merge pending)
 **Parent spec:** `docs/superpowers/specs/2026-08-17-quorum-campaign-platform-design.md`
   (the campaign platform design; "the parent" below)
 **Prerequisite:** Kernel D1 contracts (merged to main @ `41b9e2b`; PRI-2944 done;
