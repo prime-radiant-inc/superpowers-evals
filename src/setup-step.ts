@@ -1,6 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  projectSuperpowersEnv,
+  type SuperpowersSpec,
+} from './agents/superpowers.ts';
 import { getEnv } from './env.ts';
 import { repoRoot } from './paths.ts';
 
@@ -28,7 +32,10 @@ export const SETUP_ENV_ALLOWLIST: readonly string[] = [
 /**
  * Run a scenario's `setup.sh` from `workdir` with `QUORUM_WORKDIR` set. The
  * subprocess environment is the {@link SETUP_ENV_ALLOWLIST} projection of the
- * host env overlaid with `QUORUM_*` vars and any `envExtra`.
+ * host env overlaid with `QUORUM_*` vars and any `envExtra`. An explicit
+ * `superpowers` spec is applied last: root overrides the allowlist's
+ * SUPERPOWERS_ROOT read; none strips it; undefined keeps the legacy ambient
+ * projection byte-identical.
  *
  * A missing `setup.sh` is a silent no-op; a spawn-level failure (e.g. a
  * non-executable file — `spawnSync` sets `proc.error` with `status` null) throws,
@@ -39,6 +46,7 @@ export function runSetup(
   scenarioDir: string,
   workdir: string,
   envExtra: Record<string, string> = {},
+  superpowers?: SuperpowersSpec | undefined,
 ): void {
   const script = join(scenarioDir, 'setup.sh');
   if (!existsSync(script)) {
@@ -51,18 +59,20 @@ export function runSetup(
   // its delegating CLIs.
   const root = repoRoot();
   const prelude = join(root, 'src', 'checks', 'prelude.sh');
+  const env = {
+    ...Object.fromEntries(
+      SETUP_ENV_ALLOWLIST.map((name) => [name, getEnv(name)]),
+    ),
+    BASH_ENV: prelude,
+    QUORUM_REPO_ROOT: root,
+    QUORUM_WORKDIR: workdir,
+    QUORUM_SCENARIO_DIR: scenarioDir,
+    ...envExtra,
+  };
+  projectSuperpowersEnv(superpowers, env);
   const proc = spawnSync(script, [], {
     cwd: workdir,
-    env: {
-      ...Object.fromEntries(
-        SETUP_ENV_ALLOWLIST.map((name) => [name, getEnv(name)]),
-      ),
-      BASH_ENV: prelude,
-      QUORUM_REPO_ROOT: root,
-      QUORUM_WORKDIR: workdir,
-      QUORUM_SCENARIO_DIR: scenarioDir,
-      ...envExtra,
-    },
+    env,
     encoding: 'utf8',
     // spawnSync defaults maxBuffer to 1 MB of stdout+stderr; a verbose-but-
     // successful setup.sh (git clone / bun install / uv sync routinely exceed

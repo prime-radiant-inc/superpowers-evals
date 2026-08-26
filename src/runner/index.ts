@@ -1457,10 +1457,15 @@ async function runInnerBody(
   // setup-helpers against it). QUORUM_CODING_AGENT lets agent-aware setup steps
   // (e.g. inject-user-preference) target the ambient instructions file THIS agent
   // honors, so scenarios stay harness-agnostic.
-  runSetup(a.scenarioDir, workdir, {
-    QUORUM_REPO_ROOT: repoRoot(),
-    QUORUM_CODING_AGENT: a.codingAgent,
-  });
+  runSetup(
+    a.scenarioDir,
+    workdir,
+    {
+      QUORUM_REPO_ROOT: repoRoot(),
+      QUORUM_CODING_AGENT: a.codingAgent,
+    },
+    a.superpowers,
+  );
   // Windows runtime: runSetup built the workdir locally; push it to the guest so
   // the SSH-launched agent works in it. (Local model: agent runs here, no push.)
   if (os !== 'linux' && remoteConfig !== undefined) {
@@ -1483,6 +1488,7 @@ async function runInnerBody(
     scenarioDir: a.scenarioDir,
     configDir,
     codingAgent: a.codingAgent,
+    superpowers: a.superpowers,
   });
   if (pre.exitCode !== 0) {
     return compose({
@@ -2073,6 +2079,7 @@ async function runInnerBody(
     scenarioDir: a.scenarioDir,
     configDir,
     codingAgent: a.codingAgent,
+    superpowers: a.superpowers,
   });
   if (post.exitCode !== 0) {
     return compose({

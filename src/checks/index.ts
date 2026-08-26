@@ -9,6 +9,10 @@ import {
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  projectSuperpowersEnv,
+  type SuperpowersSpec,
+} from '../agents/superpowers.ts';
+import {
   type CheckPhase,
   type CheckRecord,
   CheckRecordSchema,
@@ -65,6 +69,12 @@ export interface RunPhaseArgs {
    * exposed to checks as QUORUM_CODING_AGENT so a verb can dispatch per-agent.
    */
   readonly codingAgent?: string;
+  /**
+   * Optional: the run's superpowers spec, applied after the allowlist read —
+   * root overrides SUPERPOWERS_ROOT, none strips it; undefined keeps the
+   * legacy ambient projection untouched.
+   */
+  readonly superpowers?: SuperpowersSpec | undefined;
 }
 
 export interface RunPhaseResult {
@@ -131,6 +141,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
       ? { QUORUM_CODING_AGENT: args.codingAgent }
       : {}),
   };
+  projectSuperpowersEnv(args.superpowers, env);
 
   try {
     // Crash-band discipline (PRI-2494): a check verb that CRASHES (126/127/
