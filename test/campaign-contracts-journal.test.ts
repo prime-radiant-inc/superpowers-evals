@@ -31,8 +31,8 @@ test('the initial instrument-cause vocabulary covers the named grader causes', (
   expect(INSTRUMENT_CAUSES).toContain('grader_rate_limited');
 });
 
-test("the vocabulary holds the parent's 19 events plus campaign_cancelled", () => {
-  expect(JOURNAL_EVENT_TYPES).toHaveLength(20);
+test("the vocabulary holds the parent's 19 events, campaign_cancelled (E5), and quarantined (E7)", () => {
+  expect(JOURNAL_EVENT_TYPES).toHaveLength(21);
   for (const type of [
     'campaign_opened',
     'block_admitted',
@@ -53,6 +53,7 @@ test("the vocabulary holds the parent's 19 events plus campaign_cancelled", () =
     'aborted',
     'storage_paused',
     'campaign_cancelled',
+    'quarantined',
     'sealed',
   ] as const) {
     expect(JOURNAL_EVENT_TYPES).toContain(type);
