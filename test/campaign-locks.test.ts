@@ -1,15 +1,20 @@
 import { expect, test } from 'bun:test';
 import {
+  chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import {
   acquireLease,
   acquireLiveSpendLock,
@@ -18,13 +23,14 @@ import {
   defaultLiveSpendLockPath,
   formatLockToken,
   type HeartbeatScheduler,
+  type LeaseHandle,
   LockError,
   type ProcessIdentityProbe,
   parseLockToken,
   readLiveSpendHolder,
   realHeartbeatScheduler,
 } from '../src/campaign/locks.ts';
-import { deleteProcessEnv, setProcessEnv } from '../src/env.ts';
+import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
 import { FakeClock } from '../src/scheduler/clock.ts';
 
 class FakeIdentity implements ProcessIdentityProbe {
@@ -446,4 +452,288 @@ test('C8 unconditional release: a throwing heartbeat-cancel never leaks the held
   });
   expect(() => lease.release()).not.toThrow();
   expect(existsSync(lockPath)).toBe(false);
+});
+
+// --- Review fix round 1: 2 Critical + 5 Important --------------------------------
+
+test('Cr-1: a replacement landing DURING heartbeat is compensated — no stray token in the successor dir', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'hb-race-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  const workerFile = join(workdir, 'worker.ts');
+  // The worker holds the lease and swaps its token file for a FIFO, so its
+  // heartbeat() parks INSIDE the token read (real fs, real thread).
+  const workerScript = `
+    import { parentPort, workerData } from 'node:worker_threads';
+    import { rmSync } from 'node:fs';
+    import { spawnSync } from 'node:child_process';
+    import { acquireLease } from '${join(import.meta.dir, '..', 'src', 'campaign', 'locks.ts')}';
+    import { FakeClock } from '${join(import.meta.dir, '..', 'src', 'scheduler', 'clock.ts')}';
+    const { lockPath, birth } = workerData as { lockPath: string; birth: number };
+    const identity = { exists: () => 'alive' as const, startTimeMs: () => birth };
+    const lease = acquireLease({ lockPath, clock: new FakeClock(10), identity, label: 'test lease' });
+    rmSync(lease.ownerFile);
+    spawnSync('mkfifo', [lease.ownerFile]);
+    parentPort?.postMessage({ kind: 'fifo-ready' });
+    try {
+      lease.heartbeat();
+      parentPort?.postMessage({ kind: 'done', threw: false });
+    } catch (err) {
+      parentPort?.postMessage({
+        kind: 'done',
+        threw: true,
+        name: (err as Error).name,
+        message: (err as Error).message,
+      });
+    } finally {
+      try {
+        lease.release();
+      } catch {}
+    }
+  `;
+  writeFileSync(workerFile, workerScript);
+  const worker = new Worker(workerFile, {
+    workerData: { lockPath, birth: BIRTH },
+  });
+  interface WorkerMsg {
+    kind: 'fifo-ready' | 'done';
+    threw?: boolean;
+    name?: string;
+  }
+  const waitFor = (kind: 'fifo-ready' | 'done') =>
+    new Promise<WorkerMsg>((resolve) => {
+      const on = (m: WorkerMsg) => {
+        if (m.kind === kind) {
+          worker.off('message', on);
+          resolve(m);
+        }
+      };
+      worker.on('message', on);
+    });
+  await waitFor('fifo-ready');
+  // The worker's heartbeat is parked: its pre-write lstat already saw the OLD
+  // directory; its token read blocks on the FIFO. Opening the write side
+  // returns only once the reader has the FIFO open — the barrier.
+  const ownerName = readdirSync(lockPath).find((e) => e.startsWith('owner-'))!;
+  const fd = openSync(join(lockPath, ownerName), 'w');
+  // The adversary replaces the directory WHILE the read is parked:
+  renameSync(lockPath, `${lockPath}.trash-cr1`);
+  mkdirSync(lockPath);
+  const successorName = 'owner-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const successorToken = formatLockToken({
+    pid: HOLDER_PID,
+    birth_ts_ms: BIRTH + 9,
+    last_heartbeat_ts_ms: 4_242,
+  });
+  writeFileSync(join(lockPath, successorName), successorToken);
+  // Release the parked read with the holder's own (still-valid) bytes, so the
+  // pre-write guard PASSES and the write lands inside the successor's dir:
+  writeSync(
+    fd,
+    formatLockToken({
+      pid: process.pid,
+      birth_ts_ms: BIRTH,
+      last_heartbeat_ts_ms: 10_000,
+    }),
+  );
+  closeSync(fd);
+  const result = await waitFor('done');
+  await worker.terminate();
+  expect(result.threw).toBe(true);
+  expect(result.name).toBe('LockError');
+  // The successor's directory must contain ONLY the successor's token: the
+  // old holder's mid-race publication was compensated away.
+  expect(readdirSync(lockPath).sort()).toEqual([successorName]);
+  expect(readFileSync(join(lockPath, successorName), 'utf8')).toBe(
+    successorToken,
+  );
+}, 15_000);
+
+test("Cr-2: a delayed stale contender never severs the successor's fresh dir", () => {
+  const lockPath = tmpLockPath();
+  const clock = new FakeClock(10);
+  clock.advance(200);
+  plantStaleHolder(lockPath, 10_000);
+  const plain = new FakeIdentity();
+  plain.set(process.pid, 'alive', BIRTH);
+  plain.set(HOLDER_PID, 'esrch', null);
+  let successor: LeaseHandle | null = null;
+  let raced = false;
+  // The delayed contender's identity probe is the interleave point: the
+  // quick contender severs the dead holder and acquires WHILE the delayed
+  // one sits between its observation and its sever.
+  const delayed: ProcessIdentityProbe = {
+    exists: (pid) => {
+      if (pid === HOLDER_PID && !raced) {
+        raced = true;
+        successor = acquireLease({
+          lockPath,
+          clock,
+          identity: plain,
+          label: 'successor lease',
+        });
+      }
+      return plain.exists(pid);
+    },
+    startTimeMs: (pid) => plain.startTimeMs(pid),
+  };
+  expect(() =>
+    acquireLease({ lockPath, clock, identity: delayed, label: 'test lease' }),
+  ).toThrow(LockError);
+  expect(successor).not.toBeNull();
+  expect(existsSync(successor!.ownerFile)).toBe(true); // never severed
+  successor!.release();
+});
+
+test('I2a+b: ambiguous or corrupt holder tokens refuse loudly', () => {
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  // (a) two canonical owner tokens = ambiguous holder state
+  const two = tmpLockPath();
+  mkdirSync(two);
+  writeFileSync(
+    join(two, 'owner-00000000-0000-4000-8000-000000000000'),
+    formatLockToken({ pid: 1, birth_ts_ms: 1, last_heartbeat_ts_ms: 1 }),
+  );
+  writeFileSync(
+    join(two, 'owner-11111111-1111-4111-8111-111111111111'),
+    formatLockToken({ pid: 2, birth_ts_ms: 2, last_heartbeat_ts_ms: 2 }),
+  );
+  expect(() =>
+    acquireLease({
+      lockPath: two,
+      clock: new FakeClock(10),
+      identity,
+      label: 'test lease',
+    }),
+  ).toThrow(/multiple owner tokens/i);
+  // (b) exactly one owner token whose body is garbage
+  const corrupt = tmpLockPath();
+  mkdirSync(corrupt);
+  writeFileSync(
+    join(corrupt, 'owner-00000000-0000-4000-8000-000000000000'),
+    'garbage',
+  );
+  expect(() =>
+    acquireLease({
+      lockPath: corrupt,
+      clock: new FakeClock(10),
+      identity,
+      label: 'test lease',
+    }),
+  ).toThrow(/unparseable/i);
+});
+
+test('I5: no absolute lock path available refuses loudly', () => {
+  const hadHome = getEnv('HOME');
+  const hadOverride = getEnv('QUORUM_LIVE_SPEND_LOCK');
+  try {
+    deleteProcessEnv('HOME');
+    deleteProcessEnv('QUORUM_LIVE_SPEND_LOCK');
+    expect(() => defaultLiveSpendLockPath()).toThrow(LockError);
+    setProcessEnv('QUORUM_LIVE_SPEND_LOCK', 'relative/lock.d');
+    expect(() => defaultLiveSpendLockPath()).toThrow(/absolute/i);
+    setProcessEnv('QUORUM_LIVE_SPEND_LOCK', '/tmp/abs-lock.d');
+    expect(defaultLiveSpendLockPath()).toBe('/tmp/abs-lock.d');
+    setProcessEnv('HOME', 'relative/home');
+    deleteProcessEnv('QUORUM_LIVE_SPEND_LOCK');
+    expect(() => defaultLiveSpendLockPath()).toThrow(/absolute/i);
+  } finally {
+    if (hadHome === undefined) deleteProcessEnv('HOME');
+    else setProcessEnv('HOME', hadHome);
+    if (hadOverride === undefined) deleteProcessEnv('QUORUM_LIVE_SPEND_LOCK');
+    else setProcessEnv('QUORUM_LIVE_SPEND_LOCK', hadOverride);
+  }
+});
+
+test('I3: release surfaces cleanup failure loudly and stays retryable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rel-'));
+  const lockPath = join(dir, 'test.lock.d');
+  const clock = new FakeClock(10);
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const lease = acquireLease({
+    lockPath,
+    clock,
+    identity,
+    label: 'test lease',
+  });
+  chmodSync(dir, 0o500); // block the severing rename: the parent is unwritable
+  try {
+    expect(() => lease.release()).toThrow(/cannot sever|still held/i);
+    // The handle stays retryable and the lease genuinely still held:
+    // heartbeats keep proving ownership.
+    clock.advance(5);
+    expect(() => lease.heartbeat()).not.toThrow();
+    expect(
+      parseLockToken(readFileSync(lease.ownerFile, 'utf8'))!
+        .last_heartbeat_ts_ms,
+    ).toBe(15_000);
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  lease.release();
+  expect(existsSync(lockPath)).toBe(false);
+});
+
+test('I4: campaign-id sidecar failure rolls the lease back — heartbeat stopped, path absent', () => {
+  const lockPath = tmpLockPath();
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const beats: (() => void)[] = [];
+  const scheduler: HeartbeatScheduler = {
+    every(_ms, cb) {
+      chmodSync(lockPath, 0o500); // deterministic sidecar-write failure
+      beats.push(cb);
+      return () => {};
+    },
+  };
+  expect(() =>
+    acquireLiveSpendLock({
+      lockPath,
+      campaignId: 'abc123',
+      clock: new FakeClock(5),
+      identity,
+      scheduler,
+    }),
+  ).toThrow(/EACCES/);
+  expect(existsSync(lockPath)).toBe(false); // the lease unwound fully
+  expect(beats).toHaveLength(1);
+  beats[0]!(); // a beat after the rollback must be a no-op
+  expect(existsSync(lockPath)).toBe(false);
+});
+
+test('I1: empty-dir polling terminates under a frozen FakeClock and acquires', () => {
+  const lockPath = tmpLockPath();
+  mkdirSync(lockPath); // a contender "mid-acquire" whose token never lands
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const lease = acquireLease({
+    lockPath,
+    clock: new FakeClock(10),
+    identity,
+    label: 'test lease',
+  });
+  expect(existsSync(lease.ownerFile)).toBe(true);
+  lease.release();
+  expect(existsSync(lockPath)).toBe(false);
+});
+
+test('I2c: an unreadable lock dir is never judged blind', () => {
+  const lockPath = tmpLockPath();
+  plantStaleHolder(lockPath, 10_000);
+  chmodSync(lockPath, 0o000);
+  try {
+    const identity = new FakeIdentity();
+    identity.set(process.pid, 'alive', BIRTH);
+    expect(() =>
+      acquireLease({
+        lockPath,
+        clock: new FakeClock(210),
+        identity,
+        label: 'test lease',
+      }),
+    ).toThrow(/cannot inspect/i);
+  } finally {
+    chmodSync(lockPath, 0o700);
+  }
 });
