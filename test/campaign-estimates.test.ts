@@ -247,3 +247,114 @@ test('generated_at is max finished_at; serialization is byte-stable', () => {
   expect(serializeEstimates(a1)).toBe(serializeEstimates(a2));
   expect(serializeEstimates(a1).endsWith('\n')).toBe(true);
 });
+
+test('tokens_total_median: median over observed sidecar volumes at every tier; absent when unobserved', () => {
+  const inputs: EstimateInput[] = [
+    {
+      record: rec({ run_id: 't1', wall_ms: 100_000 }),
+      finished_at: '2026-08-08T01:00:00.000Z',
+      tokens_total: 100_000,
+    },
+    {
+      record: rec({ run_id: 't2', wall_ms: 300_000 }),
+      finished_at: '2026-08-08T01:00:00.000Z',
+      tokens_total: 300_000,
+    },
+    {
+      record: rec({ run_id: 't3', wall_ms: 500_000 }),
+      finished_at: '2026-08-08T01:00:00.000Z',
+      tokens_total: null,
+    },
+  ];
+  const art = buildEstimates(inputs, { sources: ['fixture'] });
+  // One group at every tier; the median skips the null observation.
+  expect(art.entries[0]!.tokens_total_median).toBe(200_000);
+  expect(art.fallbacks.scenario_agent[0]!.tokens_total_median).toBe(200_000);
+  expect(art.fallbacks.scenario[0]!.tokens_total_median).toBe(200_000);
+  expect(art.fallbacks.corpus_median.tokens_total_median).toBe(200_000);
+
+  // Absent when no run observed a volume — the key is omitted, never 0
+  // (a zero-volume would price an override at $0).
+  const none = buildEstimates(
+    [
+      {
+        record: rec({ run_id: 'n1' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: null,
+      },
+    ],
+    { sources: ['fixture'] },
+  );
+  expect('tokens_total_median' in none.entries[0]!).toBe(false);
+  expect(none.fallbacks.corpus_median.tokens_total_median).toBeUndefined();
+
+  // The optional field survives the pinned serialization + schema parse in
+  // both directions (present and absent).
+  const back = EstimatesArtifactSchema.parse(
+    JSON.parse(serializeEstimates(art)),
+  );
+  expect(back.entries[0]!.tokens_total_median).toBe(200_000);
+  expect(
+    EstimatesArtifactSchema.parse(JSON.parse(serializeEstimates(none)))
+      .entries[0]!.tokens_total_median,
+  ).toBeUndefined();
+
+  // First-wins run_id dedupe applies to the token volume too.
+  const dup = buildEstimates(
+    [
+      {
+        record: rec({ run_id: 'd' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: 100,
+      },
+      {
+        record: rec({ run_id: 'd' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: 900,
+      },
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(dup.entries[0]!.tokens_total_median).toBe(100);
+});
+
+test('lookupEstimate surfaces tokens_total_median through the fallback chain', () => {
+  const inputs: EstimateInput[] = [
+    {
+      record: rec({ run_id: 'a', wall_ms: 100_000 }),
+      finished_at: '2026-08-08T01:00:00.000Z',
+      tokens_total: 111_000,
+    },
+    {
+      record: rec({ run_id: 'b', credential: 'other_cred', wall_ms: 300_000 }),
+      finished_at: '2026-08-08T01:00:00.000Z',
+      tokens_total: 222_000,
+    },
+  ];
+  const art = buildEstimates(inputs, { sources: ['fixture'] });
+  const direct = lookupEstimate(art, {
+    scenario: 'sdd-escalates',
+    agent: 'claude',
+    credential: 'opus_bedrock',
+    os: 'linux',
+  });
+  expect(direct.tokens_total_median).toBe(111_000);
+  // Unknown credential on a known scenario×agent: scenario_agent tier.
+  const sa = lookupEstimate(art, {
+    scenario: 'sdd-escalates',
+    agent: 'claude',
+    credential: 'never_seen',
+    os: 'linux',
+  });
+  expect(sa.tier).toBe('scenario_agent');
+  expect(sa.tokens_total_median).toBe((111_000 + 222_000) / 2);
+  // Unknown scenario: corpus tier.
+  const corpus = lookupEstimate(art, {
+    scenario: 'nope',
+    agent: 'gemini',
+    credential: 'x',
+    os: 'linux',
+  });
+  expect(corpus.tier).toBe('corpus');
+  expect(corpus.tokens_total_median).toBe((111_000 + 222_000) / 2);
+});

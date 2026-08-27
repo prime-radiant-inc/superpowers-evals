@@ -9,6 +9,13 @@ export const EstimateStatsSchema = z.object({
   cost_grader_usd_median: z.number().nullable(),
   cost_total_usd_median: z.number().nullable(),
   priced_n: z.number().int().nonnegative(),
+  /** Token-volume median over the group's runs (sidecar
+   *  coding-agent-token-usage.json total_tokens) — the C3 pricing-override
+   *  volume source (2026-08-27 operator ruling). Optional and additive:
+   *  artifacts predating token capture stay valid; absent means "no
+   *  observed volume", and a per-token override without a volume cannot
+   *  price (fail-closed at registration). */
+  tokens_total_median: z.number().optional(),
   spread_s: z.object({ p25: z.number(), p75: z.number() }),
   confidence: z.enum(['high', 'medium', 'low']),
 });
@@ -53,6 +60,7 @@ export const EstimatesArtifactSchema = z.object({
     corpus_median: z.object({
       duration_s: z.number(),
       cost_total_usd: z.number().nullable(),
+      tokens_total_median: z.number().optional(),
     }),
   }),
 });

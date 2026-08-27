@@ -676,3 +676,39 @@ test('campaign estimates --inclusion rejects malformed entries loudly (non-strin
   rmSync(results, { recursive: true });
   rmSync(corpus, { recursive: true });
 });
+
+test('campaign estimates reads token volumes from the coding-agent sidecar (C3 pricing source)', () => {
+  const { corpus, manifest } = fixture();
+  // Both corpus runs share one estimates group; give each a real token
+  // volume (writeRun seeds an unreadable '{}' sidecar — tolerance case).
+  writeFileSync(
+    join(corpus, 'run-base', 'coding-agent-token-usage.json'),
+    JSON.stringify({
+      total_input: 90_000,
+      total_output: 10_000,
+      total_tokens: 100_000,
+    }),
+  );
+  writeFileSync(
+    join(corpus, 'run-treat', 'coding-agent-token-usage.json'),
+    JSON.stringify({ total_tokens: 300_000 }),
+  );
+  const estimatesPath = join(corpus, 'estimates-tokens.json');
+  const est = run([
+    'campaign',
+    'estimates',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--out',
+    estimatesPath,
+  ]);
+  expect(est.status).toBe(0);
+  const art = JSON.parse(readFileSync(estimatesPath, 'utf8'));
+  // One entry group: median of the two observed volumes.
+  expect(art.entries).toHaveLength(1);
+  expect(art.entries[0].tokens_total_median).toBe(200_000);
+  expect(art.fallbacks.corpus_median.tokens_total_median).toBe(200_000);
+  rmSync(corpus, { recursive: true });
+});

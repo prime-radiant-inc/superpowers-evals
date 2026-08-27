@@ -200,6 +200,25 @@ function scanAndPrintInclusion(resultsRoot: string): void {
   );
 }
 
+/** Token volume for one run (C3 pricing overrides): the frozen sidecar's
+ *  total_tokens. Tolerant by design — a corpus predating token capture is
+ *  legitimate history, so an absent/unreadable sidecar reads as null,
+ *  never an error. */
+function readTokensTotal(runDir: string): number | null {
+  try {
+    const raw: unknown = JSON.parse(
+      readFileSync(join(runDir, 'coding-agent-token-usage.json'), 'utf8'),
+    );
+    if (typeof raw !== 'object' || raw === null) return null;
+    const tokens = (raw as Record<string, unknown>)['total_tokens'];
+    return typeof tokens === 'number' && Number.isFinite(tokens)
+      ? tokens
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function campaignEstimates(opts: CampaignEstimatesOptions): void {
   try {
     // Scan-only mode: --scan-results without --inclusion prints the
@@ -232,7 +251,11 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
       const verdict = JSON.parse(
         readFileSync(join(corpus, record.run_id, 'verdict.json'), 'utf8'),
       ) as { finished_at: string };
-      return { record, finished_at: verdict.finished_at };
+      return {
+        record,
+        finished_at: verdict.finished_at,
+        tokens_total: readTokensTotal(join(corpus, record.run_id)),
+      };
     });
     if (opts.inclusion !== undefined) {
       const inclusion = parseInclusion(opts.inclusion);
@@ -294,6 +317,7 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
               record.credential,
           },
           finished_at: verdict.finished_at,
+          tokens_total: readTokensTotal(dir),
         });
       }
     }

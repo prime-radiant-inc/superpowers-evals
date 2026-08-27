@@ -10,6 +10,11 @@ import type { ReplayRecord } from '../contracts/replay.ts';
 export interface EstimateInput {
   record: ReplayRecord;
   finished_at: string;
+  /** The run's coding-agent token volume (coding-agent-token-usage.json
+   *  total_tokens) — the C3 pricing-override volume source. Null when the
+   *  sidecar is absent or unreadable: pre-token corpora are legitimate
+   *  history, never an error. */
+  tokens_total?: number | null;
 }
 
 export type EstimateTier =
@@ -21,9 +26,16 @@ export type EstimateTier =
 export interface EstimateLookup {
   duration_s: number;
   cost_total_usd: number | null;
+  /** Token-volume median at the resolved tier; null when that tier
+   *  observed no volumes. A per-token pricing override needs this to
+   *  price (fail-closed when absent). */
+  tokens_total_median: number | null;
   tier: EstimateTier;
   confidence: 'high' | 'medium' | 'low' | null;
 }
+
+/** A record plus its observed token volume — the grouping input. */
+type EstimateRow = ReplayRecord & { tokens_total: number | null };
 
 type EntryFields = Pick<
   ReplayRecord,
@@ -97,21 +109,23 @@ function confidence(durationN: number): 'high' | 'medium' | 'low' {
 
 /** statsOf is only ever called on non-empty record groups, so the indexed
  *  reads below are in range. */
-function statsOf(records: ReplayRecord[]): EstimateStats {
-  const durations = records.map((r) => r.wall_ms / 1000).sort((a, b) => a - b);
+function statsOf(rows: EstimateRow[]): EstimateStats {
+  const durations = rows.map((r) => r.wall_ms / 1000).sort((a, b) => a - b);
   const n = durations.length;
   const mid = Math.floor(n / 2);
   const lower = durations.slice(0, mid);
   const upper = durations.slice(n % 2 === 1 ? mid + 1 : mid);
+  const tokensMedian = medianOrNull(rows.map((r) => r.tokens_total));
   return {
     duration_s_median: median(durations),
     duration_n: n,
-    cost_subject_usd_median: medianOrNull(
-      records.map((r) => r.cost_subject_usd),
-    ),
-    cost_grader_usd_median: medianOrNull(records.map((r) => r.cost_grader_usd)),
-    cost_total_usd_median: medianOrNull(records.map((r) => r.cost_total_usd)),
-    priced_n: records.filter((r) => r.cost_total_usd !== null).length,
+    cost_subject_usd_median: medianOrNull(rows.map((r) => r.cost_subject_usd)),
+    cost_grader_usd_median: medianOrNull(rows.map((r) => r.cost_grader_usd)),
+    cost_total_usd_median: medianOrNull(rows.map((r) => r.cost_total_usd)),
+    priced_n: rows.filter((r) => r.cost_total_usd !== null).length,
+    // Omitted when unobserved — absent, never 0, so an override can never
+    // price at $0 off a missing volume.
+    ...(tokensMedian !== null ? { tokens_total_median: tokensMedian } : {}),
     spread_s:
       n < 4
         ? { p25: durations[0] as number, p75: durations[n - 1] as number }
@@ -124,7 +138,7 @@ function statsOf(records: ReplayRecord[]): EstimateStats {
  *  field is ever recovered by splitting a packed string. */
 interface Group<K extends string[]> {
   tuple: K;
-  records: ReplayRecord[];
+  records: EstimateRow[];
 }
 
 /** Groups records by an arbitrary string tuple. The Map id is the tuple's
@@ -132,11 +146,11 @@ interface Group<K extends string[]> {
  *  ones containing NUL or boundary-blurring characters) can never collapse
  *  into one group. */
 function byKey<K extends string[]>(
-  records: ReplayRecord[],
-  keyOf: (r: ReplayRecord) => K,
+  rows: EstimateRow[],
+  keyOf: (r: EstimateRow) => K,
 ): Map<string, Group<K>> {
   const groups = new Map<string, Group<K>>();
-  for (const r of records) {
+  for (const r of rows) {
     const tuple = keyOf(r);
     const id = JSON.stringify(tuple);
     const g = groups.get(id);
@@ -152,30 +166,28 @@ export function buildEstimates(
 ): EstimatesArtifact {
   // Merge rule: union by run_id, first input wins; duplicates counted out.
   const seen = new Set<string>();
-  const records: ReplayRecord[] = [];
+  const rows: EstimateRow[] = [];
   const finishedAts: string[] = [];
   let duplicatesExcluded = 0;
-  for (const { record, finished_at } of inputs) {
+  for (const { record, finished_at, tokens_total } of inputs) {
     if (seen.has(record.run_id)) {
       duplicatesExcluded++;
       continue;
     }
     seen.add(record.run_id);
-    records.push(record);
+    rows.push({ ...record, tokens_total: tokens_total ?? null });
     finishedAts.push(finished_at);
   }
-  if (records.length === 0) throw new Error('buildEstimates: no inputs');
+  if (rows.length === 0) throw new Error('buildEstimates: no inputs');
 
-  const entries: EstimateEntry[] = [...byKey(records, entryTuple).values()]
+  const entries: EstimateEntry[] = [...byKey(rows, entryTuple).values()]
     .map(({ tuple, records: rs }): EstimateEntry => {
       const [scenario, agent, credential, os] = tuple;
       return { scenario, agent, credential, os, ...statsOf(rs) };
     })
     .sort((a, b) => cmpTuple(entryTuple(a), entryTuple(b)));
 
-  const scenarioAgent: ScenarioAgentStats[] = [
-    ...byKey(records, saTuple).values(),
-  ]
+  const scenarioAgent: ScenarioAgentStats[] = [...byKey(rows, saTuple).values()]
     .map(({ tuple, records: rs }): ScenarioAgentStats => {
       const [scenario, agent] = tuple;
       return { scenario, agent, ...statsOf(rs) };
@@ -183,7 +195,7 @@ export function buildEstimates(
     .sort((a, b) => cmpTuple(saTuple(a), saTuple(b)));
 
   const scenario: ScenarioStats[] = [
-    ...byKey(records, (r): [string] => [r.scenario]).values(),
+    ...byKey(rows, (r): [string] => [r.scenario]).values(),
   ]
     .map(
       ({ tuple, records: rs }): ScenarioStats => ({
@@ -195,15 +207,16 @@ export function buildEstimates(
 
   const digest = Bun.SHA256.hash([...seen].sort().join('\n'), 'hex');
   const generatedAt = finishedAts.sort().at(-1);
-  // records is non-empty here, so finishedAts is too.
+  // rows is non-empty here, so finishedAts is too.
   if (generatedAt === undefined) throw new Error('buildEstimates: no inputs');
 
+  const corpusStats = statsOf(rows);
   return {
     schema_version: 'quorum.estimates/v1',
     generated_at: generatedAt,
     corpus: {
       sources: opts.sources,
-      run_count: records.length,
+      run_count: rows.length,
       duplicates_excluded: duplicatesExcluded,
       digest,
     },
@@ -212,13 +225,15 @@ export function buildEstimates(
       scenario_agent: scenarioAgent,
       scenario,
       corpus_median: {
-        duration_s: statsOf(records).duration_s_median,
-        cost_total_usd: medianOrNull(records.map((r) => r.cost_total_usd)),
+        duration_s: corpusStats.duration_s_median,
+        cost_total_usd: medianOrNull(rows.map((r) => r.cost_total_usd)),
+        ...(corpusStats.tokens_total_median !== undefined
+          ? { tokens_total_median: corpusStats.tokens_total_median }
+          : {}),
       },
     },
   };
 }
-
 export function lookupEstimate(
   artifact: EstimatesArtifact,
   key: { scenario: string; agent: string; credential: string; os: string },
@@ -234,6 +249,7 @@ export function lookupEstimate(
     return {
       duration_s: direct.duration_s_median,
       cost_total_usd: direct.cost_total_usd_median,
+      tokens_total_median: direct.tokens_total_median ?? null,
       tier: 'scenario_agent_credential_os',
       confidence: direct.confidence,
     };
@@ -245,6 +261,7 @@ export function lookupEstimate(
     return {
       duration_s: sa.duration_s_median,
       cost_total_usd: sa.cost_total_usd_median,
+      tokens_total_median: sa.tokens_total_median ?? null,
       tier: 'scenario_agent',
       confidence: sa.confidence,
     };
@@ -256,6 +273,7 @@ export function lookupEstimate(
     return {
       duration_s: sc.duration_s_median,
       cost_total_usd: sc.cost_total_usd_median,
+      tokens_total_median: sc.tokens_total_median ?? null,
       tier: 'scenario',
       confidence: sc.confidence,
     };
@@ -263,6 +281,8 @@ export function lookupEstimate(
   return {
     duration_s: artifact.fallbacks.corpus_median.duration_s,
     cost_total_usd: artifact.fallbacks.corpus_median.cost_total_usd,
+    tokens_total_median:
+      artifact.fallbacks.corpus_median.tokens_total_median ?? null,
     tier: 'corpus',
     confidence: null,
   };
