@@ -1275,3 +1275,348 @@ test('buildContentionBlock freezes G, thresholds, sampler parameters, tolerances
     disk_tolerance_pct: 10,
   });
 });
+
+// ── registerCampaign orchestration + publication (task 5d) ────────────────
+// Real tmp git repos (house pattern), real bun installs, injected
+// clock/identity/probe; the CommandRunner fake answers ONLY the merge-base
+// child-contract check (the fixture cannot contain the real D2 merge SHA).
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+  defaultCommandRunner,
+} from '../src/agents/command-runner.ts';
+import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
+import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
+import {
+  MINIMUM_CHILD_CONTRACT_SHA,
+  type RegisterArgs,
+  registerCampaign,
+} from '../src/campaign/registration.ts';
+import type { PricingOverride } from '../src/contracts/campaign/campaign.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
+
+const LOCAL_IDENTITY: ProcessIdentityProbe = {
+  exists: () => 'alive',
+  startTimeMs: () => 1,
+};
+const FAKE_STATS: HostStats = {
+  ts_ms: 0,
+  load1: 0.1,
+  pid_max: 1_000_000,
+  mem_available_bytes: 8 * GiB,
+  mem_total_bytes: 16 * GiB,
+  swap_used_bytes: 0,
+  swap_total_bytes: 4 * GiB,
+  process_count: 200,
+  disk_free_bytes: 50 * GiB,
+  disk_total_bytes: 100 * GiB,
+};
+const FAKE_PROBE: HostStatsProbe = {
+  sample: (nowMs) => ({ ...FAKE_STATS, ts_ms: nowMs }),
+};
+
+function git(dir: string, args: string[]): string {
+  const res = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  if (res.status !== 0)
+    throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
+  return res.stdout.trim();
+}
+
+/** A real tmp evals checkout at one commit: arms/, credentials.yaml,
+ *  coding-agents/claude.yaml, scenarios/scn-a, and a stub CLI entrypoint. */
+function evalsRepo(): { dir: string; sha: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'evals-repo-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 't@t']);
+  git(dir, ['config', 'user.name', 't']);
+  writeFileSync(
+    join(dir, 'credentials.yaml'),
+    [
+      'cred_a:',
+      '  model: test-model',
+      '  harnesses: [claude]',
+      '  api: anthropic',
+      '  auth: api-key',
+      '  api_key_env: TEST_KEY',
+      'cred_b:',
+      '  model: test-model',
+      '  harnesses: [claude]',
+      '  api: anthropic',
+      '  auth: api-key',
+      '  api_key_env: TEST_KEY_B',
+      '',
+    ].join('\n'),
+  );
+  mkdirSync(join(dir, 'arms'), { recursive: true });
+  writeFileSync(
+    join(dir, 'arms', 'arm_a.yaml'),
+    [
+      'schema_version: 1',
+      'name: arm_a',
+      'agent: claude',
+      'credential: cred_a',
+      'superpowers: none',
+      '',
+    ].join('\n'),
+  );
+  writeFileSync(
+    join(dir, 'arms', 'arm_b.yaml'),
+    [
+      'schema_version: 1',
+      'name: arm_b',
+      'agent: claude',
+      'credential: cred_b',
+      'superpowers: none',
+      '',
+    ].join('\n'),
+  );
+  mkdirSync(join(dir, 'coding-agents'), { recursive: true });
+  writeFileSync(
+    join(dir, 'coding-agents', 'claude.yaml'),
+    [
+      'name: claude',
+      'runtime_family: claude',
+      'binary: claude',
+      'model: claude-test',
+      'home_config_subdir: .claude',
+      'session_log_dir: .claude/projects',
+      "session_log_glob: '**/*.jsonl'",
+      'normalizer: claude',
+      'default_credential: cred_a',
+      '',
+    ].join('\n'),
+  );
+  mkdirSync(join(dir, 'scenarios', 'scn-a'), { recursive: true });
+  writeFileSync(
+    join(dir, 'scenarios', 'scn-a', 'story.md'),
+    '---\nquorum_tier: full\n---\nDo the thing.\n',
+  );
+  writeFileSync(
+    join(dir, 'scenarios', 'scn-a', 'setup.sh'),
+    '#!/usr/bin/env bash\n:\n',
+  );
+  writeFileSync(
+    join(dir, 'scenarios', 'scn-a', 'checks.sh'),
+    'pre() { :; }\npost() { :; }\n',
+  );
+  mkdirSync(join(dir, 'src', 'cli'), { recursive: true });
+  writeFileSync(
+    join(dir, 'src', 'cli', 'index.ts'),
+    "if (process.argv.includes('--version')) console.log('quorum-test 0.0.0');\n",
+  );
+  commitWithLockfile(dir); // the snapshot's bun install --frozen-lockfile needs a committed lockfile
+  return { dir, sha: git(dir, ['rev-parse', 'HEAD']) };
+}
+
+/** Give a fixture repo a dependency-less package.json + lockfile and commit
+ *  everything — materializeEvalsSnapshot runs `bun install
+ *  --frozen-lockfile` in every checked-out tree. */
+function commitWithLockfile(dir: string): void {
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'fixture', version: '0.0.0' }),
+  );
+  const installed = spawnSync('bun', ['install'], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  if (installed.status !== 0)
+    throw new Error(`fixture bun install failed: ${installed.stderr}`);
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'fixture']);
+}
+
+function gauntletRepo(): { dir: string; sha: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'gauntlet-repo-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 't@t']);
+  git(dir, ['config', 'user.name', 't']);
+  writeFileSync(join(dir, 'README.md'), 'gauntlet fixture\n');
+  commitWithLockfile(dir);
+  return { dir, sha: git(dir, ['rev-parse', 'HEAD']) };
+}
+
+/** Real runner everywhere EXCEPT the merge-base child-contract check, which
+ *  the fixture repo cannot contain (the real D2 merge SHA). The fake answers
+ *  that one call; everything else runs for real. */
+function probeRunner(mergeBaseStatus: 0 | 1): CommandRunner {
+  return {
+    run(
+      command: string,
+      args: readonly string[],
+      options?: CommandOptions,
+    ): CommandResult {
+      if (command === 'git' && args.includes('merge-base')) {
+        return {
+          status: mergeBaseStatus,
+          stdout: '',
+          stderr: mergeBaseStatus === 0 ? '' : 'not an ancestor\n',
+        };
+      }
+      return defaultCommandRunner.run(command, args, options);
+    },
+  };
+}
+
+const SUITE_RAW = [
+  'schema_version: 1',
+  'name: testsuite',
+  'kind: exploratory',
+  'budget_usd: 100',
+  'grader: { credential: cred_a, model: grader-model }',
+  'comparisons:',
+  '  - baseline: arm_a',
+  '    treatment: arm_b',
+  '    scenarios: [scn-a]',
+  '    n: 1',
+  '',
+].join('\n');
+
+function registerArgs(overrides: Partial<RegisterArgs> = {}): RegisterArgs {
+  const evals = evalsRepo();
+  const gauntlet = gauntletRepo();
+  return {
+    suitePath: 'suites/testsuite.yaml',
+    suiteRaw: SUITE_RAW,
+    campaignsRoot: mkdtempSync(join(tmpdir(), 'campaigns-')),
+    estimates: estimates(),
+    globalCap: 8,
+    confirm: true,
+    dryRun: false,
+    evalsCheckout: evals.dir,
+    evalsRef: evals.sha,
+    gauntletCheckout: gauntlet.dir,
+    gauntletRef: gauntlet.sha,
+    superpowersCheckout: mkdtempSync(join(tmpdir(), 'sp-')),
+    runner: probeRunner(0),
+    clock: new FakeClock(1),
+    identity: LOCAL_IDENTITY,
+    probe: FAKE_PROBE,
+    env: () => 'set',
+    registeredBy: 'test',
+    nowMs: Date.parse('2026-08-26T00:00:00Z'),
+    ...overrides,
+  };
+}
+
+test('registerCampaign: snapshot-first intake, digest dir naming, P-4 publication order', () => {
+  const result = registerCampaign(registerArgs());
+  expect(result.published).toBe(true);
+  expect(result.campaign_id).toBe(result.digest);
+  // Dir name = first-8 digest hex + suite name (Decision D-6).
+  expect(
+    result.campaignDir.endsWith(`${result.digest.slice(0, 8)}-testsuite`),
+  ).toBe(true);
+  // Publication artifacts all present; campaign.json is the readiness marker.
+  for (const f of [
+    'journal.db',
+    'contention-telemetry.jsonl',
+    '.ballast',
+    'campaign.json',
+    '.quorum-snapshot-ok',
+  ]) {
+    expect(existsSync(join(result.campaignDir, f))).toBe(true);
+  }
+  const doc = JSON.parse(
+    readFileSync(join(result.campaignDir, 'campaign.json'), 'utf8'),
+  );
+  expect(doc.digest).toBe(result.digest);
+  expect(doc.contention.global_run_cap).toBe(8);
+  expect(doc.grader).toEqual({ credential: 'cred_a', model: 'grader-model' });
+  expect(
+    doc.execution_surface.map((a: { name: string }) => a.name).sort(),
+  ).toEqual(['arm_a', 'arm_b']);
+  // Snapshot landed at the campaign dir itself (Decision D-6).
+  expect(
+    existsSync(join(result.campaignDir, 'evals', 'credentials.yaml')),
+  ).toBe(true);
+  // Operator surface: digest + derived max-block reading (Decision D-1).
+  expect(result.printed).toMatch(new RegExp(`digest: ${result.digest}`));
+  expect(result.printed).toContain('global_run_cap = 8 per-sample slots');
+  expect(result.printed).toContain('max contemporaneous two-arm blocks = 4');
+});
+
+test('idempotent re-registration: same input -> same digest -> same dir, no republish', () => {
+  const args = registerArgs();
+  const first = registerCampaign(args);
+  const second = registerCampaign(args);
+  expect(second.campaignDir).toBe(first.campaignDir);
+  expect(second.digest).toBe(first.digest);
+  expect(second.published).toBe(false); // re-opening validates digest equality only
+});
+
+test('dry-run prints grid + exclusions + digest, never writes', () => {
+  const result = registerCampaign(registerArgs({ dryRun: true }));
+  expect(result.published).toBe(false);
+  expect(result.campaignDir).toBe('');
+  expect(result.printed).toMatch(/digest: [0-9a-f]{64}/);
+});
+
+test('without --confirm: print-and-exit path, never prompts (noninteractive)', () => {
+  const result = registerCampaign(registerArgs({ confirm: false }));
+  expect(result.published).toBe(false);
+  expect(result.campaignDir).toBe('');
+  expect(result.printed).toMatch(/global_run_cap = 8/);
+});
+
+test('child-contract probe refuses an evals SHA below the minimum commit', () => {
+  expect(() =>
+    registerCampaign(registerArgs({ runner: probeRunner(1) })),
+  ).toThrow(new RegExp(MINIMUM_CHILD_CONTRACT_SHA.slice(0, 12)));
+});
+
+test('intake bytes come from the frozen SHA, and the materialized tree is verified against them', () => {
+  // Mutate the working tree AFTER the fixture commit: registration must not
+  // see the mutation (intake is git-object content at the resolved SHA).
+  const args = registerArgs();
+  writeFileSync(
+    join(args.evalsCheckout, 'credentials.yaml'),
+    'corrupted: true\n',
+  );
+  const result = registerCampaign(args);
+  expect(result.published).toBe(true);
+  const materialized = readFileSync(
+    join(result.campaignDir, 'evals', 'credentials.yaml'),
+    'utf8',
+  );
+  expect(materialized).toContain('cred_a:');
+  expect(materialized).not.toContain('corrupted');
+});
+
+test('C3 public intake: pricingOverrides persist into campaign.json pricing_overrides', () => {
+  const overrides: PricingOverride[] = [
+    {
+      applies_to_grader: true,
+      per_token_usd: 0.000002,
+      rationale:
+        'operator ruling 2026-08-27: grader priced per-token (tokens_total_median)',
+    },
+  ];
+  const result = registerCampaign(
+    registerArgs({ pricingOverrides: overrides }),
+  );
+  expect(result.published).toBe(true);
+  const doc = JSON.parse(
+    readFileSync(join(result.campaignDir, 'campaign.json'), 'utf8'),
+  );
+  expect(doc.pricing_overrides).toEqual(overrides);
+  // The attested grader silences the exploratory unattested-grader caveat.
+  expect(result.printed).not.toContain('unattested');
+});
+
+test('R-REG-19 registration preflight: a missing arm key env refuses, naming it', () => {
+  const env = (key: string) => (key === 'TEST_KEY_B' ? undefined : 'set');
+  expect(() => registerCampaign(registerArgs({ env }))).toThrow(/TEST_KEY_B/);
+  // Refusal happens before anything lands under the campaigns root.
+});

@@ -1,16 +1,37 @@
 // Registration from the snapshot (kernel D3, R-REG-1..22; REV Blocker C):
-// resolve refs -> choose/lock the final campaign-dir path -> materialize the
-// evals+gauntlet snapshot at that final path -> read scenarios, agent YAMLs,
-// and credentials.yaml FROM the snapshot's evals tree (never the mutable
-// host checkout) -> grid expansion, rejection matrix, pricing, digest ->
-// final-path init (journal + campaign_opened + sidecar + ballast) ->
-// campaign.json staged + renamed LAST. Resume authority = campaign.json +
-// the snapshot.
+// resolve refs -> grid+digest derived from a THROWAWAY materialization of
+// the frozen evals SHA (path-naming input only; never `git show`, never the
+// mutable host checkout) -> choose/lock the final campaign-dir path ->
+// materialize the evals+gauntlet snapshot at that final path -> re-read the
+// AUTHORITATIVE intake from the final-path evals tree and verify it
+// reproduces the digest (what ships is what was digested) -> final-path init
+// (journal + campaign_opened + sidecar + ballast) -> campaign.json staged +
+// renamed LAST. Resume authority = campaign.json + the snapshot.
 
-import type { Arm } from '../contracts/campaign/arm.ts';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import type { CommandRunner } from '../agents/command-runner.ts';
+import { superpowersCapability } from '../agents/index.ts';
+import { resolveSuperpowersRef } from '../appliance/git.ts';
+import {
+  agentRuntimeFamily,
+  loadAgentConfigForValidation,
+} from '../contracts/agent-config.ts';
+import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
 import {
   type Block,
   type Campaign,
+  CampaignSchema,
   type Cell,
   type ContentionDeclaration,
   type ContentionThreshold,
@@ -19,13 +40,50 @@ import {
   type PricingOverride,
   type Sample,
 } from '../contracts/campaign/campaign.ts';
+import {
+  campaignDigest,
+  type PreDigestCampaign,
+} from '../contracts/campaign/digest.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
-import { type Suite, TIER_SELECTOR_RE } from '../contracts/campaign/suite.ts';
-import type { Credential } from '../contracts/credential.ts';
+import { scanCouplingDefault } from '../contracts/campaign/scenario-meta.ts';
+import {
+  type Suite,
+  SuiteSchema,
+  TIER_SELECTOR_RE,
+} from '../contracts/campaign/suite.ts';
+import {
+  type Credential,
+  parseCredentialsFile,
+} from '../contracts/credential.ts';
 import type { EstimatesArtifact } from '../contracts/estimates.ts';
+import { getEnv } from '../env.ts';
+import type { Clock } from '../scheduler/clock.ts';
+import {
+  readCoupling,
+  readQuorumTier,
+  readRequiresSuperpowers,
+} from '../story-meta.ts';
 import { type EstimateLookup, lookupEstimate } from './estimates.ts';
-import { PID_MAX_SLOTS } from './host-stats.ts';
+import {
+  clockNowMs,
+  type HostStatsProbe,
+  PID_MAX_SLOTS,
+  probeFingerprint,
+} from './host-stats.ts';
+import type { SnapshotHandle } from './instrument-snapshot.ts';
+import {
+  createBallast,
+  DEFAULT_BALLAST_BYTES,
+  electWriter,
+  initJournalDb,
+  openJournalRead,
+  stageAndPublishCampaignJson,
+  verifyBallast,
+} from './journal.ts';
+import { acquireLease, type ProcessIdentityProbe } from './locks.ts';
+import { ensureWorktreeAt } from './provisioning.ts';
+import { materializeCampaignSnapshot, repairDriftedTrees } from './snapshot.ts';
 
 export class RegistrationError extends Error {
   constructor(message: string) {
@@ -839,4 +897,620 @@ export function buildContentionBlock(args: {
     mem_tolerance_pct: args.memTolerancePct ?? 10,
     disk_tolerance_pct: args.diskTolerancePct ?? 10,
   };
+}
+
+// ── registerCampaign orchestration + publication (task 5d) ────────────────
+
+/** The D2 minimal-env invariant (PATH/HOME/TMPDIR only), read through
+ *  src/env.ts — never a direct process.env read outside that boundary. */
+function minimalGitEnv(): Readonly<Record<string, string | undefined>> {
+  return {
+    PATH: getEnv('PATH'),
+    HOME: getEnv('HOME'),
+    TMPDIR: getEnv('TMPDIR'),
+  };
+}
+
+/** Snapshot intake read from a MATERIALIZED tree of the frozen evals SHA
+ *  (Blocker C): arms/, credentials.yaml, scenarios/<name>/, coding-agents/ —
+ *  plain file reads off a checkout of the resolved SHA, never `git show`
+ *  and never the mutable host working tree. The shipped path-based
+ *  frontmatter readers (readQuorumTier etc.) apply unchanged. */
+function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
+  const arms: Record<string, Arm> = {};
+  const armsDir = join(evalsRoot, 'arms');
+  if (existsSync(armsDir)) {
+    for (const entry of readdirSync(armsDir).sort()) {
+      if (!entry.endsWith('.yaml')) continue;
+      const arm = ArmSchema.parse(
+        parseYaml(readFileSync(join(armsDir, entry), 'utf8')),
+      );
+      arms[arm.name] = arm;
+    }
+  }
+  const credentialsPath = join(evalsRoot, 'credentials.yaml');
+  if (!existsSync(credentialsPath)) {
+    throw new RegistrationError(
+      `no credentials.yaml at evals SHA — the snapshot intake cannot read credentials; fix the evals ref or add the registry, then re-register (fail-closed)`,
+    );
+  }
+  const credentials = parseCredentialsFile(
+    parseYaml(readFileSync(credentialsPath, 'utf8')),
+  );
+  const scenarios: ScenarioIntake[] = [];
+  const scenariosDir = join(evalsRoot, 'scenarios');
+  if (existsSync(scenariosDir)) {
+    for (const entry of readdirSync(scenariosDir).sort()) {
+      const scenarioDir = join(scenariosDir, entry);
+      const storyPath = join(scenarioDir, 'story.md');
+      if (!existsSync(storyPath)) continue;
+      scenarios.push({
+        name: entry,
+        tier: readQuorumTier(storyPath),
+        requires_superpowers: readRequiresSuperpowers(storyPath) ?? false,
+        coupling: readCoupling(storyPath) ?? scanCouplingDefault(scenarioDir),
+        os: undefined,
+      });
+    }
+  }
+  return {
+    arms,
+    credentials,
+    scenarios,
+    agentConfigsDir: join(evalsRoot, 'coding-agents'),
+  };
+}
+
+/** Ordering half of defect C2 (REV Blocker C sol #3 + review Critical #2):
+ *  Decision D-6 names the campaign dir after the digest, R-REG-4's digest
+ *  covers the grid, and the grid depends on intake — so SOME frozen-SHA
+ *  read must precede path selection. Every intake byte is read from a
+ *  materialized worktree of the resolved SHA (no `git show`, no
+ *  mutable-checkout reads); the throwaway tree exists only to derive the
+ *  path name, and the AUTHORITATIVE intake is re-read from the final-path
+ *  tree after publication materialization, cross-checked by digest
+ *  equality (fail-closed) — what ships is what was digested. */
+function withIntakeSnapshot<T>(
+  evalsCheckout: string,
+  evalsSha: string,
+  campaignsRoot: string,
+  runner: CommandRunner,
+  body: (evalsTree: string) => T,
+): T {
+  const stagingRoot = mkdtempSync(join(campaignsRoot, '.intake-'));
+  const stagingTree = join(stagingRoot, 'evals');
+  ensureWorktreeAt({
+    sourceCheckout: evalsCheckout,
+    sha: evalsSha,
+    dest: stagingTree,
+    runner,
+  });
+  try {
+    return body(stagingTree);
+  } finally {
+    removeStagingWorktree(evalsCheckout, stagingTree, runner);
+    rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+/** Remove the intake staging worktree through the CommandRunner seam — the
+ *  same remove+prune discipline repairDriftedTrees uses. A failed cleanup
+ *  is loud: it leaves registrations in the host checkout's .git/worktrees. */
+function removeStagingWorktree(
+  checkout: string,
+  dest: string,
+  runner: CommandRunner,
+): void {
+  const env = minimalGitEnv();
+  const remove = runner.run(
+    'git',
+    ['-C', checkout, 'worktree', 'remove', '--force', dest],
+    { env },
+  );
+  const prune = runner.run('git', ['-C', checkout, 'worktree', 'prune'], {
+    env,
+  });
+  if (remove.status !== 0 || prune.status !== 0) {
+    throw new RegistrationError(
+      `intake snapshot cleanup failed at ${dest}: remove ${remove.status} (${remove.stderr.trim()}), prune ${prune.status} (${prune.stderr.trim()}) — inspect ${dest} and the worktree registrations in ${checkout}/.git/worktrees, then re-run registration (fail-closed)`,
+    );
+  }
+}
+
+export interface RegisterArgs {
+  readonly suitePath: string;
+  readonly suiteRaw: string;
+  readonly campaignsRoot: string;
+  readonly estimates: EstimatesArtifact;
+  readonly globalCap: number;
+  readonly confirm: boolean;
+  readonly dryRun: boolean;
+  readonly evalsCheckout: string;
+  readonly gauntletCheckout: string;
+  readonly superpowersCheckout: string;
+  readonly evalsRef: string;
+  readonly gauntletRef: string;
+  readonly runner: CommandRunner;
+  readonly clock: Clock;
+  readonly identity: ProcessIdentityProbe;
+  readonly probe: HostStatsProbe;
+  readonly env: (key: string) => string | undefined;
+  readonly registeredBy: string;
+  readonly nowMs: number;
+  /** Operator-declared per-token escapes (C3 public intake, 2026-08-27
+   *  operator ruling): passed into prepareRegistration's override costing
+   *  and persisted into campaign.json's pricing_overrides. */
+  readonly pricingOverrides?: readonly PricingOverride[];
+}
+
+export interface RegisterResult {
+  readonly campaign_id: string;
+  readonly digest: string;
+  /** '' until the dir exists (dry-run / print-and-exit). */
+  readonly campaignDir: string;
+  readonly published: boolean;
+  readonly dryRun: boolean;
+  readonly printed: string;
+  readonly excluded_cells: { cell: string; reason: string }[];
+  readonly warnings: string[];
+}
+
+interface SnapshotIntake {
+  readonly arms: Record<string, Arm>;
+  readonly credentials: Record<string, Credential>;
+  readonly scenarios: ScenarioIntake[];
+  readonly agentConfigsDir: string;
+}
+
+interface ComputedRegistration {
+  readonly prepared: PreparedRegistration;
+  readonly preDigest: PreDigestCampaign;
+  readonly digest: string;
+}
+
+type CandidateClass =
+  | { kind: 'absent' }
+  | { kind: 'published'; digest: string }
+  | { kind: 'incomplete'; openedDigest: string | null }
+  | { kind: 'shell' }
+  | { kind: 'ambiguous' };
+
+/** Decision D-6 / Round-4 S-8 classification: published campaign.json
+ *  supplies the candidate's full digest; an incomplete dir's first
+ *  campaign_opened supplies it when readable; a digest-less dir is reusable
+ *  only when nothing records spend; else ambiguous (prefix extends, loud
+ *  orphan note). */
+function classifyCandidate(candidate: string): CandidateClass {
+  if (!existsSync(candidate)) return { kind: 'absent' };
+  const campaignJson = join(candidate, 'campaign.json');
+  if (existsSync(campaignJson)) {
+    const doc = JSON.parse(readFileSync(campaignJson, 'utf8')) as {
+      digest?: string;
+    };
+    if (typeof doc.digest !== 'string') return { kind: 'ambiguous' };
+    return { kind: 'published', digest: doc.digest };
+  }
+  const journalDb = join(candidate, 'journal.db');
+  let openedDigest: string | null = null;
+  let eventCount = 0;
+  if (existsSync(journalDb)) {
+    const reader = openJournalRead(candidate);
+    try {
+      const events = reader.readEvents();
+      eventCount = events.length;
+      const opened = events[0];
+      if (opened !== undefined && opened.type === 'campaign_opened') {
+        openedDigest = opened.payload.digest;
+      }
+    } finally {
+      reader.close();
+    }
+  }
+  const spendArtifacts = ['cancel-request', '.storage-paused'].some((f) =>
+    existsSync(join(candidate, f)),
+  );
+  if (openedDigest !== null) return { kind: 'incomplete', openedDigest };
+  if (eventCount === 0 && !spendArtifacts) return { kind: 'shell' };
+  return { kind: 'ambiguous' };
+}
+
+/** Child-contract compatibility (REV fable I-12): the snapshot CLI probes
+ *  clean and the evals SHA must contain D2's implementation merge — verified
+ *  through the CommandRunner seam, rejected loudly naming the minimum. */
+function probeChildContract(
+  evalsRoot: string,
+  evalsSha: string,
+  args: RegisterArgs,
+): void {
+  const minimalEnv = minimalGitEnv();
+  const version = args.runner.run(
+    'bun',
+    [join(evalsRoot, 'src', 'cli', 'index.ts'), '--version'],
+    { cwd: evalsRoot, env: minimalEnv },
+  );
+  if (version.status !== 0) {
+    throw new RegistrationError(
+      `child-contract probe failed: bun ${evalsRoot}/src/cli/index.ts --version exited ${version.status}: ${version.stderr.trim()} — the evals ref does not carry a runnable quorum CLI; use a ref at or beyond the child contract (REV fable I-12)`,
+    );
+  }
+  const ancestor = args.runner.run(
+    'git',
+    [
+      '-C',
+      args.evalsCheckout,
+      'merge-base',
+      '--is-ancestor',
+      MINIMUM_CHILD_CONTRACT_SHA,
+      evalsSha,
+    ],
+    { env: minimalEnv },
+  );
+  if (ancestor.status !== 0) {
+    throw new RegistrationError(
+      `evals ref ${evalsSha} predates the minimum child-contract commit ${MINIMUM_CHILD_CONTRACT_SHA} (D2's implementation merge) — refusing registration; re-register with an evals ref containing ${MINIMUM_CHILD_CONTRACT_SHA} (REV fable I-12)`,
+    );
+  }
+}
+
+export function registerCampaign(args: RegisterArgs): RegisterResult {
+  const printed: string[] = [];
+  const emit = (line: string): void => {
+    printed.push(line);
+  };
+
+  // 1. Suite + grader intake (Design note 1): the grader block is extracted
+  //    BEFORE the strict SuiteSchema parse.
+  const raw = parseYaml(args.suiteRaw) as Record<string, unknown>;
+  const graderRaw = raw['grader'] as
+    | { credential?: string; model?: string }
+    | undefined;
+  if (
+    graderRaw === undefined ||
+    typeof graderRaw.credential !== 'string' ||
+    typeof graderRaw.model !== 'string'
+  ) {
+    throw new RegistrationError(
+      `${args.suitePath}: suite must declare grader: { credential, model } — the campaign grader is registered singular (R-REG-20)`,
+    );
+  }
+  const graderDecl = {
+    credential: graderRaw.credential,
+    model: graderRaw.model,
+  };
+  const { grader: _stripped, ...suiteFields } = raw;
+  const suite = SuiteSchema.parse(suiteFields);
+  assertIdComponent(suite.name, 'suite name');
+
+  // 2. Ref resolution to 40-hex SHAs (R-REG-8).
+  const evalsSha = resolveSuperpowersRef(
+    { path: args.evalsCheckout, remote: 'origin' },
+    args.evalsRef,
+    args.runner,
+  );
+  const gauntletSha = resolveSuperpowersRef(
+    { path: args.gauntletCheckout, remote: 'origin' },
+    args.gauntletRef,
+    args.runner,
+  );
+
+  // 3. Contention declarations (Decision D-3/D-4): the host fingerprint
+  //    defines the designated host; thresholds derive from the same sample.
+  const nowMs = clockNowMs(args.clock);
+  const stats = args.probe.sample(nowMs);
+  const fingerprint = probeFingerprint(args.probe, nowMs);
+  const contention = buildContentionBlock({
+    fingerprint,
+    globalCap: args.globalCap,
+    thresholds: defaultContentionThresholds({
+      mem_bytes: stats.mem_total_bytes,
+      swap_total_bytes: stats.swap_total_bytes,
+      disk_total_bytes: stats.disk_total_bytes,
+    }),
+  });
+
+  mkdirSync(args.campaignsRoot, { recursive: true });
+  const lease = acquireLease({
+    lockPath: join(args.campaignsRoot, 'registration.lock.d'),
+    clock: args.clock,
+    identity: args.identity,
+    label: 'registration lease',
+  });
+  try {
+    // 4. Snapshot-first grid derivation (C2 ordering): intake is read from
+    //    a materialized tree of the frozen evals SHA, the grid + digest are
+    //    computed from it, and the digest names the final campaign dir.
+    const compute = (intake: SnapshotIntake): ComputedRegistration => {
+      const superpowers_by_arm: Record<string, string | null> = {};
+      for (const armDef of Object.values(intake.arms)) {
+        superpowers_by_arm[armDef.name] =
+          armDef.superpowers === 'none'
+            ? null
+            : resolveSuperpowersRef(
+                { path: args.superpowersCheckout, remote: 'origin' },
+                armDef.superpowers,
+                args.runner,
+              );
+      }
+      const prepared = prepareRegistration({
+        suite,
+        arms: intake.arms,
+        credentials: intake.credentials,
+        grader: graderDecl,
+        estimates: args.estimates,
+        capability: (family) => superpowersCapability(family),
+        agentOsSupport: (agent) =>
+          loadAgentConfigForValidation(intake.agentConfigsDir, agent)
+            .os_support,
+        agentFamily: (agent) =>
+          agentRuntimeFamily(
+            loadAgentConfigForValidation(intake.agentConfigsDir, agent),
+          ),
+        scenarios: intake.scenarios,
+        globalCap: args.globalCap,
+        campaignOs: 'linux',
+        env: args.env,
+        nowMs: args.nowMs,
+        ...(args.pricingOverrides !== undefined
+          ? { pricingOverrides: args.pricingOverrides }
+          : {}),
+      });
+      // Execution surface (scrubbed, secret-free — env-var NAMES only).
+      const execution_surface = Object.values(intake.arms).map((armDef) => {
+        const cred = intake.credentials[armDef.credential];
+        return {
+          name: armDef.name,
+          agent: armDef.agent,
+          credential: armDef.credential,
+          auth: cred?.auth ?? 'api-key',
+          api: cred?.api ?? 'openai-chat',
+          ...(cred?.base_url !== undefined ? { base_url: cred.base_url } : {}),
+          model: cred?.model ?? '',
+          key_env_names:
+            cred?.key_pool ??
+            (cred?.api_key_env !== undefined ? [cred.api_key_env] : []),
+        };
+      });
+      const preDigest: PreDigestCampaign = {
+        schema_version: 1,
+        campaign_id: 'pending',
+        suite,
+        refs: { superpowers_by_arm, evals: evalsSha, gauntlet: gauntletSha },
+        grader: graderDecl,
+        cells: prepared.cells,
+        excluded_cells: prepared.excluded_cells,
+        samples: prepared.samples,
+        comparisons: prepared.comparisons,
+        blocks: prepared.blocks,
+        budget: prepared.budget,
+        registered_at: new Date(args.nowMs).toISOString(),
+        registered_by: args.registeredBy,
+        contention,
+        execution_surface,
+        ...(args.pricingOverrides !== undefined
+          ? { pricing_overrides: [...args.pricingOverrides] }
+          : {}),
+      };
+      return { prepared, preDigest, digest: campaignDigest(preDigest) };
+    };
+
+    const staging = withIntakeSnapshot(
+      args.evalsCheckout,
+      evalsSha,
+      args.campaignsRoot,
+      args.runner,
+      (tree) => compute(readIntakeFromEvalsTree(tree)),
+    );
+    const digest = staging.digest;
+    const campaign_id = digest; // identity = digest
+
+    // 5. Confirmation output (R-REG-22 + Decision D-1 max-block reading).
+    emit(`campaign ${suite.name}`);
+    emit(
+      `grid: ${staging.prepared.cells.length} cells, ${staging.prepared.samples.length} samples, ${staging.prepared.blocks.length} blocks`,
+    );
+    emit(
+      `budget: $${staging.prepared.budget.usd_all_in} all-in (surcharge $${staging.prepared.budget.surcharge_applied}, priced coverage ${staging.prepared.budget.priced_coverage})`,
+    );
+    for (const exclusion of staging.prepared.excluded_cells) {
+      emit(`excluded ${exclusion.cell}: ${exclusion.reason}`);
+    }
+    for (const warning of staging.prepared.warnings) {
+      emit(`warning: ${warning}`);
+    }
+    emit(
+      'reserve is one shared per-cell pool for instrument, skew, exposure-audit, and contention replacements — size for correlated same-window draws',
+    );
+    if ((suite.reserve ?? 0) === 0) {
+      emit('warning: contention invalidation will be shortfall-only');
+    }
+    emit(`digest: ${digest}`);
+    emit(
+      `global_run_cap = ${args.globalCap} per-sample slots; max contemporaneous two-arm blocks = ${Math.floor(args.globalCap / 2)}`,
+    );
+
+    const finishUnpublished = (): RegisterResult => ({
+      campaign_id,
+      digest,
+      campaignDir: '',
+      published: false,
+      dryRun: args.dryRun,
+      printed: printed.join('\n'),
+      excluded_cells: staging.prepared.excluded_cells,
+      warnings: staging.prepared.warnings,
+    });
+    if (args.dryRun) return finishUnpublished();
+    // Noninteractive: no tty prompt, ever — absent --confirm is the
+    // print-and-exit path.
+    if (!args.confirm) return finishUnpublished();
+
+    // 6. Candidate dir naming + collision extension (Decision D-6).
+    let prefixLen = 8;
+    let campaignDir = '';
+    let reopenOnly = false;
+    for (;;) {
+      const candidate = join(
+        args.campaignsRoot,
+        `${digest.slice(0, prefixLen)}-${suite.name}`,
+      );
+      const classification = classifyCandidate(candidate);
+      if (classification.kind === 'absent' || classification.kind === 'shell') {
+        campaignDir = candidate;
+        break;
+      }
+      if (classification.kind === 'incomplete') {
+        if (classification.openedDigest === digest) {
+          campaignDir = candidate;
+          break;
+        }
+        emit(
+          `collision: ${candidate} holds a different campaign_opened digest — extending prefix`,
+        );
+        prefixLen += 4;
+        continue;
+      }
+      if (classification.kind === 'published') {
+        if (classification.digest === digest) {
+          campaignDir = candidate;
+          reopenOnly = true; // R-REG-22: digest equality only, no republish
+          break;
+        }
+        emit(
+          `collision: ${candidate} is published with a different digest — extending prefix`,
+        );
+        prefixLen += 4;
+        continue;
+      }
+      emit(
+        `orphan: ${candidate} is ambiguous (no identity carrier, spend recorded) — left untouched, extending prefix`,
+      );
+      prefixLen += 4;
+    }
+
+    if (reopenOnly) {
+      emit(
+        `re-opening published campaign at ${campaignDir} (digest equality verified)`,
+      );
+      return {
+        campaign_id,
+        digest,
+        campaignDir,
+        published: false,
+        dryRun: false,
+        printed: printed.join('\n'),
+        excluded_cells: staging.prepared.excluded_cells,
+        warnings: staging.prepared.warnings,
+      };
+    }
+
+    // 7. P-4 publication order: snapshot at the final path FIRST, then
+    //    journal init -> ballast -> campaign.json staged + renamed LAST.
+    //    (1) Materialize at the final path; incomplete-re-entry repair under
+    //        the lease when the dest holds drifted/dirty debris (D-7 S-8).
+    const snapshotArgs = {
+      campaignDir,
+      refs: staging.preDigest.refs,
+      evalsCheckout: args.evalsCheckout,
+      gauntletCheckout: args.gauntletCheckout,
+      superpowersCheckout: args.superpowersCheckout,
+      runner: args.runner,
+    };
+    let handle: SnapshotHandle;
+    try {
+      handle = materializeCampaignSnapshot(snapshotArgs);
+    } catch (err) {
+      emit(
+        `repair: snapshot materialization failed (${(err as Error).message}) — removing drifted trees under lease and re-materializing (loud, D-7 S-8)`,
+      );
+      try {
+        handle = repairDriftedTrees(snapshotArgs);
+      } catch (repairErr) {
+        throw new RegistrationError(
+          `snapshot repair failed at ${campaignDir}: ${(repairErr as Error).message} — refusing registration (fail-closed)`,
+        );
+      }
+    }
+    // (2) Authoritative intake: re-read from the FINAL-path tree. The
+    //     recomputed digest must equal the digest that named the directory
+    //     — a mismatch is snapshot corruption, never ignored (R-REG-5).
+    const authoritative = compute(readIntakeFromEvalsTree(handle.evalsRoot));
+    if (authoritative.digest !== digest) {
+      throw new RegistrationError(
+        `materialized snapshot at ${campaignDir} does not reproduce the registration digest (${authoritative.digest} != ${digest}) — refusing publication; inspect the snapshot trees, then re-run registration (fail-closed)`,
+      );
+    }
+    probeChildContract(handle.evalsRoot, evalsSha, args);
+
+    // (3) Journal init + campaign_opened (first event, committed before
+    //     campaign.json exists; never re-journaled on re-entry) + sidecar.
+    if (!existsSync(join(campaignDir, 'journal.db')))
+      initJournalDb(campaignDir);
+    const writer = electWriter({
+      campaignDir,
+      clock: args.clock,
+      identity: args.identity,
+    });
+    try {
+      const events = writer.readEvents();
+      if (events.length === 0) {
+        writer.appendEvent({
+          type: 'campaign_opened',
+          payload: { campaign_id, digest },
+        });
+      } else {
+        const opened = events[0];
+        if (
+          opened === undefined ||
+          opened.type !== 'campaign_opened' ||
+          opened.payload.digest !== digest
+        ) {
+          throw new RegistrationError(
+            `existing journal at ${campaignDir} carries a different campaign_opened digest — refusing (fail-closed); inspect journal.db and re-run registration against the matching suite/refs`,
+          );
+        }
+      }
+    } finally {
+      writer.release();
+    }
+    const sidecar = join(campaignDir, 'contention-telemetry.jsonl');
+    if (!existsSync(sidecar)) writeFileSync(sidecar, '', { flag: 'wx' });
+
+    // (4) Ballast: verify-or-create. Idempotent re-entry VERIFIES the same
+    //     properties or RECREATES the ballast before publishing (D-13) — a
+    //     crash mid-createBallast leaves a short/unverifiable file, and a
+    //     refusal here would brick the directory (createBallast opens
+    //     O_EXCL). Publication has not happened yet, so recreation is
+    //     legal; the never-recreate rule applies only MID-campaign.
+    const ballastPath = join(campaignDir, '.ballast');
+    if (!existsSync(ballastPath)) {
+      createBallast(campaignDir, DEFAULT_BALLAST_BYTES);
+    } else if (!verifyBallast(campaignDir, DEFAULT_BALLAST_BYTES)) {
+      process.stderr.write(
+        `existing .ballast at ${campaignDir} fails the non-sparse allocation check — recreating before publication (D-13 re-entry)\n`,
+      );
+      unlinkSync(ballastPath);
+      createBallast(campaignDir, DEFAULT_BALLAST_BYTES);
+    }
+
+    // (5) campaign.json staged + renamed LAST, directory fsync — built from
+    //     the authoritative final-path intake.
+    const finalDoc = { ...authoritative.preDigest, campaign_id, digest };
+    CampaignSchema.parse(finalDoc); // the frozen document shape, validated
+    if (!existsSync(join(campaignDir, 'campaign.json'))) {
+      stageAndPublishCampaignJson(campaignDir, finalDoc);
+    }
+    emit(`published ${campaignDir}`);
+
+    return {
+      campaign_id,
+      digest,
+      campaignDir,
+      published: true,
+      dryRun: false,
+      printed: printed.join('\n'),
+      excluded_cells: authoritative.prepared.excluded_cells,
+      warnings: authoritative.prepared.warnings,
+    };
+  } finally {
+    lease.release();
+  }
 }
