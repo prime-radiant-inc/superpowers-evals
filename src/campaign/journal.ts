@@ -1425,48 +1425,127 @@ export function rebuildMaterialized(
   writer.rebuildProjectionsFrom(universe); // DROPs projection tables, re-applies events via project()
 }
 
+/** The fs-operations seam the publication primitives run through (repo
+ *  culture: seams carry the fiction, everything else hits the real fs).
+ *  Domain-shaped operations, not raw POSIX, so a test recorder can observe
+ *  the durable operation ORDER (ballast write -> fsync -> dir fsync ->
+ *  stage write -> fsync -> rename LAST -> dir fsync) without mocking
+ *  behavior away. Production always uses the real fs. */
+export interface JournalFsOps {
+  /** O_EXCL create: refuses if the path already exists. */
+  openExclusive(path: string): number;
+  /** Read-only open (file or directory). */
+  openRead(path: string): number;
+  close(fd: number): void;
+  write(fd: number, data: string | Buffer): void;
+  fsync(fd: number): void;
+  rename(from: string, to: string): void;
+  unlink(path: string): void;
+  stat(path: string): { size: number; blocks: number };
+  exists(path: string): boolean;
+}
+
+const realFsOps: JournalFsOps = {
+  openExclusive: (path) => openSync(path, 'wx'),
+  openRead: (path) => openSync(path, 'r'),
+  close: closeSync,
+  write: (fd, data) => {
+    if (typeof data === 'string') writeSync(fd, data);
+    else writeSync(fd, data);
+  },
+  fsync: fsyncSync,
+  rename: renameSync,
+  unlink: unlinkSync,
+  stat: (path) => statSync(path),
+  exists: existsSync,
+};
+
+/** Best-effort failure-path cleanup whose own failure is REPORTED, never
+ * swallowed (no silent drops): null on success, the underlying error
+ * message on failure so the refusal can carry it. */
+function cleanupUnlink(fsOps: JournalFsOps, path: string): string | null {
+  try {
+    fsOps.unlink(path);
+    return null;
+  } catch (err) {
+    return errorMessage(err);
+  }
+}
+
 /** Decision D-13 ballast: physically allocated, operator-visible, created +
  *  fsynced BEFORE campaign.json publication. Non-sparse: open exclusively,
  *  write non-zero buffers through the entire length (never truncate-only),
  *  fsync the file, verify allocated blocks cover the length, then fsync the
  *  campaign directory. Failure or an unverifiable allocation refuses
  *  publication. */
-export function createBallast(campaignDir: string, sizeBytes: number): void {
+export function createBallast(
+  campaignDir: string,
+  sizeBytes: number,
+  fsOps: JournalFsOps = realFsOps,
+): void {
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
+    throw new JournalError(
+      `ballast size must be a positive integer of bytes, got ${sizeBytes} — a zero/fractional reserve reserves nothing (Decision D-13 requires physically allocated bytes)`,
+    );
+  }
   const path = join(campaignDir, '.ballast');
   let fd: number;
   try {
-    fd = openSync(path, 'wx'); // O_EXCL: never overwrite an existing ballast
+    fd = fsOps.openExclusive(path); // O_EXCL: never overwrite an existing ballast
   } catch (err) {
     throw new JournalError(
-      `ballast already exists or cannot be created at ${path}: ${errorMessage(err)}`,
+      `ballast already exists or cannot be created at ${path}: ${errorMessage(err)} — verify the existing reserve (verifyBallast) instead of recreating, or clear the path and retry registration`,
     );
   }
   try {
-    const chunk = Buffer.alloc(64 * 1024, 0xba); // non-zero
-    let written = 0;
-    while (written < sizeBytes) {
-      const n = Math.min(chunk.length, sizeBytes - written);
-      writeSync(fd, chunk, 0, n);
-      written += n;
-    }
-    fsyncSync(fd); // durable BEFORE the allocation check
-  } finally {
-    closeSync(fd);
-  }
-  if (!verifyBallast(campaignDir, sizeBytes)) {
     try {
-      unlinkSync(path);
-    } catch {}
+      const chunk = Buffer.alloc(64 * 1024, 0xba); // non-zero
+      let written = 0;
+      while (written < sizeBytes) {
+        const n = Math.min(chunk.length, sizeBytes - written);
+        fsOps.write(fd, chunk.subarray(0, n));
+        written += n;
+      }
+      fsOps.fsync(fd); // durable BEFORE the allocation check
+    } finally {
+      fsOps.close(fd);
+    }
+  } catch (err) {
+    const cleanup = cleanupUnlink(fsOps, path);
     throw new JournalError(
-      `ballast allocation unverifiable at ${path} (sparse or short filesystem?) — refusing publication (fail-closed)`,
+      `ballast write/fsync failed at ${path}: ${errorMessage(err)}` +
+        (cleanup
+          ? `; removing the failed ballast also failed (${cleanup}) — delete ${path} by hand`
+          : '') +
+        ` — free space on the campaign volume, then retry registration (fail-closed: no ballast, no publication)`,
     );
   }
-  fsyncDir(campaignDir);
+  if (!verifyBallast(campaignDir, sizeBytes, fsOps)) {
+    const cleanup = cleanupUnlink(fsOps, path);
+    throw new JournalError(
+      `ballast allocation unverifiable at ${path} (sparse or short filesystem?) — refusing publication (fail-closed)` +
+        (cleanup
+          ? `; removing the invalid ballast also failed (${cleanup}) — delete ${path} by hand`
+          : '') +
+        `; free space on the campaign volume or use a qualified non-sparse filesystem, then retry registration`,
+    );
+  }
+  try {
+    fsyncDir(campaignDir, fsOps);
+  } catch (err) {
+    throw new JournalError(
+      `ballast created and verified at ${path} but the directory fsync failed: ${errorMessage(err)} — fsync the campaign directory by hand, verify (verifyBallast), then publish`,
+    );
+  }
 }
 
-export function verifyBallast(campaignDir: string, sizeBytes: number): boolean {
+export function verifyBallast(
+  campaignDir: string,
+  sizeBytes: number,
+  fsOps: JournalFsOps = realFsOps,
+): boolean {
   try {
-    const st = statSync(join(campaignDir, '.ballast'));
+    const st = fsOps.stat(join(campaignDir, '.ballast'));
     return st.size === sizeBytes && st.blocks * 512 >= sizeBytes;
   } catch {
     return false;
@@ -1476,15 +1555,30 @@ export function verifyBallast(campaignDir: string, sizeBytes: number): boolean {
 /** D-13 pause step 3: release the ballast (unlink, fsync dir) so the freed
  *  blocks land the pause evidence. Absence is loud (the reserve was already
  *  spent — recovery journals that note). */
-export function releaseBallast(campaignDir: string): void {
+export function releaseBallast(
+  campaignDir: string,
+  fsOps: JournalFsOps = realFsOps,
+): void {
   const path = join(campaignDir, '.ballast');
-  if (!existsSync(path)) {
+  if (!fsOps.exists(path)) {
     throw new JournalError(
-      `no ballast to release at ${path} — reserve already spent`,
+      `no ballast to release at ${path} — the reserve was already spent; recovery must journal the accounting note (Decision D-13) instead of releasing again`,
     );
   }
-  unlinkSync(path);
-  fsyncDir(campaignDir);
+  try {
+    fsOps.unlink(path);
+  } catch (err) {
+    throw new JournalError(
+      `cannot release the ballast at ${path}: ${errorMessage(err)} — clear the path (or remount the volume writable), then retry the pause; the pause evidence must land in the freed blocks`,
+    );
+  }
+  try {
+    fsyncDir(campaignDir, fsOps);
+  } catch (err) {
+    throw new JournalError(
+      `ballast unlinked at ${path} but the directory fsync failed: ${errorMessage(err)} — fsync the campaign directory before writing pause evidence (D-13 step 3 is not durable yet)`,
+    );
+  }
 }
 
 /** D-13 step-1 detection predicate: a storage-full failure from either
@@ -1505,12 +1599,12 @@ export function isStorageFullError(err: unknown): boolean {
   );
 }
 
-export function fsyncDir(dir: string): void {
-  const fd = openSync(dir, 'r');
+export function fsyncDir(dir: string, fsOps: JournalFsOps = realFsOps): void {
+  const fd = fsOps.openRead(dir);
   try {
-    fsyncSync(fd);
+    fsOps.fsync(fd);
   } finally {
-    closeSync(fd);
+    fsOps.close(fd);
   }
 }
 
@@ -1521,20 +1615,83 @@ export function fsyncDir(dir: string): void {
 export function stageAndPublishCampaignJson(
   campaignDir: string,
   campaign: unknown,
+  expectedBallastBytes: number = DEFAULT_BALLAST_BYTES,
+  fsOps: JournalFsOps = realFsOps,
 ): void {
-  if (existsSync(join(campaignDir, 'campaign.json'))) {
+  if (fsOps.exists(join(campaignDir, 'campaign.json'))) {
     throw new JournalError(
       `campaign.json already published at ${campaignDir} — publication happens exactly once; re-entry verifies, never republishes`,
     );
   }
-  const stage = join(campaignDir, `campaign.json.stage.${process.pid}`);
-  const fd = openSync(stage, 'wx');
-  try {
-    writeSync(fd, `${JSON.stringify(campaign, null, 2)}\n`);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+  if (!fsOps.exists(join(campaignDir, JOURNAL_DB_FILENAME))) {
+    throw new JournalError(
+      `no journal at ${join(campaignDir, JOURNAL_DB_FILENAME)} — the journal initializes at the final campaign path BEFORE publication (P-4/S-8); run initJournalDb first, then publish`,
+    );
   }
-  renameSync(stage, join(campaignDir, 'campaign.json')); // rename last
-  fsyncDir(campaignDir); // directory fsync after the publication rename
+  if (!verifyBallast(campaignDir, expectedBallastBytes, fsOps)) {
+    throw new JournalError(
+      `ballast at ${join(campaignDir, '.ballast')} is absent, sparse, or not ${expectedBallastBytes} bytes — create the D-13 reserve with createBallast(campaignDir, ${expectedBallastBytes}) before publishing; publication without a physically allocated reserve is forbidden`,
+    );
+  }
+  // Serialize BEFORE opening the stage file: an unrepresentable document
+  // must refuse without leaving stage debris behind.
+  let stringified: string | undefined;
+  try {
+    stringified = JSON.stringify(campaign, null, 2);
+  } catch (err) {
+    throw new JournalError(
+      `campaign document is not JSON-serializable: ${errorMessage(err)} — fix the document at the publisher; nothing was staged`,
+    );
+  }
+  if (typeof stringified !== 'string') {
+    throw new JournalError(
+      `campaign document is not JSON-serializable (${campaign === undefined ? 'undefined document' : `a ${typeof campaign}`}) — pass a JSON-representable document; nothing was staged`,
+    );
+  }
+  const body = `${stringified}\n`;
+  const stage = join(campaignDir, `campaign.json.stage.${process.pid}`);
+  let fd: number;
+  try {
+    fd = fsOps.openExclusive(stage);
+  } catch (err) {
+    throw new JournalError(
+      `cannot stage campaign.json at ${stage}: ${errorMessage(err)} — remove the stale stage file (a crashed publication attempt left it; campaign.json was NOT published) and retry`,
+    );
+  }
+  try {
+    try {
+      fsOps.write(fd, body);
+      fsOps.fsync(fd);
+    } finally {
+      fsOps.close(fd);
+    }
+  } catch (err) {
+    const cleanup = cleanupUnlink(fsOps, stage);
+    throw new JournalError(
+      `staging campaign.json failed at ${stage}: ${errorMessage(err)}` +
+        (cleanup
+          ? `; removing the stage debris also failed (${cleanup}) — delete ${stage} by hand`
+          : '') +
+        ` — inspect the campaign volume, then retry registration; campaign.json was NOT published`,
+    );
+  }
+  try {
+    fsOps.rename(stage, join(campaignDir, 'campaign.json')); // rename last
+  } catch (err) {
+    const cleanup = cleanupUnlink(fsOps, stage);
+    throw new JournalError(
+      `publication rename failed at ${stage}: ${errorMessage(err)}` +
+        (cleanup
+          ? `; removing the stage debris also failed (${cleanup}) — delete ${stage} by hand`
+          : '') +
+        ` — inspect the campaign volume, then retry; campaign.json was NOT published`,
+    );
+  }
+  try {
+    fsyncDir(campaignDir, fsOps); // directory fsync after the publication rename
+  } catch (err) {
+    throw new JournalError(
+      `campaign.json was renamed into place at ${campaignDir} but the directory fsync failed: ${errorMessage(err)} — fsync the campaign directory by hand; the publication is not durable until then`,
+    );
+  }
 }
