@@ -322,6 +322,20 @@ Codex path remains physically unverified and unavailable until that bundle
 migration occurs. See the full positive and negative evidence in
 [the F13 experiment receipt](experiments/2026-08-19-f13-filesystem-credential-scoping.md).
 
+### Host-wide live-spend lock (kernel D3)
+
+`campaign run`, `run-all`, and direct `quorum run` contend for ONE host-wide
+lock. `$QUORUM_LIVE_SPEND_LOCK` is authoritative; production appliance
+deployments set it to the appliance-owned shared path so containerized jobs
+and break-glass host runs share one lock:
+
+    export QUORUM_LIVE_SPEND_LOCK=/var/lib/quorum/live-spend.lock.d
+
+The default (env unset) is user-wide: `$HOME/.quorum/live-spend.lock.d`.
+Holder tokens carry `pid`, `birth_ts_ms`, `last_heartbeat_ts_ms` and
+heartbeat every 30s; reclamation requires a stale heartbeat (5× cadence)
+AND a dead holder under the ESRCH + OS-start-time identity check.
+
 ## Sentinel Batch
 
 Start with the sentinel tier and a narrow target set. One appliance job carries
