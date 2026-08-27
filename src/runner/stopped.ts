@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalVerdict } from '../contracts/verdict.ts';
 
@@ -8,6 +9,7 @@ export interface StoppedIdentity {
   readonly codingAgent: string;
   readonly startedAt: string;
   readonly credential?: string;
+  readonly campaign?: CampaignIdentity;
   readonly labels?: CredentialLabels;
 }
 
@@ -29,6 +31,7 @@ export function buildStoppedVerdict(id: StoppedIdentity): FinalVerdict {
     finished_at: new Date().toISOString(),
     credential: id.credential,
     ...(id.labels !== undefined ? { labels: id.labels } : {}),
+    ...(id.campaign !== undefined ? { campaign: id.campaign } : {}),
   };
 }
 

@@ -74,6 +74,7 @@ import {
   loadAgentConfig,
   resolveSessionLogDir,
 } from '../contracts/agent-config.ts';
+import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
 import type { CheckManifest } from '../contracts/check-manifest.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
@@ -436,6 +437,11 @@ export interface RunScenarioArgs {
   // seam and the gauntlet version probe execute it; when absent, both
   // resolve 'gauntlet' through PATH.
   readonly gauntletBin?: string | undefined;
+  // D3 identity intake (R-SPN-4, Decision D-8): the campaign identity block
+  // the spawner supplies at launch. Persisted at run-dir allocation and
+  // stamped on every verdict/error/stopped path — before the first provider
+  // token. Legacy runs leave it undefined.
+  readonly campaign?: CampaignIdentity | undefined;
 }
 
 export interface RunScenarioResult {
@@ -981,6 +987,18 @@ export function cleanupAgentRuntime(cleanupDirs: readonly string[]): void {
   }
 }
 
+/** Decision D-8: persisted at run-dir allocation, atomic (tmp + rename), at
+ *  the same seam as the run_allocated: emission. Recovery reads a run dir's
+ *  identity without trusting the dispatcher's memory (R-RCV-3). */
+function persistCampaignIdentity(
+  runDir: string,
+  identity: CampaignIdentity,
+): void {
+  const tmp = join(runDir, `.campaign-identity-${process.pid}.tmp`);
+  writeFileSync(tmp, `${JSON.stringify(identity, null, 2)}\n`);
+  renameSync(tmp, join(runDir, 'campaign-identity.json'));
+}
+
 // Run one scenario end to end. A user-supplied external campaign is validated
 // before allocation; after that preflight, the runner always allocates a run
 // dir and writes verdict.json, mapping thrown invariants to indeterminate.
@@ -1030,6 +1048,9 @@ export async function runScenario(
   // learns the run dir before the long await — it needs it to write a stopped
   // verdict if the run is interrupted mid-flight.
   a.onRunDir?.(runDir);
+  if (a.campaign !== undefined) {
+    persistCampaignIdentity(runDir, a.campaign);
+  }
   // startedAt: caller-supplied stamp wins so the handler and the happy path
   // agree on the same value; else stamp it here.
   const startedAt = a.startedAt ?? new Date().toISOString();
@@ -1118,6 +1139,7 @@ export async function runScenario(
       ? { labels: selectedCredentialLabels }
       : {}),
     provenance,
+    ...(a.campaign !== undefined ? { campaign: a.campaign } : {}),
   };
   writeFileSync(
     join(runDir, 'verdict.json'),

@@ -1,6 +1,10 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
+import {
+  type CampaignIdentity,
+  CampaignIdentitySchema,
+} from '../contracts/campaign/campaign.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalStatus } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
@@ -20,9 +24,13 @@ export interface RunCommandOptions {
   readonly credential?: string;
   readonly credentialsFile?: string;
   readonly graderModel?: string;
-  // Snapshot-local gauntlet wrapper (internal: the run-child parser is the
-  // only flag surface; the public `quorum run` command does not expose it).
+  // Snapshot-local gauntlet wrapper: exposed on both the public `run` command
+  // and the run-child parser (the campaign child enters through the
+  // snapshot's public run; R-SPN-9 threading).
   readonly gauntletBin?: string;
+  // R-SPN-4 identity intake: the --campaign-identity flag's raw JSON, parsed
+  // at this boundary (a zod failure is the loud CLI error) before the run.
+  readonly campaignIdentityJson?: string;
   // Explicit superpowers mode. `superpowersRoot` is an already-materialized
   // root (resolved here, never a ref); `noSuperpowers` runs stock. Both unset
   // = legacy ambient behavior.
@@ -34,12 +42,21 @@ export interface RunCommandOptions {
  *  `--no-superpowers` flag parses as the NEGATED boolean `superpowers`
  *  (default true, false only when passed); the shared executor instead reads
  *  the mode off `noSuperpowers`, so the negation is folded here, once, for
- *  both CLI parsers. */
+ *  both CLI parsers. Commander likewise derives `campaignIdentity` from
+ *  `--campaign-identity`; the executor reads `campaignIdentityJson`, so the
+ *  flag is renamed here, at the same single fold. */
 export function normalizeRunCommandOptions(
-  opts: RunCommandOptions & { superpowers?: boolean },
+  opts: RunCommandOptions & {
+    superpowers?: boolean;
+    campaignIdentity?: string;
+  },
 ): RunCommandOptions {
-  const { superpowers: suppressed, ...rest } = opts;
-  return { ...rest, ...(suppressed === false ? { noSuperpowers: true } : {}) };
+  const { superpowers: suppressed, campaignIdentity: json, ...rest } = opts;
+  return {
+    ...rest,
+    ...(suppressed === false ? { noSuperpowers: true } : {}),
+    ...(json !== undefined ? { campaignIdentityJson: json } : {}),
+  };
 }
 
 export type RunCredentialsOrigin =
@@ -105,6 +122,9 @@ export async function executeRunCommand(
         startedAt,
         ...(credentialName !== undefined ? { credential: credentialName } : {}),
         ...(labelsForStop !== undefined ? { labels: labelsForStop } : {}),
+        ...(campaignIdentity !== undefined
+          ? { campaign: campaignIdentity }
+          : {}),
       });
     }
     process.exit(2);
@@ -124,6 +144,12 @@ export async function executeRunCommand(
       'setup',
     );
   }
+  // R-SPN-4 (Decision D-8): parse the identity at the CLI boundary — a
+  // malformed block fails loud here, before any run dir or provider token.
+  const campaignIdentity: CampaignIdentity | undefined =
+    opts.campaignIdentityJson === undefined
+      ? undefined
+      : CampaignIdentitySchema.parse(JSON.parse(opts.campaignIdentityJson));
   const { runDir, verdict } = await runScenario({
     scenarioDir: resolve(scn),
     codingAgent: opts.codingAgent,
@@ -142,6 +168,7 @@ export async function executeRunCommand(
     ...(opts.gauntletBin !== undefined
       ? { gauntletBin: resolve(opts.gauntletBin) }
       : {}),
+    ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
     ...(superpowers !== undefined ? { superpowers } : {}),
     onRunDir: (dir) => {
       runDirForStop = dir;

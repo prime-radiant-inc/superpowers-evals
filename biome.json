@@ -112,6 +112,7 @@
         "test/cli-run.test.ts",
         "test/cli-run-sigint.test.ts",
         "test/cli-run-superpowers.test.ts",
+        "test/campaign-identity-intake.test.ts",
         "test/gauntlet-env.test.ts",
         "test/agent-*.test.ts",
         "test/setup-helpers-shim.test.ts",

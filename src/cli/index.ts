@@ -142,6 +142,14 @@ program
     '--grader-model <id>',
     'Gauntlet-Agent (grader) model (default: claude-sonnet-5)',
   )
+  .option(
+    '--gauntlet-bin <path>',
+    'snapshot-local gauntlet wrapper (campaign children)',
+  )
+  .option(
+    '--campaign-identity <json>',
+    'campaign identity block (campaign children)',
+  )
   .addOption(
     // The conflicts target is the negated flag's derived option name —
     // commander parses `--no-superpowers` as `superpowers`, not

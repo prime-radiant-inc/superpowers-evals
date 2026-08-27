@@ -20,6 +20,10 @@ program
   .requiredOption('--credentials-file <path>')
   .option('--grader-model <id>')
   .option('--gauntlet-bin <path>')
+  .option(
+    '--campaign-identity <json>',
+    'campaign identity block (campaign children)',
+  )
   .addOption(
     // The conflicts target is the negated flag's derived option name —
     // commander parses `--no-superpowers` as `superpowers`, not
