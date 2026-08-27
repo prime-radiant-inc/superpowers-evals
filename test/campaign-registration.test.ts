@@ -52,3 +52,69 @@ test('ID components outside the pinned grammar reject; ":" never passes', () => 
   expect(() => assertIdComponent('', 'suite name')).toThrow(RegistrationError);
   expect(() => cellKeyOf('c1', 'bad:scenario')).toThrow(RegistrationError);
 });
+
+test('numeric parameters outside the 1-based positive-integer domain reject', () => {
+  expect(() => comparisonId(0)).toThrow(RegistrationError);
+  expect(() => comparisonId(-1)).toThrow(RegistrationError);
+  expect(() => comparisonId(1.5)).toThrow(RegistrationError);
+  expect(() => comparisonId(Number.NaN)).toThrow(RegistrationError);
+  expect(() => comparisonId(Number.POSITIVE_INFINITY)).toThrow(
+    RegistrationError,
+  );
+  expect(() => primaryBlockId('c1:sdd-escalates', -1)).toThrow(
+    RegistrationError,
+  );
+  expect(() => reserveBlockId('c1:sdd-escalates', 0)).toThrow(
+    RegistrationError,
+  );
+  expect(() =>
+    primarySampleId('c1:sdd-escalates', 'claude-sp', Number.NaN),
+  ).toThrow(RegistrationError);
+  expect(() => reserveSampleId('c1:sdd-escalates', 'claude-sp', 1.5)).toThrow(
+    RegistrationError,
+  );
+  expect(() => rerunInstanceId('c1:sdd-escalates:b3', 0)).toThrow(
+    RegistrationError,
+  );
+  expect(() => attemptIdOf('c1:sdd-escalates:claude-sp:r3', -2)).toThrow(
+    RegistrationError,
+  );
+});
+
+test('prebuilt id inputs are shape-validated before interpolation', () => {
+  // comparison id into a cell key: must be c<N>, N 1-based, single component.
+  expect(() => cellKeyOf('1', 'sdd-escalates')).toThrow(RegistrationError);
+  expect(() => cellKeyOf('c0', 'sdd-escalates')).toThrow(RegistrationError);
+  expect(() => cellKeyOf('c1:extra', 'sdd-escalates')).toThrow(
+    RegistrationError,
+  );
+  // cell key into block/sample constructors: exactly c<N>:<scenario>.
+  expect(() => primaryBlockId('c1', 3)).toThrow(RegistrationError);
+  expect(() =>
+    primarySampleId('c1:sdd-escalates:extra', 'claude-sp', 3),
+  ).toThrow(RegistrationError);
+  expect(() => reserveSampleId('c1:', 'claude-sp', 2)).toThrow(
+    RegistrationError,
+  );
+  // lineage root: the first NON-rerun block — b<N> or x<N>, never :i<N>.
+  expect(() => rerunInstanceId('c1:sdd-escalates:b3:i1', 1)).toThrow(
+    RegistrationError,
+  );
+  expect(() => rerunInstanceId('c1:sdd-escalates:q3', 1)).toThrow(
+    RegistrationError,
+  );
+  // sample id into an attempt: cell:arm:r<N> or cell:arm:x<N>.
+  expect(() => attemptIdOf('c1:sdd-escalates:claude-sp', 2)).toThrow(
+    RegistrationError,
+  );
+  expect(() => attemptIdOf('c1:sdd-escalates:claude-sp:q3', 2)).toThrow(
+    RegistrationError,
+  );
+  // reserve lineage roots and reserve-sample attempts stay in-grammar.
+  expect(rerunInstanceId('c1:sdd-escalates:x2', 1)).toBe(
+    'c1:sdd-escalates:x2:i1',
+  );
+  expect(attemptIdOf('c1:sdd-escalates:claude-sp:x2', 1)).toBe(
+    'c1:sdd-escalates:claude-sp:x2:a1',
+  );
+});
