@@ -1539,11 +1539,15 @@ export function createBallast(
   }
 }
 
+/** Zero (or anything non-positive / non-integral) is never a valid reserve
+ *  size: a zero-byte file verifies nothing even though `size === 0` would
+ *  trivially match, so the request itself refuses. */
 export function verifyBallast(
   campaignDir: string,
   sizeBytes: number,
   fsOps: JournalFsOps = realFsOps,
 ): boolean {
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) return false;
   try {
     const st = fsOps.stat(join(campaignDir, '.ballast'));
     return st.size === sizeBytes && st.blocks * 512 >= sizeBytes;
@@ -1625,7 +1629,36 @@ export function stageAndPublishCampaignJson(
   }
   if (!fsOps.exists(join(campaignDir, JOURNAL_DB_FILENAME))) {
     throw new JournalError(
-      `no journal at ${join(campaignDir, JOURNAL_DB_FILENAME)} — the journal initializes at the final campaign path BEFORE publication (P-4/S-8); run initJournalDb first, then publish`,
+      `no journal at ${join(campaignDir, JOURNAL_DB_FILENAME)} — the journal initializes at the final campaign path BEFORE publication (P-4/S-8); run initJournalDb, journal campaign_opened, then publish`,
+    );
+  }
+  // Readiness is journal CONTENTS, not file existence (D-7 order): an empty
+  // or corrupt journal.db must not publish. Reuse the reader path — its
+  // checkSchemaVersion proves the schema_version row, then the committed
+  // campaign_opened event proves the campaign actually opened.
+  try {
+    const reader = openJournalRead(campaignDir);
+    try {
+      const opened = reader
+        .readEvents()
+        .some((event) => event.type === 'campaign_opened');
+      if (!opened) {
+        throw new JournalError(
+          `journal at ${join(campaignDir, JOURNAL_DB_FILENAME)} has no committed campaign_opened event — journal it (electWriter + appendEvent) before publishing; the readiness marker must not precede the campaign's own opening (P-4/S-8)`,
+        );
+      }
+    } finally {
+      reader.close();
+    }
+  } catch (err) {
+    if (err instanceof JournalError) throw err;
+    throw new JournalError(
+      `journal at ${join(campaignDir, JOURNAL_DB_FILENAME)} is not readable as an initialized journal: ${errorMessage(err)} — re-initialize (initJournalDb) and journal campaign_opened before publishing; campaign.json was NOT published`,
+    );
+  }
+  if (!Number.isInteger(expectedBallastBytes) || expectedBallastBytes <= 0) {
+    throw new JournalError(
+      `expectedBallastBytes must be a positive integer of bytes, got ${expectedBallastBytes} — zero is never a valid D-13 reserve; publish against the real reserve size`,
     );
   }
   if (!verifyBallast(campaignDir, expectedBallastBytes, fsOps)) {
