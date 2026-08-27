@@ -201,22 +201,29 @@ function scanAndPrintInclusion(resultsRoot: string): void {
 }
 
 /** Token volume for one run (C3 pricing overrides): the frozen sidecar's
- *  total_tokens. Tolerant by design — a corpus predating token capture is
- *  legitimate history, so an absent/unreadable sidecar reads as null,
- *  never an error. */
+ *  total_tokens. Absent/unreadable sidecar or a missing key reads as null —
+ *  a corpus predating token capture is legitimate history. A PRESENT but
+ *  invalid value (negative/fractional/non-finite) is corrupt data: token
+ *  counts are nonnegative integers, so ingestion fails closed naming the
+ *  run rather than pricing garbage. */
 function readTokensTotal(runDir: string): number | null {
+  let raw: unknown;
   try {
-    const raw: unknown = JSON.parse(
+    raw = JSON.parse(
       readFileSync(join(runDir, 'coding-agent-token-usage.json'), 'utf8'),
     );
-    if (typeof raw !== 'object' || raw === null) return null;
-    const tokens = (raw as Record<string, unknown>)['total_tokens'];
-    return typeof tokens === 'number' && Number.isFinite(tokens)
-      ? tokens
-      : null;
   } catch {
     return null;
   }
+  if (typeof raw !== 'object' || raw === null) return null;
+  if (!('total_tokens' in raw)) return null;
+  const tokens = (raw as Record<string, unknown>)['total_tokens'];
+  if (typeof tokens !== 'number' || !Number.isInteger(tokens) || tokens < 0) {
+    cliError(
+      `token sidecar ${join(runDir, 'coding-agent-token-usage.json')} carries an invalid total_tokens (${JSON.stringify(tokens)}) — token counts are nonnegative integers; fix or regenerate the sidecar`,
+    );
+  }
+  return tokens;
 }
 
 export function campaignEstimates(opts: CampaignEstimatesOptions): void {

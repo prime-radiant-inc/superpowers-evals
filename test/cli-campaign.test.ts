@@ -712,3 +712,27 @@ test('campaign estimates reads token volumes from the coding-agent sidecar (C3 p
   expect(art.fallbacks.corpus_median.tokens_total_median).toBe(200_000);
   rmSync(corpus, { recursive: true });
 });
+
+test('campaign estimates fails closed on an invalid sidecar token volume (negative total_tokens)', () => {
+  const { corpus, manifest } = fixture();
+  writeFileSync(
+    join(corpus, 'run-base', 'coding-agent-token-usage.json'),
+    JSON.stringify({ total_tokens: -100 }),
+  );
+  const estimatesPath = join(corpus, 'estimates-bad.json');
+  const res = run([
+    'campaign',
+    'estimates',
+    '--corpus',
+    corpus,
+    '--manifest',
+    manifest,
+    '--out',
+    estimatesPath,
+  ]);
+  expect(res.status).not.toBe(0);
+  expect(res.stderr).toContain('run-base');
+  expect(res.stderr).toMatch(/total_tokens/);
+  expect(existsSync(estimatesPath)).toBe(false);
+  rmSync(corpus, { recursive: true });
+});

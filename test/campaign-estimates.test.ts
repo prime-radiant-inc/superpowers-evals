@@ -358,3 +358,42 @@ test('lookupEstimate surfaces tokens_total_median through the fallback chain', (
   expect(corpus.tier).toBe('corpus');
   expect(corpus.tokens_total_median).toBe((111_000 + 222_000) / 2);
 });
+
+test('tokens_total_median schema: negative volumes fail artifact parse; fractional medians stay valid', () => {
+  // A negative observed volume must not survive artifact parsing — a
+  // per-token override would price negative off it.
+  const negative = buildEstimates(
+    [
+      {
+        record: rec({ run_id: 'v' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: -100,
+      },
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(
+    EstimatesArtifactSchema.safeParse(JSON.parse(serializeEstimates(negative)))
+      .success,
+  ).toBe(false);
+  // Even-n medians average two integers: fractional values are legitimate.
+  const fractional = buildEstimates(
+    [
+      {
+        record: rec({ run_id: 'f1' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: 1,
+      },
+      {
+        record: rec({ run_id: 'f2' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: 2,
+      },
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(
+    EstimatesArtifactSchema.parse(JSON.parse(serializeEstimates(fractional)))
+      .entries[0]!.tokens_total_median,
+  ).toBe(1.5);
+});

@@ -14,8 +14,9 @@ export const EstimateStatsSchema = z.object({
    *  volume source (2026-08-27 operator ruling). Optional and additive:
    *  artifacts predating token capture stay valid; absent means "no
    *  observed volume", and a per-token override without a volume cannot
-   *  price (fail-closed at registration). */
-  tokens_total_median: z.number().optional(),
+   *  price (fail-closed at registration). Volumes are nonnegative and
+   *  finite — a negative median would price an override negative. */
+  tokens_total_median: z.number().finite().nonnegative().optional(),
   spread_s: z.object({ p25: z.number(), p75: z.number() }),
   confidence: z.enum(['high', 'medium', 'low']),
 });

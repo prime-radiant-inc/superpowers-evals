@@ -276,9 +276,16 @@ export function prepareRegistration(
 
   // Registration-level checks (not per-cell):
   checkProfileParams(suite);
+  checkCellOverrideCorrelation(suite); // R-REG-18 (tripwire_expect half)
+  checkGraderCredential(input); // R-REG-20 singular + R-REG-15 grader half
   checkKeyEnvPresence(input); // R-REG-19 (registration half)
   checkEstimateStaleness(input); // R-REG-21 — needs nowMs; see registerCampaign
   warnings.push(...graderAndPoolWarnings(input)); // R-REG-20 + R-REG-7
+  if ((suite.reserve ?? 0) === 0) {
+    warnings.push(
+      `suite ${suite.name} registers zero reserve — contention invalidation will be shortfall-only (size reserve for correlated same-window draws)`,
+    );
+  }
   if (gating) {
     const attested = overrides.some((o) => o.applies_to_grader === true);
     if (!attested) {
@@ -314,7 +321,7 @@ export function prepareRegistration(
       if (scen === undefined) {
         excluded_cells.push({
           cell: cellKey,
-          reason: `scenario ${scenarioName} not in the snapshot intake`,
+          reason: `scenario ${scenarioName} not in the snapshot intake — add it to the scenario intake or fix the comparison's scenario selector`,
         });
         continue;
       }
@@ -355,9 +362,10 @@ export function prepareRegistration(
         estimatesByArm[armName] = {
           duration_s: priced.lookup.duration_s,
           cost_usd: priced.cost_usd ?? 0,
-          confidence:
-            priced.lookup.confidence ??
-            (priced.override_cost !== null ? 'high' : 'low'),
+          // An override prices but does not manufacture confidence: the
+          // fallback tier's own confidence stands (null at corpus tier
+          // reads low), so the R-REG-3 surcharge is never suppressed.
+          confidence: priced.lookup.confidence ?? 'low',
         };
       }
       if (gating && !allPriced) {
@@ -423,7 +431,10 @@ export function prepareRegistration(
   });
 
   // Surcharge formula v1 (versioned): for each cell whose worst-arm
-  // confidence < high, estimated cost x (medium ? 0.10 : 0.25).
+  // confidence < high, estimated cost x (medium ? 0.10 : 0.25), priced over
+  // the cell's full frozen block count — primaries AND reserves (E7.0:
+  // reserve blocks are pre-registered, count-hard, priced).
+  const reservePerCell = suite.reserve ?? 0;
   let surcharge = 0;
   let pricedCells = 0;
   for (const cell of cells) {
@@ -441,7 +452,7 @@ export function prepareRegistration(
     if (priced) pricedCells += 1;
     if (worst !== 'high') {
       surcharge +=
-        cell.n *
+        (cell.n + reservePerCell) *
         cellCost *
         (worst === 'medium' ? SURCHARGE_RATE_MEDIUM : SURCHARGE_RATE_LOW);
     }
@@ -498,40 +509,41 @@ function rejectCell(
     scen.requires_superpowers &&
     armNames.some((a) => arms[a]?.superpowers === 'none')
   ) {
-    return `scenario requires_superpowers conflicts with a superpowers: none arm (R-REG-16)`;
+    return `scenario requires_superpowers conflicts with a superpowers: none arm (R-REG-16) — drop the none arm from this comparison or move the scenario to superpowers-capable arms`;
   }
   for (const armName of armNames) {
     const armDef = arms[armName];
-    if (armDef === undefined) return `arm ${armName} not in arms/ intake`;
+    if (armDef === undefined)
+      return `arm ${armName} not in arms/ intake (R-REG-2) — fix the comparison's arm names or add the arm to arms/`;
     const cred = credentials[armDef.credential];
     if (cred === undefined)
-      return `arm ${armName} credential ${armDef.credential} not in credentials.yaml`;
+      return `arm ${armName} credential ${armDef.credential} not in credentials.yaml (R-REG-2) — add the credential or fix the arm's credential reference`;
     // R-REG-10: os: windows parses, then rejects.
     if (armDef.os === 'windows') {
-      return `arm ${armName} targets os windows — a registration error (parent non-goal)`;
+      return `arm ${armName} targets os windows — a registration error (parent non-goal) (R-REG-10) — run the campaign on a linux or darwin host or drop the arm`;
     }
     // R-REG-14: arm os unsupported by the agent, credential, or scenario
     // directives.
     const armOs = armDef.os ?? campaignOs;
     const agentOs = input.agentOsSupport(armDef.agent);
     if (agentOs !== undefined && !agentOs.includes(armOs)) {
-      return `arm ${armName} os ${armOs} unsupported by agent ${armDef.agent} (supports: ${agentOs.join(', ')})`;
+      return `arm ${armName} os ${armOs} unsupported by agent ${armDef.agent} (supports: ${agentOs.join(', ')}) (R-REG-14) — align the arm os with the agent's support or drop the arm`;
     }
     if (cred.os_support !== undefined && !cred.os_support.includes(armOs)) {
-      return `arm ${armName} os ${armOs} unsupported by credential ${armDef.credential}`;
+      return `arm ${armName} os ${armOs} unsupported by credential ${armDef.credential} (R-REG-14) — align the credential's os_support or drop the arm`;
     }
     if (scen.os !== undefined && !scen.os.includes(armOs)) {
-      return `arm ${armName} os ${armOs} unsupported by scenario directive (${scen.os.join(', ')})`;
+      return `arm ${armName} os ${armOs} unsupported by scenario directive (${scen.os.join(', ')}) (R-REG-14) — align the scenario's os directive or drop the scenario from this comparison`;
     }
     // R-REG-9: none/ref arms on adapters without the capability.
     const cap = input.capability(input.agentFamily(armDef.agent));
     if (armDef.superpowers === 'none' ? !cap.none : !cap.ref) {
-      return `arm ${armName} superpowers mode ${JSON.stringify(armDef.superpowers)} lacks adapter capability (default-deny registry)`;
+      return `arm ${armName} superpowers mode ${JSON.stringify(armDef.superpowers)} lacks adapter capability (default-deny registry) (R-REG-9) — drop the arm, switch it to a proven superpowers mode, or extend the adapter capability registry`;
     }
     // R-REG-15: seat/subscription auth in gating suites — mechanical, no
     // operator override.
     if (gating && cred.auth !== 'api-key') {
-      return `arm ${armName} credential ${armDef.credential} auth=${cred.auth} in a gating suite (api-key required, no override)`;
+      return `arm ${armName} credential ${armDef.credential} auth=${cred.auth} in a gating suite (R-REG-15, api-key required, no override) — switch the arm to an api-key credential`;
     }
   }
   // R-REG-13: minimum-feasible-launch feasibility — cap-1 pools facing
@@ -549,21 +561,32 @@ function rejectCell(
       credA === undefined ||
       credB === undefined
     ) {
-      return `comparison names an arm or credential missing from the intake (R-REG-2 fail-closed)`;
+      return `comparison names an arm or credential missing from the intake (R-REG-2 fail-closed) — fix arms/ or credentials/ so every comparison arm resolves`;
     }
     const poolA = poolKey(credA, armA.credential);
     const poolB = poolKey(credB, armB.credential);
     if (poolA === poolB) {
-      const cap = credA.max_concurrency ?? 1;
-      if (cap < 2) {
-        return `comparison infeasible pre-spend: cap-${cap} pool ${poolA} faces two-arm same-pool demand (R-REG-13)`;
+      // Order-independent feasibility: every registry credential mapped to
+      // this pool constrains it — the tightest cap and any positive spacing
+      // bind the two-arm demand, whichever arm named them.
+      const members = Object.entries(credentials)
+        .filter(([name, cred]) => poolKey(cred, name) === poolA)
+        .map(([, cred]) => cred);
+      const poolCap = Math.min(
+        ...members.map((cred) => cred.max_concurrency ?? 1),
+      );
+      const poolSpacing = Math.max(
+        ...members.map((cred) => cred.launch_spacing_seconds ?? 0),
+      );
+      if (poolCap < 2) {
+        return `comparison infeasible pre-spend: pool ${poolA} resolves to cap-${poolCap} across its ${members.length} credential declaration(s); two-arm same-pool demand cannot launch (R-REG-13) — raise every pool credential's max_concurrency to >= 2 or split the arms across pools`;
       }
-      if ((credA.launch_spacing_seconds ?? 0) > 0) {
-        return `comparison infeasible pre-spend: launch spacing ${credA.launch_spacing_seconds}s on shared pool ${poolA} cannot co-launch both arms (R-REG-13)`;
+      if (poolSpacing > 0) {
+        return `comparison infeasible pre-spend: launch spacing ${poolSpacing}s declared on shared pool ${poolA}; the arms cannot co-launch (R-REG-13) — remove launch_spacing_seconds from the pool's credentials or split the arms across pools`;
       }
     }
     if (input.globalCap < 2) {
-      return `comparison infeasible pre-spend: global_run_cap ${input.globalCap} < two-sample block demand (R-REG-13)`;
+      return `comparison infeasible pre-spend: global_run_cap ${input.globalCap} < two-sample block demand (R-REG-13) — re-register with --global-cap >= 2`;
     }
   }
   // R-REG-12: usd-denominated profile parameters when any arm is unpriceable.
@@ -585,7 +608,7 @@ function rejectCell(
       );
     });
     if (unpriceable) {
-      return `usd-denominated profile parameters (${usdParams.join(', ')}) with an unpriceable arm (R-REG-12)`;
+      return `usd-denominated profile parameters (${usdParams.join(', ')}) with an unpriceable arm (R-REG-12) — price the arm (a per-token override with a resolvable tokens_total_median, or refreshed estimates) or drop the usd-denominated parameters`;
     }
   }
   return null;
@@ -622,6 +645,49 @@ function checkProfileParams(suite: Suite): void {
         );
       }
     }
+  }
+}
+
+/** R-REG-18 (tripwire_expect half): the firing criterion correlates to
+ *  tripwire cells — a gating tripwire cell without one has no firing
+ *  semantics, and one declared on any other class is a miscorrelation. */
+function checkCellOverrideCorrelation(suite: Suite): void {
+  for (const comparison of suite.comparisons) {
+    const cells = comparison.cells;
+    if (cells === undefined) continue;
+    for (const [scenario, cell] of Object.entries(cells)) {
+      if (
+        suite.kind === 'gating' &&
+        cell.class === 'tripwire' &&
+        cell.tripwire_expect === undefined
+      ) {
+        throw new RegistrationError(
+          `comparison cell ${scenario} is class tripwire without tripwire_expect — the v1 firing criterion is required on gating tripwire cells (R-REG-18) — declare tripwire_expect: 'pass' | 'fail' or re-class the cell`,
+        );
+      }
+      if (cell.class !== 'tripwire' && cell.tripwire_expect !== undefined) {
+        throw new RegistrationError(
+          `comparison cell ${scenario} (class ${cell.class}) declares tripwire_expect — the firing criterion correlates to tripwire cells only (R-REG-18) — drop tripwire_expect or re-class the cell tripwire`,
+        );
+      }
+    }
+  }
+}
+
+/** R-REG-20 grader singular + R-REG-15 grader half: the registered grader
+ *  credential must exist, and in a gating suite it must be api-key auth —
+ *  mechanical, before any expansion. */
+function checkGraderCredential(input: RegistrationInput): void {
+  const cred = input.credentials[input.grader.credential];
+  if (cred === undefined) {
+    throw new RegistrationError(
+      `grader credential ${input.grader.credential} not in credentials.yaml (R-REG-20 grader singular) — add the credential or re-register with a registered grader credential`,
+    );
+  }
+  if (input.suite.kind === 'gating' && cred.auth !== 'api-key') {
+    throw new RegistrationError(
+      `grader credential ${input.grader.credential} auth=${cred.auth} in a gating suite — api-key required, no operator override (R-REG-15) — use an api-key grader credential`,
+    );
   }
 }
 
@@ -690,6 +756,11 @@ function graderAndPoolWarnings(input: RegistrationInput): string[] {
         `grader pool cap ${graderCap} < 15 in a gating suite — every 8h-clearing Phase 0 configuration had cap >= 15 (R-REG-20 warning)`,
       );
     }
+  }
+  if (!gating && graderCred !== undefined && graderCred.auth !== 'api-key') {
+    warnings.push(
+      `grader credential ${input.grader.credential} auth=${graderCred.auth} — seat-auth grading cannot be enforced mechanically outside gating suites; prefer an api-key grader credential (R-REG-15 exploratory caveat)`,
+    );
   }
   for (const [name, cred] of Object.entries(input.credentials)) {
     if (cred.key_pool !== undefined && cred.max_concurrency !== undefined) {

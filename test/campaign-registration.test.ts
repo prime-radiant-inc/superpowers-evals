@@ -408,6 +408,9 @@ test('rejection matrix: capability, windows os, unsupported os, requires_superpo
         cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
         cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
       },
+      // Grader rides the api-key credential so this case isolates the
+      // ARM row of R-REG-15 (the grader row is registration-level now).
+      grader: { credential: 'cred_b', model: 'grader-model' },
       pricingOverrides: [
         { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
       ],
@@ -694,4 +697,368 @@ test('warnings: grader cap below 15 in gating; key_pool over-capacity (R-REG-20/
   );
   expect(prep.warnings.join(' ')).toMatch(/grader pool cap/);
   expect(prep.warnings.join(' ')).toMatch(/key_pool/); // 12 > 2 keys x 5 = 10 -> over-capacity warning
+});
+
+function gatingSuite(overrides: Partial<Suite> = {}): Suite {
+  return suite({
+    kind: 'gating',
+    profile: 'release_gate_v1',
+    reserve: 1,
+    max_exposure_skew: 60,
+    profile_params: {
+      alpha: 0.05,
+      determinate_n_floor: 5,
+      completion_divergence_max: 0.2,
+      mde_by_scenario: { 'scn-a': 0.1 },
+    },
+    ...overrides,
+  } as never);
+}
+
+const UNPRICED_WITH_TOKENS = () =>
+  estimates({
+    entries: [],
+    fallbacks: {
+      scenario_agent: [],
+      scenario: [],
+      corpus_median: {
+        duration_s: 600,
+        cost_total_usd: null,
+        tokens_total_median: 1_500_000,
+      },
+    },
+  });
+
+test('R-REG-13: shared-pool feasibility is order-independent (constraints from every credential on the pool)', () => {
+  const asymmetric = {
+    credentials: {
+      // arm_a's declaration alone would admit; arm_b's tightens the pool.
+      cred_a: credential({ max_concurrency: 15, quota_pool: 'shared' }),
+      cred_b: credential({
+        max_concurrency: 1,
+        launch_spacing_seconds: 10,
+        api_key_env: 'TEST_KEY_B',
+        quota_pool: 'shared',
+      }),
+    },
+  };
+  // a -> b: must reject, not just the b -> a order.
+  let prep = prepareRegistration(input(asymmetric));
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /infeasible/,
+  );
+  // b -> a: same pool, same verdict.
+  prep = prepareRegistration(
+    input({
+      ...asymmetric,
+      suite: suite({
+        comparisons: [
+          { baseline: 'arm_b', treatment: 'arm_a', scenarios: ['scn-a'], n: 1 },
+        ],
+      }),
+    }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /infeasible/,
+  );
+  // Every registry credential mapped to the pool constrains it — an unused
+  // cap-1 member tightens the shared bucket below two-arm demand.
+  prep = prepareRegistration(
+    input({
+      credentials: {
+        cred_a: credential({ max_concurrency: 2, quota_pool: 'shared' }),
+        cred_b: credential({
+          max_concurrency: 2,
+          api_key_env: 'TEST_KEY_B',
+          quota_pool: 'shared',
+        }),
+        cred_c: credential({
+          max_concurrency: 1,
+          api_key_env: 'TEST_KEY_C',
+          quota_pool: 'shared',
+        }),
+      },
+    }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /infeasible/,
+  );
+  // Accept pair: every pool member cap >= 2 and no spacing -> admitted.
+  prep = prepareRegistration(
+    input({
+      credentials: {
+        cred_a: credential({ max_concurrency: 2, quota_pool: 'shared' }),
+        cred_b: credential({
+          max_concurrency: 2,
+          api_key_env: 'TEST_KEY_B',
+          quota_pool: 'shared',
+        }),
+      },
+    }),
+  );
+  expect(prep.cells).toHaveLength(1);
+});
+
+test('grader eligibility: missing credential refuses; non-api-key grader refuses in gating, warns in exploratory (R-REG-15/19/20)', () => {
+  expect(() =>
+    prepareRegistration(
+      input({ grader: { credential: 'grader_cred', model: 'g' } }),
+    ),
+  ).toThrow(/grader_cred/);
+  expect(() =>
+    prepareRegistration(
+      input({
+        suite: gatingSuite(),
+        credentials: {
+          cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
+          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+        },
+        grader: { credential: 'cred_a', model: 'g' },
+        pricingOverrides: [
+          { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+        ],
+      } as never),
+    ),
+  ).toThrow(/grader.*api-key|api-key.*grader/);
+  const prep = prepareRegistration(
+    input({
+      credentials: {
+        cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
+        cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+      },
+    }),
+  );
+  expect(prep.warnings.join(' ')).toMatch(/api-key grader credential/);
+});
+
+test('R-REG-19: key-env preflight refuses naming every unset env (api_key_env and key_pool members)', () => {
+  expect(() => prepareRegistration(input({ env: () => undefined }))).toThrow(
+    /TEST_KEY/,
+  );
+  expect(() =>
+    prepareRegistration(
+      input({
+        credentials: {
+          cred_a: credential({
+            max_concurrency: 12,
+            key_pool: ['K1', 'K2'],
+            api_key_env: undefined,
+          }),
+          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+        },
+        env: (key) => (key === 'K2' ? undefined : 'set'),
+      }),
+    ),
+  ).toThrow(/K2/);
+});
+
+test('override pricing preserves the fallback tier confidence — no manufactured high, surcharge still applies (R-REG-3)', () => {
+  const prep = prepareRegistration(
+    input({
+      estimates: UNPRICED_WITH_TOKENS(),
+      pricingOverrides: [
+        { arm: 'arm_a', per_token_usd: 0.00001, rationale: 'r' },
+        { arm: 'arm_b', per_token_usd: 0.00001, rationale: 'r' },
+      ],
+    }),
+  );
+  // Corpus tier + override: priced (cost 15) but the tier's own confidence
+  // (none) reads low — an override prices, it does not manufacture high.
+  expect(prep.cells[0]?.estimates_by_arm['arm_a']?.confidence).toBe('low');
+  expect(prep.cells[0]?.estimates_by_arm['arm_a']?.cost_usd).toBeCloseTo(15, 9);
+  // 2 primary blocks x (15 + 15) x 0.25 (low) — surcharge not suppressed.
+  expect(prep.budget.surcharge_applied).toBeCloseTo(15, 9);
+  expect(prep.budget.priced_coverage).toBe(1);
+});
+
+test('E7.0: surcharge prices frozen reserve capacity — (n + reserve) blocks per cell', () => {
+  const prep = prepareRegistration(
+    input({
+      suite: suite({
+        reserve: 1,
+        comparisons: [
+          { baseline: 'arm_a', treatment: 'arm_b', scenarios: ['scn-a'], n: 1 },
+        ],
+      }),
+      estimates: UNPRICED_WITH_TOKENS(),
+      pricingOverrides: [
+        { arm: 'arm_a', per_token_usd: 0.00001, rationale: 'r' },
+        { arm: 'arm_b', per_token_usd: 0.00001, rationale: 'r' },
+      ],
+    }),
+  );
+  expect(prep.blocks.filter((b) => b.slot === 'reserve')).toHaveLength(1);
+  // (n=1 primary + 1 reserve) x (15 + 15) x 0.25 = 15 — reserve priced.
+  expect(prep.budget.surcharge_applied).toBeCloseTo(15, 9);
+});
+
+test('zero-reserve suites warn: contention invalidation will be shortfall-only', () => {
+  const prep = prepareRegistration(input());
+  expect(prep.warnings.join(' ')).toContain(
+    'contention invalidation will be shortfall-only',
+  );
+});
+
+test('R-REG-21: stale estimates artifact refuses registration naming the rebuild', () => {
+  expect(() =>
+    prepareRegistration(input({ nowMs: Date.parse('2026-10-15T00:00:00Z') })),
+  ).toThrow(/stale/);
+  expect(() =>
+    prepareRegistration(input({ nowMs: Date.parse('2026-10-15T00:00:00Z') })),
+  ).toThrow(/quorum campaign estimates/);
+});
+
+test('R-REG-18: tripwire_expect correlates to tripwire cells', () => {
+  const tripwire = (cell: Record<string, unknown>): Suite =>
+    gatingSuite({
+      comparisons: [
+        {
+          baseline: 'arm_a',
+          treatment: 'arm_b',
+          scenarios: ['scn-a'],
+          n: 1,
+          cells: { 'scn-a': cell },
+        },
+      ],
+    } as never);
+  // Gating needs the grader attestation independent of cell overrides.
+  const attested = {
+    pricingOverrides: [
+      { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+    ],
+  };
+  // tripwire WITH expectation: admitted.
+  expect(
+    prepareRegistration(
+      input({
+        ...attested,
+        suite: tripwire({ class: 'tripwire', tripwire_expect: 'fail' }),
+      }),
+    ).cells,
+  ).toHaveLength(1);
+  // gating tripwire without expectation: refused (no firing criterion).
+  expect(() =>
+    prepareRegistration(
+      input({ ...attested, suite: tripwire({ class: 'tripwire' }) }),
+    ),
+  ).toThrow(/tripwire_expect/);
+  // tripwire_expect on a non-tripwire cell: refused (miscorrelation).
+  expect(() =>
+    prepareRegistration(
+      input({
+        ...attested,
+        suite: tripwire({ class: 'confirmatory', tripwire_expect: 'fail' }),
+      }),
+    ),
+  ).toThrow(/tripwire_expect/);
+});
+test('rejection-matrix accept pairs: capability, arm os, requires_superpowers, gating auth (R-REG-9/14/16/15)', () => {
+  // R-REG-9 accept: a ref arm on a ref-capable adapter.
+  let prep = prepareRegistration(
+    input({
+      arms: {
+        arm_a: arm('arm_a', { superpowers: 'ref' }),
+        arm_b: arm('arm_b', { credential: 'cred_b' }),
+      },
+      capability: () => ({ ref: true, none: true }),
+    }),
+  );
+  expect(prep.cells).toHaveLength(1);
+  // R-REG-14 accept: arm os supported by the agent.
+  prep = prepareRegistration(
+    input({
+      arms: {
+        arm_a: arm('arm_a', { os: 'darwin' }),
+        arm_b: arm('arm_b', { credential: 'cred_b' }),
+      },
+      agentOsSupport: () => ['linux', 'darwin'],
+    }),
+  );
+  expect(prep.cells).toHaveLength(1);
+  // R-REG-16 accept: requires_superpowers scenario, both arms carry superpowers.
+  prep = prepareRegistration(
+    input({
+      arms: {
+        arm_a: arm('arm_a', { superpowers: 'ref' }),
+        arm_b: arm('arm_b', { credential: 'cred_b', superpowers: 'ref' }),
+      },
+      scenarios: [scenario('scn-a', { requires_superpowers: true })],
+    }),
+  );
+  expect(prep.cells).toHaveLength(1);
+  // R-REG-15 accept: api-key credentials in a gating suite.
+  prep = prepareRegistration(
+    input({
+      suite: gatingSuite(),
+      pricingOverrides: [
+        { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+      ],
+    } as never),
+  );
+  expect(prep.cells).toHaveLength(1);
+});
+
+test('every exclusion reason names the operator next step', () => {
+  const cases: Array<[Partial<RegistrationInput>, RegExp]> = [
+    [
+      {
+        arms: {
+          arm_a: arm('arm_a', { superpowers: 'ref' }),
+          arm_b: arm('arm_b', { credential: 'cred_b' }),
+        },
+        capability: () => ({ ref: false, none: true }),
+      },
+      /R-REG-9/,
+    ],
+    [
+      {
+        arms: {
+          arm_a: arm('arm_a', { os: 'windows' }),
+          arm_b: arm('arm_b', { credential: 'cred_b' }),
+        },
+      },
+      /R-REG-10/,
+    ],
+    [
+      {
+        arms: {
+          arm_a: arm('arm_a', { os: 'darwin' }),
+          arm_b: arm('arm_b', { credential: 'cred_b' }),
+        },
+        agentOsSupport: () => ['linux'],
+      },
+      /R-REG-14/,
+    ],
+    [
+      { scenarios: [scenario('scn-a', { requires_superpowers: true })] },
+      /R-REG-16/,
+    ],
+    [
+      {
+        credentials: {
+          cred_a: credential({ max_concurrency: 1, quota_pool: 'shared' }),
+          cred_b: credential({
+            max_concurrency: 1,
+            api_key_env: 'TEST_KEY_B',
+            quota_pool: 'shared',
+          }),
+        },
+      },
+      /R-REG-13/,
+    ],
+  ];
+  for (const [overrides, row] of cases) {
+    const prep = prepareRegistration(input(overrides));
+    expect(prep.cells).toEqual([]);
+    expect(prep.excluded_cells.length).toBeGreaterThan(0);
+    for (const { reason } of prep.excluded_cells) {
+      expect(reason).toMatch(
+        /—.*(drop|switch|raise|remove|fix|align|re-register|add|price|rebuild|move|provision|split)/,
+      );
+      expect(reason).toMatch(row);
+    }
+  }
 });
