@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -20,6 +20,9 @@ const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 // fixture does not, so a full pass run through run-child points here
 // (same pattern as test/runner-gauntlet-bin.test.ts).
 const REPO_CREDENTIALS = resolve(import.meta.dir, '..', 'credentials.yaml');
+// The static mock dir provides the `claude` binary shim (version probe /
+// provisioning) while the generated hang shim provides `gauntlet`.
+const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 
 const IDENTITY = {
   campaign_id: 'c'.repeat(64),
@@ -29,25 +32,34 @@ const IDENTITY = {
   execution_attempt_id: 'c1:scn-a:arm_a:r1:a1',
 };
 
-function scenario(): string {
+function scenario(setupFails = false): string {
   const scn = mkdtempSync(join(tmpdir(), 'scn-'));
   writeFileSync(
     join(scn, 'story.md'),
     '---\nquorum_max_time: 1m\n---\nDo the thing.',
   );
-  writeFileSync(join(scn, 'setup.sh'), '#!/usr/bin/env bash\n:\n');
+  // A failing setup drives the runner's post-allocation error path (RunnerError
+  // stage 'setup' composed into an indeterminate verdict).
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    setupFails ? '#!/usr/bin/env bash\nexit 1\n' : '#!/usr/bin/env bash\n:\n',
+  );
   chmodSync(join(scn, 'setup.sh'), 0o755);
   writeFileSync(join(scn, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
   return scn;
 }
 
-function runChild(extraArgs: string[], envExtra: Record<string, string> = {}) {
+function runChild(
+  extraArgs: string[],
+  envExtra: Record<string, string> = {},
+  scn: string = scenario(),
+) {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const proc = spawnSync(
     'bun',
     [
       RUN_CHILD,
-      scenario(),
+      scn,
       '--coding-agent',
       'claude',
       '--coding-agents-dir',
@@ -79,6 +91,46 @@ function runChild(extraArgs: string[], envExtra: Record<string, string> = {}) {
   };
 }
 
+// Resolve, then sleep, then resolve again — a poll tick.
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Poll `predicate` until it returns a non-undefined value or the deadline
+// passes (cli-run-sigint.test.ts's deterministic readiness gate).
+async function pollFor<T>(
+  predicate: () => T | undefined,
+  deadlineMs: number,
+  stepMs = 25,
+): Promise<T | undefined> {
+  const end = Date.now() + deadlineMs;
+  for (;;) {
+    const v = predicate();
+    if (v !== undefined) {
+      return v;
+    }
+    if (Date.now() >= end) {
+      return undefined;
+    }
+    await sleep(stepMs);
+  }
+}
+
+// The single child dir of `outRoot` holding the mock's hang marker (the
+// marker's dir IS the runDir — the mock's --project-dir).
+function hangRunDir(outRoot: string): string | undefined {
+  if (!existsSync(outRoot)) {
+    return undefined;
+  }
+  for (const name of readdirSync(outRoot)) {
+    const dir = join(outRoot, name);
+    if (existsSync(join(dir, 'mock-gauntlet-hang.pid'))) {
+      return dir;
+    }
+  }
+  return undefined;
+}
+
 test('campaign identity: persisted at run-dir allocation and stamped on the verdict', () => {
   const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)]);
   expect(r.status).toBe(0);
@@ -108,8 +160,104 @@ test('legacy runs carry no campaign block (byte-identical intake absence)', () =
 test('malformed campaign identity fails loud at the CLI boundary', () => {
   const r = runChild(['--campaign-identity', '{"campaign_id": "x"}']);
   expect(r.status).not.toBe(0);
-  expect(r.stderr).toMatch(/campaign-identity|comparison_id|invalid/i);
+  // The SPECIFIC rejection: the zod issues dump names the first missing
+  // required field (comparison_id) — not just any stderr noise.
+  expect(r.stderr).toMatch(/ZodError/);
+  expect(r.stderr).toMatch(/"comparison_id"/);
+  // The boundary is BEFORE run-dir allocation: a malformed block must never
+  // leave a run dir behind.
+  expect(r.runDir).toBeNull();
+  expect(readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))).toEqual([]);
 });
+
+test('error path: identity persisted at allocation and stamped on an error verdict', () => {
+  // R-SPN-4: the stamp must land on EVERY exit path, not just the happy one.
+  // A failing setup.sh forces the runner's post-allocation error path — the
+  // RunnerError is composed into an indeterminate verdict with an error block.
+  const r = runChild(
+    ['--campaign-identity', JSON.stringify(IDENTITY)],
+    {},
+    scenario(true),
+  );
+  expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+  expect(r.runDir).not.toBeNull();
+  const verdict = JSON.parse(
+    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+  );
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('setup');
+  // Both halves: persisted at allocation, stamped on the error verdict.
+  expect(
+    JSON.parse(readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8')),
+  ).toEqual(IDENTITY);
+  expect(verdict.campaign).toEqual(IDENTITY);
+});
+
+test('stopped path: SIGINT writes the stopped verdict stamped with the identity', async () => {
+  // The stopped path is the CLI's SIGINT handler (writeStoppedVerdict), not
+  // the runner's identified construction — it needs its own stamp proof.
+  // Drives run-child under the mock gauntlet's `hang` fixture, parked in the
+  // agent phase, then signals it (cli-run-sigint.test.ts's mechanics).
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-ident-sigint-'));
+  const child = spawn(
+    'bun',
+    [
+      RUN_CHILD,
+      scenario(),
+      '--coding-agent',
+      'claude',
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      outRoot,
+      '--credentials-file',
+      REPO_CREDENTIALS,
+      '--campaign-identity',
+      JSON.stringify(IDENTITY),
+    ],
+    {
+      env: {
+        ...process.env,
+        PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
+        ANTHROPIC_API_KEY: 'sk-test',
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  // The child must outlive this test body even if an assertion throws; reap it.
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.on('exit', (code) => resolveExit(code));
+  });
+  try {
+    // Race-free readiness: poll for the mock's hang marker (the runDir).
+    const runDir = await pollFor(() => hangRunDir(outRoot), 30_000);
+    expect(runDir).toBeDefined();
+    if (runDir === undefined) {
+      throw new Error('mock gauntlet never reached hang mode');
+    }
+    child.kill('SIGINT');
+    const code = await exited;
+    expect(code).toBe(2);
+    const verdict = JSON.parse(
+      readFileSync(join(runDir, 'verdict.json'), 'utf8'),
+    );
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('stopped');
+    // Both halves: persisted at allocation, stamped on the stopped verdict.
+    expect(
+      JSON.parse(readFileSync(join(runDir, 'campaign-identity.json'), 'utf8')),
+    ).toEqual(IDENTITY);
+    expect(verdict.campaign).toEqual(IDENTITY);
+  } finally {
+    // Belt and suspenders: no leaked CLI child survives a failed assertion.
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    await exited;
+  }
+}, 60_000);
 
 test('covered child marker: the child entry never attempts lock acquisition', () => {
   // C4 defect-addendum: campaign children enter covered by the holder's
