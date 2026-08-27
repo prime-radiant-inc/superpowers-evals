@@ -24,6 +24,14 @@ import {
   normalizeBlockReplaced,
   readRunAllocatedGrants,
 } from '../contracts/campaign/journal-events.ts';
+import {
+  applyCampaignEvent,
+  applySampleEvent,
+  beginSealing,
+  type CampaignState,
+  type JournalEventInput,
+  type SampleState,
+} from '../contracts/campaign/state-machine.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import { clockNowMs } from './host-stats.ts';
 import {
@@ -223,6 +231,56 @@ export interface AttemptRow {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** E7.2 legacy same-arm pairing (ONE implementation for the writer's
+ *  incremental fold and for replay, so derived rosters can never diverge):
+ *  the successor's OWN samples form the roster, each superseding the
+ *  predecessor sample of the same arm; the pairing must be total in both
+ *  directions (one sample per arm per cell). `armSource` names the
+ *  membership authority in failures; `fail` builds the caller's error type
+ *  (JournalError on append, JournalCorruptionError on replay). */
+function pairSameArmRoster(args: {
+  readonly predecessorBlockId: string;
+  readonly successorBlockId: string;
+  readonly successorSampleIds: readonly string[];
+  readonly predecessorSampleIds: readonly string[];
+  readonly armOf: (sampleId: string) => string | undefined;
+  readonly armSource: string;
+  readonly fail: (message: string) => Error;
+}): BlockRosterEntry[] {
+  const predecessorByArm = new Map<string, string>();
+  for (const sampleId of args.predecessorSampleIds) {
+    const arm = args.armOf(sampleId);
+    if (arm === undefined || arm === '') {
+      throw args.fail(
+        `predecessor sample ${sampleId} of block ${args.predecessorBlockId} has no arm in ${args.armSource} — cannot same-arm pair (E7.2)`,
+      );
+    }
+    predecessorByArm.set(arm, sampleId);
+  }
+  const entries: BlockRosterEntry[] = [];
+  for (const sampleId of args.successorSampleIds) {
+    const arm = args.armOf(sampleId);
+    if (arm === undefined || arm === '') {
+      throw args.fail(
+        `reserve sample ${sampleId} of block ${args.successorBlockId} has no arm in ${args.armSource} — cannot same-arm pair (E7.2)`,
+      );
+    }
+    const supersedes = predecessorByArm.get(arm);
+    if (supersedes === undefined) {
+      throw args.fail(
+        `same-arm pairing is not total: no sample of predecessor block ${args.predecessorBlockId} has arm ${arm} for reserve sample ${sampleId} — refusing (E7.2)`,
+      );
+    }
+    entries.push({ sample_id: sampleId, arm, supersedes });
+  }
+  if (entries.length !== predecessorByArm.size) {
+    throw args.fail(
+      `same-arm pairing is not total: predecessor block ${args.predecessorBlockId} has an arm no reserve sample of ${args.successorBlockId} covers — refusing (E7.2)`,
+    );
+  }
+  return entries;
 }
 
 export class JournalWriter {
@@ -452,38 +510,15 @@ export class JournalWriter {
     const armBySample = new Map(
       this.campaign.samples.map((sample) => [sample.sample_id, sample.arm]),
     );
-    const predecessorByArm = new Map<string, string>();
-    for (const sampleId of this.rosters.get(rec.block_id) ?? []) {
-      const arm = armBySample.get(sampleId);
-      if (arm === undefined) {
-        throw new JournalError(
-          `predecessor sample ${sampleId} of block ${rec.block_id} has no arm in the campaign document — cannot same-arm pair (E7.2)`,
-        );
-      }
-      predecessorByArm.set(arm, sampleId);
-    }
-    const entries: BlockRosterEntry[] = [];
-    for (const sampleId of successor.sample_ids) {
-      const arm = armBySample.get(sampleId);
-      if (arm === undefined) {
-        throw new JournalError(
-          `reserve sample ${sampleId} of block ${successor.block_id} has no arm in the campaign document — cannot same-arm pair (E7.2)`,
-        );
-      }
-      const supersedes = predecessorByArm.get(arm);
-      if (supersedes === undefined) {
-        throw new JournalError(
-          `same-arm pairing is not total: no sample of predecessor block ${rec.block_id} has arm ${arm} for reserve sample ${sampleId} — refusing (E7.2)`,
-        );
-      }
-      entries.push({ sample_id: sampleId, arm, supersedes });
-    }
-    if (entries.length !== predecessorByArm.size) {
-      throw new JournalError(
-        `same-arm pairing is not total: predecessor block ${rec.block_id} has an arm no reserve sample of ${successor.block_id} covers — refusing (E7.2)`,
-      );
-    }
-    return entries;
+    return pairSameArmRoster({
+      predecessorBlockId: rec.block_id,
+      successorBlockId: successor.block_id,
+      successorSampleIds: successor.sample_ids,
+      predecessorSampleIds: this.rosters.get(rec.block_id) ?? [],
+      armOf: (sampleId) => armBySample.get(sampleId),
+      armSource: 'the campaign document',
+      fail: (message) => new JournalError(message),
+    });
   }
 
   /** Projection maintenance (mirrors replayEvents routing, Decision D-7).
@@ -966,4 +1001,335 @@ export function openJournalRead(campaignDir: string): {
       db.close();
     },
   };
+}
+
+/** Replay's roster entry. zod infers optional fields as `T | undefined`;
+ *  explicit-undefined compatibility keeps BlockRosterEntry rosters
+ *  assignable (the crash-windows MintRosterEntry precedent). */
+export interface ReplayRosterEntry {
+  sample_id: string;
+  arm: string;
+  supersedes?: string | undefined;
+}
+
+export interface ReplayState {
+  campaignState: CampaignState;
+  readonly sampleStates: Map<string, SampleState>;
+  readonly blockStates: Map<string, string>;
+  readonly rosters: Map<string, ReplayRosterEntry[]>;
+  readonly mintSeqBySuccessor: Map<string, number>;
+  readonly supersededBlocks: Set<string>;
+  readonly quarantine: Map<
+    string,
+    { run_id: string; attempt_id?: string; reason: string }
+  >;
+  readonly budget: { spend_usd: number; estimate_inflight_usd: number };
+}
+
+/** The pinned replay routing table (Decision D-7): a reject is corruption
+ *  ONLY after correct routing. Sample-scoped -> applySampleEvent per named
+ *  sample; block fan-out over universe blocks ∪ E7 mint rosters; block_
+ *  replaced -> instance-chain + roster projections ONLY (never the sample
+ *  reducer); campaign-scoped -> applyCampaignEvent; accounting ->
+ *  projections only. quarantined -> quarantine projection only. */
+export function replayEvents(
+  universe: CampaignUniverse,
+  events: readonly JournalEvent[],
+): ReplayState {
+  const sampleStates = new Map<string, SampleState>();
+  const blockStates = new Map<string, string>();
+  const rosters = new Map<string, ReplayRosterEntry[]>();
+  const mintSeqBySuccessor = new Map<string, number>();
+  const supersededBlocks = new Set<string>();
+  const quarantine = new Map<
+    string,
+    { run_id: string; attempt_id?: string; reason: string }
+  >();
+  let campaignState: CampaignState = 'registered';
+  let spend = 0;
+  let estimate = 0;
+
+  const attemptSample = new Map<string, string>(); // attempt_created bindings
+  for (const block of universe.blocks) {
+    const armBySample = new Map(
+      universe.samples.map((s) => [s.sample_id, s.arm ?? '']),
+    );
+    rosters.set(
+      block.block_id,
+      block.sample_ids.map((sampleId) => ({
+        sample_id: sampleId,
+        arm: armBySample.get(sampleId) ?? '',
+      })),
+    );
+  }
+  const ensureSample = (sampleId: string): void => {
+    if (!sampleStates.has(sampleId)) sampleStates.set(sampleId, 'planned');
+  };
+  const stateOf = (sampleId: string): SampleState =>
+    sampleStates.get(sampleId) ?? 'planned';
+  const membershipOf = (blockId: string): string[] =>
+    (rosters.get(blockId) ?? []).map((entry) => entry.sample_id);
+  /** Attempt-scoped events name an attempt; the sample rides the binding.
+   *  An attempt never created in this stream is corruption (correct
+   *  routing already happened). */
+  const sampleOfAttempt = (event: JournalEvent, attemptId: string): string => {
+    const sampleId = attemptSample.get(attemptId);
+    if (sampleId === undefined) {
+      throw new JournalCorruptionError(
+        `${event.type} (seq ${event.seq}) names attempt ${attemptId} never bound by attempt_created — corruption`,
+      );
+    }
+    return sampleId;
+  };
+
+  for (const [index, event] of events.entries()) {
+    const input: JournalEventInput = {
+      type: event.type,
+      payload: event.payload,
+    } as JournalEventInput;
+    // R-JRN-11 derivation: activity events double as the campaign-state
+    // signal (storage_paused -> running on the first activity; running stays
+    // running). The SHIPPED campaign reducer owns the edge — no second
+    // implementation here.
+    if (
+      (campaignState === 'storage_paused' || campaignState === 'running') &&
+      (event.type === 'block_admitted' ||
+        event.type === 'attempt_created' ||
+        event.type === 'budget_event')
+    ) {
+      const derived = applyCampaignEvent(campaignState, event.type);
+      if (derived.result === 'apply') campaignState = derived.next;
+    }
+    switch (event.type) {
+      case 'attempt_created':
+        attemptSample.set(event.payload.attempt_id, event.payload.sample_id);
+        ensureSample(event.payload.sample_id);
+        sampleStates.set(
+          event.payload.sample_id,
+          applyOrCorrupt(
+            event,
+            stateOf(event.payload.sample_id),
+            event.payload.sample_id,
+            input,
+          ),
+        );
+        break;
+      case 'run_allocated':
+      case 'run_completed':
+      case 'instrument_failure': {
+        const sampleId = sampleOfAttempt(event, event.payload.attempt_id);
+        sampleStates.set(
+          sampleId,
+          applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
+        );
+        break;
+      }
+      case 'exposure_started':
+      case 'sample_disposition':
+      case 'slot_exhausted': {
+        const sampleId = event.payload.sample_id;
+        ensureSample(sampleId);
+        sampleStates.set(
+          sampleId,
+          applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
+        );
+        break;
+      }
+      case 'budget_stopped':
+        for (const sampleId of event.payload.sample_ids) {
+          ensureSample(sampleId);
+          sampleStates.set(
+            sampleId,
+            applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
+          );
+        }
+        break;
+      case 'block_admitted':
+      case 'aborted':
+      case 'skew_excluded': {
+        const members = membershipOf(event.payload.block_id);
+        if (members.length === 0) {
+          throw new JournalCorruptionError(
+            `${event.type} (seq ${event.seq}) names unknown block ${event.payload.block_id} — no frozen or minted membership`,
+          );
+        }
+        for (const sampleId of members) {
+          ensureSample(sampleId);
+          const outcome = applySampleEvent(stateOf(sampleId), input);
+          if (outcome.result === 'apply')
+            sampleStates.set(sampleId, outcome.next);
+          if (outcome.result === 'reject') {
+            throw new JournalCorruptionError(
+              `${event.type} (seq ${event.seq}) REJECT from ${sampleStates.get(sampleId)} for sample ${sampleId} — routed correctly, so this is corruption`,
+            );
+          }
+          // ignore-late: recorded-but-non-mutating (R-JRN-7)
+        }
+        blockStates.set(
+          event.payload.block_id,
+          event.type === 'block_admitted' ? 'admitted' : event.type,
+        );
+        break;
+      }
+      case 'block_replaced': {
+        const rec = normalizeBlockReplaced(event.payload);
+        supersededBlocks.add(rec.block_id);
+        mintSeqBySuccessor.set(rec.replacement_block_id, event.seq);
+        if (rec.roster.length > 0) {
+          rosters.set(rec.replacement_block_id, [...rec.roster]);
+        } else {
+          // E7.2 legacy round-trip: the successor is an unactivated FROZEN
+          // RESERVE block; its OWN samples form the roster, each superseding
+          // the same-arm predecessor sample (total pairing — one sample per
+          // arm per cell). Membership derives from the registered universe,
+          // never carried over from the predecessor — the same derivation
+          // the writer's incremental fold runs (pairSameArmRoster).
+          rosters.set(
+            rec.replacement_block_id,
+            deriveLegacyReplayRoster(universe, rosters, rec, event),
+          );
+        }
+        blockStates.set(rec.block_id, 'replaced');
+        blockStates.set(rec.replacement_block_id, 'minted');
+        break; // NEVER fanned through applySampleEvent (Decision D-7)
+      }
+      case 'campaign_opened':
+      case 'campaign_cancelled':
+      case 'storage_paused': {
+        const outcome = applyCampaignEvent(campaignState, event.type);
+        if (outcome.result === 'reject') {
+          throw new JournalCorruptionError(
+            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${campaignState} — corruption`,
+          );
+        }
+        campaignState = outcome.next;
+        break;
+      }
+      case 'sealed': {
+        // C5: `sealing` is TRANSIENT — entered by predicate-guarded
+        // beginSealing, never by an event — so a validly sealed journal holds
+        // running -> sealing -> sealed with only `sealed` on disk. Replay
+        // models the hop through the SHIPPED edges (no second
+        // implementation): beginSealing over the strict pre-event prefix,
+        // then sealing -> sealed. A reject means the journal witnesses a
+        // seal that could not have happened.
+        const begun = beginSealing(
+          campaignState,
+          universe,
+          events.slice(0, index),
+        );
+        if (begun.result === 'reject') {
+          throw new JournalCorruptionError(
+            `sealed (seq ${event.seq}) cannot enter sealing from ${campaignState} — the seal predicate does not hold over the preceding events, so this journal records an impossible seal; inspect the campaign directory before trusting any derived state`,
+          );
+        }
+        const outcome = applyCampaignEvent(begun.next, event.type);
+        if (outcome.result === 'reject') {
+          throw new JournalCorruptionError(
+            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${begun.next} — corruption`,
+          );
+        }
+        campaignState = outcome.next;
+        break;
+      }
+      case 'pool_blocked':
+        break; // projections only (accounting class)
+      case 'budget_event':
+        if (event.payload.kind === 'spend') spend += event.payload.amount_usd;
+        else estimate = event.payload.amount_usd; // absolute-total supersession (E7.7)
+        break;
+      case 'amendment':
+      case 'adjudication':
+        break; // projections only
+      case 'quarantined':
+        quarantine.set(event.payload.run_id, {
+          run_id: event.payload.run_id,
+          ...(event.payload.attempt_id !== undefined
+            ? { attempt_id: event.payload.attempt_id }
+            : {}),
+          reason: event.payload.reason,
+        });
+        break;
+      default:
+        // The switch is statically exhaustive over JournalEvent (`event` is
+        // never here); the widening cast keeps the runtime backstop for a
+        // row a future vocabulary parses that this table does not route.
+        throw new JournalCorruptionError(
+          `unknown event type at seq ${(event as JournalEvent).seq}`,
+        );
+    }
+  }
+
+  return {
+    campaignState,
+    sampleStates,
+    blockStates,
+    rosters,
+    mintSeqBySuccessor,
+    supersededBlocks,
+    quarantine,
+    budget: { spend_usd: spend, estimate_inflight_usd: estimate },
+  };
+}
+
+/** Replay's E7.2 legacy-arm derivation: resolve the successor as a frozen
+ *  reserve block of the universe and same-arm pair against the predecessor's
+ *  current roster. A legacy mint whose successor the universe does not know
+ *  as a reserve block, or whose pairing is not total, is corruption (routed
+ *  correctly — the event itself is unfulfillable). */
+function deriveLegacyReplayRoster(
+  universe: CampaignUniverse,
+  rosters: ReadonlyMap<string, ReplayRosterEntry[]>,
+  rec: BlockReplacedRecord,
+  event: JournalEvent,
+): BlockRosterEntry[] {
+  const successor = universe.blocks.find(
+    (block) => block.block_id === rec.replacement_block_id,
+  );
+  if (successor === undefined || successor.slot !== 'reserve') {
+    throw new JournalCorruptionError(
+      `block_replaced (seq ${event.seq}) legacy arm names successor ${rec.replacement_block_id} that is not a frozen reserve block of the universe — corruption; inspect the campaign document before trusting any derived state`,
+    );
+  }
+  const armBySample = new Map(
+    universe.samples.map((sample) => [sample.sample_id, sample.arm]),
+  );
+  return pairSameArmRoster({
+    predecessorBlockId: rec.block_id,
+    successorBlockId: successor.block_id,
+    successorSampleIds: successor.sample_ids,
+    predecessorSampleIds: (rosters.get(rec.block_id) ?? []).map(
+      (entry) => entry.sample_id,
+    ),
+    armOf: (sampleId) => armBySample.get(sampleId),
+    armSource: 'the frozen universe',
+    fail: (message) =>
+      new JournalCorruptionError(
+        `block_replaced (seq ${event.seq}): ${message} — corruption; inspect the campaign document before trusting any derived state`,
+      ),
+  });
+}
+
+/** apply = advance; ignore-late = unchanged; reject after correct routing is
+ *  corruption (R-JRN-7). Returns the state to store. */
+function applyOrCorrupt(
+  event: JournalEvent,
+  state: SampleState,
+  sampleId: string,
+  input: JournalEventInput,
+): SampleState {
+  const outcome = applySampleEvent(state, input);
+  if (outcome.result === 'reject') {
+    throw new JournalCorruptionError(
+      `${event.type} (seq ${event.seq}) REJECT from ${state} for sample ${sampleId} — routed correctly, so this is corruption`,
+    );
+  }
+  return outcome.result === 'apply' ? outcome.next : state;
+}
+
+export function rebuildMaterialized(
+  writer: JournalWriter,
+  universe: CampaignUniverse,
+): void {
+  writer.rebuildProjectionsFrom(universe); // DROPs projection tables, re-applies events via project()
 }
