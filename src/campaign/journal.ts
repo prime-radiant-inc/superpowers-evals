@@ -1082,19 +1082,35 @@ export function replayEvents(
   // frozen universe's ∪ those mint rosters introduce (membership derives
   // from events, Decision D-7). An unknown sample is corruption — never a
   // fabricated 'planned' row the reducer could then legally advance.
+  // The sample universe is FROZEN (E7.0): reserve blocks are pre-registered
+  // with their own frozen samples and reruns reuse predecessor samples, so
+  // a mint extends BLOCK membership (the rosters map), never the sample
+  // set. Every event field that names a sample — primary targets AND
+  // references (superseded_by, roster sample_id/supersedes) — is gated.
   const knownSamples = new Set<string>(
     universe.samples.map((sample) => sample.sample_id),
   );
   for (const roster of rosters.values()) {
     for (const entry of roster) knownSamples.add(entry.sample_id);
   }
-  const requireKnownSample = (event: JournalEvent, sampleId: string): void => {
+  /** Reference gate: throws on a sample ID the frozen universe does not
+   *  know; never plants state (`role` names the offending field). */
+  const assertKnownSample = (
+    event: JournalEvent,
+    sampleId: string,
+    role: string,
+  ): void => {
     if (!knownSamples.has(sampleId)) {
       throw corrupt(
-        `${event.type} (seq ${event.seq}) names sample ${sampleId} that no frozen or minted membership knows`,
-        `the frozen campaign document and the journaled mint rosters are the membership authority — inspect them, then ${AUDIT}`,
+        `${event.type} (seq ${event.seq}) ${role} ${sampleId} that the frozen universe does not know`,
+        `the frozen campaign document is the membership authority — inspect it, then ${AUDIT}`,
       );
     }
+  };
+  /** Mutation gate: reference check plus the lazy 'planned' default for a
+   *  sample the reducer is about to advance. */
+  const requireKnownSample = (event: JournalEvent, sampleId: string): void => {
+    assertKnownSample(event, sampleId, 'names sample');
     if (!sampleStates.has(sampleId)) sampleStates.set(sampleId, 'planned');
   };
   const stateOf = (sampleId: string): SampleState =>
@@ -1162,6 +1178,18 @@ export function replayEvents(
       case 'slot_exhausted': {
         const sampleId = event.payload.sample_id;
         requireKnownSample(event, sampleId);
+        if (
+          event.type === 'sample_disposition' &&
+          event.payload.disposition === 'excluded_block_replaced'
+        ) {
+          // superseded_by names the superseding SUCCESSOR sample — a
+          // reference, validated but never planted.
+          assertKnownSample(
+            event,
+            event.payload.superseded_by,
+            'superseded_by names sample',
+          );
+        }
         sampleStates.set(
           sampleId,
           applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
@@ -1210,25 +1238,31 @@ export function replayEvents(
         const rec = normalizeBlockReplaced(event.payload);
         supersededBlocks.add(rec.block_id);
         mintSeqBySuccessor.set(rec.replacement_block_id, event.seq);
-        if (rec.roster.length > 0) {
-          rosters.set(rec.replacement_block_id, [...rec.roster]);
-        } else {
-          // E7.2 legacy round-trip: the successor is an unactivated FROZEN
-          // RESERVE block; its OWN samples form the roster, each superseding
-          // the same-arm predecessor sample (total pairing — one sample per
-          // arm per cell). Membership derives from the registered universe,
-          // never carried over from the predecessor — the same derivation
-          // the writer's incremental fold runs (pairSameArmRoster).
-          rosters.set(
-            rec.replacement_block_id,
-            deriveLegacyReplayRoster(universe, rosters, rec, event),
-          );
+        // E7.2 legacy round-trip (empty roster): the successor is an
+        // unactivated FROZEN RESERVE block; its OWN samples form the
+        // roster, each superseding the same-arm predecessor sample (total
+        // pairing — one sample per arm per cell). Membership derives from
+        // the registered universe, never carried over from the predecessor
+        // — the same derivation the writer's incremental fold runs
+        // (pairSameArmRoster).
+        const roster =
+          rec.roster.length > 0
+            ? [...rec.roster]
+            : deriveLegacyReplayRoster(universe, rosters, rec, event);
+        // A mint extends BLOCK membership only — every sample the roster
+        // names (successor sample_id AND supersedes reference) must already
+        // be a frozen universe sample (E7.0); a ghost is corruption.
+        for (const entry of roster) {
+          assertKnownSample(event, entry.sample_id, 'roster names sample');
+          if (entry.supersedes !== undefined) {
+            assertKnownSample(
+              event,
+              entry.supersedes,
+              'roster supersedes names sample',
+            );
+          }
         }
-        // A mint roster INTRODUCES membership (Decision D-7): its samples
-        // are known from this event onward.
-        for (const entry of rosters.get(rec.replacement_block_id) ?? []) {
-          knownSamples.add(entry.sample_id);
-        }
+        rosters.set(rec.replacement_block_id, roster);
         blockStates.set(rec.block_id, 'replaced');
         blockStates.set(rec.replacement_block_id, 'minted');
         break; // NEVER fanned through applySampleEvent (Decision D-7)

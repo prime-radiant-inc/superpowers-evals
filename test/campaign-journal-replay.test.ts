@@ -330,26 +330,33 @@ test('an event naming a sample no frozen or minted membership knows is corruptio
   expect(() => replayEvents(UNIVERSE, ghostStopped)).toThrow(
     JournalCorruptionError,
   );
-  // Membership derives from EVENTS (universe ∪ mint rosters): a sample a
-  // mint roster introduced IS known from that mint onward — never rejected.
-  const mintIntroduced = [
+  // The gate must not over-reject the CANONICAL mint (spec ~2509): a
+  // replacement activates the registered frozen reserve block with THAT
+  // block's own samples — every roster name (sample_id and supersedes) is a
+  // frozen universe sample, and the successor's samples then advance from
+  // their own planned state.
+  const canonicalMint = [
     ev('campaign_opened', opened),
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('block_replaced', {
       block_id: 'b1',
-      replacement_block_id: 'b1x',
+      replacement_block_id: 'bres',
       reason: 'subject_crashed',
       kind: 'replacement',
       reserve_activation: true,
       roster: [
-        { sample_id: 'x1', arm: 'base', supersedes: 's1' },
-        { sample_id: 'x2', arm: 'treat', supersedes: 's2' },
+        { sample_id: 's3', arm: 'base', supersedes: 's1' },
+        { sample_id: 's4', arm: 'treat', supersedes: 's2' },
       ],
     }),
-    ev('slot_exhausted', { sample_id: 'x1' }),
+    ev('slot_exhausted', { sample_id: 's3' }),
   ];
-  const state = replayEvents(UNIVERSE, mintIntroduced);
-  expect(state.sampleStates.get('x1')).toBe('exhausted');
+  const state = replayEvents(RESERVE_UNIVERSE, canonicalMint);
+  expect(state.sampleStates.get('s3')).toBe('exhausted');
+  expect(state.rosters.get('bres')).toEqual([
+    { sample_id: 's3', arm: 'base', supersedes: 's1' },
+    { sample_id: 's4', arm: 'treat', supersedes: 's2' },
+  ]);
 });
 
 test("every corruption refusal names the operator's next step (F2, fail-closed)", () => {
@@ -393,4 +400,64 @@ test("every corruption refusal names the operator's next step (F2, fail-closed)"
     expect(thrown).toBeInstanceOf(JournalCorruptionError);
     expect((thrown as Error).message).toMatch(NEXT_STEP);
   }
+});
+
+// ————— Review round 2 —————
+
+test('secondary sample references are gated: superseded_by, roster sample_id, roster supersedes (F1 remainder)', () => {
+  const opened = { campaign_id: 'c', digest: 'd'.repeat(64) };
+  // sample_disposition.superseded_by is a sample REFERENCE — a ghost must be
+  // corruption, never a legal transition of the source sample.
+  const ghostSupersededBy = [
+    ev('campaign_opened', opened),
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('sample_disposition', {
+      sample_id: 's1',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'ghost',
+    }),
+  ];
+  expect(() => replayEvents(UNIVERSE, ghostSupersededBy)).toThrow(
+    JournalCorruptionError,
+  );
+  // Fresh mint roster sample_ids must be frozen universe samples (E7.0:
+  // reserve blocks are pre-registered with their own frozen samples; reruns
+  // reuse predecessor samples) — a mint can never INTRODUCE sample IDs.
+  const ghostRosterSamples = [
+    ev('campaign_opened', opened),
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1x',
+      reason: 'subject_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+  ];
+  expect(() => replayEvents(UNIVERSE, ghostRosterSamples)).toThrow(
+    JournalCorruptionError,
+  );
+  // ...and so must roster supersedes references.
+  const ghostSupersedes = [
+    ev('campaign_opened', opened),
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'bres',
+      reason: 'subject_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 's3', arm: 'base', supersedes: 'ghost' },
+        { sample_id: 's4', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+  ];
+  expect(() => replayEvents(RESERVE_UNIVERSE, ghostSupersedes)).toThrow(
+    JournalCorruptionError,
+  );
 });
