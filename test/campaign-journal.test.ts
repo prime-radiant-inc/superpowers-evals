@@ -1,12 +1,13 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   electWriter,
   initJournalDb,
   JOURNAL_DB_FILENAME,
+  JournalError,
   type JournalWriter,
   openJournalRead,
   WriterDeposedError,
@@ -31,11 +32,24 @@ function camp(): string {
   return dir;
 }
 
+// Fixture-literal casts (only the membership fields the writer reads are
+// populated): the default campaign gives b1 the s1/s2 membership the core
+// tests append against; review F4 made membership-dependent appends refuse
+// unknown references instead of fabricating empty strings.
+const BASE_CAMPAIGN = {
+  blocks: [{ block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] }],
+  samples: [
+    { sample_id: 's1', cell: 'c1:scn', arm: 'base', replicate: 1 },
+    { sample_id: 's2', cell: 'c1:scn', arm: 'treat', replicate: 1 },
+  ],
+} as unknown as Campaign;
+
 function writer(dir: string, clock = new FakeClock(1)): JournalWriter {
   return electWriter({
     campaignDir: dir,
     clock,
     identity: new LocalIdentity(),
+    campaign: BASE_CAMPAIGN,
   });
 }
 
@@ -90,6 +104,14 @@ test('PRAGMAs on the writer connection are pinned (WAL / FULL / busy_timeout=0)'
   } | null;
   expect(mode?.journal_mode).toBe('wal');
   db.close();
+  // Minor (review): durable assertions on the ACTUAL writer connection —
+  // synchronous and busy_timeout are per-connection, so only the writer's
+  // own connection can observe the pin.
+  expect(w.pragmaState()).toEqual({
+    journal_mode: 'wal',
+    synchronous: 2,
+    busy_timeout: 0,
+  });
   w.release();
 });
 
@@ -313,38 +335,93 @@ test('rebuildProjectionsFrom: drop + replay is byte-identical to incremental mai
   w.release();
 });
 
-test('legacy block_replaced (empty roster) carries predecessor membership — roster rows + attempt resolution (E7.2)', () => {
+// Review F1: a realistic primary+reserve fixture — the legacy derivation
+// resolves the FROZEN RESERVE block's own samples and pairs same-arm with
+// the predecessor's samples (spec E7.2 + the kind-'replacement' membership
+// rule: membership derives from the registered universe, never invented).
+const RESERVE_CAMPAIGN = {
+  blocks: [
+    { block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] },
+    {
+      block_id: 'bres',
+      comparison_id: 'c1',
+      sample_ids: ['s3', 's4'],
+      slot: 'reserve',
+    },
+  ],
+  samples: [
+    { sample_id: 's1', cell: 'c1:scn', arm: 'base', replicate: 1 },
+    { sample_id: 's2', cell: 'c1:scn', arm: 'treat', replicate: 1 },
+    { sample_id: 's3', cell: 'c1:scn', arm: 'base', replicate: 2 },
+    { sample_id: 's4', cell: 'c1:scn', arm: 'treat', replicate: 2 },
+  ],
+} as unknown as Campaign;
+
+const RESERVE_UNIVERSE: CampaignUniverse = {
+  samples: [
+    { sample_id: 's1', arm: 'base', cell: 'c1:scn' },
+    { sample_id: 's2', arm: 'treat', cell: 'c1:scn' },
+    { sample_id: 's3', arm: 'base', cell: 'c1:scn' },
+    { sample_id: 's4', arm: 'treat', cell: 'c1:scn' },
+  ],
+  blocks: [
+    { block_id: 'b1', sample_ids: ['s1', 's2'], slot: 'primary' },
+    { block_id: 'bres', sample_ids: ['s3', 's4'], slot: 'reserve' },
+  ],
+};
+
+test('legacy block_replaced derives the frozen reserve block roster with same-arm supersedes (E7.2)', () => {
   const dir = camp();
   const w = electWriter({
     campaignDir: dir,
     clock: new FakeClock(1),
     identity: new LocalIdentity(),
-    campaign: PARITY_CAMPAIGN,
+    campaign: RESERVE_CAMPAIGN,
   });
   w.appendEvent(OPENED);
   w.appendEvent({
     type: 'block_admitted',
     payload: { block_id: 'b1', pools: ['p'] },
   });
-  // Legacy arm: no roster — membership carries over from the predecessor.
+  // Legacy arm: no roster/reserve_activation — the derivation must produce
+  // the reserve block's own samples, each superseding the same-arm
+  // predecessor sample (total pairing, one sample per arm per cell).
   w.appendEvent({
     type: 'block_replaced',
     payload: {
       block_id: 'b1',
-      replacement_block_id: 'b1:i1',
+      replacement_block_id: 'bres',
       cause: 'subject_spawn_failed',
     },
   });
+  // The derived roster exactly — asserted, not sampled:
+  const rostersLine = w
+    .snapshotTables()
+    .split('\n')
+    .find((line) => line.startsWith('block_rosters='));
+  expect(
+    JSON.parse(rostersLine?.slice('block_rosters='.length) ?? '[]'),
+  ).toEqual([
+    { block_id: 'bres', sample_id: 's3', arm: 'base', supersedes: 's1' },
+    { block_id: 'bres', sample_id: 's4', arm: 'treat', supersedes: 's2' },
+  ]);
+  // Successor membership is the reserve block's OWN samples: a post-mint
+  // attempt resolves to the activated reserve; predecessor samples stay
+  // resolved to their frozen home.
   w.appendEvent({
     type: 'attempt_created',
-    payload: { sample_id: 's1', attempt_id: 'a2' },
+    payload: { sample_id: 's3', attempt_id: 'a2' },
   });
-  const row = w.readAttempt('a2');
-  expect(row.block_id).toBe('b1:i1'); // resolved through the carried roster
+  expect(w.readAttempt('a2').block_id).toBe('bres');
+  w.appendEvent({
+    type: 'attempt_created',
+    payload: { sample_id: 's1', attempt_id: 'a3' },
+  });
+  expect(w.readAttempt('a3').block_id).toBe('b1');
+  // The derivation is a pure function of campaign + events — parity across
+  // a drop + replay rebuild:
   const tables = w.snapshotTables();
-  expect(tables).toContain('"block_id":"b1:i1","sample_id":"s1"'); // carried row materialized
-  // The carry is derived from events, not stored state — parity survives rebuild:
-  w.rebuildProjectionsFrom(PARITY_UNIVERSE);
+  w.rebuildProjectionsFrom(RESERVE_UNIVERSE);
   expect(w.snapshotTables()).toBe(tables);
   w.release();
 });
@@ -368,4 +445,134 @@ test('release() severs the lease even when the end-of-session checkpoint fails (
   pin.exec('COMMIT');
   pin.close();
   successor.release();
+});
+
+test('deposed writer under an active successor write-lock throws WriterDeposedError, current writer throws raw busy (R-LCK-1)', () => {
+  const dir = camp();
+  const a = writer(dir); // gen 1
+  a.appendEvent(OPENED);
+  a.abandonLease();
+  const b = writer(dir); // gen 2 — the live writer
+  // A third connection holds the WAL write lock (an in-flight successor
+  // transaction): with busy_timeout = 0 every BEGIN IMMEDIATE is instantly
+  // busy. The DEPOSED writer must read as deposed, never as a generic lock
+  // error; the CURRENT writer's busy is genuine contention and stays raw.
+  const holder = new Database(join(dir, JOURNAL_DB_FILENAME));
+  holder.exec('BEGIN IMMEDIATE');
+  try {
+    expect(() =>
+      a.appendEvent({ type: 'aborted', payload: { block_id: 'b1' } }),
+    ).toThrow(WriterDeposedError);
+    expect(() =>
+      b.appendEvent({ type: 'aborted', payload: { block_id: 'b1' } }),
+    ).toThrow(/database is locked|SQLITE_BUSY/i);
+  } finally {
+    holder.exec('ROLLBACK');
+    holder.close();
+  }
+  // The lock is free again: B appends fine, A is still deposed on the fence.
+  expect(
+    b.appendEvent({ type: 'aborted', payload: { block_id: 'b1' } }).seq,
+  ).toBe(2);
+  expect(() =>
+    a.appendEvent({ type: 'aborted', payload: { block_id: 'b1' } }),
+  ).toThrow(WriterDeposedError);
+  b.release();
+});
+
+test('initJournalDb refuses existing journals with a foreign schema_version or foreign tables (R-JRN-2)', () => {
+  const dir = camp();
+  const db = new Database(join(dir, JOURNAL_DB_FILENAME));
+  db.query("UPDATE meta SET value = '999' WHERE key = 'schema_version'").run();
+  db.close();
+  expect(() => initJournalDb(dir)).toThrow(/schema_version.*999/);
+  // The refusal mutated nothing: the version row is still 999.
+  const after = new Database(join(dir, JOURNAL_DB_FILENAME));
+  const row = after
+    .query('SELECT value FROM meta WHERE key = ?')
+    .get('schema_version') as {
+    value: string;
+  };
+  expect(row.value).toBe('999');
+  after.close();
+  // A foreign database (tables, no meta) is refused, never grafted onto.
+  const foreignDir = mkdtempSync(join(tmpdir(), 'camp-'));
+  const foreign = new Database(join(foreignDir, JOURNAL_DB_FILENAME));
+  foreign.exec('CREATE TABLE foreign_data(x)');
+  foreign.close();
+  expect(() => initJournalDb(foreignDir)).toThrow(/foreign|refus/i);
+  // A healthy journal re-inits idempotently; a zero-byte crash shell repairs.
+  expect(() => initJournalDb(camp())).not.toThrow();
+  const crashDir = mkdtempSync(join(tmpdir(), 'camp-'));
+  writeFileSync(join(crashDir, JOURNAL_DB_FILENAME), '');
+  expect(() => initJournalDb(crashDir)).not.toThrow();
+});
+
+test('membership-dependent appends fail closed on unknown references — no fabricated rows (F4)', () => {
+  const dir = camp();
+  const w = writer(dir); // campaign fixture: b1 covers s1/s2
+  w.appendEvent(OPENED);
+  expect(() =>
+    w.appendEvent({
+      type: 'block_admitted',
+      payload: { block_id: 'bX', pools: ['p'] },
+    }),
+  ).toThrow(/bX/);
+  expect(() =>
+    w.appendEvent({
+      type: 'attempt_created',
+      payload: { sample_id: 'ghost', attempt_id: 'aX' },
+    }),
+  ).toThrow(/ghost/);
+  // Both refusals rolled back whole: no seq consumed, no rows fabricated.
+  expect(w.readEvents().map((e) => e.seq)).toEqual([1]);
+  w.release();
+  // Without the campaign document the same appends refuse naming why.
+  const bare = electWriter({
+    campaignDir: camp(),
+    clock: new FakeClock(1),
+    identity: new LocalIdentity(),
+  });
+  expect(() =>
+    bare.appendEvent({
+      type: 'block_admitted',
+      payload: { block_id: 'b1', pools: ['p'] },
+    }),
+  ).toThrow(/campaign/);
+  bare.release();
+});
+
+test('a failed rebuild rolls back the tables AND restores in-memory membership (F5)', () => {
+  const dir = camp();
+  const w = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(1),
+    identity: new LocalIdentity(),
+    campaign: RESERVE_CAMPAIGN,
+  });
+  w.appendEvent(OPENED);
+  w.appendEvent({
+    type: 'block_admitted',
+    payload: { block_id: 'b1', pools: ['p'] },
+  });
+  w.appendEvent({
+    type: 'attempt_created',
+    payload: { sample_id: 's1', attempt_id: 'a1' },
+  });
+  const before = w.snapshotTables();
+  // A universe with NO membership: re-projection of attempt_created fails
+  // mid-replay (F4's fail-closed refusal) — a real in-transaction failure.
+  expect(() => w.rebuildProjectionsFrom({ samples: [], blocks: [] })).toThrow(
+    JournalError,
+  );
+  expect(w.snapshotTables()).toBe(before); // tables restored by the rollback
+  // The in-memory maps were restored too: the writer keeps appending with
+  // membership consistent with the restored tables (a1 resolves again).
+  const a2 = w.appendEvent({
+    type: 'attempt_created',
+    payload: { sample_id: 's1', attempt_id: 'a2' },
+  });
+  expect(w.readAttempt('a2').block_id).toBe('b1');
+  expect(a2.seq).toBe(4);
+  w.release();
 });

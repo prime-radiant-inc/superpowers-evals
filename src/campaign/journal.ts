@@ -13,6 +13,10 @@ import { join } from 'node:path';
 import type { Campaign } from '../contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../contracts/campaign/crash-windows.ts';
 import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
+import type {
+  BlockReplacedRecord,
+  BlockRosterEntry,
+} from '../contracts/campaign/journal-events.ts';
 import {
   type JournalEvent,
   JournalEventSchema,
@@ -133,11 +137,27 @@ function writerPragmas(db: Database): void {
 
 export function initJournalDb(campaignDir: string): void {
   mkdirSync(campaignDir, { recursive: true });
-  const db = new Database(join(campaignDir, JOURNAL_DB_FILENAME), {
-    create: true,
-  });
+  const dbPath = join(campaignDir, JOURNAL_DB_FILENAME);
+  const db = new Database(dbPath, { create: true });
   try {
     writerPragmas(db);
+    // R-JRN-2 on EXISTING databases: prove the journal is ours before any
+    // schema mutation. A version we cannot read refuses (checkSchemaVersion);
+    // tables without a meta row are a foreign database, never grafted onto.
+    // Only a table-free file (a fresh or crashed-mid-init shell) initializes.
+    const tables = db
+      .query(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+      )
+      .all() as Array<{ name: string }>;
+    const names = tables.map((table) => table.name);
+    if (names.includes('meta')) {
+      checkSchemaVersion(db);
+    } else if (names.length > 0) {
+      throw new JournalError(
+        `${dbPath} holds tables (${names.join(', ')}) but no meta.schema_version — foreign database, refusing to touch it; inspect the campaign directory by hand before initializing`,
+      );
+    }
     db.exec(SCHEMA_SQL);
     db.exec('BEGIN IMMEDIATE');
     db.query('INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)').run(
@@ -160,7 +180,7 @@ function checkSchemaVersion(db: Database): void {
     .get('schema_version') as { value: string } | null;
   if (row === null || row.value !== String(JOURNAL_SCHEMA_VERSION)) {
     throw new JournalError(
-      `journal schema_version ${row === null ? '<missing>' : row.value} != ${JOURNAL_SCHEMA_VERSION} — refusing to open (fail-closed)`,
+      `journal schema_version ${row === null ? '<missing>' : row.value} != ${JOURNAL_SCHEMA_VERSION} — refusing to open (fail-closed); this journal belongs to another schema generation: open it with the tooling that wrote it, or move the campaign directory aside before initializing a new one`,
     );
   }
 }
@@ -225,16 +245,8 @@ export class JournalWriter {
     this.db = new Database(join(args.campaignDir, JOURNAL_DB_FILENAME));
     writerPragmas(this.db);
     checkSchemaVersion(this.db);
-    if (this.campaign !== undefined) {
-      for (const block of this.campaign.blocks) {
-        this.rosters.set(block.block_id, [...block.sample_ids]);
-        this.blockComparison.set(block.block_id, block.comparison_id);
-      }
-    }
-    // Replay existing events to rebuild in-memory membership (resumes).
-    for (const event of this.readEvents()) {
-      this.foldMembership(event);
-    }
+    // Seed in-memory membership exactly as a fresh election does (resumes).
+    this.reseedMembership();
   }
 
   static elect(args: ElectWriterArgs): JournalWriter {
@@ -325,7 +337,17 @@ export class JournalWriter {
 
   private appendOne(input: EventInput): JournalEvent {
     const ts_ms = input.ts_ms ?? clockNowMs(this.clock);
-    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+    } catch (err) {
+      // busy_timeout = 0 makes a contended BEGIN IMMEDIATE fail instantly.
+      // A DEPOSED writer must read as deposed (R-LCK-1), never as a generic
+      // lock error: re-check the generation on the committed snapshot — a
+      // mismatch is deposition, a match is genuine contention for the
+      // current writer and the raw busy error is the honest surface.
+      this.assertFenced();
+      throw err;
+    }
     let envelope: JournalEvent;
     try {
       this.assertFenced();
@@ -359,15 +381,17 @@ export class JournalWriter {
   private foldMembership(event: JournalEvent): void {
     switch (event.type) {
       case 'block_replaced': {
-        const rec = normalizeBlockReplaced(event.payload);
-        const roster =
-          rec.roster.length > 0
-            ? rec.roster.map((entry) => entry.sample_id)
-            : (this.rosters.get(rec.block_id) ?? []);
-        this.rosters.set(rec.replacement_block_id, [...roster]);
-        const comparison = this.blockComparison.get(rec.block_id);
+        const roster = this.rosterEntriesFor(event);
+        this.rosters.set(
+          event.payload.replacement_block_id,
+          roster.map((entry) => entry.sample_id),
+        );
+        const comparison = this.blockComparison.get(event.payload.block_id);
         if (comparison !== undefined) {
-          this.blockComparison.set(rec.replacement_block_id, comparison);
+          this.blockComparison.set(
+            event.payload.replacement_block_id,
+            comparison,
+          );
         }
         break;
       }
@@ -379,35 +403,115 @@ export class JournalWriter {
     }
   }
 
+  /** The roster entries a mint carries: the event's explicit roster, or —
+   *  for the E7.2 legacy arm (absent roster) — the derived frozen-reserve
+   *  roster. One derivation for foldMembership and project, so in-memory
+   *  membership and the block_rosters projection can never diverge. */
+  private rosterEntriesFor(
+    event: JournalEvent & { type: 'block_replaced' },
+  ): BlockRosterEntry[] {
+    const rec = normalizeBlockReplaced(event.payload);
+    return rec.roster.length > 0
+      ? [...rec.roster]
+      : this.deriveLegacyRoster(rec);
+  }
+
+  /** E7.2 legacy round-trip + the kind-'replacement' membership rule: the
+   *  successor is an unactivated frozen reserve block of the same cell; its
+   *  OWN samples form the roster, each superseding the same-arm predecessor
+   *  sample (the pairing is total — one sample per arm per cell). Membership
+   *  derives from the registered campaign universe, never invented. */
+  private deriveLegacyRoster(rec: BlockReplacedRecord): BlockRosterEntry[] {
+    if (this.campaign === undefined) {
+      throw new JournalError(
+        `legacy block_replaced (predecessor ${rec.block_id}) cannot derive its roster without the frozen campaign document — re-elect the writer with campaign: the reserve block's membership is the authority`,
+      );
+    }
+    const successor = this.campaign.blocks.find(
+      (block) => block.block_id === rec.replacement_block_id,
+    );
+    if (successor === undefined || successor.slot !== 'reserve') {
+      throw new JournalError(
+        `replacement_block_id ${rec.replacement_block_id} is not a frozen reserve block of the campaign — refusing to invent membership; inspect the campaign document before minting`,
+      );
+    }
+    const armBySample = new Map(
+      this.campaign.samples.map((sample) => [sample.sample_id, sample.arm]),
+    );
+    const predecessorByArm = new Map<string, string>();
+    for (const sampleId of this.rosters.get(rec.block_id) ?? []) {
+      const arm = armBySample.get(sampleId);
+      if (arm === undefined) {
+        throw new JournalError(
+          `predecessor sample ${sampleId} of block ${rec.block_id} has no arm in the campaign document — cannot same-arm pair (E7.2)`,
+        );
+      }
+      predecessorByArm.set(arm, sampleId);
+    }
+    const entries: BlockRosterEntry[] = [];
+    for (const sampleId of successor.sample_ids) {
+      const arm = armBySample.get(sampleId);
+      if (arm === undefined) {
+        throw new JournalError(
+          `reserve sample ${sampleId} of block ${successor.block_id} has no arm in the campaign document — cannot same-arm pair (E7.2)`,
+        );
+      }
+      const supersedes = predecessorByArm.get(arm);
+      if (supersedes === undefined) {
+        throw new JournalError(
+          `same-arm pairing is not total: no sample of predecessor block ${rec.block_id} has arm ${arm} for reserve sample ${sampleId} — refusing (E7.2)`,
+        );
+      }
+      entries.push({ sample_id: sampleId, arm, supersedes });
+    }
+    if (entries.length !== predecessorByArm.size) {
+      throw new JournalError(
+        `same-arm pairing is not total: predecessor block ${rec.block_id} has an arm no reserve sample of ${successor.block_id} covers — refusing (E7.2)`,
+      );
+    }
+    return entries;
+  }
+
   /** Projection maintenance (mirrors replayEvents routing, Decision D-7).
    *  Runs INSIDE the append transaction. */
   private project(event: JournalEvent): void {
     const db = this.db;
     switch (event.type) {
       case 'block_admitted': {
-        const comparison =
-          this.blockComparison.get(event.payload.block_id) ?? '';
+        const comparison = this.blockComparison.get(event.payload.block_id);
+        if (comparison === undefined) {
+          throw new JournalError(
+            `block_admitted names block ${event.payload.block_id} that no frozen or minted membership resolves — refusing to fabricate a comparison_id;${
+              this.campaign === undefined
+                ? ' this writer holds no campaign document (publication phase) — re-elect with campaign'
+                : ' inspect the campaign document'
+            }`,
+          );
+        }
         db.query(
           `INSERT INTO blocks(block_id, comparison_id, state, slot, instance_of, mint_seq, reserve_activation)
            VALUES (?, ?, 'admitted', 'primary', NULL, NULL, 0)
            ON CONFLICT(block_id) DO UPDATE SET state = 'admitted'`,
         ).run(event.payload.block_id, comparison);
-        const roster = this.rosters.get(event.payload.block_id) ?? [];
-        for (const sampleId of roster) {
-          this.upsertSampleAttemptBlock(sampleId, event.payload.block_id);
-        }
         break;
       }
-      case 'attempt_created':
+      case 'attempt_created': {
+        const blockId = this.blockOfSample(event.payload.sample_id);
+        if (blockId === undefined) {
+          throw new JournalError(
+            `attempt_created names sample ${event.payload.sample_id} that no frozen or minted roster resolves — refusing to fabricate a block_id;${
+              this.campaign === undefined
+                ? ' this writer holds no campaign document (publication phase) — re-elect with campaign'
+                : ' inspect the campaign document'
+            }`,
+          );
+        }
         db.query(
           `INSERT INTO attempts(attempt_id, sample_id, block_id, state)
            VALUES (?, ?, ?, 'created')`,
-        ).run(
-          event.payload.attempt_id,
-          event.payload.sample_id,
-          this.blockOfSample(event.payload.sample_id) ?? '',
-        );
+        ).run(event.payload.attempt_id, event.payload.sample_id, blockId);
         break;
+      }
       case 'run_allocated': {
         const createdTs = this.attemptCreatedTs.get(event.payload.attempt_id);
         const spawnGap =
@@ -462,7 +566,12 @@ export class JournalWriter {
       case 'block_replaced': {
         const rec = normalizeBlockReplaced(event.payload);
         this.setBlockState(rec.block_id, 'replaced');
-        const comparison = this.blockComparison.get(rec.block_id) ?? '';
+        const comparison = this.blockComparison.get(rec.block_id);
+        if (comparison === undefined) {
+          throw new JournalError(
+            `block_replaced names predecessor ${rec.block_id} that no frozen or minted membership resolves — refusing to fabricate a comparison_id; inspect the campaign document before minting`,
+          );
+        }
         db.query(
           `INSERT INTO blocks(block_id, comparison_id, state, slot, instance_of, mint_seq, reserve_activation)
            VALUES (?, ?, 'minted', ?, ?, ?, ?)
@@ -475,27 +584,15 @@ export class JournalWriter {
           event.seq,
           rec.reserve_activation ? 1 : 0,
         );
-        if (rec.roster.length > 0) {
-          for (const entry of rec.roster) {
-            db.query(
-              `INSERT OR REPLACE INTO block_rosters(block_id, sample_id, arm, supersedes) VALUES (?, ?, ?, ?)`,
-            ).run(
-              rec.replacement_block_id,
-              entry.sample_id,
-              entry.arm,
-              entry.supersedes ?? null,
-            );
-          }
-        } else {
-          // E7.2 legacy round-trip: an absent roster carries the
-          // predecessor's membership over — same derivation replay uses, so
-          // incremental and rebuilt tables stay byte-identical.
-          const carried = this.rosters.get(rec.block_id) ?? [];
-          for (const sampleId of carried) {
-            db.query(
-              `INSERT OR REPLACE INTO block_rosters(block_id, sample_id, arm, supersedes) VALUES (?, ?, '', NULL)`,
-            ).run(rec.replacement_block_id, sampleId);
-          }
+        for (const entry of this.rosterEntriesFor(event)) {
+          db.query(
+            `INSERT OR REPLACE INTO block_rosters(block_id, sample_id, arm, supersedes) VALUES (?, ?, ?, ?)`,
+          ).run(
+            rec.replacement_block_id,
+            entry.sample_id,
+            entry.arm,
+            entry.supersedes ?? null,
+          );
         }
         break;
       }
@@ -573,7 +670,14 @@ export class JournalWriter {
    *  rebuilt tables are byte-identical to incrementally maintained ones. */
   rebuildProjectionsFrom(universe: CampaignUniverse): void {
     if (this.released) throw new JournalError('writer released');
-    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+    } catch (err) {
+      // Same rule as appendOne: a busy BEGIN must read as deposition for a
+      // deposed writer, never as a generic lock error.
+      this.assertFenced();
+      throw err;
+    }
     try {
       this.assertFenced();
       for (const [table] of PROJECTION_TABLES) {
@@ -589,7 +693,37 @@ export class JournalWriter {
       try {
         this.db.exec('ROLLBACK');
       } catch {}
+      // The rollback restored the tables; restore the in-memory maps the
+      // same way a fresh election builds them (campaign seed + fold of the
+      // unchanged events), so a caller that catches the error can never
+      // keep appending against membership inconsistent with the tables.
+      try {
+        this.reseedMembership();
+      } catch (reseedErr) {
+        throw new JournalError(
+          `rebuild failed (${errorMessage(err)}) and the membership reseed failed too (${errorMessage(reseedErr)}) — in-memory state is untrustworthy; release and re-elect a writer before further appends`,
+        );
+      }
       throw err;
+    }
+  }
+
+  /** Seed in-memory membership exactly as a fresh election does: frozen
+   *  campaign blocks first, then fold every journaled event in seq order —
+   *  the events are the truth. Used at construction (resumes) and to
+   *  restore in-memory state after a failed rebuild. */
+  private reseedMembership(): void {
+    this.rosters.clear();
+    this.attemptCreatedTs.clear();
+    this.blockComparison.clear();
+    if (this.campaign !== undefined) {
+      for (const block of this.campaign.blocks) {
+        this.rosters.set(block.block_id, [...block.sample_ids]);
+        this.blockComparison.set(block.block_id, block.comparison_id);
+      }
+    }
+    for (const event of this.readEvents()) {
+      this.foldMembership(event);
     }
   }
 
@@ -631,9 +765,28 @@ export class JournalWriter {
       .run(state, sampleId);
   }
 
-  private upsertSampleAttemptBlock(_sampleId: string, _blockId: string): void {
-    // attempts.block_id resolves at attempt_created time via blockOfSample;
-    // admission-time membership is carried by foldMembership/rosters.
+  /** R-JRN-4 diagnostic surface: the live writer connection's PRAGMA state.
+   *  synchronous and busy_timeout are per-connection — no other connection
+   *  can observe the pin, so this is the only honest probe. */
+  pragmaState(): {
+    journal_mode: string;
+    synchronous: number;
+    busy_timeout: number;
+  } {
+    const mode = this.db.query('PRAGMA journal_mode').get() as {
+      journal_mode: string;
+    } | null;
+    const sync = this.db.query('PRAGMA synchronous').get() as {
+      synchronous: number;
+    } | null;
+    const busy = this.db.query('PRAGMA busy_timeout').get() as {
+      timeout: number;
+    } | null;
+    return {
+      journal_mode: mode?.journal_mode ?? '',
+      synchronous: sync?.synchronous ?? -1,
+      busy_timeout: busy?.timeout ?? -1,
+    };
   }
 
   readEvents(afterSeq = 0): JournalEvent[] {
