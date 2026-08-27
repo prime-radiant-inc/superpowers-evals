@@ -1197,3 +1197,81 @@ test('every exclusion reason names the operator next step', () => {
     }
   }
 });
+
+import {
+  buildContentionBlock,
+  defaultContentionThresholds,
+} from '../src/campaign/registration.ts';
+
+const GiB = 2 ** 30;
+
+test('the five pinned D-4 threshold defaults derive from the fingerprint', () => {
+  const thresholds = defaultContentionThresholds({
+    mem_bytes: 16 * GiB,
+    swap_total_bytes: 4 * GiB,
+    disk_total_bytes: 100 * GiB,
+  });
+  expect(thresholds).toEqual([
+    { metric: 'load1_per_core', source: 'host', op: 'gt', value: 2.0 },
+    {
+      metric: 'mem_available_bytes',
+      source: 'host',
+      op: 'lt',
+      value: Math.max(2 * GiB, 0.1 * 16 * GiB),
+      relative_of: 'mem_bytes',
+    },
+    {
+      metric: 'swap_used_bytes',
+      source: 'host',
+      op: 'gt',
+      value: 0.25 * 4 * GiB,
+      relative_of: 'swap_total_bytes',
+    },
+    {
+      metric: 'disk_free_bytes',
+      source: 'host',
+      op: 'lt',
+      value: Math.max(5 * GiB, 0.15 * 100 * GiB),
+      relative_of: 'disk_total_bytes',
+    },
+    {
+      metric: 'process_count',
+      source: 'host',
+      op: 'gt',
+      value: 800_000,
+      relative_of: 'pid_table',
+    },
+  ]);
+});
+
+test('buildContentionBlock freezes G, thresholds, sampler parameters, tolerances (digest members)', () => {
+  const block = buildContentionBlock({
+    fingerprint: {
+      cpu_model: 'Apple M1',
+      cpu_cores: 8,
+      mem_bytes: 16 * GiB,
+      disk_total_bytes: 100 * GiB,
+    },
+    globalCap: 24,
+    thresholds: defaultContentionThresholds({
+      mem_bytes: 16 * GiB,
+      swap_total_bytes: 4 * GiB,
+      disk_total_bytes: 100 * GiB,
+    }),
+  });
+  expect(block).toEqual({
+    host_fingerprint: {
+      cpu_model: 'Apple M1',
+      cpu_cores: 8,
+      mem_bytes: 16 * GiB,
+      disk_total_bytes: 100 * GiB,
+    },
+    global_run_cap: 24,
+    thresholds: block.thresholds,
+    cadence_ms: 10_000,
+    sustain_k: 3,
+    coverage_n: 4,
+    mem_tolerance_pct: 10,
+    disk_tolerance_pct: 10,
+  });
+});

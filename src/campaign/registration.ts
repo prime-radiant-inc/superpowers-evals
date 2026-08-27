@@ -12,6 +12,9 @@ import {
   type Block,
   type Campaign,
   type Cell,
+  type ContentionDeclaration,
+  type ContentionThreshold,
+  type HostFingerprint,
   ID_COMPONENT_RE,
   type PricingOverride,
   type Sample,
@@ -22,6 +25,7 @@ import { type Suite, TIER_SELECTOR_RE } from '../contracts/campaign/suite.ts';
 import type { Credential } from '../contracts/credential.ts';
 import type { EstimatesArtifact } from '../contracts/estimates.ts';
 import { type EstimateLookup, lookupEstimate } from './estimates.ts';
+import { PID_MAX_SLOTS } from './host-stats.ts';
 
 export class RegistrationError extends Error {
   constructor(message: string) {
@@ -772,4 +776,67 @@ function graderAndPoolWarnings(input: RegistrationInput): string[] {
     }
   }
   return warnings;
+}
+
+/** Decision D-4 defaults (drafted for gate challenge; the parent pins the
+ *  obligation, not the numbers): absolute floor paired with the relative
+ *  band; hysteresis lives solely in the frozen sustain_k. */
+export function defaultContentionThresholds(args: {
+  mem_bytes: number;
+  swap_total_bytes: number;
+  disk_total_bytes: number;
+}): ContentionThreshold[] {
+  return [
+    { metric: 'load1_per_core', source: 'host', op: 'gt', value: 2.0 },
+    {
+      metric: 'mem_available_bytes',
+      source: 'host',
+      op: 'lt',
+      value: Math.max(2 * 2 ** 30, 0.1 * args.mem_bytes),
+      relative_of: 'mem_bytes',
+    },
+    {
+      metric: 'swap_used_bytes',
+      source: 'host',
+      op: 'gt',
+      value: 0.25 * args.swap_total_bytes,
+      relative_of: 'swap_total_bytes',
+    },
+    {
+      metric: 'disk_free_bytes',
+      source: 'host',
+      op: 'lt',
+      value: Math.max(5 * 2 ** 30, 0.15 * args.disk_total_bytes),
+      relative_of: 'disk_total_bytes',
+    },
+    {
+      metric: 'process_count',
+      source: 'host',
+      op: 'gt',
+      value: 0.8 * PID_MAX_SLOTS,
+      relative_of: 'pid_table',
+    },
+  ];
+}
+
+export function buildContentionBlock(args: {
+  fingerprint: HostFingerprint;
+  globalCap: number;
+  thresholds: ContentionThreshold[];
+  cadenceMs?: number;
+  sustainK?: number;
+  coverageN?: number;
+  memTolerancePct?: number;
+  diskTolerancePct?: number;
+}): ContentionDeclaration {
+  return {
+    host_fingerprint: args.fingerprint,
+    global_run_cap: args.globalCap,
+    thresholds: args.thresholds,
+    cadence_ms: args.cadenceMs ?? 10_000,
+    sustain_k: args.sustainK ?? 3,
+    coverage_n: args.coverageN ?? 4,
+    mem_tolerance_pct: args.memTolerancePct ?? 10,
+    disk_tolerance_pct: args.diskTolerancePct ?? 10,
+  };
 }

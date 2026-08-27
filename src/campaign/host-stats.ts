@@ -188,6 +188,17 @@ export const DEFAULT_RESOURCE_FLOORS: ResourceFloors = {
   process_headroom: 256,
 };
 
+/** Decision D-4 declaration default: the NOMINAL pid-table size behind the
+ *  drafted `process_count gt 0.8 x PID_MAX_SLOTS` threshold (flagged for gate
+ *  challenge — the parent pins the obligation, not the numbers). This is a
+ *  digest-stability choice, NOT a headroom judgment: the registered
+ *  declaration must stay a pure function of the fingerprint-shaped
+ *  registration inputs, so it cannot derive from the live pid_max sysctl
+ *  (a mutable knob, not host identity). Preflight still judges real headroom
+ *  against the host's actual pid_max read through the probe — never this
+ *  constant. */
+export const PID_MAX_SLOTS = 1_000_000;
+
 /** Resource-floor preflight (R-LCK-2) — the ADMISSION step, standalone by
  *  design: spender verbs (`campaign run`, `run-all`, direct `quorum run`)
  *  call it AFTER acquiring the live-spend lock and killing/reconciling
