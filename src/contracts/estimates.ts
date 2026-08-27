@@ -61,7 +61,10 @@ export const EstimatesArtifactSchema = z.object({
     corpus_median: z.object({
       duration_s: z.number(),
       cost_total_usd: z.number().nullable(),
-      tokens_total_median: z.number().optional(),
+      // Same constraint as the stats tiers (see EstimateStatsSchema): a
+      // negative fallback volume would price a corpus-tier override
+      // negative.
+      tokens_total_median: z.number().finite().nonnegative().optional(),
     }),
   }),
 });

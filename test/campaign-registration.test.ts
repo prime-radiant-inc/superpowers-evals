@@ -853,6 +853,74 @@ test('R-REG-19: key-env preflight refuses naming every unset env (api_key_env an
       }),
     ),
   ).toThrow(/K2/);
+  // A DISTINCT grader credential's missing env refuses independently of
+  // the arm credentials (R-REG-19 grader half).
+  expect(() =>
+    prepareRegistration(
+      input({
+        credentials: {
+          cred_a: credential(),
+          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+          grader_cred: credential({ api_key_env: 'GRADER_KEY' }),
+        },
+        grader: { credential: 'grader_cred', model: 'g' },
+        env: (key) => (key === 'GRADER_KEY' ? undefined : 'set'),
+      }),
+    ),
+  ).toThrow(/GRADER_KEY/);
+});
+
+test('R-REG-13 branches isolated: spacing-only rejection (cap sufficient) and global_run_cap < 2', () => {
+  // Spacing-only: every pool member's cap serves two-arm demand, but a
+  // declared spacing makes the atomic two-arm launch impossible.
+  let prep = prepareRegistration(
+    input({
+      credentials: {
+        cred_a: credential({ max_concurrency: 2, quota_pool: 'shared' }),
+        cred_b: credential({
+          max_concurrency: 2,
+          launch_spacing_seconds: 30,
+          api_key_env: 'TEST_KEY_B',
+          quota_pool: 'shared',
+        }),
+      },
+    }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /launch spacing/,
+  );
+  // Global cap: pools are fine (separate pools), but G < 2 cannot serve a
+  // two-sample block.
+  prep = prepareRegistration(input({ globalCap: 1 }));
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /global_run_cap 1/,
+  );
+});
+
+test('R-REG-14 legs: credential os_support and scenario os directive rejections', () => {
+  // Credential os_support excludes the campaign os.
+  let prep = prepareRegistration(
+    input({
+      credentials: {
+        cred_a: credential({ os_support: ['darwin'] }),
+        cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+      },
+    }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /unsupported by credential cred_a/,
+  );
+  // Scenario os directive excludes the campaign os.
+  prep = prepareRegistration(
+    input({ scenarios: [scenario('scn-a', { os: ['darwin'] })] }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
+    /unsupported by scenario directive/,
+  );
 });
 
 test('override pricing preserves the fallback tier confidence — no manufactured high, surcharge still applies (R-REG-3)', () => {
@@ -1048,6 +1116,73 @@ test('every exclusion reason names the operator next step', () => {
         },
       },
       /R-REG-13/,
+    ],
+    [
+      {
+        arms: { arm_a: arm('arm_a') },
+      },
+      /R-REG-2/,
+    ],
+    [
+      {
+        estimates: estimates({
+          entries: [],
+          fallbacks: {
+            scenario_agent: [],
+            scenario: [],
+            corpus_median: { duration_s: 600, cost_total_usd: null },
+          },
+        }),
+        suite: gatingSuite(),
+        grader: { credential: 'cred_b', model: 'g' },
+        pricingOverrides: [
+          { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+        ],
+      },
+      /R-REG-11/,
+    ],
+    [
+      {
+        estimates: estimates({
+          entries: [],
+          fallbacks: {
+            scenario_agent: [],
+            scenario: [],
+            corpus_median: { duration_s: 600, cost_total_usd: null },
+          },
+        }),
+        suite: suite({ profile_params: { max_exposure_usd: 50 } }),
+      },
+      /R-REG-12/,
+    ],
+    [
+      {
+        suite: gatingSuite(),
+        credentials: {
+          cred_a: credential({ auth: 'subscription' }),
+          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+        },
+        grader: { credential: 'cred_b', model: 'g' },
+        pricingOverrides: [
+          { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+        ],
+      },
+      /R-REG-15/,
+    ],
+    [
+      {
+        suite: suite({
+          comparisons: [
+            {
+              baseline: 'arm_a',
+              treatment: 'arm_b',
+              scenarios: ['scn-x'],
+              n: 1,
+            },
+          ],
+        }),
+      },
+      /not in the snapshot intake/,
     ],
   ];
   for (const [overrides, row] of cases) {

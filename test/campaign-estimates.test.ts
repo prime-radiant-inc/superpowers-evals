@@ -397,3 +397,24 @@ test('tokens_total_median schema: negative volumes fail artifact parse; fraction
       .entries[0]!.tokens_total_median,
   ).toBe(1.5);
 });
+
+test('corpus_median tokens_total_median is equally constrained (negative fallback fails artifact parse)', () => {
+  // A well-formed artifact whose ONLY poison is the corpus fallback's
+  // volume: the entry tiers are clean, so this isolates the fallback hole
+  // an override-priced corpus-tier lookup would multiply against.
+  const clean = buildEstimates(
+    [
+      {
+        record: rec({ run_id: 'c1' }),
+        finished_at: '2026-08-08T01:00:00.000Z',
+        tokens_total: 1_000,
+      },
+    ],
+    { sources: ['fixture'] },
+  );
+  const poisoned = JSON.parse(serializeEstimates(clean)) as {
+    fallbacks: { corpus_median: { tokens_total_median: number } };
+  };
+  poisoned.fallbacks.corpus_median.tokens_total_median = -1;
+  expect(EstimatesArtifactSchema.safeParse(poisoned).success).toBe(false);
+});
