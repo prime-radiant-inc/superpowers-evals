@@ -321,6 +321,224 @@ test('the supersession chain leaf demands the successor sample CURRENT completed
   expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
 });
 
+test('E7.3a conservation: a mint missing its required disposition never seals', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('instrument_failure', { attempt_id: 'a1', cause: 'grader_crashed' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x1s2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    // The bundle's required excluded_block_replaced for still-admitted s2
+    // is MISSING (crash between mint and dispositions); s1 keeps its
+    // instrument_failure terminal and requires none.
+    ev('block_admitted', { block_id: 'x1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 'x1s1', attempt_id: 'xa1' }),
+    ev('run_allocated', { attempt_id: 'xa1', run_id: 'xr1', pgid: 3 }),
+    ev('run_completed', { attempt_id: 'xa1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 'x1s2', attempt_id: 'xa2' }),
+    ev('run_allocated', { attempt_id: 'xa2', run_id: 'xr2', pgid: 4 }),
+    ev('run_completed', { attempt_id: 'xa2', outcome: 'pass' }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+  // Resume completes the bundle: the matching disposition satisfies E7.3a
+  // and the campaign seals.
+  events.push(
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(true);
+});
+
+test('E7.3a conservation: an orphan disposition is corruption — seal refuses even with every sample accounted', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 2 }),
+    ev('run_completed', { attempt_id: 'a2', outcome: 'pass' }),
+    // Both primaries completed — but this disposition pairs with no mint
+    // roster entry (E7.3a: absent from the roster = replay corruption).
+    ev('sample_disposition', {
+      sample_id: 's1',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s1',
+    }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+});
+
+test('E7.3a: an orphan disposition retires nothing — the resolver still acts on the live attempt', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    // No mint anywhere: the disposition matches no roster pair, so it must
+    // not suppress the crash-window resolution for the live attempt.
+    ev('sample_disposition', {
+      sample_id: 's1',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s1',
+    }),
+  );
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report.attempts).toEqual([
+    { attempt_id: 'a1', resolution: 'kill_pgid_rerun_block', pgid: 1 },
+  ]);
+});
+
+function abortedSuccessorEvents(): JournalEvent[] {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('instrument_failure', { attempt_id: 'a1', cause: 'grader_crashed' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x1s2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+    ev('block_admitted', { block_id: 'x1', pools: ['p'] }),
+    // The activated reserve aborts before producing any completed attempt.
+    ev('aborted', { block_id: 'x1' }),
+  );
+  return events;
+}
+
+test('an aborted successor never terminates the chain as an included leaf (E7.3a)', () => {
+  // s1/s2's chains end at x1s1/x1s2, whose block aborted: the chain leaf is
+  // terminal but NOT included (completed), so seal must refuse.
+  expect(sealPredicateHolds(UNIVERSE, abortedSuccessorEvents())).toBe(false);
+});
+
+test('the chain completes through the LATEST instance of the successor sample', () => {
+  // Rerunning the aborted reserve mints x1:i1 over the same sample ids; the
+  // chain leaf's included terminal is judged against the CURRENT instance.
+  const events = abortedSuccessorEvents();
+  events.push(
+    ev('block_replaced', {
+      block_id: 'x1',
+      replacement_block_id: 'x1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base' },
+        { sample_id: 'x1s2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'x1:i1', pools: ['p'], rerun_of: 'x1' }),
+    ev('attempt_created', { sample_id: 'x1s1', attempt_id: 'xb1' }),
+    ev('run_allocated', { attempt_id: 'xb1', run_id: 'xr3', pgid: 5 }),
+    ev('run_completed', { attempt_id: 'xb1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 'x1s2', attempt_id: 'xb2' }),
+    ev('run_allocated', { attempt_id: 'xb2', run_id: 'xr4', pgid: 6 }),
+    ev('run_completed', { attempt_id: 'xb2', outcome: 'pass' }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(true);
+});
+
+test('E7.6: a rerun admission never resurrects budget_stopped (permanent shortfall)', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('budget_stopped', { sample_ids: ['s1'] }),
+    ev('aborted', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i1', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a3' }),
+    ev('run_allocated', { attempt_id: 'a3', run_id: 'r3', pgid: 3 }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a4' }),
+    ev('run_allocated', { attempt_id: 'a4', run_id: 'r4', pgid: 4 }),
+    // Crash: s2's aborted fact is re-enterable and was lifted, so a4 gets
+    // its kill; s1's budget_stopped is a PERMANENT terminal shortfall — the
+    // re-entry never lifts it and a3 gets no action.
+  );
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report.attempts).toEqual([
+    { attempt_id: 'a4', resolution: 'kill_pgid_rerun_block', pgid: 4 },
+  ]);
+});
+
+test('slot_exhausted and skew_excluded terminals never re-enter either (E7.1 REJECT set)', () => {
+  const slotEvents = openAndAdmit();
+  slotEvents.push(
+    ev('slot_exhausted', { sample_id: 's1' }),
+    ev('aborted', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i1', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a3' }),
+    ev('run_allocated', { attempt_id: 'a3', run_id: 'r3', pgid: 3 }),
+  );
+  expect(resolveCrashWindows(UNIVERSE, slotEvents).attempts).toEqual([]);
+
+  const skewEvents = openAndAdmit();
+  skewEvents.push(
+    ev('skew_excluded', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i2',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i2', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a5' }),
+    ev('run_allocated', { attempt_id: 'a5', run_id: 'r5', pgid: 5 }),
+  );
+  expect(resolveCrashWindows(UNIVERSE, skewEvents).attempts).toEqual([]);
+});
+
 test('malformed membership fails closed: a block-less frozen sample never seals', () => {
   const universe: CampaignUniverse = {
     samples: [{ sample_id: 's1' }],

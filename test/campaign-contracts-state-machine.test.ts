@@ -587,10 +587,21 @@ test("crash windows: budget_stopped retires the stopped sample's attempt", () =>
 });
 
 test("crash windows: the replacement disposition retires the disposed sample's attempt", () => {
+  // E7.1 mint bundle: the disposition always follows its durable-first
+  // block_replaced; the roster-matched pair (E7.3a) retires the disposed
+  // sample's attempt for recovery.
   const windows = resolveCrashWindows(ONE_SAMPLE_UNIVERSE, [
     ev(1, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
     ev(2, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
-    ev(3, 'sample_disposition', {
+    ev(3, 'block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [{ sample_id: 'r2', arm: 'base', supersedes: 's1' }],
+    }),
+    ev(4, 'sample_disposition', {
       sample_id: 's1',
       disposition: 'excluded_block_replaced',
       superseded_by: 'r2',

@@ -77,21 +77,37 @@ interface PrefixFold {
   readonly currentAttempt: Map<string, string>;
   readonly terminalAttempts: Set<string>;
   readonly completedAttempts: Set<string>;
-  /** Latest sample-terminal FACT seq per sample (slot_exhausted,
-   *  budget_stopped, aborted/skew_excluded roster fan-out). Dispositions
-   *  never arm this: a superseded sample accounts only through its chain
-   *  (E7.3a), and an orphan disposition accounts nothing at all. */
+  /** Latest RE-ENTERABLE terminal-fact seq per sample — the aborted
+   *  roster fan-out only, the one fact a rerun re-entry lifts (E7.1's
+   *  re-entry sources are aborted | completed | instrument_failed; the
+   *  attempt-level two live via currentAttempt). Dispositions never arm
+   *  this: a superseded sample accounts only through its chain (E7.3a). */
   readonly sampleTerminalSeq: Map<string, number>;
+  /** Samples holding a PERMANENT terminal fact (slot_exhausted,
+   *  budget_stopped, skew_excluded roster fan-out) — E7.1's REJECT set: a
+   *  rerun re-entry never lifts these and a budget raise never resurrects
+   *  budget_stopped (E7.6). */
+  readonly permanentTerminalSamples: Set<string>;
   /** Latest rerun re-admission seq per sample (block_admitted with
    *  rerun_of). A terminal fact older than the re-entry is
    *  predecessor-era: the re-entry edge restored the sample to admitted,
    *  so the stale fact never retires the re-entered instance (E7.1). */
   readonly reentrySeq: Map<string, number>;
-  /** Samples named by ANY excluded_block_replaced disposition, orphan or
-   *  matched — resolver retirement only (their evidence moved to a
-   *  successor; recovery must not kill or re-admit around it). Seal
-   *  accounting never reads this set. */
+  /** Samples whose excluded_block_replaced disposition MATCHED a mint
+   *  roster pair — resolver retirement (their evidence moved to a
+   *  successor; recovery must not kill or re-admit around it). An orphan
+   *  disposition retires nothing here: absent from the canonical roster
+   *  graph it is replay corruption, not moved evidence (E7.3a). */
   readonly excludedSamples: Set<string>;
+  /** E7.3a conservation, armed at mint time: `pred, succ` keys for
+   *  every roster supersedes pair whose predecessor was disposable
+   *  (source set admitted | spawned | exposed | completed) and whose
+   *  excluded_block_replaced disposition has not yet landed. Non-empty at
+   *  seal = incomplete mint bundle — seal refuses. */
+  readonly pendingRequiredDispositions: Set<string>;
+  /** Count of excluded_block_replaced dispositions matching no mint
+   *  roster pair — replay corruption (E7.3a); any orphan refuses seal. */
+  readonly orphanDispositions: number;
   readonly supersededSamples: Map<string, string>; // predecessor -> superseded_by
   readonly sealed: boolean;
   readonly cancelled: boolean;
@@ -103,6 +119,27 @@ interface PrefixFold {
   readonly blockTerminalSeq: Map<string, number>;
   readonly instrumentFailures: readonly InstrumentFailureRecord[];
   readonly adjudications: readonly AdjudicationRecord[];
+}
+
+/** One conservation key per (predecessor, superseding successor) pair. */
+function dispositionKey(predecessor: string, supersededBy: string): string {
+  return JSON.stringify([predecessor, supersededBy]);
+}
+
+/** A standing terminal FACT for the sample: any permanent terminal, or a
+ *  re-enterable (aborted) fact no rerun re-entry has lifted. Callable
+ *  mid-fold (the block_replaced arm asks it about pre-mint state). */
+function factTerminal(
+  fold: Pick<
+    PrefixFold,
+    'permanentTerminalSamples' | 'sampleTerminalSeq' | 'reentrySeq'
+  >,
+  sampleId: string,
+): boolean {
+  if (fold.permanentTerminalSamples.has(sampleId)) return true;
+  const factSeq = fold.sampleTerminalSeq.get(sampleId);
+  const reentry = fold.reentrySeq.get(sampleId);
+  return factSeq !== undefined && (reentry === undefined || factSeq > reentry);
 }
 
 function blockOfSampleFor(
@@ -142,9 +179,13 @@ function foldPrefix(
   const currentAttempt = new Map<string, string>();
   const terminalAttempts = new Set<string>();
   const completedAttempts = new Set<string>();
+  const instrumentFailedAttempts = new Set<string>();
   const sampleTerminalSeq = new Map<string, number>();
+  const permanentTerminalSamples = new Set<string>();
   const reentrySeq = new Map<string, number>();
   const excludedSamples = new Set<string>();
+  const pendingRequiredDispositions = new Set<string>();
+  let orphanDispositions = 0;
   const supersededSamples = new Map<string, string>();
   const mints: MintRecord[] = [];
   const supersededBlocks = new Set<string>();
@@ -184,6 +225,7 @@ function foldPrefix(
         const sampleId = attemptSample.get(event.payload.attempt_id);
         if (sampleId !== undefined) {
           terminalAttempts.add(event.payload.attempt_id);
+          instrumentFailedAttempts.add(event.payload.attempt_id);
           instrumentFailures.push({
             attemptId: event.payload.attempt_id,
             sampleId,
@@ -202,11 +244,11 @@ function foldPrefix(
         if (event.payload.disposition !== 'excluded_block_replaced') break;
         const disposed = event.payload.sample_id;
         const supersededBy = event.payload.superseded_by;
-        excludedSamples.add(disposed);
-        // E7.3a conservation: the disposition credits the supersession
-        // chain only when its pair matches a mint roster entry. Mint rows
-        // are durable-first, so the mint always precedes its dispositions;
-        // a pair matching no roster is an orphan and accounts nothing.
+        // E7.3a: the roster is the canonical supersession graph. A matched
+        // disposition completes its mint bundle and retires the sample for
+        // recovery (mints are durable-first, so the mint always precedes
+        // its dispositions). An unmatched disposition is replay corruption:
+        // it accounts nothing, retires nothing, and refuses seal.
         const matched = mints.some((m) =>
           m.roster.some(
             (entry) =>
@@ -214,24 +256,42 @@ function foldPrefix(
           ),
         );
         if (matched) {
-          supersededSamples.set(disposed, supersededBy);
+          excludedSamples.add(disposed);
+          pendingRequiredDispositions.delete(
+            dispositionKey(disposed, supersededBy),
+          );
+        } else {
+          orphanDispositions += 1;
         }
         break;
       }
+      // Validity/shortfall terminals are E7.1's re-entry REJECT set — a
+      // rerun admission never lifts them, and budget_stopped in particular
+      // is never resurrected (E7.6).
       case 'slot_exhausted':
-        noteSeq(sampleTerminalSeq, event.payload.sample_id, event.seq);
+        permanentTerminalSamples.add(event.payload.sample_id);
         break;
       case 'budget_stopped':
         for (const sampleId of event.payload.sample_ids) {
+          permanentTerminalSamples.add(sampleId);
+        }
+        break;
+      case 'aborted': {
+        noteSeq(blockTerminalSeq, event.payload.block_id, event.seq);
+        // The one RE-ENTERABLE fact: a rerun admission restores aborted
+        // roster samples to admitted (E7.1), so the fan-out keeps its seq
+        // for the re-entry comparison instead of a permanent mark.
+        for (const sampleId of rosterByBlock.get(event.payload.block_id) ??
+          []) {
           noteSeq(sampleTerminalSeq, sampleId, event.seq);
         }
         break;
-      case 'aborted':
+      }
       case 'skew_excluded': {
         noteSeq(blockTerminalSeq, event.payload.block_id, event.seq);
         for (const sampleId of rosterByBlock.get(event.payload.block_id) ??
           []) {
-          noteSeq(sampleTerminalSeq, sampleId, event.seq);
+          permanentTerminalSamples.add(sampleId);
         }
         break;
       }
@@ -284,9 +344,31 @@ function foldPrefix(
           rec.replacement_block_id,
           roster.map((entry) => entry.sample_id),
         );
+        // E7.3a conservation, judged on pre-mint state: every supersedes
+        // pair whose predecessor sits in the disposition source set
+        // (admitted | spawned | exposed | completed) must gain exactly its
+        // excluded_block_replaced disposition before seal. A predecessor
+        // keeping a terminal instead — a standing fact, or an
+        // instrument-failed current attempt (the cause consumed the
+        // activation) — requires none; a never-admitted predecessor block
+        // leaves its samples planned, outside the source set.
+        const predecessorAdmitted =
+          blockAdmittedSeq.get(rec.block_id) !== undefined;
         for (const entry of roster) {
-          if (entry.supersedes !== undefined) {
-            supersededSamples.set(entry.supersedes, entry.sample_id);
+          if (entry.supersedes === undefined) continue;
+          supersededSamples.set(entry.supersedes, entry.sample_id);
+          if (!predecessorAdmitted) continue;
+          const current = currentAttempt.get(entry.supersedes);
+          const keepsTerminal =
+            factTerminal(
+              { permanentTerminalSamples, sampleTerminalSeq, reentrySeq },
+              entry.supersedes,
+            ) ||
+            (current !== undefined && instrumentFailedAttempts.has(current));
+          if (!keepsTerminal) {
+            pendingRequiredDispositions.add(
+              dispositionKey(entry.supersedes, entry.sample_id),
+            );
           }
         }
         break;
@@ -318,8 +400,11 @@ function foldPrefix(
     terminalAttempts,
     completedAttempts,
     sampleTerminalSeq,
+    permanentTerminalSamples,
     reentrySeq,
     excludedSamples,
+    pendingRequiredDispositions,
+    orphanDispositions,
     supersededSamples,
     sealed,
     cancelled,
@@ -334,18 +419,13 @@ function foldPrefix(
   };
 }
 
-/** A sample is fact-terminal when its latest terminal FACT postdates any
- *  rerun re-entry (a predecessor-era fact never retires the re-entered
- *  instance), or when its CURRENT (latest-created) attempt reached a
- *  terminal event. A stale terminal for a superseded attempt never retires
- *  the newer attempt (parent Identity: late events are quarantined by
- *  attempt-id mismatch). */
+/** A sample is terminal when it holds a standing terminal FACT (permanent,
+ *  or re-enterable and not lifted — factTerminal), or when its CURRENT
+ *  (latest-created) attempt reached a terminal event. A stale terminal for
+ *  a superseded attempt never retires the newer attempt (parent Identity:
+ *  late events are quarantined by attempt-id mismatch). */
 function sampleTerminal(fold: PrefixFold, sampleId: string): boolean {
-  const factSeq = fold.sampleTerminalSeq.get(sampleId);
-  const reentry = fold.reentrySeq.get(sampleId);
-  if (factSeq !== undefined && (reentry === undefined || factSeq > reentry)) {
-    return true;
-  }
+  if (factTerminal(fold, sampleId)) return true;
   const current = fold.currentAttempt.get(sampleId);
   return current !== undefined && fold.terminalAttempts.has(current);
 }
@@ -365,8 +445,15 @@ function successorSampleDischarged(
   sampleId: string,
   includedOnly: boolean,
 ): boolean {
-  const blockTerminal = fold.blockTerminalSeq.get(mint.successor);
-  if (blockTerminal !== undefined && blockTerminal > mint.mintSeq) return true;
+  if (!includedOnly) {
+    // A post-mint block-terminal (aborted/skew_excluded) discharges the
+    // clause-2 obligation, but it is never an INCLUDED (completed) leaf —
+    // an aborted successor cannot terminate a supersession chain (E7.3a).
+    const blockTerminal = fold.blockTerminalSeq.get(mint.successor);
+    if (blockTerminal !== undefined && blockTerminal > mint.mintSeq) {
+      return true;
+    }
+  }
   const admitted = fold.blockAdmittedSeq.get(mint.successor);
   if (admitted === undefined) return false; // minted-but-unadmitted: zero witnesses
   const current = fold.currentAttempt.get(sampleId);
@@ -388,11 +475,20 @@ function successorSampleDischarged(
  *  instrument_failure — that is a chained failure, not an included
  *  outcome), non-superseded (the chain leaf is reached only when
  *  supersededSamples has no entry), and successor-local (post-mint where a
- *  mint applies). */
+ *  mint applies). Rerun instances reuse sample ids, so the witness is
+ *  judged against the LATEST mint naming the sample — the current
+ *  instance; an earlier instance's attribution would refuse a legitimately
+ *  completed rerun forever. */
 function includedTerminal(fold: PrefixFold, sampleId: string): boolean {
-  const mint = [...fold.mintBySuccessor.values()].find((m) =>
-    m.roster.some((entry) => entry.sample_id === sampleId),
-  );
+  let mint: MintRecord | undefined;
+  for (const candidate of fold.mints) {
+    if (!candidate.roster.some((entry) => entry.sample_id === sampleId)) {
+      continue;
+    }
+    if (mint === undefined || candidate.mintSeq > mint.mintSeq) {
+      mint = candidate;
+    }
+  }
   if (mint !== undefined) {
     return successorSampleDischarged(fold, mint, sampleId, true);
   }
@@ -461,6 +557,13 @@ export function sealPredicateHolds(
         adjudicationCovers(fold, cellBySample.get(sample.sample_id));
     if (!accounted) return false;
   }
+  // E7.3a conservation: supersession chains are fully paired — every
+  // roster supersedes pair whose predecessor was disposable at mint time
+  // gained its excluded_block_replaced disposition (resume completes the
+  // bundle before sealing), and every disposition paired with a roster
+  // entry (an orphan is replay corruption). Either failure refuses seal.
+  if (fold.pendingRequiredDispositions.size > 0) return false;
+  if (fold.orphanDispositions > 0) return false;
   // Clause 2: every activated successor discharged by successor-local,
   // post-mint witnesses regardless of admission state.
   for (const mint of fold.mints) {
@@ -501,10 +604,11 @@ export function resolveCrashWindows(
       const sampleId = fold.attemptSample.get(attemptId);
       if (sampleId === undefined) continue;
       if (fold.currentAttempt.get(sampleId) !== attemptId) continue;
-      // Resolver retirement: a terminal sample, or any disposition that
-      // moved its evidence to a successor (matched or orphan — recovery
-      // never kills or re-admits around moved evidence; orphan-ness is a
-      // replay-validator concern, refused at seal instead).
+      // Resolver retirement: a terminal sample, or a roster-matched
+      // disposition that moved its evidence to a successor (recovery never
+      // kills or re-admits around moved evidence). An orphan disposition
+      // matches no roster pair — corruption, not moved evidence — so it
+      // retires nothing and the live attempt still resolves.
       if (
         sampleTerminal(fold, sampleId) ||
         fold.excludedSamples.has(sampleId)
