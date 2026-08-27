@@ -1,16 +1,15 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -456,26 +455,151 @@ test('C8 unconditional release: a throwing heartbeat-cancel never leaks the held
 
 // --- Review fix round 1: 2 Critical + 5 Important --------------------------------
 
-test('Cr-1: a replacement landing DURING heartbeat is compensated — no stray token in the successor dir', async () => {
-  const workdir = mkdtempSync(join(tmpdir(), 'hb-race-'));
+// --- Review fix round 3: heartbeat publication + reclaim severance races ----
+
+/** A FakeClock whose next now() runs an adversary first: the deterministic
+ *  interleave point between the heartbeat's last ownership check and its
+ *  write (clockNowMs is the final call before publication). */
+class TrapClock extends FakeClock {
+  trap: (() => void) | null = null;
+  override now(): number {
+    const t = this.trap;
+    if (t !== null) {
+      this.trap = null;
+      t();
+    }
+    return super.now();
+  }
+}
+
+test('HB-1: a replacement landing between the ownership check and the write receives nothing — the beat lands only on our own token', () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'hb-trap-'));
   const lockPath = join(workdir, 'test.lock.d');
+  const advTrash = join(workdir, 'displaced-by-adversary');
+  const clock = new TrapClock(10);
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const lease = acquireLease({
+    lockPath,
+    clock,
+    identity,
+    label: 'test lease',
+  });
+  const successorName = 'owner-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const successorToken = formatLockToken({
+    pid: HOLDER_PID,
+    birth_ts_ms: BIRTH + 9,
+    last_heartbeat_ts_ms: 4_242,
+  });
+  clock.advance(30);
+  clock.trap = () => {
+    // Reclamation replaces the directory at the worst possible moment: after
+    // every pre-write ownership check has passed, before the write.
+    renameSync(lockPath, advTrash);
+    mkdirSync(lockPath);
+    writeFileSync(join(lockPath, successorName), successorToken);
+  };
+  expect(() => lease.heartbeat()).toThrow(LockError);
+  // The successor's directory was never touched...
+  expect(readdirSync(lockPath)).toEqual([successorName]);
+  expect(readFileSync(join(lockPath, successorName), 'utf8')).toBe(
+    successorToken,
+  );
+  // ...and the fresh heartbeat landed on OUR OWN token, wherever the
+  // directory went — publication is bound to the holder's inode, never to
+  // the mutable lock path.
+  const ownName = readdirSync(advTrash).find((e) => e.startsWith('owner-'))!;
+  expect(
+    parseLockToken(readFileSync(join(advTrash, ownName), 'utf8'))!
+      .last_heartbeat_ts_ms,
+  ).toBe(40_000);
+});
+
+test('HB-2: two owner tokens in the lock dir is corruption — the heartbeat fails closed and stops beating', () => {
+  const lockPath = tmpLockPath();
+  const clock = new FakeClock(10);
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const beats: (() => void)[] = [];
+  const cancelled: boolean[] = [];
+  const scheduler: HeartbeatScheduler = {
+    every(_ms, cb) {
+      beats.push(cb);
+      return () => {
+        cancelled.push(true);
+      };
+    },
+  };
+  const lease = acquireLease({
+    lockPath,
+    clock,
+    identity,
+    label: 'test lease',
+    scheduler,
+  });
+  const planted = 'owner-11111111-1111-4111-8111-111111111111';
+  const plantedBody = formatLockToken({
+    pid: HOLDER_PID,
+    birth_ts_ms: BIRTH,
+    last_heartbeat_ts_ms: 12_000,
+  });
+  writeFileSync(join(lockPath, planted), plantedBody);
+  clock.advance(30);
+  expect(() => beats[0]!()).toThrow(/multiple owner tokens/i);
+  // Fail-closed: nothing was written and the beat driver was cancelled.
+  expect(
+    parseLockToken(readFileSync(lease.ownerFile, 'utf8'))!.last_heartbeat_ts_ms,
+  ).toBe(10_000);
+  expect(readFileSync(join(lockPath, planted), 'utf8')).toBe(plantedBody);
+  expect(cancelled).toEqual([true]);
+});
+
+test('HB-3: a token file swapped for a different file with identical bytes is never beaten through — ownership is the inode, not the content', () => {
+  const lockPath = tmpLockPath();
+  const clock = new FakeClock(10);
+  const identity = new FakeIdentity();
+  const lease = acquireFirst(lockPath, clock, identity);
+  const bytes = readFileSync(lease.ownerFile, 'utf8');
+  rmSync(lease.ownerFile);
+  writeFileSync(lease.ownerFile, bytes); // same name, same bytes, new inode
+  clock.advance(30);
+  expect(() => lease.heartbeat()).toThrow(LockError);
+  expect(readFileSync(lease.ownerFile, 'utf8')).toBe(bytes); // untouched
+});
+
+// Real thread + Atomics barrier: the parent swaps the judged token for a FIFO
+// EXACTLY between the contender's dead-holder judgment and its severance. A
+// reclaim that re-reads the token through the mutable lock path parks on the
+// FIFO forever; the rename-first claim never re-reads through the path — it
+// verifies the severed directory under its private trash name and fails
+// loudly on the non-regular token.
+test('RC-1: reclaim never re-reads the judged token through the mutable lock path between judgment and severance', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'reclaim-race-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  const tokenName = 'owner-00000000-0000-4000-8000-000000000000';
+  plantStaleHolder(lockPath, 10_000);
   const workerFile = join(workdir, 'worker.ts');
-  // The worker holds the lease and swaps its token file for a FIFO, so its
-  // heartbeat() parks INSIDE the token read (real fs, real thread).
-  const workerScript = `
+  writeFileSync(
+    workerFile,
+    `
     import { parentPort, workerData } from 'node:worker_threads';
-    import { rmSync } from 'node:fs';
-    import { spawnSync } from 'node:child_process';
     import { acquireLease } from '${join(import.meta.dir, '..', 'src', 'campaign', 'locks.ts')}';
     import { FakeClock } from '${join(import.meta.dir, '..', 'src', 'scheduler', 'clock.ts')}';
-    const { lockPath, birth } = workerData as { lockPath: string; birth: number };
-    const identity = { exists: () => 'alive' as const, startTimeMs: () => birth };
-    const lease = acquireLease({ lockPath, clock: new FakeClock(10), identity, label: 'test lease' });
-    rmSync(lease.ownerFile);
-    spawnSync('mkfifo', [lease.ownerFile]);
-    parentPort?.postMessage({ kind: 'fifo-ready' });
+    const { lockPath, sab } = workerData as { lockPath: string; sab: SharedArrayBuffer };
+    const flag = new Int32Array(sab);
+    const identity = {
+      exists(pid: number): 'alive' | 'esrch' | 'unknown' {
+        if (pid === process.pid) return 'alive';
+        parentPort?.postMessage({ kind: 'at-judgment' });
+        Atomics.wait(flag, 0, 0); // parked until the parent swaps the token
+        return 'esrch';
+      },
+      startTimeMs(pid: number): number | null {
+        return pid === process.pid ? ${BIRTH} : null;
+      },
+    };
     try {
-      lease.heartbeat();
+      acquireLease({ lockPath, clock: new FakeClock(210), identity, label: 'test lease' });
       parentPort?.postMessage({ kind: 'done', threw: false });
     } catch (err) {
       parentPort?.postMessage({
@@ -484,22 +608,18 @@ test('Cr-1: a replacement landing DURING heartbeat is compensated — no stray t
         name: (err as Error).name,
         message: (err as Error).message,
       });
-    } finally {
-      try {
-        lease.release();
-      } catch {}
     }
-  `;
-  writeFileSync(workerFile, workerScript);
-  const worker = new Worker(workerFile, {
-    workerData: { lockPath, birth: BIRTH },
-  });
+  `,
+  );
+  const sab = new SharedArrayBuffer(4);
+  const worker = new Worker(workerFile, { workerData: { lockPath, sab } });
   interface WorkerMsg {
-    kind: 'fifo-ready' | 'done';
+    kind: 'at-judgment' | 'done';
     threw?: boolean;
     name?: string;
+    message?: string;
   }
-  const waitFor = (kind: 'fifo-ready' | 'done') =>
+  const waitFor = (kind: WorkerMsg['kind']) =>
     new Promise<WorkerMsg>((resolve) => {
       const on = (m: WorkerMsg) => {
         if (m.kind === kind) {
@@ -509,44 +629,58 @@ test('Cr-1: a replacement landing DURING heartbeat is compensated — no stray t
       };
       worker.on('message', on);
     });
-  await waitFor('fifo-ready');
-  // The worker's heartbeat is parked: its pre-write lstat already saw the OLD
-  // directory; its token read blocks on the FIFO. Opening the write side
-  // returns only once the reader has the FIFO open — the barrier.
-  const ownerName = readdirSync(lockPath).find((e) => e.startsWith('owner-'))!;
-  const fd = openSync(join(lockPath, ownerName), 'w');
-  // The adversary replaces the directory WHILE the read is parked:
-  renameSync(lockPath, `${lockPath}.trash-cr1`);
-  mkdirSync(lockPath);
-  const successorName = 'owner-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
-  const successorToken = formatLockToken({
-    pid: HOLDER_PID,
-    birth_ts_ms: BIRTH + 9,
-    last_heartbeat_ts_ms: 4_242,
-  });
-  writeFileSync(join(lockPath, successorName), successorToken);
-  // Release the parked read with the holder's own (still-valid) bytes, so the
-  // pre-write guard PASSES and the write lands inside the successor's dir:
-  writeSync(
-    fd,
-    formatLockToken({
-      pid: process.pid,
-      birth_ts_ms: BIRTH,
-      last_heartbeat_ts_ms: 10_000,
-    }),
-  );
-  closeSync(fd);
+  await waitFor('at-judgment');
+  // The interleave: the judged token stops being a regular file while the
+  // contender sits between its judgment and its severance.
+  rmSync(join(lockPath, tokenName));
+  spawnSync('mkfifo', [join(lockPath, tokenName)]);
+  const flag = new Int32Array(sab);
+  Atomics.store(flag, 0, 1);
+  Atomics.notify(flag, 0);
   const result = await waitFor('done');
   await worker.terminate();
   expect(result.threw).toBe(true);
   expect(result.name).toBe('LockError');
-  // The successor's directory must contain ONLY the successor's token: the
-  // old holder's mid-race publication was compensated away.
-  expect(readdirSync(lockPath).sort()).toEqual([successorName]);
-  expect(readFileSync(join(lockPath, successorName), 'utf8')).toBe(
-    successorToken,
-  );
+  expect(result.message).toMatch(/regular file|parked/i);
+  // The claim freed the lock path; the severed state is parked under a
+  // private trash name for the operator.
+  expect(existsSync(lockPath)).toBe(false);
+  expect(
+    readdirSync(workdir).some((e) => e.startsWith('test.lock.d.trash-')),
+  ).toBe(true);
 }, 15_000);
+
+test('RB-1: a rollback that cannot free the lock surfaces BOTH the original failure and the held path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rollback-'));
+  const lockPath = join(dir, 'test.lock.d');
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const exploding: HeartbeatScheduler = {
+    every() {
+      chmodSync(dir, 0o500); // the rollback's severing rename will fail EACCES
+      throw new Error('driver registration failed');
+    },
+  };
+  let thrown: Error | null = null;
+  try {
+    acquireLease({
+      lockPath,
+      clock: new FakeClock(10),
+      identity,
+      label: 'test lease',
+      scheduler: exploding,
+    });
+  } catch (err) {
+    thrown = err as Error;
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  expect(thrown).toBeInstanceOf(LockError);
+  expect(thrown!.message).toContain('driver registration failed');
+  expect(thrown!.message).toContain(lockPath);
+  expect(thrown!.message).toMatch(/still be held|could not free/i);
+  expect(existsSync(lockPath)).toBe(true); // genuinely held — reported, not hidden
+});
 
 test("Cr-2: a delayed stale contender never severs the successor's fresh dir", () => {
   const lockPath = tmpLockPath();
@@ -581,6 +715,14 @@ test("Cr-2: a delayed stale contender never severs the successor's fresh dir", (
   ).toThrow(LockError);
   expect(successor).not.toBeNull();
   expect(existsSync(successor!.ownerFile)).toBe(true); // never severed
+  // The successor survived any displacement intact: its identity (dev+ino)
+  // is preserved, so its heartbeat still proves ownership.
+  clock.advance(1);
+  successor!.heartbeat();
+  expect(
+    parseLockToken(readFileSync(successor!.ownerFile, 'utf8'))!
+      .last_heartbeat_ts_ms,
+  ).toBe(211_000);
   successor!.release();
 });
 
@@ -702,18 +844,26 @@ test('I4: campaign-id sidecar failure rolls the lease back — heartbeat stopped
   expect(existsSync(lockPath)).toBe(false);
 });
 
-test('I1: empty-dir polling terminates under a frozen FakeClock and acquires', () => {
+test('I1: empty-dir polling runs on the injected clock — a FakeClock terminates deterministically with no wall-time waiting', () => {
   const lockPath = tmpLockPath();
   mkdirSync(lockPath); // a contender "mid-acquire" whose token never lands
   const identity = new FakeIdentity();
   identity.set(process.pid, 'alive', BIRTH);
+  const clock = new FakeClock(10);
+  const t0 = performance.now();
   const lease = acquireLease({
     lockPath,
-    clock: new FakeClock(10),
+    clock,
     identity,
     label: 'test lease',
   });
+  const elapsedMs = performance.now() - t0;
   expect(existsSync(lease.ownerFile)).toBe(true);
+  // The grace decision AND the waiting both ride the injected clock: the
+  // fake clock advanced itself past the grace window without one physical
+  // sleep — wall time is never proof of crash.
+  expect(clock.now()).toBeGreaterThan(10);
+  expect(elapsedMs).toBeLessThan(100);
   lease.release();
   expect(existsSync(lockPath)).toBe(false);
 });

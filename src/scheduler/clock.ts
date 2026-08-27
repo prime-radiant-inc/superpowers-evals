@@ -12,6 +12,11 @@ export interface Clock {
   now(): number;
   // Resolve once now() >= targetSeconds. Already-past targets resolve promptly.
   sleepUntil(targetSeconds: number): Promise<void>;
+  // Synchronously pass `seconds` of clock time: afterwards now() reads at
+  // least `seconds` later. The real clock physically sleeps; the fake clock
+  // advances itself — synchronous pollers key their progress off this
+  // contract instead of counting wall-time sleeps.
+  sleepSync(seconds: number): void;
 }
 
 // Wall-clock implementation: now() is the real epoch in seconds, sleepUntil
@@ -27,6 +32,10 @@ export class RealClock implements Clock {
     return new Promise<void>((resolveP) => {
       setTimeout(resolveP, remainingMs);
     });
+  }
+
+  sleepSync(seconds: number): void {
+    Bun.sleepSync(seconds * 1000);
   }
 }
 
@@ -61,6 +70,12 @@ export class FakeClock implements Clock {
     return new Promise<void>((resolveP) => {
       this.waiters.push({ target: targetSeconds, resolve: resolveP });
     });
+  }
+
+  // Passing fake time is advancing it: a synchronous poller sleeping on this
+  // clock makes deterministic progress with zero wall-time waiting.
+  sleepSync(seconds: number): void {
+    this.setTo(this.current + seconds);
   }
 
   // Move time forward by `seconds` and release every waiter whose target is now
