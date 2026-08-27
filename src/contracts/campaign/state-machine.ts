@@ -34,6 +34,14 @@ export const TERMINAL_STATES = [
 ] as const;
 export type TerminalState = (typeof TERMINAL_STATES)[number];
 
+/** E7.1 re-entry sources: the three states a live block's samples can hold
+ *  at kill time (partial predecessors included). */
+export const REENTRY_STATES = [
+  'aborted',
+  'completed',
+  'instrument_failed',
+] as const;
+
 export type TransitionResult = 'apply' | 'ignore-late' | 'reject';
 export type TransitionOutcome =
   | { result: 'apply'; next: SampleState }
@@ -72,6 +80,12 @@ export function applySampleEvent(
 ): TransitionOutcome {
   switch (event.type) {
     case 'block_admitted':
+      // E7.1: rerun re-entry applies per roster sample of the rerun instance.
+      if (event.payload.rerun_of !== undefined) {
+        return (REENTRY_STATES as readonly string[]).includes(state)
+          ? apply('admitted')
+          : REJECT;
+      }
       return state === 'planned' ? apply('admitted') : REJECT;
     case 'attempt_created':
       // Binding only (sample <-> attempt), no state change — journaled
@@ -106,8 +120,15 @@ export function applySampleEvent(
       const superseded: unknown = (event.payload as { superseded_by?: unknown })
         .superseded_by;
       if (typeof superseded !== 'string' || superseded === '') return REJECT;
-      // The innocent arm's override; its run dir is retained.
-      if (state === 'spawned' || state === 'exposed' || state === 'completed') {
+      // The innocent arm's override; its run dir is retained. E7.1 adds
+      // admitted to the shipped sources (a sibling can fail after spawning
+      // while another sample is still admitted).
+      if (
+        state === 'admitted' ||
+        state === 'spawned' ||
+        state === 'exposed' ||
+        state === 'completed'
+      ) {
         return apply('excluded_block_replaced');
       }
       return REJECT;
@@ -118,6 +139,9 @@ export function applySampleEvent(
       if (state === 'exposed' || state === 'spawned') {
         return apply('skew_excluded');
       }
+      // E7.1 terminal-tolerant fan-out: retained-evidence semantics for the
+      // completed sibling of a partial-block exclusion.
+      if (isTerminal(state)) return LATE;
       return REJECT;
     case 'slot_exhausted':
       return state === 'planned' ? apply('exhausted') : REJECT;
@@ -132,6 +156,9 @@ export function applySampleEvent(
       if (state === 'admitted' || state === 'spawned' || state === 'exposed') {
         return apply('aborted');
       }
+      // E7.1 terminal-tolerant fan-out: the canonical partial-block abort —
+      // one arm completes, the dispatcher aborts the block.
+      if (isTerminal(state)) return LATE;
       return REJECT;
     default:
       // Campaign-scoped and accounting events never touch sample state.

@@ -61,10 +61,13 @@ export type PreDigestCampaign = Omit<Campaign, 'digest'> & {
 };
 
 /** Strip the advisory/re-derivable fields out of a campaign before
- *  canonicalization (parent Appendix B digest definition): estimates_by_arm
- *  in every cell, budget.surcharge_applied, budget.priced_coverage,
- *  registered_at, registered_by, campaign_id, and digest itself.
- *  budget.usd_all_in (the registered figure) stays in. */
+ *  canonicalization (R-REG-4, parent Appendix B digest definition):
+ *  estimates_by_arm in every cell, budget.surcharge_applied,
+ *  budget.priced_coverage, registered_at, registered_by, campaign_id, and
+ *  digest itself. budget.usd_all_in (the registered figure) stays in. The
+ *  contention and execution_surface blocks are digest members by default —
+ *  absent from the exclusion list, they ride the remainder spread
+ *  (Decision D-4). */
 export function digestInput(
   campaign: PreDigestCampaign,
 ): Record<string, unknown> {
@@ -78,7 +81,13 @@ export function digestInput(
   return {
     ...rest,
     cells: campaign.cells.map(({ estimates_by_arm: _e, ...cell }) => cell),
-    budget: { usd_all_in: campaign.budget.usd_all_in },
+    budget: {
+      usd_all_in: campaign.budget.usd_all_in,
+      // surcharge_formula_version is a digest member (absent from the
+      // R-REG-4 exclusion list; inclusion is the default). surcharge_applied
+      // and priced_coverage stay excluded.
+      surcharge_formula_version: campaign.budget.surcharge_formula_version,
+    },
   };
 }
 

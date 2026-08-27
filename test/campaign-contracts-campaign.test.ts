@@ -1,6 +1,12 @@
 // test/campaign-contracts-campaign.test.ts
 import { expect, test } from 'bun:test';
-import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
+import {
+  CampaignIdentitySchema,
+  CampaignSchema,
+  ExecutionSurfaceArmSchema,
+  ID_COMPONENT_RE,
+  PricingOverrideSchema,
+} from '../src/contracts/campaign/campaign.ts';
 
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
@@ -58,7 +64,54 @@ export function goldenCampaign(overrides: Record<string, unknown> = {}) {
       { comparison_id: 'c1', baseline: 'base_arm', treatment: 'treat_arm' },
     ],
     blocks: [{ block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] }],
-    budget: { usd_all_in: 100, surcharge_applied: 5, priced_coverage: 0.95 },
+    contention: {
+      host_fingerprint: {
+        cpu_model: 'Apple M5 Pro',
+        cpu_cores: 10,
+        mem_bytes: 64 * 1024 ** 3,
+        disk_total_bytes: 1024 ** 4,
+      },
+      global_run_cap: 4,
+      thresholds: [
+        {
+          metric: 'load1_per_core',
+          source: 'host_stats',
+          op: 'gt',
+          value: 2,
+        },
+      ],
+      cadence_ms: 1000,
+      sustain_k: 3,
+      coverage_n: 5,
+      mem_tolerance_pct: 10,
+      disk_tolerance_pct: 15,
+    },
+    execution_surface: [
+      {
+        name: 'base_arm',
+        agent: 'claude',
+        credential: 'opus_fx',
+        auth: 'api-key',
+        api: 'anthropic',
+        model: 'claude-opus-5',
+        key_env_names: ['ANTHROPIC_API_KEY'],
+      },
+      {
+        name: 'treat_arm',
+        agent: 'codex',
+        credential: 'codex_fx',
+        auth: 'api-key',
+        api: 'openai-chat',
+        model: 'gpt-5.6',
+        key_env_names: ['OPENAI_API_KEY'],
+      },
+    ],
+    budget: {
+      usd_all_in: 100,
+      surcharge_applied: 5,
+      priced_coverage: 0.95,
+      surcharge_formula_version: 1,
+    },
     registered_at: '2026-08-24T00:00:00Z',
     registered_by: 'drew',
     digest: '0'.repeat(64),
@@ -280,8 +333,118 @@ test('campaign numbers are finite (estimates and budget reject Infinity)', () =>
           usd_all_in: Number.POSITIVE_INFINITY,
           surcharge_applied: 5,
           priced_coverage: 0.95,
+          surcharge_formula_version: 1,
         },
       }),
     ),
+  ).toThrow();
+});
+
+test('E7.0: BlockSchema.slot is optional, primary | reserve, unknown values reject', () => {
+  const doc = goldenCampaign();
+  const noSlot = {
+    ...doc,
+    blocks: doc.blocks.map((b) => {
+      const { slot: _s, ...rest } = b as typeof b & { slot?: unknown };
+      return rest;
+    }),
+  };
+  expect(() => CampaignSchema.parse(noSlot)).not.toThrow();
+  const reserve = {
+    ...doc,
+    blocks: doc.blocks.map((b) => ({ ...b, slot: 'reserve' as const })),
+  };
+  expect(() => CampaignSchema.parse(reserve)).not.toThrow();
+  const bogus = {
+    ...doc,
+    blocks: doc.blocks.map((b) => ({ ...b, slot: 'bonus' })),
+  };
+  expect(() => CampaignSchema.parse(bogus)).toThrow();
+});
+
+test('the contention block is required and strict (Decision D-4)', () => {
+  const doc = goldenCampaign();
+  const { contention: _c, ...rest } = doc;
+  expect(() => CampaignSchema.parse(rest)).toThrow();
+  expect(() =>
+    CampaignSchema.parse({
+      ...doc,
+      contention: { ...doc.contention, unknown_field: 1 },
+    }),
+  ).toThrow();
+});
+
+test('PricingOverrideSchema: exactly one of arm / applies_to_grader: true', () => {
+  expect(() =>
+    PricingOverrideSchema.parse({
+      arm: 'base_arm',
+      per_token_usd: 0.01,
+      rationale: 'r',
+    }),
+  ).not.toThrow();
+  expect(() =>
+    PricingOverrideSchema.parse({
+      applies_to_grader: true,
+      per_token_usd: 0.01,
+      rationale: 'r',
+    }),
+  ).not.toThrow();
+  expect(() =>
+    PricingOverrideSchema.parse({ per_token_usd: 0.01, rationale: 'r' }),
+  ).toThrow();
+  expect(() =>
+    PricingOverrideSchema.parse({
+      arm: 'base_arm',
+      applies_to_grader: true,
+      per_token_usd: 0.01,
+      rationale: 'r',
+    }),
+  ).toThrow();
+});
+
+test('ID_COMPONENT_RE: the pinned grammar, delimiter-exclusion included', () => {
+  expect(ID_COMPONENT_RE.test('a')).toBe(true);
+  expect(ID_COMPONENT_RE.test('scenario-01.x_y')).toBe(true);
+  expect(ID_COMPONENT_RE.test('has:colon')).toBe(false);
+  expect(ID_COMPONENT_RE.test('Upper')).toBe(false);
+  expect(ID_COMPONENT_RE.test('-leading-dash')).toBe(false);
+  expect(ID_COMPONENT_RE.test('.dot-first')).toBe(false);
+});
+
+test('CampaignIdentitySchema is strict; execution_surface takes env-var NAMES only', () => {
+  expect(() =>
+    CampaignIdentitySchema.parse({
+      campaign_id: 'c',
+      comparison_id: 'cmp',
+      block_id: 'b',
+      sample_id: 's',
+      execution_attempt_id: 's:a1',
+    }),
+  ).not.toThrow();
+  expect(() =>
+    CampaignIdentitySchema.parse({
+      campaign_id: 'c',
+      comparison_id: 'cmp',
+      block_id: 'b',
+      sample_id: 's',
+    }),
+  ).toThrow();
+  const arm = {
+    name: 'base_arm',
+    agent: 'claude',
+    credential: 'opus_fx',
+    auth: 'api-key',
+    api: 'anthropic',
+    model: 'claude-opus-5',
+    key_env_names: ['ANTHROPIC_API_KEY'],
+  };
+  expect(() => ExecutionSurfaceArmSchema.parse(arm)).not.toThrow();
+  // Secret-shaped strings reject where env-var names belong (Blocker C: the
+  // surface is scrubbed — names only, never key material).
+  expect(() =>
+    ExecutionSurfaceArmSchema.parse({
+      ...arm,
+      key_env_names: ['sk-ant-this-is-a-secret'],
+    }),
   ).toThrow();
 });

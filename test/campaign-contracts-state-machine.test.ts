@@ -92,6 +92,16 @@ const EV = {
   storage_paused: { type: 'storage_paused', payload: {} },
   campaign_cancelled: { type: 'campaign_cancelled', payload: {} },
   sealed: { type: 'sealed', payload: { report_digest: 'e'.repeat(64) } },
+  // E7.1 rerun re-entry admission; E7.4 binding-only quarantine carrier
+  // (21-event ratified vocabulary).
+  block_admitted_rerun: {
+    type: 'block_admitted',
+    payload: { block_id: 'b:i1', pools: ['p'], rerun_of: 'b' },
+  },
+  quarantined: {
+    type: 'quarantined',
+    payload: { run_id: 'r1', reason: 'attempt_mismatch' },
+  },
 } satisfies Record<string, JournalEventInput>;
 
 const A = (next: SampleState): TransitionOutcome => ({
@@ -191,11 +201,11 @@ test('instrument_failure applies from spawned or exposed only', () => {
   );
 });
 
-test('abort reaches admitted, spawned, exposed — never terminals', () => {
+test('abort reaches admitted, spawned, exposed; terminals are ignore-late (E7.1)', () => {
   for (const state of ['admitted', 'spawned', 'exposed'] as const) {
     expect(applySampleEvent(state, EV.aborted)).toEqual(A('aborted'));
   }
-  expect(applySampleEvent('completed', EV.aborted).result).toBe('reject');
+  expect(applySampleEvent('completed', EV.aborted).result).toBe('ignore-late');
 });
 
 // The exact transition table: for each event variant, the states where the
@@ -236,6 +246,7 @@ const EXACT: ReadonlyArray<{
   {
     event: 'disposition_replaced',
     expected: {
+      admitted: A('excluded_block_replaced'),
       spawned: A('excluded_block_replaced'),
       exposed: A('excluded_block_replaced'),
       completed: A('excluded_block_replaced'),
@@ -251,7 +262,17 @@ const EXACT: ReadonlyArray<{
   },
   {
     event: 'skew_excluded',
-    expected: { spawned: A('skew_excluded'), exposed: A('skew_excluded') },
+    expected: {
+      spawned: A('skew_excluded'),
+      exposed: A('skew_excluded'),
+      completed: LATE,
+      instrument_failed: LATE,
+      aborted: LATE,
+      skew_excluded: LATE,
+      excluded_block_replaced: LATE,
+      exhausted: LATE,
+      budget_stopped: LATE,
+    },
   },
   {
     event: 'aborted',
@@ -259,6 +280,21 @@ const EXACT: ReadonlyArray<{
       admitted: A('aborted'),
       spawned: A('aborted'),
       exposed: A('aborted'),
+      completed: LATE,
+      instrument_failed: LATE,
+      aborted: LATE,
+      skew_excluded: LATE,
+      excluded_block_replaced: LATE,
+      exhausted: LATE,
+      budget_stopped: LATE,
+    },
+  },
+  {
+    event: 'block_admitted_rerun',
+    expected: {
+      aborted: A('admitted'),
+      completed: A('admitted'),
+      instrument_failed: A('admitted'),
     },
   },
   // Campaign-scoped and accounting events never touch sample state.
@@ -271,6 +307,9 @@ const EXACT: ReadonlyArray<{
   { event: 'campaign_cancelled', expected: {} },
   { event: 'sealed', expected: {} },
   { event: 'campaign_opened', expected: {} },
+  // E7.4: binding-only, routed to the quarantine projection — the reducer
+  // itself has no edge for it.
+  { event: 'quarantined', expected: {} },
 ];
 
 test('exact (state x event) expectations: every cell decided, default reject', () => {
@@ -289,6 +328,57 @@ test('exact (state x event) expectations: every cell decided, default reject', (
       });
     }
   }
+});
+
+const EV_RERUN_ADMITTED = {
+  type: 'block_admitted',
+  payload: { block_id: 'b:i1', pools: ['p'], rerun_of: 'b' },
+} satisfies JournalEventInput;
+
+test('E7.1 re-entry: block_admitted{rerun_of} applies from aborted|completed|instrument_failed only', () => {
+  for (const state of ['aborted', 'completed', 'instrument_failed'] as const) {
+    expect(applySampleEvent(state, EV_RERUN_ADMITTED)).toEqual(A('admitted'));
+  }
+  // Kill->journal-aborted order violations (corruption) and non-re-entry
+  // terminals (E7.6) reject.
+  for (const state of [
+    'planned',
+    'admitted',
+    'spawned',
+    'exposed',
+    'skew_excluded',
+    'excluded_block_replaced',
+    'exhausted',
+    'budget_stopped',
+  ] as const) {
+    expect(applySampleEvent(state, EV_RERUN_ADMITTED).result).toBe('reject');
+  }
+});
+
+test('E7.1: aborted and skew_excluded are ignore-late from EVERY terminal', () => {
+  for (const terminal of [
+    'completed',
+    'instrument_failed',
+    'aborted',
+    'skew_excluded',
+    'excluded_block_replaced',
+    'exhausted',
+    'budget_stopped',
+  ] as const) {
+    expect(applySampleEvent(terminal, EV.aborted).result).toBe('ignore-late');
+    expect(applySampleEvent(terminal, EV.skew_excluded).result).toBe(
+      'ignore-late',
+    );
+  }
+  // Non-terminal live states still apply/reject as shipped.
+  expect(applySampleEvent('planned', EV.aborted).result).toBe('reject');
+  expect(applySampleEvent('planned', EV.skew_excluded).result).toBe('reject');
+});
+
+test('E7.1: excluded_block_replaced gains the admitted source', () => {
+  expect(applySampleEvent('admitted', EV.disposition_replaced)).toEqual(
+    A('excluded_block_replaced'),
+  );
 });
 
 test('campaign machine: opened, cancelled, sealed, and storage pauses', () => {

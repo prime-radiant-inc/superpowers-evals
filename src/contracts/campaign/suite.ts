@@ -13,6 +13,14 @@ export const TIER_SELECTOR_RE = /^tier=(sentinel|full|adhoc)$/;
 
 const NAME_RE = /^[a-z0-9_]+$/;
 
+/** Round-4 S-11: every external component interpolated into a generated id —
+ *  suite name, scenario name, arm name — matches this grammar. `:` is NOT a
+ *  component character: it is reserved exclusively as the generated
+ *  delimiter. Registration enforces this before any D3 campaign exists.
+ *  (Defined here, the leaf of the suite<-campaign import edge, and
+ *  re-exported by campaign.ts — the spec's two declared homes.) */
+export const ID_COMPONENT_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
 export const CellOverrideSchema = z
   .object({
     n: z.number().int().positive().optional(),
@@ -59,7 +67,18 @@ export type Comparison = z.infer<typeof ComparisonSchema>;
 export const SuiteSchema = z
   .object({
     schema_version: z.literal(1),
-    name: z.string().regex(NAME_RE),
+    // Suite names satisfy BOTH NAME_RE and the campaign ID-component
+    // grammar: the intersection is effectively /^[a-z0-9][a-z0-9_]*$/ —
+    // underscores satisfy both regexes, dots/dashes fail NAME_RE, and a
+    // leading underscore fails the ID grammar's alphanumeric first
+    // character.
+    name: z
+      .string()
+      .regex(NAME_RE)
+      .regex(
+        ID_COMPONENT_RE,
+        'suite name must satisfy the campaign ID-component grammar',
+      ),
     kind: z.enum(SUITE_KINDS),
     budget_usd: FiniteNumberSchema.positive(),
     profile: z.enum(PROFILE_NAMES).optional(),

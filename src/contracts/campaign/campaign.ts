@@ -1,7 +1,17 @@
 // src/contracts/campaign/campaign.ts
 import { z } from 'zod';
+import {
+  CREDENTIAL_APIS,
+  CREDENTIAL_AUTHS,
+  EnvVarNameSchema,
+} from '../credential.ts';
 import { FiniteNumberSchema } from '../finite.ts';
-import { CELL_CLASSES, SuiteSchema } from './suite.ts';
+import { CELL_CLASSES, ID_COMPONENT_RE, SuiteSchema } from './suite.ts';
+
+// Round-4 S-11 ID-component grammar (defined in suite.ts, the leaf of the
+// suite<-campaign import edge) is re-exported here: the spec names
+// campaign.ts and suite.ts as its two homes.
+export { ID_COMPONENT_RE };
 
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 const DIGEST_RE = /^[0-9a-f]{64}$/;
@@ -46,11 +56,15 @@ export const SampleSchema = z
   .strict();
 export type Sample = z.infer<typeof SampleSchema>;
 
+export const BlockSlotSchema = z.enum(['primary', 'reserve']);
+
 export const BlockSchema = z
   .object({
     block_id: z.string().min(1),
     comparison_id: z.string().min(1),
     sample_ids: z.array(z.string().min(1)).min(1),
+    // E7.0 frozen slot representation: absent reads as 'primary'.
+    slot: BlockSlotSchema.optional(),
   })
   .strict();
 export type Block = z.infer<typeof BlockSchema>;
@@ -74,16 +88,96 @@ export type CampaignComparison = z.infer<typeof CampaignComparisonSchema>;
 
 /** The operator-declared per-token escape for unpriced gating models —
  *  parent Concepts records it in campaign.json (Appendix B omission
- *  reconciled in the D1 spec). */
+ *  reconciled in the D1 spec). Grader-capable (R-REG-3): exactly one of
+ *  arm or applies_to_grader: true. */
 export const PricingOverrideSchema = z
   .object({
-    arm: z.string().min(1),
+    arm: z.string().min(1).optional(),
+    applies_to_grader: z.boolean().optional(),
     scenario: z.string().min(1).optional(),
     per_token_usd: FiniteNumberSchema.positive(),
     rationale: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((override, ctx) => {
+    const hasArm = override.arm !== undefined;
+    const hasGrader = override.applies_to_grader === true;
+    if (hasArm === hasGrader) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message:
+          'pricing override targets exactly one of arm or applies_to_grader: true',
+      });
+    }
+  });
 export type PricingOverride = z.infer<typeof PricingOverrideSchema>;
+
+export const HostFingerprintSchema = z
+  .object({
+    cpu_model: z.string().min(1),
+    cpu_cores: z.number().int().positive(),
+    mem_bytes: z.number().int().positive(),
+    disk_total_bytes: z.number().int().positive(),
+  })
+  .strict();
+
+export const ContentionThresholdSchema = z
+  .object({
+    metric: z.string().min(1),
+    source: z.string().min(1),
+    op: z.enum(['gt', 'lt']),
+    value: FiniteNumberSchema.positive(),
+    relative_of: z.string().min(1).optional(),
+  })
+  .strict();
+
+/** Decision D-4: the contention-guard declaration — host fingerprint,
+ *  global run cap, invalidation thresholds, and the frozen sampler
+ *  parameters. Computed and declared at registration; a digest member. */
+export const ContentionDeclarationSchema = z
+  .object({
+    host_fingerprint: HostFingerprintSchema,
+    global_run_cap: z.number().int().min(1),
+    thresholds: z.array(ContentionThresholdSchema).min(1),
+    cadence_ms: z.number().int().positive(),
+    sustain_k: z.number().int().positive(),
+    coverage_n: z.number().int().positive(),
+    mem_tolerance_pct: FiniteNumberSchema.nonnegative(),
+    disk_tolerance_pct: FiniteNumberSchema.nonnegative(),
+  })
+  .strict();
+export type HostFingerprint = z.infer<typeof HostFingerprintSchema>;
+export type ContentionThreshold = z.infer<typeof ContentionThresholdSchema>;
+export type ContentionDeclaration = z.infer<typeof ContentionDeclarationSchema>;
+
+/** The scrubbed, secret-free arm/credential execution surface (Blocker C
+ *  intake): env-var NAMES only, never key material. */
+export const ExecutionSurfaceArmSchema = z
+  .object({
+    name: z.string().min(1),
+    agent: z.string().min(1),
+    credential: z.string().min(1),
+    auth: z.enum(CREDENTIAL_AUTHS),
+    api: z.enum(CREDENTIAL_APIS),
+    base_url: z.string().min(1).optional(),
+    model: z.string().min(1),
+    key_env_names: z.array(EnvVarNameSchema),
+  })
+  .strict();
+export type ExecutionSurfaceArm = z.infer<typeof ExecutionSurfaceArmSchema>;
+
+/** R-SPN-4 identity intake: stamped on every verdict/error/stopped path. */
+export const CampaignIdentitySchema = z
+  .object({
+    campaign_id: z.string().min(1),
+    comparison_id: z.string().min(1),
+    block_id: z.string().min(1),
+    sample_id: z.string().min(1),
+    execution_attempt_id: z.string().min(1),
+  })
+  .strict();
+export type CampaignIdentity = z.infer<typeof CampaignIdentitySchema>;
 
 export const CampaignSchema = z
   .object({
@@ -110,12 +204,15 @@ export const CampaignSchema = z
     samples: z.array(SampleSchema),
     comparisons: z.array(CampaignComparisonSchema),
     blocks: z.array(BlockSchema),
+    contention: ContentionDeclarationSchema,
+    execution_surface: z.array(ExecutionSurfaceArmSchema),
     pricing_overrides: z.array(PricingOverrideSchema).optional(),
     budget: z
       .object({
         usd_all_in: FiniteNumberSchema.positive(),
         surcharge_applied: FiniteNumberSchema.nonnegative(),
         priced_coverage: FiniteNumberSchema.min(0).max(1),
+        surcharge_formula_version: z.number().int().positive(),
       })
       .strict(),
     // ISO-8601 datetime with a timezone designator (Z or offset).

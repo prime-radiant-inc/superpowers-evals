@@ -66,7 +66,54 @@ function goldenCampaign() {
       { comparison_id: 'c1', baseline: 'base_arm', treatment: 'treat_arm' },
     ],
     blocks: [{ block_id: 'b1', comparison_id: 'c1', sample_ids: ['s1', 's2'] }],
-    budget: { usd_all_in: 100, surcharge_applied: 5, priced_coverage: 0.95 },
+    contention: {
+      host_fingerprint: {
+        cpu_model: 'Apple M5 Pro',
+        cpu_cores: 10,
+        mem_bytes: 64 * 1024 ** 3,
+        disk_total_bytes: 1024 ** 4,
+      },
+      global_run_cap: 4,
+      thresholds: [
+        {
+          metric: 'load1_per_core',
+          source: 'host_stats',
+          op: 'gt',
+          value: 2,
+        },
+      ],
+      cadence_ms: 1000,
+      sustain_k: 3,
+      coverage_n: 5,
+      mem_tolerance_pct: 10,
+      disk_tolerance_pct: 15,
+    },
+    execution_surface: [
+      {
+        name: 'base_arm',
+        agent: 'claude',
+        credential: 'opus_fx',
+        auth: 'api-key',
+        api: 'anthropic',
+        model: 'claude-opus-5',
+        key_env_names: ['ANTHROPIC_API_KEY'],
+      },
+      {
+        name: 'treat_arm',
+        agent: 'codex',
+        credential: 'codex_fx',
+        auth: 'api-key',
+        api: 'openai-chat',
+        model: 'gpt-5.6',
+        key_env_names: ['OPENAI_API_KEY'],
+      },
+    ],
+    budget: {
+      usd_all_in: 100,
+      surcharge_applied: 5,
+      priced_coverage: 0.95,
+      surcharge_formula_version: 1,
+    },
     registered_at: '2026-08-24T00:00:00Z',
     registered_by: 'drew',
   };
@@ -76,8 +123,11 @@ test('golden vector: digest of the reference campaign', () => {
   // Campaign-level golden: canonical bytes of the exclusion-stripped document
   // and its SHA-256. The canonicalizer itself is verified against RFC 8785
   // vectors in campaign-contracts-jcs.test.ts.
+  // Vector recomputed when the fixture gained its D3 digest members
+  // (contention, execution_surface, budget.surcharge_formula_version);
+  // canonicalization itself is unchanged.
   expect(campaignDigest(goldenCampaign() as never)).toBe(
-    '7b116f014e80582de4ce8f356abf260afa2e27df0aba089f4ad73af9225eebec',
+    '13a450c70fbc275e40b2f80cbe9304aadc9708ec3fc8d801c52614672f126ec5',
   );
 });
 
@@ -155,4 +205,35 @@ test('lone UTF-16 surrogates reject in string values and object keys (RFC 8785)'
   // Valid surrogate PAIRS stay supported in both positions.
   expect(jcsCanonicalize('😀')).toBe('"😀"');
   expect(jcsCanonicalize({ '😀': 1 })).toBe('{"😀":1}');
+});
+
+test('digest membership: contention block and surcharge_formula_version are members; exclusions stay excluded', () => {
+  const doc = goldenCampaign();
+  const base = campaignDigest(doc as never);
+  // Included (Decision D-4): mutating any contention field changes the
+  // digest — the block rides the non-excluded remainder of the document.
+  expect(
+    campaignDigest({
+      ...doc,
+      contention: { ...doc.contention, cadence_ms: 999999 },
+    } as never),
+  ).not.toBe(base);
+  expect(
+    campaignDigest({
+      ...doc,
+      budget: { ...doc.budget, surcharge_formula_version: 2 },
+    } as never),
+  ).not.toBe(base);
+  // Excluded: the R-REG-4 list stays invariant. (No extraneous-key probe:
+  // R-REG-4 hashes the Campaign DOCUMENT — strict-parsed, so unknown keys
+  // cannot reach the digest input; digestInput is exclusion-based by
+  // decision D-4's "inclusion is the default".)
+  expect(
+    campaignDigest({
+      ...doc,
+      budget: { ...doc.budget, surcharge_applied: 999, priced_coverage: 0 },
+      registered_at: '2030-01-01T00:00:00Z',
+      registered_by: 'someone-else',
+    } as never),
+  ).toBe(base);
 });
