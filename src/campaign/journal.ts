@@ -55,6 +55,12 @@ export class JournalCorruptionError extends JournalError {
     this.name = 'JournalCorruptionError';
   }
 }
+export class WriterPoisonedError extends JournalError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WriterPoisonedError';
+  }
+}
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -140,11 +146,10 @@ export function initJournalDb(campaignDir: string): void {
   const dbPath = join(campaignDir, JOURNAL_DB_FILENAME);
   const db = new Database(dbPath, { create: true });
   try {
-    writerPragmas(db);
-    // R-JRN-2 on EXISTING databases: prove the journal is ours before any
-    // schema mutation. A version we cannot read refuses (checkSchemaVersion);
-    // tables without a meta row are a foreign database, never grafted onto.
-    // Only a table-free file (a fresh or crashed-mid-init shell) initializes.
+    // NO pragmas before the gate: journal_mode = WAL is PERSISTENT — on an
+    // existing database the schema_version is proven BEFORE any persistent
+    // mutation, so a refused foreign journal keeps its file byte-identical
+    // (reading sqlite_master and meta needs no pragma at all).
     const tables = db
       .query(
         `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
@@ -158,6 +163,7 @@ export function initJournalDb(campaignDir: string): void {
         `${dbPath} holds tables (${names.join(', ')}) but no meta.schema_version — foreign database, refusing to touch it; inspect the campaign directory by hand before initializing`,
       );
     }
+    writerPragmas(db); // ours (or table-free): persistent WAL from here on
     db.exec(SCHEMA_SQL);
     db.exec('BEGIN IMMEDIATE');
     db.query('INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)').run(
@@ -231,6 +237,10 @@ export class JournalWriter {
   private readonly attemptCreatedTs = new Map<string, number>();
   private readonly blockComparison = new Map<string, string>();
   private released = false;
+  /** Set when a rebuild's reseed failed: in-memory membership is
+   *  untrustworthy and every later mutation must refuse until
+   *  release() + re-election. */
+  private poison: string | undefined;
 
   private constructor(
     args: ElectWriterArgs,
@@ -243,8 +253,10 @@ export class JournalWriter {
     this.lease = lease;
     this.generation = generation;
     this.db = new Database(join(args.campaignDir, JOURNAL_DB_FILENAME));
-    writerPragmas(this.db);
+    // Version gate BEFORE any persistent PRAGMA — same R-JRN-2 rule as
+    // initJournalDb: a refused foreign journal is never mutated on open.
     checkSchemaVersion(this.db);
+    writerPragmas(this.db);
     // Seed in-memory membership exactly as a fresh election does (resumes).
     this.reseedMembership();
   }
@@ -260,8 +272,9 @@ export class JournalWriter {
       const db = new Database(join(args.campaignDir, JOURNAL_DB_FILENAME));
       let generation = 0;
       try {
-        writerPragmas(db);
+        // Version gate BEFORE any persistent PRAGMA (R-JRN-2, as initJournalDb).
         checkSchemaVersion(db);
+        writerPragmas(db);
         db.exec('BEGIN IMMEDIATE');
         const row = db
           .query('SELECT value FROM meta WHERE key = ?')
@@ -307,6 +320,7 @@ export class JournalWriter {
    *  one-event transaction, appended in order, nothing interleaving. */
   appendEvents(inputs: readonly EventInput[]): JournalEvent[] {
     if (this.released) throw new JournalError('writer released');
+    this.assertNotPoisoned();
     const out: JournalEvent[] = [];
     for (const input of inputs) {
       if (this.restrict !== undefined && !this.restrict.includes(input.type)) {
@@ -670,6 +684,7 @@ export class JournalWriter {
    *  rebuilt tables are byte-identical to incrementally maintained ones. */
   rebuildProjectionsFrom(universe: CampaignUniverse): void {
     if (this.released) throw new JournalError('writer released');
+    this.assertNotPoisoned();
     try {
       this.db.exec('BEGIN IMMEDIATE');
     } catch (err) {
@@ -700,9 +715,10 @@ export class JournalWriter {
       try {
         this.reseedMembership();
       } catch (reseedErr) {
-        throw new JournalError(
-          `rebuild failed (${errorMessage(err)}) and the membership reseed failed too (${errorMessage(reseedErr)}) — in-memory state is untrustworthy; release and re-elect a writer before further appends`,
-        );
+        // The maps are UNTRUSTWORTHY now: poison the writer — every later
+        // mutation refuses; the only recovery is release() + re-election.
+        this.poison = `journal writer poisoned: rebuild failed (${errorMessage(err)}) and the membership reseed failed too (${errorMessage(reseedErr)}) — in-memory state is untrustworthy; the only recovery is release() followed by re-electing a writer`;
+        throw new WriterPoisonedError(this.poison);
       }
       throw err;
     }
@@ -725,6 +741,14 @@ export class JournalWriter {
     for (const event of this.readEvents()) {
       this.foldMembership(event);
     }
+  }
+
+  /** The poison gate: a writer whose rebuild reseed failed keeps its
+   *  in-memory membership untrustworthy forever — refuse every mutation
+   *  with the typed error naming the recovery. Reads stay available for
+   *  diagnosis. */
+  private assertNotPoisoned(): void {
+    if (this.poison !== undefined) throw new WriterPoisonedError(this.poison);
   }
 
   /** Deterministic dump of every projection table (rebuild-verification

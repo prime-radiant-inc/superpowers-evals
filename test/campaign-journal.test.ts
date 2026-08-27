@@ -11,6 +11,7 @@ import {
   type JournalWriter,
   openJournalRead,
   WriterDeposedError,
+  WriterPoisonedError,
 } from '../src/campaign/journal.ts';
 import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
@@ -575,4 +576,84 @@ test('a failed rebuild rolls back the tables AND restores in-memory membership (
   expect(w.readAttempt('a2').block_id).toBe('b1');
   expect(a2.seq).toBe(4);
   w.release();
+});
+
+test('initJournalDb refuses a foreign journal WITHOUT mutating it — journal_mode unchanged (R-JRN-2)', () => {
+  const foreignDir = mkdtempSync(join(tmpdir(), 'camp-'));
+  const foreignPath = join(foreignDir, JOURNAL_DB_FILENAME);
+  const foreign = new Database(foreignPath);
+  foreign.exec('CREATE TABLE foreign_data(x)');
+  foreign.close();
+  expect(() => initJournalDb(foreignDir)).toThrow(/foreign/);
+  const probe = new Database(foreignPath);
+  const mode = probe.query('PRAGMA journal_mode').get() as {
+    journal_mode: string;
+  };
+  expect(mode.journal_mode).toBe('delete'); // refusal left the file untouched
+  probe.close();
+  // A wrong-version journal authored by another schema generation (rollback
+  // journal mode, meta row present): refused, still unmutated.
+  const otherDir = mkdtempSync(join(tmpdir(), 'camp-'));
+  const otherPath = join(otherDir, JOURNAL_DB_FILENAME);
+  const other = new Database(otherPath);
+  other.exec('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  other.query("INSERT INTO meta VALUES ('schema_version', '999')").run();
+  other.close();
+  expect(() => initJournalDb(otherDir)).toThrow(/schema_version/);
+  const probe2 = new Database(otherPath);
+  const mode2 = probe2.query('PRAGMA journal_mode').get() as {
+    journal_mode: string;
+  };
+  expect(mode2.journal_mode).toBe('delete');
+  probe2.close();
+});
+
+test('a failed reseed poisons the writer — every later mutation throws WriterPoisonedError until re-election', () => {
+  const dir = camp();
+  const w = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(1),
+    identity: new LocalIdentity(),
+    campaign: RESERVE_CAMPAIGN,
+  });
+  w.appendEvent(OPENED);
+  w.appendEvent({
+    type: 'block_admitted',
+    payload: { block_id: 'b1', pools: ['p'] },
+  });
+  w.appendEvent({
+    type: 'attempt_created',
+    payload: { sample_id: 's1', attempt_id: 'a1' },
+  });
+  // A real double failure is unreachable through the public surface — the
+  // fold is deterministic over frozen inputs, so a reseed that fails now
+  // would have failed construction. The injected throw stands in for the
+  // I/O class of reseed failures; the poison machinery under test is real.
+  (w as unknown as { reseedMembership(): void }).reseedMembership = () => {
+    throw new Error('injected: reseed I/O failure');
+  };
+  // Rebuild fails for real (membership-less universe -> F4 refusal), the
+  // reseed fails too -> the writer is poisoned, typed, naming re-election.
+  expect(() => w.rebuildProjectionsFrom({ samples: [], blocks: [] })).toThrow(
+    WriterPoisonedError,
+  );
+  expect(() => w.appendEvent({ type: 'storage_paused', payload: {} })).toThrow(
+    WriterPoisonedError,
+  );
+  expect(() => w.rebuildProjectionsFrom(RESERVE_UNIVERSE)).toThrow(
+    WriterPoisonedError,
+  );
+  // Reads stay available for diagnosis; release() is the recovery.
+  expect(w.readEvents().length).toBe(3);
+  w.release();
+  const fresh = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(1),
+    identity: new LocalIdentity(),
+    campaign: RESERVE_CAMPAIGN,
+  });
+  expect(fresh.appendEvent({ type: 'storage_paused', payload: {} }).seq).toBe(
+    4,
+  );
+  fresh.release();
 });
