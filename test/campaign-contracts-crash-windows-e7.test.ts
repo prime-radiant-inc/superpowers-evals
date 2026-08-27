@@ -198,3 +198,152 @@ test('resolver still emits kill_pgid_rerun_block for a post-run_allocated crash 
     { attempt_id: 'a1', resolution: 'kill_pgid_rerun_block', pgid: 1 },
   ]);
 });
+
+test('successor witness is the CURRENT attempt of THIS instance (stale terminals never discharge)', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 2 }),
+    ev('aborted', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i1', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a_old' }),
+    ev('run_allocated', { attempt_id: 'a_old', run_id: 'r3', pgid: 3 }),
+    ev('run_completed', { attempt_id: 'a_old', outcome: 'pass' }),
+    // Crash mid-retry: s1's CURRENT attempt a_new is live; a_old is stale.
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a_new' }),
+    ev('run_allocated', { attempt_id: 'a_new', run_id: 'r4', pgid: 4 }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report.attempts).toEqual([
+    { attempt_id: 'a_new', resolution: 'kill_pgid_rerun_block', pgid: 4 },
+  ]);
+});
+
+test('rerun admission lifts the aborted fact: a live rerun attempt gets its kill action', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 2 }),
+    ev('aborted', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i1', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a3' }),
+    ev('run_allocated', { attempt_id: 'a3', run_id: 'r3', pgid: 3 }),
+    // Crash: a3 is allocated without a terminal — the aborted b1 fact is
+    // predecessor-era and must not retire the re-entered sample.
+  );
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report.attempts).toEqual([
+    { attempt_id: 'a3', resolution: 'kill_pgid_rerun_block', pgid: 3 },
+  ]);
+});
+
+test('an orphan excluded_block_replaced disposition (no matching mint) never seals', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', { attempt_id: 'a2', run_id: 'r2', pgid: 2 }),
+    // No block_replaced anywhere: this disposition pairs with no roster
+    // entry (E7.3a conservation) and must not account s2.
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+});
+
+test('the supersession chain leaf demands the successor sample CURRENT completed attempt', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('instrument_failure', { attempt_id: 'a1', cause: 'grader_crashed' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x1s2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+    ev('block_admitted', { block_id: 'x1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 'x1s1', attempt_id: 'xa1' }),
+    ev('run_allocated', { attempt_id: 'xa1', run_id: 'xr1', pgid: 3 }),
+    ev('run_completed', { attempt_id: 'xa1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 'x1s2', attempt_id: 'xb_old' }),
+    ev('run_allocated', { attempt_id: 'xb_old', run_id: 'xr2', pgid: 4 }),
+    ev('run_completed', { attempt_id: 'xb_old', outcome: 'pass' }),
+    // Crash mid-retry: x1s2's CURRENT attempt is live; xb_old is stale and
+    // must not terminate s2's supersession chain.
+    ev('attempt_created', { sample_id: 'x1s2', attempt_id: 'xb_new' }),
+    ev('run_allocated', { attempt_id: 'xb_new', run_id: 'xr3', pgid: 5 }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+});
+
+test('malformed membership fails closed: a block-less frozen sample never seals', () => {
+  const universe: CampaignUniverse = {
+    samples: [{ sample_id: 's1' }],
+    blocks: [],
+  };
+  expect(sealPredicateHolds(universe, [])).toBe(false);
+  const events = [
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+  ];
+  // Even a completed attempt cannot account a sample with no frozen block —
+  // loud rejection, never a silent skip.
+  expect(sealPredicateHolds(universe, events)).toBe(false);
+});
+
+test('malformed membership fails closed: dual primary+reserve membership never seals', () => {
+  const universe: CampaignUniverse = {
+    samples: [{ sample_id: 's1', arm: 'base', cell: 'c1:scn' }],
+    blocks: [
+      { block_id: 'b1', sample_ids: ['s1'], slot: 'primary' },
+      { block_id: 'x1', sample_ids: ['s1'], slot: 'reserve' },
+    ],
+  };
+  expect(sealPredicateHolds(universe, [])).toBe(false);
+});
