@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 5,
+  "runId": "mock_pass-no-transcript_0000",
+  "status": "pass",
+  "summary": "ok",
+  "reasoning": "all ACs met (no canned claude session log in this fixture)",
+  "duration_ms": 1000,
+  "config": { "model": "claude-opus-4-8" }
+}

@@ -53,6 +53,7 @@ function runChild(
   extraArgs: string[],
   envExtra: Record<string, string> = {},
   scn: string = scenario(),
+  fixture = 'pass',
 ) {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const proc = spawnSync(
@@ -73,7 +74,7 @@ function runChild(
     {
       env: {
         ...process.env,
-        PATH: `${mockGauntletDir('pass')}:${process.env['PATH'] ?? ''}`,
+        PATH: `${mockGauntletDir(fixture)}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
@@ -170,10 +171,12 @@ test('malformed campaign identity fails loud at the CLI boundary', () => {
   expect(readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))).toEqual([]);
 });
 
-test('error path: identity persisted at allocation and stamped on an error verdict', () => {
-  // R-SPN-4: the stamp must land on EVERY exit path, not just the happy one.
-  // A failing setup.sh forces the runner's post-allocation error path — the
-  // RunnerError is composed into an indeterminate verdict with an error block.
+test('setup-error path: identity persisted at allocation and stamped on a setup-error verdict', () => {
+  // R-SPN-4: the stamp must land on EVERY exit path. A failing setup.sh
+  // forces the OUTER error route — a thrown RunnerError caught by
+  // runScenario and composed into an indeterminate verdict (stage 'setup').
+  // The run-error route (error AFTER gauntlet started) is covered by the
+  // post-gauntlet capture test below.
   const r = runChild(
     ['--campaign-identity', JSON.stringify(IDENTITY)],
     {},
@@ -187,6 +190,37 @@ test('error path: identity persisted at allocation and stamped on an error verdi
   expect(verdict.final).toBe('indeterminate');
   expect(verdict.error?.stage).toBe('setup');
   // Both halves: persisted at allocation, stamped on the error verdict.
+  expect(
+    JSON.parse(readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8')),
+  ).toEqual(IDENTITY);
+  expect(verdict.campaign).toEqual(IDENTITY);
+});
+
+test('run-error path: identity stamped on a post-gauntlet error verdict', () => {
+  // The genuine run-error route (distinct from setup): Gauntlet STARTED and
+  // COMPLETED (the pass-no-transcript fixture drops a passing result.json but
+  // no canned claude session log), then the run errored in the capture
+  // cascade — no Claude transcript appeared — composing an indeterminate
+  // verdict with an error block (stage 'capture') via the runner's error
+  // composition, not an early guard. The gauntlet layer's presence is what
+  // proves this errored AFTER Gauntlet ran.
+  const r = runChild(
+    ['--campaign-identity', JSON.stringify(IDENTITY)],
+    {},
+    scenario(),
+    'pass-no-transcript',
+  );
+  expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+  expect(r.runDir).not.toBeNull();
+  const verdict = JSON.parse(
+    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+  );
+  // Gauntlet ran and passed; the run itself errored afterward.
+  expect(verdict.gauntlet?.status).toBe('pass');
+  expect(verdict.gauntlet?.run_id).toBe('mock_pass-no-transcript_0000');
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('capture');
+  // Both halves: persisted at allocation, stamped on the run-error verdict.
   expect(
     JSON.parse(readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8')),
   ).toEqual(IDENTITY);
