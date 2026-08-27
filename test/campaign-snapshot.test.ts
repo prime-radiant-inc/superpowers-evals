@@ -1,6 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -13,7 +15,11 @@ import type {
   CommandResult,
   CommandRunner,
 } from '../src/agents/command-runner.ts';
-import { SnapshotDriftError } from '../src/campaign/instrument-snapshot.ts';
+import { defaultCommandRunner } from '../src/agents/command-runner.ts';
+import {
+  type SnapshotHandle,
+  verifySnapshot,
+} from '../src/campaign/instrument-snapshot.ts';
 import {
   driftAffectedBlockIds,
   materializeCampaignSnapshot,
@@ -268,7 +274,12 @@ test('repair removes ONLY identity-checked drifted trees — clean siblings surv
   runner.heads.set(join(campaignDir, 'gauntlet'), GAUNTLET);
   runner.porcelain.set(join(campaignDir, 'gauntlet'), ' M story.md'); // dirty tree: drift
   runner.heads.set(spRoot, SP_A); // exact + clean: must survive
-  expect(() =>
+  // Capture the mandated stderr loudness (D-11: naming tree + drift) instead
+  // of leaking it into test output.
+  const errSpy = spyOn(process.stderr, 'write');
+  errSpy.mockImplementation(() => true); // pure capture — suppress the write
+  let loud = '';
+  try {
     repairDriftedTrees({
       campaignDir,
       refs: refs({ arm1: SP_A }),
@@ -276,8 +287,22 @@ test('repair removes ONLY identity-checked drifted trees — clean siblings surv
       gauntletCheckout: '/src/gauntlet',
       superpowersCheckout: '/src/sp',
       runner,
-    }),
-  ).not.toThrow();
+    });
+    // Snapshot the captured calls BEFORE mockRestore — bun's restore
+    // clears mock state.
+    loud = errSpy.mock.calls.map((c) => String(c[0])).join('');
+  } finally {
+    errSpy.mockRestore();
+  }
+  expect(loud).toContain(
+    `removed + recreating evals at ${join(campaignDir, 'evals')}`,
+  );
+  expect(loud).toContain('drift: HEAD ');
+  expect(loud).toContain(
+    `removed + recreating gauntlet at ${join(campaignDir, 'gauntlet')}`,
+  );
+  expect(loud).toContain('dirty working tree');
+  expect(loud).not.toContain('superpowers('); // the clean sibling was never touched
   const removed = runner.calls
     .filter((c) => c.args.includes('remove'))
     .map((c) => c.args[c.args.length - 1]);
@@ -297,7 +322,9 @@ test('repair drops the completion marker so re-materialization rebuilds install 
   // A stale marker from the drifted era: without removal, D2's marker
   // fast-path would skip install/wrapper over the recreated trees.
   writeFileSync(join(campaignDir, '.quorum-snapshot-ok'), '');
-  expect(() =>
+  const errSpy = spyOn(process.stderr, 'write');
+  errSpy.mockImplementation(() => true); // pure capture — suppress the write
+  try {
     repairDriftedTrees({
       campaignDir,
       refs: refs({}),
@@ -305,8 +332,10 @@ test('repair drops the completion marker so re-materialization rebuilds install 
       gauntletCheckout: '/src/gauntlet',
       superpowersCheckout: '/src/sp',
       runner,
-    }),
-  ).not.toThrow(); // the post-repair verify also proves the marker was re-created
+    });
+  } finally {
+    errSpy.mockRestore();
+  } // the post-repair verify also proves the marker was re-created
   expect(
     runner.calls.some((c) => c.command === 'bun' && c.args.includes('install')),
   ).toBe(true);
@@ -318,11 +347,17 @@ test('repair verifies the rebuilt tree set — a still-drifted recreate refuses 
   mkdirSync(join(campaignDir, 'evals'), { recursive: true });
   mkdirSync(join(campaignDir, 'gauntlet'), { recursive: true });
   runner.heads.set(join(campaignDir, 'evals'), EVALS);
+  runner.heads.set(join(campaignDir, 'gauntlet'), GAUNTLET);
   // The base runner's porcelain survives remove -> the recreated tree
   // re-materializes "successfully" yet can never verify clean.
   runner.porcelain.set(join(campaignDir, 'evals'), ' M story.md');
 
-  expect(() =>
+  // One invocation: capture the refusal message (it must name the tree AND
+  // the operator's next step), keeping stderr out of the test output.
+  const errSpy = spyOn(process.stderr, 'write');
+  errSpy.mockImplementation(() => true); // pure capture — suppress the write
+  let message = '';
+  try {
     repairDriftedTrees({
       campaignDir,
       refs: refs({}),
@@ -330,16 +365,198 @@ test('repair verifies the rebuilt tree set — a still-drifted recreate refuses 
       gauntletCheckout: '/src/gauntlet',
       superpowersCheckout: '/src/sp',
       runner,
-    }),
-  ).toThrow(SnapshotDriftError);
-  expect(() =>
-    repairDriftedTrees({
+    });
+  } catch (err) {
+    message = (err as Error).message;
+  } finally {
+    errSpy.mockRestore();
+  }
+  expect(message).toContain('evals'); // names the drifted tree
+  expect(message).toContain('post-repair verification failed'); // campaign-level framing
+  expect(message).toContain('re-run the repair'); // the operator's next step
+});
+
+function seedCompletedSnapshot(
+  runner: RecordingRunner,
+  campaignDir: string,
+  armShas: readonly string[],
+): void {
+  mkdirSync(join(campaignDir, 'evals'), { recursive: true });
+  mkdirSync(join(campaignDir, 'gauntlet'), { recursive: true });
+  mkdirSync(join(campaignDir, 'bin'), { recursive: true });
+  for (const sha of armShas) {
+    mkdirSync(join(campaignDir, `superpowers-${sha}`), { recursive: true });
+    runner.heads.set(join(campaignDir, `superpowers-${sha}`), sha);
+  }
+  writeFileSync(join(campaignDir, '.quorum-snapshot-ok'), '');
+  writeFileSync(
+    join(campaignDir, 'bin', 'gauntlet'),
+    `#!/bin/sh\nexec bun '${join(campaignDir, 'gauntlet')}/src/index.ts' "$@"\n`,
+  );
+  chmodSync(join(campaignDir, 'bin', 'gauntlet'), 0o755);
+  runner.heads.set(join(campaignDir, 'evals'), EVALS);
+  runner.heads.set(join(campaignDir, 'gauntlet'), GAUNTLET);
+}
+
+test("reconstruction refusal names the operator's next step (R-RCV-6 fail-closed)", () => {
+  const runner = new RecordingRunner();
+  const campaignDir = mkdtempSync(join(tmpdir(), 'camp-'));
+  seedCompletedSnapshot(runner, campaignDir, [SP_A]);
+  runner.heads.set(join(campaignDir, 'evals'), 'f'.repeat(40)); // moved HEAD
+  let message = '';
+  try {
+    reconstructCampaignSnapshot({
       campaignDir,
-      refs: refs({}),
-      evalsCheckout: '/src/evals',
-      gauntletCheckout: '/src/gauntlet',
-      superpowersCheckout: '/src/sp',
+      refs: refs({ arm1: SP_A }),
       runner,
-    }),
-  ).toThrow(/evals/);
+    });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain('evals');
+  expect(message).toContain(EVALS); // both identities are named
+  expect(message).toContain('f'.repeat(40));
+  expect(message).toContain('refusing to resume');
+  expect(message).toContain('drift repair'); // the named recovery verb
+});
+
+// Real-git end-to-end (the instrument-snapshot/provisioning real-repo
+// pattern): RecordingRunner's canned git answers would lie for a real
+// repo, so the genuine sequence — real worktree add, real drift (dirty
+// porcelain + a moved HEAD), real worktree remove --force + prune on the
+// source checkout, real re-materialize, real verification — runs through
+// the real SpawnCommandRunner over local tmp repos (hermetic: no network).
+class RecordingRealRunner implements CommandRunner {
+  readonly calls: { command: string; args: readonly string[] }[] = [];
+  run(
+    command: string,
+    args: readonly string[],
+    options?: CommandOptions,
+  ): CommandResult {
+    this.calls.push({ command, args });
+    return defaultCommandRunner.run(command, args, options);
+  }
+}
+
+function makeSourceRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'camp-src-'));
+  const git = (...gargs: string[]) =>
+    spawnSync('git', gargs, { cwd: dir, encoding: 'utf8' });
+  git('init', '-q');
+  writeFileSync(
+    join(dir, 'package.json'),
+    '{"name":"fixture","version":"0.0.0"}\n',
+  );
+  writeFileSync(join(dir, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(dir, 'README.md'), 'fixture\n');
+  git('add', '-A');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x');
+  return dir;
+}
+
+function realHead(dir: string): string {
+  return spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  }).stdout.trim();
+}
+
+test('real git + real bun: materialize, drift (HEAD + dirty), repair, verify the rebuilt set', () => {
+  const evalsSrc = makeSourceRepo();
+  const gauntletSrc = makeSourceRepo();
+  const spSrc = makeSourceRepo();
+  const spSha1 = realHead(spSrc);
+  // A second commit gives the superpowers worktree a DIFFERENT sha to move
+  // its HEAD to — identity drift with a clean porcelain.
+  writeFileSync(join(spSrc, 'second.md'), '2\n');
+  spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'], {
+    cwd: spSrc,
+    encoding: 'utf8',
+  });
+  spawnSync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'two'],
+    { cwd: spSrc, encoding: 'utf8' },
+  );
+  const spSha2 = realHead(spSrc);
+  const evalsSha = realHead(evalsSrc);
+  const gauntletSha = realHead(gauntletSrc);
+  const campaignDir = mkdtempSync(join(tmpdir(), 'camp-real-'));
+  const spRoot = join(campaignDir, `superpowers-${spSha1}`);
+  const materialize = new RecordingRealRunner();
+  const handle = materializeCampaignSnapshot({
+    campaignDir,
+    refs: {
+      superpowers_by_arm: { arm1: spSha1 },
+      evals: evalsSha,
+      gauntlet: gauntletSha,
+    },
+    evalsCheckout: evalsSrc,
+    gauntletCheckout: gauntletSrc,
+    superpowersCheckout: spSrc,
+    runner: materialize,
+  });
+  expect(realHead(handle.evalsRoot)).toBe(evalsSha);
+  expect(realHead(spRoot)).toBe(spSha1);
+  expect(existsSync(join(campaignDir, '.quorum-snapshot-ok'))).toBe(true);
+  // Drift 1: dirty working tree in evals. Drift 2: moved HEAD (clean
+  // porcelain) in the superpowers worktree. Gauntlet stays clean.
+  writeFileSync(join(handle.evalsRoot, 'README.md'), 'dirty\n');
+  spawnSync('git', ['-C', spRoot, 'checkout', '-q', '--detach', spSha2], {
+    encoding: 'utf8',
+  });
+  // Repair once, with stderr captured and asserted (D-11 loudness).
+  const repairRunner = new RecordingRealRunner();
+  const errSpy = spyOn(process.stderr, 'write');
+  errSpy.mockImplementation(() => true); // pure capture — suppress the write
+  let repaired: SnapshotHandle | undefined;
+  let loud = '';
+  try {
+    repaired = repairDriftedTrees({
+      campaignDir,
+      refs: {
+        superpowers_by_arm: { arm1: spSha1 },
+        evals: evalsSha,
+        gauntlet: gauntletSha,
+      },
+      evalsCheckout: evalsSrc,
+      gauntletCheckout: gauntletSrc,
+      superpowersCheckout: spSrc,
+      runner: repairRunner,
+    });
+    // Snapshot the captured calls BEFORE mockRestore — bun's restore
+    // clears mock state.
+    loud = errSpy.mock.calls.map((c) => String(c[0])).join('');
+  } finally {
+    errSpy.mockRestore();
+  }
+  expect(loud).toContain(
+    `removed + recreating evals at ${join(campaignDir, 'evals')}`,
+  );
+  expect(loud).toContain(`removed + recreating superpowers(`);
+  expect(loud).not.toContain('gauntlet at'); // the clean tree was never touched
+  // Only the two drifted trees were removed; prune ran; never rm -rf.
+  const removed = repairRunner.calls
+    .filter((c) => c.args.includes('remove'))
+    .map((c) => c.args[c.args.length - 1]);
+  expect(removed).toEqual([join(campaignDir, 'evals'), spRoot]);
+  expect(
+    repairRunner.calls.some(
+      (c) => c.args.includes('worktree') && c.args.includes('prune'),
+    ),
+  ).toBe(true);
+  expect(
+    repairRunner.calls
+      .map((c) => `${c.command} ${c.args.join(' ')}`)
+      .some((v) => v.includes('rm -rf')),
+  ).toBe(false);
+  // The rebuilt set: real HEADs back at the registered SHAs, the marker
+  // re-created (bun install re-ran — the marker was dropped first), and the
+  // D2 guard green over the real trees.
+  expect(realHead(join(campaignDir, 'evals'))).toBe(evalsSha);
+  expect(realHead(spRoot)).toBe(spSha1);
+  expect(existsSync(join(campaignDir, '.quorum-snapshot-ok'))).toBe(true);
+  expect(
+    repairRunner.calls.filter((c) => c.command === 'bun').length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(() => verifySnapshot(repaired ?? handle, repairRunner)).not.toThrow();
 });

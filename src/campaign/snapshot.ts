@@ -102,7 +102,7 @@ export function reconstructCampaignSnapshot(args: {
   }
   if (mismatches.length > 0) {
     throw new SnapshotIntegrationError(
-      `snapshot reconstruction failed the Campaign.refs cross-check at ${args.campaignDir}: ${mismatches.join('; ')} — expected identity never derives from current HEAD alone (refuse, fail-closed)`,
+      `snapshot reconstruction failed the Campaign.refs cross-check at ${args.campaignDir}: ${mismatches.join('; ')} — expected identity never derives from current HEAD alone; refusing to resume (fail-closed). Next: reconcile the on-disk trees against the campaign.json refs — rebuild drifted trees with the authorized drift repair (quorum campaign run), or re-open the campaign record if the registered refs themselves are wrong`,
     );
   }
   return handle;
@@ -303,7 +303,14 @@ export function repairDriftedTrees(
   const handle = materializeCampaignSnapshot(args);
   // C2: prove the rebuilt wrapper/tree set with the same D2 drift guard the
   // cadence sites run — a repair whose recreate cannot verify clean never
-  // hands the handle back.
-  verifyCampaignSnapshot(handle, args.runner);
+  // hands the handle back. The refusal wraps D2's drift detail (which names
+  // the tree) with the campaign-level operator next step.
+  try {
+    verifyCampaignSnapshot(handle, args.runner);
+  } catch (err) {
+    throw new SnapshotIntegrationError(
+      `post-repair verification failed at ${args.campaignDir}: ${(err as Error).message} — the recreated snapshot still fails the D2 drift guard; refusing to resume on it (fail-closed). Next: inspect the tree named above and the source checkouts (${args.evalsCheckout}, ${args.gauntletCheckout}, ${args.superpowersCheckout}), resolve the underlying drift source, then re-run the repair`,
+    );
+  }
   return handle;
 }
