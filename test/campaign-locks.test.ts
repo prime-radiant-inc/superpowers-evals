@@ -887,3 +887,236 @@ test('I2c: an unreadable lock dir is never judged blind', () => {
     chmodSync(lockPath, 0o700);
   }
 });
+
+// --- Review fix round 4: fail-closed claim inspection + three-contender ----
+
+/** A FakeClock that runs an adversary inside the FIRST now() read past the
+ *  empty-grace window: the deterministic interleave point between the last
+ *  successful observation of the empty dir and the severing claim. */
+class ExpiryTrapClock extends FakeClock {
+  adversary: (() => void) | null = null;
+  override now(): number {
+    const t = super.now();
+    if (t > 10.12 && this.adversary !== null) {
+      const a = this.adversary;
+      this.adversary = null;
+      a();
+    }
+    return t;
+  }
+}
+
+test('FC-1: a severed directory that cannot be inspected is never treated as empty — nothing deleted, loud refusal', () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'fc1-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  mkdirSync(lockPath); // a contender "mid-acquire", judged empty past grace
+  const slowName = 'owner-abababab-abab-4bab-8bab-abababababab';
+  const clock = new ExpiryTrapClock(10);
+  clock.adversary = () => {
+    // A slow acquisition lands AND the directory becomes uninspectable in
+    // the window between the last empty observation and the severing claim.
+    writeFileSync(join(lockPath, slowName), 'a live acquisition landed');
+    chmodSync(lockPath, 0o000);
+  };
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  try {
+    expect(() =>
+      acquireLease({ lockPath, clock, identity, label: 'test lease' }),
+    ).toThrow(/cannot inspect/i);
+  } finally {
+    for (const e of readdirSync(workdir)) {
+      if (e.startsWith('test.lock.d')) chmodSync(join(workdir, e), 0o700);
+    }
+  }
+  // The uninspectable claim deleted NOTHING: the landed token survives,
+  // parked under the private trash name for the operator.
+  const trash = readdirSync(workdir).find((e) =>
+    e.startsWith('test.lock.d.trash-'),
+  )!;
+  expect(trash).toBeDefined();
+  expect(readFileSync(join(workdir, trash, slowName), 'utf8')).toBe(
+    'a live acquisition landed',
+  );
+});
+
+test('FC-2: a judged token that cannot be inspected after the claim refuses loudly — never judged as corruption blind', () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'fc2-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  const tokenName = 'owner-00000000-0000-4000-8000-000000000000';
+  plantStaleHolder(lockPath, 10_000);
+  const plain = new FakeIdentity();
+  plain.set(process.pid, 'alive', BIRTH);
+  plain.set(HOLDER_PID, 'esrch', null);
+  // The interleave point: the directory becomes uninspectable between the
+  // dead-holder judgment and the severing claim.
+  const identity: ProcessIdentityProbe = {
+    exists: (pid) => {
+      if (pid === HOLDER_PID) chmodSync(lockPath, 0o000);
+      return plain.exists(pid);
+    },
+    startTimeMs: (pid) => plain.startTimeMs(pid),
+  };
+  try {
+    expect(() =>
+      acquireLease({
+        lockPath,
+        clock: new FakeClock(210),
+        identity,
+        label: 'test lease',
+      }),
+    ).toThrow(/cannot inspect/i);
+  } finally {
+    for (const e of readdirSync(workdir)) {
+      if (e.startsWith('test.lock.d')) chmodSync(join(workdir, e), 0o700);
+    }
+  }
+  // Nothing was deleted through the uninspectable state: the judged token
+  // survives under the parked trash name.
+  const trash = readdirSync(workdir).find((e) =>
+    e.startsWith('test.lock.d.trash-'),
+  )!;
+  expect(readdirSync(join(workdir, trash))).toEqual([tokenName]);
+});
+
+// Three contenders, real thread + Atomics barrier (the adjudicated D2
+// closure): C2's freshly created dir is parked out from under it (C1's
+// mistaken grab) while C2 sits between its mkdir and its token write, and
+// C3 re-takes the path. C2's post-create identity re-proof must refuse —
+// a parked fresh owner never acts as holder — and its rollback must remove
+// the stray token it wrote into C3's directory, leaving C3 undisturbed.
+test('TC-1: a parked fresh owner refuses to act while the third contender holds', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'tc1-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  const parked = join(workdir, 'parked-by-c1');
+  const workerFile = join(workdir, 'worker.ts');
+  writeFileSync(
+    workerFile,
+    `
+    import { parentPort, workerData } from 'node:worker_threads';
+    import { acquireLease } from '${join(import.meta.dir, '..', 'src', 'campaign', 'locks.ts')}';
+    const { lockPath, sab } = workerData as { lockPath: string; sab: SharedArrayBuffer };
+    const flag = new Int32Array(sab);
+    let nowCalls = 0;
+    // First now() read = the token-timestamp read between mkdir and the
+    // token write: the barrier parks C2 exactly there.
+    const clock = {
+      now(): number {
+        nowCalls += 1;
+        if (nowCalls === 1) {
+          parentPort?.postMessage({ kind: 'mid-create' });
+          Atomics.wait(flag, 0, 0);
+        }
+        return 10;
+      },
+      sleepUntil: () => Promise.resolve(),
+      sleepSync: (_s: number) => {},
+    };
+    const identity = {
+      exists: () => 'alive' as const,
+      startTimeMs: (pid: number) => (pid === process.pid ? ${BIRTH} : null),
+    };
+    try {
+      acquireLease({ lockPath, clock, identity, label: 'test lease' });
+      parentPort?.postMessage({ kind: 'done', threw: false });
+    } catch (err) {
+      parentPort?.postMessage({
+        kind: 'done',
+        threw: true,
+        name: (err as Error).name,
+        message: (err as Error).message,
+      });
+    }
+  `,
+  );
+  const sab = new SharedArrayBuffer(4);
+  const worker = new Worker(workerFile, { workerData: { lockPath, sab } });
+  interface WorkerMsg {
+    kind: 'mid-create' | 'done';
+    threw?: boolean;
+    name?: string;
+    message?: string;
+  }
+  const waitFor = (kind: WorkerMsg['kind']) =>
+    new Promise<WorkerMsg>((resolve) => {
+      const on = (m: WorkerMsg) => {
+        if (m.kind === kind) {
+          worker.off('message', on);
+          resolve(m);
+        }
+      };
+      worker.on('message', on);
+    });
+  await waitFor('mid-create');
+  // C1's mistaken grab parks C2's fresh dir; C3 re-takes the path.
+  renameSync(lockPath, parked);
+  mkdirSync(lockPath);
+  const c3Name = 'owner-cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const c3Token = formatLockToken({
+    pid: HOLDER_PID,
+    birth_ts_ms: BIRTH + 3,
+    last_heartbeat_ts_ms: 999_000,
+  });
+  writeFileSync(join(lockPath, c3Name), c3Token);
+  const flag = new Int32Array(sab);
+  Atomics.store(flag, 0, 1);
+  Atomics.notify(flag, 0);
+  const result = await waitFor('done');
+  await worker.terminate();
+  // The parked fresh owner discovered the displacement at its post-create
+  // identity re-proof and refused to act as holder.
+  expect(result.threw).toBe(true);
+  expect(result.name).toBe('LockError');
+  expect(result.message).toMatch(/vanished mid-acquire/i);
+  // C3 holds, undisturbed: its dir contains ONLY its token (C2's stray,
+  // written through the re-taken path, was rolled back by unique name).
+  expect(readdirSync(lockPath)).toEqual([c3Name]);
+  expect(readFileSync(join(lockPath, c3Name), 'utf8')).toBe(c3Token);
+  // C2's parked dir is orphan-inert (C2 never wrote into it).
+  expect(readdirSync(parked)).toEqual([]);
+}, 15_000);
+
+test('RB-2: a stray token that cannot be removed from a replacement directory surfaces loudly with the original failure', () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'rb2-'));
+  const lockPath = join(workdir, 'test.lock.d');
+  const displaced = join(workdir, 'displaced');
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  let strayPath = '';
+  const exploding: HeartbeatScheduler = {
+    every() {
+      // The dir is replaced mid-acquisition and the replacement holds a
+      // foreign file under OUR token's name, in a read-only dir: the
+      // rollback's stray removal must fail — and must say so.
+      const ownerName = readdirSync(lockPath).find((e) =>
+        e.startsWith('owner-'),
+      )!;
+      strayPath = join(lockPath, ownerName);
+      renameSync(lockPath, displaced);
+      mkdirSync(lockPath);
+      writeFileSync(strayPath, 'foreign stray');
+      chmodSync(lockPath, 0o555);
+      throw new Error('driver registration failed');
+    },
+  };
+  let thrown: Error | null = null;
+  try {
+    acquireLease({
+      lockPath,
+      clock: new FakeClock(10),
+      identity,
+      label: 'test lease',
+      scheduler: exploding,
+    });
+  } catch (err) {
+    thrown = err as Error;
+  } finally {
+    chmodSync(lockPath, 0o700);
+  }
+  expect(thrown).toBeInstanceOf(LockError);
+  expect(thrown!.message).toContain('driver registration failed');
+  expect(thrown!.message).toContain(strayPath);
+  expect(thrown!.message).toMatch(/could not be removed|stray/i);
+  // The stray is still there — reported, not silently abandoned.
+  expect(readFileSync(strayPath, 'utf8')).toBe('foreign stray');
+});

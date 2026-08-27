@@ -20,9 +20,24 @@
 // orphan. Lock polling waits through the injected Clock's sleepSync, so
 // poll progress is keyed off clock advancement, never off wall-time counts.
 // Rollback and release surface cleanup failures loudly (original error plus
-// the held path); holder inspection is fail-closed (exactly one canonical
-// owner; permission/IO errors refuse, never judged blind); the host-wide
-// default refuses any non-absolute path.
+// the held path); inspection is fail-closed EVERYWHERE — holder judgment
+// (exactly one canonical owner; permission/IO errors refuse, never judged
+// blind) and the claim path alike (only ENOENT reads as vanished; an
+// unlistable severed directory is never "empty", nothing is deleted through
+// it); the host-wide default refuses any non-absolute path.
+//
+// Residual (the protocol's explicit bound): every holder-side action is
+// gated on identity — the acquirer re-proves the lock path's dev+ino
+// against the directory it created after writing its owner token (D2
+// tryAcquireLock's swap check: a parked fresh owner never acts as holder),
+// and every heartbeat re-proves it at the pinned cadence — so a holder
+// whose directory is displaced spends for at most one heartbeat cadence
+// before it fail-stops. Displacing a LIVE holder is unreachable in-protocol
+// (reclamation requires a stale heartbeat AND proven-dead-or-reused
+// identity; identity-unknown refuses), leaving the window open only under
+// corruption or sabotage. The parent spec's Linux matrix lists two-process
+// locking as asserted-not-proven debt; this cadence-bounded window is that
+// debt's locks-module expression.
 
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -165,6 +180,10 @@ const EMPTY_GRACE_MS = 100;
 const POLL_MS = 50;
 const OWNER_NAME_RE = /^owner-[0-9a-f-]{36}$/;
 
+/** lstat whose null means only "the beat must fail-stop / the path is not
+ *  ours" — callers that use null as a FAIL-CLOSED signal. Judgment sites in
+ *  the claim path use lstatOrVanished instead: there, absence and
+ *  permission failure must be told apart. */
 function tryLstat(path: string): Stats | null {
   try {
     return lstatSync(path);
@@ -173,8 +192,30 @@ function tryLstat(path: string): Stats | null {
   }
 }
 
-/** readdirSync that never throws (empty on error) — best-effort listing of
- *  a directory we already severed to a unique trash name. */
+/** lstat that returns null ONLY for ENOENT (genuinely vanished — a
+ *  transient race the caller backs off from). Every other failure refuses
+ *  loudly: an EACCES/EIO must never read as absence (the same fail-closed
+ *  bar observeOwner meets). */
+function lstatOrVanished(
+  path: string,
+  label: string,
+  what: string,
+): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    throw new LockError(
+      `${label}: cannot inspect ${what} at ${path} (${code ?? 'fs error'}) — refusing to judge lock state blind; resolve the filesystem failure and retry`,
+    );
+  }
+}
+
+/** readdirSync that never throws (empty on error) — ONLY for the best-effort
+ *  deletion sweep of an already-verified severed directory, where the rename
+ *  has freed the lock path and leftovers are inert under the unguessable
+ *  trash name. Never used to JUDGE state. */
 function readdirSafe(path: string): string[] {
   try {
     return readdirSync(path);
@@ -332,7 +373,7 @@ function severAndRemove(
       `${label}: cannot sever lock dir ${lockPath} (rename failed: ${code ?? 'fs error'}) — the lease may still be held; resolve the filesystem failure and retry`,
     );
   }
-  const st = tryLstat(trash);
+  const st = lstatOrVanished(trash, label, 'the severed lock directory');
   if (st === null) return 'lost';
   if (!st.isDirectory() || st.dev !== expected.dev || st.ino !== expected.ino) {
     return restoreOrThrow(trash, lockPath, label);
@@ -341,9 +382,15 @@ function severAndRemove(
     // The severed directory is the one we observed; the judged token must
     // still be in it, byte-identical. Nothing legitimate rewrites a dead
     // holder's token, so any drift here is corruption — park the severed
-    // state for the operator, never delete what we cannot re-verify.
+    // state for the operator, never delete what we cannot re-verify. An
+    // inspection failure is its own loud refusal (lstatOrVanished), never
+    // read as drift.
     const tokenPath = join(trash, guard.ownerName);
-    const tokenStat = tryLstat(tokenPath);
+    const tokenStat = lstatOrVanished(
+      tokenPath,
+      label,
+      'the judged owner token',
+    );
     const current =
       tokenStat?.isFile() === true ? readTokenAt(tokenPath) : null;
     if (
@@ -360,8 +407,20 @@ function severAndRemove(
   if (guard.kind === 'empty') {
     // Judged owner-token-free; if an owner token landed between the
     // observation and the claim, a slow acquisition just completed in this
-    // directory — put it back untouched.
-    const owners = readdirSafe(trash).filter((n) => OWNER_NAME_RE.test(n));
+    // directory — put it back untouched. The verification listing must
+    // succeed: a directory we cannot list is never "empty" (fail-closed) —
+    // nothing gets deleted, the claim parks loudly for the operator.
+    let names: string[];
+    try {
+      names = readdirSync(trash);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return 'lost';
+      throw new LockError(
+        `${label}: cannot inspect the severed lock directory at ${trash} (${code ?? 'fs error'}) — refusing to treat an unlistable directory as empty; nothing was deleted; resolve the filesystem failure, then inspect and remove ${trash} by hand`,
+      );
+    }
+    const owners = names.filter((n) => OWNER_NAME_RE.test(n));
     if (owners.length > 0) {
       return restoreOrThrow(trash, lockPath, label);
     }
@@ -467,7 +526,12 @@ export function acquireLease(args: AcquireLeaseArgs): LeaseHandle {
           last_heartbeat_ts_ms: clockNowMs(clock),
         };
         writeFileSync(ownerFile, formatLockToken(token), { flag: 'wx' });
-        const still = tryLstat(lockPath);
+        // The post-create identity re-proof (D2 tryAcquireLock's swap
+        // check): the lock path must STILL be the directory this call
+        // created — a contender whose fresh dir was parked out from under
+        // it discovers the displacement here and never acts as holder. An
+        // inspection failure refuses loudly (never read as vanished).
+        const still = lstatOrVanished(lockPath, args.label, 'the lock path');
         if (
           still === null ||
           !still.isDirectory() ||
@@ -494,36 +558,15 @@ export function acquireLease(args: AcquireLeaseArgs): LeaseHandle {
           heartbeatMs,
         );
       } catch (err) {
-        try {
-          const now = tryLstat(lockPath);
-          if (
-            now?.isDirectory() === true &&
-            now.dev === mine.dev &&
-            now.ino === mine.ino
-          ) {
-            severAndRemove(lockPath, mine, { kind: 'ours' }, args.label);
-          } else {
-            // The path no longer identifies our directory: our uniquely
-            // named token may have landed in a replacement. Removing it by
-            // OUR name can only ever remove a file this call created.
-            try {
-              rmSync(ownerFile, { force: true });
-            } catch {}
-          }
-        } catch (severErr) {
-          // Never report success-with-held-lock — and never hide a rollback
-          // that could not free it: surface both failures and the path.
-          throw new LockError(
-            `${args.label}: acquisition failed (${errorMessage(err)}) AND rollback could not free the lock — it may still be held at ${lockPath}: ${errorMessage(severErr)}`,
-          );
-        }
+        rollbackCreatedDir(lockPath, ownerFile, mine, args.label, err);
         throw err;
       }
     }
     // Contended (or the path is not a directory we just created): pin the
     // observed directory identity FIRST — a swapped path is never traversed
-    // and never severed by observation of its contents.
-    const observed = tryLstat(lockPath);
+    // and never severed by observation of its contents. An inspection
+    // failure refuses loudly; only ENOENT retries the mkdir race.
+    const observed = lstatOrVanished(lockPath, args.label, 'the lock path');
     if (observed === null) continue; // vanished: retry the mkdir race
     if (!observed.isDirectory()) {
       throw new LockError(
@@ -579,6 +622,52 @@ export function acquireLease(args: AcquireLeaseArgs): LeaseHandle {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Unwind a failed acquisition. Never silent, never success-with-held-lock:
+ *  every cleanup failure surfaces as a combined LockError carrying the
+ *  original failure, what could not be cleaned, and where. When the path no
+ *  longer identifies the directory this call created, its uniquely named
+ *  token may have landed in a replacement — removing it by OUR name can
+ *  only ever remove a file this call created, and a removal failure is
+ *  reported loudly: a lingering second owner token is corruption for the
+ *  replacement's holder. */
+function rollbackCreatedDir(
+  lockPath: string,
+  ownerFile: string,
+  mine: Stats,
+  label: string,
+  original: unknown,
+): void {
+  let now: Stats | null;
+  try {
+    now = lstatOrVanished(lockPath, label, 'the lock path');
+  } catch (inspectErr) {
+    throw new LockError(
+      `${label}: acquisition failed (${errorMessage(original)}) AND rollback could not inspect the lock path — the lease may still be held at ${lockPath}: ${errorMessage(inspectErr)}`,
+    );
+  }
+  if (
+    now?.isDirectory() === true &&
+    now.dev === mine.dev &&
+    now.ino === mine.ino
+  ) {
+    try {
+      severAndRemove(lockPath, mine, { kind: 'ours' }, label);
+    } catch (severErr) {
+      throw new LockError(
+        `${label}: acquisition failed (${errorMessage(original)}) AND rollback could not free the lock — it may still be held at ${lockPath}: ${errorMessage(severErr)}`,
+      );
+    }
+    return;
+  }
+  try {
+    rmSync(ownerFile, { force: true });
+  } catch (strayErr) {
+    throw new LockError(
+      `${label}: acquisition failed (${errorMessage(original)}) AND this call's stray owner token at ${ownerFile} could not be removed from the replacement lock directory: ${errorMessage(strayErr)} — remove it by hand before the replacement's holder fail-stops on it`,
+    );
+  }
 }
 
 function holderRefusal(
@@ -716,14 +805,34 @@ function makeHandle(
           ...current,
           last_heartbeat_ts_ms: clockNowMs(clock),
         };
-        const body = formatLockToken(fresh);
-        // The rewrite of our OWN token: one write at offset 0 through the
-        // verified descriptor. The body never shrinks in practice (pid and
-        // birth are fixed, the heartbeat timestamp's digits never lose
-        // places); the truncate covers the theoretical remainder.
-        writeSync(fd, body, 0, 'utf8');
-        if (Buffer.byteLength(body) < bytesRead) {
-          ftruncateSync(fd, Buffer.byteLength(body));
+        const data = Buffer.from(formatLockToken(fresh), 'utf8');
+        // The rewrite of our OWN token through the verified descriptor. A
+        // partial write must never leave a parseable truncated prefix
+        // standing as our token: keep writing until every byte has landed;
+        // zero forward progress or a write failure fail-stops the driver
+        // loudly. (The body never shrinks in practice — pid and birth are
+        // fixed, the timestamp's digits never lose places — the truncate
+        // covers the theoretical remainder.)
+        let written = 0;
+        while (written < data.length) {
+          let n: number;
+          try {
+            n = writeSync(fd, data, written, data.length - written, written);
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            failStop(
+              `cannot rewrite own token at ${ownerFile} (${code ?? 'fs error'} after ${written} of ${data.length} bytes) — token state unverifiable; fail-stop and stop spending on this lock`,
+            );
+          }
+          if (n <= 0) {
+            failStop(
+              `short write while rewriting own token at ${ownerFile} (${written} of ${data.length} bytes, no forward progress) — token state unverifiable; fail-stop and stop spending on this lock`,
+            );
+          }
+          written += n;
+        }
+        if (data.length < bytesRead) {
+          ftruncateSync(fd, data.length);
         }
         // A replacement that landed after the checks above got nothing (the
         // write went to our inode wherever the directory now lives) — but
