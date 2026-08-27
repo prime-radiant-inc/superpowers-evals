@@ -1026,6 +1026,22 @@ export interface ReplayState {
   readonly budget: { spend_usd: number; estimate_inflight_usd: number };
 }
 
+/** The standing tail of every replay corruption refusal: replay state is
+ *  untrustworthy, so nothing may rebuild or resume over the journal until a
+ *  human has audited it. */
+const AUDIT =
+  'quarantine the campaign directory for manual audit before any rebuild or resume';
+
+/** The single constructor for replay corruption refusals (fail-closed
+ *  constraint): every refusal states what the journal claims AND the
+ *  operator's next step — a bare "corruption" with no recovery action never
+ *  ships. */
+function corrupt(claim: string, nextStep: string): JournalCorruptionError {
+  return new JournalCorruptionError(
+    `${claim} — journal corruption: ${nextStep}`,
+  );
+}
+
 /** The pinned replay routing table (Decision D-7): a reject is corruption
  *  ONLY after correct routing. Sample-scoped -> applySampleEvent per named
  *  sample; block fan-out over universe blocks ∪ E7 mint rosters; block_
@@ -1062,7 +1078,23 @@ export function replayEvents(
       })),
     );
   }
-  const ensureSample = (sampleId: string): void => {
+  // F1 membership gate: the sample IDs an event may name are exactly the
+  // frozen universe's ∪ those mint rosters introduce (membership derives
+  // from events, Decision D-7). An unknown sample is corruption — never a
+  // fabricated 'planned' row the reducer could then legally advance.
+  const knownSamples = new Set<string>(
+    universe.samples.map((sample) => sample.sample_id),
+  );
+  for (const roster of rosters.values()) {
+    for (const entry of roster) knownSamples.add(entry.sample_id);
+  }
+  const requireKnownSample = (event: JournalEvent, sampleId: string): void => {
+    if (!knownSamples.has(sampleId)) {
+      throw corrupt(
+        `${event.type} (seq ${event.seq}) names sample ${sampleId} that no frozen or minted membership knows`,
+        `the frozen campaign document and the journaled mint rosters are the membership authority — inspect them, then ${AUDIT}`,
+      );
+    }
     if (!sampleStates.has(sampleId)) sampleStates.set(sampleId, 'planned');
   };
   const stateOf = (sampleId: string): SampleState =>
@@ -1075,8 +1107,9 @@ export function replayEvents(
   const sampleOfAttempt = (event: JournalEvent, attemptId: string): string => {
     const sampleId = attemptSample.get(attemptId);
     if (sampleId === undefined) {
-      throw new JournalCorruptionError(
-        `${event.type} (seq ${event.seq}) names attempt ${attemptId} never bound by attempt_created — corruption`,
+      throw corrupt(
+        `${event.type} (seq ${event.seq}) names attempt ${attemptId} never bound by attempt_created`,
+        `inspect the events table around this seq for the missing attempt_created, then ${AUDIT}`,
       );
     }
     return sampleId;
@@ -1102,8 +1135,8 @@ export function replayEvents(
     }
     switch (event.type) {
       case 'attempt_created':
+        requireKnownSample(event, event.payload.sample_id);
         attemptSample.set(event.payload.attempt_id, event.payload.sample_id);
-        ensureSample(event.payload.sample_id);
         sampleStates.set(
           event.payload.sample_id,
           applyOrCorrupt(
@@ -1128,7 +1161,7 @@ export function replayEvents(
       case 'sample_disposition':
       case 'slot_exhausted': {
         const sampleId = event.payload.sample_id;
-        ensureSample(sampleId);
+        requireKnownSample(event, sampleId);
         sampleStates.set(
           sampleId,
           applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
@@ -1137,7 +1170,7 @@ export function replayEvents(
       }
       case 'budget_stopped':
         for (const sampleId of event.payload.sample_ids) {
-          ensureSample(sampleId);
+          requireKnownSample(event, sampleId);
           sampleStates.set(
             sampleId,
             applyOrCorrupt(event, stateOf(sampleId), sampleId, input),
@@ -1149,18 +1182,20 @@ export function replayEvents(
       case 'skew_excluded': {
         const members = membershipOf(event.payload.block_id);
         if (members.length === 0) {
-          throw new JournalCorruptionError(
+          throw corrupt(
             `${event.type} (seq ${event.seq}) names unknown block ${event.payload.block_id} — no frozen or minted membership`,
+            `the frozen campaign document and prior block_replaced mints are the membership authority — inspect them, then ${AUDIT}`,
           );
         }
         for (const sampleId of members) {
-          ensureSample(sampleId);
+          requireKnownSample(event, sampleId);
           const outcome = applySampleEvent(stateOf(sampleId), input);
           if (outcome.result === 'apply')
             sampleStates.set(sampleId, outcome.next);
           if (outcome.result === 'reject') {
-            throw new JournalCorruptionError(
-              `${event.type} (seq ${event.seq}) REJECT from ${sampleStates.get(sampleId)} for sample ${sampleId} — routed correctly, so this is corruption`,
+            throw corrupt(
+              `${event.type} (seq ${event.seq}) REJECT from ${sampleStates.get(sampleId)} for sample ${sampleId} — routed correctly, so the stream violates the pinned state machine`,
+              `inspect this sample's event history around the seq, then ${AUDIT}`,
             );
           }
           // ignore-late: recorded-but-non-mutating (R-JRN-7)
@@ -1189,6 +1224,11 @@ export function replayEvents(
             deriveLegacyReplayRoster(universe, rosters, rec, event),
           );
         }
+        // A mint roster INTRODUCES membership (Decision D-7): its samples
+        // are known from this event onward.
+        for (const entry of rosters.get(rec.replacement_block_id) ?? []) {
+          knownSamples.add(entry.sample_id);
+        }
         blockStates.set(rec.block_id, 'replaced');
         blockStates.set(rec.replacement_block_id, 'minted');
         break; // NEVER fanned through applySampleEvent (Decision D-7)
@@ -1198,8 +1238,9 @@ export function replayEvents(
       case 'storage_paused': {
         const outcome = applyCampaignEvent(campaignState, event.type);
         if (outcome.result === 'reject') {
-          throw new JournalCorruptionError(
-            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${campaignState} — corruption`,
+          throw corrupt(
+            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${campaignState}`,
+            `inspect the campaign-scoped event order around this seq, then ${AUDIT}`,
           );
         }
         campaignState = outcome.next;
@@ -1219,14 +1260,16 @@ export function replayEvents(
           events.slice(0, index),
         );
         if (begun.result === 'reject') {
-          throw new JournalCorruptionError(
-            `sealed (seq ${event.seq}) cannot enter sealing from ${campaignState} — the seal predicate does not hold over the preceding events, so this journal records an impossible seal; inspect the campaign directory before trusting any derived state`,
+          throw corrupt(
+            `sealed (seq ${event.seq}) cannot enter sealing from ${campaignState} — the seal predicate does not hold over the preceding events, so this journal records an impossible seal`,
+            `inspect the campaign directory before trusting any derived state, then ${AUDIT}`,
           );
         }
         const outcome = applyCampaignEvent(begun.next, event.type);
         if (outcome.result === 'reject') {
-          throw new JournalCorruptionError(
-            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${begun.next} — corruption`,
+          throw corrupt(
+            `campaign-scoped ${event.type} (seq ${event.seq}) rejected from ${begun.next}`,
+            `inspect the campaign-scoped event order around this seq, then ${AUDIT}`,
           );
         }
         campaignState = outcome.next;
@@ -1254,8 +1297,9 @@ export function replayEvents(
         // The switch is statically exhaustive over JournalEvent (`event` is
         // never here); the widening cast keeps the runtime backstop for a
         // row a future vocabulary parses that this table does not route.
-        throw new JournalCorruptionError(
+        throw corrupt(
           `unknown event type at seq ${(event as JournalEvent).seq}`,
+          'this journal was written by a newer vocabulary than this routing table — open it with the tooling that wrote it',
         );
     }
   }
@@ -1287,8 +1331,9 @@ function deriveLegacyReplayRoster(
     (block) => block.block_id === rec.replacement_block_id,
   );
   if (successor === undefined || successor.slot !== 'reserve') {
-    throw new JournalCorruptionError(
-      `block_replaced (seq ${event.seq}) legacy arm names successor ${rec.replacement_block_id} that is not a frozen reserve block of the universe — corruption; inspect the campaign document before trusting any derived state`,
+    throw corrupt(
+      `block_replaced (seq ${event.seq}) legacy arm names successor ${rec.replacement_block_id} that is not a frozen reserve block of the universe`,
+      `the frozen campaign document is the membership authority — inspect it, then ${AUDIT}`,
     );
   }
   const armBySample = new Map(
@@ -1304,8 +1349,9 @@ function deriveLegacyReplayRoster(
     armOf: (sampleId) => armBySample.get(sampleId),
     armSource: 'the frozen universe',
     fail: (message) =>
-      new JournalCorruptionError(
-        `block_replaced (seq ${event.seq}): ${message} — corruption; inspect the campaign document before trusting any derived state`,
+      corrupt(
+        `block_replaced (seq ${event.seq}): ${message}`,
+        `the frozen campaign document is the membership authority — inspect it, then ${AUDIT}`,
       ),
   });
 }
@@ -1320,8 +1366,9 @@ function applyOrCorrupt(
 ): SampleState {
   const outcome = applySampleEvent(state, input);
   if (outcome.result === 'reject') {
-    throw new JournalCorruptionError(
-      `${event.type} (seq ${event.seq}) REJECT from ${state} for sample ${sampleId} — routed correctly, so this is corruption`,
+    throw corrupt(
+      `${event.type} (seq ${event.seq}) REJECT from ${state} for sample ${sampleId} — routed correctly, so the stream violates the pinned state machine`,
+      `inspect this sample's event history around the seq, then ${AUDIT}`,
     );
   }
   return outcome.result === 'apply' ? outcome.next : state;

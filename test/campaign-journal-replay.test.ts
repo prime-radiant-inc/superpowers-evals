@@ -308,3 +308,89 @@ test('replay legacy-roster derivation matches the writer projection exactly (par
   expect(projectedEntries).toEqual(state.rosters.get('bres') ?? []);
   w.release();
 });
+
+// ————— Review round 1 —————
+
+test('an event naming a sample no frozen or minted membership knows is corruption — no fabricated rows (F1)', () => {
+  const opened = { campaign_id: 'c', digest: 'd'.repeat(64) };
+  // slot_exhausted and budget_stopped are the fabrication paths: the reducer
+  // legally advances an invented 'planned' to terminal, so without the
+  // membership gate a ghost sample yields a fabricated replay row.
+  const ghostTerminal = [
+    ev('campaign_opened', opened),
+    ev('slot_exhausted', { sample_id: 'ghost' }),
+  ];
+  expect(() => replayEvents(UNIVERSE, ghostTerminal)).toThrow(
+    JournalCorruptionError,
+  );
+  const ghostStopped = [
+    ev('campaign_opened', opened),
+    ev('budget_stopped', { sample_ids: ['ghost'] }),
+  ];
+  expect(() => replayEvents(UNIVERSE, ghostStopped)).toThrow(
+    JournalCorruptionError,
+  );
+  // Membership derives from EVENTS (universe ∪ mint rosters): a sample a
+  // mint roster introduced IS known from that mint onward — never rejected.
+  const mintIntroduced = [
+    ev('campaign_opened', opened),
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1x',
+      reason: 'subject_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    ev('slot_exhausted', { sample_id: 'x1' }),
+  ];
+  const state = replayEvents(UNIVERSE, mintIntroduced);
+  expect(state.sampleStates.get('x1')).toBe('exhausted');
+});
+
+test("every corruption refusal names the operator's next step (F2, fail-closed)", () => {
+  const opened = { campaign_id: 'c', digest: 'd'.repeat(64) };
+  const NEXT_STEP = /inspect|quarantine|re-elect|rebuild|tooling that wrote/i;
+  const streams: JournalEvent[][] = [
+    // attempt never bound by attempt_created
+    [
+      ev('campaign_opened', opened),
+      ev('run_allocated', { attempt_id: 'ghost', run_id: 'r1', pgid: 1 }),
+    ],
+    // unknown block (no frozen or minted membership)
+    [
+      ev('campaign_opened', opened),
+      ev('block_admitted', { block_id: 'bX', pools: ['p'] }),
+    ],
+    // unknown sample (F1's gate)
+    [
+      ev('campaign_opened', opened),
+      ev('slot_exhausted', { sample_id: 'ghost' }),
+    ],
+    // sample reducer reject after correct routing (exposure before admission)
+    [
+      ev('campaign_opened', opened),
+      ev('exposure_started', { sample_id: 's1', ts: 1 }),
+    ],
+    // block fan-out reducer reject (aborted before admission)
+    [ev('campaign_opened', opened), ev('aborted', { block_id: 'b1' })],
+    // campaign-scoped reject (double open)
+    [ev('campaign_opened', opened), ev('campaign_opened', opened)],
+    // impossible seal
+    [ev('sealed', { report_digest: 'e'.repeat(64) })],
+  ];
+  for (const events of streams) {
+    let thrown: unknown;
+    try {
+      replayEvents(UNIVERSE, events);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(JournalCorruptionError);
+    expect((thrown as Error).message).toMatch(NEXT_STEP);
+  }
+});
