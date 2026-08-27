@@ -192,12 +192,31 @@ function resolveProjectPrompt(path: string, cfg: AgentConfig): AgentConfig {
   return cfg;
 }
 
+/** Parse + statically validate an agent config from its SOURCE text;
+ *  `origin` names where the bytes came from in error messages (a file path,
+ *  or an object-store address like `coding-agents/claude.yaml@<sha>`). No
+ *  project_prompt resolution — that needs a real tree and belongs to the
+ *  path-based loaders. */
+export function parseAgentConfigForValidation(
+  source: string,
+  origin: string,
+  name: string,
+): AgentConfig {
+  const cfg = AgentConfigSchema.parse(parseYaml(source));
+  validateAgentConfigStatic(origin, cfg, name);
+  return cfg;
+}
+
 export function loadAgentConfigForValidation(
   codingAgentsDir: string,
   name: string,
 ): AgentConfig {
-  const { path, cfg } = readAgentConfigFile(codingAgentsDir, name);
-  validateAgentConfigStatic(path, cfg, name);
+  const path = join(codingAgentsDir, `${name}.yaml`);
+  const cfg = parseAgentConfigForValidation(
+    readFileSync(path, 'utf8'),
+    path,
+    name,
+  );
   return resolveProjectPrompt(path, cfg);
 }
 

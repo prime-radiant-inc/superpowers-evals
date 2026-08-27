@@ -22,8 +22,7 @@ function stripChar(s: string, ch: string): string {
  * surrounding single quotes. Missing or malformed frontmatter yields an empty
  * map rather than an error.
  */
-function frontmatter(storyPath: string): Map<string, string> {
-  const text = readFileSync(storyPath, 'utf8');
+function frontmatterOf(text: string): Map<string, string> {
   const body = text.match(/^---\n([\s\S]*?)\n---\n/)?.[1];
   const out = new Map<string, string>();
   if (body === undefined) return out;
@@ -35,6 +34,10 @@ function frontmatter(storyPath: string): Map<string, string> {
     if (key) out.set(key, val);
   }
   return out;
+}
+
+function frontmatter(storyPath: string): Map<string, string> {
+  return frontmatterOf(readFileSync(storyPath, 'utf8'));
 }
 
 /**
@@ -51,17 +54,24 @@ export function readQuorumMaxTime(storyPath: string): string | null {
 }
 
 /**
- * The story's `quorum_tier`, defaulting to `full`. Throws
+ * The story's `quorum_tier` from its TEXT, defaulting to `full`. Throws
  * {@link StoryMetaError} on any value outside the closed set.
  */
-export function readQuorumTier(
-  storyPath: string,
+export function quorumTierFromStory(
+  story: string,
 ): 'sentinel' | 'full' | 'adhoc' {
-  const v = frontmatter(storyPath).get('quorum_tier') ?? 'full';
+  const v = frontmatterOf(story).get('quorum_tier') ?? 'full';
   if (v !== 'sentinel' && v !== 'full' && v !== 'adhoc') {
     throw new StoryMetaError(`invalid quorum_tier: ${v}`);
   }
   return v;
+}
+
+/** {@link quorumTierFromStory} over the story file at `storyPath`. */
+export function readQuorumTier(
+  storyPath: string,
+): 'sentinel' | 'full' | 'adhoc' {
+  return quorumTierFromStory(readFileSync(storyPath, 'utf8'));
 }
 
 /** The story's `status`, defaulting to `ready`. */
@@ -69,16 +79,21 @@ export function readStoryStatus(storyPath: string): string {
   return frontmatter(storyPath).get('status') ?? 'ready';
 }
 
-/** The story's `requires_superpowers`, or `null` when omitted (the scan
- *  default applies downstream). Throws {@link StoryMetaError} outside
- *  true/false. */
-export function readRequiresSuperpowers(storyPath: string): boolean | null {
-  const v = frontmatter(storyPath).get('requires_superpowers');
+/** The story's `requires_superpowers` from its TEXT, or `null` when omitted
+ *  (the scan default applies downstream). Throws {@link StoryMetaError}
+ *  outside true/false. */
+export function requiresSuperpowersFromStory(story: string): boolean | null {
+  const v = frontmatterOf(story).get('requires_superpowers');
   if (v === undefined) return null;
   if (v !== 'true' && v !== 'false') {
     throw new StoryMetaError(`invalid requires_superpowers: ${v}`);
   }
   return v === 'true';
+}
+
+/** {@link requiresSuperpowersFromStory} over the story file at `storyPath`. */
+export function readRequiresSuperpowers(storyPath: string): boolean | null {
+  return requiresSuperpowersFromStory(readFileSync(storyPath, 'utf8'));
 }
 
 export const COUPLING_VALUES = [
@@ -88,10 +103,10 @@ export const COUPLING_VALUES = [
 ] as const;
 export type CouplingValue = (typeof COUPLING_VALUES)[number];
 
-/** The story's `coupling` override, or `null` when omitted. Throws
- *  {@link StoryMetaError} outside the closed vocabulary. */
-export function readCoupling(storyPath: string): CouplingValue | null {
-  const v = frontmatter(storyPath).get('coupling');
+/** The story's `coupling` override from its TEXT, or `null` when omitted.
+ *  Throws {@link StoryMetaError} outside the closed vocabulary. */
+export function couplingFromStory(story: string): CouplingValue | null {
+  const v = frontmatterOf(story).get('coupling');
   if (v === undefined) return null;
   if (
     v !== 'pins-skill-names' &&
@@ -101,4 +116,9 @@ export function readCoupling(storyPath: string): CouplingValue | null {
     throw new StoryMetaError(`invalid coupling: ${v}`);
   }
   return v;
+}
+
+/** {@link couplingFromStory} over the story file at `storyPath`. */
+export function readCoupling(storyPath: string): CouplingValue | null {
+  return couplingFromStory(readFileSync(storyPath, 'utf8'));
 }

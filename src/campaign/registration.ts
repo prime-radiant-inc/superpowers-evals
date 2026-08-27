@@ -12,22 +12,21 @@
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { CommandRunner } from '../agents/command-runner.ts';
 import { superpowersCapability } from '../agents/index.ts';
 import { resolveSuperpowersRef } from '../appliance/git.ts';
 import {
+  type AgentConfig,
   agentRuntimeFamily,
-  loadAgentConfigForValidation,
+  parseAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
 import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
 import {
@@ -48,7 +47,7 @@ import {
 } from '../contracts/campaign/digest.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
-import { scanCouplingDefault } from '../contracts/campaign/scenario-meta.ts';
+import { couplingDefaultFrom } from '../contracts/campaign/scenario-meta.ts';
 import {
   type Suite,
   SuiteSchema,
@@ -62,9 +61,9 @@ import type { EstimatesArtifact } from '../contracts/estimates.ts';
 import { getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import {
-  readCoupling,
-  readQuorumTier,
-  readRequiresSuperpowers,
+  couplingFromStory,
+  quorumTierFromStory,
+  requiresSuperpowersFromStory,
 } from '../story-meta.ts';
 import { type EstimateLookup, lookupEstimate } from './estimates.ts';
 import {
@@ -79,6 +78,7 @@ import {
   DEFAULT_BALLAST_BYTES,
   electWriter,
   initJournalDb,
+  type JournalFsOps,
   openJournalRead,
   stageAndPublishCampaignJson,
   verifyBallast,
@@ -914,9 +914,9 @@ function minimalGitEnv(): Readonly<Record<string, string | undefined>> {
 
 /** Authoritative intake read from the MATERIALIZED final-path evals tree
  *  (Blocker C): arms/, credentials.yaml, scenarios/<name>/, coding-agents/
- *  via plain file reads. The shipped path-based frontmatter readers
- *  (readQuorumTier etc.) apply unchanged. Records every consumed file's
- *  bytes so callers can cross-check provenance. */
+ *  via plain file reads, parsed by the same string-based readers the
+ *  object-store intake uses. Records every consumed file's bytes so callers
+ *  can cross-check provenance. */
 function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
   const arms: Record<string, Arm> = {};
   const files: Record<string, string> = {};
@@ -959,11 +959,22 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
           'utf8',
         );
       }
+      const story = files[`scenarios/${entry}/story.md`] as string;
+      const combined =
+        story +
+        (files[`scenarios/${entry}/setup.sh`] ?? '') +
+        (files[`scenarios/${entry}/checks.sh`] ?? '');
+      const skillsFixturesDir = join(scenarioDir, 'fixtures', 'skills');
+      const hasSkillsFixtures =
+        existsSync(skillsFixturesDir) &&
+        statSync(skillsFixturesDir).isDirectory();
       scenarios.push({
         name: entry,
-        tier: readQuorumTier(storyPath),
-        requires_superpowers: readRequiresSuperpowers(storyPath) ?? false,
-        coupling: readCoupling(storyPath) ?? scanCouplingDefault(scenarioDir),
+        tier: quorumTierFromStory(story),
+        requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
+        coupling:
+          couplingFromStory(story) ??
+          couplingDefaultFrom(combined, hasSkillsFixtures),
         os: undefined,
       });
     }
@@ -978,13 +989,7 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       );
     }
   }
-  return {
-    arms,
-    credentials,
-    scenarios,
-    agentConfigsDir: agentsDir,
-    files,
-  };
+  return { arms, credentials, scenarios, files };
 }
 
 function gitOutText(runner: CommandRunner, args: readonly string[]): string {
@@ -1001,15 +1006,15 @@ function gitOutText(runner: CommandRunner, args: readonly string[]): string {
  *  read-only from the git OBJECT STORE at the resolved frozen SHA —
  *  `git ls-tree` + `git show <sha>:<path>` through the CommandRunner seam.
  *  Object-store content is immutable, so these bytes can never observe the
- *  mutable host checkout (Blocker C's point). Consumed files also land in a
- *  transient scratch dir so the shipped path-based frontmatter readers and
- *  loadAgentConfigForValidation apply unchanged; the caller removes it
- *  after the grid+digest computation. */
+ *  mutable host checkout (Blocker C's point). Fully in-memory (round-2
+ *  finding 1): every parser consumes the strings directly, so dry-run and
+ *  print-and-exit are write-free by construction — no scratch dir exists to
+ *  leak. */
 function readSnapshotIntake(
   evalsCheckout: string,
   evalsSha: string,
   runner: CommandRunner,
-): { intake: SnapshotIntake; scratch: string } {
+): SnapshotIntake {
   const listing = gitOutText(runner, [
     '-C',
     evalsCheckout,
@@ -1019,7 +1024,6 @@ function readSnapshotIntake(
     evalsSha,
   ]);
   const paths = listing.split('\n').filter((p) => p !== '');
-  const scratch = mkdtempSync(join(tmpdir(), 'intake-'));
   const files: Record<string, string> = {};
   const readAt = (rel: string): string => {
     const content = gitOutText(runner, [
@@ -1029,9 +1033,6 @@ function readSnapshotIntake(
       `${evalsSha}:${rel}`,
     ]);
     files[rel] = content;
-    const dest = join(scratch, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, content);
     return content;
   };
   const arms: Record<string, Arm> = {};
@@ -1053,35 +1054,30 @@ function readSnapshotIntake(
   )) {
     const name = p.split('/')[1] ?? '';
     if (name === '') continue; // unreachable by the path regex; keeps the type sound
-    readAt(p);
+    const story = readAt(p);
     const setup = `scenarios/${name}/setup.sh`;
     const checks = `scenarios/${name}/checks.sh`;
-    if (paths.includes(setup)) readAt(setup);
-    if (paths.includes(checks)) readAt(checks);
-    const storyPath = join(scratch, p);
+    const combined =
+      story +
+      (paths.includes(setup) ? readAt(setup) : '') +
+      (paths.includes(checks) ? readAt(checks) : '');
+    const hasSkillsFixtures = paths.some((x) =>
+      x.startsWith(`scenarios/${name}/fixtures/skills/`),
+    );
     scenarios.push({
       name,
-      tier: readQuorumTier(storyPath),
-      requires_superpowers: readRequiresSuperpowers(storyPath) ?? false,
+      tier: quorumTierFromStory(story),
+      requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
       coupling:
-        readCoupling(storyPath) ??
-        scanCouplingDefault(join(scratch, 'scenarios', name)),
+        couplingFromStory(story) ??
+        couplingDefaultFrom(combined, hasSkillsFixtures),
       os: undefined,
     });
   }
   for (const p of paths.filter((x) => /^coding-agents\/[^/]+\.yaml$/.test(x))) {
     readAt(p);
   }
-  return {
-    intake: {
-      arms,
-      credentials,
-      scenarios,
-      agentConfigsDir: join(scratch, 'coding-agents'),
-      files,
-    },
-    scratch,
-  };
+  return { arms, credentials, scenarios, files };
 }
 
 /** Post-materialization guard (finding 1's byte-verification): the
@@ -1122,6 +1118,10 @@ export interface RegisterArgs {
    *  operator ruling): passed into prepareRegistration's override costing
    *  and persisted into campaign.json's pricing_overrides. */
   readonly pricingOverrides?: readonly PricingOverride[];
+  /** The publication-primitive fs seam (ballast + campaign.json staging);
+   *  unset means the real filesystem. Lets a test observe the durable P-4
+   *  order — committed campaign_opened BEFORE the marker rename. */
+  readonly fsOps?: JournalFsOps;
 }
 
 export interface RegisterResult {
@@ -1140,10 +1140,23 @@ interface SnapshotIntake {
   readonly arms: Record<string, Arm>;
   readonly credentials: Record<string, Credential>;
   readonly scenarios: ScenarioIntake[];
-  readonly agentConfigsDir: string;
   /** Relative path -> consumed bytes (object-store or tree), for the
-   *  post-materialization byte verification. */
+   *  post-materialization byte verification. Agent configs parse from
+   *  these bytes too (never a live directory read). */
   readonly files: Record<string, string>;
+}
+
+/** The intake's agent config by name, parsed from the consumed bytes. A
+ *  missing YAML refuses naming the intake gap (fail-closed). */
+function intakeAgentConfig(intake: SnapshotIntake, agent: string): AgentConfig {
+  const rel = `coding-agents/${agent}.yaml`;
+  const source = intake.files[rel];
+  if (source === undefined) {
+    throw new RegistrationError(
+      `agent '${agent}' has no ${rel} in the evals intake — add the agent config at the registered evals ref or fix the arm's agent reference (fail-closed)`,
+    );
+  }
+  return parseAgentConfigForValidation(source, rel, agent);
 }
 interface ComputedRegistration {
   readonly prepared: PreparedRegistration;
@@ -1314,12 +1327,9 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       grader: graderDecl,
       estimates: args.estimates,
       capability: (family) => superpowersCapability(family),
-      agentOsSupport: (agent) =>
-        loadAgentConfigForValidation(intake.agentConfigsDir, agent).os_support,
+      agentOsSupport: (agent) => intakeAgentConfig(intake, agent).os_support,
       agentFamily: (agent) =>
-        agentRuntimeFamily(
-          loadAgentConfigForValidation(intake.agentConfigsDir, agent),
-        ),
+        agentRuntimeFamily(intakeAgentConfig(intake, agent)),
       scenarios: intake.scenarios,
       globalCap: args.globalCap,
       campaignOs: 'linux',
@@ -1368,17 +1378,8 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     return { prepared, preDigest, digest: campaignDigest(preDigest) };
   };
 
-  const { intake, scratch } = readSnapshotIntake(
-    args.evalsCheckout,
-    evalsSha,
-    args.runner,
-  );
-  let staging: ComputedRegistration;
-  try {
-    staging = compute(intake);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  const intake = readSnapshotIntake(args.evalsCheckout, evalsSha, args.runner);
+  const staging = compute(intake);
   const digest = staging.digest;
   const campaign_id = digest; // identity = digest
 
@@ -1436,15 +1437,28 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     let prefixLen = 8;
     let campaignDir = '';
     let reopenOnly = false;
-    for (;;) {
-      // Finding 4: extension is bounded by the digest itself — past the full
-      // 64 hex chars the slice stops changing and an unbounded loop would
-      // spin forever on a saturated prefix.
-      if (prefixLen > digest.length) {
+    // Finding 4: extension is bounded by the digest itself — past the full
+    // 64 hex chars the slice stops changing and an unbounded loop would
+    // spin forever on a saturated prefix. A collision AT the full digest IS
+    // the exhaustion: refuse naming the exhausted candidate dir and its
+    // occupant's conflicting digest (campaign.json or journal
+    // campaign_opened, via classifyCandidate — round-2 finding 2).
+    const extendOrExhaust = (
+      candidate: string,
+      occupantDigest: string | null,
+    ): void => {
+      if (prefixLen >= digest.length) {
+        const occupant =
+          occupantDigest === null
+            ? 'an ambiguous orphan with no readable digest'
+            : `an occupant with digest ${occupantDigest}`;
         throw new RegistrationError(
-          `digest-prefix collision exhausted at ${args.campaignsRoot}: every candidate dir up to the full digest ${digest} is taken by another campaign or an ambiguous orphan — inspect the directories under ${args.campaignsRoot}, resolve or move the conflicting campaign, then re-register (fail-closed)`,
+          `digest-prefix collision exhausted at ${candidate}: the full-digest candidate is held by ${occupant}, conflicting with registering digest ${digest} — inspect the directories under ${args.campaignsRoot}, resolve or move the conflicting campaign, then re-register (fail-closed)`,
         );
       }
+      prefixLen += 4;
+    };
+    for (;;) {
       const candidate = join(
         args.campaignsRoot,
         `${digest.slice(0, prefixLen)}-${suite.name}`,
@@ -1462,7 +1476,7 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
         emit(
           `collision: ${candidate} holds a different campaign_opened digest — extending prefix`,
         );
-        prefixLen += 4;
+        extendOrExhaust(candidate, classification.openedDigest);
         continue;
       }
       if (classification.kind === 'published') {
@@ -1474,13 +1488,13 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
         emit(
           `collision: ${candidate} is published with a different digest — extending prefix`,
         );
-        prefixLen += 4;
+        extendOrExhaust(candidate, classification.digest);
         continue;
       }
       emit(
         `orphan: ${candidate} is ambiguous (no identity carrier, spend recorded) — left untouched, extending prefix`,
       );
-      prefixLen += 4;
+      extendOrExhaust(candidate, null);
     }
 
     if (reopenOnly) {
@@ -1583,13 +1597,13 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     //     legal; the never-recreate rule applies only MID-campaign.
     const ballastPath = join(campaignDir, '.ballast');
     if (!existsSync(ballastPath)) {
-      createBallast(campaignDir, DEFAULT_BALLAST_BYTES);
-    } else if (!verifyBallast(campaignDir, DEFAULT_BALLAST_BYTES)) {
+      createBallast(campaignDir, DEFAULT_BALLAST_BYTES, args.fsOps);
+    } else if (!verifyBallast(campaignDir, DEFAULT_BALLAST_BYTES, args.fsOps)) {
       process.stderr.write(
         `existing .ballast at ${campaignDir} fails the non-sparse allocation check — recreating before publication (D-13 re-entry)\n`,
       );
       unlinkSync(ballastPath);
-      createBallast(campaignDir, DEFAULT_BALLAST_BYTES);
+      createBallast(campaignDir, DEFAULT_BALLAST_BYTES, args.fsOps);
     }
 
     // (5) campaign.json staged + renamed LAST, directory fsync — built from
@@ -1600,7 +1614,12 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     //     Idempotent re-registration never reaches here (reopenOnly above).
     const finalDoc = { ...authoritative.preDigest, campaign_id, digest };
     CampaignSchema.parse(finalDoc); // the frozen document shape, validated
-    stageAndPublishCampaignJson(campaignDir, finalDoc);
+    stageAndPublishCampaignJson(
+      campaignDir,
+      finalDoc,
+      DEFAULT_BALLAST_BYTES,
+      args.fsOps,
+    );
     emit(`published ${campaignDir}`);
 
     return {

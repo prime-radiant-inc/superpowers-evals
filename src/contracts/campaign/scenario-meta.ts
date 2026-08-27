@@ -29,9 +29,20 @@ function reads(dir: string, name: string): string {
   return readFileSync(path, 'utf8');
 }
 
-/** Default coupling class for a scenario dir: skill-shaped references in
- *  story/setup/checks pin skill names; skill-shaped fixture subtrees embed
- *  skill fixtures; neither is arm-independent. */
+/** Default coupling class from a scenario's CONTENT: skill-shaped references
+ *  in the concatenated story+setup+checks text pin skill names; a
+ *  skill-shaped fixture subtree embeds skill fixtures; neither is
+ *  arm-independent. */
+export function couplingDefaultFrom(
+  text: string,
+  hasSkillsFixtures: boolean,
+): (typeof COUPLING_CLASSES)[number] {
+  if (SKILL_REF_RE.test(text)) return 'pins-skill-names';
+  if (hasSkillsFixtures) return 'embeds-skill-fixtures';
+  return 'arm-independent';
+}
+
+/** {@link couplingDefaultFrom} over a scenario dir on disk. */
 export function scanCouplingDefault(
   scenarioDir: string,
 ): (typeof COUPLING_CLASSES)[number] {
@@ -39,8 +50,8 @@ export function scanCouplingDefault(
     reads(scenarioDir, 'story.md') +
     reads(scenarioDir, 'setup.sh') +
     reads(scenarioDir, 'checks.sh');
-  if (SKILL_REF_RE.test(text)) return 'pins-skill-names';
 
+  let hasSkillsFixtures = false;
   const fixturesDir = join(scenarioDir, 'fixtures');
   if (existsSync(fixturesDir) && statSync(fixturesDir).isDirectory()) {
     for (const entry of readdirSync(fixturesDir)) {
@@ -48,9 +59,9 @@ export function scanCouplingDefault(
         SKILL_FIXTURE_RE.test(entry) &&
         statSync(join(fixturesDir, entry)).isDirectory()
       ) {
-        return 'embeds-skill-fixtures';
+        hasSkillsFixtures = true;
       }
     }
   }
-  return 'arm-independent';
+  return couplingDefaultFrom(text, hasSkillsFixtures);
 }
