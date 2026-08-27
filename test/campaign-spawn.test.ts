@@ -12,10 +12,8 @@ import {
   keyGrantsPayload,
   parseRunAllocatedLine,
   SpawnError,
-  selectKeyEnv,
 } from '../src/campaign/spawn.ts';
 import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
-import { FakeClock } from '../src/scheduler/clock.ts';
 
 test('detached spawn: pid == pgid (setsid), protocol line observed, group exists', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'spawn-'));
@@ -297,96 +295,4 @@ test('R3 fail-loud: an unset OR EMPTY selected key refuses to compose (R-SPN-7)'
     if (prev === undefined) deleteProcessEnv(MISSING);
     else setProcessEnv(MISSING, prev);
   }
-});
-
-test('R3 key selection: least-loaded below the per-key cap; at-cap is unavailable', async () => {
-  const clock = new FakeClock();
-  const leastLoaded = await selectKeyEnv({
-    sample: () => [
-      { env: 'K2', inFlight: 1 },
-      { env: 'K1', inFlight: 0 },
-    ],
-    maxConcurrency: 4,
-    clock,
-    waitSeconds: 10,
-    pollSeconds: 2,
-  });
-  expect(leastLoaded).toBe('K1');
-  // ceil(4/2)=2: inFlight 2 is AT cap (unavailable), so the load-1 key wins.
-  const skipsAtCap = await selectKeyEnv({
-    sample: () => [
-      { env: 'K1', inFlight: 2 },
-      { env: 'K2', inFlight: 1 },
-    ],
-    maxConcurrency: 4,
-    clock,
-    waitSeconds: 10,
-    pollSeconds: 2,
-  });
-  expect(skipsAtCap).toBe('K2');
-});
-
-test('R3 key wait rides the injected Clock — zero wall time', async () => {
-  const clock = new FakeClock();
-  let capped = true;
-  const sample = () =>
-    capped
-      ? [
-          { env: 'K1', inFlight: 2 },
-          { env: 'K2', inFlight: 2 },
-        ]
-      : [
-          { env: 'K1', inFlight: 0 },
-          { env: 'K2', inFlight: 2 },
-        ];
-  const start = clock.now();
-  const pending = selectKeyEnv({
-    sample,
-    maxConcurrency: 4,
-    clock,
-    waitSeconds: 30,
-    pollSeconds: 5,
-  });
-  // The selection is parked on the clock (not resolved, not wall-sleeping).
-  capped = false;
-  clock.advance(5);
-  await expect(pending).resolves.toBe('K1');
-  expect(clock.now() - start).toBe(5);
-});
-
-test('R3 key wait fails loud once the clock budget is exhausted (R-SPN-6/7)', async () => {
-  const clock = new FakeClock();
-  const start = clock.now();
-  const pending = selectKeyEnv({
-    sample: () => [{ env: 'K1', inFlight: 9 }],
-    maxConcurrency: 1,
-    clock,
-    waitSeconds: 10,
-    pollSeconds: 2,
-  });
-  // FakeClock advances only when driven: a concurrent driver releases each
-  // parked poll step until the budget is spent and the selection rejects.
-  const driver = (async () => {
-    for (;;) {
-      const next = clock.earliestWaiter();
-      if (next === null) return;
-      clock.setTo(next);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-  })();
-  await expect(pending).rejects.toBeInstanceOf(SpawnError);
-  await driver;
-  expect(clock.now() - start).toBeGreaterThanOrEqual(10);
-});
-
-test('R3 key selection: empty pool fails loud', async () => {
-  const clock = new FakeClock();
-  await expect(
-    selectKeyEnv({
-      sample: () => [],
-      maxConcurrency: 4,
-      clock,
-      waitSeconds: 1,
-    }),
-  ).rejects.toBeInstanceOf(SpawnError);
 });

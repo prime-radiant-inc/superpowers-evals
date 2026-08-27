@@ -1,12 +1,15 @@
 import { expect, test } from 'bun:test';
 import {
   KeySelectionError,
+  type KeyWaitNotice,
   keyWaitThreshold,
   resolveKeyForSpawn,
+  resolveKeyForSpawnWithWait,
   selectKey,
   warnKeyWait,
 } from '../src/campaign/key-select.ts';
 import type { Credential } from '../src/contracts/credential.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
 
 function poolCredential(keys: string[], maxConcurrency?: number): Credential {
   return {
@@ -94,14 +97,169 @@ test('resolveKeyForSpawn: singular api_key_env uses; non-api-key is native; miss
   ).toThrow(/fallback is forbidden/);
 });
 
-test('D-2 loud warnings: entry names the credential; resolution names credential + measured wait', () => {
+test('D-2 warnings: entry names the credential; resolution carries the MEASURED wait; invalid measurements fail closed', () => {
   const written: string[] = [];
   const stream = { write: (s: string) => written.push(s) };
-  warnKeyWait(stream, 'entry', 'cred_a');
-  warnKeyWait(stream, 'resolution', 'cred_a', 2500);
+  warnKeyWait(stream, { phase: 'entry', credentialName: 'cred_a' });
+  warnKeyWait(stream, {
+    phase: 'resolution',
+    credentialName: 'cred_a',
+    waitMs: 2500,
+  });
   expect(written[0]).toMatch(/cred_a/);
   expect(written[0]).toMatch(/wait/i);
   expect(written[1]).toMatch(/cred_a/);
   expect(written[1]).toMatch(/2500/);
   expect(written[1]).toMatch(/spawn-gap|wait/i);
+  // Boundary: a measured zero is finite and nonnegative — reportable.
+  warnKeyWait(stream, {
+    phase: 'resolution',
+    credentialName: 'cred_b',
+    waitMs: 0,
+  });
+  expect(written[2]).toMatch(/0ms/);
+  // Fail-closed (D-2): the measured duration is required, never defaulted.
+  // Omission, NaN, negative, and infinite all refuse to report.
+  expect(() =>
+    warnKeyWait(stream, {
+      phase: 'resolution',
+      credentialName: 'c',
+    } as unknown as KeyWaitNotice),
+  ).toThrow(KeySelectionError);
+  expect(() =>
+    warnKeyWait(stream, {
+      phase: 'resolution',
+      credentialName: 'c',
+      waitMs: Number.NaN,
+    }),
+  ).toThrow(KeySelectionError);
+  expect(() =>
+    warnKeyWait(stream, {
+      phase: 'resolution',
+      credentialName: 'c',
+      waitMs: -1,
+    }),
+  ).toThrow(KeySelectionError);
+  expect(() =>
+    warnKeyWait(stream, {
+      phase: 'resolution',
+      credentialName: 'c',
+      waitMs: Number.POSITIVE_INFINITY,
+    }),
+  ).toThrow(KeySelectionError);
+  expect(written).toHaveLength(3); // refused reports write nothing
+});
+
+test('withWait: key wait rides the injected Clock — entry/resolution warnings carry the measured wait', async () => {
+  const clock = new FakeClock();
+  const written: string[] = [];
+  const cred = poolCredential(['K1', 'K2'], 4); // per-key threshold 2
+  const inFlight: Record<string, number> = { K1: 2, K2: 2 };
+  const pending = resolveKeyForSpawnWithWait({
+    cred,
+    credentialName: 'cred_pool',
+    inFlight,
+    clock,
+    warn: { write: (s) => written.push(s) },
+    waitSeconds: 30,
+    pollSeconds: 2.5,
+  });
+  // A dispatcher-side release on the SAME persistent map frees K2 mid-wait.
+  inFlight['K2'] = 1;
+  clock.advance(2.5);
+  const resolution = await pending;
+  expect(resolution).toEqual({ kind: 'use', grant: { envName: 'K2' } });
+  expect(clock.now()).toBe(2.5); // zero wall time — FakeClock moved only when driven
+  expect(written).toHaveLength(2);
+  expect(written[0]).toMatch(/key wait entered for credential cred_pool/);
+  expect(written[1]).toMatch(
+    /key wait resolved for credential cred_pool after 2500ms/,
+  );
+});
+
+test('withWait: bounded exhaustion — fails LOUD (KeySelectionError) once the full budget is spent; no resolution warning', async () => {
+  const clock = new FakeClock();
+  const written: string[] = [];
+  const cred = poolCredential(['K1'], 1); // threshold 1
+  const pending = resolveKeyForSpawnWithWait({
+    cred,
+    credentialName: 'cred_stuck',
+    inFlight: { K1: 9 }, // pinned at/over cap for the whole budget
+    clock,
+    warn: { write: (s) => written.push(s) },
+    waitSeconds: 10,
+    pollSeconds: 2,
+  });
+  const start = clock.now();
+  // Drive each parked poll step straight to its wake time until the budget is spent.
+  const driver = (async () => {
+    for (;;) {
+      const next = clock.earliestWaiter();
+      if (next === null) return;
+      clock.setTo(next);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  })();
+  await expect(pending).rejects.toBeInstanceOf(KeySelectionError);
+  await expect(pending).rejects.toThrow(/failing loud/);
+  await driver;
+  expect(clock.now() - start).toBeGreaterThanOrEqual(10);
+  expect(written).toHaveLength(1); // entry only — an exhausted wait never resolves
+  expect(written[0]).toMatch(/cred_stuck/);
+});
+
+test('withWait: subject and grader resolve independently — separate credentials and counter maps, no cross-talk', async () => {
+  const clock = new FakeClock();
+  const written: string[] = [];
+  const warn = { write: (s: string) => written.push(s) };
+  const subject = poolCredential(['S1', 'S2'], 2); // threshold 1
+  const grader = poolCredential(['G1', 'G2'], 2);
+  const subjectInFlight: Record<string, number> = { S1: 1 };
+  const graderInFlight: Record<string, number> = { G1: 0, G2: 1 };
+  const [subjectRes, graderRes] = await Promise.all([
+    resolveKeyForSpawnWithWait({
+      cred: subject,
+      credentialName: 'subject_arm',
+      inFlight: subjectInFlight,
+      clock,
+      warn,
+      waitSeconds: 5,
+    }),
+    resolveKeyForSpawnWithWait({
+      cred: grader,
+      credentialName: 'grader_arm',
+      inFlight: graderInFlight,
+      clock,
+      warn,
+      waitSeconds: 5,
+    }),
+  ]);
+  expect(subjectRes).toEqual({ kind: 'use', grant: { envName: 'S2' } });
+  expect(graderRes).toEqual({ kind: 'use', grant: { envName: 'G1' } });
+  expect(written).toHaveLength(0); // neither role waited
+  expect(clock.now()).toBe(0);
+});
+
+test('withWait: the dispatcher-owned counter map persists across samples — never recreated', async () => {
+  const clock = new FakeClock();
+  const written: string[] = [];
+  const warn = { write: (s: string) => written.push(s) };
+  const cred = poolCredential(['K1', 'K2'], 4); // threshold 2
+  const inFlight: Record<string, number> = {}; // ONE map for the pool's whole life
+  const resolve = () =>
+    resolveKeyForSpawnWithWait({
+      cred,
+      credentialName: 'c',
+      inFlight,
+      clock,
+      warn,
+      waitSeconds: 5,
+    });
+  expect(await resolve()).toEqual({ kind: 'use', grant: { envName: 'K1' } });
+  inFlight['K1'] = (inFlight['K1'] ?? 0) + 1; // dispatcher books sample 1's grant
+  expect(await resolve()).toEqual({ kind: 'use', grant: { envName: 'K2' } }); // sees K1's load
+  inFlight['K2'] = (inFlight['K2'] ?? 0) + 1;
+  expect(await resolve()).toEqual({ kind: 'use', grant: { envName: 'K1' } }); // 1-1 tie: pool order
+  expect(written).toHaveLength(0); // honest admission never waits
+  expect(clock.now()).toBe(0);
 });

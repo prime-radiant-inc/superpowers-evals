@@ -5,7 +5,6 @@ import {
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
 import { getEnv } from '../env.ts';
-import type { Clock } from '../scheduler/clock.ts';
 import { COVERED_BY_LOCK_ENV } from './locks.ts';
 
 // The child-spawner seam (Decision D-8): the dispatcher observes fake
@@ -341,61 +340,4 @@ export function composeCampaignChildEnv(
     env[grant.env] = value;
   }
   return env;
-}
-
-/** One key's live load in the dispatcher's pool (R-SPN-6): the env NAME and
- *  how many in-flight children currently hold it. */
-export interface KeyLoad {
-  readonly env: string;
-  readonly inFlight: number;
-}
-
-export interface SelectKeyEnvArgs {
-  /** Live load view — the dispatcher owns the counters; selection samples. */
-  readonly sample: () => readonly KeyLoad[];
-  /** The credential's max_concurrency (pool-level admission stays
-   *  authoritative — this selector is never a second admission authority). */
-  readonly maxConcurrency: number;
-  /** The injected Clock — the wait branch NEVER touches wall time. */
-  readonly clock: Clock;
-  /** Total wait budget (seconds) before failing loud (R-SPN-7). */
-  readonly waitSeconds: number;
-  /** Clock slice between re-checks; default 1s. */
-  readonly pollSeconds?: number;
-}
-
-/** R-SPN-6 KeySelector: the least-loaded key below the per-key cap
- *  (ceil(max_concurrency / pool size); at-cap is unavailable). When every
- *  key is at cap — the miscalibration/rebuild guard, not a second admission
- *  authority — the wait rides the injected Clock and fails loud once the
- *  budget is spent (R-SPN-7). */
-export async function selectKeyEnv(args: SelectKeyEnvArgs): Promise<string> {
-  const pollSeconds = args.pollSeconds ?? 1;
-  const deadline = args.clock.now() + args.waitSeconds;
-  for (;;) {
-    const pool = args.sample();
-    if (pool.length === 0) {
-      throw new SpawnError('key selection: empty key pool');
-    }
-    const perKeyCap = Math.ceil(args.maxConcurrency / pool.length);
-    let best: KeyLoad | null = null;
-    for (const key of pool) {
-      if (key.inFlight >= perKeyCap) continue;
-      if (
-        best === null ||
-        key.inFlight < best.inFlight ||
-        (key.inFlight === best.inFlight && key.env < best.env)
-      ) {
-        best = key;
-      }
-    }
-    if (best !== null) return best.env;
-    const target = args.clock.now() + pollSeconds;
-    if (target > deadline) {
-      throw new SpawnError(
-        `key selection: every key at/over its per-key cap (${perKeyCap}) for ${args.waitSeconds}s — failing loud (R-SPN-6/7)`,
-      );
-    }
-    await args.clock.sleepUntil(target);
-  }
 }
