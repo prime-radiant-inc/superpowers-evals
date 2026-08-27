@@ -321,7 +321,8 @@ export interface CampaignChildEnvArgs {
 /** R-SPN-3 (C4 spawn portion): the complete campaign-child environment —
  *  caller base + the children-never-acquire marker + the selected key
  *  VALUES. Values resolve through the env seam and fail loud on an unset
- *  selection (R-SPN-7); they never appear in any journal payload. */
+ *  selection — unset, empty, or whitespace-only (R-SPN-7); they never appear
+ *  in any journal payload. */
 export function composeCampaignChildEnv(
   args: CampaignChildEnvArgs,
 ): Record<string, string> {
@@ -332,9 +333,9 @@ export function composeCampaignChildEnv(
   env[COVERED_BY_LOCK_ENV] = '1';
   for (const grant of keyGrantsPayload(args.grants ?? {}).key_grants) {
     const value = getEnv(grant.env);
-    if (value === undefined) {
+    if (value === undefined || value.trim() === '') {
       throw new SpawnError(
-        `selected key env ${grant.env} (${grant.role}) is unset — refusing to compose the child env (R-SPN-7)`,
+        `selected key env ${grant.env} (${grant.role}) is unset or empty — refusing to compose the child env (R-SPN-7)`,
       );
     }
     env[grant.env] = value;

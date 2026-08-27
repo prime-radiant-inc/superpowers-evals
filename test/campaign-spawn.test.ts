@@ -278,16 +278,24 @@ test('R3 env composition: marker + selected key VALUES projected; child env cons
   }
 });
 
-test('R3 fail-loud: an unset selected key refuses to compose (R-SPN-7)', () => {
+test('R3 fail-loud: an unset OR EMPTY selected key refuses to compose (R-SPN-7)', () => {
   const MISSING = 'QR_TEST_DEFINITELY_UNSET_KEY';
   const prev = getEnv(MISSING);
-  if (prev !== undefined) deleteProcessEnv(MISSING);
   try {
-    expect(() =>
-      composeCampaignChildEnv({ base: {}, grants: { subjectEnv: MISSING } }),
-    ).toThrow(SpawnError);
+    // undefined, empty, and whitespace-only are all unusable credentials —
+    // exactly the unset/empty semantics of resolveApiKey and the
+    // registration key preflight (src/credentials/resolve.ts,
+    // src/campaign/registration.ts).
+    for (const value of [undefined, '', '   '] as (string | undefined)[]) {
+      if (value === undefined) deleteProcessEnv(MISSING);
+      else setProcessEnv(MISSING, value);
+      expect(() =>
+        composeCampaignChildEnv({ base: {}, grants: { subjectEnv: MISSING } }),
+      ).toThrow(SpawnError);
+    }
   } finally {
-    if (prev !== undefined) setProcessEnv(MISSING, prev);
+    if (prev === undefined) deleteProcessEnv(MISSING);
+    else setProcessEnv(MISSING, prev);
   }
 });
 
