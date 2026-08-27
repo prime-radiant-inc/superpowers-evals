@@ -1285,11 +1285,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   type CommandOptions,
   type CommandResult,
@@ -1297,6 +1298,7 @@ import {
   defaultCommandRunner,
 } from '../src/agents/command-runner.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
+import { openJournalRead } from '../src/campaign/journal.ts';
 import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import {
   MINIMUM_CHILD_CONTRACT_SHA,
@@ -1546,28 +1548,56 @@ test('registerCampaign: snapshot-first intake, digest dir naming, P-4 publicatio
   expect(result.printed).toContain('global_run_cap = 8 per-sample slots');
   expect(result.printed).toContain('max contemporaneous two-arm blocks = 4');
 });
-
 test('idempotent re-registration: same input -> same digest -> same dir, no republish', () => {
   const args = registerArgs();
   const first = registerCampaign(args);
+  const markerBytes = readFileSync(
+    join(first.campaignDir, 'campaign.json'),
+    'utf8',
+  );
   const second = registerCampaign(args);
   expect(second.campaignDir).toBe(first.campaignDir);
   expect(second.digest).toBe(first.digest);
   expect(second.published).toBe(false); // re-opening validates digest equality only
+  // The marker is byte-identical and campaign_opened is never re-journaled
+  // (R-REG-22): exactly one event in the journal.
+  expect(readFileSync(join(second.campaignDir, 'campaign.json'), 'utf8')).toBe(
+    markerBytes,
+  );
+  const reader = openJournalRead(second.campaignDir);
+  const events = reader.readEvents();
+  reader.close();
+  expect(events).toHaveLength(1);
+  expect(events[0]?.type).toBe('campaign_opened');
 });
 
 test('dry-run prints grid + exclusions + digest, never writes', () => {
-  const result = registerCampaign(registerArgs({ dryRun: true }));
+  const untouchedRoot = join(tmpdir(), `q-never-${process.pid}-${Date.now()}`);
+  const args = registerArgs({ dryRun: true, campaignsRoot: untouchedRoot });
+  // Snapshot tmpdir AFTER the fixtures exist: any diff is registration's.
+  const tmpBefore = readdirSync(tmpdir()).sort();
+  const result = registerCampaign(args);
   expect(result.published).toBe(false);
   expect(result.campaignDir).toBe('');
   expect(result.printed).toMatch(/digest: [0-9a-f]{64}/);
+  // No writes AT ALL (finding 2): the campaigns root is never created and
+  // tmpdir carries no leftover scratch from the intake pass.
+  expect(existsSync(untouchedRoot)).toBe(false);
+  expect(readdirSync(tmpdir()).sort()).toEqual(tmpBefore);
 });
 
 test('without --confirm: print-and-exit path, never prompts (noninteractive)', () => {
-  const result = registerCampaign(registerArgs({ confirm: false }));
+  const untouchedRoot = join(
+    tmpdir(),
+    `q-never-confirm-${process.pid}-${Date.now()}`,
+  );
+  const result = registerCampaign(
+    registerArgs({ confirm: false, campaignsRoot: untouchedRoot }),
+  );
   expect(result.published).toBe(false);
   expect(result.campaignDir).toBe('');
   expect(result.printed).toMatch(/global_run_cap = 8/);
+  expect(existsSync(untouchedRoot)).toBe(false);
 });
 
 test('child-contract probe refuses an evals SHA below the minimum commit', () => {
@@ -1620,3 +1650,161 @@ test('R-REG-19 registration preflight: a missing arm key env refuses, naming it'
   expect(() => registerCampaign(registerArgs({ env }))).toThrow(/TEST_KEY_B/);
   // Refusal happens before anything lands under the campaigns root.
 });
+
+// ── fix round 1 (findings 1–5) ─────────────────────────────────────────────
+
+test('P-4 order observable: snapshot complete at child-probe time; campaign_opened backs the marker', () => {
+  const args = registerArgs();
+  let probedDir = '';
+  // Observed at child-probe time (false until the probe runs).
+  let journalAtProbe = false;
+  let markerAtProbe = false;
+  let ballastAtProbe = false;
+  const wrapped: CommandRunner = {
+    run(
+      command: string,
+      cargs: readonly string[],
+      options?: CommandOptions,
+    ): CommandResult {
+      const res = probeRunner(0).run(command, cargs, options);
+      if (
+        command === 'bun' &&
+        cargs.includes('--version') &&
+        options?.cwd !== undefined &&
+        options.cwd.endsWith('/evals')
+      ) {
+        probedDir = dirname(options.cwd);
+        journalAtProbe = existsSync(join(probedDir, 'journal.db'));
+        markerAtProbe = existsSync(join(probedDir, 'campaign.json'));
+        ballastAtProbe = existsSync(join(probedDir, '.ballast'));
+      }
+      return res;
+    },
+  };
+  const result = registerCampaign({ ...args, runner: wrapped });
+  expect(probedDir).toBe(result.campaignDir);
+  // Materialization completed FIRST (snapshot marker present) and none of
+  // journal/ballast/campaign.json existed yet at child-probe time.
+  expect(existsSync(join(probedDir, '.quorum-snapshot-ok'))).toBe(true);
+  expect(journalAtProbe).toBe(false);
+  expect(ballastAtProbe).toBe(false);
+  expect(markerAtProbe).toBe(false);
+  // Post-state: campaign_opened is the first committed event and the
+  // readiness marker exists — the publication helper gates the rename on
+  // exactly that journal content (P-4/S-8).
+  const reader = openJournalRead(result.campaignDir);
+  const events = reader.readEvents();
+  reader.close();
+  expect(events[0]?.type).toBe('campaign_opened');
+  expect(events[0]?.payload).toEqual({
+    campaign_id: result.digest,
+    digest: result.digest,
+  });
+  expect(existsSync(join(result.campaignDir, 'campaign.json'))).toBe(true);
+});
+
+test('materialized tree byte-mismatch vs the object-store intake refuses publication', () => {
+  const args = registerArgs();
+  const tamper: CommandRunner = {
+    run(
+      command: string,
+      cargs: readonly string[],
+      options?: CommandOptions,
+    ): CommandResult {
+      const res = probeRunner(0).run(command, cargs, options);
+      if (
+        command === 'bun' &&
+        cargs.includes('install') &&
+        options?.cwd !== undefined &&
+        options.cwd.startsWith(args.campaignsRoot) &&
+        options.cwd.endsWith('/evals')
+      ) {
+        // Corrupt the materialized FINAL-path tree after the real install:
+        // verifyIntakeMatch must refuse (fail-closed), naming the path.
+        writeFileSync(
+          join(options.cwd, 'credentials.yaml'),
+          'tampered: true\n',
+        );
+      }
+      return res;
+    },
+  };
+  expect(() => registerCampaign({ ...args, runner: tamper })).toThrow(
+    /drifted from intake bytes/,
+  );
+});
+
+test('an unexpected existing campaign.json at the publish step fails closed', () => {
+  const args = registerArgs();
+  const interloper: CommandRunner = {
+    run(
+      command: string,
+      cargs: readonly string[],
+      options?: CommandOptions,
+    ): CommandResult {
+      const res = probeRunner(0).run(command, cargs, options);
+      if (
+        command === 'bun' &&
+        cargs.includes('--version') &&
+        options?.cwd !== undefined &&
+        options.cwd.endsWith('/evals')
+      ) {
+        // Simulate a campaign.json landing between classification and the
+        // publish step: the publication helper's already-published refusal
+        // must fire — never a silent skip past the marker.
+        writeFileSync(
+          join(dirname(options.cwd), 'campaign.json'),
+          JSON.stringify({ digest: 'e'.repeat(64) }),
+        );
+      }
+      return res;
+    },
+  };
+  expect(() => registerCampaign({ ...args, runner: interloper })).toThrow(
+    /already published/,
+  );
+});
+
+test('D-6 collision with a published foreign digest extends the prefix, never overwrites', () => {
+  const args = registerArgs();
+  const dry = registerCampaign({ ...args, dryRun: true });
+  const foreign = join(
+    args.campaignsRoot,
+    `${dry.digest.slice(0, 8)}-testsuite`,
+  );
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(
+    join(foreign, 'campaign.json'),
+    JSON.stringify({ digest: 'e'.repeat(64) }),
+  );
+  const result = registerCampaign(args);
+  expect(result.campaignDir).toBe(
+    join(args.campaignsRoot, `${dry.digest.slice(0, 12)}-testsuite`),
+  );
+  expect(result.printed).toContain('collision:');
+  // The foreign published dir is untouched (verified prefix extension).
+  expect(
+    JSON.parse(readFileSync(join(foreign, 'campaign.json'), 'utf8')).digest,
+  ).toBe('e'.repeat(64));
+});
+
+test('D-6 prefix extension is bounded: full-digest collisions refuse loudly', () => {
+  const args = registerArgs();
+  const dry = registerCampaign({ ...args, dryRun: true });
+  const dirs: string[] = [];
+  for (let len = 8; len <= dry.digest.length; len += 4) {
+    const dir = join(
+      args.campaignsRoot,
+      `${dry.digest.slice(0, len)}-testsuite`,
+    );
+    mkdirSync(dir, { recursive: true });
+    // Spend artifact + no identity carrier = ambiguous (D-6): extends.
+    writeFileSync(join(dir, 'cancel-request'), 'spend recorded\n');
+    dirs.push(dir);
+  }
+  expect(() => registerCampaign(args)).toThrow(/collision exhausted|prefix/);
+  // Nothing was overwritten or removed while extending.
+  for (const dir of dirs) {
+    expect(existsSync(join(dir, 'cancel-request'))).toBe(true);
+  }
+}, 30_000);

@@ -1,13 +1,14 @@
-// Registration from the snapshot (kernel D3, R-REG-1..22; REV Blocker C):
-// resolve refs -> grid+digest derived from a THROWAWAY materialization of
-// the frozen evals SHA (path-naming input only; never `git show`, never the
-// mutable host checkout) -> choose/lock the final campaign-dir path ->
-// materialize the evals+gauntlet snapshot at that final path -> re-read the
-// AUTHORITATIVE intake from the final-path evals tree and verify it
-// reproduces the digest (what ships is what was digested) -> final-path init
-// (journal + campaign_opened + sidecar + ballast) -> campaign.json staged +
-// renamed LAST. Resume authority = campaign.json + the snapshot.
-
+// Registration from the snapshot (kernel D3, R-REG-1..22; REV Blocker C;
+// operator amendment 2026-08-27): resolve refs -> read the digest-computation
+// intake read-only from the git OBJECT STORE at the resolved frozen SHA
+// (git ls-tree + git show — immutable, never the mutable host checkout) ->
+// grid expansion, rejection matrix, pricing, digest -> choose/lock the final
+// campaign-dir path -> materialize the evals+gauntlet snapshot at that final
+// path -> verifyIntakeMatch (byte-identity of every consumed file vs the
+// object-store bytes) -> re-derive the AUTHORITATIVE intake + digest from the
+// materialized tree -> final-path init (journal + campaign_opened + sidecar +
+// ballast) -> campaign.json staged + renamed LAST. Dry-run and print-and-exit
+// perform no writes at all. Resume authority = campaign.json + the snapshot.
 import {
   existsSync,
   mkdirSync,
@@ -18,7 +19,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { CommandRunner } from '../agents/command-runner.ts';
 import { superpowersCapability } from '../agents/index.ts';
@@ -82,7 +84,6 @@ import {
   verifyBallast,
 } from './journal.ts';
 import { acquireLease, type ProcessIdentityProbe } from './locks.ts';
-import { ensureWorktreeAt } from './provisioning.ts';
 import { materializeCampaignSnapshot, repairDriftedTrees } from './snapshot.ts';
 
 export class RegistrationError extends Error {
@@ -911,20 +912,21 @@ function minimalGitEnv(): Readonly<Record<string, string | undefined>> {
   };
 }
 
-/** Snapshot intake read from a MATERIALIZED tree of the frozen evals SHA
- *  (Blocker C): arms/, credentials.yaml, scenarios/<name>/, coding-agents/ —
- *  plain file reads off a checkout of the resolved SHA, never `git show`
- *  and never the mutable host working tree. The shipped path-based
- *  frontmatter readers (readQuorumTier etc.) apply unchanged. */
+/** Authoritative intake read from the MATERIALIZED final-path evals tree
+ *  (Blocker C): arms/, credentials.yaml, scenarios/<name>/, coding-agents/
+ *  via plain file reads. The shipped path-based frontmatter readers
+ *  (readQuorumTier etc.) apply unchanged. Records every consumed file's
+ *  bytes so callers can cross-check provenance. */
 function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
   const arms: Record<string, Arm> = {};
+  const files: Record<string, string> = {};
   const armsDir = join(evalsRoot, 'arms');
   if (existsSync(armsDir)) {
     for (const entry of readdirSync(armsDir).sort()) {
       if (!entry.endsWith('.yaml')) continue;
-      const arm = ArmSchema.parse(
-        parseYaml(readFileSync(join(armsDir, entry), 'utf8')),
-      );
+      const rel = `arms/${entry}`;
+      files[rel] = readFileSync(join(armsDir, entry), 'utf8');
+      const arm = ArmSchema.parse(parseYaml(files[rel] as string));
       arms[arm.name] = arm;
     }
   }
@@ -934,8 +936,9 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       `no credentials.yaml at evals SHA — the snapshot intake cannot read credentials; fix the evals ref or add the registry, then re-register (fail-closed)`,
     );
   }
+  files['credentials.yaml'] = readFileSync(credentialsPath, 'utf8');
   const credentials = parseCredentialsFile(
-    parseYaml(readFileSync(credentialsPath, 'utf8')),
+    parseYaml(files['credentials.yaml'] as string),
   );
   const scenarios: ScenarioIntake[] = [];
   const scenariosDir = join(evalsRoot, 'scenarios');
@@ -944,6 +947,18 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       const scenarioDir = join(scenariosDir, entry);
       const storyPath = join(scenarioDir, 'story.md');
       if (!existsSync(storyPath)) continue;
+      files[`scenarios/${entry}/story.md`] = readFileSync(storyPath, 'utf8');
+      const setupPath = join(scenarioDir, 'setup.sh');
+      if (existsSync(setupPath)) {
+        files[`scenarios/${entry}/setup.sh`] = readFileSync(setupPath, 'utf8');
+      }
+      const checksPath = join(scenarioDir, 'checks.sh');
+      if (existsSync(checksPath)) {
+        files[`scenarios/${entry}/checks.sh`] = readFileSync(
+          checksPath,
+          'utf8',
+        );
+      }
       scenarios.push({
         name: entry,
         tier: readQuorumTier(storyPath),
@@ -953,67 +968,133 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       });
     }
   }
+  const agentsDir = join(evalsRoot, 'coding-agents');
+  if (existsSync(agentsDir)) {
+    for (const entry of readdirSync(agentsDir).sort()) {
+      if (!entry.endsWith('.yaml')) continue;
+      files[`coding-agents/${entry}`] = readFileSync(
+        join(agentsDir, entry),
+        'utf8',
+      );
+    }
+  }
   return {
     arms,
     credentials,
     scenarios,
-    agentConfigsDir: join(evalsRoot, 'coding-agents'),
+    agentConfigsDir: agentsDir,
+    files,
   };
 }
 
-/** Ordering half of defect C2 (REV Blocker C sol #3 + review Critical #2):
- *  Decision D-6 names the campaign dir after the digest, R-REG-4's digest
- *  covers the grid, and the grid depends on intake — so SOME frozen-SHA
- *  read must precede path selection. Every intake byte is read from a
- *  materialized worktree of the resolved SHA (no `git show`, no
- *  mutable-checkout reads); the throwaway tree exists only to derive the
- *  path name, and the AUTHORITATIVE intake is re-read from the final-path
- *  tree after publication materialization, cross-checked by digest
- *  equality (fail-closed) — what ships is what was digested. */
-function withIntakeSnapshot<T>(
-  evalsCheckout: string,
-  evalsSha: string,
-  campaignsRoot: string,
-  runner: CommandRunner,
-  body: (evalsTree: string) => T,
-): T {
-  const stagingRoot = mkdtempSync(join(campaignsRoot, '.intake-'));
-  const stagingTree = join(stagingRoot, 'evals');
-  ensureWorktreeAt({
-    sourceCheckout: evalsCheckout,
-    sha: evalsSha,
-    dest: stagingTree,
-    runner,
-  });
-  try {
-    return body(stagingTree);
-  } finally {
-    removeStagingWorktree(evalsCheckout, stagingTree, runner);
-    rmSync(stagingRoot, { recursive: true, force: true });
+function gitOutText(runner: CommandRunner, args: readonly string[]): string {
+  const res = runner.run('git', [...args], { env: minimalGitEnv() });
+  if (res.status !== 0) {
+    throw new RegistrationError(
+      `git ${args.join(' ')} failed (${res.status}): ${res.stderr.trim()}`,
+    );
   }
+  return res.stdout;
 }
 
-/** Remove the intake staging worktree through the CommandRunner seam — the
- *  same remove+prune discipline repairDriftedTrees uses. A failed cleanup
- *  is loud: it leaves registrations in the host checkout's .git/worktrees. */
-function removeStagingWorktree(
-  checkout: string,
-  dest: string,
+/** Digest-computation intake (operator amendment 2026-08-27, finding 1):
+ *  read-only from the git OBJECT STORE at the resolved frozen SHA —
+ *  `git ls-tree` + `git show <sha>:<path>` through the CommandRunner seam.
+ *  Object-store content is immutable, so these bytes can never observe the
+ *  mutable host checkout (Blocker C's point). Consumed files also land in a
+ *  transient scratch dir so the shipped path-based frontmatter readers and
+ *  loadAgentConfigForValidation apply unchanged; the caller removes it
+ *  after the grid+digest computation. */
+function readSnapshotIntake(
+  evalsCheckout: string,
+  evalsSha: string,
   runner: CommandRunner,
-): void {
-  const env = minimalGitEnv();
-  const remove = runner.run(
-    'git',
-    ['-C', checkout, 'worktree', 'remove', '--force', dest],
-    { env },
-  );
-  const prune = runner.run('git', ['-C', checkout, 'worktree', 'prune'], {
-    env,
-  });
-  if (remove.status !== 0 || prune.status !== 0) {
+): { intake: SnapshotIntake; scratch: string } {
+  const listing = gitOutText(runner, [
+    '-C',
+    evalsCheckout,
+    'ls-tree',
+    '-r',
+    '--name-only',
+    evalsSha,
+  ]);
+  const paths = listing.split('\n').filter((p) => p !== '');
+  const scratch = mkdtempSync(join(tmpdir(), 'intake-'));
+  const files: Record<string, string> = {};
+  const readAt = (rel: string): string => {
+    const content = gitOutText(runner, [
+      '-C',
+      evalsCheckout,
+      'show',
+      `${evalsSha}:${rel}`,
+    ]);
+    files[rel] = content;
+    const dest = join(scratch, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, content);
+    return content;
+  };
+  const arms: Record<string, Arm> = {};
+  for (const p of paths.filter((x) => /^arms\/[^/]+\.yaml$/.test(x))) {
+    const arm = ArmSchema.parse(parseYaml(readAt(p)));
+    arms[arm.name] = arm;
+  }
+  if (!paths.includes('credentials.yaml')) {
     throw new RegistrationError(
-      `intake snapshot cleanup failed at ${dest}: remove ${remove.status} (${remove.stderr.trim()}), prune ${prune.status} (${prune.stderr.trim()}) — inspect ${dest} and the worktree registrations in ${checkout}/.git/worktrees, then re-run registration (fail-closed)`,
+      `no credentials.yaml at evals SHA ${evalsSha} — the snapshot intake cannot read credentials; fix the evals ref or add the registry, then re-register (fail-closed)`,
     );
+  }
+  const credentials = parseCredentialsFile(
+    parseYaml(readAt('credentials.yaml')),
+  );
+  const scenarios: ScenarioIntake[] = [];
+  for (const p of paths.filter((x) =>
+    /^scenarios\/[^/]+\/story\.md$/.test(x),
+  )) {
+    const name = p.split('/')[1] ?? '';
+    if (name === '') continue; // unreachable by the path regex; keeps the type sound
+    readAt(p);
+    const setup = `scenarios/${name}/setup.sh`;
+    const checks = `scenarios/${name}/checks.sh`;
+    if (paths.includes(setup)) readAt(setup);
+    if (paths.includes(checks)) readAt(checks);
+    const storyPath = join(scratch, p);
+    scenarios.push({
+      name,
+      tier: readQuorumTier(storyPath),
+      requires_superpowers: readRequiresSuperpowers(storyPath) ?? false,
+      coupling:
+        readCoupling(storyPath) ??
+        scanCouplingDefault(join(scratch, 'scenarios', name)),
+      os: undefined,
+    });
+  }
+  for (const p of paths.filter((x) => /^coding-agents\/[^/]+\.yaml$/.test(x))) {
+    readAt(p);
+  }
+  return {
+    intake: {
+      arms,
+      credentials,
+      scenarios,
+      agentConfigsDir: join(scratch, 'coding-agents'),
+      files,
+    },
+    scratch,
+  };
+}
+
+/** Post-materialization guard (finding 1's byte-verification): the
+ *  materialized evals tree must be byte-identical to the object-store
+ *  intake for every file the grid consumed — a mismatch is corruption,
+ *  never ignored (fail-closed, R-REG-5: what ships is what was digested). */
+function verifyIntakeMatch(intake: SnapshotIntake, evalsRoot: string): void {
+  for (const [rel, content] of Object.entries(intake.files)) {
+    if (readFileSync(join(evalsRoot, rel), 'utf8') !== content) {
+      throw new RegistrationError(
+        `materialized snapshot drifted from intake bytes at ${rel} — refusing publication (fail-closed); inspect ${join(evalsRoot, rel)} against the git object store at the registered SHA, then re-run registration`,
+      );
+    }
   }
 }
 
@@ -1060,8 +1141,10 @@ interface SnapshotIntake {
   readonly credentials: Record<string, Credential>;
   readonly scenarios: ScenarioIntake[];
   readonly agentConfigsDir: string;
+  /** Relative path -> consumed bytes (object-store or tree), for the
+   *  post-materialization byte verification. */
+  readonly files: Record<string, string>;
 }
-
 interface ComputedRegistration {
   readonly prepared: PreparedRegistration;
   readonly preDigest: PreDigestCampaign;
@@ -1208,6 +1291,139 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     }),
   });
 
+  // 4. Digest-computation intake (operator amendment 2026-08-27, finding 1):
+  //    grid + digest derive from the git OBJECT STORE at the resolved frozen
+  //    SHA — read-only, and the first filesystem write only happens after
+  //    the confirm gates below (finding 2: dry-run never writes).
+  const compute = (intake: SnapshotIntake): ComputedRegistration => {
+    const superpowers_by_arm: Record<string, string | null> = {};
+    for (const armDef of Object.values(intake.arms)) {
+      superpowers_by_arm[armDef.name] =
+        armDef.superpowers === 'none'
+          ? null
+          : resolveSuperpowersRef(
+              { path: args.superpowersCheckout, remote: 'origin' },
+              armDef.superpowers,
+              args.runner,
+            );
+    }
+    const prepared = prepareRegistration({
+      suite,
+      arms: intake.arms,
+      credentials: intake.credentials,
+      grader: graderDecl,
+      estimates: args.estimates,
+      capability: (family) => superpowersCapability(family),
+      agentOsSupport: (agent) =>
+        loadAgentConfigForValidation(intake.agentConfigsDir, agent).os_support,
+      agentFamily: (agent) =>
+        agentRuntimeFamily(
+          loadAgentConfigForValidation(intake.agentConfigsDir, agent),
+        ),
+      scenarios: intake.scenarios,
+      globalCap: args.globalCap,
+      campaignOs: 'linux',
+      env: args.env,
+      nowMs: args.nowMs,
+      ...(args.pricingOverrides !== undefined
+        ? { pricingOverrides: args.pricingOverrides }
+        : {}),
+    });
+    // Execution surface (scrubbed, secret-free — env-var NAMES only).
+    const execution_surface = Object.values(intake.arms).map((armDef) => {
+      const cred = intake.credentials[armDef.credential];
+      return {
+        name: armDef.name,
+        agent: armDef.agent,
+        credential: armDef.credential,
+        auth: cred?.auth ?? 'api-key',
+        api: cred?.api ?? 'openai-chat',
+        ...(cred?.base_url !== undefined ? { base_url: cred.base_url } : {}),
+        model: cred?.model ?? '',
+        key_env_names:
+          cred?.key_pool ??
+          (cred?.api_key_env !== undefined ? [cred.api_key_env] : []),
+      };
+    });
+    const preDigest: PreDigestCampaign = {
+      schema_version: 1,
+      campaign_id: 'pending',
+      suite,
+      refs: { superpowers_by_arm, evals: evalsSha, gauntlet: gauntletSha },
+      grader: graderDecl,
+      cells: prepared.cells,
+      excluded_cells: prepared.excluded_cells,
+      samples: prepared.samples,
+      comparisons: prepared.comparisons,
+      blocks: prepared.blocks,
+      budget: prepared.budget,
+      registered_at: new Date(args.nowMs).toISOString(),
+      registered_by: args.registeredBy,
+      contention,
+      execution_surface,
+      ...(args.pricingOverrides !== undefined
+        ? { pricing_overrides: [...args.pricingOverrides] }
+        : {}),
+    };
+    return { prepared, preDigest, digest: campaignDigest(preDigest) };
+  };
+
+  const { intake, scratch } = readSnapshotIntake(
+    args.evalsCheckout,
+    evalsSha,
+    args.runner,
+  );
+  let staging: ComputedRegistration;
+  try {
+    staging = compute(intake);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  const digest = staging.digest;
+  const campaign_id = digest; // identity = digest
+
+  // 5. Confirmation output (R-REG-22 + Decision D-1 max-block reading).
+  emit(`campaign ${suite.name}`);
+  emit(
+    `grid: ${staging.prepared.cells.length} cells, ${staging.prepared.samples.length} samples, ${staging.prepared.blocks.length} blocks`,
+  );
+  emit(
+    `budget: $${staging.prepared.budget.usd_all_in} all-in (surcharge $${staging.prepared.budget.surcharge_applied}, priced coverage ${staging.prepared.budget.priced_coverage})`,
+  );
+  for (const exclusion of staging.prepared.excluded_cells) {
+    emit(`excluded ${exclusion.cell}: ${exclusion.reason}`);
+  }
+  for (const warning of staging.prepared.warnings) {
+    emit(`warning: ${warning}`);
+  }
+  emit(
+    'reserve is one shared per-cell pool for instrument, skew, exposure-audit, and contention replacements — size for correlated same-window draws',
+  );
+  if ((suite.reserve ?? 0) === 0) {
+    emit('warning: contention invalidation will be shortfall-only');
+  }
+  emit(`digest: ${digest}`);
+  emit(
+    `global_run_cap = ${args.globalCap} per-sample slots; max contemporaneous two-arm blocks = ${Math.floor(args.globalCap / 2)}`,
+  );
+
+  const finishUnpublished = (): RegisterResult => ({
+    campaign_id,
+    digest,
+    campaignDir: '',
+    published: false,
+    dryRun: args.dryRun,
+    printed: printed.join('\n'),
+    excluded_cells: staging.prepared.excluded_cells,
+    warnings: staging.prepared.warnings,
+  });
+  if (args.dryRun) return finishUnpublished();
+  // Noninteractive: no tty prompt, ever — absent --confirm is the
+  // print-and-exit path.
+  if (!args.confirm) return finishUnpublished();
+
+  // First filesystem write of the flow (finding 2): the campaigns root and
+  // the registration lease, only once publication is confirmed.
   mkdirSync(args.campaignsRoot, { recursive: true });
   const lease = acquireLease({
     lockPath: join(args.campaignsRoot, 'registration.lock.d'),
@@ -1216,138 +1432,19 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     label: 'registration lease',
   });
   try {
-    // 4. Snapshot-first grid derivation (C2 ordering): intake is read from
-    //    a materialized tree of the frozen evals SHA, the grid + digest are
-    //    computed from it, and the digest names the final campaign dir.
-    const compute = (intake: SnapshotIntake): ComputedRegistration => {
-      const superpowers_by_arm: Record<string, string | null> = {};
-      for (const armDef of Object.values(intake.arms)) {
-        superpowers_by_arm[armDef.name] =
-          armDef.superpowers === 'none'
-            ? null
-            : resolveSuperpowersRef(
-                { path: args.superpowersCheckout, remote: 'origin' },
-                armDef.superpowers,
-                args.runner,
-              );
-      }
-      const prepared = prepareRegistration({
-        suite,
-        arms: intake.arms,
-        credentials: intake.credentials,
-        grader: graderDecl,
-        estimates: args.estimates,
-        capability: (family) => superpowersCapability(family),
-        agentOsSupport: (agent) =>
-          loadAgentConfigForValidation(intake.agentConfigsDir, agent)
-            .os_support,
-        agentFamily: (agent) =>
-          agentRuntimeFamily(
-            loadAgentConfigForValidation(intake.agentConfigsDir, agent),
-          ),
-        scenarios: intake.scenarios,
-        globalCap: args.globalCap,
-        campaignOs: 'linux',
-        env: args.env,
-        nowMs: args.nowMs,
-        ...(args.pricingOverrides !== undefined
-          ? { pricingOverrides: args.pricingOverrides }
-          : {}),
-      });
-      // Execution surface (scrubbed, secret-free — env-var NAMES only).
-      const execution_surface = Object.values(intake.arms).map((armDef) => {
-        const cred = intake.credentials[armDef.credential];
-        return {
-          name: armDef.name,
-          agent: armDef.agent,
-          credential: armDef.credential,
-          auth: cred?.auth ?? 'api-key',
-          api: cred?.api ?? 'openai-chat',
-          ...(cred?.base_url !== undefined ? { base_url: cred.base_url } : {}),
-          model: cred?.model ?? '',
-          key_env_names:
-            cred?.key_pool ??
-            (cred?.api_key_env !== undefined ? [cred.api_key_env] : []),
-        };
-      });
-      const preDigest: PreDigestCampaign = {
-        schema_version: 1,
-        campaign_id: 'pending',
-        suite,
-        refs: { superpowers_by_arm, evals: evalsSha, gauntlet: gauntletSha },
-        grader: graderDecl,
-        cells: prepared.cells,
-        excluded_cells: prepared.excluded_cells,
-        samples: prepared.samples,
-        comparisons: prepared.comparisons,
-        blocks: prepared.blocks,
-        budget: prepared.budget,
-        registered_at: new Date(args.nowMs).toISOString(),
-        registered_by: args.registeredBy,
-        contention,
-        execution_surface,
-        ...(args.pricingOverrides !== undefined
-          ? { pricing_overrides: [...args.pricingOverrides] }
-          : {}),
-      };
-      return { prepared, preDigest, digest: campaignDigest(preDigest) };
-    };
-
-    const staging = withIntakeSnapshot(
-      args.evalsCheckout,
-      evalsSha,
-      args.campaignsRoot,
-      args.runner,
-      (tree) => compute(readIntakeFromEvalsTree(tree)),
-    );
-    const digest = staging.digest;
-    const campaign_id = digest; // identity = digest
-
-    // 5. Confirmation output (R-REG-22 + Decision D-1 max-block reading).
-    emit(`campaign ${suite.name}`);
-    emit(
-      `grid: ${staging.prepared.cells.length} cells, ${staging.prepared.samples.length} samples, ${staging.prepared.blocks.length} blocks`,
-    );
-    emit(
-      `budget: $${staging.prepared.budget.usd_all_in} all-in (surcharge $${staging.prepared.budget.surcharge_applied}, priced coverage ${staging.prepared.budget.priced_coverage})`,
-    );
-    for (const exclusion of staging.prepared.excluded_cells) {
-      emit(`excluded ${exclusion.cell}: ${exclusion.reason}`);
-    }
-    for (const warning of staging.prepared.warnings) {
-      emit(`warning: ${warning}`);
-    }
-    emit(
-      'reserve is one shared per-cell pool for instrument, skew, exposure-audit, and contention replacements — size for correlated same-window draws',
-    );
-    if ((suite.reserve ?? 0) === 0) {
-      emit('warning: contention invalidation will be shortfall-only');
-    }
-    emit(`digest: ${digest}`);
-    emit(
-      `global_run_cap = ${args.globalCap} per-sample slots; max contemporaneous two-arm blocks = ${Math.floor(args.globalCap / 2)}`,
-    );
-
-    const finishUnpublished = (): RegisterResult => ({
-      campaign_id,
-      digest,
-      campaignDir: '',
-      published: false,
-      dryRun: args.dryRun,
-      printed: printed.join('\n'),
-      excluded_cells: staging.prepared.excluded_cells,
-      warnings: staging.prepared.warnings,
-    });
-    if (args.dryRun) return finishUnpublished();
-    // Noninteractive: no tty prompt, ever — absent --confirm is the
-    // print-and-exit path.
-    if (!args.confirm) return finishUnpublished();
-
     // 6. Candidate dir naming + collision extension (Decision D-6).
     let prefixLen = 8;
     let campaignDir = '';
     let reopenOnly = false;
     for (;;) {
+      // Finding 4: extension is bounded by the digest itself — past the full
+      // 64 hex chars the slice stops changing and an unbounded loop would
+      // spin forever on a saturated prefix.
+      if (prefixLen > digest.length) {
+        throw new RegistrationError(
+          `digest-prefix collision exhausted at ${args.campaignsRoot}: every candidate dir up to the full digest ${digest} is taken by another campaign or an ambiguous orphan — inspect the directories under ${args.campaignsRoot}, resolve or move the conflicting campaign, then re-register (fail-closed)`,
+        );
+      }
       const candidate = join(
         args.campaignsRoot,
         `${digest.slice(0, prefixLen)}-${suite.name}`,
@@ -1429,9 +1526,13 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
         );
       }
     }
-    // (2) Authoritative intake: re-read from the FINAL-path tree. The
-    //     recomputed digest must equal the digest that named the directory
-    //     — a mismatch is snapshot corruption, never ignored (R-REG-5).
+    // (2) Byte verification (amendment 2026-08-27): every consumed file
+    //     must be byte-identical between the object-store intake and the
+    //     final-path materialized tree. The materialized tree is the
+    //     AUTHORITATIVE intake — its recomputed digest must equal the
+    //     digest that named the directory (R-REG-5: what ships is what was
+    //     digested; a mismatch is corruption, never ignored).
+    verifyIntakeMatch(intake, handle.evalsRoot);
     const authoritative = compute(readIntakeFromEvalsTree(handle.evalsRoot));
     if (authoritative.digest !== digest) {
       throw new RegistrationError(
@@ -1492,12 +1593,14 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     }
 
     // (5) campaign.json staged + renamed LAST, directory fsync — built from
-    //     the authoritative final-path intake.
+    //     the authoritative final-path intake. The publication is
+    //     UNCONDITIONAL (finding 3): an unexpected existing campaign.json —
+    //     one that appeared after classification — is the helper's
+    //     already-published refusal, never a silent skip past the marker.
+    //     Idempotent re-registration never reaches here (reopenOnly above).
     const finalDoc = { ...authoritative.preDigest, campaign_id, digest };
     CampaignSchema.parse(finalDoc); // the frozen document shape, validated
-    if (!existsSync(join(campaignDir, 'campaign.json'))) {
-      stageAndPublishCampaignJson(campaignDir, finalDoc);
-    }
+    stageAndPublishCampaignJson(campaignDir, finalDoc);
     emit(`published ${campaignDir}`);
 
     return {
