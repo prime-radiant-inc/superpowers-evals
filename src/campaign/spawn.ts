@@ -4,6 +4,8 @@ import {
   type CampaignIdentity,
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
+import { getEnv } from '../env.ts';
+import type { Clock } from '../scheduler/clock.ts';
 import { COVERED_BY_LOCK_ENV } from './locks.ts';
 
 // The child-spawner seam (Decision D-8): the dispatcher observes fake
@@ -79,11 +81,9 @@ export class DetachedChildSpawner implements ChildSpawner {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    if (child.pid === undefined) {
-      throw new SpawnError(
-        `spawn failed: no pid for ${spec.command} ${spec.args.join(' ')}`,
-      );
-    }
+    // ALL handlers are installed BEFORE any throw: a failed launch (async
+    // ENOENT etc.) is consumed by the 'error' listener, so it can never
+    // surface as an unhandled event that terminates the caller (C4/R1).
     const stdoutLines: string[] = [];
     const stderrLines: string[] = [];
     const stdoutCbs: ((line: string) => void)[] = [];
@@ -107,6 +107,38 @@ export class DetachedChildSpawner implements ChildSpawner {
       }
       return rest;
     };
+    // Terminal settlement (C4/R2): publish only once the process has ended
+    // AND both pipes have closed, each unterminated tail flushed exactly
+    // once as a final line — a subscriber reacting to exit always sees the
+    // complete record, and late subscribers replay it.
+    let processEnd: ChildExitInfo | null = null;
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let published = false;
+    const flushStdoutTail = (): void => {
+      if (stdoutBuf === '') return;
+      const line = stdoutBuf;
+      stdoutBuf = '';
+      stdoutLines.push(line);
+      for (const cb of stdoutCbs) cb(line);
+    };
+    const flushStderrTail = (): void => {
+      if (stderrBuf === '') return;
+      const line = stderrBuf;
+      stderrBuf = '';
+      stderrLines.push(line);
+      for (const cb of stderrCbs) cb(line);
+    };
+    const settle = (): void => {
+      if (published || processEnd === null || !stdoutEnded || !stderrEnded) {
+        return;
+      }
+      published = true;
+      flushStdoutTail();
+      flushStderrTail();
+      exitInfo = processEnd;
+      for (const cb of exitCbs) cb(exitInfo);
+    };
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBuf = deliver(
         stdoutBuf,
@@ -114,6 +146,16 @@ export class DetachedChildSpawner implements ChildSpawner {
         stdoutCbs,
         chunk.toString('utf8'),
       );
+    });
+    // 'end' and 'close' are alternative EOF signals across runtimes; the
+    // first one to fire completes its stream.
+    child.stdout?.on('end', () => {
+      stdoutEnded = true;
+      settle();
+    });
+    child.stdout?.on('close', () => {
+      stdoutEnded = true;
+      settle();
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       stderrBuf = deliver(
@@ -123,20 +165,42 @@ export class DetachedChildSpawner implements ChildSpawner {
         chunk.toString('utf8'),
       );
     });
-    const terminal = (info: ChildExitInfo): void => {
-      // First terminal event wins; a later one is a duplicate, never
-      // re-notified.
-      if (exitInfo !== null) return;
-      exitInfo = info;
-      // Flush any unterminated tail as a final line before exit delivery.
-      if (stdoutBuf !== '') {
-        stdoutLines.push(stdoutBuf);
-        for (const cb of stdoutCbs) cb(stdoutBuf);
-      }
-      for (const cb of exitCbs) cb(info);
-    };
-    child.on('exit', (code, signal) => terminal({ code, signal }));
-    child.on('error', () => terminal({ code: null, signal: null }));
+    child.stderr?.on('end', () => {
+      stderrEnded = true;
+      settle();
+    });
+    child.stderr?.on('close', () => {
+      stderrEnded = true;
+      settle();
+    });
+    child.on('exit', (code, signal) => {
+      processEnd = { code, signal };
+      settle();
+    });
+    // Launch/pipe failure: no streams may ever close, so it force-settles.
+    // Exactly one failure notification per failed spawn — the first terminal
+    // event wins (published guard), later ones are never re-notified.
+    child.on('error', () => {
+      processEnd = { code: null, signal: null };
+      stdoutEnded = true;
+      stderrEnded = true;
+      settle();
+    });
+    // Backstop: the ChildProcess 'close' event means "process ended AND the
+    // stdio streams have closed" — complete both streams if their own EOF
+    // signals were missed, so settlement can never hang on a silent pipe.
+    child.on('close', () => {
+      stdoutEnded = true;
+      stderrEnded = true;
+      settle();
+    });
+    if (child.pid === undefined) {
+      // The single typed failure the caller sees; the async 'error' event is
+      // already consumed above, so the caller survives the launch failure.
+      throw new SpawnError(
+        `spawn failed: no pid for ${spec.command} ${spec.args.join(' ')}`,
+      );
+    }
     return {
       pid: child.pid,
       get stdoutLines() {
@@ -241,4 +305,96 @@ export function keyGrantsPayload(args: {
   if (args.graderEnv !== undefined)
     key_grants.push({ role: 'grader', env: args.graderEnv });
   return { key_grants };
+}
+
+export interface CampaignChildEnvArgs {
+  /** Caller-controlled base (PATH, HOME, projected credential vars). The
+   *  child environment is CONSTRUCTED from it — the parent environment is
+   *  never read wholesale (R-SPN-3). */
+  readonly base: Readonly<Record<string, string | undefined>>;
+  /** Selected key grants (R-SPN-3): one env NAME per API-key role; the
+   *  VALUES are resolved through the env seam and projected into the child
+   *  env — names only are ever journaled (keyGrantsPayload). */
+  readonly grants?: { subjectEnv?: string; graderEnv?: string };
+}
+
+/** R-SPN-3 (C4 spawn portion): the complete campaign-child environment —
+ *  caller base + the children-never-acquire marker + the selected key
+ *  VALUES. Values resolve through the env seam and fail loud on an unset
+ *  selection (R-SPN-7); they never appear in any journal payload. */
+export function composeCampaignChildEnv(
+  args: CampaignChildEnvArgs,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(args.base)) {
+    if (value !== undefined) env[name] = value;
+  }
+  env[COVERED_BY_LOCK_ENV] = '1';
+  for (const grant of keyGrantsPayload(args.grants ?? {}).key_grants) {
+    const value = getEnv(grant.env);
+    if (value === undefined) {
+      throw new SpawnError(
+        `selected key env ${grant.env} (${grant.role}) is unset — refusing to compose the child env (R-SPN-7)`,
+      );
+    }
+    env[grant.env] = value;
+  }
+  return env;
+}
+
+/** One key's live load in the dispatcher's pool (R-SPN-6): the env NAME and
+ *  how many in-flight children currently hold it. */
+export interface KeyLoad {
+  readonly env: string;
+  readonly inFlight: number;
+}
+
+export interface SelectKeyEnvArgs {
+  /** Live load view — the dispatcher owns the counters; selection samples. */
+  readonly sample: () => readonly KeyLoad[];
+  /** The credential's max_concurrency (pool-level admission stays
+   *  authoritative — this selector is never a second admission authority). */
+  readonly maxConcurrency: number;
+  /** The injected Clock — the wait branch NEVER touches wall time. */
+  readonly clock: Clock;
+  /** Total wait budget (seconds) before failing loud (R-SPN-7). */
+  readonly waitSeconds: number;
+  /** Clock slice between re-checks; default 1s. */
+  readonly pollSeconds?: number;
+}
+
+/** R-SPN-6 KeySelector: the least-loaded key below the per-key cap
+ *  (ceil(max_concurrency / pool size); at-cap is unavailable). When every
+ *  key is at cap — the miscalibration/rebuild guard, not a second admission
+ *  authority — the wait rides the injected Clock and fails loud once the
+ *  budget is spent (R-SPN-7). */
+export async function selectKeyEnv(args: SelectKeyEnvArgs): Promise<string> {
+  const pollSeconds = args.pollSeconds ?? 1;
+  const deadline = args.clock.now() + args.waitSeconds;
+  for (;;) {
+    const pool = args.sample();
+    if (pool.length === 0) {
+      throw new SpawnError('key selection: empty key pool');
+    }
+    const perKeyCap = Math.ceil(args.maxConcurrency / pool.length);
+    let best: KeyLoad | null = null;
+    for (const key of pool) {
+      if (key.inFlight >= perKeyCap) continue;
+      if (
+        best === null ||
+        key.inFlight < best.inFlight ||
+        (key.inFlight === best.inFlight && key.env < best.env)
+      ) {
+        best = key;
+      }
+    }
+    if (best !== null) return best.env;
+    const target = args.clock.now() + pollSeconds;
+    if (target > deadline) {
+      throw new SpawnError(
+        `key selection: every key at/over its per-key cap (${perKeyCap}) for ${args.waitSeconds}s — failing loud (R-SPN-6/7)`,
+      );
+    }
+    await args.clock.sleepUntil(target);
+  }
 }
