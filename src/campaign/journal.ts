@@ -8,7 +8,17 @@
 // the D1 schemas before append (unknown type / malformed payload = loud
 // programming error, never a silent drop).
 import { Database } from 'bun:sqlite';
-import { mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { Campaign } from '../contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../contracts/campaign/crash-windows.ts';
@@ -1413,4 +1423,118 @@ export function rebuildMaterialized(
   universe: CampaignUniverse,
 ): void {
   writer.rebuildProjectionsFrom(universe); // DROPs projection tables, re-applies events via project()
+}
+
+/** Decision D-13 ballast: physically allocated, operator-visible, created +
+ *  fsynced BEFORE campaign.json publication. Non-sparse: open exclusively,
+ *  write non-zero buffers through the entire length (never truncate-only),
+ *  fsync the file, verify allocated blocks cover the length, then fsync the
+ *  campaign directory. Failure or an unverifiable allocation refuses
+ *  publication. */
+export function createBallast(campaignDir: string, sizeBytes: number): void {
+  const path = join(campaignDir, '.ballast');
+  let fd: number;
+  try {
+    fd = openSync(path, 'wx'); // O_EXCL: never overwrite an existing ballast
+  } catch (err) {
+    throw new JournalError(
+      `ballast already exists or cannot be created at ${path}: ${errorMessage(err)}`,
+    );
+  }
+  try {
+    const chunk = Buffer.alloc(64 * 1024, 0xba); // non-zero
+    let written = 0;
+    while (written < sizeBytes) {
+      const n = Math.min(chunk.length, sizeBytes - written);
+      writeSync(fd, chunk, 0, n);
+      written += n;
+    }
+    fsyncSync(fd); // durable BEFORE the allocation check
+  } finally {
+    closeSync(fd);
+  }
+  if (!verifyBallast(campaignDir, sizeBytes)) {
+    try {
+      unlinkSync(path);
+    } catch {}
+    throw new JournalError(
+      `ballast allocation unverifiable at ${path} (sparse or short filesystem?) — refusing publication (fail-closed)`,
+    );
+  }
+  fsyncDir(campaignDir);
+}
+
+export function verifyBallast(campaignDir: string, sizeBytes: number): boolean {
+  try {
+    const st = statSync(join(campaignDir, '.ballast'));
+    return st.size === sizeBytes && st.blocks * 512 >= sizeBytes;
+  } catch {
+    return false;
+  }
+}
+
+/** D-13 pause step 3: release the ballast (unlink, fsync dir) so the freed
+ *  blocks land the pause evidence. Absence is loud (the reserve was already
+ *  spent — recovery journals that note). */
+export function releaseBallast(campaignDir: string): void {
+  const path = join(campaignDir, '.ballast');
+  if (!existsSync(path)) {
+    throw new JournalError(
+      `no ballast to release at ${path} — reserve already spent`,
+    );
+  }
+  unlinkSync(path);
+  fsyncDir(campaignDir);
+}
+
+/** D-13 step-1 detection predicate: a storage-full failure from either
+ *  store — SQLITE_FULL from a bun:sqlite commit, or ENOSPC from an fs write
+ *  (the sampler's sidecar append plausibly hits the full volume first).
+ *  Matched by error `code` first, message shape as the fallback (bun:sqlite
+ *  surfaces "database or disk is full"). Production callers: the
+ *  dispatcher's appendCritical and its sampler onSampleError hook (task 8),
+ *  both entering performStoragePause. */
+export function isStorageFullError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = 'code' in err ? err.code : undefined;
+  if (code === 'SQLITE_FULL' || code === 'ENOSPC') return true;
+  const message = 'message' in err ? err.message : undefined;
+  return (
+    typeof message === 'string' &&
+    /SQLITE_FULL|database or disk is full|ENOSPC/.test(message)
+  );
+}
+
+export function fsyncDir(dir: string): void {
+  const fd = openSync(dir, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Decision D-7 publication: stage campaign.json as campaign.json.stage.<pid>
+ *  (fsync), rename into place LAST, fsync the campaign directory. The rename
+ *  is the readiness marker — a crash before it leaves an explicitly
+ *  incomplete, non-runnable directory (Decision D-6/S-8). */
+export function stageAndPublishCampaignJson(
+  campaignDir: string,
+  campaign: unknown,
+): void {
+  if (existsSync(join(campaignDir, 'campaign.json'))) {
+    throw new JournalError(
+      `campaign.json already published at ${campaignDir} — publication happens exactly once; re-entry verifies, never republishes`,
+    );
+  }
+  const stage = join(campaignDir, `campaign.json.stage.${process.pid}`);
+  const fd = openSync(stage, 'wx');
+  try {
+    writeSync(fd, `${JSON.stringify(campaign, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(stage, join(campaignDir, 'campaign.json')); // rename last
+  fsyncDir(campaignDir); // directory fsync after the publication rename
 }
