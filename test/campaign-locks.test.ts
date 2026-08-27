@@ -15,9 +15,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
-  type HostStats,
-  type HostStatsProbe,
+  DEFAULT_RESOURCE_FLOORS,
   PreflightError,
+  preflightResourceFloors,
 } from '../src/campaign/host-stats.ts';
 import {
   acquireLease,
@@ -59,25 +59,6 @@ class FakeIdentity implements ProcessIdentityProbe {
 
 function tmpLockPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'lock-')), 'test.lock.d');
-}
-
-/** Above-floor host stats for the live-spend preflight (R1): the probe is
- *  injected, so acquisition tests never read the real host. */
-function healthyProbe(): HostStatsProbe {
-  return {
-    sample: (nowMs: number): HostStats => ({
-      ts_ms: nowMs,
-      load1: 0.1,
-      mem_available_bytes: 8 * 2 ** 30,
-      mem_total_bytes: 16 * 2 ** 30,
-      swap_used_bytes: 0,
-      swap_total_bytes: 2 * 2 ** 30,
-      process_count: 200,
-      pid_max: 4_194_304,
-      disk_free_bytes: 100 * 2 ** 30,
-      disk_total_bytes: 494 * 2 ** 30,
-    }),
-  };
 }
 
 const BIRTH = 1_000;
@@ -300,7 +281,6 @@ test('children never acquire: the covered-by-lock env marker refuses acquisition
         lockPath: tmpLockPath(),
         clock: new FakeClock(0),
         identity: new FakeIdentity(),
-        probe: healthyProbe(),
       }),
     ).toThrow(/never acquire/i);
   } finally {
@@ -318,7 +298,6 @@ test('live-spend lock: default path, campaign-id sidecar, holder inspection', ()
     campaignId: 'abc123',
     clock,
     identity,
-    probe: healthyProbe(),
   });
   const holder = readLiveSpendHolder(lockPath);
   expect(holder).not.toBeNull();
@@ -336,45 +315,42 @@ test('live-spend lock: default path, campaign-id sidecar, holder inspection', ()
   expect(defaultLiveSpendLockPath()).toContain('.quorum/live-spend.lock.d');
 });
 
-test('R1: below-floor host stats refuse live-spend acquisition; no lock dir remains', () => {
+test('R2: live-spend acquisition is a pure lock claim — resource floors are a separate admission step (REV sol #8c)', () => {
   const lockPath = tmpLockPath();
   const identity = new FakeIdentity();
   identity.set(process.pid, 'alive', BIRTH);
-  const belowFloors: HostStatsProbe = {
-    sample: (nowMs: number) => ({
-      ...healthyProbe().sample(nowMs),
-      disk_free_bytes: 1,
-    }),
-  };
+  // The same below-floor sample that the standalone preflight refuses must
+  // NOT block acquisition: kill/reconcile of orphan spenders runs under the
+  // lock regardless of the floor debate. Spender verbs pin the order
+  // acquire → kill/reconcile → preflight → admit; the probe is not even a
+  // parameter of acquisition.
   expect(() =>
-    acquireLiveSpendLock({
-      lockPath,
-      campaignId: 'abc123',
-      clock: new FakeClock(5),
-      identity,
-      probe: belowFloors,
-    }),
+    preflightResourceFloors(
+      {
+        ts_ms: 0,
+        load1: 0.1,
+        mem_available_bytes: 8 * 2 ** 30,
+        mem_total_bytes: 16 * 2 ** 30,
+        swap_used_bytes: 0,
+        swap_total_bytes: 2 * 2 ** 30,
+        process_count: 200,
+        pid_max: 4_194_304,
+        disk_free_bytes: 1,
+        disk_total_bytes: 494 * 2 ** 30,
+      },
+      DEFAULT_RESOURCE_FLOORS,
+    ),
   ).toThrow(PreflightError);
-  expect(existsSync(lockPath)).toBe(false); // unwound: no lock held
-});
-
-test('R1: a failing probe refuses acquisition fail-closed (no silent skip)', () => {
-  const lockPath = tmpLockPath();
-  const identity = new FakeIdentity();
-  identity.set(process.pid, 'alive', BIRTH);
-  const broken: HostStatsProbe = {
-    sample: () => {
-      throw new Error('probe unavailable');
-    },
-  };
-  expect(() =>
-    acquireLiveSpendLock({
-      lockPath,
-      clock: new FakeClock(5),
-      identity,
-      probe: broken,
-    }),
-  ).toThrow(/probe unavailable/);
+  const lock = acquireLiveSpendLock({
+    lockPath,
+    campaignId: 'abc123',
+    clock: new FakeClock(5),
+    identity,
+  });
+  expect(existsSync(lockPath)).toBe(true); // acquired despite the floors
+  const holder = readLiveSpendHolder(lockPath);
+  expect(holder?.campaignId).toBe('abc123');
+  lock.release();
   expect(existsSync(lockPath)).toBe(false);
 });
 
@@ -903,7 +879,6 @@ test('I4: campaign-id sidecar failure rolls the lease back — heartbeat stopped
       campaignId: 'abc123',
       clock: new FakeClock(5),
       identity,
-      probe: healthyProbe(),
       scheduler,
     }),
   ).toThrow(/EACCES/);

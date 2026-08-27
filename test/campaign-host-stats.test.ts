@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { cpus } from 'node:os';
 import {
   assertFingerprintMatch,
+  assertLinuxDesignatedHost,
   DEFAULT_RESOURCE_FLOORS,
   fingerprintFromStats,
   type HostFingerprint,
@@ -248,14 +249,24 @@ test('probeFingerprint derives mem/disk from the probe and CPU from the host (R4
   expect(probe.sample(1_234).ts_ms).toBe(1_234); // the probe saw the passed now
 });
 
-test('linuxHostStatsProbe refuses on non-Linux platforms (fail-closed, R-LCK-3)', () => {
-  const probe = linuxHostStatsProbe('/tmp');
-  if (process.platform === 'linux') {
-    // On a real Linux host the platform gate passes and the reads are real;
-    // the read path itself is covered by the pure-layer tests above.
-    expect(probe).toBeDefined();
-    return;
+test('assertLinuxDesignatedHost: only the Linux appliance is the designated host (R-LCK-3, deterministic on every platform)', () => {
+  expect(() => assertLinuxDesignatedHost('linux')).not.toThrow();
+  for (const platform of ['darwin', 'win32', 'freebsd', 'sunos']) {
+    expect(() => assertLinuxDesignatedHost(platform)).toThrow(PreflightError);
+    expect(() => assertLinuxDesignatedHost(platform)).toThrow(
+      /requires the Linux appliance/,
+    );
   }
-  expect(() => probe.sample(0)).toThrow(/requires the Linux appliance/);
-  expect(() => probe.sample(0)).toThrow(PreflightError);
+});
+
+test('linuxHostStatsProbe refuses non-Linux platforms through the injected platform (R-LCK-3)', () => {
+  // The guard fires before ANY filesystem read, so this is deterministic on
+  // every host — no process.platform gating that would skip the assertion
+  // where the refusal actually matters.
+  expect(() => linuxHostStatsProbe('/tmp', 'darwin').sample(0)).toThrow(
+    PreflightError,
+  );
+  expect(() => linuxHostStatsProbe('/tmp', 'win32').sample(0)).toThrow(
+    /requires the Linux appliance/,
+  );
 });

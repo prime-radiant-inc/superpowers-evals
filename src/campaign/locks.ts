@@ -61,13 +61,7 @@ import {
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
-import {
-  clockNowMs,
-  DEFAULT_RESOURCE_FLOORS,
-  type HostStatsProbe,
-  preflightResourceFloors,
-  type ResourceFloors,
-} from './host-stats.ts';
+import { clockNowMs } from './host-stats.ts';
 
 export class LockError extends Error {
   constructor(message: string) {
@@ -926,12 +920,6 @@ export function acquireLiveSpendLock(args: {
   /** Heartbeat driver; forwarded to the lease (tests inject failures or
    *  scripted beats through it). */
   readonly scheduler?: HeartbeatScheduler | undefined;
-  /** R-LCK-2 preflight (Decision D-3): live host stats through the
-   *  injectable probe, judged against `floors`. Required — preflight can
-   *  never be skipped; a probe failure refuses acquisition fail-closed. */
-  readonly probe: HostStatsProbe;
-  /** Floor overrides; production default is DEFAULT_RESOURCE_FLOORS. */
-  readonly floors?: ResourceFloors | undefined;
 }): LiveSpendLock {
   const lockPath = args.lockPath ?? defaultLiveSpendLockPath();
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -942,28 +930,12 @@ export function acquireLiveSpendLock(args: {
     label: 'live-spend lock',
     scheduler: args.scheduler,
   });
-  // R-LCK-2 preflight: this acquisition is the single admission point for
-  // host spend. Recovery ordering (REV sol #8c) puts the gate AFTER lock
-  // acquisition and BEFORE any campaign-id publication — an orphaned
-  // spender is cleaned up under the lock even when the floor debate would
-  // refuse us. Any failure unwinds the lease per the module's rollback
-  // discipline: no lock held, launch refused, fail-closed. (The resume-time
-  // host-fingerprint match of D-4 belongs to resume orchestration.)
-  try {
-    preflightResourceFloors(
-      args.probe.sample(clockNowMs(args.clock)),
-      args.floors ?? DEFAULT_RESOURCE_FLOORS,
-    );
-  } catch (err) {
-    try {
-      lease.release();
-    } catch (releaseErr) {
-      throw new LockError(
-        `live-spend lock: resource-floor preflight failed AND the lease could not be released — the lock may still be held at ${lockPath}: ${errorMessage(releaseErr)}`,
-      );
-    }
-    throw err;
-  }
+  // NOTE (R-LCK-2 layering): the resource-floor preflight is deliberately
+  // NOT here. The spec's recovery ordering (REV sol #8c) pins
+  // acquire lock → kill/reconcile → preflight → admit: preflight failure
+  // refuses admission but must never block the lock or orphan cleanup, so
+  // the spender verbs run preflightResourceFloors as a separate step after
+  // this returns (see src/campaign/host-stats.ts).
   if (args.campaignId === undefined) {
     return { ...lease, campaignId: null };
   }

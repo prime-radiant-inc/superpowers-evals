@@ -134,20 +134,33 @@ export function hostStatsFromRaw(
   };
 }
 
+/** R-LCK-3 platform gate (pure): the v1 designated host is the Linux
+ *  appliance; every other platform refuses (workstation use of the blessed
+ *  bundle is forbidden by policy). Takes the platform as a parameter so the
+ *  refusal is deterministic and testable on every host — the probe passes
+ *  its own platform, production passes process.platform. */
+export function assertLinuxDesignatedHost(platform: string): void {
+  if (platform !== 'linux') {
+    throw new PreflightError(
+      `host stats probe requires the Linux appliance (got ${platform}) — portable tests inject a fake probe`,
+    );
+  }
+}
+
 /** Production probe (Decision D-3 metric sources): load1 via os.loadavg();
  *  memory via os.freemem/totalmem; swap + process count + the PID ceiling
  *  via /proc (Linux); disk via statfs on the campaign/results volume. The
  *  reads compose the pure translation layer above. The v1 designated host is
- *  the Linux appliance — other platforms fail closed (workstation use of the
- *  blessed bundle is forbidden by policy). */
-export function linuxHostStatsProbe(diskPath: string): HostStatsProbe {
+ *  the Linux appliance — other platforms fail closed via
+ *  assertLinuxDesignatedHost; `platform` is injectable so that refusal is
+ *  testable everywhere (production callers pass only the disk path). */
+export function linuxHostStatsProbe(
+  diskPath: string,
+  platform: string = process.platform,
+): HostStatsProbe {
   return {
     sample(nowMs: number): HostStats {
-      if (process.platform !== 'linux') {
-        throw new PreflightError(
-          `host stats probe requires the Linux appliance (got ${process.platform}) — portable tests inject a fake probe`,
-        );
-      }
+      assertLinuxDesignatedHost(platform);
       return hostStatsFromRaw(nowMs, {
         load1: loadavg()[0] ?? 0,
         mem_available_bytes: freemem(),
@@ -175,10 +188,17 @@ export const DEFAULT_RESOURCE_FLOORS: ResourceFloors = {
   process_headroom: 256,
 };
 
-/** Resource-floor preflight (R-LCK-2): refuse when free disk, available
- *  memory, or PID headroom beneath the host's REAL pid_max (read through
- *  the probe) falls below the floors. An unusable ceiling fails closed —
- *  headroom is never judged against an invented constant. */
+/** Resource-floor preflight (R-LCK-2) — the ADMISSION step, standalone by
+ *  design: spender verbs (`campaign run`, `run-all`, direct `quorum run`)
+ *  call it AFTER acquiring the live-spend lock and killing/reconciling
+ *  orphan spenders, per the spec's pinned recovery ordering (REV sol #8c:
+ *  acquire lock → kill/reconcile → preflight → admit). Preflight failure
+ *  refuses admission (fail-closed) but must NEVER block the lock itself or
+ *  orphan cleanup — which is why this lives OUTSIDE acquireLiveSpendLock.
+ *  Refuses when free disk, available memory, or PID headroom beneath the
+ *  host's REAL pid_max (read through the probe) falls below the floors. An
+ *  unusable ceiling fails closed — headroom is never judged against an
+ *  invented constant. */
 export function preflightResourceFloors(
   stats: HostStats,
   floors: ResourceFloors,
