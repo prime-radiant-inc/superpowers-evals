@@ -362,6 +362,53 @@ test('E7.3a conservation: a mint missing its required disposition never seals', 
   expect(sealPredicateHolds(UNIVERSE, events)).toBe(true);
 });
 
+test('E7.3a: re-entry restores disposition eligibility — a lifted instrument_failed no longer exempts the pair', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('instrument_failure', { attempt_id: 'a1', cause: 'grader_crashed' }),
+    // Rerun admission re-enters b1's roster: instrument_failed -> admitted
+    // (E7.1), so s1 is back in the disposition source set before the mint.
+    ev('block_admitted', { block_id: 'b1', pools: ['p'], rerun_of: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x1s2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    // s2's required disposition lands; s1's — required again after the
+    // re-entry lifted its stale instrument_failed — is MISSING.
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+    ev('block_admitted', { block_id: 'x1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 'x1s1', attempt_id: 'xa1' }),
+    ev('run_allocated', { attempt_id: 'xa1', run_id: 'xr1', pgid: 3 }),
+    ev('run_completed', { attempt_id: 'xa1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 'x1s2', attempt_id: 'xa2' }),
+    ev('run_allocated', { attempt_id: 'xa2', run_id: 'xr2', pgid: 4 }),
+    ev('run_completed', { attempt_id: 'xa2', outcome: 'pass' }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+  // Completing the bundle for the re-entered predecessor satisfies E7.3a.
+  events.push(
+    ev('sample_disposition', {
+      sample_id: 's1',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s1',
+    }),
+  );
+  expect(sealPredicateHolds(UNIVERSE, events)).toBe(true);
+});
+
 test('E7.3a conservation: an orphan disposition is corruption — seal refuses even with every sample accounted', () => {
   const events = openAndAdmit();
   events.push(

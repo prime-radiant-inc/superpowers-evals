@@ -348,10 +348,14 @@ function foldPrefix(
         // pair whose predecessor sits in the disposition source set
         // (admitted | spawned | exposed | completed) must gain exactly its
         // excluded_block_replaced disposition before seal. A predecessor
-        // keeping a terminal instead — a standing fact, or an
-        // instrument-failed current attempt (the cause consumed the
-        // activation) — requires none; a never-admitted predecessor block
-        // leaves its samples planned, outside the source set.
+        // keeping a terminal instead — a standing fact, or a CURRENT-ERA
+        // instrument-failed attempt (the cause consumed the activation) —
+        // requires none; a never-admitted predecessor block leaves its
+        // samples planned, outside the source set. The instrument-failed
+        // exemption is era-scoped like the facts: a rerun re-entry lifts
+        // instrument_failed back to admitted (E7.1), so only an attempt
+        // created AFTER any re-entry exempts — a stale predecessor-era
+        // failure leaves the re-entered sample disposition-eligible.
         const predecessorAdmitted =
           blockAdmittedSeq.get(rec.block_id) !== undefined;
         for (const entry of roster) {
@@ -359,12 +363,18 @@ function foldPrefix(
           supersededSamples.set(entry.supersedes, entry.sample_id);
           if (!predecessorAdmitted) continue;
           const current = currentAttempt.get(entry.supersedes);
+          const reentry = reentrySeq.get(entry.supersedes);
+          const currentEraInstrumentFailed =
+            current !== undefined &&
+            instrumentFailedAttempts.has(current) &&
+            (reentry === undefined ||
+              (attemptCreatedSeq.get(current) ?? Number.NEGATIVE_INFINITY) >
+                reentry);
           const keepsTerminal =
             factTerminal(
               { permanentTerminalSamples, sampleTerminalSeq, reentrySeq },
               entry.supersedes,
-            ) ||
-            (current !== undefined && instrumentFailedAttempts.has(current));
+            ) || currentEraInstrumentFailed;
           if (!keepsTerminal) {
             pendingRequiredDispositions.add(
               dispositionKey(entry.supersedes, entry.sample_id),
