@@ -4,6 +4,12 @@
 // src/scheduler/clock.ts is SECONDS-based; every D3 millisecond field
 // (journal ts_ms, sidecar lines, heartbeats, cooldowns) derives through
 // clockNowMs — one Clock named uniformly, never wall-clock reads in tests.
+//
+// The production probe is split into a PURE translation layer (parseMeminfo,
+// parsePidMax, hostStatsFromRaw, fingerprintFromStats — fixture-testable on
+// any platform) over which the Linux reader composes the real OS reads.
+// Every required OS datum is fail-closed: a missing /proc field or an
+// unavailable CPU identity refuses, never degrades to a plausible value.
 import { readdirSync, readFileSync, statfsSync } from 'node:fs';
 import { cpus, freemem, loadavg, totalmem } from 'node:os';
 import type { Clock } from '../scheduler/clock.ts';
@@ -16,6 +22,9 @@ export interface HostStats {
   readonly swap_used_bytes: number;
   readonly swap_total_bytes: number;
   readonly process_count: number;
+  /** The host's real PID ceiling (/proc/sys/kernel/pid_max on Linux). PID
+   *  headroom is judged against THIS, never an invented constant. */
+  readonly pid_max: number;
   readonly disk_free_bytes: number;
   readonly disk_total_bytes: number;
 }
@@ -38,9 +47,97 @@ export class PreflightError extends Error {
   }
 }
 
+/** /proc/meminfo translation (pure, fixture-testable). SwapTotal/SwapFree
+ *  must be present and parse — a swapless host writes `SwapTotal: 0 kB`,
+ *  which is valid; a MISSING or malformed field refuses (fail-closed, never
+ *  a silent 0). */
+export function parseMeminfo(text: string): {
+  readonly swap_total_bytes: number;
+  readonly swap_free_bytes: number;
+} {
+  const kb = (key: string): number | null => {
+    const m = new RegExp(`^${key}:\\s+(\\d+) kB$`, 'm').exec(text);
+    return m === null ? null : Number(m[1]);
+  };
+  const swapTotalKb = kb('SwapTotal');
+  const swapFreeKb = kb('SwapFree');
+  if (swapTotalKb === null || swapFreeKb === null) {
+    throw new PreflightError(
+      `/proc/meminfo does not parse SwapTotal/SwapFree — missing swap data never becomes a silent 0 (fail-closed); got: ${JSON.stringify(text.slice(0, 80))}`,
+    );
+  }
+  return {
+    swap_total_bytes: swapTotalKb * 1024,
+    swap_free_bytes: swapFreeKb * 1024,
+  };
+}
+
+/** /proc/sys/kernel/pid_max translation (pure): exactly one positive
+ *  integer. The host's real PID ceiling — garbage, empty, zero, or negative
+ *  refuses (fail-closed), because headroom cannot be judged without it. */
+export function parsePidMax(text: string): number {
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new PreflightError(
+      `pid_max does not parse as one positive integer (${JSON.stringify(text.slice(0, 40))}) — PID headroom cannot be judged; refusing (fail-closed)`,
+    );
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new PreflightError(
+      `pid_max ${trimmed} is not a usable PID ceiling — refusing (fail-closed)`,
+    );
+  }
+  return value;
+}
+
+/** The /proc directory listing → live process count: numeric entries only. */
+function countPidEntries(entries: readonly string[]): number {
+  return entries.filter((n) => /^[0-9]+$/.test(n)).length;
+}
+
+/** Raw OS inputs for one host sample. `fs` is the statfs shape of the
+ *  campaign/results volume; `proc_entries` is a /proc listing. */
+export interface RawHostSampleInputs {
+  readonly load1: number;
+  readonly mem_available_bytes: number;
+  readonly mem_total_bytes: number;
+  readonly meminfo_text: string;
+  readonly pid_max_text: string;
+  readonly proc_entries: readonly string[];
+  readonly fs: {
+    readonly bavail: number;
+    readonly bsize: number;
+    readonly blocks: number;
+  };
+}
+
+/** Pure assembly of a HostStats sample from raw OS reads (fixture-testable):
+ *  swap math (used clamped at 0), process count, the host PID ceiling, and
+ *  the statfs disk math. Propagates parseMeminfo/parsePidMax refusals. */
+export function hostStatsFromRaw(
+  nowMs: number,
+  raw: RawHostSampleInputs,
+): HostStats {
+  const swap = parseMeminfo(raw.meminfo_text);
+  return {
+    ts_ms: nowMs,
+    load1: raw.load1,
+    mem_available_bytes: raw.mem_available_bytes,
+    mem_total_bytes: raw.mem_total_bytes,
+    swap_used_bytes: Math.max(0, swap.swap_total_bytes - swap.swap_free_bytes),
+    swap_total_bytes: swap.swap_total_bytes,
+    process_count: countPidEntries(raw.proc_entries),
+    pid_max: parsePidMax(raw.pid_max_text),
+    disk_free_bytes: raw.fs.bavail * raw.fs.bsize,
+    disk_total_bytes: raw.fs.blocks * raw.fs.bsize,
+  };
+}
+
 /** Production probe (Decision D-3 metric sources): load1 via os.loadavg();
- *  memory via os.freemem/totalmem; swap + process count via /proc (Linux);
- *  disk via statfs on the campaign/results volume. The v1 designated host is
+ *  memory via os.freemem/totalmem; swap + process count + the PID ceiling
+ *  via /proc (Linux); disk via statfs on the campaign/results volume. The
+ *  reads compose the pure translation layer above. The v1 designated host is
  *  the Linux appliance — other platforms fail closed (workstation use of the
  *  blessed bundle is forbidden by policy). */
 export function linuxHostStatsProbe(diskPath: string): HostStatsProbe {
@@ -51,31 +148,17 @@ export function linuxHostStatsProbe(diskPath: string): HostStatsProbe {
           `host stats probe requires the Linux appliance (got ${process.platform}) — portable tests inject a fake probe`,
         );
       }
-      const meminfo = readMeminfo();
-      const fs = statfsSync(diskPath);
-      return {
-        ts_ms: nowMs,
+      return hostStatsFromRaw(nowMs, {
         load1: loadavg()[0] ?? 0,
         mem_available_bytes: freemem(),
         mem_total_bytes: totalmem(),
-        swap_used_bytes: Math.max(0, meminfo.swapTotal - meminfo.swapFree),
-        swap_total_bytes: meminfo.swapTotal,
-        process_count: readdirSync('/proc').filter((n) => /^[0-9]+$/.test(n))
-          .length,
-        disk_free_bytes: fs.bavail * fs.bsize,
-        disk_total_bytes: fs.blocks * fs.bsize,
-      };
+        meminfo_text: readFileSync('/proc/meminfo', 'utf8'),
+        pid_max_text: readFileSync('/proc/sys/kernel/pid_max', 'utf8'),
+        proc_entries: readdirSync('/proc'),
+        fs: statfsSync(diskPath),
+      });
     },
   };
-}
-
-function readMeminfo(): { swapTotal: number; swapFree: number } {
-  const text = readFileSync('/proc/meminfo', 'utf8');
-  const kb = (key: string): number => {
-    const m = new RegExp(`^${key}:\\s+(\\d+) kB`, 'm').exec(text);
-    return m === null ? 0 : Number(m[1]) * 1024;
-  };
-  return { swapTotal: kb('SwapTotal'), swapFree: kb('SwapFree') };
 }
 
 export interface ResourceFloors {
@@ -92,11 +175,10 @@ export const DEFAULT_RESOURCE_FLOORS: ResourceFloors = {
   process_headroom: 256,
 };
 
-/** Drafted PID-table ceiling for the headroom computation (flagged for gate
- *  challenge): refuse when the live process count leaves less than
- *  process_headroom slots beneath this ceiling. */
-export const PID_MAX_SLOTS = 1_000_000;
-
+/** Resource-floor preflight (R-LCK-2): refuse when free disk, available
+ *  memory, or PID headroom beneath the host's REAL pid_max (read through
+ *  the probe) falls below the floors. An unusable ceiling fails closed —
+ *  headroom is never judged against an invented constant. */
 export function preflightResourceFloors(
   stats: HostStats,
   floors: ResourceFloors,
@@ -112,9 +194,13 @@ export function preflightResourceFloors(
       `available memory ${stats.mem_available_bytes} < floor ${floors.mem_available_bytes}`,
     );
   }
-  if (stats.process_count > PID_MAX_SLOTS - floors.process_headroom) {
+  if (!Number.isSafeInteger(stats.pid_max) || stats.pid_max <= 0) {
     violations.push(
-      `process count ${stats.process_count} leaves < ${floors.process_headroom} PID headroom beneath ${PID_MAX_SLOTS}`,
+      `pid_max ${stats.pid_max} is not a usable PID ceiling — the host PID limit is unreadable (fail-closed)`,
+    );
+  } else if (stats.process_count > stats.pid_max - floors.process_headroom) {
+    violations.push(
+      `process count ${stats.process_count} leaves < ${floors.process_headroom} PID headroom beneath pid_max ${stats.pid_max}`,
     );
   }
   if (violations.length > 0) {
@@ -130,18 +216,41 @@ export type { HostFingerprint } from '../contracts/campaign/campaign.ts';
 
 import type { HostFingerprint } from '../contracts/campaign/campaign.ts';
 
+/** Fingerprint construction (pure): mem/disk from the probe sample, CPU
+ *  identity supplied by the caller. An empty/whitespace CPU model or a
+ *  non-positive core count refuses — an unidentified host is never
+ *  fingerprinted as "unknown" (fail-closed). */
+export function fingerprintFromStats(
+  stats: HostStats,
+  cpuModel: string,
+  cpuCount: number,
+): HostFingerprint {
+  if (
+    cpuModel.trim() === '' ||
+    !Number.isSafeInteger(cpuCount) ||
+    cpuCount < 1
+  ) {
+    throw new PreflightError(
+      `host CPU identity unavailable (model=${JSON.stringify(cpuModel)}, cores=${cpuCount}) — refusing to fingerprint an unidentified host (fail-closed)`,
+    );
+  }
+  return {
+    cpu_model: cpuModel,
+    cpu_cores: cpuCount,
+    mem_bytes: stats.mem_total_bytes,
+    disk_total_bytes: stats.disk_total_bytes,
+  };
+}
+
 export function probeFingerprint(
   probe: HostStatsProbe,
   nowMs: number,
 ): HostFingerprint {
   const stats = probe.sample(nowMs);
   const cpu = cpus();
-  return {
-    cpu_model: cpu[0]?.model ?? 'unknown',
-    cpu_cores: cpu.length,
-    mem_bytes: stats.mem_total_bytes,
-    disk_total_bytes: stats.disk_total_bytes,
-  };
+  // An absent CPU entry flows into fingerprintFromStats's refusal — never a
+  // placeholder model string.
+  return fingerprintFromStats(stats, cpu[0]?.model ?? '', cpu.length);
 }
 
 /** Decision D-4 fingerprint-match policy: exact match on cpu_model and

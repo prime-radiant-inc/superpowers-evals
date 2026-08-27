@@ -15,6 +15,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
+  type HostStats,
+  type HostStatsProbe,
+  PreflightError,
+} from '../src/campaign/host-stats.ts';
+import {
   acquireLease,
   acquireLiveSpendLock,
   COVERED_BY_LOCK_ENV,
@@ -54,6 +59,25 @@ class FakeIdentity implements ProcessIdentityProbe {
 
 function tmpLockPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'lock-')), 'test.lock.d');
+}
+
+/** Above-floor host stats for the live-spend preflight (R1): the probe is
+ *  injected, so acquisition tests never read the real host. */
+function healthyProbe(): HostStatsProbe {
+  return {
+    sample: (nowMs: number): HostStats => ({
+      ts_ms: nowMs,
+      load1: 0.1,
+      mem_available_bytes: 8 * 2 ** 30,
+      mem_total_bytes: 16 * 2 ** 30,
+      swap_used_bytes: 0,
+      swap_total_bytes: 2 * 2 ** 30,
+      process_count: 200,
+      pid_max: 4_194_304,
+      disk_free_bytes: 100 * 2 ** 30,
+      disk_total_bytes: 494 * 2 ** 30,
+    }),
+  };
 }
 
 const BIRTH = 1_000;
@@ -276,6 +300,7 @@ test('children never acquire: the covered-by-lock env marker refuses acquisition
         lockPath: tmpLockPath(),
         clock: new FakeClock(0),
         identity: new FakeIdentity(),
+        probe: healthyProbe(),
       }),
     ).toThrow(/never acquire/i);
   } finally {
@@ -293,6 +318,7 @@ test('live-spend lock: default path, campaign-id sidecar, holder inspection', ()
     campaignId: 'abc123',
     clock,
     identity,
+    probe: healthyProbe(),
   });
   const holder = readLiveSpendHolder(lockPath);
   expect(holder).not.toBeNull();
@@ -308,6 +334,48 @@ test('live-spend lock: default path, campaign-id sidecar, holder inspection', ()
     deleteProcessEnv('QUORUM_LIVE_SPEND_LOCK');
   }
   expect(defaultLiveSpendLockPath()).toContain('.quorum/live-spend.lock.d');
+});
+
+test('R1: below-floor host stats refuse live-spend acquisition; no lock dir remains', () => {
+  const lockPath = tmpLockPath();
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const belowFloors: HostStatsProbe = {
+    sample: (nowMs: number) => ({
+      ...healthyProbe().sample(nowMs),
+      disk_free_bytes: 1,
+    }),
+  };
+  expect(() =>
+    acquireLiveSpendLock({
+      lockPath,
+      campaignId: 'abc123',
+      clock: new FakeClock(5),
+      identity,
+      probe: belowFloors,
+    }),
+  ).toThrow(PreflightError);
+  expect(existsSync(lockPath)).toBe(false); // unwound: no lock held
+});
+
+test('R1: a failing probe refuses acquisition fail-closed (no silent skip)', () => {
+  const lockPath = tmpLockPath();
+  const identity = new FakeIdentity();
+  identity.set(process.pid, 'alive', BIRTH);
+  const broken: HostStatsProbe = {
+    sample: () => {
+      throw new Error('probe unavailable');
+    },
+  };
+  expect(() =>
+    acquireLiveSpendLock({
+      lockPath,
+      clock: new FakeClock(5),
+      identity,
+      probe: broken,
+    }),
+  ).toThrow(/probe unavailable/);
+  expect(existsSync(lockPath)).toBe(false);
 });
 
 test('two real processes contend for one lease (portable)', async () => {
@@ -835,6 +903,7 @@ test('I4: campaign-id sidecar failure rolls the lease back — heartbeat stopped
       campaignId: 'abc123',
       clock: new FakeClock(5),
       identity,
+      probe: healthyProbe(),
       scheduler,
     }),
   ).toThrow(/EACCES/);

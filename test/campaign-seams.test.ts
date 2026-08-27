@@ -30,6 +30,7 @@ test('HostStatsProbe is injectable: a fake series drives consumers', () => {
       swap_used_bytes: 0,
       swap_total_bytes: 2 * 2 ** 30,
       process_count: 100,
+      pid_max: 4_194_304,
       disk_free_bytes: 100 * 2 ** 30,
       disk_total_bytes: 494 * 2 ** 30,
     },
