@@ -36,7 +36,11 @@ import type { BlockReplacementReason } from '../contracts/campaign/typed-failure
 import type { Credential } from '../contracts/credential.ts';
 import { RUN_ERROR_STAGES, type RunErrorStage } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
-import { type Clock, RealClock } from '../scheduler/clock.ts';
+import {
+  type CancellableSleep,
+  type Clock,
+  RealClock,
+} from '../scheduler/clock.ts';
 import { classifyFailure } from './classifier.ts';
 import {
   type BlockInterval,
@@ -1706,11 +1710,18 @@ export async function runCampaignDispatch(
     ): Promise<void> => {
       if (sample.runId !== undefined) return;
       sample.runId = runId;
-      if (mirrorStateOf(sample.sampleId) !== 'admitted') {
-        stream.write(
-          `allocation for ${sample.attemptId} (run ${runId}) arrived after its terminal/disposition — no legal run_allocated edge remains; run id retained in-memory, recovery sweeps run-dir identity files\n`,
+      const state = mirrorStateOf(sample.sampleId);
+      if (state !== 'admitted') {
+        // Unreachable by construction (the R-JRN-8 invariant): every
+        // disposition or kill of a spawned-but-unallocated sample first
+        // journals its latched allocation or verifies the child dead
+        // (settlePendingAllocations / drainLatchedAllocations), and a dead
+        // child's callbacks are abandoned — so no allocation can arrive
+        // after a terminal. Reaching this is a broken invariant, not a
+        // residual to log around.
+        throw new DispatcherError(
+          `invariant violated: allocation for ${sample.attemptId} (run ${runId}) arrived in state ${state} — a spawned sample is dispositioned only after its allocation is journaled or its child is verified dead (R-JRN-8)`,
         );
-        return;
       }
       if (signalGroup(child.pid, 0) === 'esrch') {
         stream.write(
@@ -1730,19 +1741,31 @@ export async function runCampaignDispatch(
         },
       ]);
     };
+    /** Out-of-section allocation waits: the control section is never held
+     *  while a child is slow to allocate (ENOSPC and signals must not queue
+     *  behind a stuck child). Each wait is cancellable, so an early line or
+     *  exit never leaves a budget timer holding the process, and teardown
+     *  abandons whatever is still parked. */
+    const pendingWaits = new Set<() => void>();
+    let tearingDown = false;
     /** A live child's `run_allocated:` line: the latch first, then the
-     *  subscription, bounded by the child's exit or the wait budget
-     *  (injectable clock). Resolves the run id, or null on exit/expiry. */
+     *  subscription, bounded by the child's exit or the wait budget on the
+     *  injectable clock. Resolves the run id, or null on exit / expiry /
+     *  abandon. */
     const awaitAllocationLine = (
       child: SpawnedCampaignChild,
     ): Promise<string | null> =>
       new Promise((resolve) => {
         let settled = false;
-        const settle = (runId: string | null): void => {
+        let budget: CancellableSleep | null = null;
+        const abandon = (): void => settle(null);
+        function settle(runId: string | null): void {
           if (settled) return;
           settled = true;
+          budget?.cancel();
+          pendingWaits.delete(abandon);
           resolve(runId);
-        };
+        }
         for (const line of child.stdoutLines) {
           const runId = parseRunAllocatedLine(line);
           if (runId !== null) {
@@ -1755,45 +1778,127 @@ export async function runCampaignDispatch(
           if (runId !== null) settle(runId);
         });
         child.onExit(() => settle(null));
-        void clock
-          .sleepUntil(clock.now() + ALLOCATION_WAIT_BUDGET_SECONDS)
-          .then(() => settle(null));
+        if (settled) return; // a replayed latch or exit already won
+        budget = clock.sleepUntilCancellable(
+          clock.now() + ALLOCATION_WAIT_BUDGET_SECONDS,
+        );
+        void budget.expired.then((expired) => {
+          if (expired) settle(null);
+        });
+        pendingWaits.add(abandon);
       });
-    /** R-JRN-8 (Important 1 + the delayed-allocation race): before a
-     *  disposition or a kill lands against a spawned sample, journal its
-     *  allocation — the latched line, or (`wait`) the line a live child is
-     *  about to emit, bounded by its exit or the wait budget. The record
-     *  lands exactly once, from 'admitted', so the disposition then applies
-     *  from 'spawned' (a legal source) and no spawned child's allocation is
-     *  stranded. A line arriving after the budget expired is the documented
-     *  residual: retained in-memory, loud, never journaled (D1 late-event
-     *  policy pins run_allocated after a terminal as reject). Kill paths
-     *  take the latch only (`wait: false`): an allocation is journaled while
-     *  its group is still alive, never a dead pgid (R-SPN-2). */
-    const drainPendingAllocations = async (
+    /** Spawned samples whose child is live and has not allocated (no run
+     *  id, no latched line): the ones a disposition must wait for. */
+    const pendingAllocationSamples = (lb: LiveBlockState): LiveSampleState[] =>
+      lb.samples.filter(
+        (s) =>
+          s.child !== undefined &&
+          !s.abandoned &&
+          !s.serviceEnded &&
+          s.runId === undefined &&
+          !s.child.stdoutLines.some((l) => parseRunAllocatedLine(l) !== null),
+      );
+    /** Leave the control section, wait for every pending child concurrently
+     *  (never serialized), then re-enter through runExclusive to apply. A
+     *  wait abandoned by teardown, a signal, or a storage pause re-enters
+     *  nothing. */
+    const deferUntilAllocated = (
+      pending: readonly LiveSampleState[],
+      reenter: () => Promise<void>,
+    ): void => {
+      const waits = pending.map((s) =>
+        s.child === undefined
+          ? Promise.resolve(null)
+          : awaitAllocationLine(s.child),
+      );
+      void Promise.all(waits).then(() => {
+        if (tearingDown || signalled || storagePaused) return;
+        void runExclusive(reenter);
+      });
+    };
+    /** Blocks whose pending allocations were already waited for once: the
+     *  re-entry settles them (journal or verified kill) instead of waiting
+     *  again. */
+    const waitedBlocks = new Set<string>();
+    /** R-JRN-8 (Important 1): journal every LATCHED allocation of a block's
+     *  spawned samples — the record lands exactly once, from 'admitted', so
+     *  a following disposition applies from 'spawned' and a following kill
+     *  journals a live pgid (R-SPN-2), never a dead one. Latch only: the
+     *  kill paths never wait. */
+    const drainLatchedAllocations = async (
       lb: LiveBlockState,
-      opts: { wait: boolean },
     ): Promise<void> => {
       if (storagePaused) return; // a full journal takes no allocation record
       for (const sample of lb.samples) {
         if (sample.abandoned || sample.runId !== undefined) continue;
         const child = sample.child;
         if (child === undefined) continue;
-        let runId: string | null = null;
         for (const line of child.stdoutLines) {
-          runId = parseRunAllocatedLine(line);
-          if (runId !== null) break;
-        }
-        if (runId === null && opts.wait && !sample.serviceEnded) {
-          runId = await awaitAllocationLine(child);
-          if (runId === null) {
-            stream.write(
-              `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget or child exit without a run_allocated line) — dispositioning from admitted; a later line is retained in-memory and loud (R-JRN-8)\n`,
-            );
+          const runId = parseRunAllocatedLine(line);
+          if (runId !== null) {
+            await recordAllocation(sample, child, runId);
+            break;
           }
         }
-        if (runId !== null) await recordAllocation(sample, child, runId);
       }
+    };
+    /** The R-JRN-8 invariant a disposition relies on: after the
+     *  out-of-section wait, every spawned sample of the block is either
+     *  journaled allocated (latched line) or its child is VERIFIED DEAD
+     *  before the disposition lands — no allocation can follow a terminal,
+     *  which is what makes recordAllocation's post-terminal branch
+     *  unreachable. A child that would not die is a failure the caller
+     *  aborts on loudly (C10); every verified death is a released exposure
+     *  the caller snapshots (E7.7). */
+    const settlePendingAllocations = async (
+      lb: LiveBlockState,
+    ): Promise<{ failures: string[]; released: number }> => {
+      await drainLatchedAllocations(lb);
+      const failures: string[] = [];
+      let released = 0;
+      for (const sample of lb.samples) {
+        const child = sample.child;
+        if (
+          child === undefined ||
+          sample.abandoned ||
+          sample.serviceEnded ||
+          sample.runId !== undefined
+        ) {
+          continue;
+        }
+        stream.write(
+          `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget, no run_allocated line) — killing the unallocated child before its disposition (R-JRN-8: no allocation can follow a terminal)\n`,
+        );
+        const result = await killGroupVerified({
+          pgid: child.pid,
+          birthTsMs: sample.childBirthTsMs,
+          identity,
+          signal: signalGroup,
+          clock,
+          stream,
+          graceSeconds: killGrace,
+        });
+        if (result === 'alive' || result === 'unknown') {
+          failures.push(`pgid ${child.pid} (${sample.attemptId}: ${result})`);
+          continue;
+        }
+        sample.abandoned = true;
+        releaseSample(sample);
+        released += 1;
+        if (child.stdoutLines.some((l) => parseRunAllocatedLine(l) !== null)) {
+          // The line landed in the instant between the latch check and the
+          // signal: an allocated run dir with no journal binding — R-RCV-4's
+          // documented orphan, quarantined at reconciliation by its identity
+          // file. Loud; never journaled against a dead pgid.
+          stream.write(
+            `${sample.attemptId}: run_allocated line latched moments before verified death — orphan run dir; recovery quarantines it by identity file (R-RCV-4)\n`,
+          );
+        }
+        stream.write(
+          `${sample.attemptId}: unallocated child verified dead before its disposition\n`,
+        );
+      }
+      return { failures, released };
     };
 
     const mintReplacement = async (
@@ -1806,7 +1911,32 @@ export async function runCampaignDispatch(
       // exhausted adjudication is never re-emitted, E7.1).
       if (supersededBlockIds.has(failedBlock.block.block_id)) return;
       if (resolvedObligations.has(failedBlock.block.block_id)) return;
-      await drainPendingAllocations(failedBlock, { wait: true });
+      const blockId = failedBlock.block.block_id;
+      // R-JRN-8: a spawned sibling still allocating defers the mint — its
+      // allocation is awaited OUTSIDE the control section, then the mint
+      // re-enters and settles every pending sample (journal or verified
+      // kill) before any disposition lands.
+      if (!waitedBlocks.has(blockId)) {
+        const pending = pendingAllocationSamples(failedBlock);
+        if (pending.length > 0) {
+          waitedBlocks.add(blockId);
+          stream.write(
+            `replacement for ${blockId} deferred: waiting outside the control section (up to ${ALLOCATION_WAIT_BUDGET_SECONDS}s) for ${pending.map((s) => s.attemptId).join(', ')} to allocate (R-JRN-8)\n`,
+          );
+          deferUntilAllocated(pending, () =>
+            mintReplacement(failedBlock, reason),
+          );
+          return;
+        }
+      }
+      const settled = await settlePendingAllocations(failedBlock);
+      if (settled.failures.length > 0) {
+        stream.write(
+          `replacement for ${blockId} REFUSED: kill unverified for ${settled.failures.join(', ')} — operator action: verify and kill these process groups manually, then resume; the obligation re-derives at \`quorum campaign run\`\n`,
+        );
+        halt(`unverified kill blocks the replacement of ${blockId}`);
+        return;
+      }
       const res = resolveReplacementObligation({
         predecessorBlockId: failedBlock.block.block_id,
         predecessorSamples: failedBlock.samples.map((s) => ({
@@ -1820,7 +1950,13 @@ export async function runCampaignDispatch(
         // BEFORE anything lands.
         assertInstanceGraph({ campaign, mints: [...mintRecords, res.record] });
       }
-      const appended = await appendCritical(res.events);
+      // E7.7: a verified kill above released exposure — the superseding
+      // absolute snapshot rides the same critical section as the mint.
+      const appended = await appendCritical(
+        settled.released > 0
+          ? [...res.events, snapshotEstimateInput()]
+          : res.events,
+      );
       if (appended === null) return;
       resolvedObligations.add(failedBlock.block.block_id);
       const cellKey = cellKeyOfBlockId(failedBlock.block.block_id);
@@ -1898,7 +2034,7 @@ export async function runCampaignDispatch(
         const lb = liveBlocks.get(blockId);
         if (lb === undefined) continue;
         const hadLive = lb.samples.some((s) => !s.serviceEnded);
-        await drainPendingAllocations(lb, { wait: false });
+        await drainLatchedAllocations(lb);
         const kill = await killBlockChildren(lb);
         released += kill.released;
         if (kill.failures.length > 0) {
@@ -2723,7 +2859,6 @@ export async function runCampaignDispatch(
 
     // --- Closed-window contention resolution (ratified OQ-11) ---------------
     const resolveClosedWindow = async (window: BreachWindow): Promise<void> => {
-      breachActive = false;
       // The sampler fsynced the exit sample BEFORE this notification (pinned
       // order); the resolution batch re-reads the durable sidecar through
       // THE shared evaluator with the required inputs (C6): registered
@@ -2761,6 +2896,22 @@ export async function runCampaignDispatch(
             !resolvedObligations.has(lb.block.block_id),
         )
         .sort((a, b) => compareAdmissionOrder(a.block, b.block));
+      // R-JRN-8: a spawned sibling still allocating defers the WHOLE batch —
+      // its allocation is awaited outside the control section while
+      // admission stays halted (breachActive), then the batch re-enters and
+      // settles every pending sample before any disposition lands.
+      const pending = invalid
+        .filter((lb) => !waitedBlocks.has(lb.block.block_id))
+        .flatMap((lb) => pendingAllocationSamples(lb));
+      if (pending.length > 0) {
+        for (const lb of invalid) waitedBlocks.add(lb.block.block_id);
+        stream.write(
+          `contention resolution deferred: waiting outside the control section (up to ${ALLOCATION_WAIT_BUDGET_SECONDS}s) for ${pending.map((s) => s.attemptId).join(', ')} to allocate (R-JRN-8)\n`,
+        );
+        deferUntilAllocated(pending, () => resolveClosedWindow(window));
+        return;
+      }
+      breachActive = false;
       if (invalid.length === 0) {
         stream.write(
           'contention resolution: affected=0 refilled=0 exhausted=0 suppressed=0\n',
@@ -2780,10 +2931,21 @@ export async function runCampaignDispatch(
       const batch: EventInput[] = [];
       const minted: { record: BlockReplacedRecord; reserve: Block }[] = [];
       const activatedInBatch = new Set<string>();
-      // Important 1: latched sibling allocations land before any
-      // disposition in the batch.
+      // Important 1 / R-JRN-8: every pending allocation settles (journaled,
+      // or its child verified dead) before any disposition in the batch; a
+      // child that would not die aborts the whole batch loudly (C10) — the
+      // durable sidecar re-derives it at resume.
+      let released = 0;
       for (const lb of invalid) {
-        await drainPendingAllocations(lb, { wait: true });
+        const settled = await settlePendingAllocations(lb);
+        released += settled.released;
+        if (settled.failures.length > 0) {
+          stream.write(
+            `contention resolution ABORTED: kill unverified for ${settled.failures.join(', ')} — operator action: verify and kill these process groups manually, then resume; the batch re-derives from the durable sidecar at \`quorum campaign run\`\n`,
+          );
+          halt('unverified kill blocks the contention resolution batch');
+          return;
+        }
       }
       for (const lb of invalid) {
         const res = resolveReplacementObligation({
@@ -2810,7 +2972,9 @@ export async function runCampaignDispatch(
         campaign,
         mints: [...mintRecords, ...minted.map((m) => m.record)],
       });
-      const appended = await appendCritical(batch);
+      const appended = await appendCritical(
+        released > 0 ? [...batch, snapshotEstimateInput()] : batch, // E7.7
+      );
       if (appended === null) {
         // Nothing durable landed: announce NOTHING — no planned counts, no
         // resumed receipt; the storage-pause path is the only announcement
@@ -2857,7 +3021,7 @@ export async function runCampaignDispatch(
           let released = 0;
           for (const lb of liveBlocks.values()) {
             const hadLive = lb.samples.some((s) => !s.serviceEnded);
-            await drainPendingAllocations(lb, { wait: false });
+            await drainLatchedAllocations(lb);
             const kill = await killBlockChildren(lb);
             released += kill.released;
             if (kill.failures.length > 0) {
@@ -2991,6 +3155,11 @@ export async function runCampaignDispatch(
       if (signalled || storagePaused || fatalError !== null) break;
       await runExclusive(admitWave);
     }
+    // Abandon every out-of-section allocation wait: no budget timer may
+    // outlive the run, and no deferred re-entry may run after the writer
+    // is released.
+    tearingDown = true;
+    for (const abandon of [...pendingWaits]) abandon();
     await activeSection; // drain queued handler sections before teardown
     if (fatalError !== null) {
       throw fatalError instanceof Error

@@ -2038,14 +2038,26 @@ test("the delayed-allocation race: a mint waits for a spawned sibling's run_allo
   expect(replayed.sampleStates.get('c1:scn:arm_b:r1')).toBe(
     'excluded_block_replaced',
   );
+  // The early arrival cancelled the budget timer: once the run is over and
+  // the loop's own 1s fallback sleep has elapsed, no parked 300s waiter
+  // survives on the fake timeline.
+  h.clock.advance(2);
+  expect(h.clock.earliestWaiter()).toBeNull();
 });
 
-test('the allocation wait is BOUNDED: a sibling that never allocates within the budget is dispositioned from admitted, and a later line is loud, never fabricated (R-JRN-8 remainder)', async () => {
+test('the allocation wait is BOUNDED: a sibling that never allocates within the budget is verified-KILLED before its disposition, so no allocation can follow a terminal (R-JRN-8 invariant)', async () => {
   const h = harness();
   const written: string[] = [];
+  const signals: { pgid: number; signal: number | string }[] = [];
+  const base = fakeGroupSignaler();
   const args: DispatchRunArgs = {
     ...h.args,
     stream: { write: (s: string) => written.push(s) },
+    signalGroup: (pgid, signal) => {
+      if (signal !== 0) signals.push({ pgid, signal });
+      return base(pgid, signal);
+    },
+    killGraceSeconds: 0.05,
   };
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
@@ -2055,10 +2067,20 @@ test('the allocation wait is BOUNDED: a sibling that never allocates within the 
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0); // waiting for childB
   await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1); // budget expires
-  expect(mintRecords(h.campaignDir).length).toBe(1);
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1); // kill escalation
+  // The unallocated child was killed (verified) BEFORE its disposition.
+  expect(signals.some((s) => s.pgid === childB!.child.pid)).toBe(true);
   expect(written.join('')).toMatch(/allocation wait .*expired/);
-  // The line arrives after the disposition: no legal edge remains, so it is
-  // retained in-memory and LOUD — never journaled, never lost silently.
+  expect(written.join('')).toMatch(/verified dead before its disposition/);
+  expect(mintRecords(h.campaignDir).length).toBe(1);
+  expect(
+    eventsOf(h.campaignDir, 'sample_disposition').some(
+      (d) => d.payload.sample_id === 'c1:scn:arm_b:r1',
+    ),
+  ).toBe(true);
+  // The invariant: a dead child cannot allocate. A synthetic post-death
+  // line (impossible in production) is suppressed by the abandoned guard —
+  // nothing journaled, nothing fatal, nothing "retained in-memory".
   childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
   await tick(h.clock, 1);
   expect(
@@ -2066,10 +2088,187 @@ test('the allocation wait is BOUNDED: a sibling that never allocates within the 
       (a) => a.payload.run_id === `run-${childB!.child.pid}`,
     ),
   ).toBe(false);
-  expect(written.join('')).toMatch(/arrived after its terminal/);
-  childB!.child.exit({ code: 0, signal: null });
+  expect(written.join('')).not.toMatch(/arrived after its terminal/);
+  // The killed child's slot released -> the minted reserve admits.
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('an UNKILLABLE unallocated sibling refuses the mint loudly and halts admission — verified death is the precondition for its disposition (C10)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  const dead = new Set<number>();
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+    signalGroup: (pgid, signal) => {
+      if (pgid === 1001) return 'ok'; // arm_b's group never dies
+      if (signal === 0) return dead.has(pgid) ? 'esrch' : 'ok';
+      dead.add(pgid);
+      return 'ok';
+    },
+    killGraceSeconds: 0.05,
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+  };
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1); // TERM->KILL escalation
+  // No mint, no disposition: the operation aborted loudly with a named
+  // action and admission halted.
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  expect(eventsOf(h.campaignDir, 'sample_disposition').length).toBe(0);
+  expect(written.join('')).toMatch(/operator action/);
+  expect(written.join('')).toMatch(/halt: /);
+  signalHandler!('SIGINT');
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('signalled');
+});
+
+test('the allocation wait does NOT hold the control section: a signal during the wait is handled at once (Important, D-12 latency)', async () => {
+  const h = harness();
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0); // the mint is waiting on childB
+  // A signal arrives mid-wait: it must run NOW, not after the 300s budget.
+  signalHandler!('SIGINT');
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
+  expect(journalTypes(h.campaignDir)).toContain('aborted');
+  const outcome = await run;
+  expect(outcome.status).toBe('signalled');
+  // Teardown abandoned the wait: no parked budget timer survives once the
+  // loop's own 1s fallback sleep has elapsed.
+  h.clock.advance(2);
+  expect(h.clock.earliestWaiter()).toBeNull();
+});
+
+test("allocation waits across blocks run concurrently: the second block's line resolves its mint while the first is still waiting", async () => {
+  const doc = campaignDoc();
+  const h = harness({
+    contention: { ...doc.contention, global_run_cap: 4 },
+    blocks: [
+      {
+        block_id: 'c1:scn:b1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'],
+      },
+      {
+        block_id: 'c1:scn:b2',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
+      },
+      {
+        block_id: 'c1:scn:x1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:x1', 'c1:scn:arm_b:x1'],
+        slot: 'reserve',
+      },
+    ],
+    samples: [
+      {
+        sample_id: 'c1:scn:arm_a:r1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_a:r2',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 2,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r2',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 2,
+      },
+      {
+        sample_id: 'c1:scn:arm_a:x1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:x1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+    ],
+  });
+  const credentials = Object.fromEntries(
+    Object.entries(h.credentials).map(([name, cred]) => [
+      name,
+      { ...cred, max_concurrency: 4 },
+    ]),
+  );
+  const run = runCampaignDispatch({ ...h.args, credentials });
+  await tick(h.clock, 1);
+  expect(h.spawner.spawned.length).toBe(4); // b1 + b2 both in flight
+  const [a1, b1, a2, b2] = h.spawner.spawned;
+  // Both arm_a children allocate and fail typed; both arm_b siblings are
+  // still unallocated -> two mints wait, concurrently.
+  for (const c of [a1, a2]) {
+    c!.child.emitLine(`run_allocated: run-${c!.child.pid}`);
+    c!.child.exit({ code: 1, signal: null });
+  }
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  // The SECOND block's sibling allocates first: its mint lands while the
+  // first block's wait is still open — waits never serialize.
+  b2!.child.emitLine(`run_allocated: run-${b2!.child.pid}`);
+  await tick(h.clock, 1);
+  const afterB2 = mintRecords(h.campaignDir);
+  expect(afterB2.length).toBe(1);
+  expect(afterB2[0]!.block_id).toBe('c1:scn:b2');
+  // Then the first block's sibling allocates: its obligation resolves too
+  // (the cell's only reserve is taken -> reserve_exhausted).
+  b1!.child.emitLine(`run_allocated: run-${b1!.child.pid}`);
+  await tick(h.clock, 1);
+  expect(
+    eventsOf(h.campaignDir, 'adjudication').filter(
+      (e) => e.payload.disposition === 'reserve_exhausted',
+    ).length,
+  ).toBe(1);
+  expect(
+    eventsOf(h.campaignDir, 'run_allocated').map((e) => e.payload.run_id),
+  ).toContain(`run-${b1!.child.pid}`);
+  for (const c of [b1, b2]) c!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(4)) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
   }

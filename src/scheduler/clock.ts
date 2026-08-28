@@ -17,6 +17,16 @@ export interface Clock {
   // advances itself — synchronous pollers key their progress off this
   // contract instead of counting wall-time sleeps.
   sleepSync(seconds: number): void;
+  // A sleep that can lose a race: `expired` resolves true once now() reaches
+  // the target, false if cancel() won first. cancel() releases whatever the
+  // implementation parked (the real clock's timer, the fake clock's waiter),
+  // so an abandoned sleep never holds the process or a fake timeline open.
+  sleepUntilCancellable(targetSeconds: number): CancellableSleep;
+}
+
+export interface CancellableSleep {
+  readonly expired: Promise<boolean>;
+  cancel(): void;
 }
 
 // Wall-clock implementation: now() is the real epoch in seconds, sleepUntil
@@ -32,6 +42,22 @@ export class RealClock implements Clock {
     return new Promise<void>((resolveP) => {
       setTimeout(resolveP, remainingMs);
     });
+  }
+
+  sleepUntilCancellable(targetSeconds: number): CancellableSleep {
+    const remainingMs = Math.max(0, targetSeconds - this.now()) * 1000;
+    let settle: (expired: boolean) => void = () => {};
+    const expired = new Promise<boolean>((resolveP) => {
+      settle = resolveP;
+    });
+    const timer = setTimeout(() => settle(true), remainingMs);
+    return {
+      expired,
+      cancel: () => {
+        clearTimeout(timer);
+        settle(false);
+      },
+    };
   }
 
   sleepSync(seconds: number): void {
@@ -70,6 +96,30 @@ export class FakeClock implements Clock {
     return new Promise<void>((resolveP) => {
       this.waiters.push({ target: targetSeconds, resolve: resolveP });
     });
+  }
+
+  sleepUntilCancellable(targetSeconds: number): CancellableSleep {
+    if (targetSeconds <= this.current) {
+      return { expired: Promise.resolve(true), cancel: () => {} };
+    }
+    let settle: (expired: boolean) => void = () => {};
+    const expired = new Promise<boolean>((resolveP) => {
+      settle = resolveP;
+    });
+    const waiter: Waiter = {
+      target: targetSeconds,
+      resolve: () => settle(true),
+    };
+    this.waiters.push(waiter);
+    return {
+      expired,
+      cancel: () => {
+        // A cancelled sleep leaves no parked waiter behind (earliestWaiter
+        // and advance() never see it again); the answer never flips.
+        this.waiters = this.waiters.filter((w) => w !== waiter);
+        settle(false);
+      },
+    };
   }
 
   // Passing fake time is advancing it: a synchronous poller sleeping on this
