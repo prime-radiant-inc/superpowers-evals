@@ -227,6 +227,12 @@ export function estimateInflightTotal(args: {
  *  so this bounds only miscalibration/recovery-rebuild before failing loud
  *  through the spawn-failure path. */
 const KEY_WAIT_BUDGET_SECONDS = 300;
+/** R-JRN-8: how long a disposition (mint) waits for a spawned sibling's
+ *  `run_allocated:` line before dispositioning it from 'admitted'. The
+ *  runner allocates its run dir before setup, so the wait is normally
+ *  sub-second; the budget only bounds a child stuck pre-allocation. No
+ *  pinned value exists — recorded, not silent. */
+export const ALLOCATION_WAIT_BUDGET_SECONDS = 300;
 
 /** TERM->KILL escalation grace per phase (Decision D-12 kill order). */
 const KILL_GRACE_SECONDS = 5;
@@ -617,32 +623,69 @@ export async function performStoragePause(
   }
   // Step 5: kill the campaign children (verified TERM->KILL through the
   // C10 primitive) — AFTER the pause journal, so the pause is durable
-  // before the evidence producers die. An unverified group is LOUD with a
-  // named operator action: its spend cannot be recorded on a full volume.
+  // before the evidence producers die. Verified death is a HARD
+  // precondition here exactly as on every other kill path (Critical): an
+  // unverified group is a storage-fatal outcome below, never a normal
+  // return — a surviving child spends unrecorded on a full volume.
   const killFailures = await args.killAll();
   if (killFailures.length > 0) {
     args.stream.write(
       `storage pause: kill UNVERIFIED for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually before resuming; a surviving child spends unrecorded on a full volume\n`,
     );
   }
-  // Step 6: durable marker when the event did not land.
+  const killState =
+    killFailures.length === 0
+      ? 'children verified killed'
+      : `surviving process groups (kill UNVERIFIED): ${killFailures.join(', ')}`;
+  // Step 6: durable marker when the event did not land. A marker that is
+  // already present and readable IS the durable record — EEXIST is a
+  // success arm for this carrier (an earlier pause or a racing writer
+  // landed it), never a failure.
   let markerFailure: string | null = null;
   if (journalFailure !== null) {
+    const marker = join(args.campaignDir, '.storage-paused');
     try {
-      writeFileSync(join(args.campaignDir, '.storage-paused'), '', {
-        flag: 'wx',
-      });
+      writeFileSync(marker, '', { flag: 'wx' });
     } catch (err) {
-      markerFailure = (err as Error).message;
+      markerFailure = markerCarrierFailure(marker, err);
+      if (markerFailure === null) {
+        args.stream.write(
+          'storage pause: .storage-paused marker already present — it is the durable record\n',
+        );
+      }
     }
   }
+  const reconcile = 'then run `quorum campaign run` to reconcile';
   // D-13: with NEITHER durable carrier landed, the pause has no record at
   // all — that is a storage-fatal outcome, thrown loudly, never a quiet
-  // return (Important 5).
+  // return (Important 5). The kill state is reported as it actually is.
   if (journalFailure !== null && markerFailure !== null) {
     throw new DispatcherError(
-      `storage pause FATAL: neither durable carrier landed — the storage_paused journal event failed (${journalFailure}) AND the .storage-paused marker failed (${markerFailure}); the pause has NO durable record (D-13). Operator action: free space on the volume (children are already killed), then run \`quorum campaign run\` to reconcile`,
+      `storage pause FATAL: neither durable carrier landed — the storage_paused journal event failed (${journalFailure}) AND the .storage-paused marker failed (${markerFailure}); the pause has NO durable record (D-13). ${killState}. Operator action: free space on the volume${killFailures.length > 0 ? ', verify and kill the surviving process groups manually' : ''}, ${reconcile}`,
     );
+  }
+  if (killFailures.length > 0) {
+    throw new DispatcherError(
+      `storage pause FATAL: kill UNVERIFIED for ${killFailures.join(', ')} — a surviving child spends unrecorded on a full volume (D-13 step 5). The pause record landed (${journalFailure === null ? 'storage_paused journaled' : '.storage-paused marker'}). Operator action: verify and kill these process groups manually, ${reconcile}`,
+    );
+  }
+}
+
+/** D-13 step 6, the EEXIST arm: the O_EXCL create lost to an existing path.
+ *  A readable marker file supplies the durable record (null = carrier
+ *  satisfied); any other error, or a present-but-unreadable path, is the
+ *  carrier's failure text. */
+function markerCarrierFailure(marker: string, err: unknown): string | null {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? err.code
+      : undefined;
+  if (code !== 'EEXIST') return (err as Error).message;
+  try {
+    readFileSync(marker); // a directory or an unreadable file throws
+    return null;
+  } catch (readErr) {
+    return `${(err as Error).message}; marker present but unreadable: ${(readErr as Error).message}`;
   }
 }
 
@@ -754,6 +797,17 @@ export interface DispatchRunArgs {
   readonly journal?: DispatchJournal;
   /** Operator resume seam, filled by the dispatcher for halt clearance. */
   resumeAdmission?: (reason: string) => void;
+  /** TEST seam only, filled by the dispatcher: a read-only view of the
+   *  in-memory admission state, so a test can prove a failed admission
+   *  left NO local residue (C9 mutate-after-append). Production never
+   *  reads it. */
+  inspect?: () => DispatchInspection;
+}
+
+export interface DispatchInspection {
+  readonly liveBlockIds: readonly string[];
+  readonly poolBusy: Readonly<Record<string, number>>;
+  readonly exposureSampleIds: readonly string[];
 }
 
 export interface DispatchOutcome {
@@ -1310,6 +1364,11 @@ export async function runCampaignDispatch(
     args.resumeAdmission = (reason: string): void => {
       void runExclusive(() => clearAdmissionHalt(reason));
     };
+    args.inspect = (): DispatchInspection => ({
+      liveBlockIds: [...liveBlocks.keys()],
+      poolBusy: Object.fromEntries(poolBusy),
+      exposureSampleIds: [...exposureSet],
+    });
 
     // --- Verified kill over the live child handles (C10) --------------------
     /** C10 HARD precondition: journaling/release/mint happen ONLY after a
@@ -1319,14 +1378,20 @@ export async function runCampaignDispatch(
      *  being recorded honestly), and the caller must abort its enclosing
      *  operation loudly. Abandoned is set only AFTER verified death, so a
      *  surviving child's output is never suppressed. */
-    const killBlockChildren = async (lb: LiveBlockState): Promise<string[]> => {
+    const killBlockChildren = async (
+      lb: LiveBlockState,
+    ): Promise<{ failures: string[]; released: number }> => {
       const failures: string[] = [];
+      // Every verified death is an exposure-membership change the caller
+      // must journal (E7.7) — whether or not the whole block aborts.
+      let released = 0;
       for (const sample of lb.samples) {
         if (sample.serviceEnded) continue;
         if (sample.child === undefined) {
           // Never spawned: nothing to kill; the release is trivially safe.
           sample.abandoned = true;
           releaseSample(sample);
+          released += 1;
           continue;
         }
         const result = await killGroupVerified({
@@ -1349,13 +1414,14 @@ export async function runCampaignDispatch(
         // callbacks and release the slots.
         sample.abandoned = true;
         releaseSample(sample);
+        released += 1;
       }
-      return failures;
+      return { failures, released };
     };
     const killAllChildren = async (): Promise<string[]> => {
       const failures: string[] = [];
       for (const lb of liveBlocks.values()) {
-        failures.push(...(await killBlockChildren(lb)));
+        failures.push(...(await killBlockChildren(lb)).failures);
       }
       return failures;
     };
@@ -1664,26 +1730,69 @@ export async function runCampaignDispatch(
         },
       ]);
     };
-    /** Important 1 (R-JRN-8): before a mint dispositions a predecessor
-     *  roster, journal any allocation a spawned sibling has ALREADY emitted
-     *  (latched child output whose serialized section has not run yet) —
-     *  the record lands exactly once, from 'admitted'; the disposition then
-     *  applies from 'spawned', still a legal source. No spawned child's
-     *  allocation record is stranded by the mint. */
+    /** A live child's `run_allocated:` line: the latch first, then the
+     *  subscription, bounded by the child's exit or the wait budget
+     *  (injectable clock). Resolves the run id, or null on exit/expiry. */
+    const awaitAllocationLine = (
+      child: SpawnedCampaignChild,
+    ): Promise<string | null> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const settle = (runId: string | null): void => {
+          if (settled) return;
+          settled = true;
+          resolve(runId);
+        };
+        for (const line of child.stdoutLines) {
+          const runId = parseRunAllocatedLine(line);
+          if (runId !== null) {
+            settle(runId);
+            return;
+          }
+        }
+        child.onStdoutLine((line) => {
+          const runId = parseRunAllocatedLine(line);
+          if (runId !== null) settle(runId);
+        });
+        child.onExit(() => settle(null));
+        void clock
+          .sleepUntil(clock.now() + ALLOCATION_WAIT_BUDGET_SECONDS)
+          .then(() => settle(null));
+      });
+    /** R-JRN-8 (Important 1 + the delayed-allocation race): before a
+     *  disposition or a kill lands against a spawned sample, journal its
+     *  allocation — the latched line, or (`wait`) the line a live child is
+     *  about to emit, bounded by its exit or the wait budget. The record
+     *  lands exactly once, from 'admitted', so the disposition then applies
+     *  from 'spawned' (a legal source) and no spawned child's allocation is
+     *  stranded. A line arriving after the budget expired is the documented
+     *  residual: retained in-memory, loud, never journaled (D1 late-event
+     *  policy pins run_allocated after a terminal as reject). Kill paths
+     *  take the latch only (`wait: false`): an allocation is journaled while
+     *  its group is still alive, never a dead pgid (R-SPN-2). */
     const drainPendingAllocations = async (
       lb: LiveBlockState,
+      opts: { wait: boolean },
     ): Promise<void> => {
+      if (storagePaused) return; // a full journal takes no allocation record
       for (const sample of lb.samples) {
         if (sample.abandoned || sample.runId !== undefined) continue;
         const child = sample.child;
         if (child === undefined) continue;
+        let runId: string | null = null;
         for (const line of child.stdoutLines) {
-          const runId = parseRunAllocatedLine(line);
-          if (runId !== null) {
-            await recordAllocation(sample, child, runId);
-            break;
+          runId = parseRunAllocatedLine(line);
+          if (runId !== null) break;
+        }
+        if (runId === null && opts.wait && !sample.serviceEnded) {
+          runId = await awaitAllocationLine(child);
+          if (runId === null) {
+            stream.write(
+              `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget or child exit without a run_allocated line) — dispositioning from admitted; a later line is retained in-memory and loud (R-JRN-8)\n`,
+            );
           }
         }
+        if (runId !== null) await recordAllocation(sample, child, runId);
       }
     };
 
@@ -1697,7 +1806,7 @@ export async function runCampaignDispatch(
       // exhausted adjudication is never re-emitted, E7.1).
       if (supersededBlockIds.has(failedBlock.block.block_id)) return;
       if (resolvedObligations.has(failedBlock.block.block_id)) return;
-      await drainPendingAllocations(failedBlock);
+      await drainPendingAllocations(failedBlock, { wait: true });
       const res = resolveReplacementObligation({
         predecessorBlockId: failedBlock.block.block_id,
         predecessorSamples: failedBlock.samples.map((s) => ({
@@ -1784,20 +1893,26 @@ export async function runCampaignDispatch(
       // snapshot in the same critical section (E7.7).
       const aborts: EventInput[] = [];
       const killFailures: string[] = [];
+      let released = 0;
       for (const blockId of affected) {
         const lb = liveBlocks.get(blockId);
         if (lb === undefined) continue;
         const hadLive = lb.samples.some((s) => !s.serviceEnded);
-        const failures = await killBlockChildren(lb);
-        if (failures.length > 0) {
-          killFailures.push(...failures);
+        await drainPendingAllocations(lb, { wait: false });
+        const kill = await killBlockChildren(lb);
+        released += kill.released;
+        if (kill.failures.length > 0) {
+          killFailures.push(...kill.failures);
           continue;
         }
         if (hadLive) {
           aborts.push({ type: 'aborted', payload: { block_id: blockId } });
         }
       }
-      if (aborts.length > 0) {
+      // E7.7: every verified death changed the exposure membership — the
+      // superseding absolute snapshot lands whether or not a whole block
+      // aborted (a mixed block journals no aborted but still released).
+      if (aborts.length > 0 || released > 0) {
         await appendCritical([...aborts, snapshotEstimateInput()]);
         estimateUsd = currentEstimateTotal();
       }
@@ -2667,7 +2782,9 @@ export async function runCampaignDispatch(
       const activatedInBatch = new Set<string>();
       // Important 1: latched sibling allocations land before any
       // disposition in the batch.
-      for (const lb of invalid) await drainPendingAllocations(lb);
+      for (const lb of invalid) {
+        await drainPendingAllocations(lb, { wait: true });
+      }
       for (const lb of invalid) {
         const res = resolveReplacementObligation({
           predecessorBlockId: lb.block.block_id,
@@ -2737,11 +2854,14 @@ export async function runCampaignDispatch(
           // resumable exit.
           const aborts: EventInput[] = [];
           const killFailures: string[] = [];
+          let released = 0;
           for (const lb of liveBlocks.values()) {
             const hadLive = lb.samples.some((s) => !s.serviceEnded);
-            const failures = await killBlockChildren(lb);
-            if (failures.length > 0) {
-              killFailures.push(...failures);
+            await drainPendingAllocations(lb, { wait: false });
+            const kill = await killBlockChildren(lb);
+            released += kill.released;
+            if (kill.failures.length > 0) {
+              killFailures.push(...kill.failures);
               continue;
             }
             if (hadLive) {
@@ -2751,11 +2871,14 @@ export async function runCampaignDispatch(
               });
             }
           }
-          // 3. Journal aborted per VERIFIED in-flight block; the kill
-          // drained the budget-exposure membership, so the superseding
-          // snapshot rides the same critical section (E7.7).
+          // 3. Journal aborted per VERIFIED in-flight block; every verified
+          // death drained the budget-exposure membership, so the superseding
+          // snapshot rides the same critical section (E7.7) — also for a
+          // mixed block that released without aborting.
           const bundle: EventInput[] =
-            aborts.length > 0 ? [...aborts, snapshotEstimateInput()] : [];
+            aborts.length > 0 || released > 0
+              ? [...aborts, snapshotEstimateInput()]
+              : [];
           if (killFailures.length > 0) {
             const cancelPending = existsSync(
               join(args.campaignDir, 'cancel-request'),

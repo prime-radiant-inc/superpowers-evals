@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  ALLOCATION_WAIT_BUDGET_SECONDS,
   assertInstanceGraph,
   blockDemandVector,
   blockPrioritySeconds,
@@ -26,6 +27,7 @@ import { SnapshotDriftError } from '../src/campaign/instrument-snapshot.ts';
 import {
   electWriter,
   initJournalDb,
+  type JournalWriter,
   openJournalRead,
   replayEvents,
 } from '../src/campaign/journal.ts';
@@ -1662,11 +1664,13 @@ test('evidence arbitration: terminal grader billing exhaustion outranks an earli
   expect(outcome.status).toBe('completed');
 });
 
-test('performStoragePause: BOTH durable carriers failing is a thrown storage-fatal, and the kill still ran first (Important 5, D-13)', async () => {
+/** A campaign dir whose journal writer is DEPOSED: every append fails (the
+ *  generation fence refuses), so step 4's storage_paused can never land and
+ *  the marker is the only durable carrier left. */
+function deposedPauseFixture(): { campaignDir: string; writer: JournalWriter } {
   const campaignDir = mkdtempSync(join(tmpdir(), 'disp-fatal-'));
   initJournalDb(campaignDir);
   writeFileSync(join(campaignDir, '.ballast'), 'x');
-  // A deposed writer: every journal append fails (the fence refuses).
   const writer = electWriter({
     campaignDir,
     clock: new FakeClock(0),
@@ -1679,12 +1683,35 @@ test('performStoragePause: BOTH durable carriers failing is a thrown storage-fat
     identity: IDENTITY,
   });
   successor.release();
-  // The marker path is already occupied: the O_EXCL create fails too.
-  writeFileSync(join(campaignDir, '.storage-paused'), 'occupied');
+  return { campaignDir, writer };
+}
+
+test('performStoragePause: a marker ALREADY present is the durable record — EEXIST is a success arm, never a fatal (D-13 step 6)', async () => {
+  const { campaignDir, writer } = deposedPauseFixture();
+  // The marker already exists (an earlier pause, or a racing writer): the
+  // O_EXCL create reports EEXIST, but marker presence IS the durable record.
+  writeFileSync(join(campaignDir, '.storage-paused'), 'earlier pause');
+  const written: string[] = [];
+  await performStoragePause({
+    campaignDir,
+    writer,
+    killAll: async () => [],
+    stream: { write: (s: string) => written.push(s) },
+  });
+  expect(existsSync(join(campaignDir, '.ballast'))).toBe(false);
+  expect(written.join('')).toMatch(/marker already present/);
+});
+
+test('performStoragePause: BOTH durable carriers failing is a thrown storage-fatal that reports the kill state accurately, and the kill still ran first (Important 5, D-13)', async () => {
+  const { campaignDir, writer } = deposedPauseFixture();
+  // The marker path is occupied by something that is NOT a readable marker
+  // file: the create fails and presence supplies no record either.
+  mkdirSync(join(campaignDir, '.storage-paused'));
   let killed = false;
   const written: string[] = [];
-  await expect(
-    performStoragePause({
+  let thrown: unknown = null;
+  try {
+    await performStoragePause({
       campaignDir,
       writer,
       killAll: async () => {
@@ -1692,14 +1719,55 @@ test('performStoragePause: BOTH durable carriers failing is a thrown storage-fat
         return [];
       },
       stream: { write: (s: string) => written.push(s) },
-    }),
-  ).rejects.toThrow(/storage pause FATAL/);
+    });
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(DispatcherError);
+  const message = (thrown as Error).message;
+  expect(message).toMatch(/storage pause FATAL/);
+  // The kill state is reported as it actually is — every group verified.
+  expect(message).toMatch(/children verified killed/);
   // Pinned step order: the kill (step 5) ran before the fatal surfaced.
   expect(killed).toBe(true);
   expect(existsSync(join(campaignDir, '.ballast'))).toBe(false);
 });
 
-test('a failed admission append aborts the admission transaction BEFORE any spawn (Important 6 / C9)', async () => {
+test('performStoragePause: an unverified kill is a thrown storage-fatal naming the survivors — the pause record still lands first (Critical remainder, D-13 step 5)', async () => {
+  const campaignDir = mkdtempSync(join(tmpdir(), 'disp-survivor-'));
+  initJournalDb(campaignDir);
+  writeFileSync(join(campaignDir, '.ballast'), 'x');
+  const writer = electWriter({
+    campaignDir,
+    clock: new FakeClock(0),
+    identity: IDENTITY,
+  });
+  const written: string[] = [];
+  let thrown: unknown = null;
+  try {
+    await performStoragePause({
+      campaignDir,
+      writer,
+      killAll: async () => ['pgid 4242 (c1:scn:arm_a:r1#1: alive)'],
+      stream: { write: (s: string) => written.push(s) },
+    });
+  } catch (err) {
+    thrown = err;
+  } finally {
+    writer.release();
+  }
+  expect(thrown).toBeInstanceOf(DispatcherError);
+  const message = (thrown as Error).message;
+  expect(message).toMatch(/storage pause FATAL/);
+  expect(message).toMatch(/pgid 4242/);
+  expect(message).not.toMatch(/already killed/);
+  expect(message).toMatch(/operator action/i);
+  // The durable pause record landed BEFORE the fatal surfaced.
+  expect(journalTypes(campaignDir)).toContain('storage_paused');
+  expect(existsSync(join(campaignDir, '.ballast'))).toBe(false);
+});
+
+test('a PARTIALLY landed admission append aborts the admission transaction: no spawn, no live block, no local pool/exposure allocation, only the durable prefix in the journal (Important 6 / C9)', async () => {
   const h = harness();
   const real = electWriter({
     campaignDir: h.campaignDir,
@@ -1707,32 +1775,51 @@ test('a failed admission append aborts the admission transaction BEFORE any spaw
     identity: IDENTITY,
     campaign: campaignDoc(),
   });
-  // The admission bundle fails ENOSPC-shaped, including the D-13 retry;
-  // everything else (the storage_paused event) passes through.
+  // The journal lands one event per transaction: model the volume filling
+  // mid-bundle — the first TWO admission events land (block_admitted + one
+  // attempt_created), the third hits ENOSPC, and the D-13 retry of the
+  // unlanded suffix hits ENOSPC again (the volume is still full). Single
+  // appends (the storage_paused record) pass.
+  let bundleCalls = 0;
   const journal: DispatchJournal = {
     appendEvent: (input) => real.appendEvent(input),
     appendEvents: (inputs) => {
-      if (inputs.some((i) => i.type === 'block_admitted')) {
-        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
-      }
-      return real.appendEvents(inputs);
+      const admissionShaped = inputs.some(
+        (i) => i.type === 'block_admitted' || i.type === 'attempt_created',
+      );
+      if (!admissionShaped) return real.appendEvents(inputs);
+      bundleCalls += 1;
+      if (bundleCalls === 1) real.appendEvents(inputs.slice(0, 2));
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
     },
     readEvents: (afterSeq) => real.readEvents(afterSeq),
     readBudgetPosition: () => real.readBudgetPosition(),
     release: () => real.release(),
   };
-  const run = runCampaignDispatch({ ...h.args, journal });
+  const args: DispatchRunArgs = { ...h.args, journal };
+  const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const outcome = await run;
   expect(outcome.status).toBe('storage_paused');
-  // C9: the failed append aborted the admission transaction — zero spawn,
-  // zero local allocation, nothing admission-shaped durable.
+  expect(bundleCalls).toBe(2); // the bundle + its D-13 retry
+  // C9 (mutate-after-append): the failed bundle aborted the admission
+  // transaction — zero spawn, no live block, no local pool or exposure
+  // allocation (the in-memory admission state is empty).
   expect(h.spawner.spawned.length).toBe(0);
-  const types = journalTypes(h.campaignDir);
-  expect(types).toContain('storage_paused');
-  expect(types).not.toContain('block_admitted');
-  expect(types).not.toContain('attempt_created');
-  expect(types).not.toContain('run_allocated');
+  const inspection = args.inspect?.();
+  expect(inspection).toBeDefined();
+  expect(inspection!.liveBlockIds).toEqual([]);
+  expect(inspection!.exposureSampleIds).toEqual([]);
+  expect(Object.values(inspection!.poolBusy).every((n) => n === 0)).toBe(true);
+  // The journal holds exactly the durable prefix (the one event that landed
+  // before ENOSPC) plus the pause record — nothing from the retry, no
+  // second attempt_created, no estimate snapshot, no run_allocated.
+  expect(journalTypes(h.campaignDir)).toEqual([
+    'campaign_opened',
+    'block_admitted',
+    'attempt_created',
+    'storage_paused',
+  ]);
   expect(existsSync(join(h.campaignDir, '.ballast'))).toBe(false);
 });
 
@@ -1850,4 +1937,201 @@ test('R-SNS-4 gating arm untouched: an exposure-absent gating block carries NO c
     expect(e.payload.caveat).toBeUndefined();
   }
   expect(written.some((l) => l.includes('withheld'))).toBe(true);
+});
+
+// --- Fix round 2 ------------------------------------------------------------
+
+test('storage pause with an unkillable live child is FATAL: the run rejects naming the survivor, after the pause record landed (Critical remainder, D-13 step 5)', async () => {
+  const h = harness();
+  writeFileSync(
+    join(h.campaignDir, 'contention-telemetry.jsonl'),
+    `${JSON.stringify({ ts_ms: 1000, load1: 0, mem_available_bytes: 8 * 2 ** 30, swap_used_bytes: 0, process_count: 100, disk_free_bytes: 90 * 2 ** 30, breach: [] })}\n`,
+  );
+  let hooks: DispatchSamplerHooks | null = null;
+  const scripted: DispatchSamplerSeam = {
+    start(captured) {
+      hooks = captured;
+      return () => {};
+    },
+  };
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    sampler: scripted,
+    stream: { write: (s: string) => written.push(s) },
+    signalGroup: () => 'ok', // the groups NEVER die
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  hooks!.onSampleError(
+    Object.assign(new Error('write failed'), { code: 'ENOSPC' }),
+  );
+  // Drive the TERM->wait->KILL->wait escalations for both children.
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  let thrown: unknown = null;
+  try {
+    await run;
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(DispatcherError);
+  expect((thrown as Error).message).toMatch(/storage pause FATAL/);
+  expect((thrown as Error).message).toMatch(/pgid 100[01]/);
+  // The durable pause record and the ballast release still happened first.
+  expect(journalTypes(h.campaignDir)).toContain('storage_paused');
+  expect(existsSync(join(h.campaignDir, '.ballast'))).toBe(false);
+});
+
+test("the delayed-allocation race: a mint waits for a spawned sibling's run_allocated line, so the allocation lands BEFORE the dispositions (R-JRN-8 remainder)", async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  // arm_a fails typed while childB's allocation line has NOT arrived at all
+  // (neither latched nor delivered): the mint must not disposition childB
+  // from 'admitted' and strand the allocation that is about to arrive.
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0); // the mint is waiting
+  expect(eventsOf(h.campaignDir, 'instrument_failure').length).toBe(1);
+  // The line lands AFTER the sibling's terminal was processed.
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  await tick(h.clock, 1);
+  const allocs = eventsOf(h.campaignDir, 'run_allocated');
+  const drained = allocs.filter(
+    (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+  );
+  expect(drained.length).toBe(1); // exactly once
+  const minted = mintRecords(h.campaignDir)[0];
+  expect(minted).toBeDefined();
+  expect(drained[0]!.seq).toBeLessThan(minted!.seq);
+  // The disposition applied from 'spawned' (a legal source) and replay
+  // folds a clean journal.
+  const dispositions = eventsOf(h.campaignDir, 'sample_disposition');
+  expect(
+    dispositions.some((d) => d.payload.sample_id === 'c1:scn:arm_b:r1'),
+  ).toBe(true);
+  childB!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+  const doc = campaignDoc();
+  const replayed = replayEvents(
+    {
+      samples: doc.samples,
+      blocks: doc.blocks.map((b) =>
+        b.slot === undefined
+          ? { block_id: b.block_id, sample_ids: b.sample_ids }
+          : { block_id: b.block_id, sample_ids: b.sample_ids, slot: b.slot },
+      ),
+    },
+    journalEvents(h.campaignDir),
+  );
+  expect(replayed.sampleStates.get('c1:scn:arm_b:r1')).toBe(
+    'excluded_block_replaced',
+  );
+});
+
+test('the allocation wait is BOUNDED: a sibling that never allocates within the budget is dispositioned from admitted, and a later line is loud, never fabricated (R-JRN-8 remainder)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0); // waiting for childB
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1); // budget expires
+  expect(mintRecords(h.campaignDir).length).toBe(1);
+  expect(written.join('')).toMatch(/allocation wait .*expired/);
+  // The line arrives after the disposition: no legal edge remains, so it is
+  // retained in-memory and LOUD — never journaled, never lost silently.
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  await tick(h.clock, 1);
+  expect(
+    eventsOf(h.campaignDir, 'run_allocated').some(
+      (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+    ),
+  ).toBe(false);
+  expect(written.join('')).toMatch(/arrived after its terminal/);
+  childB!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('a partially verified kill journals the superseding exposure snapshot even when the block is NOT aborted (E7.7 membership change)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  // pid 1000 (arm_a) dies on the first signal; pid 1001 (arm_b) is immortal.
+  const dead = new Set<number>();
+  const mixedSignaler: GroupSignaler = (pgid, signal) => {
+    if (pgid === 1001) return 'ok';
+    if (signal === 0) return dead.has(pgid) ? 'esrch' : 'ok';
+    dead.add(pgid);
+    return 'ok';
+  };
+  let verifies = 0;
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+    signalGroup: mixedSignaler,
+    killGraceSeconds: 0.05,
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+    snapshotVerify: () => {
+      verifies += 1;
+      if (verifies >= 2) throw new SnapshotDriftError('worktree HEAD moved');
+    },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  const lastAllocSeq = Math.max(
+    ...eventsOf(h.campaignDir, 'run_allocated').map((e) => e.seq),
+  );
+  // Wave 2: drift -> kill the affected block; arm_a verifies dead (released
+  // from the exposure set), arm_b survives -> no aborted for the block, the
+  // drift response aborts loudly.
+  await tick(h.clock, 1);
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/drift response ABORTED/);
+  const events = journalEvents(h.campaignDir);
+  expect(events.some((e) => e.type === 'aborted')).toBe(false);
+  // E7.7: the membership change (arm_a released) is journaled as a
+  // superseding absolute snapshot — the surviving arm_b's estimate only.
+  const snapshots = events.filter(
+    (e): e is Extract<JournalEvent, { type: 'budget_event' }> =>
+      e.type === 'budget_event' &&
+      e.payload.kind === 'estimate_inflight' &&
+      e.seq > lastAllocSeq,
+  );
+  expect(snapshots.length).toBeGreaterThanOrEqual(1);
+  expect(snapshots[snapshots.length - 1]!.payload.amount_usd).toBe(2);
+  // Tear down through the signal path (the survivor stays unkillable).
+  signalHandler!('SIGINT');
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('signalled');
 });
