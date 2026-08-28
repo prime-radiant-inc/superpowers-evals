@@ -1724,8 +1724,7 @@ test('P-4 order observable: snapshot complete at child-probe time; campaign_open
       if (
         command === 'bun' &&
         cargs.includes('--version') &&
-        options?.cwd !== undefined &&
-        options.cwd.endsWith('/evals')
+        options?.cwd?.endsWith('/evals')
       ) {
         probedDir = dirname(options.cwd);
         journalAtProbe = existsSync(join(probedDir, 'journal.db'));
@@ -1799,8 +1798,7 @@ test('materialized tree byte-mismatch vs the object-store intake refuses publica
       if (
         command === 'bun' &&
         cargs.includes('install') &&
-        options?.cwd !== undefined &&
-        options.cwd.startsWith(args.campaignsRoot) &&
+        options?.cwd?.startsWith(args.campaignsRoot) &&
         options.cwd.endsWith('/evals')
       ) {
         // Corrupt the materialized FINAL-path tree after the real install:
@@ -1830,8 +1828,7 @@ test('an unexpected existing campaign.json at the publish step fails closed', ()
       if (
         command === 'bun' &&
         cargs.includes('--version') &&
-        options?.cwd !== undefined &&
-        options.cwd.endsWith('/evals')
+        options?.cwd?.endsWith('/evals')
       ) {
         // Simulate a campaign.json landing between classification and the
         // publish step: the publication helper's already-published refusal
