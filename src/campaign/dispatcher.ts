@@ -56,7 +56,6 @@ import {
   type EventInput,
   electWriter,
   isStorageFullError,
-  type JournalWriter,
   releaseBallast,
 } from './journal.ts';
 import { resolveKeyForSpawnWithWait } from './key-select.ts';
@@ -276,7 +275,8 @@ export const realGroupSignaler: GroupSignaler = (pgid, signal) => {
 export interface KillGroupArgs {
   readonly pgid: number;
   /** OS start time captured at spawn (R-RCV-1 identity guard); null =
-   *  unreadable at capture time — the exists() probe is the only guard. */
+   *  unreadable at capture time — identity is then UNKNOWN and the helper
+   *  refuses to signal blind (fail-closed). */
   readonly birthTsMs: number | null;
   readonly identity: ProcessIdentityProbe;
   readonly signal: GroupSignaler;
@@ -287,21 +287,30 @@ export interface KillGroupArgs {
 
 /** THE awaited identity-guarded kill (C10; Decisions D-11/D-12/D-13 step
  *  5): identity guard -> TERM the group -> poll for death on the injected
- *  Clock -> escalate KILL after the grace -> verify again. 'dead' is the
- *  only result that permits release/mint; 'stale' means the pid was reused
- *  and is never signaled; 'alive' is the loud failure surface. */
+ *  Clock -> escalate KILL after the grace -> verify again. Verified death
+ *  is a HARD precondition for every caller's release/journal/mint: 'dead'
+ *  (or 'stale' — the pid was reused, so the original process is provably
+ *  gone; a reused pid is never signaled) are the only permitting results;
+ *  'unknown' means the identity could not be established and NOTHING was
+ *  signaled (fail-closed, never signal blind); 'alive' means the group
+ *  survived TERM+KILL — the caller must abort its enclosing operation
+ *  loudly. */
 export async function killGroupVerified(
   args: KillGroupArgs,
-): Promise<'dead' | 'stale' | 'alive'> {
+): Promise<'dead' | 'stale' | 'alive' | 'unknown'> {
   if (args.identity.exists(args.pgid) === 'esrch') return 'dead';
-  if (args.birthTsMs !== null) {
-    const current = args.identity.startTimeMs(args.pgid);
-    if (current !== null && current !== args.birthTsMs) {
-      args.stream.write(
-        `kill: pid ${args.pgid} start time ${current} != recorded ${args.birthTsMs} — reused pid, never signaled (R-RCV-1)\n`,
-      );
-      return 'stale';
-    }
+  const current = args.identity.startTimeMs(args.pgid);
+  if (args.birthTsMs === null || current === null) {
+    args.stream.write(
+      `kill: pid ${args.pgid} identity UNKNOWN (recorded birth ${args.birthTsMs ?? 'unreadable'}, current start ${current ?? 'unreadable'}) — refusing to signal blind (R-RCV-1 fail-closed)\n`,
+    );
+    return 'unknown';
+  }
+  if (current !== args.birthTsMs) {
+    args.stream.write(
+      `kill: pid ${args.pgid} start time ${current} != recorded ${args.birthTsMs} — reused pid, never signaled (R-RCV-1)\n`,
+    );
+    return 'stale';
   }
   const pollSeconds = 0.05;
   const waitForDeath = async (deadline: number): Promise<boolean> => {
@@ -553,11 +562,24 @@ export function realSamplerSeam(args: {
   };
 }
 
+/** The journal surface the dispatcher consumes (structurally satisfied by
+ *  JournalWriter). Injectable as a TEST seam only (DispatchRunArgs.journal)
+ *  so a failed/partially-landed append is drivable hermetically; production
+ *  always elects the real writer. */
+export interface DispatchJournal {
+  appendEvent(input: EventInput): JournalEvent;
+  appendEvents(inputs: readonly EventInput[]): JournalEvent[];
+  readEvents(afterSeq?: number): JournalEvent[];
+  readBudgetPosition(): { spend_usd: number; estimate_inflight_usd: number };
+  release(): void;
+}
+
 export interface StoragePauseArgs {
   readonly campaignDir: string;
-  readonly writer: JournalWriter;
-  /** D-13 step 5: kill the campaign children (verified TERM->KILL). */
-  readonly killAll: () => Promise<void>;
+  readonly writer: DispatchJournal;
+  /** D-13 step 5: verified kill of the campaign children; returns the
+   *  UNVERIFIED groups (empty = all verified dead). */
+  readonly killAll: () => Promise<readonly string[]>;
   readonly stream: { write(s: string): void };
 }
 
@@ -586,28 +608,40 @@ export async function performStoragePause(
   }
   // Step 4: journal storage_paused in the freed space (best-effort; the
   // marker below is the durable record if it cannot land).
-  let landed = false;
+  let journalFailure: string | null = null;
   try {
     args.writer.appendEvent({ type: 'storage_paused', payload: {} });
-    landed = true;
-  } catch {
-    landed = false;
+  } catch (err) {
+    journalFailure = (err as Error).message;
   }
-  // Step 5: kill the campaign children (group TERM->KILL, verify dead) —
-  // AFTER the pause journal, so the pause is durable before the evidence
-  // producers die.
-  await args.killAll();
+  // Step 5: kill the campaign children (verified TERM->KILL through the
+  // C10 primitive) — AFTER the pause journal, so the pause is durable
+  // before the evidence producers die. An unverified group is LOUD with a
+  // named operator action: its spend cannot be recorded on a full volume.
+  const killFailures = await args.killAll();
+  if (killFailures.length > 0) {
+    args.stream.write(
+      `storage pause: kill UNVERIFIED for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually before resuming; a surviving child spends unrecorded on a full volume\n`,
+    );
+  }
   // Step 6: durable marker when the event did not land.
-  if (!landed) {
+  let markerFailure: string | null = null;
+  if (journalFailure !== null) {
     try {
       writeFileSync(join(args.campaignDir, '.storage-paused'), '', {
         flag: 'wx',
       });
     } catch (err) {
-      args.stream.write(
-        `storage pause: durable marker failed too: ${(err as Error).message}\n`,
-      );
+      markerFailure = (err as Error).message;
     }
+  }
+  // D-13: with NEITHER durable carrier landed, the pause has no record at
+  // all — that is a storage-fatal outcome, thrown loudly, never a quiet
+  // return (Important 5).
+  if (journalFailure !== null && markerFailure !== null) {
+    throw new DispatcherError(
+      `storage pause FATAL: neither durable carrier landed — the storage_paused journal event failed (${journalFailure}) AND the .storage-paused marker failed (${markerFailure}); the pause has NO durable record (D-13). Operator action: free space on the volume (children are already killed), then run \`quorum campaign run\` to reconcile`,
+    );
   }
 }
 
@@ -711,6 +745,12 @@ export interface DispatchRunArgs {
   ) => () => void;
   /** C10 kill seam; production default realGroupSignaler. */
   readonly signalGroup?: GroupSignaler;
+  /** TERM->KILL escalation grace per phase; default KILL_GRACE_SECONDS.
+   *  TEST seam (deterministic escalation under a FakeClock). */
+  readonly killGraceSeconds?: number;
+  /** Journal TEST seam only (see DispatchJournal); production elects the
+   *  real writer with the frozen campaign document. */
+  readonly journal?: DispatchJournal;
   /** Operator resume seam, filled by the dispatcher for halt clearance. */
   resumeAdmission?: (reason: string) => void;
 }
@@ -776,6 +816,7 @@ export async function runCampaignDispatch(
   const readVerdict = args.readVerdict ?? readVerdictSummary;
   const observeExposure = args.observeExposure ?? trajectoryExposureMs;
   const runner = args.runner ?? defaultCommandRunner;
+  const killGrace = args.killGraceSeconds ?? KILL_GRACE_SECONDS;
   // Fail-closed intake: the frozen document re-parses through CampaignSchema
   // (C1: no production-path cast bridges this read).
   const campaign: Campaign = CampaignSchema.parse(
@@ -794,13 +835,16 @@ export async function runCampaignDispatch(
 
   // The writer carries the frozen membership so its incremental projections
   // resolve attempt->block identically to a rebuild. It is held for the
-  // whole run; readers (status/cancel polls) never take the lease.
-  const writer = electWriter({
-    campaignDir: args.campaignDir,
-    clock,
-    identity,
-    campaign,
-  });
+  // whole run; readers (status/cancel polls) never take the lease. The
+  // journal seam exists for tests only (failed-append injection, C9).
+  const writer: DispatchJournal =
+    args.journal ??
+    electWriter({
+      campaignDir: args.campaignDir,
+      clock,
+      identity,
+      campaign,
+    });
 
   let stopSampler: (() => void | Promise<void>) | null = null;
   let uninstallSignals: (() => void) | null = null;
@@ -1035,7 +1079,12 @@ export async function runCampaignDispatch(
     const skewExcludedBlocks = new Set<string>();
     const attemptSeqBySample = new Map<string, number>();
     const mintRecords: BlockReplacedRecord[] = [];
-    let budgetStopped = false;
+    /** E7.6 never-resurrects: samples SELECTED by a budget_stopped event are
+     *  terminal forever — they never admit/spawn, and a reserve containing
+     *  one can never activate. The stop does NOT latch the campaign: a
+     *  raise (amendment fold below) widens the predicate and later blocks
+     *  admit against the raised ceiling (Important 2). */
+    const stoppedSamples = new Set<string>();
     let budgetUsd = campaign.budget.usd_all_in;
     let campaignOpenedTsMs: number | null = null;
     for (const event of events) {
@@ -1065,12 +1114,14 @@ export async function runCampaignDispatch(
           break;
         }
         case 'budget_stopped':
-          budgetStopped = true;
+          for (const sampleId of event.payload.sample_ids) {
+            stoppedSamples.add(sampleId);
+          }
           break;
         case 'amendment':
-          // R-DSP-10: raise-only; the raise widens the budget predicate and
-          // NEVER resurrects budget_stopped samples (E7.6 — budgetStopped
-          // stays folded regardless of raise order).
+          // R-DSP-10: raise-only; the raise widens the budget predicate for
+          // LATER work and NEVER resurrects budget_stopped samples (E7.6 —
+          // stoppedSamples stays folded regardless of raise order).
           if (event.payload.kind === 'budget_raise') {
             budgetUsd += event.payload.amount_usd;
           }
@@ -1136,7 +1187,9 @@ export async function runCampaignDispatch(
     const waiting: Block[] = armedBlocks.filter(
       (b) =>
         !admittedBlockIds.has(b.block_id) &&
-        !supersededBlockIds.has(b.block_id),
+        !supersededBlockIds.has(b.block_id) &&
+        // E7.6: a block holding a budget-stopped sample never admits.
+        !b.sample_ids.some((s) => stoppedSamples.has(s)),
     );
     // Rerun lineage bookkeeping: successor block id -> predecessor block id
     // (tryAdmit stamps block_admitted.rerun_of from it — E7.1 re-entry edge).
@@ -1162,6 +1215,7 @@ export async function runCampaignDispatch(
       }
       if (waiting.some((b) => b.block_id === mint.replacement_block_id))
         continue;
+      if (mint.roster.some((r) => stoppedSamples.has(r.sample_id))) continue;
       if (mint.kind === 'rerun') {
         const root = lineageRootBlock(mint.replacement_block_id);
         if (root === undefined) continue; // unknown lineage: loud in replay
@@ -1185,6 +1239,16 @@ export async function runCampaignDispatch(
     let breachActive = false;
     let signalled = false;
     let cancelRequested = false;
+    /** Session-local budget-stop state: once the R-DSP-6 predicate fails,
+     *  no further admission happens THIS session (a raise cannot land
+     *  mid-run — the dispatcher holds the writer); the durable facts are
+     *  the budget_stopped events' selected samples. Unselected waiting
+     *  blocks stay planned and admit next session under a raise (E7.6). */
+    let stopInForce = false;
+    /** One durable resolution per predecessor obligation (E7.1: once a
+     *  mint/suppressed/exhausted resolution lands, later observations never
+     *  add another). Session-local; recovery folds the durable rows. */
+    const resolvedObligations = new Set<string>();
     const spawnFailuresByPool = new Map<string, number>();
     const haltedPools = new Set<string>();
     const driftIncidents: string[] = [];
@@ -1230,7 +1294,11 @@ export async function runCampaignDispatch(
       haltReason = reason;
       stream.write(`halt: ${reason} — admission stopped\n`);
     };
-    args.resumeAdmission = (reason: string): void => {
+    /** Halt clearance. Called ONLY from inside the serialized control
+     *  section (the drift repair path) or via the operator seam below —
+     *  which routes through runExclusive, so no control state ever mutates
+     *  off the section (Minor 2). */
+    const clearAdmissionHalt = (reason: string): void => {
       if (!admissionHalted) return;
       admissionHalted = false;
       spawnFailuresByPool.clear();
@@ -1238,13 +1306,25 @@ export async function runCampaignDispatch(
       stream.write(`resume: admission resumed (${reason})\n`);
       wakeLoop();
     };
+    args.resumeAdmission = (reason: string): void => {
+      void runExclusive(() => clearAdmissionHalt(reason));
+    };
 
     // --- Verified kill over the live child handles (C10) --------------------
-    const killBlockChildren = async (lb: LiveBlockState): Promise<void> => {
+    /** C10 HARD precondition: journaling/release/mint happen ONLY after a
+     *  group is verified dead through the one identity-guarded primitive.
+     *  Returns the failures (identity-unknown / alive-after-KILL); a failed
+     *  sample keeps its slots, its callbacks stay LIVE (its spend keeps
+     *  being recorded honestly), and the caller must abort its enclosing
+     *  operation loudly. Abandoned is set only AFTER verified death, so a
+     *  surviving child's output is never suppressed. */
+    const killBlockChildren = async (lb: LiveBlockState): Promise<string[]> => {
+      const failures: string[] = [];
       for (const sample of lb.samples) {
         if (sample.serviceEnded) continue;
-        sample.abandoned = true; // suppress stale callbacks (C10)
         if (sample.child === undefined) {
+          // Never spawned: nothing to kill; the release is trivially safe.
+          sample.abandoned = true;
           releaseSample(sample);
           continue;
         }
@@ -1255,21 +1335,28 @@ export async function runCampaignDispatch(
           signal: signalGroup,
           clock,
           stream,
-          graceSeconds: KILL_GRACE_SECONDS,
+          graceSeconds: killGrace,
         });
-        if (result === 'alive') {
-          // Release/mint only after verified death: an unverified kill
-          // keeps the slots held and stays loud.
-          stream.write(
-            `kill unverified for ${sample.attemptId} (pgid ${sample.child.pid}) — slots stay held\n`,
+        if (result === 'alive' || result === 'unknown') {
+          failures.push(
+            `pgid ${sample.child.pid} (${sample.attemptId}: ${result})`,
           );
           continue;
         }
+        // Verified dead ('dead', or 'stale' — the pid was reused, so the
+        // original child is provably gone): suppress the now-stale
+        // callbacks and release the slots.
+        sample.abandoned = true;
         releaseSample(sample);
       }
+      return failures;
     };
-    const killAllChildren = async (): Promise<void> => {
-      for (const lb of liveBlocks.values()) await killBlockChildren(lb);
+    const killAllChildren = async (): Promise<string[]> => {
+      const failures: string[] = [];
+      for (const lb of liveBlocks.values()) {
+        failures.push(...(await killBlockChildren(lb)));
+      }
+      return failures;
     };
 
     /** D-13 detection feeds here from both sites: a storage-full journal
@@ -1373,19 +1460,30 @@ export async function runCampaignDispatch(
           (b) =>
             b.block_id.startsWith(`${cellKey}:x`) &&
             !reserveActivated.has(b.block_id) &&
+            // E7.6: a reserve holding a budget-stopped sample never
+            // activates — never resurrects.
+            !b.sample_ids.some((s) => stoppedSamples.has(s)) &&
             !(alsoActivated?.has(b.block_id) ?? false),
         )
         .sort(compareAdmissionOrder)[0];
+    /** E3's pinned reach: admitted-but-not-yet-spawned samples — spawning
+     *  them after a stop would add a second spend wave. */
+    const admittedUnspawnedSampleIds = (): string[] =>
+      [...liveBlocks.values()].flatMap((lb) =>
+        lb.samples
+          .filter((s) => s.child === undefined && !s.serviceEnded)
+          .map((s) => s.sampleId),
+      );
     /** budget_stopped may only select planned|admitted samples (the frozen
-     *  machine's edges); waiting rerun rosters sit in terminal re-entry
-     *  states and are excluded — they simply never admit under the stop. */
-    const stoppableWaitingSampleIds = (): string[] =>
-      waiting
-        .flatMap((b) => b.sample_ids)
-        .filter((s) => {
-          const state = mirrorStateOf(s);
-          return state === 'planned' || state === 'admitted';
-        });
+     *  machine's edges) not already stopped. */
+    const stoppableSelection = (candidates: readonly string[]): string[] =>
+      [...new Set(candidates)].filter((s) => {
+        const state = mirrorStateOf(s);
+        return (
+          (state === 'planned' || state === 'admitted') &&
+          !stoppedSamples.has(s)
+        );
+      });
 
     type ObligationResolution =
       | {
@@ -1414,26 +1512,33 @@ export async function runCampaignDispatch(
       const cellKey = cellKeyOfBlockId(params.predecessorBlockId);
       const reserve = reserveForCell(cellKey, params.activatedInBatch);
       const eventInputs: EventInput[] = [];
-      if (!budgetStopped && reserve !== undefined) {
+      if (!stopInForce && reserve !== undefined) {
         const reserveExposure = reserve.sample_ids.reduce(
           (sum, s) => sum + sampleEstimate(s),
           0,
         );
         if (spendUsd + Math.max(estimateUsd, 0) + reserveExposure > budgetUsd) {
-          budgetStopped = true;
+          // R-DSP-6 pass-through: a resolution-time mint must clear the
+          // dollar predicate against the reserve's priced exposure; failure
+          // fires the durable stop (selection: E3's admitted-unspawned —
+          // planned waiting blocks stay unselected so a later raise admits
+          // them, E7.6).
+          stopInForce = true;
+          const selected = stoppableSelection(admittedUnspawnedSampleIds());
+          for (const s of selected) stoppedSamples.add(s);
           eventInputs.push(
             {
               type: 'budget_stopped',
-              payload: { sample_ids: stoppableWaitingSampleIds() },
+              payload: { sample_ids: selected },
             },
             snapshotEstimateInput(),
           );
           stream.write(
-            `budget stop: replacement for ${cellKey} would exceed $${budgetUsd} — no new admissions (raise never resurrects)\n`,
+            `budget stop: replacement for ${cellKey} would exceed $${budgetUsd} — obligation suppressed; stopped samples never resurrect, a raise permits later work\n`,
           );
         }
       }
-      if (budgetStopped) {
+      if (stopInForce) {
         eventInputs.push({
           type: 'adjudication',
           payload: {
@@ -1521,14 +1626,77 @@ export async function runCampaignDispatch(
       return { outcome: 'minted', events: eventInputs, reserve, record };
     };
 
+    /** R-JRN-8/R-SPN-5: run_allocated exactly once per run, pgid validated
+     *  through the kill seam's 0-probe. Shared by the live stdout handler
+     *  and the pre-mint allocation drain. A run whose allocation can no
+     *  longer be journaled (the sample already holds a terminal — no legal
+     *  run_allocated edge remains) keeps its run id in-memory and is LOUD:
+     *  recovery's orphan sweep rides the run-dir identity file (6c). */
+    const recordAllocation = async (
+      sample: LiveSampleState,
+      child: SpawnedCampaignChild,
+      runId: string,
+    ): Promise<void> => {
+      if (sample.runId !== undefined) return;
+      sample.runId = runId;
+      if (mirrorStateOf(sample.sampleId) !== 'admitted') {
+        stream.write(
+          `allocation for ${sample.attemptId} (run ${runId}) arrived after its terminal/disposition — no legal run_allocated edge remains; run id retained in-memory, recovery sweeps run-dir identity files\n`,
+        );
+        return;
+      }
+      if (signalGroup(child.pid, 0) === 'esrch') {
+        stream.write(
+          `run_allocated for ${sample.attemptId} but process group ${child.pid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
+        );
+        return;
+      }
+      await appendCritical([
+        {
+          type: 'run_allocated',
+          payload: {
+            attempt_id: sample.attemptId,
+            run_id: runId,
+            pgid: child.pid,
+            ...keyGrantsPayload(sample.grants),
+          },
+        },
+      ]);
+    };
+    /** Important 1 (R-JRN-8): before a mint dispositions a predecessor
+     *  roster, journal any allocation a spawned sibling has ALREADY emitted
+     *  (latched child output whose serialized section has not run yet) —
+     *  the record lands exactly once, from 'admitted'; the disposition then
+     *  applies from 'spawned', still a legal source. No spawned child's
+     *  allocation record is stranded by the mint. */
+    const drainPendingAllocations = async (
+      lb: LiveBlockState,
+    ): Promise<void> => {
+      for (const sample of lb.samples) {
+        if (sample.abandoned || sample.runId !== undefined) continue;
+        const child = sample.child;
+        if (child === undefined) continue;
+        for (const line of child.stdoutLines) {
+          const runId = parseRunAllocatedLine(line);
+          if (runId !== null) {
+            await recordAllocation(sample, child, runId);
+            break;
+          }
+        }
+      }
+    };
+
     const mintReplacement = async (
       failedBlock: LiveBlockState,
       reason: BlockReplacementReason,
     ): Promise<void> => {
       // Idempotent per block: one mint per predecessor (a two-sample block
       // can fail twice — e.g. both spawns fail — but activates ONE fresh
-      // block).
+      // block), and one durable resolution per obligation (a suppressed or
+      // exhausted adjudication is never re-emitted, E7.1).
       if (supersededBlockIds.has(failedBlock.block.block_id)) return;
+      if (resolvedObligations.has(failedBlock.block.block_id)) return;
+      await drainPendingAllocations(failedBlock);
       const res = resolveReplacementObligation({
         predecessorBlockId: failedBlock.block.block_id,
         predecessorSamples: failedBlock.samples.map((s) => ({
@@ -1544,6 +1712,7 @@ export async function runCampaignDispatch(
       }
       const appended = await appendCritical(res.events);
       if (appended === null) return;
+      resolvedObligations.add(failedBlock.block.block_id);
       const cellKey = cellKeyOfBlockId(failedBlock.block.block_id);
       if (res.outcome === 'suppressed') {
         stream.write(
@@ -1606,16 +1775,23 @@ export async function runCampaignDispatch(
         admittedUnspawned,
       });
       // (3) Kill affected in-flight groups — the ONE identity-guarded
-      // verified-kill primitive; release only after verified death (C10) —
-      // then journal aborted per affected block; the membership change
-      // appends the superseding snapshot in the same critical section
-      // (E7.7).
+      // verified-kill primitive; verified death is a HARD precondition
+      // (C10): aborted is journaled ONLY for blocks whose groups verified
+      // dead, and any failure aborts the whole drift response loudly with a
+      // named operator action — no repair, no rerun mint, no resume over a
+      // possibly-live child. The membership change appends the superseding
+      // snapshot in the same critical section (E7.7).
       const aborts: EventInput[] = [];
+      const killFailures: string[] = [];
       for (const blockId of affected) {
         const lb = liveBlocks.get(blockId);
         if (lb === undefined) continue;
         const hadLive = lb.samples.some((s) => !s.serviceEnded);
-        await killBlockChildren(lb);
+        const failures = await killBlockChildren(lb);
+        if (failures.length > 0) {
+          killFailures.push(...failures);
+          continue;
+        }
         if (hadLive) {
           aborts.push({ type: 'aborted', payload: { block_id: blockId } });
         }
@@ -1623,6 +1799,14 @@ export async function runCampaignDispatch(
       if (aborts.length > 0) {
         await appendCritical([...aborts, snapshotEstimateInput()]);
         estimateUsd = currentEstimateTotal();
+      }
+      if (killFailures.length > 0) {
+        stream.write(
+          `drift response ABORTED: kill unverified for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually, then re-run \`quorum campaign run\`; admission stays halted and no repair/rerun was performed for unverified blocks\n`,
+        );
+        driftIncidents.push(`unverified kills: ${killFailures.join(', ')}`);
+        wakeLoop();
+        return;
       }
       // (4) Authorized repair through the CommandRunner seam (D2 contracts:
       // worktree remove --force + prune on the source checkout, idempotent
@@ -1723,7 +1907,9 @@ export async function runCampaignDispatch(
       driftIncidents.push(
         `drift repaired; ${affected.length} block(s) re-entered as reruns: ${affected.join(', ')}`,
       );
-      args.resumeAdmission?.(
+      // In-section clearance (the operator seam would defer to a later
+      // section; the wave that detected the drift continues immediately).
+      clearAdmissionHalt(
         `snapshot repaired + clean re-verify (${affected.length} rerun re-entries)`,
       );
       wakeLoop();
@@ -1731,6 +1917,20 @@ export async function runCampaignDispatch(
 
     // --- Sensor evidence intake (D-10: the dispatcher supplies role +
     //     credential context; senseEvidence enforces per-source rows) -------
+    /** Important 4: stored evidence is arbitrated by the CLASSIFIER's own
+     *  first-wins row precedence, not by arrival order — the most specific
+     *  signal wins regardless of source (a weak live subject 429 never
+     *  masks later grader billing exhaustion from a terminal artifact).
+     *  Lower rank = earlier classifier row = stronger. */
+    const evidenceRank = (e: {
+      evidence: '429-match' | 'billing-exhaustion';
+      role: SensorRole;
+    }): number => {
+      if (e.role === 'grader' && e.evidence === '429-match') return 1; // row 1
+      if (e.role === 'grader') return 2; // row 2 (billing)
+      if (e.evidence === '429-match') return 4; // row 4
+      return 9; // subject billing: no classifier row (weakest)
+    };
     const recordSensorText = async (
       sample: LiveSampleState,
       source: SensorEvidenceSource,
@@ -1743,10 +1943,9 @@ export async function runCampaignDispatch(
         credential: CredentialShape;
         pool: string;
       }[] = [
-        // ONE campaign child carries BOTH parties' traffic; when subject and
-        // grader share a provider family the attribution is ambiguous and
-        // the subject reading is the deterministic first choice (both roles
-        // classify instrument either way).
+        // ONE campaign child carries BOTH parties' traffic: EVERY context is
+        // evaluated for every piece of evidence and the classifier-rank
+        // arbitration above picks the stored attribution.
         {
           role: 'subject',
           credential: {
@@ -1777,11 +1976,13 @@ export async function runCampaignDispatch(
           text,
         });
         if (signal === null) continue;
-        if (!sensorEvidenceBySample.has(sample.sampleId)) {
-          sensorEvidenceBySample.set(sample.sampleId, {
-            evidence: signal.evidence,
-            role: signal.role,
-          });
+        const candidate = { evidence: signal.evidence, role: signal.role };
+        const existingEv = sensorEvidenceBySample.get(sample.sampleId);
+        if (
+          existingEv === undefined ||
+          evidenceRank(candidate) < evidenceRank(existingEv)
+        ) {
+          sensorEvidenceBySample.set(sample.sampleId, candidate);
         }
         if (signal.evidence === '429-match') {
           // R-DSP-3: journaled cooldown, D-10 clamped retry-after; duplicate
@@ -1885,36 +2086,11 @@ export async function runCampaignDispatch(
         void runExclusive(async () => {
           if (sample.abandoned) return;
           const runId = parseRunAllocatedLine(line);
-          if (runId === null || sample.runId !== undefined) return;
-          sample.runId = runId;
-          if (mirrorStateOf(sample.sampleId) !== 'admitted') {
-            // Disposed before allocation: run_allocated has no legal edge
-            // from a terminal state (replay REJECT). The run id stays
-            // in-memory for run-dir reads; the run dir's persisted identity
-            // file (task 6c) is recovery's orphan handle.
-            return;
-          }
-          // R-SPN-2/5: pgid validated before journaling run_allocated —
-          // through the kill seam's 0-probe, never a raw kill on a fake pid.
-          if (signalGroup(child.pid, 0) === 'esrch') {
-            stream.write(
-              `run_allocated for ${sample.attemptId} but process group ${child.pid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
-            );
-            return;
-          }
-          // R-JRN-8: run_allocated in the same dispatch critical section,
-          // once per run, grants payload names only (E7.5).
-          await appendCritical([
-            {
-              type: 'run_allocated',
-              payload: {
-                attempt_id: sample.attemptId,
-                run_id: runId,
-                pgid: child.pid,
-                ...keyGrantsPayload(sample.grants),
-              },
-            },
-          ]);
+          if (runId === null) return;
+          // R-JRN-8: journaled exactly once per run in the dispatch
+          // critical section, grants payload names only (E7.5); the shared
+          // helper is also the pre-mint drain's path (Important 1).
+          await recordAllocation(sample, child, runId);
         });
       });
       child.onStderrLine((line) => {
@@ -1930,15 +2106,16 @@ export async function runCampaignDispatch(
           const runDir =
             sample.runId !== undefined ? runDirOf(sample.runId) : null;
           // Terminal evidence sweep (R-SNS-1: verdict reason, gauntlet
-          // result, event stream — read at terminal) when live intake saw
-          // nothing; first classified signal wins.
-          if (runDir !== null && !sensorEvidenceBySample.has(sample.sampleId)) {
+          // result, event stream — ALWAYS read at terminal): every source is
+          // evaluated and the classifier-rank arbitration lets the
+          // strongest/most-specific terminal evidence override an earlier
+          // weaker live match (Important 4).
+          if (runDir !== null) {
             for (const t of [
               ...terminalEvidenceTexts(runDir),
               ...gauntletEventStreamTexts(runDir),
             ]) {
               await recordSensorText(sample, t.source, t.text);
-              if (sensorEvidenceBySample.has(sample.sampleId)) break;
             }
           }
           // Terminal classification (the R-JRN emitters contract: child exit
@@ -2216,31 +2393,40 @@ export async function runCampaignDispatch(
         if (haltedPools.has(pool)) return false;
         if ((poolBusy.get(pool) ?? 0) + n > poolCapOf(pool)) return false;
       }
+      // E7.6: a block holding an already-stopped sample never admits.
+      if (block.sample_ids.some((s) => stoppedSamples.has(s))) return false;
+      if (stopInForce) return false;
       // R-DSP-6 budget gate: counts hard, dollars soft — stop admitting when
       // position + proposed exposure would exceed budget_usd.
       const proposedExposure = block.sample_ids.reduce(
         (sum, s) => sum + sampleEstimate(s),
         0,
       );
-      if (
-        !budgetStopped &&
-        spendUsd + Math.max(estimateUsd, 0) + proposedExposure > budgetUsd
-      ) {
-        // E3: the stop reaches admitted-but-not-yet-spawned samples too.
-        budgetStopped = true;
+      if (spendUsd + Math.max(estimateUsd, 0) + proposedExposure > budgetUsd) {
+        // The stop selects the DENIED block's samples (the overshoot work
+        // this stop prevents) + E3's admitted-but-unspawned reach. Other
+        // waiting blocks stay planned: they never admit this session (the
+        // in-force flag) but a raised ceiling admits them next session —
+        // the raise unblocks the campaign, never the stopped samples
+        // (E7.6/Important 2).
+        stopInForce = true;
+        const selected = stoppableSelection([
+          ...block.sample_ids,
+          ...admittedUnspawnedSampleIds(),
+        ]);
+        for (const s of selected) stoppedSamples.add(s);
         await appendCritical([
           {
             type: 'budget_stopped',
-            payload: { sample_ids: stoppableWaitingSampleIds() },
+            payload: { sample_ids: selected },
           },
           snapshotEstimateInput(),
         ]);
         stream.write(
-          `budget stop: $${spendUsd} spent + $${estimateUsd} estimated exceeds $${budgetUsd} — no new admissions (raise never resurrects)\n`,
+          `budget stop: $${spendUsd} spent + $${estimateUsd} estimated + $${proposedExposure} proposed exceeds $${budgetUsd} — stopped samples never resurrect; a raise admits the remaining planned blocks\n`,
         );
         return false;
       }
-      if (budgetStopped) return false;
       // Commit: the admission bundle lands FIRST — block_admitted +
       // attempt_created (R-JRN-8: before spawn) + the superseding snapshot
       // LAST before handoff (R-DSP-1) — and local state mutates only after
@@ -2293,6 +2479,13 @@ export async function runCampaignDispatch(
       }
       estimateUsd = currentEstimateTotal();
       admittedBlockIds.add(block.block_id);
+      // The contention surface's block interval starts at the EARLIEST
+      // roster attempt_created.ts_ms (contention.ts BlockInterval contract,
+      // Important 3) — read off the appended envelopes, never a later fresh
+      // clock read.
+      const attemptTs = appended
+        .filter((e) => e.type === 'attempt_created')
+        .map((e) => e.ts_ms);
       const live: LiveBlockState = {
         block,
         slot: block.slot ?? 'primary',
@@ -2307,11 +2500,25 @@ export async function runCampaignDispatch(
           serviceEnded: false,
           abandoned: false,
         })),
-        admittedTsMs: clockNowMs(clock),
+        admittedTsMs:
+          attemptTs.length > 0 ? Math.min(...attemptTs) : clockNowMs(clock),
         instrumentFailed: false,
       };
       liveBlocks.set(block.block_id, live);
-      for (const sample of live.samples) await spawnSample(live, sample);
+      for (const sample of live.samples) {
+        // A mint earlier in this spawn loop (the spawn-failure path) may
+        // have superseded the block and disposed the remaining samples: an
+        // excluded sample never spawns — its slots release instead
+        // (Important 1: no child exists whose allocation could strand).
+        if (
+          supersededBlockIds.has(block.block_id) ||
+          mirrorStateOf(sample.sampleId) !== 'admitted'
+        ) {
+          releaseSample(sample);
+          continue;
+        }
+        await spawnSample(live, sample);
+      }
       return true;
     };
 
@@ -2406,7 +2613,8 @@ export async function runCampaignDispatch(
         .filter(
           (lb) =>
             verdicts.get(lb.block.block_id) === 'invalid' &&
-            !supersededBlockIds.has(lb.block.block_id),
+            !supersededBlockIds.has(lb.block.block_id) &&
+            !resolvedObligations.has(lb.block.block_id),
         )
         .sort((a, b) => compareAdmissionOrder(a.block, b.block));
       if (invalid.length === 0) {
@@ -2428,6 +2636,9 @@ export async function runCampaignDispatch(
       const batch: EventInput[] = [];
       const minted: { record: BlockReplacedRecord; reserve: Block }[] = [];
       const activatedInBatch = new Set<string>();
+      // Important 1: latched sibling allocations land before any
+      // disposition in the batch.
+      for (const lb of invalid) await drainPendingAllocations(lb);
       for (const lb of invalid) {
         const res = resolveReplacementObligation({
           predecessorBlockId: lb.block.block_id,
@@ -2454,15 +2665,21 @@ export async function runCampaignDispatch(
         mints: [...mintRecords, ...minted.map((m) => m.record)],
       });
       const appended = await appendCritical(batch);
-      if (appended !== null) {
-        for (const m of minted) {
-          mintRecords.push(m.record);
-          reserveActivated.add(m.reserve.block_id);
-          supersededBlockIds.add(m.record.block_id);
-          waiting.push(m.reserve);
-        }
+      if (appended === null) {
+        // Nothing durable landed: announce NOTHING — no planned counts, no
+        // resumed receipt; the storage-pause path is the only announcement
+        // and recovery re-derives the batch (Important 3).
+        return;
       }
-      // Resolution counts BEFORE the separate admission-resumed line (D-3).
+      for (const m of minted) {
+        mintRecords.push(m.record);
+        reserveActivated.add(m.reserve.block_id);
+        supersededBlockIds.add(m.record.block_id);
+        waiting.push(m.reserve);
+      }
+      for (const lb of invalid) resolvedObligations.add(lb.block.block_id);
+      // Resolution counts BEFORE the separate admission-resumed line (D-3),
+      // and only once the batch is durable.
       stream.write(
         `contention resolution: affected=${invalid.length} refilled=${refilled} exhausted=${exhausted} suppressed=${suppressed}\n`,
       );
@@ -2483,25 +2700,44 @@ export async function runCampaignDispatch(
           // 1. Stop admitting (`signalled` gates the loop; no further waves).
           signalled = true;
           // 2. Kill every campaign process group (TERM -> wait -> KILL ->
-          // verify dead, identity-guarded — the ONE C10 primitive); release
-          // only after verified death.
-          const inFlightIds = [...liveBlocks.values()]
-            .filter((lb) => lb.samples.some((s) => !s.serviceEnded))
-            .map((lb) => lb.block.block_id);
-          await killAllChildren();
-          // 3. Journal aborted per in-flight block; the kill drained the
-          // budget-exposure membership, so the superseding snapshot rides
-          // the same critical section (E7.7).
+          // verify dead, identity-guarded — the ONE C10 primitive).
+          // Verified death is a HARD precondition (Critical): aborted is
+          // journaled ONLY for blocks whose groups verified dead; ANY
+          // failure aborts the sequence loudly — no aborted for the failed
+          // block, no campaign_cancelled, a named operator action, and a
+          // resumable exit.
+          const aborts: EventInput[] = [];
+          const killFailures: string[] = [];
+          for (const lb of liveBlocks.values()) {
+            const hadLive = lb.samples.some((s) => !s.serviceEnded);
+            const failures = await killBlockChildren(lb);
+            if (failures.length > 0) {
+              killFailures.push(...failures);
+              continue;
+            }
+            if (hadLive) {
+              aborts.push({
+                type: 'aborted',
+                payload: { block_id: lb.block.block_id },
+              });
+            }
+          }
+          // 3. Journal aborted per VERIFIED in-flight block; the kill
+          // drained the budget-exposure membership, so the superseding
+          // snapshot rides the same critical section (E7.7).
           const bundle: EventInput[] =
-            inFlightIds.length > 0
-              ? [
-                  ...inFlightIds.map((block_id) => ({
-                    type: 'aborted' as const,
-                    payload: { block_id },
-                  })),
-                  snapshotEstimateInput(),
-                ]
-              : [];
+            aborts.length > 0 ? [...aborts, snapshotEstimateInput()] : [];
+          if (killFailures.length > 0) {
+            const cancelPending = existsSync(
+              join(args.campaignDir, 'cancel-request'),
+            );
+            stream.write(
+              `signal kill FAILED for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually${cancelPending ? ', then re-run `quorum campaign cancel` (cancel incomplete: campaign_cancelled NOT journaled)' : ''}; exit stays resumable\n`,
+            );
+            if (bundle.length > 0) await appendCritical(bundle);
+            wakeLoop();
+            return;
+          }
           // 4. Operator cancel (Decision D-12): the cancel-request marker
           // means this signal came from `quorum campaign cancel` — the
           // dispatcher completes the FULL pinned sequence and journals
@@ -2585,8 +2821,11 @@ export async function runCampaignDispatch(
         [...liveBlocks.values()].every((lb) =>
           lb.samples.every((s) => s.serviceEnded),
         );
-      if (budgetStopped && waiting.length > 0) {
-        // Stopped samples never spawn; they were journaled at the stop.
+      if (stopInForce && waiting.length > 0) {
+        // Nothing else admits THIS session (a raise cannot land mid-run —
+        // the dispatcher holds the writer). Unselected blocks are dropped
+        // from the session queue WITHOUT a terminal: they stay planned in
+        // the journal and admit next session under a raise (E7.6).
         // Re-evaluate immediately — the cleared queue may complete the run.
         waiting.length = 0;
         continue;

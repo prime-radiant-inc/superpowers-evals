@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
 import { spawn as spawnProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,12 +9,14 @@ import {
   blockPrioritySeconds,
   compareAdmissionOrder,
   DispatcherError,
+  type DispatchJournal,
   type DispatchRunArgs,
   type DispatchSamplerHooks,
   type DispatchSamplerSeam,
   estimateInflightTotal,
   type GroupSignaler,
   killGroupVerified,
+  performStoragePause,
   realGroupSignaler,
   runCampaignDispatch,
   SPAWN_FAILURE_HALT_N,
@@ -43,7 +45,7 @@ import {
   normalizeBlockReplaced,
 } from '../src/contracts/campaign/journal-events.ts';
 import type { Credential } from '../src/contracts/credential.ts';
-import { setProcessEnv } from '../src/env.ts';
+import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
 import { FakeClock, RealClock } from '../src/scheduler/clock.ts';
 
 // ---------------------------------------------------------------------------
@@ -219,10 +221,21 @@ const IDENTITY: ProcessIdentityProbe = {
 };
 
 // The 6a env composition resolves selected key VALUES through src/env.ts and
-// fails loud when unset (R-SPN-7) — seed the fixture credentials' env names.
+// fails loud when unset (R-SPN-7) — seed the fixture credentials' env names,
+// preserving any prior values for suite hermeticity (restored in afterAll).
+const FIXTURE_ENV_KEYS = ['KEY_A', 'KEY_B', 'KEY_G'] as const;
+const PRIOR_ENV = new Map<string, string | undefined>(
+  FIXTURE_ENV_KEYS.map((k) => [k, getEnv(k)]),
+);
 setProcessEnv('KEY_A', 'fixture-key-a');
 setProcessEnv('KEY_B', 'fixture-key-b');
 setProcessEnv('KEY_G', 'fixture-key-g');
+afterAll(() => {
+  for (const [key, prior] of PRIOR_ENV) {
+    if (prior === undefined) deleteProcessEnv(key);
+    else setProcessEnv(key, prior);
+  }
+});
 
 // --- Fake spawner: scripted children --------------------------------------
 class FakeChild {
@@ -498,7 +511,7 @@ async function tick(clock: FakeClock, seconds: number): Promise<void> {
   // The dispatcher's serialized control section (C11) chains promises, so a
   // single microtask turn is not enough for a full wave to settle; drain a
   // deterministic batch of turns instead of guessing the exact depth.
-  for (let i = 0; i < 32; i += 1) await Promise.resolve();
+  for (let i = 0; i < 128; i += 1) await Promise.resolve();
 }
 
 // Read-only journal views (openJournalRead): a live dispatcher HOLDS the
@@ -695,10 +708,13 @@ test('instrument replacement: typed failure mints the reserve (block_replaced FI
   await run;
 });
 
-test('budget stop reaches admitted-but-unspawned samples (E3) and never resurrects on a raise', async () => {
-  // Two primary blocks; budget 4 admits b1 (exposure 3) and stops at b2
-  // (3 + 3 > 4) — the stop reaches b2's admitted-but-unspawned samples.
-  const h = harness({
+test('budget stop terminalizes the DENIED samples only; a raise admits later blocks while stopped samples stay stopped (E3/E7.6)', async () => {
+  // Three primary blocks, budget 4: session 1 admits b1 (exposure 3); the
+  // stop fires at b2 (3 + 3 > 4) selecting exactly b2's samples; b3 is
+  // denied by the in-force stop but never SELECTED — it stays planned. A
+  // raise appended between sessions then admits b3 against the raised
+  // ceiling while b2's stopped samples never resurrect (E7.6).
+  const overrides = {
     budget: {
       usd_all_in: 4,
       surcharge_applied: 0,
@@ -715,6 +731,11 @@ test('budget stop reaches admitted-but-unspawned samples (E3) and never resurrec
         block_id: 'c1:scn:b2',
         comparison_id: 'c1',
         sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
+      },
+      {
+        block_id: 'c1:scn:b3',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r3', 'c1:scn:arm_b:r3'],
       },
     ],
     samples: [
@@ -742,27 +763,81 @@ test('budget stop reaches admitted-but-unspawned samples (E3) and never resurrec
         arm: 'arm_b',
         replicate: 2,
       },
+      {
+        sample_id: 'c1:scn:arm_a:r3',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 3,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r3',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 3,
+      },
     ],
-  });
-  const run = runCampaignDispatch(h.args);
+  };
+  const h = harness(overrides);
+  const run1 = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
   }
-  await run;
-  const events = journalEvents(h.campaignDir);
-  expect(events.some((e) => e.type === 'budget_stopped')).toBe(true);
-  // Only the first block's two samples ever allocated: the stop reaches
-  // admitted-but-not-yet-spawned samples (E3), so no further run_allocated
-  // lands beyond the first block's two.
-  expect(events.filter((e) => e.type === 'run_allocated').length).toBe(2);
+  await run1;
+  const stop = eventsOf(h.campaignDir, 'budget_stopped')[0];
+  expect(stop).toBeDefined();
+  // E3 selection: the DENIED block's samples (b2 — the overshoot work the
+  // stop prevents); b3's samples stay planned, never selected.
+  expect([...stop!.payload.sample_ids].sort()).toEqual([
+    'c1:scn:arm_a:r2',
+    'c1:scn:arm_b:r2',
+  ]);
+  expect(eventsOf(h.campaignDir, 'run_allocated').length).toBe(2);
+  // R-DSP-10: the raise lands append-only between sessions (a live
+  // dispatcher holds the writer).
+  const raiser = electWriter({
+    campaignDir: h.campaignDir,
+    clock: new FakeClock(100),
+    identity: IDENTITY,
+  });
+  raiser.appendEvent({
+    type: 'amendment',
+    payload: { kind: 'budget_raise', amount_usd: 10, ts: 100_000 },
+  });
+  raiser.release();
+  // Session 2: a fresh dispatcher folds stop + raise — b3 admits against
+  // the raised ceiling; b2 never resurrects (E7.6).
+  const spawner2 = new FakeSpawner();
+  const clock2 = new FakeClock(200);
+  const run2 = runCampaignDispatch({
+    ...h.args,
+    spawner: spawner2,
+    clock: clock2,
+  });
+  await tick(clock2, 1);
+  expect(spawner2.spawned.length).toBe(2); // b3's pair; nothing for b2
+  for (const { child } of spawner2.spawned) {
+    child.emitLine(`run_allocated: s2-run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome2 = await run2;
+  expect(outcome2.status).toBe('completed');
+  const admitted = eventsOf(h.campaignDir, 'block_admitted').map(
+    (e) => e.payload.block_id,
+  );
+  expect(admitted).toEqual(['c1:scn:b1', 'c1:scn:b3']);
+  expect(eventsOf(h.campaignDir, 'run_allocated').length).toBe(4);
 });
 
-test('spawn failure: slots release, subject_spawn_failed journals + mints, pool halt after N=3 consecutive failures', async () => {
+test('spawn failure: excluded siblings never spawn, one mint + one exhausted adjudication, pool halt at N=3, operator resume readmits', async () => {
   // Both arms on ONE credential so consecutive failures attribute to one
-  // pool: b1's two failed spawns (which mint reserve x1) + x1's first failed
-  // spawn = 3 consecutive on the cred_a pool -> halt (REV fable I-14).
+  // pool (REV fable I-14). failNext=3: b1.s1 fails (1) -> mints x1 with
+  // dispositions for BOTH b1 samples; the excluded sibling b1.s2 never
+  // spawns (Important 1). b2.s1 fails (2) -> reserve exhausted (x1 already
+  // activated) -> ONE adjudication; b2 is not superseded, so b2.s2 still
+  // spawns and fails (3) -> pool halt; the duplicate obligation resolves
+  // nothing. Operator resume then admits x1, whose spawns succeed.
   const h = harness({
     execution_surface: [
       {
@@ -784,6 +859,62 @@ test('spawn failure: slots release, subject_spawn_failed journals + mints, pool 
         key_env_names: ['KEY_A'],
       },
     ],
+    blocks: [
+      {
+        block_id: 'c1:scn:b1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'],
+      },
+      {
+        block_id: 'c1:scn:b2',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
+      },
+      {
+        block_id: 'c1:scn:x1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:x1', 'c1:scn:arm_b:x1'],
+        slot: 'reserve',
+      },
+    ],
+    samples: [
+      {
+        sample_id: 'c1:scn:arm_a:r1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_a:r2',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 2,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r2',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 2,
+      },
+      {
+        sample_id: 'c1:scn:arm_a:x1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:x1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+    ],
   });
   h.spawner.failNext = SPAWN_FAILURE_HALT_N;
   const written: string[] = [];
@@ -792,8 +923,7 @@ test('spawn failure: slots release, subject_spawn_failed journals + mints, pool 
     stream: { write: (s: string) => written.push(s) },
   };
   const run = runCampaignDispatch(args);
-  await tick(h.clock, 1); // wave 1: b1's two spawns fail -> released + minted
-  await tick(h.clock, 1); // wave 2: x1 admits; 3rd failure halts the pool; 4th spawn succeeds
+  await tick(h.clock, 1); // wave 1: b1 + b2 admit; 3 spawn failures; halt
   expect(written.join('')).toMatch(/halt: spawn-failure pool halt/);
   const midEvents = journalEvents(h.campaignDir);
   // A spawn-failed sample was never allocated (state 'admitted'), so the
@@ -814,22 +944,27 @@ test('spawn failure: slots release, subject_spawn_failed journals + mints, pool 
     kind: 'replacement',
     reserve_activation: true,
   });
-  // Both spawn-failed b1 samples resolve through the mint's dispositions.
+  // Both b1 samples resolve through the mint's dispositions; the excluded
+  // sibling NEVER spawned (Important 1: no stranded allocation possible).
   expect(midEvents.filter((e) => e.type === 'sample_disposition').length).toBe(
     2,
   );
-  // x1's own 3rd spawn failure finds the reserve exhausted: the sole legal
-  // carrier is the cell adjudication (E7.1 zero-witness rule).
+  expect(h.spawner.spawned.length).toBe(0);
+  // b2's obligation resolves EXACTLY once (idempotent per predecessor): one
+  // reserve_exhausted adjudication despite two failed spawns on b2.
   expect(
-    midEvents.some(
+    midEvents.filter(
       (e) =>
         e.type === 'adjudication' &&
         e.payload.disposition === 'reserve_exhausted',
-    ),
-  ).toBe(true);
-  // Clear the halt (operator resume seam on THIS args object — the
-  // dispatcher fills it) and finish the surviving child.
+    ).length,
+  ).toBe(1);
+  // Operator resume (the seam routes through the serialized control
+  // section, Minor 2) — x1 then admits and its spawns succeed.
   args.resumeAdmission?.('spawn failures cleared');
+  await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/resume: admission resumed/);
+  expect(h.spawner.spawned.length).toBe(2); // x1's pair
   for (const { child } of h.spawner.spawned) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
@@ -1312,4 +1447,290 @@ test('killGroupVerified (C10): TERMs a REAL detached process group, awaits verif
   });
   expect(result).toBe('dead');
   expect(realGroupSignaler(pid, 0)).toBe('esrch');
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1: verified-death hard precondition, stranded allocations,
+// evidence arbitration, D-13 storage-fatal, C9 failed admission append.
+// ---------------------------------------------------------------------------
+
+test('killGroupVerified refuses identity-unknown without signaling, and reports a group that survives TERM+KILL (C10)', async () => {
+  // Identity unknown (unreadable start time): NOTHING is ever signaled.
+  const calls: (NodeJS.Signals | 0)[] = [];
+  const recorder: GroupSignaler = (_pgid, sig) => {
+    calls.push(sig);
+    return 'ok';
+  };
+  const unknownIdentity: ProcessIdentityProbe = {
+    exists: () => 'alive',
+    startTimeMs: () => null,
+  };
+  const silent = { write: () => {} };
+  expect(
+    await killGroupVerified({
+      pgid: 424242,
+      birthTsMs: 999,
+      identity: unknownIdentity,
+      signal: recorder,
+      clock: new FakeClock(0),
+      stream: silent,
+      graceSeconds: 5,
+    }),
+  ).toBe('unknown');
+  // A missing birth capture is identity-unknown too (fail-closed).
+  expect(
+    await killGroupVerified({
+      pgid: 424242,
+      birthTsMs: null,
+      identity: IDENTITY,
+      signal: recorder,
+      clock: new FakeClock(0),
+      stream: silent,
+      graceSeconds: 5,
+    }),
+  ).toBe('unknown');
+  expect(calls.length).toBe(0); // never signaled blind
+  // A group that survives TERM AND KILL past both graces reports 'alive'.
+  const alwaysAlive: GroupSignaler = () => 'ok';
+  expect(
+    await killGroupVerified({
+      pgid: 424242,
+      birthTsMs: 1,
+      identity: IDENTITY,
+      signal: alwaysAlive,
+      clock: new RealClock(),
+      stream: silent,
+      graceSeconds: 0.05,
+    }),
+  ).toBe('alive');
+});
+
+test('killGroupVerified escalates TERM->KILL on a REAL TERM-ignoring group (C10 uncooperative child)', async () => {
+  // bash traps TERM and respawns its sleep children forever; only the KILL
+  // escalation can end the group.
+  const child = spawnProcess(
+    'bash',
+    ['-c', 'trap "" TERM; while true; do sleep 60; done'],
+    { detached: true, stdio: 'ignore' },
+  );
+  expect(child.pid).toBeDefined();
+  const pid = child.pid!;
+  child.unref();
+  // Let the trap install before signaling.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const result = await killGroupVerified({
+    pgid: pid,
+    birthTsMs: realProcessIdentityProbe.startTimeMs(pid),
+    identity: realProcessIdentityProbe,
+    signal: realGroupSignaler,
+    clock: new RealClock(),
+    stream: { write: () => {} },
+    graceSeconds: 0.3,
+  });
+  expect(result).toBe('dead');
+  expect(realGroupSignaler(pid, 0)).toBe('esrch');
+});
+
+test('an unkillable group aborts the cancel sequence: no aborted, no campaign_cancelled, loud operator action (C10 hard precondition)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+    signalGroup: () => 'ok', // the group NEVER dies
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  }
+  // Operator cancel: marker first, then the signal (D-12).
+  writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
+    flag: 'wx',
+  });
+  expect(signalHandler).not.toBeNull();
+  signalHandler!('SIGTERM');
+  // Drive the TERM->wait->KILL->wait escalations for both children.
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  // Cancel INCOMPLETE: verified death is a hard precondition — nothing was
+  // journaled for the unverified blocks and the exit stays resumable.
+  expect(outcome.status).toBe('signalled');
+  const types = journalTypes(h.campaignDir);
+  expect(types).not.toContain('aborted');
+  expect(types).not.toContain('campaign_cancelled');
+  expect(written.join('')).toMatch(/operator action/);
+});
+
+test('a latched sibling allocation is drained and journaled BEFORE the mint dispositions (Important 1, R-JRN-8)', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  // childB's allocation line is LATCHED but its callback section has not
+  // run (buffered child output): push directly into the latch.
+  childB!.child.stdout.push(`run_allocated: run-${childB!.child.pid}`);
+  // arm_a fails typed -> the mint must drain childB's allocation first.
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  const allocs = eventsOf(h.campaignDir, 'run_allocated');
+  expect(allocs.map((a) => a.payload.run_id)).toContain(
+    `run-${childB!.child.pid}`,
+  );
+  const drained = allocs.find(
+    (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+  );
+  const minted = mintRecords(h.campaignDir)[0];
+  expect(minted).toBeDefined();
+  // The allocation landed BEFORE the mint (and its dispositions) — the
+  // disposition then applied from 'spawned', still a legal source.
+  expect(drained!.seq).toBeLessThan(minted!.seq);
+  const dispositions = eventsOf(h.campaignDir, 'sample_disposition');
+  expect(
+    dispositions.some((d) => d.payload.sample_id === 'c1:scn:arm_b:r1'),
+  ).toBe(true);
+  // Finish: childB (excluded, retained evidence) exits; the minted reserve
+  // runs to completion.
+  childB!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('evidence arbitration: terminal grader billing exhaustion outranks an earlier live subject 429 (Important 4)', async () => {
+  const h = harness();
+  // Distinct provider families so the live line matches ONLY the subject:
+  // the grader credential is openai-chat.
+  const graderOpenAi = {
+    model: 'm',
+    harnesses: ['claude'],
+    api: 'openai-chat',
+    auth: 'api-key',
+    api_key_env: 'KEY_G',
+    compat: {},
+    max_concurrency: 2,
+  } as Credential;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    credentials: { ...h.credentials, grader_cred: graderOpenAi },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  // Live: an anthropic-shaped 429 -> subject evidence (rank 4), pool block.
+  childA!.child.emitStderr('{"type":"rate_limit_error"} retry-after: 30');
+  // Terminal: the newest gauntlet result carries OpenAI billing exhaustion
+  // (grader context, rank 2) — it must OVERRIDE the live subject match.
+  const runDir = join(h.campaignDir, 'results', `run-${childA!.child.pid}`);
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'r1'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(runDir, 'gauntlet-agent', 'results', 'r1', 'result.json'),
+    JSON.stringify({
+      summary: 'grader died: {"error":{"code":"insufficient_quota"}}',
+    }),
+  );
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  const failures = eventsOf(h.campaignDir, 'instrument_failure');
+  expect(failures.length).toBe(1);
+  expect(failures[0]!.payload.cause).toBe('grader_billing_exhausted');
+  // Finish the innocent arm + the minted reserve (the subject pool cooldown
+  // from the live 429 must expire first).
+  childB!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 31);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('performStoragePause: BOTH durable carriers failing is a thrown storage-fatal, and the kill still ran first (Important 5, D-13)', async () => {
+  const campaignDir = mkdtempSync(join(tmpdir(), 'disp-fatal-'));
+  initJournalDb(campaignDir);
+  writeFileSync(join(campaignDir, '.ballast'), 'x');
+  // A deposed writer: every journal append fails (the fence refuses).
+  const writer = electWriter({
+    campaignDir,
+    clock: new FakeClock(0),
+    identity: IDENTITY,
+  });
+  writer.abandonLease();
+  const successor = electWriter({
+    campaignDir,
+    clock: new FakeClock(0),
+    identity: IDENTITY,
+  });
+  successor.release();
+  // The marker path is already occupied: the O_EXCL create fails too.
+  writeFileSync(join(campaignDir, '.storage-paused'), 'occupied');
+  let killed = false;
+  const written: string[] = [];
+  await expect(
+    performStoragePause({
+      campaignDir,
+      writer,
+      killAll: async () => {
+        killed = true;
+        return [];
+      },
+      stream: { write: (s: string) => written.push(s) },
+    }),
+  ).rejects.toThrow(/storage pause FATAL/);
+  // Pinned step order: the kill (step 5) ran before the fatal surfaced.
+  expect(killed).toBe(true);
+  expect(existsSync(join(campaignDir, '.ballast'))).toBe(false);
+});
+
+test('a failed admission append aborts the admission transaction BEFORE any spawn (Important 6 / C9)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // The admission bundle fails ENOSPC-shaped, including the D-13 retry;
+  // everything else (the storage_paused event) passes through.
+  const journal: DispatchJournal = {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      if (inputs.some((i) => i.type === 'block_admitted')) {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
+  const run = runCampaignDispatch({ ...h.args, journal });
+  await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  // C9: the failed append aborted the admission transaction — zero spawn,
+  // zero local allocation, nothing admission-shaped durable.
+  expect(h.spawner.spawned.length).toBe(0);
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).not.toContain('block_admitted');
+  expect(types).not.toContain('attempt_created');
+  expect(types).not.toContain('run_allocated');
+  expect(existsSync(join(h.campaignDir, '.ballast'))).toBe(false);
 });
