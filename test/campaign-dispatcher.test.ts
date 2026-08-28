@@ -2672,6 +2672,108 @@ test('terminal path: a spend snapshot that cannot land after the storage pause S
   );
 });
 
+// --- Fix round 6: the round-5 gates propagate to their enclosing loops -----
+
+test('spawn loop: after a spawn-failure snapshot enters the storage pause, NO further sample of the block is launched (the pause already abandoned it; D-13 kill sweep)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // arm_a's spawn fails; its E7.7 release snapshot hits ENOSPC (and the
+  // D-13 retry) -> storage pause, whose kill sweep abandons the unspawned
+  // arm_b sibling. The spawn loop must then launch nothing.
+  h.spawner.failNext = 1;
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    journal: snapshotEnospcJournal(real),
+    stream: { write: (s: string) => written.push(s) },
+  };
+  const run = runCampaignDispatch(args);
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  expect(h.spawner.spawned.length).toBe(0); // arm_b never spawned post-pause
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).not.toContain('run_allocated');
+  expect(types).not.toContain('block_replaced');
+  expect(written.join('')).toMatch(/storage pause/);
+});
+
+test('terminal path: after the skew_excluded append enters the storage pause, NO snapshot verification or drift repair runs (the pause owns what follows)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // The volume is full for exactly the skew_excluded row (and its retry).
+  const journal: DispatchJournal = {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      if (inputs.length === 1 && inputs[0]?.type === 'skew_excluded') {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
+  // The instrument reads as DRIFTED at any verification after the pause
+  // (the pause released the ballast — a durable, in-process marker of it).
+  let repaired = false;
+  let verifiesAfterPause = 0;
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    journal,
+    stream: { write: (s: string) => written.push(s) },
+    // b1's pair lands 499s apart -> gating skew breach at block terminal.
+    observeExposure: (runDir) =>
+      runDir.endsWith('run-1000') ? 1_000 : 500_000,
+    snapshotVerify: () => {
+      if (!existsSync(join(h.campaignDir, '.ballast'))) {
+        verifiesAfterPause += 1;
+        throw new SnapshotDriftError('worktree HEAD moved');
+      }
+    },
+    repairSnapshot: () => {
+      repaired = true;
+      return {
+        evalsRoot: join(h.campaignDir, 'evals'),
+        gauntletRoot: join(h.campaignDir, 'gauntlet'),
+        gauntletBin: join(h.campaignDir, 'bin', 'gauntlet'),
+        superpowersWorktrees: [],
+        evalsSha: 'e'.repeat(40),
+        gauntletSha: '9'.repeat(40),
+      };
+    },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  for (const { child } of h.spawner.spawned)
+    child.exit({ code: 0, signal: null });
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  expect(verifiesAfterPause).toBe(0); // no verification after the pause
+  expect(repaired).toBe(false); // no repair after the pause
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).not.toContain('skew_excluded');
+  expect(types).not.toContain('block_replaced');
+  expect(types).not.toContain('aborted');
+  expect(written.join('')).not.toMatch(/drift/);
+});
+
 test('a partially verified kill journals the superseding exposure snapshot even when the block is NOT aborted (E7.7 membership change)', async () => {
   const h = harness();
   const written: string[] = [];

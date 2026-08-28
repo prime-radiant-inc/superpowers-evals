@@ -2107,6 +2107,16 @@ export async function runCampaignDispatch(
         wakeLoop();
         return;
       }
+      // A pause entered during the kill sweep's own appends (a latched
+      // allocation, the abort bundle) owns what follows: no repair, no
+      // rerun, no resume after it (D-13 fail-stop).
+      if (storagePaused) {
+        stream.write(
+          'drift response stopped: storage pause (D-13 fail-stop) — no repair/rerun after the pause\n',
+        );
+        wakeLoop();
+        return;
+      }
       // (4) Authorized repair through the CommandRunner seam (D2 contracts:
       // worktree remove --force + prune on the source checkout, idempotent
       // re-materialize at the same dest — repairDriftedTrees, task 4).
@@ -2398,6 +2408,10 @@ export async function runCampaignDispatch(
     const onBlockTerminal = async (block: LiveBlockState): Promise<void> => {
       if (storagePaused || !block.samples.every((s) => s.serviceEnded)) return;
       await decideBlockSkew(block);
+      // The skew decision may itself have entered the D-13 pause (its
+      // skew_excluded row could not land): the pause owns what follows — no
+      // verification, no drift repair after it.
+      if (storagePaused) return;
       try {
         verifySnapshotNow();
         lastCleanVerifyTsMs = clockNowMs(clock);
@@ -2612,10 +2626,15 @@ export async function runCampaignDispatch(
     };
 
     // --- Spawn (R-SPN; 6a/6b carry-forwards) --------------------------------
+    /** Launch one admitted sample. 'fail-stop' tells the enclosing spawn
+     *  loop that the D-13 storage pause landed inside this launch (its
+     *  release snapshot could not land): nothing further may be launched —
+     *  the pause's kill sweep already abandoned the block's unspawned
+     *  siblings, and a child spawned after it would spend unjournaled. */
     const spawnSample = async (
       live: LiveBlockState,
       sample: LiveSampleState,
-    ): Promise<void> => {
+    ): Promise<'spawned' | 'failed' | 'fail-stop'> => {
       try {
         const subjectCred = credentialOfArm(sample.arm);
         const subjectName = armCredentialName(sample.arm);
@@ -2708,6 +2727,7 @@ export async function runCampaignDispatch(
         }
         superviseSample(sample, child, live);
         spawnFailuresByPool.set(sample.subjectPool, 0);
+        return 'spawned';
       } catch (err) {
         // Spawn-failure pool halt (REV fable I-14): N consecutive failures
         // attributed to one pool halt admission for that pool.
@@ -2730,7 +2750,14 @@ export async function runCampaignDispatch(
         // sample resolves via the E7.1 roster disposition from 'admitted'.
         releaseSample(sample);
         const snapshot = await appendCritical([snapshotEstimateInput()]);
-        if (snapshot === null || storagePaused) return; // D-13 fail-stop: no resolution after the pause
+        if (snapshot === null || storagePaused) {
+          // D-13 fail-stop: no resolution after the pause, and the loop
+          // that called us launches nothing further.
+          stream.write(
+            `spawn loop for ${live.block.block_id} stopped: storage pause (D-13 fail-stop) — no further launch, no resolution\n`,
+          );
+          return 'fail-stop';
+        }
         estimateUsd = currentEstimateTotal();
         const spawnClass = classifyFailure({
           outcome: 'indeterminate',
@@ -2740,6 +2767,7 @@ export async function runCampaignDispatch(
         });
         live.instrumentFailed = true;
         await mintReplacement(live, spawnClass.cause ?? 'subject_spawn_failed');
+        return 'failed';
       }
     };
 
@@ -2871,6 +2899,13 @@ export async function runCampaignDispatch(
       };
       liveBlocks.set(block.block_id, live);
       for (const sample of live.samples) {
+        // Nothing launches after a fail-stop: the D-13 pause's kill sweep
+        // already abandoned and released every unspawned sibling (a child
+        // spawned now would have its callbacks ignored and its spend
+        // unjournaled), and a mint's dispositions may have ended a sample's
+        // service. Each launch re-checks the live state.
+        if (storagePaused) break;
+        if (sample.abandoned || sample.serviceEnded) continue;
         // A mint earlier in this spawn loop (the spawn-failure path) may
         // have superseded the block and disposed the remaining samples: an
         // excluded sample never spawns — its slots release instead
@@ -2882,7 +2917,7 @@ export async function runCampaignDispatch(
           releaseSample(sample);
           continue;
         }
-        await spawnSample(live, sample);
+        if ((await spawnSample(live, sample)) === 'fail-stop') break;
       }
       return true;
     };
