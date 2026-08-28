@@ -9,9 +9,22 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { agyLogShowsRateLimit } from '../agents/agy-watch.ts';
 import { ATIF_NORMALIZERS } from '../capture/index.ts';
+import type { SUITE_KINDS } from '../contracts/campaign/suite.ts';
 import type { BlockReplacementReason } from '../contracts/campaign/typed-failures.ts';
 
 export const RETRY_AFTER_MIN_MS = 5_000;
+
+/** The D-10 evidence-source vocabulary: where a piece of sensor text came
+ *  from. Live sources (child stderr, agy.log tail, event stream) are fed by
+ *  the dispatcher as they arrive; terminal sources (verdict reason, gauntlet
+ *  result) are read at child exit via terminalEvidenceTexts and
+ *  gauntletEventStreamTexts. */
+export type SensorEvidenceSource =
+  | 'child_stderr'
+  | 'verdict_reason'
+  | 'gauntlet_result'
+  | 'event_stream'
+  | 'agy_log_tail';
 
 export interface RateLimitMarkerRow {
   readonly family: string;
@@ -27,12 +40,18 @@ export interface RateLimitMarkerRow {
   }) => number | null;
   /** Structured, case-insensitive where pinned. */
   readonly matches: (text: string) => boolean;
-  /** D-10 evidence sources this row is qualified against — registry
-   *  metadata for qualification receipts; additions are platform PRs with
+  /** The D-10 evidence sources this row is qualified against — ENFORCED by
+   *  senseEvidence: evidence from a source a row does not list never
+   *  classifies through that row. The gauntlet event stream rides the same
+   *  anchors as the gauntlet result on rows 2-5 (R-SNS-1 mandates
+   *  classification over the stream; run.jsonl run_error text IS the
+   *  gauntlet child's error surface); row 1 keeps exactly its pinned three
+   *  — its broad shipped matcher is a known false-positive surface and is
+   *  not widened to new surfaces. Additions are platform PRs with
    *  per-source fixtures. (Typed cause mapping rides role attribution: the
    *  dispatcher supplies subject|grader by matched credential context, and
    *  classifier rows 1/4 map it to grader_/subject_rate_limited.) */
-  readonly evidenceSources: readonly string[];
+  readonly evidenceSources: readonly SensorEvidenceSource[];
   readonly retryAfterParsed: boolean;
   readonly defaultCooldownMs: number;
   readonly maxCooldownMs: number;
@@ -49,7 +68,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
     // resource_exhausted | ratelimitexceeded | word-boundaried 429. Bare and
     // prose 429 MATCH; embedded hex (e4291) does not.
     matches: (text) => agyLogShowsRateLimit(text),
-    evidenceSources: ['agy.log tail', 'verdict reason', 'gauntlet result'],
+    evidenceSources: ['agy_log_tail', 'verdict_reason', 'gauntlet_result'],
     retryAfterParsed: false, // none in signal -> default
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -68,7 +87,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
           ? 1
           : null,
     matches: (text) => /"type"\s*:\s*"rate_limit_error"/i.test(text),
-    evidenceSources: ['child stderr', 'gauntlet result error text'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -87,7 +106,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
       ((/\bHTTP(?:\/[\d.]+)? 429\b/i.test(text) ||
         /"status"\s*:\s*429\b/i.test(text)) &&
         /rate limit/i.test(text)),
-    evidenceSources: ['child stderr', 'gauntlet result error text'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -100,7 +119,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
     // quoted prose mentions never trip (false-positive discipline).
     matches: (text) =>
       /"(?:status|code)"\s*:\s*"resource_exhausted"/i.test(text),
-    evidenceSources: ['child stderr', 'gauntlet result error text'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -113,7 +132,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
       /"status"\s*:\s*429\b/i.test(text) ||
       /"status_code"\s*:\s*429\b/i.test(text) ||
       /^HTTP\/[\d.]+ 429\b/im.test(text),
-    evidenceSources: ['child stderr', 'gauntlet result'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
     retryAfterParsed: false, // none -> default (weak signal, conservative)
     defaultCooldownMs: 30_000,
     maxCooldownMs: 5 * 60_000,
@@ -136,15 +155,21 @@ export interface RateLimitMatch {
 /** Closed-table classification: the most specific applicable predicate wins
  *  (per-call rank from appliesRank — api match > base_url host match >
  *  generic); one match per event (first in registry order within a rank).
- *  Parsed retry-after clamps to [5s, family max]; absent -> family default. */
+ *  Parsed retry-after clamps to [5s, family max]; absent -> family default.
+ *  When `source` is given, only rows qualified against it participate
+ *  (D-10 source enforcement — senseEvidence always passes it; the bare
+ *  no-source call is the registry-wide view). */
 export function classifyRateLimit(args: {
   api?: string;
   base_url?: string;
   runtimeFamily?: string;
+  source?: SensorEvidenceSource;
   text: string;
 }): RateLimitMatch | null {
   let best: { row: RateLimitMarkerRow; rank: number } | null = null;
   for (const row of RATE_LIMIT_MARKERS) {
+    if (args.source !== undefined && !row.evidenceSources.includes(args.source))
+      continue;
     const rank = row.appliesRank(args);
     if (rank === null) continue;
     if (!row.matches(args.text)) continue;
@@ -170,17 +195,6 @@ export function classifyRateLimit(args: {
 // ---------------------------------------------------------------------------
 // Evidence intake (Decision D-10 sources + role attribution; R-SNS-1, R-CLS-3)
 // ---------------------------------------------------------------------------
-
-/** The D-10 evidence-source vocabulary: where a piece of sensor text came
- *  from. Live sources (child stderr, agy.log tail, event stream) are fed by
- *  the dispatcher as they arrive; terminal sources (verdict reason, gauntlet
- *  result) are read at child exit via terminalEvidenceTexts. */
-export type SensorEvidenceSource =
-  | 'child_stderr'
-  | 'verdict_reason'
-  | 'gauntlet_result'
-  | 'event_stream'
-  | 'agy_log_tail';
 
 export type SensorRole = 'subject' | 'grader';
 
@@ -208,7 +222,8 @@ export interface BillingMarkerRow {
   readonly family: string;
   readonly appliesRank: (ctx: CredentialShape) => number | null;
   readonly matches: (text: string) => boolean;
-  readonly evidenceSources: readonly string[];
+  /** Enforced exactly like the rate-limit rows' evidenceSources. */
+  readonly evidenceSources: readonly SensorEvidenceSource[];
 }
 
 /** Initial anchored billing-exhaustion vocabulary (R-CLS-3: grader billing
@@ -231,7 +246,7 @@ export const BILLING_MARKERS: readonly BillingMarkerRow[] = [
     // balance carries no such field shape and never trips.
     matches: (text) =>
       /"message"\s*:\s*"[^"]*credit balance is too low/i.test(text),
-    evidenceSources: ['child stderr', 'gauntlet result error text'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
   },
   {
     family: 'openai-compatible',
@@ -240,7 +255,7 @@ export const BILLING_MARKERS: readonly BillingMarkerRow[] = [
     // OpenAI's insufficient_quota code/type — billing, not throttling, even
     // though the provider delivers it with HTTP status 429.
     matches: (text) => /"(?:code|type)"\s*:\s*"insufficient_quota"/i.test(text),
-    evidenceSources: ['child stderr', 'gauntlet result error text'],
+    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
   },
 ];
 
@@ -248,13 +263,15 @@ export interface BillingMatch {
   readonly family: string;
 }
 
-/** Closed-table billing classification, same rank arbitration as
- *  classifyRateLimit. */
+/** Closed-table billing classification, same rank arbitration and source
+ *  enforcement as classifyRateLimit. */
 export function classifyBillingExhaustion(
-  args: CredentialShape & { text: string },
+  args: CredentialShape & { source?: SensorEvidenceSource; text: string },
 ): BillingMatch | null {
   let best: { row: BillingMarkerRow; rank: number } | null = null;
   for (const row of BILLING_MARKERS) {
+    if (args.source !== undefined && !row.evidenceSources.includes(args.source))
+      continue;
     const rank = row.appliesRank(args);
     if (rank === null) continue;
     if (!row.matches(args.text)) continue;
@@ -284,13 +301,16 @@ export type SensorSignal =
       readonly role: SensorRole;
     };
 
-/** Classify one piece of evidence. Billing anchors are checked FIRST:
- *  OpenAI delivers insufficient_quota as an HTTP 429, so one payload can
- *  satisfy both tables and the billing anchor is the more specific claim —
- *  the same most-specific-wins principle as the rank arbitration. */
+/** Classify one piece of evidence against the rows qualified for its
+ *  source (D-10 enforcement — forbidden-source evidence never classifies).
+ *  Billing anchors are checked FIRST: OpenAI delivers insufficient_quota as
+ *  an HTTP 429, so one payload can satisfy both tables and the billing
+ *  anchor is the more specific claim — the same most-specific-wins
+ *  principle as the rank arbitration. */
 export function senseEvidence(ev: SensorEvidence): SensorSignal | null {
   const billing = classifyBillingExhaustion({
     ...ev.credential,
+    source: ev.source,
     text: ev.text,
   });
   if (billing !== null) {
@@ -301,7 +321,11 @@ export function senseEvidence(ev: SensorEvidence): SensorSignal | null {
       role: ev.role,
     };
   }
-  const rate = classifyRateLimit({ ...ev.credential, text: ev.text });
+  const rate = classifyRateLimit({
+    ...ev.credential,
+    source: ev.source,
+    text: ev.text,
+  });
   if (rate !== null) {
     return {
       evidence: '429-match',
@@ -314,13 +338,35 @@ export function senseEvidence(ev: SensorEvidence): SensorSignal | null {
   return null;
 }
 
+/** Run-id subdirectories of `<runDir>/gauntlet-agent/results`, newest
+ *  first — the same iteration order as the runner's
+ *  gauntletLayerFromRunDir. Empty when the results root is absent. */
+function gauntletResultDirs(runDir: string): { root: string; dirs: string[] } {
+  const root = join(runDir, 'gauntlet-agent', 'results');
+  let dirs: string[] = [];
+  try {
+    dirs = readdirSync(root)
+      .filter((name) => {
+        try {
+          return statSync(join(root, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort()
+      .reverse();
+  } catch {
+    // no gauntlet results dir
+  }
+  return { root, dirs };
+}
+
 /** Terminal evidence texts from a run dir — the registry's named run-dir
  *  sources, read at child exit (R-SNS-1: artifacts read at terminal):
  *  verdict reason + error message as 'verdict_reason', the newest parseable
- *  gauntlet result's summary + reasoning as 'gauntlet_result' (same
- *  newest-first iteration as the runner's gauntletLayerFromRunDir; JSON
- *  parsing un-escapes the strings so provider bodies quoted inside them
- *  stay anchor-matchable). Best-effort collection: a missing or unreadable
+ *  gauntlet result's summary + reasoning as 'gauntlet_result' (JSON parsing
+ *  un-escapes the strings so provider bodies quoted inside them stay
+ *  anchor-matchable). Best-effort collection: a missing or unreadable
  *  artifact yields no entry — absence composes through the classifier as
  *  'none', never a throw at evidence-collection time. */
 export function terminalEvidenceTexts(
@@ -341,38 +387,78 @@ export function terminalEvidenceTexts(
   } catch {
     // no composed verdict — the exit-code heuristic classifies (dispatcher)
   }
-  try {
-    const root = join(runDir, 'gauntlet-agent', 'results');
-    const dirs = readdirSync(root)
-      .filter((name) => {
-        try {
-          return statSync(join(root, name)).isDirectory();
-        } catch {
-          return false;
-        }
-      })
-      .sort()
-      .reverse();
-    for (const id of dirs) {
-      let r: { summary?: string; reasoning?: string };
+  const { root, dirs } = gauntletResultDirs(runDir);
+  for (const id of dirs) {
+    let r: { summary?: string; reasoning?: string };
+    try {
+      r = JSON.parse(readFileSync(join(root, id, 'result.json'), 'utf8')) as {
+        summary?: string;
+        reasoning?: string;
+      };
+    } catch {
+      continue;
+    }
+    const text = [r.summary, r.reasoning]
+      .filter((t): t is string => typeof t === 'string' && t !== '')
+      .join('\n');
+    if (text !== '') {
+      out.push({ source: 'gauntlet_result', text });
+      break;
+    }
+  }
+  return out;
+}
+
+/** Every string leaf of a parsed JSON value, in document order. run_error
+ *  payloads nest the provider body inside message strings; extracting the
+ *  parsed strings (not the raw escaped line) keeps the anchors matchable. */
+function deepStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') {
+    out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) deepStrings(item, out);
+  } else if (typeof value === 'object' && value !== null) {
+    for (const nested of Object.values(value)) deepStrings(nested, out);
+  }
+  return out;
+}
+
+/** Gauntlet event-stream intake (R-SNS-1: classification over the gauntlet
+ *  child's event stream): the newest run's run.jsonl, one evidence text per
+ *  `run_error` record (the stream's error surface — the documented channel
+ *  where a grader billing/429 death lands when no result composes).
+ *  Best-effort like the other terminal readers; the dispatcher may also
+ *  tail the stream live and feed lines through senseEvidence directly. */
+export function gauntletEventStreamTexts(
+  runDir: string,
+): { source: SensorEvidenceSource; text: string }[] {
+  const out: { source: SensorEvidenceSource; text: string }[] = [];
+  const { root, dirs } = gauntletResultDirs(runDir);
+  for (const id of dirs) {
+    let raw: string;
+    try {
+      raw = readFileSync(join(root, id, 'run.jsonl'), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of raw.split('\n')) {
+      if (line.trim() === '') continue;
+      let rec: unknown;
       try {
-        r = JSON.parse(readFileSync(join(root, id, 'result.json'), 'utf8')) as {
-          summary?: string;
-          reasoning?: string;
-        };
+        rec = JSON.parse(line);
       } catch {
         continue;
       }
-      const text = [r.summary, r.reasoning]
-        .filter((t): t is string => typeof t === 'string' && t !== '')
-        .join('\n');
-      if (text !== '') {
-        out.push({ source: 'gauntlet_result', text });
-        break;
-      }
+      if (
+        typeof rec !== 'object' ||
+        rec === null ||
+        (rec as Record<string, unknown>)['type'] !== 'run_error'
+      )
+        continue;
+      const text = deepStrings(rec).join('\n');
+      if (text !== '') out.push({ source: 'event_stream', text });
     }
-  } catch {
-    // no gauntlet results dir
+    break; // one stream per run dir (single-run-per-dir convention)
   }
   return out;
 }
@@ -413,22 +499,43 @@ export function exposureProbeFromParser(
   };
 }
 
-/** The per-harness runtime probe registry (Decision D-9: probes keyed by
- *  the harness's session-log shape knowledge already encoded in
- *  src/normalize/). Each probe parses the LIVE session log with the same
- *  normalizer capture uses and takes the earliest step timestamp; a
- *  half-written or unparseable log yields no stamps — absence, fail-closed
- *  at the decision point (R-SNS-4), never a crash mid-campaign. Unknown
- *  agents fail loud: by dispatch time every arm's agent is a registered
- *  capture backend. */
-export function exposureProbeForAgent(agent: string): ExposureProbe {
+/** Epoch-ms points from JSONL rows via a field picker: ISO-8601 strings are
+ *  parsed, finite numbers are taken as epoch ms. Unparseable lines are
+ *  skipped — a half-written log reads as fewer points, never a crash. */
+function jsonlTimePointsMs(
+  text: string,
+  pick: (row: Record<string, unknown>) => unknown,
+): number[] {
+  const out: number[] = [];
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue;
+    let rec: unknown;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof rec !== 'object' || rec === null || Array.isArray(rec)) continue;
+    const v = pick(rec as Record<string, unknown>);
+    if (typeof v === 'string') {
+      const ms = Date.parse(v);
+      if (Number.isFinite(ms)) out.push(ms);
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+/** Earliest-generation extractor over the harness's ATIF normalizer (for
+ *  the harnesses whose normalizers carry the log's own timestamps through
+ *  to step.timestamp). A partial/unparseable log yields no stamps. */
+function stepTimestampsVia(agent: string): (text: string) => readonly number[] {
   const normalize = ATIF_NORMALIZERS[agent];
   if (normalize === undefined) {
-    throw new Error(
-      `no exposure probe for agent '${agent}' — known agents: ${Object.keys(ATIF_NORMALIZERS).join(', ')}`,
-    );
+    throw new Error(`no ATIF normalizer for agent '${agent}'`);
   }
-  return exposureProbeFromParser(agent, (text) => {
+  return (text) => {
     try {
       return normalize(text, 'unknown')
         .steps.map((s) =>
@@ -438,7 +545,69 @@ export function exposureProbeForAgent(agent: string): ExposureProbe {
     } catch {
       return [];
     }
-  });
+  };
+}
+
+/** The per-harness runtime exposure derivations (Decision D-9), one row per
+ *  LIVE harness (the agents with a coding-agents/<name>.yaml — corpus-replay
+ *  ATIF dialects have no live session log to probe). Harnesses whose
+ *  normalizer preserves timestamps ride it; the rest derive from the raw
+ *  session-log shape they own. Absence (no stamps) is fail-closed at the
+ *  decision point (R-SNS-4), never a crash mid-campaign. */
+export const EXPOSURE_DERIVATIONS: Record<
+  string,
+  (text: string) => readonly number[]
+> = {
+  // Raw derivation: per-record `created_at` ISO stamps (the antigravity
+  // normalizer builds its steps without timestamps).
+  antigravity: (text) => jsonlTimePointsMs(text, (r) => r['created_at']),
+  claude: stepTimestampsVia('claude'),
+  codex: stepTimestampsVia('codex'),
+  // Copilot's events.jsonl carries no time field verifiable from this repo:
+  // the generic three-convention scan (ISO `timestamp` | numeric epoch-ms
+  // `time` | ISO `created_at`) reads one if present; otherwise absence.
+  // Copilot mid-run exposure observability is a D-9 qualification-checklist
+  // item.
+  copilot: (text) =>
+    jsonlTimePointsMs(
+      text,
+      (r) => r['timestamp'] ?? r['time'] ?? r['created_at'],
+    ),
+  gemini: stepTimestampsVia('gemini'),
+  // Hermes session exports are one JSON document with epoch-SECONDS
+  // `messages[].timestamp` floats.
+  hermes: (text) => {
+    try {
+      const doc = JSON.parse(text) as { messages?: { timestamp?: unknown }[] };
+      return (doc.messages ?? [])
+        .map((m) => m.timestamp)
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+        .map((s) => Math.round(s * 1000));
+    } catch {
+      return [];
+    }
+  },
+  // Kimi wire.jsonl rows carry numeric epoch-ms `time` (the same convention
+  // capture's sessionDurationMs reads).
+  kimi: (text) => jsonlTimePointsMs(text, (r) => r['time']),
+  opencode: stepTimestampsVia('opencode'),
+  // Raw derivation: per-record `timestamp` ISO stamps (the pi normalizer
+  // builds its steps without timestamps).
+  pi: (text) => jsonlTimePointsMs(text, (r) => r['timestamp']),
+  serf: stepTimestampsVia('serf'),
+};
+
+/** The per-harness runtime probe (Decision D-9: probes keyed by the
+ *  harness's session-log shape knowledge). Unknown agents fail loud: by
+ *  dispatch time every arm's agent is a registered live harness. */
+export function exposureProbeForAgent(agent: string): ExposureProbe {
+  const parse = EXPOSURE_DERIVATIONS[agent];
+  if (parse === undefined) {
+    throw new Error(
+      `no exposure probe for agent '${agent}' — known agents: ${Object.keys(EXPOSURE_DERIVATIONS).join(', ')}`,
+    );
+  }
+  return exposureProbeFromParser(agent, parse);
 }
 
 /** Capture-side re-derivation (Decision D-9: the capture-derived value is
@@ -487,26 +656,46 @@ export function exposureWithPrecedence(args: {
   return args.gauntletMarkTsMs ?? args.probeTsMs;
 }
 
-export interface ExposureDecision {
-  readonly tsMs: number | null;
-  readonly source: 'runtime' | 'capture' | null;
-}
+export type SuiteKind = (typeof SUITE_KINDS)[number];
+
+/** The block-terminal decision outcome: either the established exposure or
+ *  the ENFORCED unestablished resolution — never a silent neutral
+ *  (R-SNS-4). Gating: a skew breach — the sample is excluded from the
+ *  paired comparison and refilled from reserve (R-DSP-9's skew_excluded +
+ *  skew_refill journal expression, emitted by the dispatcher).
+ *  Exploratory: a rendered caveat. */
+export type ExposureTerminalDecision =
+  | {
+      readonly established: true;
+      readonly tsMs: number;
+      readonly source: 'runtime' | 'capture';
+    }
+  | {
+      readonly established: false;
+      readonly resolution: 'skew_breach_exclude_and_refill' | 'render_caveat';
+    };
 
 /** Block-terminal decision (the Decision D-9 decision point): the
  *  runtime-pinned value wins (monotonic single emission); a sample whose
  *  runtime probe never fired may take the capture-derived value; neither
- *  source by decision time -> null. Absence is fail-closed (R-SNS-4): the
- *  dispatcher excludes gating samples and refills from reserve — null is
- *  never silently treated as no-exposure. */
+ *  source by decision time resolves to the suite-kind-enforced outcome —
+ *  absence is never silently treated as no-exposure. */
 export function decideExposureAtTerminal(args: {
   runtimeTsMs: number | null;
   captureTsMs: number | null;
-}): ExposureDecision {
+  suiteKind: SuiteKind;
+}): ExposureTerminalDecision {
   if (args.runtimeTsMs !== null)
-    return { tsMs: args.runtimeTsMs, source: 'runtime' };
+    return { established: true, tsMs: args.runtimeTsMs, source: 'runtime' };
   if (args.captureTsMs !== null)
-    return { tsMs: args.captureTsMs, source: 'capture' };
-  return { tsMs: null, source: null };
+    return { established: true, tsMs: args.captureTsMs, source: 'capture' };
+  return {
+    established: false,
+    resolution:
+      args.suiteKind === 'gating'
+        ? 'skew_breach_exclude_and_refill'
+        : 'render_caveat',
+  };
 }
 
 export interface ExposureAuditResult {
@@ -524,17 +713,24 @@ export interface ExposureAuditResult {
 }
 
 /** D-9 exposure audit: the decision-time value vs the capture
- *  re-derivation. A value-only divergence (both present, different) is
- *  reported but does not invalidate; a divergence that changes inclusion
- *  (the decided value included the sample in the paired comparison and the
- *  re-derived value would exclude it, or vice versa) invalidates the
- *  block. */
+ *  re-derivation. Inclusion in the paired comparison rides the
+ *  caller-supplied predicate (the block's exposure skew against the
+ *  registered max_exposure_skew, R-DSP-9) — so two PRESENT timestamps
+ *  whose difference crosses the skew bound flip inclusion and invalidate
+ *  the block, exactly like a presence flip. Absence is excluded fail-closed
+ *  before the predicate is consulted; a divergence that leaves inclusion
+ *  unchanged is reported without invalidating. */
 export function auditExposure(args: {
   decidedTsMs: number | null;
   rederivedTsMs: number | null;
+  /** Whether a sample with this established exposure timestamp is included
+   *  in the paired comparison. Called only with present timestamps. */
+  includedAt: (tsMs: number) => boolean;
 }): ExposureAuditResult {
+  const included = (v: number | null): boolean =>
+    v !== null && args.includedAt(v);
   const inclusionChanged =
-    (args.decidedTsMs === null) !== (args.rederivedTsMs === null);
+    included(args.decidedTsMs) !== included(args.rederivedTsMs);
   return {
     divergent: args.decidedTsMs !== args.rederivedTsMs,
     inclusionChanged,

@@ -1,0 +1,16 @@
+{
+  "info": { "id": "ses_1", "directory": "/tmp/project" },
+  "messages": [
+    {
+      "info": { "role": "assistant" },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "bash",
+          "state": { "status": "completed", "input": { "command": "pwd" } },
+          "time": { "start": 1756288805000 }
+        }
+      ]
+    }
+  ]
+}

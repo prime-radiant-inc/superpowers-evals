@@ -1,16 +1,19 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   auditExposure,
   classifyBillingExhaustion,
   classifyRateLimit,
   decideExposureAtTerminal,
+  EXPOSURE_DERIVATIONS,
   ExposureTracker,
   exposureProbeForAgent,
   exposureProbeFromParser,
   exposureWithPrecedence,
+  gauntletEventStreamTexts,
   parseRetryAfterMs,
   RATE_LIMIT_MARKERS,
   RETRY_AFTER_MIN_MS,
@@ -18,7 +21,9 @@ import {
   terminalEvidenceTexts,
   trajectoryExposureMs,
 } from '../src/campaign/sensors.ts';
-import { ATIF_NORMALIZERS } from '../src/capture/index.ts';
+
+const fixture = (rel: string): string =>
+  fileURLToPath(new URL(`./fixtures/${rel}`, import.meta.url));
 
 test('the v1 registry is exactly the five pinned rows', () => {
   expect(RATE_LIMIT_MARKERS.map((r) => r.family)).toEqual([
@@ -318,33 +323,195 @@ test('C7 billing-exhaustion: anchored provider shapes only; billing outranks the
   ).toBeNull();
 });
 
-test('C7 per-harness runtime probe registry: probes ride the capture normalizers', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'probe-'));
-  const log = join(dir, 'session.jsonl');
+test('D-10 source enforcement: a row classifies only evidence from its pinned sources', () => {
+  const anthropicBody = '{"type":"rate_limit_error","message":"throttled"}';
+  const grader = { role: 'grader' as const, credential: { api: 'anthropic' } };
+  // Row 2's pinned sources are child stderr + gauntlet result (error text) +
+  // the gauntlet event stream — verdict reason is NOT among them.
+  expect(
+    senseEvidence({ ...grader, source: 'verdict_reason', text: anthropicBody }),
+  ).toBeNull();
+  expect(
+    senseEvidence({ ...grader, source: 'gauntlet_result', text: anthropicBody })
+      ?.evidence,
+  ).toBe('429-match');
+  expect(
+    senseEvidence({ ...grader, source: 'event_stream', text: anthropicBody })
+      ?.evidence,
+  ).toBe('429-match');
+  // Row 1's pinned sources are agy.log tail + verdict reason + gauntlet
+  // result — child stderr is NOT among them.
+  const agy = {
+    role: 'subject' as const,
+    credential: { runtimeFamily: 'antigravity' },
+  };
+  expect(
+    senseEvidence({
+      ...agy,
+      source: 'agy_log_tail',
+      text: 'RESOURCE_EXHAUSTED: quota',
+    })?.family,
+  ).toBe('antigravity');
+  expect(
+    senseEvidence({
+      ...agy,
+      source: 'verdict_reason',
+      text: 'RESOURCE_EXHAUSTED: quota',
+    })?.family,
+  ).toBe('antigravity');
+  expect(
+    senseEvidence({
+      ...agy,
+      source: 'child_stderr',
+      text: 'RESOURCE_EXHAUSTED: quota',
+    }),
+  ).toBeNull();
+  // Billing rows pin child stderr + gauntlet result + event stream — never
+  // verdict reason.
+  const billing =
+    '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}';
+  expect(
+    senseEvidence({ ...grader, source: 'verdict_reason', text: billing }),
+  ).toBeNull();
+  // The bare classification API without a source stays unrestricted (the
+  // registry-wide view the pinned classifyRateLimit tests exercise).
+  expect(
+    classifyRateLimit({ api: 'anthropic', text: anthropicBody })?.family,
+  ).toBe('anthropic');
+});
+
+test('R-SNS-1 gauntlet event-stream intake: run.jsonl run_error records become classifiable event_stream evidence', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'stream-'));
+  expect(gauntletEventStreamTexts(runDir)).toEqual([]);
+  const resultDir = join(runDir, 'gauntlet-agent', 'results', 'r1');
+  mkdirSync(resultDir, { recursive: true });
   const lines = [
+    JSON.stringify({ type: 'run_start', ts: 1 }),
+    JSON.stringify({ type: 'llm_request', model: 'claude-sonnet-5' }),
+    // Turn-1 grader death: the provider body rides inside the run_error
+    // record's nested message string (deep string extraction un-nests it).
     JSON.stringify({
-      type: 'user',
-      timestamp: '2026-08-27T10:00:05.000Z',
-      message: { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      type: 'run_error',
+      error: {
+        message:
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}',
+      },
     }),
     JSON.stringify({
-      type: 'assistant',
-      timestamp: '2026-08-27T10:00:07.000Z',
-      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      type: 'run_error',
+      error: {
+        message: '429 {"type":"rate_limit_error","message":"throttled"}',
+      },
     }),
   ];
-  writeFileSync(log, `${lines.join('\n')}\n`);
-  const probe = exposureProbeForAgent('claude');
-  expect(probe.agent).toBe('claude');
-  expect(probe.observe(log)).toBe(Date.parse('2026-08-27T10:00:05.000Z'));
-  // A half-written/unparseable log is absence (fail-closed at the decision
-  // point, R-SNS-4), never a crash mid-campaign.
-  writeFileSync(log, '{"type":"user","timestamp":');
-  expect(probe.observe(log)).toBeNull();
-  // The registry covers every capture backend; unknown agents fail loud.
-  for (const agent of Object.keys(ATIF_NORMALIZERS)) {
-    expect(exposureProbeForAgent(agent).agent).toBe(agent);
+  writeFileSync(join(resultDir, 'run.jsonl'), `${lines.join('\n')}\n`);
+  const texts = gauntletEventStreamTexts(runDir);
+  expect(texts.map((t) => t.source)).toEqual(['event_stream', 'event_stream']);
+  const signals = texts.map((t) =>
+    senseEvidence({
+      source: t.source,
+      role: 'grader',
+      credential: { api: 'anthropic' },
+      text: t.text,
+    }),
+  );
+  // Classifier rows 2 and 1 reachable from the event stream (R-SNS-1;
+  // exactly the documented appliance failure mode: grader billing death
+  // surfacing ONLY in run.jsonl).
+  expect(signals[0]?.evidence).toBe('billing-exhaustion');
+  expect(signals[1]?.evidence).toBe('429-match');
+});
+
+test('per-harness exposure derivations: every live harness parses its real session-log shape', () => {
+  // The registry covers exactly the live-runnable harnesses (the agents with
+  // a coding-agents/<name>.yaml) — corpus-replay ATIF dialects have no live
+  // session log to probe.
+  const liveHarnesses = readdirSync(
+    fileURLToPath(new URL('../coding-agents/', import.meta.url)),
+  )
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => f.replace(/\.yaml$/, ''))
+    .sort();
+  expect(Object.keys(EXPOSURE_DERIVATIONS).sort()).toEqual(liveHarnesses);
+
+  // Each harness's probe parses a REAL session-log fixture to a concrete
+  // earliest-generation timestamp — no label-only coverage.
+  const cases: { agent: string; path: string; expected: number }[] = [
+    // Raw derivations (the ATIF normalizer drops these logs' timestamps).
+    {
+      agent: 'antigravity',
+      path: fixture('antigravity-real-no-usage.jsonl'),
+      expected: Date.parse('2026-06-15T02:52:26Z'),
+    },
+    {
+      agent: 'pi',
+      path: fixture('pi-session.slice.jsonl'),
+      expected: Date.parse('2026-06-15T21:09:55.184Z'),
+    },
+    {
+      agent: 'hermes',
+      path: fixture('hermes-real-session.jsonl'),
+      expected: 1784842079846,
+    }, // messages[].timestamp epoch-SECONDS -> ms
+    {
+      agent: 'kimi',
+      path: fixture('exposure/kimi-wire.jsonl'),
+      expected: 1756288805000,
+    }, // numeric epoch-ms `time` (capture's kimi convention)
+    // Normalizer-backed derivations (step timestamps survive normalization).
+    {
+      agent: 'claude',
+      path: fixture('claude-2.1.177-real.jsonl'),
+      expected: Date.parse('2026-06-13T19:37:26.328Z'),
+    },
+    {
+      agent: 'codex',
+      path: fixture('codex-56-exec.slice.jsonl'),
+      expected: Date.parse('2026-07-14T08:55:26.637Z'),
+    },
+    {
+      agent: 'gemini',
+      path: fixture('exposure/gemini-session.json'),
+      expected: Date.parse('2026-08-27T10:00:07.000Z'),
+    },
+    {
+      agent: 'opencode',
+      path: fixture('exposure/opencode-session.json'),
+      expected: 1756288805000,
+    },
+    {
+      agent: 'serf',
+      path: fixture('serf-real-trajectory.json'),
+      expected: Date.parse('2026-06-22T17:22:35Z'),
+    },
+  ];
+  for (const c of cases) {
+    const probe = exposureProbeForAgent(c.agent);
+    expect(probe.agent).toBe(c.agent);
+    expect(probe.observe(c.path)).toBe(c.expected);
   }
+
+  // Copilot: events.jsonl carries no verified time field (repo evidence);
+  // its row ships the generic three-convention scan (ISO `timestamp`,
+  // numeric epoch-ms `time`, ISO `created_at`) — a real-shaped log without
+  // one reads as absence (fail-closed at the decision point, D-9
+  // qualification-checklist item), and a log that does carry one is picked
+  // up.
+  const copilot = exposureProbeForAgent('copilot');
+  expect(copilot.observe(fixture('exposure/copilot-events.jsonl'))).toBeNull();
+  const dir = mkdtempSync(join(tmpdir(), 'copilot-'));
+  const stamped = join(dir, 'events.jsonl');
+  writeFileSync(
+    stamped,
+    `${JSON.stringify({ type: 'session.start', timestamp: '2026-08-27T09:59:59.000Z' })}\n${JSON.stringify({ type: 'assistant.message', data: {} })}\n`,
+  );
+  expect(copilot.observe(stamped)).toBe(Date.parse('2026-08-27T09:59:59.000Z'));
+
+  // A half-written/unparseable log is absence, never a crash mid-campaign.
+  const torn = join(dir, 'torn.jsonl');
+  writeFileSync(torn, '{"type":"user","timestamp":');
+  expect(exposureProbeForAgent('claude').observe(torn)).toBeNull();
+  // Unknown agents fail loud.
   expect(() => exposureProbeForAgent('not-an-agent')).toThrow(
     /no exposure probe/,
   );
@@ -370,50 +537,154 @@ test('C7 capture re-derivation: trajectoryExposureMs reads the first step timest
   expect(trajectoryExposureMs(join(runDir, 'nope'))).toBeNull();
 });
 
-test('C7 D-9 decision + audit: runtime wins, capture fallback, inclusion-flip mints exposure_audit', () => {
+test('R-SNS-4 decision point: established value or the enforced gating/exploratory outcome, never a silent neutral', () => {
+  // Runtime wins (monotonic single emission); capture fallback.
   expect(
-    decideExposureAtTerminal({ runtimeTsMs: 900, captureTsMs: 1000 }),
-  ).toEqual({ tsMs: 900, source: 'runtime' });
+    decideExposureAtTerminal({
+      runtimeTsMs: 900,
+      captureTsMs: 1000,
+      suiteKind: 'gating',
+    }),
+  ).toEqual({
+    established: true,
+    tsMs: 900,
+    source: 'runtime',
+  });
   expect(
-    decideExposureAtTerminal({ runtimeTsMs: null, captureTsMs: 1000 }),
-  ).toEqual({ tsMs: 1000, source: 'capture' });
+    decideExposureAtTerminal({
+      runtimeTsMs: null,
+      captureTsMs: 1000,
+      suiteKind: 'gating',
+    }),
+  ).toEqual({
+    established: true,
+    tsMs: 1000,
+    source: 'capture',
+  });
+  // Gating absence is a skew breach: excluded from the paired comparison and
+  // refilled from reserve (R-SNS-4/R-DSP-9); exploratory renders a caveat.
   expect(
-    decideExposureAtTerminal({ runtimeTsMs: null, captureTsMs: null }),
-  ).toEqual({ tsMs: null, source: null });
+    decideExposureAtTerminal({
+      runtimeTsMs: null,
+      captureTsMs: null,
+      suiteKind: 'gating',
+    }),
+  ).toEqual({
+    established: false,
+    resolution: 'skew_breach_exclude_and_refill',
+  });
+  expect(
+    decideExposureAtTerminal({
+      runtimeTsMs: null,
+      captureTsMs: null,
+      suiteKind: 'exploratory',
+    }),
+  ).toEqual({
+    established: false,
+    resolution: 'render_caveat',
+  });
+});
+
+test('D-9 audit: inclusion rides the paired-comparison predicate — a skew-crossing value divergence mints exposure_audit', () => {
+  // The dispatcher supplies the block's inclusion predicate (exposure skew
+  // vs the registered max_exposure_skew, R-DSP-9); absence is excluded
+  // fail-closed before the predicate is consulted.
+  const withinSkew = (tsMs: number): boolean => tsMs <= 1000;
   // Agreement: clean.
-  expect(auditExposure({ decidedTsMs: 900, rederivedTsMs: 900 })).toEqual({
+  expect(
+    auditExposure({
+      decidedTsMs: 900,
+      rederivedTsMs: 900,
+      includedAt: withinSkew,
+    }),
+  ).toEqual({
     divergent: false,
     inclusionChanged: false,
     invalidationReason: null,
   });
-  // Value-only divergence: reported, not invalidating (inclusion unchanged).
-  expect(auditExposure({ decidedTsMs: 900, rederivedTsMs: 950 })).toEqual({
+  // Value divergence inside the skew window: reported, not invalidating.
+  expect(
+    auditExposure({
+      decidedTsMs: 900,
+      rederivedTsMs: 950,
+      includedAt: withinSkew,
+    }),
+  ).toEqual({
     divergent: true,
     inclusionChanged: false,
     invalidationReason: null,
   });
-  // Decided included, re-derived would exclude -> block invalidation.
-  expect(auditExposure({ decidedTsMs: 900, rederivedTsMs: null })).toEqual({
+  // BOTH present, but the re-derived value crosses max_exposure_skew: the
+  // decided value included the sample, the re-derived value would exclude
+  // it -> block invalidation (D-9).
+  expect(
+    auditExposure({
+      decidedTsMs: 900,
+      rederivedTsMs: 1500,
+      includedAt: withinSkew,
+    }),
+  ).toEqual({
     divergent: true,
     inclusionChanged: true,
     invalidationReason: 'exposure_audit',
   });
-  // Vice versa: decided excluded, re-derived would include.
-  expect(auditExposure({ decidedTsMs: null, rederivedTsMs: 900 })).toEqual({
+  // Both present, both outside the window: divergent, inclusion unchanged.
+  expect(
+    auditExposure({
+      decidedTsMs: 1500,
+      rederivedTsMs: 1600,
+      includedAt: withinSkew,
+    }),
+  ).toEqual({
+    divergent: true,
+    inclusionChanged: false,
+    invalidationReason: null,
+  });
+  // Presence flips still invalidate regardless of the predicate (absence is
+  // excluded fail-closed).
+  expect(
+    auditExposure({
+      decidedTsMs: 900,
+      rederivedTsMs: null,
+      includedAt: () => true,
+    }),
+  ).toEqual({
     divergent: true,
     inclusionChanged: true,
     invalidationReason: 'exposure_audit',
+  });
+  expect(
+    auditExposure({
+      decidedTsMs: null,
+      rederivedTsMs: 900,
+      includedAt: () => true,
+    }),
+  ).toEqual({
+    divergent: true,
+    inclusionChanged: true,
+    invalidationReason: 'exposure_audit',
+  });
+  expect(
+    auditExposure({
+      decidedTsMs: null,
+      rederivedTsMs: null,
+      includedAt: () => true,
+    }),
+  ).toEqual({
+    divergent: false,
+    inclusionChanged: false,
+    invalidationReason: null,
   });
 });
 
-test('C7 terminal sources: verdict reason + gauntlet result texts are collected, tagged, and classifiable', () => {
+test('C7 terminal sources: verdict reason + gauntlet result texts are collected, tagged, and source-enforced', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'term-'));
   expect(terminalEvidenceTexts(runDir)).toEqual([]);
   writeFileSync(
     join(runDir, 'verdict.json'),
     JSON.stringify({
       final: 'indeterminate',
-      final_reason: 'gauntlet errored',
+      final_reason: 'agy hit RESOURCE_EXHAUSTED',
       error: {
         stage: 'gauntlet',
         message: '{"type":"rate_limit_error","message":"throttled"}',
@@ -436,25 +707,37 @@ test('C7 terminal sources: verdict reason + gauntlet result texts are collected,
     'verdict_reason',
     'gauntlet_result',
   ]);
-  // The collected texts feed senseEvidence under the grader credential:
-  // classifier row 1 (grader 429) and row 2 (grader billing) both reachable
-  // from the registry's named terminal sources.
-  const signals = texts.map((t) =>
+  // Row 1 is the only row qualified against verdict reason: the antigravity
+  // signal in final_reason classifies from it; the anthropic body carried in
+  // the same verdict text does NOT (row 2 forbids verdict_reason — D-10
+  // pinned sources).
+  const verdictText = texts[0]!;
+  expect(
     senseEvidence({
-      source: t.source,
+      source: verdictText.source,
+      role: 'subject',
+      credential: { runtimeFamily: 'antigravity' },
+      text: verdictText.text,
+    })?.family,
+  ).toBe('antigravity');
+  expect(
+    senseEvidence({
+      source: verdictText.source,
       role: 'grader',
       credential: { api: 'anthropic' },
-      text: t.text,
+      text: verdictText.text,
     }),
-  );
-  expect(signals[0]).toEqual({
-    evidence: '429-match',
-    family: 'anthropic',
-    cooldownMs: 60_000,
-    source: 'verdict_reason',
-    role: 'grader',
-  });
-  expect(signals[1]).toEqual({
+  ).toBeNull();
+  // Classifier row 2 (grader billing) reachable from the gauntlet result.
+  const resultText = texts[1]!;
+  expect(
+    senseEvidence({
+      source: resultText.source,
+      role: 'grader',
+      credential: { api: 'anthropic' },
+      text: resultText.text,
+    }),
+  ).toEqual({
     evidence: 'billing-exhaustion',
     family: 'anthropic',
     source: 'gauntlet_result',

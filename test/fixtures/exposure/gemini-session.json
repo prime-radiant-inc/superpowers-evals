@@ -1,0 +1,22 @@
+{
+  "messages": [
+    {
+      "type": "user",
+      "timestamp": "2026-08-27T10:00:05.000Z",
+      "content": "go"
+    },
+    {
+      "type": "gemini",
+      "timestamp": "2026-08-27T10:00:07.000Z",
+      "content": "ok",
+      "toolCalls": [
+        {
+          "id": "t1",
+          "name": "read_file",
+          "args": { "file_path": "x" },
+          "status": "success"
+        }
+      ]
+    }
+  ]
+}
