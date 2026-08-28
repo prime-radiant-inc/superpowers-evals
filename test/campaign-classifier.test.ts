@@ -3,6 +3,11 @@ import {
   type ClassificationInput,
   classifyFailure,
 } from '../src/campaign/classifier.ts';
+import type {
+  FailureClass,
+  InstrumentCause,
+} from '../src/contracts/campaign/typed-failures.ts';
+
 import {
   RUN_ERROR_STAGES,
   type RunErrorStage,
@@ -191,9 +196,88 @@ test('the pinned 14 rows, first-match-wins', () => {
   ).toEqual({ class: 'evidence' });
 });
 
-test('exhaustive product: every combination classifies, codomain closed, default never instrument', () => {
+// Test-local mirror of the pinned v1 table (spec failure-classifier
+// table, first-wins top-down). Deliberately NOT shared with the
+// implementation: the test owns the expectation, so reordering or editing
+// the row array in src/campaign/classifier.ts cannot silently change
+// which row a given input selects.
+const PINNED_ROWS: readonly {
+  readonly match: (input: ClassificationInput) => boolean;
+  readonly expected: {
+    readonly class: FailureClass;
+    readonly cause?: InstrumentCause;
+  };
+}[] = [
+  {
+    match: (i) => i.role === 'grader' && i.sensorEvidence === '429-match',
+    expected: { class: 'instrument', cause: 'grader_rate_limited' },
+  },
+  {
+    match: (i) =>
+      i.role === 'grader' && i.sensorEvidence === 'billing-exhaustion',
+    expected: { class: 'instrument', cause: 'grader_billing_exhausted' },
+  },
+  {
+    match: (i) => i.stage === 'qa-agent-misconfigured',
+    expected: { class: 'instrument', cause: 'grader_misconfigured' },
+  },
+  {
+    match: (i) => i.role === 'subject' && i.sensorEvidence === '429-match',
+    expected: { class: 'instrument', cause: 'subject_rate_limited' },
+  },
+  {
+    match: (i) => i.stage === 'setup',
+    expected: { class: 'instrument', cause: 'setup_failed' },
+  },
+  {
+    match: (i) => i.exitClass === 'spawn-failed',
+    expected: { class: 'instrument', cause: 'subject_spawn_failed' },
+  },
+  {
+    match: (i) =>
+      i.stage === 'gauntlet' &&
+      (i.exitClass === 'signal' || i.exitClass === 'crash'),
+    expected: { class: 'instrument', cause: 'grader_crashed' },
+  },
+  {
+    match: (i) =>
+      i.role === 'subject' &&
+      (i.exitClass === 'signal' || i.exitClass === 'crash') &&
+      i.stage === undefined,
+    expected: { class: 'instrument', cause: 'subject_crashed' },
+  },
+  {
+    match: (i) => i.stage === 'capture',
+    expected: { class: 'instrument', cause: 'capture_failed' },
+  },
+  {
+    match: (i) => i.stage === 'checks',
+    expected: { class: 'instrument', cause: 'checks_crashed' },
+  },
+  {
+    match: (i) =>
+      i.stage === 'compose' && i.sensorEvidence === 'manifest-mismatch',
+    expected: { class: 'instrument', cause: 'checks_crashed' },
+  },
+  { match: (i) => i.stage === 'stopped', expected: { class: 'aborted' } },
+  {
+    match: (i) =>
+      (i.outcome === 'pass' || i.outcome === 'fail') && i.stage === undefined,
+    expected: { class: 'evidence' },
+  },
+  { match: () => true, expected: { class: 'evidence' } },
+];
+
+test('exhaustive product: every input selects the pinned first-match row (class + cause)', () => {
   for (const input of inputs()) {
+    const row = PINNED_ROWS.find((r) => r.match(input));
+    if (row === undefined) {
+      throw new Error('test-local pinned table lost its default row');
+    }
     const result = classifyFailure(input);
+    expect(result.class).toBe(row.expected.class);
+    expect(result.cause).toBe(row.expected.cause);
+    // Codomain closed, independent of the mirror's own vocabulary.
     expect(['instrument', 'evidence', 'aborted', 'shortfall']).toContain(
       result.class,
     );
