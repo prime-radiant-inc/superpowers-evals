@@ -123,10 +123,23 @@ export const ExposureStartedEvent = envelope(
     })
     .strict(),
 );
+/** R-SNS-4 exploratory caveat (operator amendment 2026-08-27): the one
+ *  condition under which run_completed is legal from `spawned` — an
+ *  exploratory-suite sample whose exposure never established by the
+ *  decision point. Gating never carries it: absence there is a skew breach
+ *  (skew_excluded + refill), not a completion. */
+export const RUN_COMPLETED_CAVEATS = [
+  'exploratory_exposure_unestablished',
+] as const;
+export type RunCompletedCaveat = (typeof RUN_COMPLETED_CAVEATS)[number];
 export const RunCompletedEvent = envelope(
   'run_completed',
   z
-    .object({ attempt_id: z.string().min(1), outcome: z.string().min(1) })
+    .object({
+      attempt_id: z.string().min(1),
+      outcome: z.string().min(1),
+      caveat: z.enum(RUN_COMPLETED_CAVEATS).optional(),
+    })
     .strict(),
 );
 export const InstrumentFailureEvent = envelope(

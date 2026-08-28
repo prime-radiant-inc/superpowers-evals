@@ -67,6 +67,7 @@ import { attemptIdOf, rerunInstanceId } from './registration.ts';
 import {
   auditExposure,
   type CredentialShape,
+  decideExposureAtTerminal,
   ExposureTracker,
   gauntletEventStreamTexts,
   type SensorEvidenceSource,
@@ -2141,29 +2142,44 @@ export async function runCampaignDispatch(
           if (classification.class === 'instrument') {
             block.instrumentFailed = true;
           }
-          // R-SNS-2/3/5 + D-9: exposure lands BEFORE the terminal event
-          // (spawned -> exposed -> terminal is the machine's only legal
-          // order); monotonic single emission via the tracker; payload field
-          // is `ts`. Absence stays absent — the skew decision treats it
-          // fail-closed (R-SNS-4). A disposed sample has no legal exposure
-          // edge and is not re-journaled.
-          if (runDir !== null && mirrorStateOf(sample.sampleId) === 'spawned') {
-            const exposureTs = observeExposure(runDir);
-            if (
-              exposureTs !== null &&
-              tracker.observe(sample.sampleId, exposureTs)
-            ) {
-              await appendCritical([
-                {
-                  type: 'exposure_started',
-                  payload: { sample_id: sample.sampleId, ts: exposureTs },
-                },
-              ]);
-            }
+          // R-SNS-2/3/5 + D-9 + R-SNS-4: the exposure terminal decision —
+          // the runtime-pinned value wins, the capture re-derivation fills
+          // a silent probe, and absence resolves to the suite-kind-enforced
+          // outcome (sensors decide; the dispatcher journals). Exposure
+          // lands BEFORE the terminal event (spawned -> exposed -> terminal
+          // is the machine's only legal order); monotonic single emission
+          // via the tracker; payload field is `ts`. Absence stays absent —
+          // never fabricated. A disposed sample has no legal exposure edge
+          // and is not re-journaled.
+          const exposure = decideExposureAtTerminal({
+            runtimeTsMs: tracker.value(sample.sampleId),
+            captureTsMs: runDir !== null ? observeExposure(runDir) : null,
+            suiteKind: campaign.suite.kind,
+          });
+          if (
+            exposure.established &&
+            mirrorStateOf(sample.sampleId) === 'spawned' &&
+            tracker.observe(sample.sampleId, exposure.tsMs)
+          ) {
+            await appendCritical([
+              {
+                type: 'exposure_started',
+                payload: { sample_id: sample.sampleId, ts: exposure.tsMs },
+              },
+            ]);
           }
           // The terminal event — only where the frozen machine has a legal
           // edge (nothing replay-illegal ever lands):
           const state = mirrorStateOf(sample.sampleId);
+          // R-SNS-4 exploratory arm (operator amendment 2026-08-27): a
+          // determinate child whose exposure never established completes
+          // from spawned with the caveat recorded on the event — never
+          // withheld, never a dangling nonterminal. Gating absence is a
+          // skew breach the block-terminal decision resolves instead.
+          const exposureCaveat =
+            state === 'spawned' &&
+            !exposure.established &&
+            exposure.resolution === 'render_caveat';
           if (classification.class === 'instrument') {
             if (
               (state === 'spawned' || state === 'exposed') &&
@@ -2192,19 +2208,32 @@ export async function runCampaignDispatch(
             state === 'completed' ||
             state === 'excluded_block_replaced' ||
             state === 'skew_excluded' ||
-            state === 'aborted'
+            state === 'aborted' ||
+            exposureCaveat
           ) {
             // Determinate/aborted evidence: legal from exposed; late-legal
-            // (retained evidence) from analytic terminals.
+            // (retained evidence) from analytic terminals; from spawned
+            // only under the exploratory caveat.
             await appendCritical([
               {
                 type: 'run_completed',
-                payload: { attempt_id: sample.attemptId, outcome },
+                payload: {
+                  attempt_id: sample.attemptId,
+                  outcome,
+                  ...(exposureCaveat
+                    ? { caveat: 'exploratory_exposure_unestablished' as const }
+                    : {}),
+                },
               },
             ]);
+            if (exposureCaveat) {
+              stream.write(
+                `exposure caveat (exploratory): ${sample.attemptId} completed with exposure unestablished by the decision point (R-SNS-4) — caveat recorded on run_completed\n`,
+              );
+            }
           } else {
             stream.write(
-              `run_completed for ${sample.attemptId} withheld: exposure unestablished (fail-closed, R-SNS-4 — the block-terminal decision resolves it)\n`,
+              `run_completed for ${sample.attemptId} withheld from state ${state}: exposure unestablished (fail-closed, R-SNS-4 — gating resolves it at the block-terminal skew decision)\n`,
             );
           }
           // Terminal spend: the ACTUAL run cost from run artifacts, falling

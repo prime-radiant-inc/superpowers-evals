@@ -99,7 +99,21 @@ export function applySampleEvent(
       if (state === 'skew_excluded') return LATE; // fast-arm ordering
       return REJECT;
     case 'run_completed':
-      if (state === 'exposed') return apply('completed');
+      if (state === 'exposed') {
+        // A caveat claiming exposure never established contradicts the
+        // landed exposure_started — corruption, never a completion.
+        return event.payload.caveat === undefined ? apply('completed') : REJECT;
+      }
+      // R-SNS-4 exploratory caveat (operator amendment 2026-08-27): an
+      // exploratory sample whose exposure never established still exits
+      // determinate; the caveat recorded on the event is the ONLY shape
+      // legal from spawned. Gating absence is a skew breach (skew_excluded
+      // + refill), so a bare run_completed from spawned stays illegal.
+      if (state === 'spawned') {
+        return event.payload.caveat === 'exploratory_exposure_unestablished'
+          ? apply('completed')
+          : REJECT;
+      }
       // Retained-evidence semantics: the run dir is kept and
       // journal-referenced either way.
       return isTerminal(state) ? LATE : REJECT;

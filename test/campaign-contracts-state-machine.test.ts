@@ -45,6 +45,16 @@ const EV = {
     type: 'run_completed',
     payload: { attempt_id: 'a1', outcome: 'pass' },
   },
+  // R-SNS-4 exploratory caveat (operator amendment 2026-08-27): the caveat
+  // marker is the ONLY run_completed shape legal from spawned.
+  run_completed_caveat: {
+    type: 'run_completed',
+    payload: {
+      attempt_id: 'a1',
+      outcome: 'pass',
+      caveat: 'exploratory_exposure_unestablished',
+    },
+  },
   instrument_failure: {
     type: 'instrument_failure',
     payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
@@ -235,6 +245,22 @@ const EXACT: ReadonlyArray<{
     },
   },
   {
+    // The amendment's conditional edge: spawned applies; exposed REJECTS
+    // (the caveat contradicts the landed exposure_started); terminals stay
+    // ignore-late (retained evidence, marker or not).
+    event: 'run_completed_caveat',
+    expected: {
+      spawned: A('completed'),
+      completed: LATE,
+      instrument_failed: LATE,
+      aborted: LATE,
+      skew_excluded: LATE,
+      excluded_block_replaced: LATE,
+      exhausted: LATE,
+      budget_stopped: LATE,
+    },
+  },
+  {
     event: 'instrument_failure',
     expected: {
       spawned: A('instrument_failed'),
@@ -379,6 +405,42 @@ test('E7.1: excluded_block_replaced gains the admitted source', () => {
   expect(applySampleEvent('admitted', EV.disposition_replaced)).toEqual(
     A('excluded_block_replaced'),
   );
+});
+
+test('R-SNS-4 exploratory caveat (operator amendment 2026-08-27): run_completed applies from spawned ONLY with the caveat recorded', () => {
+  // An exploratory sample whose exposure never established still has a
+  // truthful terminal: the caveat-marked run_completed from spawned.
+  expect(applySampleEvent('spawned', EV.run_completed_caveat)).toEqual(
+    A('completed'),
+  );
+  // The gating expression is skew_excluded + refill, never a caveat — a
+  // plain run_completed from spawned stays replay corruption.
+  expect(applySampleEvent('spawned', EV.run_completed).result).toBe('reject');
+  // A caveat claiming "never established" on a sample whose
+  // exposure_started already landed is a contradiction, not a completion.
+  expect(applySampleEvent('exposed', EV.run_completed_caveat).result).toBe(
+    'reject',
+  );
+  // The marker never widens the edge beyond spawned.
+  for (const state of ['planned', 'admitted'] as const) {
+    expect(applySampleEvent(state, EV.run_completed_caveat).result).toBe(
+      'reject',
+    );
+  }
+  // The caveat-completed sample is terminal for the seal predicate — never
+  // a dangling nonterminal.
+  const caveatPrefix = [
+    ev(1, 'campaign_opened', { campaign_id: 'c', digest: 'd'.repeat(64) }),
+    ev(2, 'block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev(3, 'attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev(4, 'run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+    ev(5, 'run_completed', {
+      attempt_id: 'a1',
+      outcome: 'pass',
+      caveat: 'exploratory_exposure_unestablished',
+    }),
+  ];
+  expect(sealPredicateHolds(ONE_SAMPLE_UNIVERSE, caveatPrefix)).toBe(true);
 });
 
 test('campaign machine: opened, cancelled, sealed, and storage pauses', () => {

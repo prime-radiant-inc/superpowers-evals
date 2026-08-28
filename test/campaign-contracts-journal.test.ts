@@ -196,6 +196,28 @@ test('every event type round-trips through the envelope', () => {
   }
 });
 
+test('run_completed caveats are typed (R-SNS-4 exploratory caveat, operator amendment 2026-08-27)', () => {
+  const caveated: JournalEvent = {
+    seq: 7,
+    ts_ms: 7,
+    type: 'run_completed',
+    payload: {
+      attempt_id: 'a1',
+      outcome: 'pass',
+      caveat: 'exploratory_exposure_unestablished',
+    },
+  };
+  expect(JournalEventSchema.parse(caveated)).toEqual(caveated);
+  expect(() =>
+    JournalEventSchema.parse({
+      seq: 7,
+      ts_ms: 7,
+      type: 'run_completed',
+      payload: { attempt_id: 'a1', outcome: 'pass', caveat: 'vibes' },
+    }),
+  ).toThrow();
+});
+
 test('instrument_failure causes are typed', () => {
   expect(() =>
     JournalEventSchema.parse({

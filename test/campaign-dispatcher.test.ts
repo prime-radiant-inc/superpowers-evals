@@ -27,6 +27,7 @@ import {
   electWriter,
   initJournalDb,
   openJournalRead,
+  replayEvents,
 } from '../src/campaign/journal.ts';
 import {
   type ProcessIdentityProbe,
@@ -1733,4 +1734,120 @@ test('a failed admission append aborts the admission transaction BEFORE any spaw
   expect(types).not.toContain('attempt_created');
   expect(types).not.toContain('run_allocated');
   expect(existsSync(join(h.campaignDir, '.ballast'))).toBe(false);
+});
+
+// --- R-SNS-4 exploratory caveat terminal (operator amendment 2026-08-27) ---
+
+const EXPLORATORY_SUITE = {
+  schema_version: 1,
+  name: 'testsuite',
+  kind: 'exploratory',
+  budget_usd: 50,
+  reserve: 1,
+  max_exposure_skew: 60,
+  comparisons: [
+    { baseline: 'arm_a', treatment: 'arm_b', scenarios: ['scn'], n: 1 },
+  ],
+};
+
+test('R-SNS-4 exploratory caveat terminal: an exposure-absent determinate exploratory sample journals run_completed WITH the caveat — never withheld, never nonterminal', async () => {
+  const h = harness({ suite: EXPLORATORY_SUITE });
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    observeExposure: () => null, // neither runtime probe nor capture: exposure never establishes
+    stream: { write: (s: string) => written.push(s) },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  for (const { child } of h.spawner.spawned)
+    child.exit({ code: 0, signal: null });
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+  const events = journalEvents(h.campaignDir);
+  // Absence stays absent: no exposure_started is ever fabricated.
+  expect(events.filter((e) => e.type === 'exposure_started').length).toBe(0);
+  // The terminal lands from spawned with the caveat recorded on the event.
+  const completed = eventsOf(h.campaignDir, 'run_completed');
+  expect(completed.length).toBe(2);
+  for (const e of completed) {
+    expect(e.payload).toMatchObject({
+      outcome: 'pass',
+      caveat: 'exploratory_exposure_unestablished',
+    });
+  }
+  // Exploratory renders a caveat — never an exclusion, never a refill mint
+  // (R-DSP-9).
+  expect(events.some((e) => e.type === 'skew_excluded')).toBe(false);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  // Replay folds both samples to a terminal state — nothing dangles.
+  const doc = campaignDoc({ suite: EXPLORATORY_SUITE });
+  const replayed = replayEvents(
+    {
+      samples: doc.samples,
+      // E7.0: an absent frozen slot reads as primary (never `slot: undefined`).
+      blocks: doc.blocks.map((b) =>
+        b.slot === undefined
+          ? { block_id: b.block_id, sample_ids: b.sample_ids }
+          : { block_id: b.block_id, sample_ids: b.sample_ids, slot: b.slot },
+      ),
+    },
+    events,
+  );
+  expect(replayed.sampleStates.get('c1:scn:arm_a:r1')).toBe('completed');
+  expect(replayed.sampleStates.get('c1:scn:arm_b:r1')).toBe('completed');
+  expect(written.some((l) => l.includes('withheld'))).toBe(false);
+  expect(written.some((l) => l.includes('caveat'))).toBe(true);
+});
+
+test('R-SNS-4 gating arm untouched: an exposure-absent gating block carries NO caveat — run_completed withheld, skew_excluded + skew_refill', async () => {
+  const h = harness();
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    // b1's pair (run-1000/run-1001) never establishes; the refill pair does.
+    observeExposure: (runDir) =>
+      runDir.endsWith('run-1000') || runDir.endsWith('run-1001') ? null : 1_000,
+    stream: { write: (s: string) => written.push(s) },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  for (const { child } of h.spawner.spawned)
+    child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1); // block terminal: skew decision -> refill admits
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+  const events = journalEvents(h.campaignDir);
+  expect(
+    events.some(
+      (e) => e.type === 'skew_excluded' && e.payload.block_id === 'c1:scn:b1',
+    ),
+  ).toBe(true);
+  expect(
+    mintRecords(h.campaignDir).some((m) => m.reason === 'skew_refill'),
+  ).toBe(true);
+  // b1's attempts never complete (withheld; the exclusion is their
+  // terminal) and no run_completed anywhere carries the exploratory caveat.
+  const b1Attempts = new Set(
+    eventsOf(h.campaignDir, 'attempt_created')
+      .filter((e) =>
+        ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'].includes(e.payload.sample_id),
+      )
+      .map((e) => e.payload.attempt_id),
+  );
+  const completed = eventsOf(h.campaignDir, 'run_completed');
+  expect(completed.length).toBe(2); // the refill pair only
+  for (const e of completed) {
+    expect(b1Attempts.has(e.payload.attempt_id)).toBe(false);
+    expect(e.payload.caveat).toBeUndefined();
+  }
+  expect(written.some((l) => l.includes('withheld'))).toBe(true);
 });

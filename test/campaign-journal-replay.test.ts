@@ -461,3 +461,30 @@ test('secondary sample references are gated: superseded_by, roster sample_id, ro
     JournalCorruptionError,
   );
 });
+
+test('R-SNS-4 exploratory caveat (operator amendment 2026-08-27): the caveat-marked run_completed replays from spawned to completed; the plain shape stays corruption', () => {
+  const opened = { campaign_id: 'c', digest: 'd'.repeat(64) };
+  const allocated = () => [
+    ev('campaign_opened', opened),
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 42 }),
+  ];
+  const caveated = replayEvents(UNIVERSE, [
+    ...allocated(),
+    ev('run_completed', {
+      attempt_id: 'a1',
+      outcome: 'pass',
+      caveat: 'exploratory_exposure_unestablished',
+    }),
+  ]);
+  expect(caveated.sampleStates.get('s1')).toBe('completed');
+  // No exposure_started, no caveat: the sample never left spawned, so a bare
+  // run_completed is the replay-illegal shape it always was.
+  expect(() =>
+    replayEvents(UNIVERSE, [
+      ...allocated(),
+      ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ]),
+  ).toThrow(JournalCorruptionError);
+});
