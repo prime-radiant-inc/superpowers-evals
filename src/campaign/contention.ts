@@ -8,9 +8,9 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
-  ftruncateSync,
   openSync,
   readFileSync,
+  renameSync,
   writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -41,10 +41,12 @@ export interface TelemetryGap {
 
 export type SidecarLine = TelemetrySample | TelemetryGap;
 
-/** Injectable fs seam for sidecar appends: tests record durability order and
- *  force short writes; production uses the real node:fs (R1-F5). */
+/** Injectable fs seam for sidecar appends and the atomic crash repair:
+ *  tests record durability order, force short writes, and crash the repair
+ *  at chosen cutover boundaries; production uses the real node:fs (R1-F5,
+ *  R2). */
 export interface SidecarFsOps {
-  openSync(path: string, flags: 'a'): number;
+  openSync(path: string, flags: 'a' | 'w' | 'r'): number;
   writeSync(
     fd: number,
     buf: Uint8Array,
@@ -53,6 +55,7 @@ export interface SidecarFsOps {
   ): number;
   fsyncSync(fd: number): void;
   closeSync(fd: number): void;
+  renameSync(oldPath: string, newPath: string): void;
 }
 
 const REAL_SIDECAR_FS: SidecarFsOps = {
@@ -60,20 +63,20 @@ const REAL_SIDECAR_FS: SidecarFsOps = {
   writeSync,
   fsyncSync,
   closeSync,
+  renameSync,
 };
 
-/** Append one JSON line, fsynced per sample (Decision D-3). Full-write
- *  discipline (locks.ts's token-rewrite precedent, R1-F5): a partial write
- *  must never be fsynced as success — keep writing until every byte has
- *  landed, THEN fsync; zero forward progress throws instead. */
-export function appendSidecarLine(
-  campaignDir: string,
-  line: SidecarLine,
-  ops: SidecarFsOps = REAL_SIDECAR_FS,
+/** Open + full-write + fsync + close through the seam (locks.ts's
+ *  token-rewrite precedent, R1-F5): a partial write must never be fsynced
+ *  as success — keep writing until every byte has landed, THEN fsync; zero
+ *  forward progress throws instead. */
+function writeDurable(
+  path: string,
+  data: Buffer,
+  flags: 'a' | 'w',
+  ops: SidecarFsOps,
 ): void {
-  const path = join(campaignDir, SIDECAR_FILENAME);
-  const data = Buffer.from(`${JSON.stringify(line)}\n`, 'utf8');
-  const fd = ops.openSync(path, 'a');
+  const fd = ops.openSync(path, flags);
   try {
     let written = 0;
     while (written < data.length) {
@@ -89,6 +92,20 @@ export function appendSidecarLine(
   } finally {
     ops.closeSync(fd);
   }
+}
+
+/** Append one JSON line, fsynced per sample (Decision D-3). */
+export function appendSidecarLine(
+  campaignDir: string,
+  line: SidecarLine,
+  ops: SidecarFsOps = REAL_SIDECAR_FS,
+): void {
+  writeDurable(
+    join(campaignDir, SIDECAR_FILENAME),
+    Buffer.from(`${JSON.stringify(line)}\n`, 'utf8'),
+    'a',
+    ops,
+  );
 }
 
 /** Structural validation of one parsed sidecar record (R1-F3): variant by
@@ -533,30 +550,44 @@ export class ContentionSampler {
     this.stopResolve?.();
   }
 
-  /** Crash recovery (R1-F1): physically remove a damaged sidecar suffix
+  /** Crash recovery (R1-F1 + R2): a damaged sidecar suffix must be removed
    *  BEFORE the first append — resuming onto a torn fragment would merge
-   *  records — and preserve the blindness as a DURABLE gap line at repair
-   *  time, so the removed interval counts uncovered via the evaluator's
-   *  gap rule, never erased. Naive truncation alone would erase it. */
+   *  records — and the blindness must survive ANY crash as a durable fact.
+   *  One ATOMIC cutover (the journal's stage -> fsync -> rename LAST ->
+   *  dir-fsync discipline): compose the repaired content — the valid
+   *  prefix plus the gap line marking the blind interval — stage it to a
+   *  temp file, fsync it, rename over the sidecar, fsync the directory. A
+   *  crash at any boundary leaves either the old damaged file (re-detected
+   *  on the next start) or the repaired file with its gap intact — never a
+   *  silently clean prefix (truncate-then-append had exactly that erasure
+   *  window between its two separately-durable steps). */
   private repairSidecar(): void {
     const path = join(this.args.campaignDir, SIDECAR_FILENAME);
     if (!existsSync(path)) return;
-    const scan = scanSidecarText(readFileSync(path, 'utf8'));
+    const raw = readFileSync(path);
+    const scan = scanSidecarText(raw.toString('utf8'));
     if (!scan.damaged) return;
-    const fd = openSync(path, 'r+');
+    const ops = this.args.fsOps ?? REAL_SIDECAR_FS;
+    const gap: TelemetryGap = {
+      ts_ms: clockNowMs(this.args.clock),
+      missing: true,
+    };
+    const repaired = Buffer.concat([
+      raw.subarray(0, scan.validByteLength),
+      Buffer.from(`${JSON.stringify(gap)}\n`, 'utf8'),
+    ]);
+    const stagePath = `${path}.repair.tmp`;
+    writeDurable(stagePath, repaired, 'w', ops);
+    ops.renameSync(stagePath, path);
+    // The cutover is durable only once the DIRECTORY entry is.
+    const dirFd = ops.openSync(this.args.campaignDir, 'r');
     try {
-      ftruncateSync(fd, scan.validByteLength);
-      fsyncSync(fd);
+      ops.fsyncSync(dirFd);
     } finally {
-      closeSync(fd);
+      ops.closeSync(dirFd);
     }
     process.stderr.write(
-      `contention sidecar at ${path} had a damaged suffix (${scan.damageDetail}) — removed before resuming; the blind interval is preserved as a gap line\n`,
-    );
-    appendSidecarLine(
-      this.args.campaignDir,
-      { ts_ms: clockNowMs(this.args.clock), missing: true },
-      this.args.fsOps,
+      `contention sidecar at ${path} had a damaged suffix (${scan.damageDetail}) — repaired atomically; the blind interval is preserved as a gap line\n`,
     );
   }
 

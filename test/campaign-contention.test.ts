@@ -6,12 +6,14 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   appendSidecarLine,
+  type BlockContentionVerdict,
   breachWindows,
   ContentionSampler,
   evaluateContention,
@@ -77,6 +79,10 @@ function recordingOps(
     closeSync(fd) {
       log.push('close');
       closeSync(fd);
+    },
+    renameSync(from, to) {
+      log.push('rename');
+      renameSync(from, to);
     },
   };
 }
@@ -425,6 +431,114 @@ test('R1-minor: a probe failure whose gap append also fails reports exactly ONE 
   await sampler.stop();
   await running;
   expect(errors).toBe(1);
+});
+
+test('R2: a crash at the repair cutover never erases the blindness', async () => {
+  const damaged = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+    appendSidecarLine(dir, { ...stats(10_000), breach: [] });
+    appendFileSync(join(dir, SIDECAR_FILENAME), '{"ts_ms": 20000, "load1": ');
+    return dir;
+  };
+  const probe: HostStatsProbe = { sample: (nowMs) => stats(nowMs) };
+  // One sampler start whose repair runs against `ops`; returns how many
+  // failures were reported (a failed repair reports once and stays down).
+  const runRepair = async (dir: string, ops: SidecarFsOps): Promise<number> => {
+    let errors = 0;
+    const sampler = new ContentionSampler({
+      campaignDir: dir,
+      probe,
+      clock: new FakeClock(40), // recovery 30s after the last good sample
+      thresholds: [MEM_FLOOR],
+      sustainK: 3,
+      cadenceMs: 10_000,
+      cpuCores: FROZEN_CORES,
+      fsOps: ops,
+      onBreachEntry: () => {},
+      onBreachExit: () => {},
+      onSampleError: () => {
+        errors += 1;
+      },
+    });
+    const { result: running } = captureStderr(() => sampler.start());
+    await sampler.stop();
+    await running;
+    return errors;
+  };
+  // The invariant every crash outcome must satisfy: work inside the blind
+  // interval [10s, repair] never classifies clean.
+  const blindVerdict = (dir: string): BlockContentionVerdict | undefined => {
+    const { result } = captureStderr(() => parseSidecar(dir));
+    return evaluateContention({
+      lines: result.lines,
+      truncatedTail: result.truncatedTail,
+      thresholds: [MEM_FLOOR],
+      sustainK: 3,
+      cadenceMs: 10_000,
+      coverageN: 4,
+      cpuCores: FROZEN_CORES,
+      campaignOpenedTsMs: 0,
+      lastTerminalTsMs: 30_000,
+      blocks: [{ block_id: 'blind', startTsMs: 15_000, endTsMs: 25_000 }],
+    }).get('blind');
+  };
+
+  // Crash while STAGING (no fd can be opened): nothing destructive may have
+  // happened — the old damaged file survives for the next start. The naive
+  // truncate-then-append repair fails this probe: the truncation lands, the
+  // gap append fails, and the blindness is erased into a clean prefix.
+  const dirA = damaged();
+  const noOpen: SidecarFsOps = {
+    ...recordingOps([]),
+    openSync: () => {
+      throw new Error('crash: no fd');
+    },
+  };
+  expect(await runRepair(dirA, noOpen)).toBe(1);
+  expect(blindVerdict(dirA)).toBe('unknown');
+  // A later start with a working fs completes the repair: the gap line is
+  // minted durably and the interval STAYS unknown.
+  expect(await runRepair(dirA, recordingOps([]))).toBe(0);
+  const healed = captureStderr(() => parseSidecar(dirA));
+  expect(healed.result.truncatedTail).toBe(false);
+  expect(healed.result.lines).toContainEqual({ ts_ms: 40_000, missing: true });
+  expect(blindVerdict(dirA)).toBe('unknown');
+
+  // Crash BETWEEN stage fsync and cutover (rename fails): the sidecar is
+  // untouched and still damaged — re-detected on the next start.
+  const dirB = damaged();
+  const noRename: SidecarFsOps = {
+    ...recordingOps([]),
+    renameSync: () => {
+      throw new Error('crash: rename');
+    },
+  };
+  expect(await runRepair(dirB, noRename)).toBe(1);
+  expect(blindVerdict(dirB)).toBe('unknown');
+
+  // Crash AFTER the cutover (directory fsync fails): the repaired file with
+  // its gap is already in place — the blindness is durable evidence.
+  const dirC = damaged();
+  const dirFds = new Set<number>();
+  const noDirFsync: SidecarFsOps = {
+    openSync(p, flags) {
+      const fd = openSync(p, flags);
+      if (flags === 'r') dirFds.add(fd);
+      return fd;
+    },
+    writeSync: (fd, buf, off, len) => writeSync(fd, buf, off, len),
+    fsyncSync(fd) {
+      if (dirFds.has(fd)) throw new Error('crash: dir fsync');
+      fsyncSync(fd);
+    },
+    closeSync: (fd) => closeSync(fd),
+    renameSync: (from, to) => renameSync(from, to),
+  };
+  expect(await runRepair(dirC, noDirFsync)).toBe(1);
+  const cutOver = captureStderr(() => parseSidecar(dirC));
+  expect(cutOver.result.truncatedTail).toBe(false); // the cutover landed
+  expect(cutOver.result.lines).toContainEqual({ ts_ms: 40_000, missing: true });
+  expect(blindVerdict(dirC)).toBe('unknown');
 });
 
 test('the pure evaluator: invalid > unknown > clean precedence, one interpretation', () => {
