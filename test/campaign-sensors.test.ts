@@ -326,8 +326,9 @@ test('C7 billing-exhaustion: anchored provider shapes only; billing outranks the
 test('D-10 source enforcement: a row classifies only evidence from its pinned sources', () => {
   const anthropicBody = '{"type":"rate_limit_error","message":"throttled"}';
   const grader = { role: 'grader' as const, credential: { api: 'anthropic' } };
-  // Row 2's pinned sources are child stderr + gauntlet result (error text) +
-  // the gauntlet event stream — verdict reason is NOT among them.
+  // Row 2's pinned sources are child stderr + gauntlet result (error text)
+  // ONLY — verdict reason and the event stream are NOT among them (R-SNS-1
+  // mandates stream INTAKE; it does not amend D-10's pinned row cells).
   expect(
     senseEvidence({ ...grader, source: 'verdict_reason', text: anthropicBody }),
   ).toBeNull();
@@ -336,9 +337,8 @@ test('D-10 source enforcement: a row classifies only evidence from its pinned so
       ?.evidence,
   ).toBe('429-match');
   expect(
-    senseEvidence({ ...grader, source: 'event_stream', text: anthropicBody })
-      ?.evidence,
-  ).toBe('429-match');
+    senseEvidence({ ...grader, source: 'event_stream', text: anthropicBody }),
+  ).toBeNull();
   // Row 1's pinned sources are agy.log tail + verdict reason + gauntlet
   // result — child stderr is NOT among them.
   const agy = {
@@ -415,11 +415,13 @@ test('R-SNS-1 gauntlet event-stream intake: run.jsonl run_error records become c
       text: t.text,
     }),
   );
-  // Classifier rows 2 and 1 reachable from the event stream (R-SNS-1;
-  // exactly the documented appliance failure mode: grader billing death
-  // surfacing ONLY in run.jsonl).
+  // The billing row classifies from the stream — its anchor is stream-native
+  // (the documented appliance failure lands the credit-balance body in
+  // run.jsonl run_error, often with NO composed result). The rate-limit body
+  // does NOT: D-10 pins rows 2-5 to child stderr + gauntlet result, and the
+  // stream intake does not amend those cells.
   expect(signals[0]?.evidence).toBe('billing-exhaustion');
-  expect(signals[1]?.evidence).toBe('429-match');
+  expect(signals[1]).toBeNull();
 });
 
 test('per-harness exposure derivations: every live harness parses its real session-log shape', () => {
@@ -444,9 +446,11 @@ test('per-harness exposure derivations: every live harness parses its real sessi
       expected: Date.parse('2026-06-15T02:52:26Z'),
     },
     {
+      // The exposure start is the first REQUEST (`type: 'message'` record) —
+      // never the session header's or model_change's metadata timestamps.
       agent: 'pi',
       path: fixture('pi-session.slice.jsonl'),
-      expected: Date.parse('2026-06-15T21:09:55.184Z'),
+      expected: Date.parse('2026-06-15T21:10:00.000Z'),
     },
     {
       agent: 'hermes',
@@ -491,21 +495,33 @@ test('per-harness exposure derivations: every live harness parses its real sessi
     expect(probe.observe(c.path)).toBe(c.expected);
   }
 
-  // Copilot: events.jsonl carries no verified time field (repo evidence);
-  // its row ships the generic three-convention scan (ISO `timestamp`,
-  // numeric epoch-ms `time`, ISO `created_at`) — a real-shaped log without
-  // one reads as absence (fail-closed at the decision point, D-9
-  // qualification-checklist item), and a log that does carry one is picked
-  // up.
+  // Copilot: the copilot normalizer carries no timestamps and no
+  // repo-verifiable events.jsonl time field exists — the derivation is
+  // fail-closed BY CONSTRUCTION (no stamps regardless of content; the D-9
+  // qualification-checklist item). Even a stray timestamp-bearing row yields
+  // nothing: there is no speculative scan codifying a shape no real copilot
+  // log is known to have. The null is not a silent no-exposure pass — it
+  // flows into the enforced R-SNS-4 terminal outcome.
   const copilot = exposureProbeForAgent('copilot');
-  expect(copilot.observe(fixture('exposure/copilot-events.jsonl'))).toBeNull();
+  const observed = copilot.observe(fixture('exposure/copilot-events.jsonl'));
+  expect(observed).toBeNull();
   const dir = mkdtempSync(join(tmpdir(), 'copilot-'));
-  const stamped = join(dir, 'events.jsonl');
+  const stray = join(dir, 'events.jsonl');
   writeFileSync(
-    stamped,
-    `${JSON.stringify({ type: 'session.start', timestamp: '2026-08-27T09:59:59.000Z' })}\n${JSON.stringify({ type: 'assistant.message', data: {} })}\n`,
+    stray,
+    `${JSON.stringify({ type: 'session.start', timestamp: '2026-08-27T09:59:59.000Z' })}\n`,
   );
-  expect(copilot.observe(stamped)).toBe(Date.parse('2026-08-27T09:59:59.000Z'));
+  expect(copilot.observe(stray)).toBeNull();
+  expect(
+    decideExposureAtTerminal({
+      runtimeTsMs: observed,
+      captureTsMs: null,
+      suiteKind: 'gating',
+    }),
+  ).toEqual({
+    established: false,
+    resolution: 'skew_breach_exclude_and_refill',
+  });
 
   // A half-written/unparseable log is absence, never a crash mid-campaign.
   const torn = join(dir, 'torn.jsonl');

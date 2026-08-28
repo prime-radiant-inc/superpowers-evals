@@ -42,15 +42,13 @@ export interface RateLimitMarkerRow {
   readonly matches: (text: string) => boolean;
   /** The D-10 evidence sources this row is qualified against — ENFORCED by
    *  senseEvidence: evidence from a source a row does not list never
-   *  classifies through that row. The gauntlet event stream rides the same
-   *  anchors as the gauntlet result on rows 2-5 (R-SNS-1 mandates
-   *  classification over the stream; run.jsonl run_error text IS the
-   *  gauntlet child's error surface); row 1 keeps exactly its pinned three
-   *  — its broad shipped matcher is a known false-positive surface and is
-   *  not widened to new surfaces. Additions are platform PRs with
-   *  per-source fixtures. (Typed cause mapping rides role attribution: the
-   *  dispatcher supplies subject|grader by matched credential context, and
-   *  classifier rows 1/4 map it to grader_/subject_rate_limited.) */
+   *  classifies through that row. The cells are exactly the pinned D-10
+   *  table's: R-SNS-1 mandates event-stream INTAKE, but it does not amend
+   *  these cells, so stream evidence classifies only where a row admits
+   *  it. Additions are platform PRs with per-source fixtures. (Typed cause
+   *  mapping rides role attribution: the dispatcher supplies
+   *  subject|grader by matched credential context, and classifier rows 1/4
+   *  map it to grader_/subject_rate_limited.) */
   readonly evidenceSources: readonly SensorEvidenceSource[];
   readonly retryAfterParsed: boolean;
   readonly defaultCooldownMs: number;
@@ -87,7 +85,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
           ? 1
           : null,
     matches: (text) => /"type"\s*:\s*"rate_limit_error"/i.test(text),
-    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
+    evidenceSources: ['child_stderr', 'gauntlet_result'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -106,7 +104,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
       ((/\bHTTP(?:\/[\d.]+)? 429\b/i.test(text) ||
         /"status"\s*:\s*429\b/i.test(text)) &&
         /rate limit/i.test(text)),
-    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
+    evidenceSources: ['child_stderr', 'gauntlet_result'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -119,7 +117,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
     // quoted prose mentions never trip (false-positive discipline).
     matches: (text) =>
       /"(?:status|code)"\s*:\s*"resource_exhausted"/i.test(text),
-    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
+    evidenceSources: ['child_stderr', 'gauntlet_result'],
     retryAfterParsed: true,
     defaultCooldownMs: 60_000,
     maxCooldownMs: 15 * 60_000,
@@ -132,7 +130,7 @@ export const RATE_LIMIT_MARKERS: readonly RateLimitMarkerRow[] = [
       /"status"\s*:\s*429\b/i.test(text) ||
       /"status_code"\s*:\s*429\b/i.test(text) ||
       /^HTTP\/[\d.]+ 429\b/im.test(text),
-    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
+    evidenceSources: ['child_stderr', 'gauntlet_result'],
     retryAfterParsed: false, // none -> default (weak signal, conservative)
     defaultCooldownMs: 30_000,
     maxCooldownMs: 5 * 60_000,
@@ -246,6 +244,11 @@ export const BILLING_MARKERS: readonly BillingMarkerRow[] = [
     // balance carries no such field shape and never trips.
     matches: (text) =>
       /"message"\s*:\s*"[^"]*credit balance is too low/i.test(text),
+    // This row is drafted (D-10 pins no billing cells) and its anchor is
+    // STREAM-NATIVE by provenance: a turn-1 grader billing death lands the
+    // credit-balance body in run.jsonl run_error with NO composed result —
+    // without event_stream here, grader_billing_exhausted is unreachable in
+    // its documented primary manifestation.
     evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
   },
   {
@@ -253,9 +256,11 @@ export const BILLING_MARKERS: readonly BillingMarkerRow[] = [
     appliesRank: (ctx) =>
       ctx.api === 'openai-chat' || ctx.api === 'openai-responses' ? 2 : null,
     // OpenAI's insufficient_quota code/type — billing, not throttling, even
-    // though the provider delivers it with HTTP status 429.
+    // though the provider delivers it with HTTP status 429. No documented
+    // stream-native manifestation (the grader is Anthropic-pinned), so this
+    // row keeps the pinned-parallel sources only.
     matches: (text) => /"(?:code|type)"\s*:\s*"insufficient_quota"/i.test(text),
-    evidenceSources: ['child_stderr', 'gauntlet_result', 'event_stream'],
+    evidenceSources: ['child_stderr', 'gauntlet_result'],
   },
 ];
 
@@ -563,16 +568,13 @@ export const EXPOSURE_DERIVATIONS: Record<
   antigravity: (text) => jsonlTimePointsMs(text, (r) => r['created_at']),
   claude: stepTimestampsVia('claude'),
   codex: stepTimestampsVia('codex'),
-  // Copilot's events.jsonl carries no time field verifiable from this repo:
-  // the generic three-convention scan (ISO `timestamp` | numeric epoch-ms
-  // `time` | ISO `created_at`) reads one if present; otherwise absence.
-  // Copilot mid-run exposure observability is a D-9 qualification-checklist
-  // item.
-  copilot: (text) =>
-    jsonlTimePointsMs(
-      text,
-      (r) => r['timestamp'] ?? r['time'] ?? r['created_at'],
-    ),
+  // Copilot: the copilot normalizer carries no timestamps and no
+  // repo-verifiable events.jsonl time field exists, so the derivation is
+  // fail-closed BY CONSTRUCTION — no stamps, ever; the terminal decision
+  // enforces the R-SNS-4 outcome. Copilot mid-run exposure observability is
+  // the D-9 qualification-checklist item; a verified real time field is the
+  // platform PR that replaces this row.
+  copilot: () => [],
   gemini: stepTimestampsVia('gemini'),
   // Hermes session exports are one JSON document with epoch-SECONDS
   // `messages[].timestamp` floats.
@@ -591,9 +593,14 @@ export const EXPOSURE_DERIVATIONS: Record<
   // capture's sessionDurationMs reads).
   kimi: (text) => jsonlTimePointsMs(text, (r) => r['time']),
   opencode: stepTimestampsVia('opencode'),
-  // Raw derivation: per-record `timestamp` ISO stamps (the pi normalizer
-  // builds its steps without timestamps).
-  pi: (text) => jsonlTimePointsMs(text, (r) => r['timestamp']),
+  // Raw derivation over pi's wire shape (the pi normalizer builds its steps
+  // without timestamps): ONLY `type: 'message'` records count — the session
+  // header and model_change/thinking_level_change metadata records carry
+  // earlier timestamps that are not generation requests.
+  pi: (text) =>
+    jsonlTimePointsMs(text, (r) =>
+      r['type'] === 'message' ? r['timestamp'] : undefined,
+    ),
   serf: stepTimestampsVia('serf'),
 };
 
