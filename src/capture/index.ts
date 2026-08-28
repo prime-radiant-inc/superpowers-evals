@@ -40,7 +40,7 @@ import { filterLogsByCwd } from './cwd-filter.ts';
 // src/normalize/harbor-pin.ts).
 type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
 
-const NORMALIZERS: Record<string, AtifNormalizer> = {
+export const ATIF_NORMALIZERS: Record<string, AtifNormalizer> = {
   acp: normalizeAcp,
   antigravity: normalizeAntigravity,
   claude: normalizeClaudeLegacy,
@@ -278,7 +278,7 @@ function emitTrajectory(
  */
 export function captureToolCalls(args: CaptureArgs): CaptureResult {
   const { normalizer, runDir } = args;
-  const normalize = NORMALIZERS[normalizer];
+  const normalize = ATIF_NORMALIZERS[normalizer];
   if (normalize === undefined) {
     throw new Error(`unknown normalizer: ${normalizer}`);
   }
