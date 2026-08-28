@@ -25,6 +25,7 @@ import {
 import type { SnapshotHandle } from '../src/campaign/instrument-snapshot.ts';
 import { SnapshotDriftError } from '../src/campaign/instrument-snapshot.ts';
 import {
+  type EventInput,
   electWriter,
   initJournalDb,
   type JournalWriter,
@@ -555,16 +556,16 @@ function mintRecords(campaignDir: string) {
 }
 /** Two primary blocks + one reserve in one cell, with caps wide enough for
  *  both primaries in flight at once (global 4, every credential 4). */
-function twoBlockHarness(): ReturnType<typeof harness> {
-  const doc = campaignDoc();
+function twoBlockHarness(): ReturnType<typeof harness> & { doc: Campaign } {
+  const base = campaignDoc();
   const sample = (id: string, arm: string, replicate: number) => ({
     sample_id: id,
     cell: 'c1:scn',
     arm,
     replicate,
   });
-  const h = harness({
-    contention: { ...doc.contention, global_run_cap: 4 },
+  const overrides = {
+    contention: { ...base.contention, global_run_cap: 4 },
     blocks: [
       {
         block_id: 'c1:scn:b1',
@@ -591,14 +592,48 @@ function twoBlockHarness(): ReturnType<typeof harness> {
       sample('c1:scn:arm_a:x1', 'arm_a', 1),
       sample('c1:scn:arm_b:x1', 'arm_b', 1),
     ],
-  });
+  };
+  const h = harness(overrides);
   const credentials = Object.fromEntries(
     Object.entries(h.credentials).map(([name, cred]) => [
       name,
       { ...cred, max_concurrency: 4 },
     ]),
   );
-  return { ...h, credentials, args: { ...h.args, credentials } };
+  return {
+    ...h,
+    credentials,
+    args: { ...h.args, credentials },
+    doc: campaignDoc(overrides),
+  };
+}
+/** The `kind` of a budget_event input (the writer types payloads as
+ *  unknown until the schema parses them), or null for any other event. */
+function budgetEventKind(input: EventInput | undefined): string | null {
+  if (input === undefined || input.type !== 'budget_event') return null;
+  const kind = (input.payload as { kind?: unknown }).kind;
+  return typeof kind === 'string' ? kind : null;
+}
+/** A journal whose volume is full for exactly the lone superseding
+ *  estimate_inflight snapshot — the settle paths' E7.7 append — including
+ *  its D-13 retry; everything else (the storage_paused record, any
+ *  resolution bundle that wrongly follows) lands. */
+function snapshotEnospcJournal(real: JournalWriter): DispatchJournal {
+  return {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      if (
+        inputs.length === 1 &&
+        budgetEventKind(inputs[0]) === 'estimate_inflight'
+      ) {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
 }
 /** A sidecar through the REAL parseSidecar/evaluateContention path: a
  *  sustain_k=3 crossing run (load1 9 -> 9/4 cores = 2.25 > threshold 2;
@@ -2497,6 +2532,144 @@ test('settle-killing the last child of a block reaches the pinned block-terminal
   }
   const outcome = await run;
   expect(outcome.status).toBe('completed');
+});
+
+// --- Fix round 5: D-13 fail-stop honored on the settle snapshot paths -------
+
+test('replacement path: a settle snapshot that cannot land after the storage pause STOPS the path — no budget read, no resolution after the fail-stop (D-13)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    journal: snapshotEnospcJournal(real),
+    stream: { write: (s: string) => written.push(s) },
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  // The budget expires, the sibling is settle-killed, and the E7.7
+  // snapshot hits ENOSPC (and again on the D-13 retry): the pause owns
+  // everything after this point.
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 6; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).not.toContain('block_replaced');
+  expect(types).not.toContain('sample_disposition');
+  expect(types).not.toContain('adjudication');
+  expect(types).not.toContain('budget_stopped');
+  const text = written.join('');
+  expect(text).toMatch(/storage pause/);
+  expect(text).not.toMatch(
+    /replacement minted|replacement suppressed|reserve exhausted|replacement for .* REFUSED/,
+  );
+});
+
+test('contention path: a settle snapshot that cannot land after the storage pause STOPS the batch — no resolution, no counts, no resume after the fail-stop (D-13)', async () => {
+  const h = twoBlockHarness();
+  writeInvalidatingSidecar(h.campaignDir);
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: h.doc,
+  });
+  let hooks: DispatchSamplerHooks | null = null;
+  const scripted: DispatchSamplerSeam = {
+    start(captured) {
+      hooks = captured;
+      return () => {};
+    },
+  };
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    journal: snapshotEnospcJournal(real),
+    sampler: scripted,
+    stream: { write: (s: string) => written.push(s) },
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  expect(h.spawner.spawned.length).toBe(4);
+  hooks!.onBreachExit(BREACH_WINDOW); // deferred on four unallocated children
+  await tick(h.clock, 1);
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 10; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).not.toContain('block_replaced');
+  expect(types).not.toContain('sample_disposition');
+  expect(types).not.toContain('adjudication');
+  const text = written.join('');
+  expect(text).toMatch(/storage pause/);
+  expect(text).not.toMatch(/contention resolution: affected=/);
+  expect(text).not.toMatch(/admission resumed/);
+});
+
+test('terminal path: a spend snapshot that cannot land after the storage pause STOPS the exit handler — no replacement is resolved after the fail-stop (D-13 sweep)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // The volume is full for exactly the terminal [spend, snapshot] bundle
+  // (and its D-13 retry); everything else lands.
+  const journal: DispatchJournal = {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      if (inputs.length === 2 && budgetEventKind(inputs[0]) === 'spend') {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    journal,
+    stream: { write: (s: string) => written.push(s) },
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  for (const c of [childA, childB])
+    c!.child.emitLine(`run_allocated: run-${c!.child.pid}`);
+  // arm_a fails typed: its terminal spend bundle hits ENOSPC -> pause; the
+  // handler must not go on to resolve the replacement.
+  childA!.child.exit({ code: 1, signal: null });
+  for (let i = 0; i < 6; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('storage_paused');
+  expect(types).toContain('instrument_failure'); // the evidence before the bundle landed
+  expect(types).not.toContain('block_replaced');
+  expect(types).not.toContain('sample_disposition');
+  expect(types).not.toContain('adjudication');
+  expect(written.join('')).not.toMatch(
+    /replacement minted|replacement suppressed|reserve exhausted|replacement for .* deferred/,
+  );
 });
 
 test('a partially verified kill journals the superseding exposure snapshot even when the block is NOT aborted (E7.7 membership change)', async () => {

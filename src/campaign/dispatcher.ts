@@ -1956,8 +1956,17 @@ export async function runCampaignDispatch(
       // E7.7 order: kills -> superseding snapshot -> budget reads. The
       // snapshot lands BEFORE the resolution reads the budget position, and
       // lands for the verified deaths even when a sibling's kill failed.
+      // D-13: a snapshot that could not land (or landed only through the
+      // storage pause) is the fail-stop terminal — no refresh, no budget
+      // read, no resolution follows; the pause owns what happens next.
       if (settled.released > 0) {
-        await appendCritical([snapshotEstimateInput()]);
+        const snapshot = await appendCritical([snapshotEstimateInput()]);
+        if (snapshot === null || storagePaused) {
+          stream.write(
+            `replacement for ${blockId} stopped: storage pause (D-13 fail-stop) — no resolution after the pause; resume re-derives the obligation\n`,
+          );
+          return;
+        }
         estimateUsd = currentEstimateTotal();
       }
       if (settled.failures.length > 0) {
@@ -2075,7 +2084,19 @@ export async function runCampaignDispatch(
       // superseding absolute snapshot lands whether or not a whole block
       // aborted (a mixed block journals no aborted but still released).
       if (aborts.length > 0 || released > 0) {
-        await appendCritical([...aborts, snapshotEstimateInput()]);
+        const bundle = await appendCritical([
+          ...aborts,
+          snapshotEstimateInput(),
+        ]);
+        if (bundle === null || storagePaused) {
+          // D-13 fail-stop: no repair, no rerun mint, no resume after the
+          // pause; resume journals the aborts it re-derives (fate table).
+          stream.write(
+            'drift response stopped: storage pause (D-13 fail-stop) — no repair/rerun after the pause\n',
+          );
+          wakeLoop();
+          return;
+        }
         estimateUsd = currentEstimateTotal();
       }
       if (killFailures.length > 0) {
@@ -2360,9 +2381,10 @@ export async function runCampaignDispatch(
       // dispositions (the samples keep their skew_excluded terminal; the
       // conservation link rides the mint's roster supersedes pairs).
       skewExcludedBlocks.add(lb.block.block_id);
-      await appendCritical([
+      const excluded = await appendCritical([
         { type: 'skew_excluded', payload: { block_id: lb.block.block_id } },
       ]);
+      if (excluded === null || storagePaused) return; // D-13 fail-stop: the refill re-derives at resume
       stream.write(
         `skew excluded: block ${lb.block.block_id} — ${detail} — refilling from reserve\n`,
       );
@@ -2555,13 +2577,23 @@ export async function runCampaignDispatch(
             (runDir !== null ? runCostFromArtifacts(runDir) : null) ??
             sampleEstimate(sample.sampleId);
           spendUsd += spendAmount;
-          await appendCritical([
+          const spendBundle = await appendCritical([
             {
               type: 'budget_event',
               payload: { kind: 'spend', amount_usd: spendAmount },
             },
             snapshotEstimateInput(),
           ]);
+          // D-13 fail-stop: a spend bundle that could not land (or landed
+          // only through the storage pause) ends this terminal here — no
+          // refresh, no replacement resolution, no block-terminal work; the
+          // pause owns what happens next and resume re-derives the rest.
+          if (spendBundle === null || storagePaused) {
+            stream.write(
+              `terminal for ${sample.attemptId} stopped: storage pause (D-13 fail-stop) — no resolution after the pause\n`,
+            );
+            return;
+          }
           estimateUsd = currentEstimateTotal();
           // R-DSP-5: a typed instrument failure activates a fresh full block
           // (budget-gated inside the shared resolution core).
@@ -2697,7 +2729,8 @@ export async function runCampaignDispatch(
         // so the typed record is classifier row 6 as the MINT reason and the
         // sample resolves via the E7.1 roster disposition from 'admitted'.
         releaseSample(sample);
-        await appendCritical([snapshotEstimateInput()]);
+        const snapshot = await appendCritical([snapshotEstimateInput()]);
+        if (snapshot === null || storagePaused) return; // D-13 fail-stop: no resolution after the pause
         estimateUsd = currentEstimateTotal();
         const spawnClass = classifyFailure({
           outcome: 'indeterminate',
@@ -3018,8 +3051,18 @@ export async function runCampaignDispatch(
       }
       // E7.7 order: kills -> superseding snapshot -> budget reads. The
       // verified deaths' release lands even when the batch aborts below.
+      // D-13: a snapshot that could not land (or landed only through the
+      // storage pause) stops the batch here — no refresh, no budget read,
+      // no resolution; the pause owns what happens next and the durable
+      // sidecar re-derives the batch at resume.
       if (released > 0) {
-        await appendCritical([snapshotEstimateInput()]);
+        const snapshot = await appendCritical([snapshotEstimateInput()]);
+        if (snapshot === null || storagePaused) {
+          stream.write(
+            'contention resolution stopped: storage pause (D-13 fail-stop) — no resolution after the pause; the batch re-derives from the durable sidecar at resume\n',
+          );
+          return;
+        }
         estimateUsd = currentEstimateTotal();
       }
       if (killFailures.length > 0) {
@@ -3208,7 +3251,8 @@ export async function runCampaignDispatch(
     //     estimate. -------------------------------------------------------
     if (admittedBlockIds.size > 0) {
       await runExclusive(async () => {
-        await appendCritical([snapshotEstimateInput()]);
+        const snapshot = await appendCritical([snapshotEstimateInput()]);
+        if (snapshot === null || storagePaused) return; // D-13 fail-stop: the loop exits paused
         estimateUsd = currentEstimateTotal();
       });
     }
