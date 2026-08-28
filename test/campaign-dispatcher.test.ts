@@ -553,6 +553,84 @@ function mintRecords(campaignDir: string) {
     ...normalizeBlockReplaced(e.payload),
   }));
 }
+/** Two primary blocks + one reserve in one cell, with caps wide enough for
+ *  both primaries in flight at once (global 4, every credential 4). */
+function twoBlockHarness(): ReturnType<typeof harness> {
+  const doc = campaignDoc();
+  const sample = (id: string, arm: string, replicate: number) => ({
+    sample_id: id,
+    cell: 'c1:scn',
+    arm,
+    replicate,
+  });
+  const h = harness({
+    contention: { ...doc.contention, global_run_cap: 4 },
+    blocks: [
+      {
+        block_id: 'c1:scn:b1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'],
+      },
+      {
+        block_id: 'c1:scn:b2',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
+      },
+      {
+        block_id: 'c1:scn:x1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:x1', 'c1:scn:arm_b:x1'],
+        slot: 'reserve',
+      },
+    ],
+    samples: [
+      sample('c1:scn:arm_a:r1', 'arm_a', 1),
+      sample('c1:scn:arm_b:r1', 'arm_b', 1),
+      sample('c1:scn:arm_a:r2', 'arm_a', 2),
+      sample('c1:scn:arm_b:r2', 'arm_b', 2),
+      sample('c1:scn:arm_a:x1', 'arm_a', 1),
+      sample('c1:scn:arm_b:x1', 'arm_b', 1),
+    ],
+  });
+  const credentials = Object.fromEntries(
+    Object.entries(h.credentials).map(([name, cred]) => [
+      name,
+      { ...cred, max_concurrency: 4 },
+    ]),
+  );
+  return { ...h, credentials, args: { ...h.args, credentials } };
+}
+/** A sidecar through the REAL parseSidecar/evaluateContention path: a
+ *  sustain_k=3 crossing run (load1 9 -> 9/4 cores = 2.25 > threshold 2;
+ *  load1_per_core normalizes by the REGISTERED cpu_cores) closed by 3
+ *  in-bounds samples — the evaluator derives breach window [2020, 2060]
+ *  from these exact lines, overlapping every block admitted at ~2000ms
+ *  (the first tick advances the FakeClock to 2s before the first wave
+ *  runs) -> 'invalid'. */
+function writeInvalidatingSidecar(campaignDir: string): void {
+  const line = (ts_ms: number, load1: number) =>
+    JSON.stringify({
+      ts_ms,
+      load1,
+      mem_available_bytes: 8 * 2 ** 30,
+      swap_used_bytes: 0,
+      process_count: 100,
+      disk_free_bytes: 90 * 2 ** 30,
+      breach: [],
+    });
+  writeFileSync(
+    join(campaignDir, 'contention-telemetry.jsonl'),
+    `${[2000, 2010, 2020]
+      .map((t) => line(t, 9))
+      .concat([2040, 2050, 2060].map((t) => line(t, 0)))
+      .join('\n')}\n`,
+  );
+}
+const BREACH_WINDOW = {
+  startTsMs: 2020,
+  endTsMs: 2060,
+  metrics: ['load1_per_core'],
+};
 
 // ---------------------------------------------------------------------------
 // Task 8b orchestrator tests
@@ -979,30 +1057,7 @@ test('spawn failure: excluded siblings never spawn, one mint + one exhausted adj
 test('closed-window contention: breach halts admission, resolution batch mints reason=contention in frozen order, counts print before admission resumed', async () => {
   const h = harness();
   const written: string[] = [];
-  // Sidecar fixture through the REAL parseSidecar/evaluateContention path: a
-  // sustain_k=3 crossing run (load1 9 -> 9/4 cores = 2.25 > threshold 2;
-  // load1_per_core normalizes by the REGISTERED cpu_cores) closed by 3
-  // in-bounds samples — the evaluator derives breach window [2020, 2060]
-  // from these exact lines, overlapping the block admitted at ~2000ms (the
-  // first tick advances the FakeClock to 2s before the first wave runs) ->
-  // 'invalid'.
-  const telemetry = (ts_ms: number, load1: number) =>
-    JSON.stringify({
-      ts_ms,
-      load1,
-      mem_available_bytes: 8 * 2 ** 30,
-      swap_used_bytes: 0,
-      process_count: 100,
-      disk_free_bytes: 90 * 2 ** 30,
-      breach: [],
-    });
-  writeFileSync(
-    join(h.campaignDir, 'contention-telemetry.jsonl'),
-    `${[2000, 2010, 2020]
-      .map((t) => telemetry(t, 9))
-      .concat([2040, 2050, 2060].map((t) => telemetry(t, 0)))
-      .join('\n')}\n`,
-  );
+  writeInvalidatingSidecar(h.campaignDir);
   // Scripted sampler seam — TYPED, no casts: capture the dispatcher's hooks
   // at start(), then drive onBreachExit by hand. This is the same entry
   // point the real ContentionSampler notifies after fsyncing the exit
@@ -1026,11 +1081,7 @@ test('closed-window contention: breach halts admission, resolution batch mints r
   expect(hooks).not.toBeNull();
   // The closed window the sampler would hand over (derived from the same
   // sidecar lines above; exit sample already durable).
-  hooks!.onBreachExit({
-    startTsMs: 2020,
-    endTsMs: 2060,
-    metrics: ['load1_per_core'],
-  });
+  hooks!.onBreachExit(BREACH_WINDOW);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
     child.exit({ code: 0, signal: null });
@@ -2169,73 +2220,8 @@ test('the allocation wait does NOT hold the control section: a signal during the
 });
 
 test("allocation waits across blocks run concurrently: the second block's line resolves its mint while the first is still waiting", async () => {
-  const doc = campaignDoc();
-  const h = harness({
-    contention: { ...doc.contention, global_run_cap: 4 },
-    blocks: [
-      {
-        block_id: 'c1:scn:b1',
-        comparison_id: 'c1',
-        sample_ids: ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'],
-      },
-      {
-        block_id: 'c1:scn:b2',
-        comparison_id: 'c1',
-        sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
-      },
-      {
-        block_id: 'c1:scn:x1',
-        comparison_id: 'c1',
-        sample_ids: ['c1:scn:arm_a:x1', 'c1:scn:arm_b:x1'],
-        slot: 'reserve',
-      },
-    ],
-    samples: [
-      {
-        sample_id: 'c1:scn:arm_a:r1',
-        cell: 'c1:scn',
-        arm: 'arm_a',
-        replicate: 1,
-      },
-      {
-        sample_id: 'c1:scn:arm_b:r1',
-        cell: 'c1:scn',
-        arm: 'arm_b',
-        replicate: 1,
-      },
-      {
-        sample_id: 'c1:scn:arm_a:r2',
-        cell: 'c1:scn',
-        arm: 'arm_a',
-        replicate: 2,
-      },
-      {
-        sample_id: 'c1:scn:arm_b:r2',
-        cell: 'c1:scn',
-        arm: 'arm_b',
-        replicate: 2,
-      },
-      {
-        sample_id: 'c1:scn:arm_a:x1',
-        cell: 'c1:scn',
-        arm: 'arm_a',
-        replicate: 1,
-      },
-      {
-        sample_id: 'c1:scn:arm_b:x1',
-        cell: 'c1:scn',
-        arm: 'arm_b',
-        replicate: 1,
-      },
-    ],
-  });
-  const credentials = Object.fromEntries(
-    Object.entries(h.credentials).map(([name, cred]) => [
-      name,
-      { ...cred, max_concurrency: 4 },
-    ]),
-  );
-  const run = runCampaignDispatch({ ...h.args, credentials });
+  const h = twoBlockHarness();
+  const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   expect(h.spawner.spawned.length).toBe(4); // b1 + b2 both in flight
   const [a1, b1, a2, b2] = h.spawner.spawned;
@@ -2269,6 +2255,243 @@ test("allocation waits across blocks run concurrently: the second block's line r
   for (const c of [b1, b2]) c!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(4)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+// --- Fix round 4: the deferred re-entry's lifecycle -------------------------
+
+test('a deferred re-entry queued behind an operator cancel is dropped AT EXECUTION: campaign_cancelled stays LAST (D-12; the control-epoch guard)', async () => {
+  const h = twoBlockHarness();
+  const written: string[] = [];
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [a1, , a2, b2] = h.spawner.spawned;
+  // Two deferred mints, one tick apart: b1's wait expires first.
+  a1!.child.emitLine(`run_allocated: run-${a1!.child.pid}`);
+  a1!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  a2!.child.emitLine(`run_allocated: run-${a2!.child.pid}`);
+  a2!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  // b1's budget expires: its re-entry is RUNNING and parked on the kill's
+  // grace sleep — the control section is busy.
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS - 0.5);
+  // The operator cancel (marker first, D-12) queues behind that busy
+  // section; then b2's sibling allocates, so b2's re-entry decides to queue
+  // while `signalled` is STILL false — it lands behind the cancel.
+  writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
+    flag: 'wx',
+  });
+  signalHandler!('SIGTERM');
+  b2!.child.emitLine(`run_allocated: run-${b2!.child.pid}`);
+  for (let i = 0; i < 10; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('cancelled');
+  const types = journalTypes(h.campaignDir);
+  // b1's mint landed before the cancel; b2's stale re-entry journaled
+  // nothing after it — campaign_cancelled is LAST.
+  expect(types[types.length - 1]).toBe('campaign_cancelled');
+  expect(mintRecords(h.campaignDir).map((m) => m.block_id)).toEqual([
+    'c1:scn:b1',
+  ]);
+  expect(
+    eventsOf(h.campaignDir, 'adjudication').filter(
+      (e) => e.payload.disposition === 'reserve_exhausted',
+    ).length,
+  ).toBe(0);
+  expect(written.join('')).toMatch(/dropped: stale control epoch/);
+});
+
+test('settle-kill releases land in the budget position BEFORE the replacement reads it: a valid replacement is not falsely suppressed (E7.7 order: kills -> snapshot -> budget reads)', async () => {
+  const doc = campaignDoc();
+  // Budget 5: with the killed sibling's estimate (2) still counted, the
+  // reserve's exposure (3) on top of the spend (1) reads 6 > 5 — a false
+  // stop. With the release landed first it reads 4 <= 5.
+  const h = harness({
+    suite: { ...doc.suite, budget_usd: 5 },
+    budget: { ...doc.budget, usd_all_in: 5 },
+  });
+  const args: DispatchRunArgs = { ...h.args, killGraceSeconds: 0.05 };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
+  const events = journalEvents(h.campaignDir);
+  expect(events.some((e) => e.type === 'budget_stopped')).toBe(false);
+  expect(
+    eventsOf(h.campaignDir, 'adjudication').some(
+      (e) => e.payload.disposition === 'replacement_suppressed',
+    ),
+  ).toBe(false);
+  const mint = mintRecords(h.campaignDir)[0];
+  expect(mint).toBeDefined();
+  // The superseding snapshot (exposure now empty) precedes the mint.
+  const emptySnapshot = events.find(
+    (e) =>
+      e.type === 'budget_event' &&
+      e.payload.kind === 'estimate_inflight' &&
+      e.payload.amount_usd === 0,
+  );
+  expect(emptySnapshot).toBeDefined();
+  expect(emptySnapshot!.seq).toBeLessThan(mint!.seq);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('a partial settle-kill in the contention batch journals the superseding snapshot for the verified deaths BEFORE aborting (E7.7)', async () => {
+  const h = twoBlockHarness();
+  writeInvalidatingSidecar(h.campaignDir);
+  let hooks: DispatchSamplerHooks | null = null;
+  const scripted: DispatchSamplerSeam = {
+    start(captured) {
+      hooks = captured;
+      return () => {};
+    },
+  };
+  const written: string[] = [];
+  const dead = new Set<number>();
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const args: DispatchRunArgs = {
+    ...h.args,
+    sampler: scripted,
+    stream: { write: (s: string) => written.push(s) },
+    killGraceSeconds: 0.05,
+    // pid 1003 (b2's arm_b) is immortal; every other group dies on TERM.
+    signalGroup: (pgid, signal) => {
+      if (pgid === 1003) return 'ok';
+      if (signal === 0) return dead.has(pgid) ? 'esrch' : 'ok';
+      dead.add(pgid);
+      return 'ok';
+    },
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  expect(h.spawner.spawned.length).toBe(4);
+  // No child has allocated when the window closes: the batch defers on all
+  // four, then the budget expires and every child is settle-killed.
+  hooks!.onBreachExit(BREACH_WINDOW);
+  await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/contention resolution deferred/);
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 12; i += 1) await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/contention resolution ABORTED/);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  // Three verified deaths released their exposure; only the survivor
+  // (arm_b:r2, estimate 2) remains — and that snapshot landed before the
+  // abort returned.
+  const snapshots = eventsOf(h.campaignDir, 'budget_event').filter(
+    (e) => e.payload.kind === 'estimate_inflight',
+  );
+  expect(snapshots[snapshots.length - 1]!.payload.amount_usd).toBe(2);
+  signalHandler!('SIGINT');
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  expect(outcome.status).toBe('signalled');
+});
+
+test('an older deferred contention resolution never clears a NEWER live breach: admission stays halted until that breach resolves itself (generation ownership)', async () => {
+  const h = harness();
+  writeInvalidatingSidecar(h.campaignDir);
+  let hooks: DispatchSamplerHooks | null = null;
+  const scripted: DispatchSamplerSeam = {
+    start(captured) {
+      hooks = captured;
+      return () => {};
+    },
+  };
+  const written: string[] = [];
+  const run = runCampaignDispatch({
+    ...h.args,
+    sampler: scripted,
+    stream: { write: (s: string) => written.push(s) },
+  });
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`); // childB stays unallocated
+  hooks!.onBreachEntry(['load1_per_core']); // generation 1
+  hooks!.onBreachExit(BREACH_WINDOW); // generation 1 closes: deferred on childB
+  await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/contention resolution deferred/);
+  hooks!.onBreachEntry(['load1_per_core']); // a NEWER breach while the old resolution waits
+  await tick(h.clock, 1);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`); // the old resolution re-enters
+  await tick(h.clock, 1);
+  expect(
+    mintRecords(h.campaignDir).filter((m) => m.reason === 'contention').length,
+  ).toBe(1); // its batch still lands...
+  // ...but the newer breach survives: admission stays halted, so the minted
+  // reserve does NOT admit even once slots free up.
+  for (const c of [childA, childB]) c!.child.exit({ code: 0, signal: null });
+  for (let i = 0; i < 3; i += 1) await tick(h.clock, 1);
+  expect(h.spawner.spawned.length).toBe(2);
+  expect(written.join('')).not.toMatch(/admission resumed/);
+  // The newer breach closes: its own resolution clears it.
+  hooks!.onBreachExit(BREACH_WINDOW);
+  await tick(h.clock, 1);
+  expect(written.join('')).toMatch(/admission resumed/);
+  expect(h.spawner.spawned.length).toBe(4);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('settle-killing the last child of a block reaches the pinned block-terminal verification (R-DSP-11 cadence point 2) that the abandoned exit callback would skip', async () => {
+  const h = harness();
+  const written: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+    killGraceSeconds: 0.05,
+  };
+  const run = runCampaignDispatch(args);
+  await tick(h.clock, 1);
+  const [childA] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+  await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
+  for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
+  const text = written.join('');
+  const killedAt = text.indexOf('verified dead before its disposition');
+  expect(killedAt).toBeGreaterThan(-1);
+  const receipt =
+    'block terminal: c1:scn:b1 — snapshot verified (R-DSP-11 cadence point 2)';
+  expect(text.indexOf(receipt)).toBeGreaterThan(killedAt);
+  expect(text.split(receipt).length - 1).toBe(1); // exactly once for the block
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(2)) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
   }

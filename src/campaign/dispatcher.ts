@@ -1296,7 +1296,17 @@ export async function runCampaignDispatch(
     let admissionHalted = false;
     let haltReason = '';
     let breachActive = false;
+    /** Which breach entry `breachActive` belongs to: a deferred contention
+     *  resolution may clear only the generation it was resolving — a newer
+     *  live breach survives an older resolution's re-entry. */
+    let breachGeneration = 0;
     let signalled = false;
+    /** The stale-work guard for deferred re-entries: every control terminal
+     *  (signal, storage pause, teardown) advances it; a re-entry captured
+     *  under an older epoch is dropped AT EXECUTION inside the serialized
+     *  section, so work queued before a terminal never journals after it
+     *  (D-12: campaign_cancelled stays LAST). */
+    let controlEpoch = 0;
     let cancelRequested = false;
     /** Session-local budget-stop state: once the R-DSP-6 predicate fails,
      *  no further admission happens THIS session (a raise cannot land
@@ -1437,6 +1447,7 @@ export async function runCampaignDispatch(
     const enterStoragePause = async (origin: string): Promise<void> => {
       if (storagePaused) return;
       storagePaused = true;
+      controlEpoch += 1; // deferred work captured before this is stale
       admissionHalted = true; // step 2: halt admission immediately
       haltReason = `storage pause: ${origin}`;
       stream.write(`storage pause detected (${origin})\n`);
@@ -1799,21 +1810,33 @@ export async function runCampaignDispatch(
           !s.child.stdoutLines.some((l) => parseRunAllocatedLine(l) !== null),
       );
     /** Leave the control section, wait for every pending child concurrently
-     *  (never serialized), then re-enter through runExclusive to apply. A
-     *  wait abandoned by teardown, a signal, or a storage pause re-enters
-     *  nothing. */
+     *  (never serialized), then re-enter through runExclusive to apply. The
+     *  re-entry is revalidated AT EXECUTION inside the section against the
+     *  control epoch captured here: a signal, storage pause, or teardown
+     *  section queued before it has run by then and advanced the epoch, so
+     *  stale work journals nothing. */
     const deferUntilAllocated = (
       pending: readonly LiveSampleState[],
+      label: string,
       reenter: () => Promise<void>,
     ): void => {
+      const epoch = controlEpoch;
       const waits = pending.map((s) =>
         s.child === undefined
           ? Promise.resolve(null)
           : awaitAllocationLine(s.child),
       );
       void Promise.all(waits).then(() => {
-        if (tearingDown || signalled || storagePaused) return;
-        void runExclusive(reenter);
+        if (tearingDown) return; // nothing re-enters after the loop exited
+        void runExclusive(async () => {
+          if (controlEpoch !== epoch) {
+            stream.write(
+              `${label} dropped: stale control epoch (a signal, storage pause, or teardown landed during the wait)\n`,
+            );
+            return;
+          }
+          await reenter();
+        });
       });
     };
     /** Blocks whose pending allocations were already waited for once: the
@@ -1923,13 +1946,20 @@ export async function runCampaignDispatch(
           stream.write(
             `replacement for ${blockId} deferred: waiting outside the control section (up to ${ALLOCATION_WAIT_BUDGET_SECONDS}s) for ${pending.map((s) => s.attemptId).join(', ')} to allocate (R-JRN-8)\n`,
           );
-          deferUntilAllocated(pending, () =>
+          deferUntilAllocated(pending, `replacement for ${blockId}`, () =>
             mintReplacement(failedBlock, reason),
           );
           return;
         }
       }
       const settled = await settlePendingAllocations(failedBlock);
+      // E7.7 order: kills -> superseding snapshot -> budget reads. The
+      // snapshot lands BEFORE the resolution reads the budget position, and
+      // lands for the verified deaths even when a sibling's kill failed.
+      if (settled.released > 0) {
+        await appendCritical([snapshotEstimateInput()]);
+        estimateUsd = currentEstimateTotal();
+      }
       if (settled.failures.length > 0) {
         stream.write(
           `replacement for ${blockId} REFUSED: kill unverified for ${settled.failures.join(', ')} — operator action: verify and kill these process groups manually, then resume; the obligation re-derives at \`quorum campaign run\`\n`,
@@ -1950,34 +1980,30 @@ export async function runCampaignDispatch(
         // BEFORE anything lands.
         assertInstanceGraph({ campaign, mints: [...mintRecords, res.record] });
       }
-      // E7.7: a verified kill above released exposure — the superseding
-      // absolute snapshot rides the same critical section as the mint.
-      const appended = await appendCritical(
-        settled.released > 0
-          ? [...res.events, snapshotEstimateInput()]
-          : res.events,
-      );
+      const appended = await appendCritical(res.events);
       if (appended === null) return;
-      resolvedObligations.add(failedBlock.block.block_id);
-      const cellKey = cellKeyOfBlockId(failedBlock.block.block_id);
+      resolvedObligations.add(blockId);
+      const cellKey = cellKeyOfBlockId(blockId);
       if (res.outcome === 'suppressed') {
         stream.write(
           `replacement suppressed for ${cellKey}: budget stopped (named shortfall)\n`,
         );
-        return;
-      }
-      if (res.outcome === 'exhausted') {
+      } else if (res.outcome === 'exhausted') {
         stream.write(`reserve exhausted for ${cellKey}: named shortfall\n`);
-        return;
+      } else {
+        mintRecords.push(res.record);
+        reserveActivated.add(res.reserve.block_id);
+        supersededBlockIds.add(blockId);
+        waiting.push(res.reserve);
+        stream.write(
+          `replacement minted: ${blockId} -> ${res.reserve.block_id} (reason ${reason})\n`,
+        );
+        wakeLoop();
       }
-      mintRecords.push(res.record);
-      reserveActivated.add(res.reserve.block_id);
-      supersededBlockIds.add(failedBlock.block.block_id);
-      waiting.push(res.reserve);
-      stream.write(
-        `replacement minted: ${failedBlock.block.block_id} -> ${res.reserve.block_id} (reason ${reason})\n`,
-      );
-      wakeLoop();
+      // D-11/R-DSP-11: a settle-kill that terminalized the block's last
+      // child reaches the pinned block-terminal verification here — the
+      // killed child's own exit callback is abandoned and would skip it.
+      if (settled.released > 0) await onBlockTerminal(failedBlock);
     };
 
     // --- R-DSP-11 verify + Decision D-11 drift response ---------------------
@@ -2261,6 +2287,22 @@ export async function runCampaignDispatch(
       // Instrument-failed blocks are the replacement path's; skew owns only
       // determinate blocks.
       if (lb.instrumentFailed) return;
+      // A sample still 'admitted' at block terminal never allocated (its
+      // child was settle-killed or died pre-allocation): the machine pins
+      // skew_excluded from spawned|exposed only, so there is no exclusion
+      // edge to journal. The block's fate belongs to the obligation that
+      // killed it (an aborted contention batch re-derives at resume) or to
+      // recovery's pre-run_allocated window (attempt void, re-admit). Loud,
+      // never a fabricated exclusion.
+      const unallocated = lb.samples.filter(
+        (s) => mirrorStateOf(s.sampleId) === 'admitted',
+      );
+      if (unallocated.length > 0) {
+        stream.write(
+          `block terminal: ${lb.block.block_id} has unallocated sample(s) ${unallocated.map((s) => s.attemptId).join(', ')} — skew undecidable (no exclusion edge from admitted); left to its pending obligation or recovery\n`,
+        );
+        return;
+      }
       if (campaign.suite.kind === 'gating') {
         // D-9 exposure audit at the decision point: the decided value vs the
         // capture re-derivation; an inclusion-flipping divergence invalidates
@@ -2325,6 +2367,25 @@ export async function runCampaignDispatch(
         `skew excluded: block ${lb.block.block_id} — ${detail} — refilling from reserve\n`,
       );
       await mintReplacement(lb, 'skew_refill');
+    };
+
+    /** D2 cadence point 2 of 3 (R-DSP-11): the block-terminal skew decision
+     *  (R-DSP-9, gating) then the snapshot verification, reached from EVERY
+     *  way a block's last child ends — its exit callback, or a settle-kill
+     *  whose abandoned callback never runs. */
+    const onBlockTerminal = async (block: LiveBlockState): Promise<void> => {
+      if (storagePaused || !block.samples.every((s) => s.serviceEnded)) return;
+      await decideBlockSkew(block);
+      try {
+        verifySnapshotNow();
+        lastCleanVerifyTsMs = clockNowMs(clock);
+        stream.write(
+          `block terminal: ${block.block.block_id} — snapshot verified (R-DSP-11 cadence point 2)\n`,
+        );
+      } catch (err) {
+        if (err instanceof SnapshotDriftError) await handleDrift(err);
+        else throw err;
+      }
     };
 
     // --- Child supervision --------------------------------------------------
@@ -2513,16 +2574,7 @@ export async function runCampaignDispatch(
           // Block terminal: the skew decision (R-DSP-9, gating) runs first,
           // then D2 cadence point 2 of 3 (R-DSP-11): verify at BLOCK
           // terminal (the third point, pre-seal, is D4's).
-          if (!storagePaused && block.samples.every((s) => s.serviceEnded)) {
-            await decideBlockSkew(block);
-            try {
-              verifySnapshotNow();
-              lastCleanVerifyTsMs = clockNowMs(clock);
-            } catch (err) {
-              if (err instanceof SnapshotDriftError) await handleDrift(err);
-              else throw err;
-            }
-          }
+          await onBlockTerminal(block);
         });
       });
     };
@@ -2858,7 +2910,23 @@ export async function runCampaignDispatch(
     };
 
     // --- Closed-window contention resolution (ratified OQ-11) ---------------
-    const resolveClosedWindow = async (window: BreachWindow): Promise<void> => {
+    /** Clear the breach ONLY if it is still the generation this resolution
+     *  belongs to; a newer live breach keeps admission halted until its own
+     *  resolution clears it. */
+    const clearBreach = (generation: number): void => {
+      if (breachGeneration === generation) {
+        breachActive = false;
+        stream.write('admission resumed\n');
+        return;
+      }
+      stream.write(
+        `admission stays halted: a newer contention breach (generation ${breachGeneration}) is live; its own resolution clears it\n`,
+      );
+    };
+    const resolveClosedWindow = async (
+      window: BreachWindow,
+      generation: number = breachGeneration,
+    ): Promise<void> => {
       // The sampler fsynced the exit sample BEFORE this notification (pinned
       // order); the resolution batch re-reads the durable sidecar through
       // THE shared evaluator with the required inputs (C6): registered
@@ -2908,15 +2976,16 @@ export async function runCampaignDispatch(
         stream.write(
           `contention resolution deferred: waiting outside the control section (up to ${ALLOCATION_WAIT_BUDGET_SECONDS}s) for ${pending.map((s) => s.attemptId).join(', ')} to allocate (R-JRN-8)\n`,
         );
-        deferUntilAllocated(pending, () => resolveClosedWindow(window));
+        deferUntilAllocated(pending, 'contention resolution', () =>
+          resolveClosedWindow(window, generation),
+        );
         return;
       }
-      breachActive = false;
       if (invalid.length === 0) {
         stream.write(
           'contention resolution: affected=0 refilled=0 exhausted=0 suppressed=0\n',
         );
-        stream.write('admission resumed\n');
+        clearBreach(generation);
         return;
       }
       // One dispatch writer critical section covers the whole batch; frozen
@@ -2936,16 +3005,31 @@ export async function runCampaignDispatch(
       // child that would not die aborts the whole batch loudly (C10) — the
       // durable sidecar re-derives it at resume.
       let released = 0;
+      const terminalizedByKill: LiveBlockState[] = [];
+      const killFailures: string[] = [];
       for (const lb of invalid) {
         const settled = await settlePendingAllocations(lb);
         released += settled.released;
+        if (settled.released > 0) terminalizedByKill.push(lb);
         if (settled.failures.length > 0) {
-          stream.write(
-            `contention resolution ABORTED: kill unverified for ${settled.failures.join(', ')} — operator action: verify and kill these process groups manually, then resume; the batch re-derives from the durable sidecar at \`quorum campaign run\`\n`,
-          );
-          halt('unverified kill blocks the contention resolution batch');
-          return;
+          killFailures.push(...settled.failures);
+          break;
         }
+      }
+      // E7.7 order: kills -> superseding snapshot -> budget reads. The
+      // verified deaths' release lands even when the batch aborts below.
+      if (released > 0) {
+        await appendCritical([snapshotEstimateInput()]);
+        estimateUsd = currentEstimateTotal();
+      }
+      if (killFailures.length > 0) {
+        stream.write(
+          `contention resolution ABORTED: kill unverified for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually, then resume; the batch re-derives from the durable sidecar at \`quorum campaign run\`\n`,
+        );
+        if (breachGeneration === generation) breachActive = false; // the halt below owns admission now
+        halt('unverified kill blocks the contention resolution batch');
+        for (const lb of terminalizedByKill) await onBlockTerminal(lb);
+        return;
       }
       for (const lb of invalid) {
         const res = resolveReplacementObligation({
@@ -2972,9 +3056,7 @@ export async function runCampaignDispatch(
         campaign,
         mints: [...mintRecords, ...minted.map((m) => m.record)],
       });
-      const appended = await appendCritical(
-        released > 0 ? [...batch, snapshotEstimateInput()] : batch, // E7.7
-      );
+      const appended = await appendCritical(batch);
       if (appended === null) {
         // Nothing durable landed: announce NOTHING — no planned counts, no
         // resumed receipt; the storage-pause path is the only announcement
@@ -2993,8 +3075,11 @@ export async function runCampaignDispatch(
       stream.write(
         `contention resolution: affected=${invalid.length} refilled=${refilled} exhausted=${exhausted} suppressed=${suppressed}\n`,
       );
-      stream.write('admission resumed\n');
+      clearBreach(generation);
       wakeLoop(); // minted reserves are admission candidates now
+      // D-11/R-DSP-11: blocks whose last child the settle-kill terminalized
+      // reach the pinned block-terminal verification here.
+      for (const lb of terminalizedByKill) await onBlockTerminal(lb);
     };
 
     // --- Signal handling (R-DSP-7 / Decision D-12 pinned order) -------------
@@ -3009,6 +3094,7 @@ export async function runCampaignDispatch(
           if (signalled || storagePaused) return;
           // 1. Stop admitting (`signalled` gates the loop; no further waves).
           signalled = true;
+          controlEpoch += 1; // deferred work captured before this is stale
           // 2. Kill every campaign process group (TERM -> wait -> KILL ->
           // verify dead, identity-guarded — the ONE C10 primitive).
           // Verified death is a HARD precondition (Critical): aborted is
@@ -3088,6 +3174,7 @@ export async function runCampaignDispatch(
       onBreachEntry: (metrics) => {
         void runExclusive(() => {
           breachActive = true;
+          breachGeneration += 1;
           stream.write(
             `contention breach entry: ${metrics.join(', ')} — admission halted, in-flight runs to service end\n`,
           );
@@ -3159,6 +3246,7 @@ export async function runCampaignDispatch(
     // outlive the run, and no deferred re-entry may run after the writer
     // is released.
     tearingDown = true;
+    controlEpoch += 1;
     for (const abandon of [...pendingWaits]) abandon();
     await activeSection; // drain queued handler sections before teardown
     if (fatalError !== null) {
