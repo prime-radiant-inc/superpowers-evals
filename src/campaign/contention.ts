@@ -8,6 +8,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
   openSync,
   readFileSync,
   writeSync,
@@ -40,54 +41,175 @@ export interface TelemetryGap {
 
 export type SidecarLine = TelemetrySample | TelemetryGap;
 
-/** Append one JSON line, fsynced per sample (Decision D-3). */
+/** Injectable fs seam for sidecar appends: tests record durability order and
+ *  force short writes; production uses the real node:fs (R1-F5). */
+export interface SidecarFsOps {
+  openSync(path: string, flags: 'a'): number;
+  writeSync(
+    fd: number,
+    buf: Uint8Array,
+    offset: number,
+    length: number,
+  ): number;
+  fsyncSync(fd: number): void;
+  closeSync(fd: number): void;
+}
+
+const REAL_SIDECAR_FS: SidecarFsOps = {
+  openSync,
+  writeSync,
+  fsyncSync,
+  closeSync,
+};
+
+/** Append one JSON line, fsynced per sample (Decision D-3). Full-write
+ *  discipline (locks.ts's token-rewrite precedent, R1-F5): a partial write
+ *  must never be fsynced as success — keep writing until every byte has
+ *  landed, THEN fsync; zero forward progress throws instead. */
 export function appendSidecarLine(
   campaignDir: string,
   line: SidecarLine,
+  ops: SidecarFsOps = REAL_SIDECAR_FS,
 ): void {
   const path = join(campaignDir, SIDECAR_FILENAME);
-  const fd = openSync(path, 'a');
+  const data = Buffer.from(`${JSON.stringify(line)}\n`, 'utf8');
+  const fd = ops.openSync(path, 'a');
   try {
-    writeSync(fd, `${JSON.stringify(line)}\n`);
-    fsyncSync(fd);
+    let written = 0;
+    while (written < data.length) {
+      const n = ops.writeSync(fd, data, written, data.length - written);
+      if (n <= 0) {
+        throw new Error(
+          `short write on ${path} (${written} of ${data.length} bytes, no forward progress) — refusing to fsync a torn record`,
+        );
+      }
+      written += n;
+    }
+    ops.fsyncSync(fd);
   } finally {
-    closeSync(fd);
+    ops.closeSync(fd);
   }
 }
 
-/** Torn-tail tolerant parse: truncate at the last COMPLETE line with a loud
- *  flag; the truncated interval counts as uncovered (the evaluator takes
- *  `truncatedTail` as a required input — C6, tail state is never discarded). */
+/** Structural validation of one parsed sidecar record (R1-F3): variant by
+ *  the `missing` discriminator, required fields present, finite numbers,
+ *  non-negative timestamp, breach as a string array. Extra fields are
+ *  tolerated (test fixtures and older writers carry more); a wrong or
+ *  missing REQUIRED field is damage, never trusted. */
+function isValidSidecarLine(x: unknown): x is SidecarLine {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
+  const rec = x as Record<string, unknown>;
+  const finite = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v);
+  const ts = rec['ts_ms'];
+  if (!finite(ts) || ts < 0) return false;
+  if ('missing' in rec) return rec['missing'] === true;
+  const breach = rec['breach'];
+  return (
+    finite(rec['load1']) &&
+    finite(rec['mem_available_bytes']) &&
+    finite(rec['swap_used_bytes']) &&
+    finite(rec['process_count']) &&
+    finite(rec['disk_free_bytes']) &&
+    Array.isArray(breach) &&
+    breach.every((m) => typeof m === 'string')
+  );
+}
+
+interface SidecarScan {
+  readonly lines: SidecarLine[];
+  /** Byte length of the valid prefix — the repair truncation point. */
+  readonly validByteLength: number;
+  readonly damaged: boolean;
+  readonly damageDetail: string | null;
+}
+
+/** Longest valid prefix of sidecar text: the scan STOPS at the first
+ *  damaged line — unterminated tail, unparseable JSON, or an invalid
+ *  record — so later complete lines never resurrect coverage past a damage
+ *  point (R1-F1: skipping damage was fail-open). */
+function scanSidecarText(text: string): SidecarScan {
+  const lines: SidecarLine[] = [];
+  let pos = 0;
+  let validByteLength = 0;
+  while (pos < text.length) {
+    const nl = text.indexOf('\n', pos);
+    if (nl === -1) {
+      return {
+        lines,
+        validByteLength,
+        damaged: true,
+        damageDetail: 'unterminated tail (crash mid-append)',
+      };
+    }
+    const raw = text.slice(pos, nl);
+    if (raw !== '') {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return {
+          lines,
+          validByteLength,
+          damaged: true,
+          damageDetail: `unparseable line ${JSON.stringify(raw.slice(0, 60))}`,
+        };
+      }
+      if (!isValidSidecarLine(parsed)) {
+        return {
+          lines,
+          validByteLength,
+          damaged: true,
+          damageDetail: `invalid record ${JSON.stringify(raw.slice(0, 60))}`,
+        };
+      }
+      lines.push(parsed);
+    }
+    pos = nl + 1;
+    validByteLength += Buffer.byteLength(raw, 'utf8') + 1;
+  }
+  return { lines, validByteLength, damaged: false, damageDetail: null };
+}
+
+/** Damage-tolerant parse: truncate at the last COMPLETE valid line with a
+ *  loud note; the truncated interval counts as uncovered (the evaluator
+ *  takes `truncatedTail` as a required input — C6, tail state is never
+ *  discarded). */
 export function parseSidecar(campaignDir: string): {
   lines: SidecarLine[];
   truncatedTail: boolean;
 } {
   const path = join(campaignDir, SIDECAR_FILENAME);
   if (!existsSync(path)) return { lines: [], truncatedTail: false };
-  const text = readFileSync(path, 'utf8');
-  const rawLines = text.split('\n');
-  const lines: SidecarLine[] = [];
-  let truncatedTail = false;
-  for (const raw of rawLines) {
-    if (raw === '') continue;
-    try {
-      lines.push(JSON.parse(raw) as SidecarLine);
-    } catch {
-      truncatedTail = true; // crash mid-append: torn tail
-    }
-  }
-  if (truncatedTail) {
+  const scan = scanSidecarText(readFileSync(path, 'utf8'));
+  if (scan.damaged) {
     process.stderr.write(
-      `contention sidecar at ${path} has a torn tail — truncated at the last complete line; the truncated interval counts as uncovered\n`,
+      `contention sidecar at ${path} has a damaged suffix (${scan.damageDetail}) — truncated at the last complete line; the truncated interval counts as uncovered\n`,
     );
   }
-  return { lines, truncatedTail };
+  return { lines: scan.lines, truncatedTail: scan.damaged };
 }
 
 export interface ResolvedThreshold {
   readonly metric: string;
   readonly op: 'gt' | 'lt';
   readonly value: number;
+}
+
+// The metrics this evaluator can judge. Registration's ContentionThreshold
+// schema allows any non-empty metric string; a frozen threshold outside this
+// set refuses loudly — it must never silently evaluate clean (R1-F4).
+const THRESHOLD_METRIC_NAMES: ReadonlySet<string> = new Set([
+  'load1',
+  'load1_per_core',
+  'mem_available_bytes',
+  'swap_used_bytes',
+  'process_count',
+  'disk_free_bytes',
+]);
+
+function unknownMetricMessage(metric: string): string {
+  return `unknown contention threshold metric ${JSON.stringify(metric)} — supported: ${[...THRESHOLD_METRIC_NAMES].join(', ')}; a frozen threshold this evaluator cannot judge refuses, never evaluates clean (fail-closed)`;
 }
 
 /** The registered threshold -> sample comparison. Metric sources pinned:
@@ -110,7 +232,7 @@ export function thresholdViolations(
   thresholds: readonly ResolvedThreshold[],
   cpuCores: number,
 ): string[] {
-  const metricValue = (metric: string): number | null => {
+  const metricValue = (metric: string): number => {
     switch (metric) {
       case 'load1':
         return sample.load1;
@@ -130,13 +252,12 @@ export function thresholdViolations(
       case 'disk_free_bytes':
         return sample.disk_free_bytes;
       default:
-        return null;
+        throw new Error(unknownMetricMessage(metric));
     }
   };
   const violated: string[] = [];
   for (const t of thresholds) {
     const v = metricValue(t.metric);
-    if (v === null) continue;
     if (t.op === 'gt' ? v > t.value : v < t.value) violated.push(t.metric);
   }
   return violated;
@@ -268,6 +389,13 @@ export interface EvaluateContentionArgs {
 export function evaluateContention(
   args: EvaluateContentionArgs,
 ): Map<string, BlockContentionVerdict> {
+  // R1-F4: refuse unjudgeable frozen thresholds upfront — even with zero
+  // samples to test them against, never silently skip into clean.
+  for (const t of args.thresholds) {
+    if (!THRESHOLD_METRIC_NAMES.has(t.metric)) {
+      throw new Error(unknownMetricMessage(t.metric));
+    }
+  }
   const windows = breachWindows(
     args.lines,
     args.thresholds,
@@ -283,6 +411,12 @@ export function evaluateContention(
   const uncovered: Array<{ start: number; end: number }> = [];
   const horizon = args.lastTerminalTsMs;
   const maxGap = args.coverageN * args.cadenceMs;
+  // R1-F2: zero real samples is zero evidence — the whole window is
+  // uncovered regardless of the N x cadence tolerance; no evidence is
+  // never clean.
+  if (sampleTs.length === 0) {
+    uncovered.push({ start: args.campaignOpenedTsMs, end: horizon });
+  }
   let prev = args.campaignOpenedTsMs;
   for (const ts of sampleTs) {
     if (ts > prev + maxGap) uncovered.push({ start: prev, end: ts });
@@ -297,10 +431,14 @@ export function evaluateContention(
     let prevReal = args.campaignOpenedTsMs;
     let nextReal = horizon;
     for (const ts of sampleTs) {
-      if (ts < line.ts_ms) prevReal = Math.max(prevReal, ts);
-      else if (ts > line.ts_ms) {
+      if (ts < line.ts_ms) {
+        prevReal = Math.max(prevReal, ts);
+      } else {
+        // sampleTs is sorted; the first sample AT or after the gap instant
+        // ends the blindness (a crash-recovery gap shares its ts_ms with
+        // the first post-repair sample).
         nextReal = Math.min(nextReal, ts);
-        break; // sampleTs is sorted; the first later sample is the neighbor
+        break;
       }
     }
     uncovered.push({ start: prevReal, end: nextReal });
@@ -354,6 +492,9 @@ export interface SamplerArgs {
   /** The REGISTERED fingerprint's cpu_cores (C6) — the sampler's live
    *  threshold evaluation normalizes by the frozen count too. */
   readonly cpuCores: number;
+  /** Injectable fs seam for the sidecar appends (R1-F5); omitted = real
+   *  node:fs. */
+  readonly fsOps?: SidecarFsOps;
   readonly onBreachEntry: (metrics: readonly string[]) => void;
   readonly onBreachExit: (window: BreachWindow) => void;
   readonly onSampleError: (err: unknown) => void;
@@ -392,7 +533,43 @@ export class ContentionSampler {
     this.stopResolve?.();
   }
 
+  /** Crash recovery (R1-F1): physically remove a damaged sidecar suffix
+   *  BEFORE the first append — resuming onto a torn fragment would merge
+   *  records — and preserve the blindness as a DURABLE gap line at repair
+   *  time, so the removed interval counts uncovered via the evaluator's
+   *  gap rule, never erased. Naive truncation alone would erase it. */
+  private repairSidecar(): void {
+    const path = join(this.args.campaignDir, SIDECAR_FILENAME);
+    if (!existsSync(path)) return;
+    const scan = scanSidecarText(readFileSync(path, 'utf8'));
+    if (!scan.damaged) return;
+    const fd = openSync(path, 'r+');
+    try {
+      ftruncateSync(fd, scan.validByteLength);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    process.stderr.write(
+      `contention sidecar at ${path} had a damaged suffix (${scan.damageDetail}) — removed before resuming; the blind interval is preserved as a gap line\n`,
+    );
+    appendSidecarLine(
+      this.args.campaignDir,
+      { ts_ms: clockNowMs(this.args.clock), missing: true },
+      this.args.fsOps,
+    );
+  }
+
   private async loop(): Promise<void> {
+    try {
+      this.repairSidecar();
+    } catch (err) {
+      // A sidecar that cannot be repaired must not be appended onto: report
+      // once and stay down — samplerStaleMs turns a down sampler into an
+      // admission halt (fail-closed).
+      this.args.onSampleError(err);
+      return;
+    }
     while (!this.stopping) {
       const nowMs = clockNowMs(this.args.clock);
       try {
@@ -411,25 +588,36 @@ export class ContentionSampler {
           this.openSince !== null
             ? (this.crossedMetricsAtOpen ?? violated)
             : [];
-        appendSidecarLine(this.args.campaignDir, {
-          ts_ms: sample.ts_ms,
-          load1: sample.load1,
-          mem_available_bytes: sample.mem_available_bytes,
-          swap_used_bytes: sample.swap_used_bytes,
-          process_count: sample.process_count,
-          disk_free_bytes: sample.disk_free_bytes,
-          breach,
-        });
+        appendSidecarLine(
+          this.args.campaignDir,
+          {
+            ts_ms: sample.ts_ms,
+            load1: sample.load1,
+            mem_available_bytes: sample.mem_available_bytes,
+            swap_used_bytes: sample.swap_used_bytes,
+            process_count: sample.process_count,
+            disk_free_bytes: sample.disk_free_bytes,
+            breach,
+          },
+          this.args.fsOps,
+        );
         notify?.();
       } catch (err) {
         // Missing-sample policy: record the gap; the dispatcher sees it via
-        // coverage; ENOSPC here reports into the pause path (onSampleError).
-        appendSidecarLineSafe(
-          this.args.campaignDir,
-          { ts_ms: nowMs, missing: true },
-          this.args.onSampleError,
-        );
-        this.args.onSampleError(err);
+        // coverage. Exactly ONE failure notification per missed sample
+        // (R1-minor): when the gap append itself fails (e.g. ENOSPC), that
+        // graver fault is the one reported into the pause path.
+        let failure: unknown = err;
+        try {
+          appendSidecarLine(
+            this.args.campaignDir,
+            { ts_ms: nowMs, missing: true },
+            this.args.fsOps,
+          );
+        } catch (appendErr) {
+          failure = appendErr;
+        }
+        this.args.onSampleError(failure);
       }
       await Promise.race([
         this.args.clock.sleepUntil(
@@ -487,17 +675,5 @@ export class ContentionSampler {
       this.inBoundsRun = 0;
     }
     return null;
-  }
-}
-
-function appendSidecarLineSafe(
-  campaignDir: string,
-  line: SidecarLine,
-  onError: (err: unknown) => void,
-): void {
-  try {
-    appendSidecarLine(campaignDir, line);
-  } catch (err) {
-    onError(err); // the gap could not be recorded — the pause path owns it
   }
 }

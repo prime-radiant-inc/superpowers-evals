@@ -1,5 +1,13 @@
 import { expect, spyOn, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +18,7 @@ import {
   parseSidecar,
   type ResolvedThreshold,
   SIDECAR_FILENAME,
+  type SidecarFsOps,
   type SidecarLine,
   samplerStaleMs,
   thresholdViolations,
@@ -26,6 +35,51 @@ const MEM_FLOOR: ResolvedThreshold = {
 // The FROZEN registered fingerprint's core count (C6: never the live
 // machine's) — threaded through every threshold evaluation.
 const FROZEN_CORES = 8;
+
+// Capture the mandated stderr loudness instead of leaking it into test
+// output.
+function captureStderr<T>(fn: () => T): { result: T; loud: string } {
+  const errSpy = spyOn(process.stderr, 'write');
+  errSpy.mockImplementation(() => true); // pure capture — suppress the write
+  try {
+    const result = fn();
+    // Snapshot the captured calls BEFORE mockRestore — bun's restore
+    // clears mock state.
+    return {
+      result,
+      loud: errSpy.mock.calls.map((c) => String(c[0])).join(''),
+    };
+  } finally {
+    errSpy.mockRestore();
+  }
+}
+
+// Recording fs seam: logs open/write/fsync/close order while delegating to
+// the real fs; capBytes forces short writes to prove the full-write loop.
+function recordingOps(
+  log: string[],
+  capBytes = Number.POSITIVE_INFINITY,
+): SidecarFsOps {
+  return {
+    openSync(path, flags) {
+      log.push('open');
+      return openSync(path, flags);
+    },
+    writeSync(fd, buf, offset, length) {
+      const n = writeSync(fd, buf, offset, Math.min(length, capBytes));
+      log.push(`write:${n}`);
+      return n;
+    },
+    fsyncSync(fd) {
+      log.push('fsync');
+      fsyncSync(fd);
+    },
+    closeSync(fd) {
+      log.push('close');
+      closeSync(fd);
+    },
+  };
+}
 
 function stats(ts: number, memAvailable = 8 * GiB): HostStats {
   return {
@@ -170,24 +224,207 @@ test('torn tail: parseSidecar truncates at the last complete line, loudly', () =
   appendSidecarLine(dir, { ...stats(1000), breach: [] });
   // Append a torn (unterminated JSON) tail.
   appendFileSync(join(dir, SIDECAR_FILENAME), '{"ts_ms": 2000, "load1": ');
-  // Capture the mandated stderr loudness instead of leaking it into test
-  // output.
-  const errSpy = spyOn(process.stderr, 'write');
-  errSpy.mockImplementation(() => true); // pure capture — suppress the write
-  let lines: SidecarLine[] = [];
-  let truncatedTail = false;
-  let loud = '';
-  try {
-    ({ lines, truncatedTail } = parseSidecar(dir));
-    // Snapshot the captured calls BEFORE mockRestore — bun's restore
-    // clears mock state.
-    loud = errSpy.mock.calls.map((c) => String(c[0])).join('');
-  } finally {
-    errSpy.mockRestore();
-  }
-  expect(lines).toHaveLength(1);
-  expect(truncatedTail).toBe(true);
-  expect(loud).toContain('torn tail — truncated at the last complete line');
+  const { result, loud } = captureStderr(() => parseSidecar(dir));
+  expect(result.lines).toHaveLength(1);
+  expect(result.truncatedTail).toBe(true);
+  expect(loud).toContain('truncated at the last complete line');
+});
+
+test('R1-F1: damage mid-file truncates the parse THERE — later lines never resurrect coverage', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+  appendSidecarLine(dir, { ...stats(10_000), breach: [] });
+  // A newline-terminated torn fragment followed by a complete line — the
+  // fail-open shape: a parser that merely SKIPS damage accepts the 40s
+  // line and counts [10s, 40s] covered by spacing.
+  appendFileSync(join(dir, SIDECAR_FILENAME), '{"ts_ms": 20000, "load1": \n');
+  appendSidecarLine(dir, { ...stats(40_000), breach: [] });
+  const { result } = captureStderr(() => parseSidecar(dir));
+  expect(result.lines).toHaveLength(1); // truncated AT the damage point
+  expect(result.truncatedTail).toBe(true);
+  const verdicts = evaluateContention({
+    lines: result.lines,
+    truncatedTail: result.truncatedTail,
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    coverageN: 4,
+    cpuCores: FROZEN_CORES,
+    campaignOpenedTsMs: 0,
+    lastTerminalTsMs: 40_000,
+    blocks: [{ block_id: 'mid-damage', startTsMs: 15_000, endTsMs: 25_000 }],
+  });
+  expect(verdicts.get('mid-damage')).toBe('unknown');
+});
+
+test('R1-F1: sampler recovery repairs the torn suffix BEFORE appending and keeps the blindness durable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+  appendSidecarLine(dir, { ...stats(10_000), breach: [] });
+  // Crash mid-append: an unterminated fragment ends the file.
+  appendFileSync(join(dir, SIDECAR_FILENAME), '{"ts_ms": 20000, "load1": ');
+  const clock = new FakeClock(40); // recovery 30s after the last good sample
+  const probe: HostStatsProbe = { sample: (nowMs) => stats(nowMs) };
+  const sampler = new ContentionSampler({
+    campaignDir: dir,
+    probe,
+    clock,
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    cpuCores: FROZEN_CORES,
+    onBreachEntry: () => {},
+    onBreachExit: () => {},
+    onSampleError: () => {},
+  });
+  // Repair runs synchronously at loop entry, before the first append.
+  const { result: running, loud } = captureStderr(() => sampler.start());
+  expect(loud).toContain('damaged suffix');
+  clock.advance(10); // sample at t=50s
+  await tick2();
+  await sampler.stop();
+  await running;
+  const raw = readFileSync(join(dir, SIDECAR_FILENAME), 'utf8');
+  expect(raw).not.toContain('20000'); // the torn fragment is physically gone
+  const { lines, truncatedTail } = parseSidecar(dir);
+  expect(truncatedTail).toBe(false); // the file itself is whole again
+  expect(lines).toHaveLength(4); // sample@10s, gap@40s, sample@40s, sample@50s
+  expect(lines[1]).toEqual({ ts_ms: 40_000, missing: true }); // the durable blindness fact
+  const verdicts = evaluateContention({
+    lines,
+    truncatedTail,
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    coverageN: 4,
+    cpuCores: FROZEN_CORES,
+    campaignOpenedTsMs: 0,
+    lastTerminalTsMs: 50_000,
+    blocks: [
+      // Inside the removed interval [10s, 40s]: uncovered, never erased.
+      { block_id: 'blind', startTsMs: 15_000, endTsMs: 25_000 },
+      // Post-recovery work classifies normally off the fresh samples.
+      { block_id: 'after', startTsMs: 42_000, endTsMs: 48_000 },
+    ],
+  });
+  expect(verdicts.get('blind')).toBe('unknown');
+  expect(verdicts.get('after')).toBe('clean');
+});
+
+test('R1-F2: zero telemetry is never clean — an empty sidecar classifies every block unknown', () => {
+  // 29s horizon under the 40s (N x cadence) tolerance, but with ZERO real
+  // samples there is no evidence at all: the whole window is uncovered.
+  const verdicts = evaluateContention({
+    lines: [],
+    truncatedTail: false,
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    coverageN: 4,
+    cpuCores: FROZEN_CORES,
+    campaignOpenedTsMs: 0,
+    lastTerminalTsMs: 29_000,
+    blocks: [{ block_id: 'no-evidence', startTsMs: 5_000, endTsMs: 20_000 }],
+  });
+  expect(verdicts.get('no-evidence')).toBe('unknown');
+});
+
+test('R1-F3: malformed-but-parseable records are damage — rejected loudly, never trusted', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+  appendSidecarLine(dir, { ...stats(10_000), breach: [] });
+  appendFileSync(join(dir, SIDECAR_FILENAME), '{}\n'); // valid JSON, not a sidecar record
+  appendSidecarLine(dir, { ...stats(20_000), breach: [] });
+  const { result, loud } = captureStderr(() => parseSidecar(dir));
+  expect(result.truncatedTail).toBe(true);
+  expect(result.lines).toHaveLength(1); // truncated at the invalid record
+  expect(loud).toContain('invalid record');
+  // The rejected record can no longer poison liveness with NaN staleness.
+  expect(samplerStaleMs(result.lines, 31_000)).toBe(21_000);
+  // Wrong-typed required fields are equally damage.
+  const dir2 = mkdtempSync(join(tmpdir(), 'cont-'));
+  appendFileSync(
+    join(dir2, SIDECAR_FILENAME),
+    '{"ts_ms": null, "missing": true}\n',
+  );
+  const second = captureStderr(() => parseSidecar(dir2));
+  expect(second.result.lines).toHaveLength(0);
+  expect(second.result.truncatedTail).toBe(true);
+});
+
+test('R1-F4: an unknown threshold metric refuses loudly instead of evaluating clean', () => {
+  const alien: ResolvedThreshold = {
+    metric: 'gpu_temp_c',
+    op: 'gt',
+    value: 90,
+  };
+  expect(() => thresholdViolations(stats(0), [alien], FROZEN_CORES)).toThrow(
+    /gpu_temp_c/,
+  );
+  const base = {
+    truncatedTail: false,
+    thresholds: [alien],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    coverageN: 4,
+    cpuCores: FROZEN_CORES,
+    campaignOpenedTsMs: 0,
+    lastTerminalTsMs: 20_000,
+    blocks: [{ block_id: 'b', startTsMs: 5_000, endTsMs: 15_000 }],
+  };
+  expect(() =>
+    evaluateContention({ ...base, lines: [{ ...stats(10_000), breach: [] }] }),
+  ).toThrow(/gpu_temp_c/);
+  // Even with zero samples to test against, a frozen threshold this
+  // evaluator cannot judge refuses upfront.
+  expect(() => evaluateContention({ ...base, lines: [] })).toThrow(
+    /gpu_temp_c/,
+  );
+});
+
+test('R1-F5: append survives short writes — every byte lands, fsynced after the last byte, before close', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+  const log: string[] = [];
+  const line = { ts_ms: 1_000, missing: true } as const;
+  // A 7-byte write cap forces multiple writes for the ~30-byte record.
+  appendSidecarLine(dir, line, recordingOps(log, 7));
+  const { lines, truncatedTail } = parseSidecar(dir);
+  expect(truncatedTail).toBe(false); // the record landed complete
+  expect(lines).toEqual([{ ts_ms: 1_000, missing: true }]);
+  const writes = log.filter((e) => e.startsWith('write:'));
+  expect(writes.length).toBeGreaterThan(1); // the cap actually bit
+  const totalWritten = writes.reduce((n, e) => n + Number(e.slice(6)), 0);
+  expect(totalWritten).toBe(Buffer.byteLength(`${JSON.stringify(line)}\n`));
+  // Durability order: the fsync follows the LAST write and precedes close.
+  expect(log[0]).toBe('open');
+  expect(log[log.length - 2]).toBe('fsync');
+  expect(log[log.length - 1]).toBe('close');
+});
+
+test('R1-minor: a probe failure whose gap append also fails reports exactly ONE sample error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-'));
+  const missingDir = join(dir, 'gone'); // never created -> every append fails
+  let errors = 0;
+  const probe: HostStatsProbe = {
+    sample() {
+      throw new Error('probe boom');
+    },
+  };
+  const sampler = new ContentionSampler({
+    campaignDir: missingDir,
+    probe,
+    clock: new FakeClock(0),
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 10_000,
+    cpuCores: FROZEN_CORES,
+    onBreachEntry: () => {},
+    onBreachExit: () => {},
+    onSampleError: () => {
+      errors += 1;
+    },
+  });
+  const running = sampler.start(); // t=0: probe throws AND the gap append fails
+  await sampler.stop();
+  await running;
+  expect(errors).toBe(1);
 });
 
 test('the pure evaluator: invalid > unknown > clean precedence, one interpretation', () => {
@@ -350,6 +587,8 @@ test('fsync-before-notify: the exit sample is durable BEFORE the closed-window c
     },
   };
   let exitLineCountAtNotify = -1;
+  let exitFsyncCountAtNotify = -1;
+  const fsLog: string[] = [];
   const sampler = new ContentionSampler({
     campaignDir: dir,
     probe,
@@ -358,11 +597,15 @@ test('fsync-before-notify: the exit sample is durable BEFORE the closed-window c
     sustainK: 1, // fast edges for the test
     cadenceMs: 10_000,
     cpuCores: FROZEN_CORES,
+    fsOps: recordingOps(fsLog),
     onBreachEntry: () => {},
     onBreachExit: () => {
       exitLineCountAtNotify = readFileSync(join(dir, SIDECAR_FILENAME), 'utf8')
         .split('\n')
         .filter((l) => l !== '').length;
+      // Buffered visibility is not durability: the recorder proves the
+      // exit line's fsync itself COMPLETED before the callback.
+      exitFsyncCountAtNotify = fsLog.filter((e) => e === 'fsync').length;
     },
     onSampleError: () => {},
   });
@@ -377,4 +620,5 @@ test('fsync-before-notify: the exit sample is durable BEFORE the closed-window c
   // exit callback fired, the sidecar ALREADY held all five lines including
   // the exit sample — the pinned fsync-before-notify order.
   expect(exitLineCountAtNotify).toBe(5);
+  expect(exitFsyncCountAtNotify).toBe(5); // one completed fsync per line, exit line included
 });
