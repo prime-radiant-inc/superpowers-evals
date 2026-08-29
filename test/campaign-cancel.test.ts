@@ -4,6 +4,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdtempSync,
   openSync,
   renameSync,
@@ -152,6 +153,10 @@ function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
         calls.push(`rename:${basename(from)}->${basename(to)}`);
         renameSync(from, to);
       },
+      link: (from, to) => {
+        calls.push(`link:${basename(from)}->${basename(to)}`);
+        linkSync(from, to);
+      },
       unlink: (path) => {
         calls.push(`unlink:${basename(path)}`);
         unlinkSync(path);
@@ -180,9 +185,9 @@ test('cancel: the cancel-request marker is fsynced with its directory before cam
     fsOps: ops,
   });
   expect(result.cancelled).toBe(true);
-  // The marker is STAGED, fsynced, then renamed onto the final name, so the
-  // final name only ever appears complete; the EEXIST guard's existence
-  // probe is not part of the durable order.
+  // The marker is STAGED, fsynced, then LINKED onto the final name: atomic
+  // and exclusive, so the final name only ever appears complete and a
+  // concurrent writer cannot be overwritten.
   const durable = calls.filter((c) => !c.startsWith('exists:'));
   const staged = durable[0]!.replace('open-wx:', '');
   expect(staged).toMatch(/^cancel\-request\.stage\./);
@@ -191,10 +196,11 @@ test('cancel: the cancel-request marker is fsynced with its directory before cam
     `write:${staged}`,
     `fsync:${staged}`,
     `close:${staged}`,
-    `rename:${staged}->cancel-request`,
+    `link:${staged}->cancel-request`,
     `open-r:${basename(dir)}`,
     `fsync:${basename(dir)}`,
     `close:${basename(dir)}`,
+    `unlink:${staged}`,
   ]);
 });
 

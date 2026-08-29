@@ -4,6 +4,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -2118,6 +2119,10 @@ function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
         calls.push(`rename:${basename(from)}->${basename(to)}`);
         renameSync(from, to);
       },
+      link: (from, to) => {
+        calls.push(`link:${basename(from)}->${basename(to)}`);
+        linkSync(from, to);
+      },
       unlink: (path) => {
         calls.push(`unlink:${basename(path)}`);
         unlinkSync(path);
@@ -2144,9 +2149,9 @@ test('performStoragePause: the .storage-paused marker is fsynced with its direct
     fsOps: ops,
   });
   expect(existsSync(join(campaignDir, '.storage-paused'))).toBe(true);
-  // The marker is STAGED, fsynced, then renamed onto the final name, so the
-  // final name only ever appears complete; the EEXIST guard's existence
-  // probe is not part of the durable order.
+  // The marker is STAGED, fsynced, then LINKED onto the final name: atomic
+  // and exclusive, so the final name only ever appears complete and a
+  // concurrent writer cannot be overwritten.
   const durable = calls.filter((c) => !c.startsWith('exists:'));
   const staged = durable[0]!.replace('open-wx:', '');
   expect(staged).toMatch(/^\.storage\-paused\.stage\./);
@@ -2156,10 +2161,11 @@ test('performStoragePause: the .storage-paused marker is fsynced with its direct
     // the fsync and the rename are what make it durable.
     `fsync:${staged}`,
     `close:${staged}`,
-    `rename:${staged}->.storage-paused`,
+    `link:${staged}->.storage-paused`,
     `open-r:${basename(campaignDir)}`,
     `fsync:${basename(campaignDir)}`,
     `close:${basename(campaignDir)}`,
+    `unlink:${staged}`,
   ]);
 });
 

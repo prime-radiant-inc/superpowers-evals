@@ -13,6 +13,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   renameSync,
@@ -1450,6 +1451,10 @@ export interface JournalFsOps {
   write(fd: number, data: string | Buffer): number;
   fsync(fd: number): void;
   rename(from: string, to: string): void;
+  /** Hard-link `from` onto `to`. Atomic AND EEXIST-respecting: unlike
+   *  rename it refuses when `to` exists, so it publishes a fully-written
+   *  file under a name that is exclusively created. */
+  link(from: string, to: string): void;
   unlink(path: string): void;
   stat(path: string): { size: number; blocks: number };
   exists(path: string): boolean;
@@ -1463,6 +1468,7 @@ const realFsOps: JournalFsOps = {
     typeof data === 'string' ? writeSync(fd, data) : writeSync(fd, data),
   fsync: fsyncSync,
   rename: renameSync,
+  link: linkSync,
   unlink: unlinkSync,
   stat: (path) => statSync(path),
   exists: existsSync,
@@ -1470,20 +1476,24 @@ const realFsOps: JournalFsOps = {
 
 /** Write every byte before anyone fsyncs: a partial write fsynced as success
  *  is a torn record presented as durable. Zero forward progress refuses
- *  rather than spinning (contention.ts's sidecar writer, same discipline). */
+ *  rather than spinning (contention.ts's sidecar writer, same discipline).
+ *
+ *  The retry slices BYTES, not JS code units: a short write that lands
+ *  mid-character would otherwise resume from the wrong offset and reach the
+ *  expected byte count with corrupted content. */
 function writeFull(
   fsOps: JournalFsOps,
   fd: number,
   data: string,
   path: string,
 ): void {
+  const bytes = Buffer.from(data, 'utf8');
   let written = 0;
-  const total = Buffer.byteLength(data);
-  while (written < total) {
-    const n = fsOps.write(fd, data.slice(written));
+  while (written < bytes.length) {
+    const n = fsOps.write(fd, bytes.subarray(written));
     if (!Number.isFinite(n) || n <= 0) {
       throw new JournalError(
-        `short write on ${path} (${written} of ${total} bytes, no forward progress) — refusing to fsync a torn record`,
+        `short write on ${path} (${written} of ${bytes.length} bytes, no forward progress) — refusing to fsync a torn record`,
       );
     }
     written += n;
@@ -1624,32 +1634,32 @@ export function releaseBallast(
 /** Create a crash-consistency marker durably. The D-13 storage-paused marker
  *  and the D-12 cancel-request marker are each the ONLY durable record of a
  *  decision at the moment they are written, and every caller blesses
- *  whatever it finds at the final path — so the final NAME must never exist
- *  in a half-written state, not merely be cleaned up afterwards.
+ *  whatever it finds at the final path — so the final NAME must be created
+ *  atomically, exclusively, and only ever complete.
  *
- *  The publication discipline, applied to a marker: stage into a unique name
- *  in the same directory, write every byte (a short write is never fsynced
- *  as success), fsync the file, rename onto the final name, fsync the
- *  directory. Rename is atomic within a directory, so the final name appears
- *  complete or not at all; a crash anywhere earlier leaves only stage
- *  debris, which no caller reads.
+ *  Stage into a unique name in the same directory (O_EXCL), write every byte
+ *  (a short write is never fsynced as success), fsync the file, then publish
+ *  with `link(2)`: it is atomic, it REFUSES with EEXIST when the final name
+ *  already exists, and the bytes it publishes are already durable. Rename
+ *  would be atomic but not exclusive — two concurrent cancels would let the
+ *  second silently replace the first operator's reason. Finally fsync the
+ *  directory and drop the temp.
  *
- *  EEXIST semantics are unchanged for callers: an existing final name
- *  refuses with an `EEXIST`-coded error, so presence-is-the-record stays
- *  their arm to take — and what they bless is now always complete. */
+ *  Once the link lands the operation has SUCCEEDED: the record exists and is
+ *  complete, so no failure path may ever unlink the final name. A failure
+ *  BEFORE the link leaves no final name and at most an inert temp, which no
+ *  caller reads.
+ *
+ *  EEXIST semantics are unchanged for callers: presence-is-the-record stays
+ *  their arm to take, and what they bless is now always complete. */
 export function createDurableMarker(
   path: string,
   body: string,
   fsOps: JournalFsOps = realFsOps,
 ): void {
-  if (fsOps.exists(path)) {
-    throw Object.assign(
-      new Error(`EEXIST: durable marker already exists at ${path}`),
-      { code: 'EEXIST' },
-    );
-  }
   const stage = `${path}.stage.${process.pid}.${randomBytes(4).toString('hex')}`;
   const fd = fsOps.openExclusive(stage);
+  let published = false;
   try {
     try {
       writeFull(fsOps, fd, body, stage);
@@ -1657,27 +1667,38 @@ export function createDurableMarker(
     } finally {
       fsOps.close(fd);
     }
-    fsOps.rename(stage, path);
-    // The rename itself is only durable once the directory entry is.
+    // The exclusive, atomic publication. EEXIST rides out to the caller
+    // untouched — an existing marker is another writer's completed record.
+    fsOps.link(stage, path);
+    published = true;
+    // The new directory entry is only durable once the directory is.
     fsyncDir(dirname(path), fsOps);
   } catch (err) {
-    // A FAILED creation leaves no name at either path — including the case
-    // where the rename landed and only the directory fsync failed: that
-    // marker's content is complete but its directory entry is not durable,
-    // and the caller was told the creation failed. The body is reproducible,
-    // so removing it is strictly safer than leaving a record the caller does
-    // not believe in.
-    const debris = [stage, path]
-      .filter((p) => fsOps.exists(p))
-      .map((p) => ({ p, failure: cleanupUnlink(fsOps, p) }))
-      .filter((r) => r.failure !== null);
-    throw new JournalError(
-      `durable marker ${path} could not be written (${errorMessage(err)})` +
-        (debris.length === 0
-          ? ' — no name was left behind, so nothing reads a partial marker back as a durable record'
-          : `; removing ${debris.map((d) => `${d.p} (${d.failure})`).join(', ')} ALSO failed — delete by hand before retrying`),
-    );
+    // The final name is NEVER removed here: either it was never created, or
+    // the link succeeded and it is a complete record — someone's, possibly
+    // another writer's.
+    const tempFailure = fsOps.exists(stage)
+      ? cleanupUnlink(fsOps, stage)
+      : null;
+    if (published) {
+      throw new JournalError(
+        `durable marker ${path} was published but its directory entry could not be fsynced (${errorMessage(err)}) — the marker itself is complete and has been left in place; re-run the operation to confirm it (the EEXIST arm will bless it)` +
+          (tempFailure === null
+            ? ''
+            : `; removing the temp ${stage} also failed (${tempFailure})`),
+      );
+    }
+    throw err instanceof Error && (err as { code?: string }).code === 'EEXIST'
+      ? err // the caller's presence-is-the-record arm owns this
+      : new JournalError(
+          `durable marker ${path} could not be written (${errorMessage(err)}) — the final name was never created, so nothing reads a partial marker back as a durable record` +
+            (tempFailure === null
+              ? ''
+              : `; removing the temp ${stage} also failed (${tempFailure}) — delete it by hand`),
+        );
   }
+  // Best effort: a leftover temp is inert debris, never a failure.
+  cleanupUnlink(fsOps, stage);
 }
 
 /** D-13 step-1 detection predicate: a storage-full failure from either

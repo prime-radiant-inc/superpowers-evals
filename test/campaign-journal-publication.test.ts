@@ -3,6 +3,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -67,7 +68,7 @@ function tmpCampaign(): string {
 /** Real-fs ops that record the durable operation ORDER (the seam carries the
  *  fiction; every call still hits the real filesystem). */
 
-test('createDurableMarker: the final name only ever appears complete — it is staged, fsynced, THEN renamed', () => {
+test('createDurableMarker: the final name only ever appears complete — staged, fsynced, then LINKED (atomic and exclusive)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'marker-'));
   const { ops, calls } = recordedOps();
   createDurableMarker(join(dir, '.storage-paused'), 'why\n', ops);
@@ -80,10 +81,11 @@ test('createDurableMarker: the final name only ever appears complete — it is s
     `write:${staged}`,
     `fsync:${staged}`,
     `close:${staged}`,
-    `rename:${staged}->.storage-paused`,
+    `link:${staged}->.storage-paused`,
     `open-r:${basename(dir)}`,
     `fsync:${basename(dir)}`,
     `close:${basename(dir)}`,
+    `unlink:${staged}`,
   ]);
   expect(readFileSync(join(dir, '.storage-paused'), 'utf8')).toBe('why\n');
   // No stage debris survives a successful create.
@@ -100,8 +102,8 @@ test('createDurableMarker: process death mid-create leaves only a STAGE name, wh
   expect(() =>
     createDurableMarker(marker, 'why\n', {
       ...ops,
-      rename: () => {
-        throw new Error('process died before the rename');
+      link: () => {
+        throw new Error('process died before the link');
       },
     }),
   ).toThrow();
@@ -124,10 +126,8 @@ test('createDurableMarker: a short write is never fsynced as success', () => {
         // The volume takes one byte, then stops accepting: forward progress
         // ends and the remaining bytes never land.
         if (accepted > 0) return 0;
-        accepted = ops.write(
-          fd,
-          typeof data === 'string' ? data.slice(0, 1) : data,
-        );
+        const buf = typeof data === 'string' ? Buffer.from(data) : data;
+        accepted = ops.write(fd, buf.subarray(0, 1));
         return accepted;
       },
       fsync: (fd) => {
@@ -151,10 +151,10 @@ test('createDurableMarker: cleanup failure still refuses, and still leaves no fi
         throw new Error('fsync failed');
       },
       unlink: () => {
-        throw new Error('cannot remove the stage file either');
+        throw new Error('cannot remove the temp either');
       },
     }),
-  ).toThrow(/cannot remove the stage file either/);
+  ).toThrow(/cannot remove the temp either/);
   // Whatever debris remains, it is NOT the final name.
   expect(existsSync(marker)).toBe(false);
 });
@@ -162,7 +162,7 @@ test('createDurableMarker: cleanup failure still refuses, and still leaves no fi
 test('createDurableMarker: a creation that fails mid-way leaves NO final name — the next attempt is not handed a blessed residue', () => {
   const dir = mkdtempSync(join(tmpdir(), 'marker-'));
   const marker = join(dir, '.storage-paused');
-  const failAt = (stage: 'write' | 'fsync' | 'dir'): JournalFsOps => {
+  const failAt = (stage: 'write' | 'fsync'): JournalFsOps => {
     const { ops } = recordedOps();
     return {
       ...ops,
@@ -174,22 +174,130 @@ test('createDurableMarker: a creation that fails mid-way leaves NO final name �
         if (stage === 'fsync') throw new Error('fsync failed');
         ops.fsync(fd);
       },
-      openRead: (p) => {
-        if (stage === 'dir') throw new Error('cannot open the directory');
-        return ops.openRead(p);
-      },
     };
   };
   // A marker is the ONLY durable record of its decision, and every caller's
   // EEXIST arm blesses whatever it finds at the final path. A half-written
   // one must therefore never appear there.
-  for (const stage of ['write', 'fsync', 'dir'] as const) {
+  // Only the stages BEFORE the link: once the link lands the record exists
+  // and is complete, which is the success arm (covered separately).
+  for (const stage of ['write', 'fsync'] as const) {
     expect(() => createDurableMarker(marker, 'why\n', failAt(stage))).toThrow();
     expect(existsSync(marker)).toBe(false);
   }
   // …and a clean creation afterwards still works.
   createDurableMarker(marker, 'why\n');
   expect(readFileSync(marker, 'utf8')).toBe('why\n');
+});
+
+test("createDurableMarker: two concurrent creators — exactly one wins, the loser gets EEXIST, and the winner's bytes survive", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, 'cancel-request');
+  const { ops } = recordedOps();
+  let raced = false;
+  let loser: unknown = null;
+  // B runs to completion inside A's window, right where A is about to
+  // publish the final name. Only an atomic, EEXIST-respecting create keeps
+  // A from replacing B's operator reason (POSIX rename would overwrite it).
+  try {
+    createDurableMarker(marker, 'A reason\n', {
+      ...ops,
+      link: (from, to) => {
+        if (!raced) {
+          raced = true;
+          createDurableMarker(marker, 'B reason\n');
+        }
+        ops.link(from, to);
+      },
+    });
+  } catch (err) {
+    loser = err;
+  }
+  expect(raced).toBe(true);
+  expect((loser as { code?: string } | null)?.code).toBe('EEXIST');
+  // B got there first, so B's reason is what the operator reads back.
+  expect(readFileSync(marker, 'utf8')).toBe('B reason\n');
+  expect(readdirSync(dir).filter((n) => !n.includes('.stage.'))).toEqual([
+    'cancel-request',
+  ]);
+});
+
+test('createDurableMarker: a short write splitting a multi-byte character never corrupts the content', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, 'cancel-request');
+  const { ops } = recordedOps();
+  // An operator reason with non-ASCII in it. A retry loop that counts UTF-8
+  // bytes but slices JS code units re-sends the wrong tail and lands the
+  // expected byte COUNT with corrupted content.
+  const body = '1730000000000\nannulé — coût dépassé ✂\n';
+  let first = true;
+  createDurableMarker(marker, body, {
+    ...ops,
+    write: (fd, data) => {
+      if (!first) return ops.write(fd, data);
+      first = false;
+      // The volume takes 5 bytes — landing mid-character.
+      const buf = typeof data === 'string' ? Buffer.from(data) : data;
+      return ops.write(fd, buf.subarray(0, 5));
+    },
+  });
+  expect(readFileSync(marker, 'utf8')).toBe(body);
+});
+
+test('createDurableMarker: death after the final link is SUCCESS — the marker is complete and stays blessed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, '.storage-paused');
+  const { ops } = recordedOps();
+  // The link landed, so the record exists and is complete; only its
+  // directory entry is unconfirmed. Cleanup must never take it away.
+  expect(() =>
+    createDurableMarker(marker, 'why\n', {
+      ...ops,
+      openRead: (p) => {
+        if (p === dir) throw new Error('died before the directory fsync');
+        return ops.openRead(p);
+      },
+    }),
+  ).toThrow();
+  expect(existsSync(marker)).toBe(true);
+  expect(readFileSync(marker, 'utf8')).toBe('why\n');
+  // …and the caller's EEXIST arm still blesses it.
+  expect(() => createDurableMarker(marker, 'other\n')).toThrow(
+    expect.objectContaining({ code: 'EEXIST' }),
+  );
+});
+
+test('createDurableMarker: death mid-link leaves no final name and only inert temp debris', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, '.storage-paused');
+  const { ops } = recordedOps();
+  expect(() =>
+    createDurableMarker(marker, 'why\n', {
+      ...ops,
+      link: () => {
+        throw new Error('died during the link');
+      },
+    }),
+  ).toThrow();
+  expect(existsSync(marker)).toBe(false);
+  // Whatever debris remains is a stage name, which no caller reads.
+  expect(readdirSync(dir).every((n) => n.includes('.stage.'))).toBe(true);
+  createDurableMarker(marker, 'real\n');
+  expect(readFileSync(marker, 'utf8')).toBe('real\n');
+});
+
+test('createDurableMarker: a temp-removal failure never touches the final name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, 'cancel-request');
+  const { ops } = recordedOps();
+  createDurableMarker(marker, 'kept\n', {
+    ...ops,
+    unlink: () => {
+      throw new Error('cannot remove the temp');
+    },
+  });
+  // The publication succeeded; the temp is inert debris, not a failure.
+  expect(readFileSync(marker, 'utf8')).toBe('kept\n');
 });
 
 test('createDurableMarker: an existing marker refuses (O_EXCL) — callers own the EEXIST arm', () => {
@@ -235,6 +343,10 @@ function recordedOps(): { ops: JournalFsOps; calls: string[] } {
     rename: (from, to) => {
       calls.push(`rename:${basename(from)}->${basename(to)}`);
       renameSync(from, to);
+    },
+    link: (from, to) => {
+      calls.push(`link:${basename(from)}->${basename(to)}`);
+      linkSync(from, to);
     },
     unlink: (path) => {
       calls.push(`unlink:${basename(path)}`);
