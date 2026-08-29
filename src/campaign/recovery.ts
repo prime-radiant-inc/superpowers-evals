@@ -974,7 +974,21 @@ export function terminalEvidenceActions(args: {
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
-    if (recovered.has(attemptId)) continue; // already paid, per attempt
+    // Accounting completion is NOT lifecycle completion. A receipt says the
+    // attempt's money is recorded; only a legal terminal says the attempt is
+    // resolved. The live exposure-absent gating path journals the spend and
+    // WITHHOLDS run_completed, so a recovered attempt can still be sitting
+    // in `spawned` — and nothing downstream rescues it: the dispatcher never
+    // re-queues an already-admitted original block, so the sample would stay
+    // spawned forever and its block would never re-enter.
+    if (recovered.has(attemptId)) {
+      if (terminaled.has(attemptId)) continue; // paid AND resolved
+      stream.write(
+        `attempt ${attemptId} is already accounted but has no legal terminal — its block re-enters via rerun (the receipt keeps the spend from being charged twice)\n`,
+      );
+      rerun(attemptId);
+      continue;
+    }
     const sampleId = chain.sampleOfAttempt.get(attemptId);
     if (sampleId === undefined) {
       throw new RecoveryError(
@@ -1004,6 +1018,16 @@ export function terminalEvidenceActions(args: {
         }),
       );
       terminalAttemptIds.push(attemptId);
+      // The live fail-stop promises the resume journals the spend and
+      // CONTINUES. For a free-standing gap (the terminal was withheld too)
+      // continuing means the block re-enters — resolving the dollars alone
+      // would leave the sample stranded exactly as above.
+      if (!terminaled.has(attemptId)) {
+        stream.write(
+          `attempt ${attemptId} has no legal terminal after its gap resolved — its block re-enters via rerun\n`,
+        );
+        rerun(attemptId);
+      }
       continue;
     }
     if (terminaled.has(attemptId)) {

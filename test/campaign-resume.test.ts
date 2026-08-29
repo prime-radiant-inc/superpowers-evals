@@ -669,6 +669,17 @@ test('a terminal-less live spend already in the journal is never charged twice',
   await reconcileOnly(fx, 'terminalless-1.lock.d');
   // a1 was already paid; only a2 is accounted now.
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  // …and being PAID is not being RESOLVED. a1 has no legal terminal, so its
+  // block must still re-enter via the E7 rerun path; skipping it on the
+  // strength of the receipt alone strands the sample `spawned` forever —
+  // the dispatcher never re-queues an already-admitted original block.
+  const mints = journalEvents(fx.dir)
+    .filter((e) => e.type === 'block_replaced')
+    .map((e) =>
+      e.type === 'block_replaced' ? normalizeBlockReplaced(e.payload) : null,
+    );
+  expect(mints.map((m) => m?.block_id)).toEqual([BLOCK_A]);
+  expect(mints[0]?.kind).toBe('rerun');
   const afterFirst = journalEvents(fx.dir).length;
   await reconcileOnly(fx, 'terminalless-2.lock.d');
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
@@ -836,6 +847,17 @@ test('a FREE-STANDING unpriced gap blocks the resume, and resolves when the econ
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
   await reconcileOnly(fx, 'freestanding-2.lock.d');
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  // The live fail-stop promises that a resume journals the spend and
+  // CONTINUES the lifecycle. a1 still has no legal terminal, so continuing
+  // means its block re-enters — resolving the dollars alone would leave the
+  // sample stranded.
+  const mints = journalEvents(fx.dir)
+    .filter((e) => e.type === 'block_replaced')
+    .map((e) =>
+      e.type === 'block_replaced' ? normalizeBlockReplaced(e.payload) : null,
+    );
+  expect(mints.map((m) => m?.block_id)).toEqual([BLOCK_A]);
+  expect(mints[0]?.kind).toBe('rerun');
 });
 
 test("a resolved accounting gap lets the resume proceed: restoring the run dir's economics is the advertised action and it WORKS", async () => {
