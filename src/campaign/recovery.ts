@@ -25,6 +25,7 @@ import {
   type JournalEvent,
   JournalEventSchema,
   normalizeBlockReplaced,
+  UNPRICED_TERMINAL,
 } from '../contracts/campaign/journal-events.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import type { SampleState } from '../contracts/campaign/state-machine.ts';
@@ -669,12 +670,15 @@ function synthesizeEnvelopes(
   });
 }
 
-/** Read one crashed attempt's run dir as D-13 terminal evidence. COMPLETE
- *  means every field the reconstruction needs is actually there — a
- *  recognized final verdict AND a readable actual cost. Anything less is not
- *  evidence: the attempt re-enters via E7 rerun rather than being journaled
- *  terminal against a cost nobody knows (R-JRN-12: spend rows carry
- *  actuals). Loud either way. */
+/** Read one crashed attempt's run dir as D-13 terminal evidence. `null`
+ *  means the run dir supplies NO evidence — no composed verdict — which is
+ *  the D-13 rule's rerun branch.
+ *
+ *  A composed verdict whose ACTUAL cost is unreadable is a different thing
+ *  entirely: the run RAN and spent, so it is not rerun fodder (a rerun pays
+ *  twice for evidence already held) and it is not journalable either
+ *  (R-JRN-12 forbids an estimate in a spend row). It REFUSES, naming the run
+ *  dir and the operator action. */
 export function readTerminalRunEvidence(args: {
   runDir: string;
   runId: string;
@@ -687,10 +691,9 @@ export function readTerminalRunEvidence(args: {
   if (verdict === null) return null; // no run dir / no composed verdict
   const costUsd = runCostFromArtifacts(args.runDir);
   if (costUsd === null) {
-    args.stream.write(
-      `terminal evidence for run ${args.runId} is INCOMPLETE: its verdict composed but carries no readable actual cost — the instance re-enters via rerun rather than journaling a terminal against an unknown spend (D-13)\n`,
+    throw new RecoveryError(
+      `run ${args.runId} composed a verdict but its artifacts carry no readable actual cost — refusing to resume: journaling an estimate as spend is forbidden (R-JRN-12) and rerunning a run that already spent would pay twice. Inspect ${args.runDir} and restore its verdict economics, then re-run \`quorum campaign run\`; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing was journaled; ${AUDIT}`,
     );
-    return null;
   }
   const sample = args.campaign.samples.find(
     (s) => s.sample_id === args.sampleId,
@@ -795,12 +798,41 @@ export function terminalEvidenceActions(args: {
   rerunBlockIds: string[];
 } {
   const stream = args.stream ?? { write: () => {} };
-  const terminalAttempts = new Set<string>();
-  for (const event of args.events) {
-    if (event.type === 'run_completed' || event.type === 'instrument_failure') {
-      terminalAttempts.add(event.payload.attempt_id);
+  // R-JRN-4 pins ONE TRANSACTION PER EVENT, so a terminal bundle is not
+  // crash-atomic: a death inside it leaves a durable prefix (the terminal
+  // committed, its accounting tail lost). The spec's crash model for a
+  // batched writer critical section is that recovery appends the missing
+  // suffix, so recovery must be able to SEE a truncated bundle.
+  //
+  // It can, structurally: one writer, one serialized section, so a complete
+  // terminal is immediately followed — by seq — by its accounting tail
+  // (`budget_event`, or the unpriced-gap adjudication). The only event the
+  // pause path can interleave there is `storage_paused` (appendCritical
+  // lands the durable prefix, journals the pause, then retries the
+  // remainder). Anything else means the tail never landed.
+  const accountedTerminals = new Set<string>();
+  const truncatedTerminals = new Set<string>();
+  for (let i = 0; i < args.events.length; i += 1) {
+    const event = args.events[i];
+    if (
+      event === undefined ||
+      (event.type !== 'run_completed' && event.type !== 'instrument_failure')
+    ) {
+      continue;
     }
+    let j = i + 1;
+    while (args.events[j]?.type === 'storage_paused') j += 1;
+    const tail = args.events[j];
+    const accounted =
+      tail !== undefined &&
+      (tail.type === 'budget_event' ||
+        (tail.type === 'adjudication' &&
+          tail.payload.disposition === UNPRICED_TERMINAL));
+    (accounted ? accountedTerminals : truncatedTerminals).add(
+      event.payload.attempt_id,
+    );
   }
+
   const chain = admittedInstanceChain(args.events, args.universe);
   // Folded LAZILY: an attempt the instance chain cannot explain must refuse
   // through blockOfAttempt (C11) rather than through the reducer's
@@ -821,7 +853,7 @@ export function terminalEvidenceActions(args: {
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
-    if (terminalAttempts.has(attemptId)) continue;
+    if (accountedTerminals.has(attemptId)) continue;
     const sampleId = chain.sampleOfAttempt.get(attemptId);
     if (sampleId === undefined) {
       throw new RecoveryError(
@@ -829,6 +861,25 @@ export function terminalEvidenceActions(args: {
       );
     }
     const evidence = args.evidenceOf(event.payload.run_id, sampleId);
+    if (truncatedTerminals.has(attemptId)) {
+      // The terminal is durable; only its accounting tail was lost. Append
+      // exactly the missing suffix — never a second terminal, never a rerun
+      // of paid work whose evidence is already journaled.
+      if (evidence === null) {
+        throw new RecoveryError(
+          `attempt ${attemptId} has a durable terminal whose spend never landed, and run ${event.payload.run_id} no longer supplies the actual cost — refusing to resume against a budget position that cannot be reconciled; inspect ${event.payload.run_id}'s run dir, restore its verdict economics, then re-run \`quorum campaign run\`; ${AUDIT}`,
+        );
+      }
+      stream.write(
+        `terminal bundle for ${attemptId} was truncated by a crash — completing its missing spend (${evidence.costUsd}) from the run artifacts\n`,
+      );
+      terminals.push({
+        type: 'budget_event',
+        payload: { kind: 'spend', amount_usd: evidence.costUsd },
+      });
+      terminalAttemptIds.push(attemptId);
+      continue;
+    }
     if (evidence === null) {
       rerun(attemptId);
       continue;
@@ -892,8 +943,13 @@ export function terminalEvidenceActions(args: {
       rerun(attemptId);
       continue;
     }
-    // Accounting events ride the same reconstruction: the cooldowns the
-    // sensor evidence declares, then the ACTUAL spend from the artifacts.
+    // The ACTUAL spend follows the terminal IMMEDIATELY — that adjacency is
+    // what lets a later resume tell a complete bundle from a truncated one.
+    // The cooldowns the sensor evidence declares ride after it.
+    bundle.push({
+      type: 'budget_event',
+      payload: { kind: 'spend', amount_usd: evidence.costUsd },
+    });
     for (const block of evidence.poolBlocks) {
       bundle.push({
         type: 'pool_blocked',
@@ -903,10 +959,6 @@ export function terminalEvidenceActions(args: {
         },
       });
     }
-    bundle.push({
-      type: 'budget_event',
-      payload: { kind: 'spend', amount_usd: evidence.costUsd },
-    });
     terminals.push(...bundle);
     terminalAttemptIds.push(attemptId);
   }
@@ -1490,6 +1542,20 @@ export async function resumeCampaign(
     let plan: RecoveryPlan;
     try {
       const events = writer.readEvents();
+      // A durable accounting gap is not resumable by machine: the live path
+      // fail-stopped because the budget position cannot account for a run
+      // that really spent. Re-admitting against that position would spend
+      // more against a number known to be wrong.
+      const gap = events.find(
+        (e) =>
+          e.type === 'adjudication' &&
+          e.payload.disposition === UNPRICED_TERMINAL,
+      );
+      if (gap !== undefined && gap.type === 'adjudication') {
+        throw new RecoveryError(
+          `resume refused: an unresolved ${UNPRICED_TERMINAL} adjudication stands at seq ${gap.seq} (cell ${gap.payload.cell}) — ${gap.payload.rationale}. The budget position cannot account for that run, so nothing further may be admitted. Restore the named run dir's verdict economics and re-open the campaign record, or adjudicate the accounting at seal; nothing was journaled and nothing was admitted`,
+        );
+      }
       killReport = await killJournaledPgids({
         events,
         campaignId: campaign.campaign_id,

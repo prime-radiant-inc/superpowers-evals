@@ -454,13 +454,15 @@ test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown 
       poolBlocks: [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
     }),
   });
+  // The spend follows the terminal IMMEDIATELY: that adjacency is what lets
+  // a later resume tell a complete bundle from a crash-truncated one.
   expect(actions.terminals.map((e) => e.type)).toEqual([
     'exposure_started',
     'instrument_failure',
-    'pool_blocked',
     'budget_event',
+    'pool_blocked',
   ]);
-  expect(actions.terminals[2]?.payload).toEqual({
+  expect(actions.terminals[3]?.payload).toEqual({
     pool_key: 'cred|anthropic|m',
     until_ts_ms: 70_000,
   });
@@ -526,6 +528,10 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
       key_grants: [],
     }),
     ev('instrument_failure', { attempt_id: 'a0', cause: 'grader_crashed' }),
+    // â€¦with the accounting tail the writer appends in the same critical
+    // section: a terminal without one reads as a crash-truncated bundle.
+    ev('budget_event', { kind: 'spend', amount_usd: 0.5 }),
+    ev('budget_event', { kind: 'estimate_inflight', amount_usd: 0 }),
     // The complete E7.1 mint bundle: s3 keeps instrument_failed, s4 (admitted)
     // takes its disposition, THEN the successor is admitted.
     ev('block_replaced', {

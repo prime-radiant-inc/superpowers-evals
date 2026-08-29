@@ -256,6 +256,13 @@ afterAll(() => {
 // --- Fake spawner: scripted children --------------------------------------
 class FakeChild {
   readonly pid: number;
+  /** The `--out-root` the dispatcher gave this child. A real campaign child
+   *  ALLOCATES its run dir before its first provider token and leaves priced
+   *  economics in the composed verdict, so the fake does too — an allocated
+   *  run whose dir never appears is corruption in production, and the
+   *  dispatcher now fail-stops on it (the accounting gap). Tests that need a
+   *  different shape seed the dir themselves first; this never overwrites. */
+  readonly outRoot: string | null;
   stdout: string[] = [];
   stderr: string[] = [];
   get stdoutLines(): readonly string[] {
@@ -268,10 +275,18 @@ class FakeChild {
   private stdoutCbs: ((l: string) => void)[] = [];
   private stderrCbs: ((l: string) => void)[] = [];
   private exitCbs: ((i: ChildExitInfo) => void)[] = [];
-  constructor(pid: number) {
+  constructor(pid: number, outRoot: string | null = null) {
     this.pid = pid;
+    this.outRoot = outRoot;
   }
   emitLine(line: string): void {
+    const allocated = /^run_allocated:\s*(\S+)$/.exec(line);
+    if (allocated?.[1] !== undefined && this.outRoot !== null) {
+      const dir = join(this.outRoot, allocated[1]);
+      if (!existsSync(dir)) {
+        seedCompletedRunDir(this.outRoot, allocated[1], { costUsd: 0.25 });
+      }
+    }
     this.stdout.push(line);
     for (const cb of this.stdoutCbs) cb(line);
   }
@@ -302,7 +317,11 @@ class FakeSpawner implements ChildSpawner {
       this.failNext -= 1;
       throw new Error('injected spawn failure');
     }
-    const child = new FakeChild(this.nextPid++);
+    const outRootIdx = spec.args.indexOf('--out-root');
+    const child = new FakeChild(
+      this.nextPid++,
+      outRootIdx >= 0 ? (spec.args[outRootIdx + 1] ?? null) : null,
+    );
     this.spawned.push({ spec, child });
     return child;
   }
@@ -1547,9 +1566,9 @@ test('terminal spend journals the ACTUAL run cost from run artifacts, not the re
   childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
   childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
   await tick(h.clock, 1);
-  // arm_a's run composed a verdict carrying actual economics; arm_b's run
-  // dir is absent, so its actual cost is not knowable — and a spend row must
-  // be an actual (R-JRN-12), so NO spend is journaled for it.
+  // arm_a's run composed a verdict carrying 7.25 in actual economics; arm_b's
+  // carries the fixture default. Both spends are ARTIFACT costs — the frozen
+  // registration estimates (1 and 2) never reach a spend row.
   const runDir = join(h.campaignDir, 'results', `run-${childA!.child.pid}`);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
@@ -1567,7 +1586,7 @@ test('terminal spend journals the ACTUAL run cost from run artifacts, not the re
   const spends = eventsOf(h.campaignDir, 'budget_event')
     .filter((e) => e.payload.kind === 'spend')
     .map((e) => e.payload.amount_usd);
-  expect(spends).toEqual([7.25]); // the one actual; nothing invented for arm_b
+  expect(spends).toEqual([7.25, 0.25]); // actuals only; never 1 or 2
 });
 
 test('instance-graph validator (C5): double reserve selection, duplicate predecessors, cross-arm links, and mint-into-replaced cycles refuse', () => {
@@ -1894,7 +1913,12 @@ test('a latched sibling allocation is drained and journaled BEFORE the mint disp
   const [childA, childB] = h.spawner.spawned;
   childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
   // childB's allocation line is LATCHED but its callback section has not
-  // run (buffered child output): push directly into the latch.
+  // run (buffered child output): push directly into the latch. The run dir
+  // is seeded by hand because that bypass skips the fake child's own
+  // allocation — a real child allocates the dir before its first token.
+  seedCompletedRunDir(h.args.resultsRoot!, `run-${childB!.child.pid}`, {
+    costUsd: 0.25,
+  });
   childB!.child.stdout.push(`run_allocated: run-${childB!.child.pid}`);
   // arm_a fails typed -> the mint must drain childB's allocation first.
   childA!.child.exit({ code: 1, signal: null });
@@ -2248,6 +2272,52 @@ test('the terminal bundle is atomic: run_completed and its spend + snapshot land
   }
 });
 
+test('process death inside the terminal bundle leaves a durable PREFIX, not a whole bundle — the journal layer commits per event (R-JRN-4)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // Crash injection at the journal layer: the first event of the terminal
+  // bundle commits, then the process dies. R-JRN-4 pins one transaction per
+  // event, so there is no rollback of the committed prefix — which is why
+  // recovery, not the transaction, owes the missing suffix.
+  const journal: DispatchJournal = {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      if (inputs.some((i) => i.type === 'run_completed')) {
+        real.appendEvents(inputs.slice(0, 1));
+        throw new Error('process died mid-bundle');
+      }
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
+  const run = runCampaignDispatch({ ...h.args, journal });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned) {
+    const runId = `run-${child.pid}`;
+    seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
+    child.emitLine(`run_allocated: ${runId}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  await expect(run).rejects.toThrow(/process died mid-bundle/);
+  const types = journalTypes(h.campaignDir);
+  // The durable prefix: the terminal landed, its accounting tail did not.
+  expect(types).toContain('run_completed');
+  expect(types[types.length - 1]).toBe('run_completed');
+  expect(
+    eventsOf(h.campaignDir, 'budget_event').filter(
+      (e) => e.payload.kind === 'spend',
+    ),
+  ).toEqual([]);
+});
+
 test('terminal spend is the ACTUAL cost from the run artifacts, never the registration estimate', async () => {
   const h = harness();
   const run = runCampaignDispatch(h.args);
@@ -2267,7 +2337,7 @@ test('terminal spend is the ACTUAL cost from the run artifacts, never the regist
   expect(spends).toEqual([0.25, 0.25]);
 });
 
-test('an unreadable actual cost journals NO spend and says so loudly — never a fabricated one (D-13 honest row)', async () => {
+test('an unreadable actual cost FAIL-STOPS: terminal + a durable accounting gap, no spend, no further admission (D-13 discipline)', async () => {
   const h = harness();
   const written: string[] = [];
   const run = runCampaignDispatch({
@@ -2275,27 +2345,42 @@ test('an unreadable actual cost journals NO spend and says so loudly — never a
     stream: { write: (s: string) => written.push(s) },
   });
   await tick(h.clock, 1);
-  for (const { child } of h.spawner.spawned) {
-    const runId = `run-${child.pid}`;
-    // A composed verdict with no priced economics: the terminal is real,
-    // the money is not knowable. Fabricating the registration estimate here
-    // is what R-JRN-12 forbids (spend rows carry actuals).
-    seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: null });
-    child.emitLine(`run_allocated: ${runId}`);
+  const [first] = h.spawner.spawned;
+  const runId = `run-${first!.child.pid}`;
+  // A composed verdict with no priced economics: the terminal is real, the
+  // money is not knowable. Fabricating the registration estimate is what
+  // R-JRN-12 forbids; continuing on a snapshot that silently drops the cost
+  // understates the budget forever, so the campaign stops instead.
+  seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: null });
+  first!.child.emitLine(`run_allocated: ${runId}`);
+  first!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(1)) {
+    const rid = `run-${child.pid}`;
+    seedCompletedRunDir(h.args.resultsRoot!, rid, { costUsd: 0.25 });
+    child.emitLine(`run_allocated: ${rid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 1);
-  await run;
+  const outcome = await run;
+  expect(outcome.status).toBe('halted');
+  expect(outcome.reason).toMatch(/accounting gap/);
+  // No fabricated money, and the gap is DURABLE — not just a stream line.
   expect(
-    eventsOf(h.campaignDir, 'budget_event').filter(
-      (e) => e.payload.kind === 'spend',
-    ),
-  ).toEqual([]);
+    eventsOf(h.campaignDir, 'budget_event')
+      .filter((e) => e.payload.kind === 'spend')
+      .map((e) => e.payload.amount_usd),
+  ).not.toContain(1);
+  const gaps = eventsOf(h.campaignDir, 'adjudication').filter(
+    (e) => e.payload.disposition === 'unpriced_terminal',
+  );
+  expect(gaps.length).toBe(1);
+  expect(gaps[0]!.payload.rationale).toContain(runId);
   expect(journalTypes(h.campaignDir)).toContain('run_completed');
-  // The gap is loud, not journaled as money: per-sample spend attribution
-  // derives at seal from the run dir itself (E7.7), which sees the same gap.
-  expect(written.join('')).toContain('terminal spend for');
-  expect(written.join('')).toContain('is UNKNOWN');
+  // The gap terminal resolves nothing: no replacement is minted off it.
+  expect(written.join('')).toMatch(/operator action/);
+  // Nothing admitted after the halt.
+  expect(eventsOf(h.campaignDir, 'block_admitted').length).toBe(1);
 });
 
 // --- R-SNS-4 exploratory caveat terminal (operator amendment 2026-08-27) ---

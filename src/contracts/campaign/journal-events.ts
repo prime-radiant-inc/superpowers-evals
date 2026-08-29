@@ -402,6 +402,16 @@ export const CampaignCancelledEvent = envelope(
 );
 // E7.4 quarantine carrier: binding-only (no state-machine edges, like
 // attempt_created); routed to the quarantine projection only.
+/** The machine disposition for a terminal whose ACTUAL cost the run
+ *  artifacts cannot supply. R-JRN-12 pins that `spend` rows carry actuals,
+ *  so no spend may be journaled — but a budget position that silently drops
+ *  a real cost is worse than no position at all, so the gap is recorded and
+ *  the campaign fail-stops. Carried on the existing `adjudication` event:
+ *  the pinned machine-disposition convention (the same one that carries
+ *  `replacement_suppressed`, `reserve_exhausted`, and `ballast_spent`), no
+ *  vocabulary change. */
+export const UNPRICED_TERMINAL = 'unpriced_terminal';
+
 export const QUARANTINE_REASONS = [
   'attempt_mismatch',
   'late_terminal',

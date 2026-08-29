@@ -27,6 +27,7 @@ import {
   type JournalEvent,
   JournalEventSchema,
   normalizeBlockReplaced,
+  UNPRICED_TERMINAL,
 } from '../contracts/campaign/journal-events.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import {
@@ -2793,6 +2794,7 @@ export async function runCampaignDispatch(
           // was never spent into the sealed accounting.
           const spendAmount =
             runDir !== null ? runCostFromArtifacts(runDir) : null;
+          const cell = cellOfSample(sample.sampleId);
           if (spendAmount !== null) {
             spendUsd += spendAmount;
             terminalEvents.push({
@@ -2800,11 +2802,20 @@ export async function runCampaignDispatch(
               payload: { kind: 'spend', amount_usd: spendAmount },
             });
           } else {
-            // No spend row at all: per-sample spend attribution derives at
-            // seal from the run dir itself (E7.7), which sees the same gap.
-            stream.write(
-              `terminal spend for ${sample.attemptId} is UNKNOWN: the run artifacts carry no readable cost — no spend journaled, because a spend row must be an actual (R-JRN-12); seal-time attribution reads the run dir\n`,
-            );
+            // Fail-closed accounting gap. No spend row may be invented, but
+            // continuing would admit further work against a position that
+            // has silently dropped a real cost — permanently understating
+            // the budget. So the gap is journaled durably (the pinned
+            // machine-disposition convention on `adjudication`) and the
+            // campaign fail-stops, D-13 style: the operator resolves it.
+            terminalEvents.push({
+              type: 'adjudication',
+              payload: {
+                cell: `${cell.comparison_id}:${cell.scenario}`,
+                disposition: UNPRICED_TERMINAL,
+                rationale: `attempt ${sample.attemptId} (run ${sample.runId ?? '<unallocated>'}) terminaled with no readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
+              },
+            });
           }
           terminalEvents.push(snapshotEstimateInput());
           const spendBundle = await appendCritical(terminalEvents);
@@ -2815,6 +2826,16 @@ export async function runCampaignDispatch(
           if (spendBundle === null || storagePaused) {
             stream.write(
               `terminal for ${sample.attemptId} stopped: storage pause (D-13 fail-stop) — no resolution after the pause\n`,
+            );
+            return;
+          }
+          if (spendAmount === null) {
+            const runName = sample.runId ?? '<unallocated>';
+            halt(
+              `accounting gap: attempt ${sample.attemptId} terminaled with no readable actual cost (run ${runName})`,
+            );
+            stream.write(
+              `operator action: the budget position cannot account for run ${runName}. Inspect ${runDirOf(runName)} and restore its verdict economics, then re-run \`quorum campaign run\`; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
             );
             return;
           }
