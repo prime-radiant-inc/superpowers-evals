@@ -16,7 +16,6 @@ import {
   type Campaign,
   type CampaignIdentity,
   CampaignIdentitySchema,
-  CampaignSchema,
 } from '../contracts/campaign/campaign.ts';
 import {
   type CampaignUniverse,
@@ -29,6 +28,7 @@ import {
 import type { Credential } from '../contracts/credential.ts';
 import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
+import { loadFrozenCampaign } from './campaign-document.ts';
 import {
   type BlockInterval,
   breachWindows,
@@ -1068,25 +1068,18 @@ export interface ResumeArgs {
  *  corrupt document must refuse here rather than shape kills and journal
  *  bundles. */
 function readPublishedCampaign(campaignDir: string): Campaign {
-  const path = join(campaignDir, 'campaign.json');
-  let raw: unknown;
+  // Authenticated, not merely schema-parsed: recovery derives campaign
+  // identity, membership, kill targets, and budget position from this
+  // document, so a digest that does not match its content — or a sample
+  // naming a cell or arm that does not exist — refuses here rather than
+  // resolving to a zero/empty value downstream.
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    return loadFrozenCampaign(campaignDir);
   } catch (err) {
     throw new RecoveryError(
-      `campaign.json at ${path} could not be read as JSON (${(err as Error).message}) — refusing to derive campaign identity or membership from an unreadable document; ${AUDIT}`,
+      `${err instanceof Error ? err.message : String(err)}; ${AUDIT}`,
     );
   }
-  const parsed = CampaignSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new RecoveryError(
-      `campaign.json at ${path} is not a valid frozen campaign document: ${parsed.error.issues
-        .map((i) => `${i.path.join('.')} ${i.message}`)
-        .slice(0, 5)
-        .join('; ')} — refusing (fail-closed); ${AUDIT}`,
-    );
-  }
-  return parsed.data;
 }
 
 /** R-REG-19 (second occurrence, REV fable I-14): every api-key arm's

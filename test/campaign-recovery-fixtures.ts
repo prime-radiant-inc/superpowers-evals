@@ -1,7 +1,7 @@
 // Shared fixtures for the resume + cancellation verbs (task 9b). Both verbs
-// re-parse campaign.json through CampaignSchema (fail-closed), so every
-// fixture here is a genuinely valid frozen document — a minimal stand-in
-// would only prove the parser was skipped.
+// AUTHENTICATE campaign.json (schema, recomputed digest, identity, closure),
+// so every fixture here is a genuinely valid AND authentic frozen document —
+// a minimal stand-in would only prove the intake was skipped.
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
@@ -18,11 +18,10 @@ import { electWriter, initJournalDb } from '../src/campaign/journal.ts';
 import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
 import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
+import { campaignDigest } from '../src/contracts/campaign/digest.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { FakeClock } from '../src/scheduler/clock.ts';
 
-export const CAMPAIGN_ID = 'd'.repeat(64);
-export const DIGEST = 'd'.repeat(64);
 export const BLOCK_A = 'c1:scn:b1';
 export const SAMPLE_A = 'c1:scn:arm_a:r1';
 export const SAMPLE_B = 'c1:scn:arm_b:r1';
@@ -84,7 +83,7 @@ export interface CampaignDocOverrides {
 export function campaignDoc(overrides: CampaignDocOverrides = {}): Campaign {
   const doc = {
     schema_version: 1,
-    campaign_id: CAMPAIGN_ID,
+    campaign_id: 'd'.repeat(64), // placeholder: re-stamped below
     suite: {
       schema_version: 1,
       name: 'testsuite',
@@ -164,7 +163,7 @@ export function campaignDoc(overrides: CampaignDocOverrides = {}): Campaign {
     },
     registered_at: '2026-08-26T00:00:00Z',
     registered_by: 'test',
-    digest: DIGEST,
+    digest: 'd'.repeat(64), // placeholder: re-stamped below (excluded from the digest input)
     contention: overrides.contention ?? {
       host_fingerprint: {
         cpu_model: 'test',
@@ -204,15 +203,29 @@ export function campaignDoc(overrides: CampaignDocOverrides = {}): Campaign {
     ],
   };
   // Parsed, not cast: the fixture is only useful if it is the same document
-  // the production verbs accept.
-  return CampaignSchema.parse(doc);
+  // the production verbs accept — which means AUTHENTIC, so the identity is
+  // stamped from the content's own digest.
+  const parsed = CampaignSchema.parse(doc);
+  const digest = campaignDigest(parsed);
+  return { ...parsed, digest, campaign_id: digest };
 }
+
+/** Identity is the digest, so the fixture cannot pin a literal: the default
+ *  document's own recomputed digest IS its id. A document built with
+ *  overrides carries a different (re-stamped) identity — read it off the
+ *  document, never off this constant. */
+export const DIGEST: string = campaignDoc().digest;
+export const CAMPAIGN_ID: string = DIGEST;
 
 export interface PublishedOptions {
   /** Journal a crashed in-flight attempt (attempt_created + run_allocated on
    *  CRASHED_PGID) for sample A. Default true. */
   readonly inFlight?: boolean;
   readonly doc?: Campaign;
+  /** Publish into an EXISTING directory (a caller that had to seed the
+   *  snapshot before it could compute the document's refs, and therefore its
+   *  identity). Default: a fresh tmp dir. */
+  readonly dir?: string;
 }
 
 /** A published campaign dir: campaign.json, ballast, sidecar, and a journal
@@ -221,7 +234,7 @@ export function publishedCampaign(options: PublishedOptions = {}): {
   dir: string;
   doc: Campaign;
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'cancel-'));
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'cancel-'));
   const doc = options.doc ?? campaignDoc();
   writeFileSync(join(dir, 'campaign.json'), JSON.stringify(doc));
   writeFileSync(join(dir, 'contention-telemetry.jsonl'), '');
@@ -276,8 +289,11 @@ export function journaledTypes(dir: string, atSeconds: number): string[] {
 
 /** The campaign child's real argv shape (spawn.ts buildCampaignChildArgv):
  *  the persisted identity travels on `--campaign-identity`. */
-export function childCommandLine(attemptId: string): string {
-  return `bun /snap/src/cli/index.ts run /scn --campaign-identity {"campaign_id":"${CAMPAIGN_ID}","comparison_id":"c1","block_id":"${BLOCK_A}","sample_id":"${SAMPLE_A}","execution_attempt_id":"${attemptId}"}`;
+export function childCommandLine(
+  attemptId: string,
+  campaignId: string = CAMPAIGN_ID,
+): string {
+  return `bun /snap/src/cli/index.ts run /scn --campaign-identity {"campaign_id":"${campaignId}","comparison_id":"c1","block_id":"${BLOCK_A}","sample_id":"${SAMPLE_A}","execution_attempt_id":"${attemptId}"}`;
 }
 
 // ---------------------------------------------------------------------------

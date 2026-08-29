@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -54,6 +55,7 @@ import type {
   SpawnedCampaignChild,
 } from '../src/campaign/spawn.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
+import { campaignDigest } from '../src/contracts/campaign/digest.ts';
 import {
   type JournalEvent,
   normalizeBlockReplaced,
@@ -320,9 +322,9 @@ function fakeGroupSignaler(): GroupSignaler {
 
 // --- Campaign document fixture --------------------------------------------
 function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
-  return {
+  const doc = {
     schema_version: 1,
-    campaign_id: 'c'.repeat(64),
+    campaign_id: 'c'.repeat(64), // placeholder: re-stamped below
     suite: {
       schema_version: 1,
       name: 'testsuite',
@@ -412,7 +414,7 @@ function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
     },
     registered_at: '2026-08-26T00:00:00Z',
     registered_by: 'test',
-    digest: 'c'.repeat(64),
+    digest: 'c'.repeat(64), // placeholder: re-stamped below
     contention: {
       host_fingerprint: {
         cpu_model: 'test',
@@ -454,8 +456,11 @@ function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
     // Fixture-literal cast, justified: this is a full valid document already
     // exercised against CampaignSchema in the task 5 registration tests; the
     // cast only bridges the untyped `overrides` spread. The dispatcher
-    // re-parses it through CampaignSchema at startup (fail-closed).
+    // AUTHENTICATES it at startup, so the identity is stamped from the
+    // content's own digest rather than pinned to a literal.
   } as unknown as Campaign;
+  const digest = campaignDigest(doc);
+  return { ...doc, digest, campaign_id: digest };
 }
 
 interface HarnessArgs {
@@ -794,6 +799,47 @@ test('429 cooldown: classified stderr pools the block, waits the clamped cooldow
     child.exit({ code: 0, signal: null });
   }
   await run;
+});
+
+test('startup authenticates the frozen document: a tampered budget refuses before any admission', async () => {
+  const h = harness();
+  // A hand-edited ceiling: schema-valid, digest-invalid. Nothing may admit
+  // against a document whose content no longer matches its identity.
+  const doc = JSON.parse(
+    readFileSync(join(h.campaignDir, 'campaign.json'), 'utf8'),
+  ) as Campaign;
+  writeFileSync(
+    join(h.campaignDir, 'campaign.json'),
+    JSON.stringify({
+      ...doc,
+      budget: { ...doc.budget, usd_all_in: 500_000 },
+    }),
+  );
+  await expect(runCampaignDispatch(h.args)).rejects.toThrow(
+    /not the digest of its content/,
+  );
+  expect(h.spawner.spawned).toHaveLength(0);
+});
+
+test('startup authenticates closure: a sample whose cell is not registered refuses instead of pricing it at zero', async () => {
+  const h = harness();
+  const doc = JSON.parse(
+    readFileSync(join(h.campaignDir, 'campaign.json'), 'utf8'),
+  ) as Campaign;
+  const cells: Campaign['cells'] = [];
+  const tampered = { ...doc, cells };
+  writeFileSync(
+    join(h.campaignDir, 'campaign.json'),
+    JSON.stringify({
+      ...tampered,
+      digest: campaignDigest(tampered),
+      campaign_id: campaignDigest(tampered),
+    }),
+  );
+  await expect(runCampaignDispatch(h.args)).rejects.toThrow(
+    /which is not a registered cell/,
+  );
+  expect(h.spawner.spawned).toHaveLength(0);
 });
 
 test('results root: controller and child resolve ONE absolute path, even when the operator names a relative one', async () => {

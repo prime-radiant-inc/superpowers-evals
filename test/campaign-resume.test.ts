@@ -6,8 +6,8 @@
 // and the children are the dispatcher suite's scripted-child seam — hermetic
 // throughout, no network and no real campaign process.
 import { afterAll, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { cpus } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
@@ -180,8 +180,12 @@ interface CrashedFixture {
 function crashedCampaign(
   options: { driftEvals?: boolean } = {},
 ): CrashedFixture {
-  const seed = publishedCampaign({ inFlight: false, doc: campaignDoc() });
-  const refs = seedRealSnapshot(seed.dir);
+  // Identity IS the digest, so the document must be FINAL before it is
+  // published: the snapshot is seeded first (it supplies the real refs), the
+  // document is built from those refs, and only then is the campaign dir
+  // published and journaled against it.
+  const dir = mkdtempSync(join(tmpdir(), 'resume-'));
+  const refs = seedRealSnapshot(dir);
   const doc = campaignDoc({
     refs:
       options.driftEvals === true ? { ...refs, evals: 'f'.repeat(40) } : refs,
@@ -191,7 +195,7 @@ function crashedCampaign(
       global_run_cap: 4,
     },
   });
-  writeFileSync(join(seed.dir, 'campaign.json'), JSON.stringify(doc));
+  const seed = publishedCampaign({ inFlight: false, doc, dir });
   const w = electWriter({
     campaignDir: seed.dir,
     clock: new FakeClock(0),
@@ -231,6 +235,17 @@ function crashedCampaign(
   return { dir: seed.dir, doc, resultsRoot: join(seed.dir, 'results') };
 }
 
+/** The identity a fixture child of THIS campaign carries (its campaign id is
+ *  the document's own digest, not a shared constant). */
+function fixtureChild(fx: CrashedFixture): {
+  commandLine: (p: number) => string;
+} {
+  return {
+    commandLine: (pgid: number) =>
+      childCommandLine(pgid === 900_000_101 ? 'a1' : 'a2', fx.doc.campaign_id),
+  };
+}
+
 function journalEvents(dir: string): JournalEvent[] {
   const r = openJournalRead(dir);
   try {
@@ -247,6 +262,41 @@ async function tick(clock: FakeClock, seconds: number): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+test('resume authenticates the frozen document: a tampered budget refuses before any kill or admission', async () => {
+  const fx = crashedCampaign();
+  const doc = JSON.parse(
+    readFileSync(join(fx.dir, 'campaign.json'), 'utf8'),
+  ) as Campaign;
+  writeFileSync(
+    join(fx.dir, 'campaign.json'),
+    JSON.stringify({
+      ...doc,
+      budget: { ...doc.budget, usd_all_in: 500_000 },
+    }),
+  );
+  const spawner = new FakeSpawner();
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner,
+      lockPath: lockDir('resume-authenticity.lock.d'),
+      stream: { write: () => {} },
+    }),
+  ).rejects.toThrow(/not the digest of its content/);
+  expect(spawner.spawned).toHaveLength(0);
+});
+
 test('resume drives the whole pinned order: kill/reconcile -> rerun re-entry -> preflight -> reconstruction -> admission -> completion', async () => {
   const fx = crashedCampaign();
   const spawner = new FakeSpawner();
@@ -261,10 +311,7 @@ test('resume drives the whole pinned order: kill/reconcile -> rerun re-entry -> 
     resultsRoot: fx.resultsRoot,
     clock,
     identity: ALIVE_AT_5,
-    child: {
-      commandLine: (pgid) =>
-        childCommandLine(pgid === 900_000_101 ? 'a1' : 'a2'),
-    },
+    child: fixtureChild(fx),
     signal: mortalGroup(),
     graceSeconds: 0,
     probe: PROBE,
@@ -362,10 +409,7 @@ test('resume reconciliation lands BEFORE the refs cross-check refuses: D-13 term
       resultsRoot: fx.resultsRoot,
       clock: new FakeClock(1),
       identity: ALIVE_AT_5,
-      child: {
-        commandLine: (pgid) =>
-          childCommandLine(pgid === 900_000_101 ? 'a1' : 'a2'),
-      },
+      child: fixtureChild(fx),
       signal: mortalGroup(),
       graceSeconds: 0,
       probe: PROBE,
@@ -418,10 +462,7 @@ test('resume REFUSES when a registered key env is missing (R-REG-19 second occur
         resultsRoot: fx.resultsRoot,
         clock: new FakeClock(1),
         identity: ALIVE_AT_5,
-        child: {
-          commandLine: (pgid) =>
-            childCommandLine(pgid === 900_000_101 ? 'a1' : 'a2'),
-        },
+        child: fixtureChild(fx),
         signal: mortalGroup(),
         graceSeconds: 0,
         probe: PROBE,
@@ -455,10 +496,7 @@ test('resume REFUSES when the grader credential is missing from the registry (R-
       resultsRoot: fx.resultsRoot,
       clock: new FakeClock(1),
       identity: ALIVE_AT_5,
-      child: {
-        commandLine: (pgid) =>
-          childCommandLine(pgid === 900_000_101 ? 'a1' : 'a2'),
-      },
+      child: fixtureChild(fx),
       signal: mortalGroup(),
       graceSeconds: 0,
       probe: PROBE,

@@ -15,10 +15,11 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
-import {
-  type Block,
-  type Campaign,
-  CampaignSchema,
+import type {
+  Block,
+  Campaign,
+  Cell,
+  ExecutionSurfaceArm,
 } from '../contracts/campaign/campaign.ts';
 import {
   type BlockReplacedRecord,
@@ -41,6 +42,7 @@ import {
   type Clock,
   RealClock,
 } from '../scheduler/clock.ts';
+import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
 import {
   type BlockInterval,
@@ -1062,11 +1064,12 @@ export async function runCampaignDispatch(
   const observeExposure = args.observeExposure ?? trajectoryExposureMs;
   const runner = args.runner ?? defaultCommandRunner;
   const killGrace = args.killGraceSeconds ?? KILL_GRACE_SECONDS;
-  // Fail-closed intake: the frozen document re-parses through CampaignSchema
-  // (C1: no production-path cast bridges this read).
-  const campaign: Campaign = CampaignSchema.parse(
-    JSON.parse(readFileSync(join(args.campaignDir, 'campaign.json'), 'utf8')),
-  );
+  // Fail-closed intake: the frozen document is AUTHENTICATED, not merely
+  // schema-parsed — recomputed digest, identity = digest, and closure over
+  // cells/arms/refs (C1: no production-path cast bridges this read). Every
+  // derivation below reads the document as an authority, so an unclosed
+  // document would resolve to zero estimates and empty credential names.
+  const campaign: Campaign = loadFrozenCampaign(args.campaignDir);
   if (args.snapshotVerify === undefined && args.snapshot === undefined) {
     throw new DispatcherError(
       'no SnapshotHandle and no snapshotVerify seam — the R-DSP-11 admission gate cannot run; `campaign run` passes the reconstructed handle',
@@ -1123,30 +1126,48 @@ export async function runCampaignDispatch(
       }
       return arm;
     };
-    const sampleEstimate = (sampleId: string): number => {
+    /** The frozen cell a sample belongs to. The authenticated document
+     *  guarantees it resolves; an unresolvable one is corruption, and a
+     *  substituted zero estimate or empty scenario name would spend real
+     *  money against a fabricated figure. */
+    const cellOfSample = (sampleId: string): Cell => {
       const sample = sampleById.get(sampleId);
-      if (sample === undefined) return 0;
-      return (
-        cellByKey.get(sample.cell)?.estimates_by_arm[sample.arm]?.cost_usd ?? 0
-      );
+      const cell =
+        sample === undefined ? undefined : cellByKey.get(sample.cell);
+      if (sample === undefined || cell === undefined) {
+        throw new DispatcherError(
+          `sample ${sampleId} does not resolve to a frozen cell — refusing to substitute an estimate for it`,
+        );
+      }
+      return cell;
     };
-    const sampleDurationEstimate = (sampleId: string): number => {
-      const sample = sampleById.get(sampleId);
-      if (sample === undefined) return 0;
-      return (
-        cellByKey.get(sample.cell)?.estimates_by_arm[sample.arm]?.duration_s ??
-        0
-      );
+    const estimateOfSample = (sampleId: string) => {
+      const arm = armOf(sampleId);
+      const estimate = cellOfSample(sampleId).estimates_by_arm[arm];
+      if (estimate === undefined) {
+        throw new DispatcherError(
+          `sample ${sampleId} has no frozen estimate for arm ${arm} — refusing to price it as zero`,
+        );
+      }
+      return estimate;
     };
-    const scenarioOfSample = (sampleId: string): string => {
-      const sample = sampleById.get(sampleId);
-      if (sample === undefined) return '';
-      return cellByKey.get(sample.cell)?.scenario ?? '';
+    const sampleEstimate = (sampleId: string): number =>
+      estimateOfSample(sampleId).cost_usd;
+    const sampleDurationEstimate = (sampleId: string): number =>
+      estimateOfSample(sampleId).duration_s;
+    const scenarioOfSample = (sampleId: string): string =>
+      cellOfSample(sampleId).scenario;
+    const surfaceOfArm = (arm: string): ExecutionSurfaceArm => {
+      const surface = campaign.execution_surface.find((a) => a.name === arm);
+      if (surface === undefined) {
+        throw new DispatcherError(
+          `arm ${arm} is not in the frozen execution surface — refusing to dispatch it without a credential`,
+        );
+      }
+      return surface;
     };
-    const surfaceOfArm = (arm: string) =>
-      campaign.execution_surface.find((a) => a.name === arm);
     const armCredentialName = (arm: string): string =>
-      surfaceOfArm(arm)?.credential ?? '';
+      surfaceOfArm(arm).credential;
     const credentialOfArm = (arm: string): Credential => {
       const name = armCredentialName(arm);
       const cred = args.credentials[name];
@@ -2448,7 +2469,7 @@ export async function runCampaignDispatch(
       // the two credentials share a provider.
       const role = roleOfEvidenceSource(source);
       const subjectCred = credentialOfArm(sample.arm);
-      const runtimeFamily = surfaceOfArm(sample.arm)?.agent;
+      const runtimeFamily = surfaceOfArm(sample.arm).agent;
       const ctx: { credential: CredentialShape; pool: string } =
         role === 'subject'
           ? {
@@ -2457,7 +2478,7 @@ export async function runCampaignDispatch(
                 ...(subjectCred.base_url !== undefined
                   ? { base_url: subjectCred.base_url }
                   : {}),
-                ...(runtimeFamily !== undefined ? { runtimeFamily } : {}),
+                runtimeFamily,
               },
               pool: sample.subjectPool,
             }
@@ -2868,7 +2889,7 @@ export async function runCampaignDispatch(
             'scenarios',
             scenarioOfSample(sample.sampleId),
           ),
-          codingAgent: surfaceOfArm(sample.arm)?.agent ?? '',
+          codingAgent: surfaceOfArm(sample.arm).agent,
           codingAgentsDir: join(evalsRoot, 'coding-agents'),
           outRoot: resultsRoot,
           os: 'linux',
