@@ -151,7 +151,7 @@ function runCli(
   args: string[],
   opts: { cwd?: string; env?: EnvOverrides } = {},
 ): { status: number; stdout: string; stderr: string } {
-  const p = spawnSync('bun', [CLI, ...args], {
+  const p = spawnSync('bun', ['--no-env-file', CLI, ...args], {
     encoding: 'utf8',
     cwd: opts.cwd,
     env: cliEnv(opts.env),
@@ -179,6 +179,9 @@ test('campaign register resolves gauntlet from $GAUNTLET_ROOT, refusing loudly w
 
 test('campaign register resolves superpowers from $SUPERPOWERS_ROOT, refusing loudly when unset (C12b)', () => {
   const work = mkdtempSync(join(tmpdir(), 'reg-'));
+  // A caller-owned dotenv file must not be able to repopulate an environment
+  // variable this subprocess intentionally removed.
+  writeFileSync(join(work, '.env'), `SUPERPOWERS_ROOT=${SUPERPOWERS_ROOT}\n`);
   const res = runCli(
     [
       'campaign',
@@ -187,7 +190,7 @@ test('campaign register resolves superpowers from $SUPERPOWERS_ROOT, refusing lo
       '--estimates',
       writeEstimates(work),
     ],
-    { env: { SUPERPOWERS_ROOT: undefined } },
+    { cwd: work, env: { SUPERPOWERS_ROOT: undefined } },
   );
   expect(res.status).toBe(1);
   expect(res.stderr).toContain('SUPERPOWERS_ROOT');
