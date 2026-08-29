@@ -11,8 +11,12 @@ import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
-import { electWriter, openJournalRead } from '../src/campaign/journal.ts';
-import { resumeCampaign } from '../src/campaign/recovery.ts';
+import {
+  electWriter,
+  openJournalRead,
+  replayEvents,
+} from '../src/campaign/journal.ts';
+import { resumeCampaign, universeOf } from '../src/campaign/recovery.ts';
 import type {
   CampaignChildSpec,
   ChildExitInfo,
@@ -369,6 +373,118 @@ test('resume drives the whole pinned order: kill/reconcile -> rerun re-entry -> 
   expect(banner.join('')).toMatch(/live-spend lock acquired/);
   expect(banner.join('')).toMatch(/reconcile complete/);
 }, 60_000);
+
+test('reconstructed terminal evidence is the FULL fate-table bundle and the journal stays replay-valid (D-13)', async () => {
+  // driftEvals stops the resume at the refs cross-check, AFTER reconciliation
+  // has committed — so this test sees exactly what reconciliation wrote.
+  const fx = crashedCampaign({ driftEvals: true });
+  // Both crashed attempts left complete run dirs: verdict + trajectory
+  // (exposure) + priced economics. The reconstruction owes exposure_started
+  // before the terminal (a bare run_completed from `spawned` is illegal),
+  // the ACTUAL spend from the artifacts, and a superseding snapshot.
+  seedRunDir(fx.resultsRoot, 'r1', 'pass');
+  seedRunDir(fx.resultsRoot, 'r2', 'fail');
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner: new FakeSpawner(),
+      lockPath: lockDir('resume-fate-table.lock.d'),
+      stream: { write: () => {} },
+    }),
+  ).rejects.toThrow();
+
+  const events = journalEvents(fx.dir);
+  const types = events.map((e) => e.type);
+  // Replay-legality is the whole point: the reducer must accept every edge
+  // the reconstruction wrote.
+  expect(() => replayEvents(universeOf(fx.doc), events)).not.toThrow();
+  // Exposure precedes each terminal (spawned -> exposed -> completed).
+  expect(types.indexOf('exposure_started')).toBeGreaterThan(-1);
+  expect(types.indexOf('exposure_started')).toBeLessThan(
+    types.indexOf('run_completed'),
+  );
+  expect(
+    events
+      .filter((e) => e.type === 'run_completed')
+      .map((e) => e.payload.attempt_id)
+      .sort(),
+  ).toEqual(['a1', 'a2']);
+  // Actual spend from the run artifacts (seedRunDir prices each at 0.25),
+  // never the registration estimate (1 and 2).
+  const spends = events
+    .filter((e) => e.type === 'budget_event' && e.payload.kind === 'spend')
+    .map((e) => (e.type === 'budget_event' ? e.payload.amount_usd : 0));
+  expect(spends).toEqual([0.25, 0.25]);
+  // The superseding absolute snapshot rides the same critical section, last.
+  const snapshots = events.filter(
+    (e) => e.type === 'budget_event' && e.payload.kind === 'estimate_inflight',
+  );
+  expect(snapshots.length).toBeGreaterThan(0);
+  expect(types.lastIndexOf('budget_event')).toBe(
+    events.indexOf(snapshots[snapshots.length - 1]!),
+  );
+});
+
+test('a run dir whose actual cost is unreadable is NOT complete evidence: no terminal, no invented spend, the instance re-enters via rerun (D-13)', async () => {
+  const fx = crashedCampaign({ driftEvals: true });
+  // A composed verdict with no priced economics. The terminal is knowable;
+  // the money is not — and a spend row must be an actual (R-JRN-12), so the
+  // instance re-enters rather than being journaled against a fabricated one.
+  for (const runId of ['r1', 'r2']) {
+    const dir = join(fx.resultsRoot, runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'verdict.json'),
+      JSON.stringify({
+        final: 'pass',
+        final_reason: 'fixture',
+        economics: null,
+      }),
+    );
+  }
+  const written: string[] = [];
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner: new FakeSpawner(),
+      lockPath: lockDir('resume-unpriced.lock.d'),
+      stream: { write: (s) => written.push(s) },
+    }),
+  ).rejects.toThrow();
+  const events = journalEvents(fx.dir);
+  const types = events.map((e) => e.type);
+  expect(types).not.toContain('run_completed');
+  expect(
+    events.filter(
+      (e) => e.type === 'budget_event' && e.payload.kind === 'spend',
+    ),
+  ).toEqual([]);
+  expect(types).toContain('aborted');
+  expect(types).toContain('block_replaced');
+  expect(written.join('')).toContain('no readable actual cost');
+});
 
 test('resume reconciliation lands BEFORE the refs cross-check refuses: D-13 terminal evidence, quarantine, and the storage-pause marker are all durable', async () => {
   const fx = crashedCampaign({ driftEvals: true });

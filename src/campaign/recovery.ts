@@ -23,12 +23,17 @@ import {
 } from '../contracts/campaign/crash-windows.ts';
 import {
   type JournalEvent,
+  JournalEventSchema,
   normalizeBlockReplaced,
 } from '../contracts/campaign/journal-events.ts';
+import { poolKey } from '../contracts/campaign/pool.ts';
+import type { SampleState } from '../contracts/campaign/state-machine.ts';
 import type { Credential } from '../contracts/credential.ts';
+import type { RunErrorStage } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
+import { classifyFailure } from './classifier.ts';
 import {
   type BlockInterval,
   breachWindows,
@@ -42,12 +47,15 @@ import {
   compareAdmissionOrder,
   contentionResolutionBatch,
   type DispatchOutcome,
+  estimateInflightTotal,
   type GroupSignaler,
   killGroupVerified,
   nextRerunInstanceId,
+  readVerdictSummary,
   realGroupSignaler,
   realSamplerSeam,
   runCampaignDispatch,
+  runCostFromArtifacts,
 } from './dispatcher.ts';
 import {
   assertFingerprintMatch,
@@ -78,6 +86,17 @@ import {
 } from './locks.ts';
 import { resolveCampaignResultsRoot } from './results-root.ts';
 import {
+  decideExposureAtTerminal,
+  gauntletEventStreamTexts,
+  roleOfEvidenceSource,
+  type SensorRole,
+  type SuiteKind,
+  senseEvidence,
+  sensorAttributionRank,
+  terminalEvidenceTexts,
+  trajectoryExposureMs,
+} from './sensors.ts';
+import {
   reconstructCampaignSnapshot,
   repairDriftedTrees,
   verifyCampaignSnapshot,
@@ -101,7 +120,7 @@ const KILL_GRACE_SECONDS = 5;
 
 /** The frozen document's replay/resolver view: samples with their arm+cell,
  *  blocks with their roster and slot. */
-function universeOf(campaign: Campaign): CampaignUniverse {
+export function universeOf(campaign: Campaign): CampaignUniverse {
   return {
     samples: campaign.samples.map((s) => ({
       sample_id: s.sample_id,
@@ -587,21 +606,195 @@ export function planRecovery(args: {
 // Decision D-13: terminal evidence without a journaled terminal
 // ---------------------------------------------------------------------------
 
+/** Everything a crashed attempt's run dir still says about it. The D-13
+ *  fate table's "buffer + retry" row is what recovery has to rebuild from
+ *  disk: the exposure the sensors observed, the terminal outcome, the pool
+ *  cooldowns the classifier declared, and the ACTUAL spend. A run dir that
+ *  cannot answer all of it is not complete evidence — the reader returns
+ *  null and the attempt re-enters via E7 rerun instead. */
+export interface TerminalRunEvidence {
+  readonly outcome: 'pass' | 'fail' | 'indeterminate';
+  readonly stage?: RunErrorStage;
+  /** Actual cost read from the run artifacts. Never an estimate. */
+  readonly costUsd: number;
+  /** Capture-re-derived exposure (epoch ms); null = unestablished. */
+  readonly exposureTsMs: number | null;
+  /** The strongest sensor attribution the run dir carries. */
+  readonly sensor: {
+    readonly role: SensorRole;
+    readonly evidence: '429-match' | 'billing-exhaustion';
+  } | null;
+  /** Pool cooldowns the rate-limit evidence re-declares. */
+  readonly poolBlocks: readonly { poolKey: string; cooldownMs: number }[];
+}
+
+/** The frozen per-sample cost estimate. The authenticated document
+ *  guarantees the lookup resolves; a gap refuses rather than pricing at
+ *  zero (the same rule the dispatcher applies). */
+function frozenSampleEstimate(campaign: Campaign, sampleId: string): number {
+  const sample = campaign.samples.find((s) => s.sample_id === sampleId);
+  const cell =
+    sample === undefined
+      ? undefined
+      : campaign.cells.find(
+          (c) => `${c.comparison_id}:${c.scenario}` === sample.cell,
+        );
+  const estimate =
+    sample === undefined ? undefined : cell?.estimates_by_arm[sample.arm];
+  if (estimate === undefined) {
+    throw new RecoveryError(
+      `sample ${sampleId} has no frozen estimate in the campaign document — refusing to reconcile the budget position against a substituted zero; ${AUDIT}`,
+    );
+  }
+  return estimate.cost_usd;
+}
+
+/** Envelope the pending bundle so the reducer can fold it: replay reads
+ *  full journal events, and the bundle is still un-appended inputs. The seq
+ *  numbers continue the durable prefix; ts_ms is this resume's reading. */
+function synthesizeEnvelopes(
+  bundle: readonly EventInput[],
+  events: readonly JournalEvent[],
+  nowMs: number,
+): JournalEvent[] {
+  let seq = events.reduce((m, e) => Math.max(m, e.seq), 0);
+  return bundle.map((input) => {
+    seq += 1;
+    return JournalEventSchema.parse({
+      seq,
+      ts_ms: input.ts_ms ?? nowMs,
+      type: input.type,
+      payload: input.payload,
+    });
+  });
+}
+
+/** Read one crashed attempt's run dir as D-13 terminal evidence. COMPLETE
+ *  means every field the reconstruction needs is actually there — a
+ *  recognized final verdict AND a readable actual cost. Anything less is not
+ *  evidence: the attempt re-enters via E7 rerun rather than being journaled
+ *  terminal against a cost nobody knows (R-JRN-12: spend rows carry
+ *  actuals). Loud either way. */
+export function readTerminalRunEvidence(args: {
+  runDir: string;
+  runId: string;
+  sampleId: string;
+  campaign: Campaign;
+  credentials: Readonly<Record<string, Credential>>;
+  stream: { write(s: string): void };
+}): TerminalRunEvidence | null {
+  const verdict = readVerdictSummary(args.runDir);
+  if (verdict === null) return null; // no run dir / no composed verdict
+  const costUsd = runCostFromArtifacts(args.runDir);
+  if (costUsd === null) {
+    args.stream.write(
+      `terminal evidence for run ${args.runId} is INCOMPLETE: its verdict composed but carries no readable actual cost — the instance re-enters via rerun rather than journaling a terminal against an unknown spend (D-13)\n`,
+    );
+    return null;
+  }
+  const sample = args.campaign.samples.find(
+    (s) => s.sample_id === args.sampleId,
+  );
+  const surface =
+    sample === undefined
+      ? undefined
+      : args.campaign.execution_surface.find((a) => a.name === sample.arm);
+  if (sample === undefined || surface === undefined) {
+    throw new RecoveryError(
+      `run ${args.runId} binds to sample ${args.sampleId}, which the frozen document does not place on an execution-surface arm — refusing to attribute its evidence; ${AUDIT}`,
+    );
+  }
+  const subjectCred = args.credentials[surface.credential];
+  const graderCred = args.credentials[args.campaign.grader.credential];
+  if (subjectCred === undefined || graderCred === undefined) {
+    throw new RecoveryError(
+      `run ${args.runId} needs credentials ${surface.credential} and ${args.campaign.grader.credential} to attribute its sensor evidence, and the registry supplies ${subjectCred === undefined ? surface.credential : args.campaign.grader.credential} for neither — refusing; ${AUDIT}`,
+    );
+  }
+  // Sensor evidence, attributed by source provenance exactly as the live
+  // path does: the child's own channels are the subject's, the
+  // Gauntlet-Agent's artifacts are the grader's.
+  let best: {
+    role: SensorRole;
+    evidence: '429-match' | 'billing-exhaustion';
+  } | null = null;
+  const poolBlocks: { poolKey: string; cooldownMs: number }[] = [];
+  for (const text of [
+    ...terminalEvidenceTexts(args.runDir),
+    ...gauntletEventStreamTexts(args.runDir),
+  ]) {
+    const role = roleOfEvidenceSource(text.source);
+    const cred = role === 'subject' ? subjectCred : graderCred;
+    const pool = poolKey(
+      cred,
+      role === 'subject' ? surface.credential : args.campaign.grader.credential,
+    );
+    const signal = senseEvidence({
+      source: text.source,
+      role,
+      credential: {
+        api: cred.api,
+        ...(cred.base_url !== undefined ? { base_url: cred.base_url } : {}),
+        ...(role === 'subject' ? { runtimeFamily: surface.agent } : {}),
+      },
+      text: text.text,
+    });
+    if (signal === null) continue;
+    const candidate = { role: signal.role, evidence: signal.evidence };
+    if (
+      best === null ||
+      sensorAttributionRank(candidate) < sensorAttributionRank(best)
+    ) {
+      best = candidate;
+    }
+    if (signal.evidence === '429-match') {
+      const existing = poolBlocks.find((b) => b.poolKey === pool);
+      if (existing === undefined) {
+        poolBlocks.push({ poolKey: pool, cooldownMs: signal.cooldownMs });
+      } else if (signal.cooldownMs > existing.cooldownMs) {
+        existing.cooldownMs = signal.cooldownMs;
+      }
+    }
+  }
+  return {
+    outcome: verdict.outcome,
+    ...(verdict.stage !== undefined ? { stage: verdict.stage } : {}),
+    costUsd,
+    exposureTsMs: trajectoryExposureMs(args.runDir),
+    sensor: best,
+    poolBlocks,
+  };
+}
+
 /** Decision D-13 terminal-evidence rule: every journaled non-terminal
- *  attempt whose run dir holds a complete verdict is journaled terminal from
- *  the evidence (outcome-derived, loud); every journaled attempt with no run
- *  dir at all re-enters via E7 rerun — under the id of the instance that
- *  ADMITTED it (primary, reserve, or rerun), never the last block admitted.
- *  An attempt the instance chain cannot explain refuses (blockOfAttempt). */
+ *  attempt whose run dir holds COMPLETE evidence is journaled terminal from
+ *  that evidence (outcome-derived, loud); every journaled attempt whose run
+ *  dir cannot supply it re-enters via E7 rerun — under the id of the
+ *  instance that ADMITTED it (primary, reserve, or rerun), never the last
+ *  block admitted. An attempt the instance chain cannot explain refuses
+ *  (blockOfAttempt).
+ *
+ *  The reconstruction emits the WHOLE fate-table bundle per attempt, in
+ *  replay-legal order: exposure_started (spawned -> exposed, so the terminal
+ *  has a legal edge — a bare run_completed from `spawned` is illegal),
+ *  the terminal itself (run_completed or instrument_failure), the pool
+ *  cooldowns the sensor evidence declares, and the actual spend. The caller
+ *  appends the one superseding estimate_inflight snapshot last, in the same
+ *  critical section (E7.7). */
 export function terminalEvidenceActions(args: {
   events: readonly JournalEvent[];
   universe: CampaignUniverse;
-  verdictOf: (runId: string) => { final: string } | null;
+  evidenceOf: (runId: string, sampleId: string) => TerminalRunEvidence | null;
+  suiteKind: SuiteKind;
+  /** Resume-time clock reading for the re-declared cooldown windows. */
+  nowMs: number;
+  stream?: { write(s: string): void };
 }): {
   terminals: EventInput[];
   terminalAttemptIds: string[];
   rerunBlockIds: string[];
 } {
+  const stream = args.stream ?? { write: () => {} };
   const terminalAttempts = new Set<string>();
   for (const event of args.events) {
     if (event.type === 'run_completed' || event.type === 'instrument_failure') {
@@ -609,26 +802,113 @@ export function terminalEvidenceActions(args: {
     }
   }
   const chain = admittedInstanceChain(args.events, args.universe);
+  // Folded LAZILY: an attempt the instance chain cannot explain must refuse
+  // through blockOfAttempt (C11) rather than through the reducer's
+  // corruption error, and a resume with no reconstructable evidence never
+  // needs the fold at all.
+  let foldedStates: Map<string, SampleState> | null = null;
+  const stateOf = (sampleId: string): SampleState => {
+    foldedStates ??= replayEvents(args.universe, args.events).sampleStates;
+    return foldedStates.get(sampleId) ?? 'planned';
+  };
   const terminals: EventInput[] = [];
   const terminalAttemptIds: string[] = [];
   const rerunBlockIds: string[] = [];
+  const rerun = (attemptId: string): void => {
+    const blockId = blockOfAttempt(chain, attemptId);
+    if (!rerunBlockIds.includes(blockId)) rerunBlockIds.push(blockId);
+  };
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
-    if (terminalAttempts.has(event.payload.attempt_id)) continue;
-    const verdict = args.verdictOf(event.payload.run_id);
-    if (verdict !== null) {
-      terminals.push({
-        type: 'run_completed',
-        payload: {
-          attempt_id: event.payload.attempt_id,
-          outcome: verdict.final,
-        },
-      });
-      terminalAttemptIds.push(event.payload.attempt_id);
+    const attemptId = event.payload.attempt_id;
+    if (terminalAttempts.has(attemptId)) continue;
+    const sampleId = chain.sampleOfAttempt.get(attemptId);
+    if (sampleId === undefined) {
+      throw new RecoveryError(
+        `attempt ${attemptId} allocated run ${event.payload.run_id} but binds to no sample — refusing to journal a terminal for it; ${AUDIT}`,
+      );
+    }
+    const evidence = args.evidenceOf(event.payload.run_id, sampleId);
+    if (evidence === null) {
+      rerun(attemptId);
       continue;
     }
-    const blockId = blockOfAttempt(chain, event.payload.attempt_id);
-    if (!rerunBlockIds.includes(blockId)) rerunBlockIds.push(blockId);
+    const bundle: EventInput[] = [];
+    let state = stateOf(sampleId);
+    // Exposure first: the machine's only legal path to a determinate
+    // terminal is spawned -> exposed -> completed.
+    if (state === 'spawned' && evidence.exposureTsMs !== null) {
+      bundle.push({
+        type: 'exposure_started',
+        payload: { sample_id: sampleId, ts: evidence.exposureTsMs },
+      });
+      state = 'exposed';
+    }
+    // The run dir holds a composed verdict, so the runner reached
+    // composition: the exit class is 'clean' and the typed cause (if any)
+    // comes from the recorded stage and sensor evidence.
+    const classification = classifyFailure({
+      outcome: evidence.outcome,
+      ...(evidence.stage !== undefined ? { stage: evidence.stage } : {}),
+      exitClass: 'clean',
+      role: evidence.sensor?.role ?? 'subject',
+      sensorEvidence: evidence.sensor?.evidence ?? 'none',
+    });
+    const decision = decideExposureAtTerminal({
+      runtimeTsMs: null,
+      captureTsMs: evidence.exposureTsMs,
+      suiteKind: args.suiteKind,
+    });
+    const exposureCaveat =
+      state === 'spawned' &&
+      !decision.established &&
+      decision.resolution === 'render_caveat';
+    if (
+      classification.class === 'instrument' &&
+      classification.cause !== undefined &&
+      (state === 'spawned' || state === 'exposed')
+    ) {
+      bundle.push({
+        type: 'instrument_failure',
+        payload: { attempt_id: attemptId, cause: classification.cause },
+      });
+    } else if (state === 'exposed' || exposureCaveat) {
+      bundle.push({
+        type: 'run_completed',
+        payload: {
+          attempt_id: attemptId,
+          outcome: evidence.outcome,
+          ...(exposureCaveat
+            ? { caveat: 'exploratory_exposure_unestablished' as const }
+            : {}),
+        },
+      });
+    } else {
+      // No legal terminal edge (gating, exposure never established): the
+      // block re-enters whole rather than carrying an illegal terminal.
+      stream.write(
+        `terminal evidence for ${attemptId} withheld: exposure was never established and the suite is ${args.suiteKind} — the instance re-enters via rerun instead (D-13, fail-closed)\n`,
+      );
+      rerun(attemptId);
+      continue;
+    }
+    // Accounting events ride the same reconstruction: the cooldowns the
+    // sensor evidence declares, then the ACTUAL spend from the artifacts.
+    for (const block of evidence.poolBlocks) {
+      bundle.push({
+        type: 'pool_blocked',
+        payload: {
+          pool_key: block.poolKey,
+          until_ts_ms: args.nowMs + block.cooldownMs,
+        },
+      });
+    }
+    bundle.push({
+      type: 'budget_event',
+      payload: { kind: 'spend', amount_usd: evidence.costUsd },
+    });
+    terminals.push(...bundle);
+    terminalAttemptIds.push(attemptId);
   }
   return { terminals, terminalAttemptIds, rerunBlockIds };
 }
@@ -1274,20 +1554,18 @@ export async function resumeCampaign(
       const evidence = terminalEvidenceActions({
         events,
         universe,
-        verdictOf: (runId) => {
-          try {
-            const v = JSON.parse(
-              readFileSync(join(resultsRoot, runId, 'verdict.json'), 'utf8'),
-            ) as { final?: string };
-            return v.final === 'pass' ||
-              v.final === 'fail' ||
-              v.final === 'indeterminate'
-              ? { final: v.final }
-              : null;
-          } catch {
-            return null;
-          }
-        },
+        suiteKind: campaign.suite.kind,
+        nowMs: clockNowMs(clock),
+        stream,
+        evidenceOf: (runId, sampleId) =>
+          readTerminalRunEvidence({
+            runDir: join(resultsRoot, runId),
+            runId,
+            sampleId,
+            campaign,
+            credentials: args.credentials,
+            stream,
+          }),
       });
       bundle.push(...evidence.terminals);
       // Storage-pause reconciliation (R-JRN-11 + D-13 step 7): retroactive
@@ -1435,6 +1713,37 @@ export async function resumeCampaign(
           campaign,
         }),
       );
+      // E7.7: the superseding absolute estimate_inflight snapshot rides the
+      // SAME critical section, last — recovery writes the reconciled
+      // position before anything evaluates the budget. Its value is the
+      // total remaining exposure of the post-bundle state, computed the way
+      // the dispatcher's own startup fold computes it.
+      if (bundle.length > 0) {
+        const reconciled = replayEvents(universe, [
+          ...events,
+          ...synthesizeEnvelopes(bundle, events, clockNowMs(clock)),
+        ]).sampleStates;
+        const stillExposed: string[] = [];
+        for (const [sampleId, state] of reconciled) {
+          if (
+            state === 'admitted' ||
+            state === 'spawned' ||
+            state === 'exposed'
+          )
+            stillExposed.push(sampleId);
+        }
+        bundle.push({
+          type: 'budget_event',
+          payload: {
+            kind: 'estimate_inflight',
+            amount_usd: estimateInflightTotal({
+              exposureSamples: stillExposed.map((sampleId) => ({ sampleId })),
+              estimateCostUsd: (sampleId) =>
+                frozenSampleEstimate(campaign, sampleId),
+            }),
+          },
+        });
+      }
       let committed = false;
       if (bundle.length > 0) {
         writer.appendEvents(bundle);

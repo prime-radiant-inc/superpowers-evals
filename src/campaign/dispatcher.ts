@@ -83,6 +83,7 @@ import {
   type SensorEvidenceSource,
   type SensorRole,
   senseEvidence,
+  sensorAttributionRank,
   terminalEvidenceTexts,
   trajectoryExposureMs,
 } from './sensors.ts';
@@ -2443,20 +2444,6 @@ export async function runCampaignDispatch(
 
     // --- Sensor evidence intake (D-10: the dispatcher supplies role +
     //     credential context; senseEvidence enforces per-source rows) -------
-    /** Important 4: stored evidence is arbitrated by the CLASSIFIER's own
-     *  first-wins row precedence, not by arrival order — the most specific
-     *  signal wins regardless of source (a weak live subject 429 never
-     *  masks later grader billing exhaustion from a terminal artifact).
-     *  Lower rank = earlier classifier row = stronger. */
-    const evidenceRank = (e: {
-      evidence: '429-match' | 'billing-exhaustion';
-      role: SensorRole;
-    }): number => {
-      if (e.role === 'grader' && e.evidence === '429-match') return 1; // row 1
-      if (e.role === 'grader') return 2; // row 2 (billing)
-      if (e.evidence === '429-match') return 4; // row 4
-      return 9; // subject billing: no classifier row (weakest)
-    };
     const recordSensorText = async (
       sample: LiveSampleState,
       source: SensorEvidenceSource,
@@ -2502,7 +2489,7 @@ export async function runCampaignDispatch(
       const existingEv = sensorEvidenceBySample.get(sample.sampleId);
       if (
         existingEv === undefined ||
-        evidenceRank(candidate) < evidenceRank(existingEv)
+        sensorAttributionRank(candidate) < sensorAttributionRank(existingEv)
       ) {
         sensorEvidenceBySample.set(sample.sampleId, candidate);
       }
@@ -2740,20 +2727,23 @@ export async function runCampaignDispatch(
             state === 'spawned' &&
             !exposure.established &&
             exposure.resolution === 'render_caveat';
+          // The terminal evidence and its spend are ONE critical section
+          // (the D-13 fate table pairs them): a crash between two appends
+          // would leave a terminal attempt that recovery skips, after which
+          // startup re-snapshots exposure without ever recording its spend.
+          const terminalEvents: EventInput[] = [];
           if (classification.class === 'instrument') {
             if (
               (state === 'spawned' || state === 'exposed') &&
               classification.cause !== undefined
             ) {
-              await appendCritical([
-                {
-                  type: 'instrument_failure',
-                  payload: {
-                    attempt_id: sample.attemptId,
-                    cause: classification.cause,
-                  },
+              terminalEvents.push({
+                type: 'instrument_failure',
+                payload: {
+                  attempt_id: sample.attemptId,
+                  cause: classification.cause,
                 },
-              ]);
+              });
             } else {
               // Never-allocated ('admitted') or already-disposed samples
               // carry the typed cause on the MINT; a late instrument_failure
@@ -2763,19 +2753,19 @@ export async function runCampaignDispatch(
                 `typed instrument evidence for ${sample.attemptId} (${classification.cause ?? 'unknown'}) carried by the mint — state ${state} has no legal instrument_failure edge\n`,
               );
             }
-          } else if (
-            state === 'exposed' ||
-            state === 'completed' ||
-            state === 'excluded_block_replaced' ||
-            state === 'skew_excluded' ||
-            state === 'aborted' ||
-            exposureCaveat
-          ) {
-            // Determinate/aborted evidence: legal from exposed; late-legal
-            // (retained evidence) from analytic terminals; from spawned
-            // only under the exploratory caveat.
-            await appendCritical([
-              {
+          } else {
+            if (
+              state === 'exposed' ||
+              state === 'completed' ||
+              state === 'excluded_block_replaced' ||
+              state === 'skew_excluded' ||
+              state === 'aborted' ||
+              exposureCaveat
+            ) {
+              // Determinate/aborted evidence: legal from exposed; late-legal
+              // (retained evidence) from analytic terminals; from spawned
+              // only under the exploratory caveat.
+              terminalEvents.push({
                 type: 'run_completed',
                 payload: {
                   attempt_id: sample.attemptId,
@@ -2784,32 +2774,40 @@ export async function runCampaignDispatch(
                     ? { caveat: 'exploratory_exposure_unestablished' as const }
                     : {}),
                 },
-              },
-            ]);
-            if (exposureCaveat) {
+              });
+              if (exposureCaveat) {
+                stream.write(
+                  `exposure caveat (exploratory): ${sample.attemptId} completed with exposure unestablished by the decision point (R-SNS-4) — caveat recorded on run_completed\n`,
+                );
+              }
+            } else {
               stream.write(
-                `exposure caveat (exploratory): ${sample.attemptId} completed with exposure unestablished by the decision point (R-SNS-4) — caveat recorded on run_completed\n`,
+                `run_completed for ${sample.attemptId} withheld from state ${state}: exposure unestablished (fail-closed, R-SNS-4 — gating resolves it at the block-terminal skew decision)\n`,
               );
             }
-          } else {
-            stream.write(
-              `run_completed for ${sample.attemptId} withheld from state ${state}: exposure unestablished (fail-closed, R-SNS-4 — gating resolves it at the block-terminal skew decision)\n`,
-            );
           }
-          // Terminal spend: the ACTUAL run cost from run artifacts, falling
-          // back to the registration estimate (C9); the superseding absolute
-          // snapshot rides the same critical section (E7.7).
+          // Terminal spend: the ACTUAL run cost from the run artifacts.
+          // R-JRN-12 pins that spend rows carry actuals, so an unreadable
+          // cost is journaled as an accounting gap, never as the
+          // registration estimate — fabricating one would put a number that
+          // was never spent into the sealed accounting.
           const spendAmount =
-            (runDir !== null ? runCostFromArtifacts(runDir) : null) ??
-            sampleEstimate(sample.sampleId);
-          spendUsd += spendAmount;
-          const spendBundle = await appendCritical([
-            {
+            runDir !== null ? runCostFromArtifacts(runDir) : null;
+          if (spendAmount !== null) {
+            spendUsd += spendAmount;
+            terminalEvents.push({
               type: 'budget_event',
               payload: { kind: 'spend', amount_usd: spendAmount },
-            },
-            snapshotEstimateInput(),
-          ]);
+            });
+          } else {
+            // No spend row at all: per-sample spend attribution derives at
+            // seal from the run dir itself (E7.7), which sees the same gap.
+            stream.write(
+              `terminal spend for ${sample.attemptId} is UNKNOWN: the run artifacts carry no readable cost — no spend journaled, because a spend row must be an actual (R-JRN-12); seal-time attribution reads the run dir\n`,
+            );
+          }
+          terminalEvents.push(snapshotEstimateInput());
+          const spendBundle = await appendCritical(terminalEvents);
           // D-13 fail-stop: a spend bundle that could not land (or landed
           // only through the storage pause) ends this terminal here — no
           // refresh, no replacement resolution, no block-terminal work; the

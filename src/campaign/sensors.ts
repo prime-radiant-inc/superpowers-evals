@@ -328,6 +328,20 @@ export type SensorSignal =
       readonly role: SensorRole;
     };
 
+/** Rank one classified attribution by the CLASSIFIER's own row order, so
+ *  the stored attribution is the most specific signal seen rather than the
+ *  last one to arrive (a weak subject 429 never masks later grader billing
+ *  exhaustion read off a terminal artifact). Lower = stronger. */
+export function sensorAttributionRank(signal: {
+  readonly evidence: '429-match' | 'billing-exhaustion';
+  readonly role: SensorRole;
+}): number {
+  if (signal.role === 'grader' && signal.evidence === '429-match') return 1;
+  if (signal.role === 'grader') return 2; // billing
+  if (signal.evidence === '429-match') return 4;
+  return 9; // subject billing: no classifier row (weakest)
+}
+
 /** Classify one piece of evidence against the rows qualified for its
  *  source (D-10 enforcement — forbidden-source evidence never classifies).
  *  Billing anchors are checked FIRST: OpenAI delivers insufficient_quota as

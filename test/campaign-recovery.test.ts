@@ -365,21 +365,105 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
       key_grants: [],
     }),
   ];
-  const withVerdict = terminalEvidenceActions({
+  const withEvidence = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
-    verdictOf: (runId) => (runId === 'r1' ? { final: 'pass' } : null),
+    suiteKind: 'gating',
+    nowMs: 10_000,
+    evidenceOf: (runId) =>
+      runId === 'r1'
+        ? {
+            outcome: 'pass' as const,
+            costUsd: 0.5,
+            exposureTsMs: 1_000,
+            sensor: null,
+            poolBlocks: [],
+          }
+        : null,
   });
-  expect(withVerdict.terminals).toEqual([
+  // The FULL fate-table bundle, in replay-legal order: exposure lifts the
+  // sample out of `spawned` (a bare run_completed from there is illegal),
+  // then the terminal, then the ACTUAL spend.
+  expect(withEvidence.terminals).toEqual([
+    { type: 'exposure_started', payload: { sample_id: 's1', ts: 1_000 } },
     { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.5 } },
   ]);
   const withoutRunDir = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
-    verdictOf: () => null,
+    suiteKind: 'gating',
+    nowMs: 10_000,
+    evidenceOf: () => null,
   });
   expect(withoutRunDir.terminals).toEqual([]);
   expect(withoutRunDir.rerunBlockIds).toEqual(['b1']);
+});
+
+test('terminal-evidence rule: a gating sample whose exposure never established gets NO terminal — the instance re-enters via rerun', () => {
+  SEQ = 0;
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+  ];
+  const actions = terminalEvidenceActions({
+    events,
+    universe: UNIVERSE,
+    suiteKind: 'gating',
+    nowMs: 10_000,
+    evidenceOf: () => ({
+      outcome: 'pass' as const,
+      costUsd: 0.5,
+      exposureTsMs: null, // never established
+      sensor: null,
+      poolBlocks: [],
+    }),
+  });
+  expect(actions.terminals).toEqual([]);
+  expect(actions.rerunBlockIds).toEqual(['b1']);
+});
+
+test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown alongside the terminal (D-13 fate table)', () => {
+  SEQ = 0;
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+  ];
+  const actions = terminalEvidenceActions({
+    events,
+    universe: UNIVERSE,
+    suiteKind: 'gating',
+    nowMs: 10_000,
+    evidenceOf: () => ({
+      outcome: 'indeterminate' as const,
+      costUsd: 0.25,
+      exposureTsMs: 1_000,
+      sensor: { role: 'subject' as const, evidence: '429-match' as const },
+      poolBlocks: [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
+    }),
+  });
+  expect(actions.terminals.map((e) => e.type)).toEqual([
+    'exposure_started',
+    'instrument_failure',
+    'pool_blocked',
+    'budget_event',
+  ]);
+  expect(actions.terminals[2]?.payload).toEqual({
+    pool_key: 'cred|anthropic|m',
+    until_ts_ms: 70_000,
+  });
 });
 
 test('an attempt with no admitted instance REFUSES recovery loudly — an unattributable in-flight run is never silently dropped (C11)', () => {
@@ -398,7 +482,9 @@ test('an attempt with no admitted instance REFUSES recovery loudly — an unattr
     terminalEvidenceActions({
       events,
       universe: UNIVERSE,
-      verdictOf: () => null,
+      suiteKind: 'gating',
+      nowMs: 0,
+      evidenceOf: () => null,
     }),
   ).toThrow(RecoveryError);
 });
@@ -501,7 +587,9 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN �
   const actions = terminalEvidenceActions({
     events,
     universe,
-    verdictOf: () => null, // no run dirs survived the crash
+    suiteKind: 'gating',
+    nowMs: 0,
+    evidenceOf: () => null, // no run dirs survived the crash
   });
   expect(actions.rerunBlockIds).toEqual(['b1', 'x2', 'b3:i1']);
 });

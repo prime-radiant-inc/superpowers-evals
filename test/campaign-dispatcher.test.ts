@@ -469,6 +469,32 @@ interface HarnessArgs {
   clock: FakeClock;
   credentials: Record<string, Credential>;
 }
+/** A completed run dir as the composer would leave it: the verdict the
+ *  terminal classification reads, the trajectory the exposure sensor reads,
+ *  and (unless costUsd is null) the priced economics the terminal spend
+ *  comes from. */
+function seedCompletedRunDir(
+  resultsRoot: string,
+  runId: string,
+  opts: { costUsd: number | null; final?: 'pass' | 'fail' | 'indeterminate' },
+): void {
+  const dir = join(resultsRoot, runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'verdict.json'),
+    JSON.stringify({
+      final: opts.final ?? 'pass',
+      final_reason: 'fixture',
+      economics:
+        opts.costUsd === null ? null : { total_est_cost_usd: opts.costUsd },
+    }),
+  );
+  writeFileSync(
+    join(dir, 'trajectory.json'),
+    JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
+  );
+}
+
 function harness(
   overrides: Record<string, unknown> = {},
 ): HarnessArgs & { args: DispatchRunArgs } {
@@ -1057,8 +1083,15 @@ test('budget stop terminalizes the DENIED samples only; a raise admits later blo
   const h = harness(overrides);
   const run1 = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
-  for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+  // Terminal spend is the ACTUAL cost from the run artifacts, so b1's runs
+  // must leave the artifacts that carry it: 1 + 2 spent, exactly the frozen
+  // estimates the budget arithmetic below assumes.
+  for (const [i, { child }] of h.spawner.spawned.entries()) {
+    const runId = `run-${child.pid}`;
+    seedCompletedRunDir(h.args.resultsRoot!, runId, {
+      costUsd: i === 0 ? 1 : 2,
+    });
+    child.emitLine(`run_allocated: ${runId}`);
     child.exit({ code: 0, signal: null });
   }
   await run1;
@@ -1515,8 +1548,8 @@ test('terminal spend journals the ACTUAL run cost from run artifacts, not the re
   childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
   await tick(h.clock, 1);
   // arm_a's run composed a verdict carrying actual economics; arm_b's run
-  // dir is absent, so its terminal spend falls back to the registration
-  // estimate (the honest available number).
+  // dir is absent, so its actual cost is not knowable — and a spend row must
+  // be an actual (R-JRN-12), so NO spend is journaled for it.
   const runDir = join(h.campaignDir, 'results', `run-${childA!.child.pid}`);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
@@ -1534,7 +1567,7 @@ test('terminal spend journals the ACTUAL run cost from run artifacts, not the re
   const spends = eventsOf(h.campaignDir, 'budget_event')
     .filter((e) => e.payload.kind === 'spend')
     .map((e) => e.payload.amount_usd);
-  expect(spends).toEqual([7.25, 2]); // actual artifact cost, then arm_b's estimate fallback
+  expect(spends).toEqual([7.25]); // the one actual; nothing invented for arm_b
 });
 
 test('instance-graph validator (C5): double reserve selection, duplicate predecessors, cross-arm links, and mint-into-replaced cycles refuse', () => {
@@ -2173,6 +2206,96 @@ test('a PARTIALLY landed admission append aborts the admission transaction: no s
     'storage_paused',
   ]);
   expect(existsSync(join(h.campaignDir, '.ballast'))).toBe(false);
+});
+
+test('the terminal bundle is atomic: run_completed and its spend + snapshot land in ONE critical section (D-13 fate table)', async () => {
+  const h = harness();
+  const real = electWriter({
+    campaignDir: h.campaignDir,
+    clock: h.clock,
+    identity: IDENTITY,
+    campaign: campaignDoc(),
+  });
+  // A crash between the terminal append and the spend append leaves a
+  // terminal attempt recovery skips, after which startup re-snapshots
+  // exposure without ever recording that run's spend. They must be one
+  // append.
+  const bundles: string[][] = [];
+  const journal: DispatchJournal = {
+    appendEvent: (input) => real.appendEvent(input),
+    appendEvents: (inputs) => {
+      bundles.push(inputs.map((i) => i.type));
+      return real.appendEvents(inputs);
+    },
+    readEvents: (afterSeq) => real.readEvents(afterSeq),
+    readBudgetPosition: () => real.readBudgetPosition(),
+    release: () => real.release(),
+  };
+  const run = runCampaignDispatch({ ...h.args, journal });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned) {
+    const runId = `run-${child.pid}`;
+    seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
+    child.emitLine(`run_allocated: ${runId}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  await run;
+  const terminalBundles = bundles.filter((b) => b.includes('run_completed'));
+  expect(terminalBundles.length).toBe(2);
+  for (const bundle of terminalBundles) {
+    expect(bundle).toEqual(['run_completed', 'budget_event', 'budget_event']);
+  }
+});
+
+test('terminal spend is the ACTUAL cost from the run artifacts, never the registration estimate', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned) {
+    const runId = `run-${child.pid}`;
+    // The frozen estimates are 1 and 2 USD; the artifacts say 0.25.
+    seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
+    child.emitLine(`run_allocated: ${runId}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  await run;
+  const spends = eventsOf(h.campaignDir, 'budget_event')
+    .filter((e) => e.payload.kind === 'spend')
+    .map((e) => e.payload.amount_usd);
+  expect(spends).toEqual([0.25, 0.25]);
+});
+
+test('an unreadable actual cost journals NO spend and says so loudly — never a fabricated one (D-13 honest row)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  const run = runCampaignDispatch({
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+  });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned) {
+    const runId = `run-${child.pid}`;
+    // A composed verdict with no priced economics: the terminal is real,
+    // the money is not knowable. Fabricating the registration estimate here
+    // is what R-JRN-12 forbids (spend rows carry actuals).
+    seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: null });
+    child.emitLine(`run_allocated: ${runId}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  await run;
+  expect(
+    eventsOf(h.campaignDir, 'budget_event').filter(
+      (e) => e.payload.kind === 'spend',
+    ),
+  ).toEqual([]);
+  expect(journalTypes(h.campaignDir)).toContain('run_completed');
+  // The gap is loud, not journaled as money: per-sample spend attribution
+  // derives at seal from the run dir itself (E7.7), which sees the same gap.
+  expect(written.join('')).toContain('terminal spend for');
+  expect(written.join('')).toContain('is UNKNOWN');
 });
 
 // --- R-SNS-4 exploratory caveat terminal (operator amendment 2026-08-27) ---
@@ -2895,12 +3018,16 @@ test('terminal path: a spend snapshot that cannot land after the storage pause S
     identity: IDENTITY,
     campaign: campaignDoc(),
   });
-  // The volume is full for exactly the terminal [spend, snapshot] bundle
-  // (and its D-13 retry); everything else lands.
+  // The volume is full for exactly the terminal bundle (evidence + spend +
+  // snapshot, one critical section) and its D-13 retry; everything else lands.
   const journal: DispatchJournal = {
     appendEvent: (input) => real.appendEvent(input),
     appendEvents: (inputs) => {
-      if (inputs.length === 2 && budgetEventKind(inputs[0]) === 'spend') {
+      if (
+        inputs.some(
+          (i) => i.type === 'run_completed' || i.type === 'instrument_failure',
+        )
+      ) {
         throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
       }
       return real.appendEvents(inputs);
@@ -2929,7 +3056,9 @@ test('terminal path: a spend snapshot that cannot land after the storage pause S
   expect(outcome.status).toBe('storage_paused');
   const types = journalTypes(h.campaignDir);
   expect(types).toContain('storage_paused');
-  expect(types).toContain('instrument_failure'); // the evidence before the bundle landed
+  // Atomicity: the evidence rides the same critical section as its spend, so
+  // a bundle that cannot land leaves NO terminal behind for recovery to skip.
+  expect(types).not.toContain('instrument_failure');
   expect(types).not.toContain('block_replaced');
   expect(types).not.toContain('sample_disposition');
   expect(types).not.toContain('adjudication');
