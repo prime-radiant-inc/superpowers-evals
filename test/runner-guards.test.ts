@@ -47,6 +47,12 @@ function makeScenarioDir(opts: {
 // env afterward. PATH is
 // NOT pointed at the mock-gauntlet, so any test that reaches invokeGauntlet would
 // fail loudly — every Region-1 guard must short-circuit before that.
+//
+// `noPath` points PATH at an EMPTY directory for the call: a guard that is
+// supposed to be stopped by the binary preflight must be stopped by it on
+// every host, not only on hosts where the agent binary happens to be
+// unresolvable. Without it the run proceeds into a real scenario setup and
+// races the test timeout.
 async function runGuard(args: {
   scenarioDir: string;
   codingAgent?: string;
@@ -56,9 +62,17 @@ async function runGuard(args: {
   const prevKey = process.env['ANTHROPIC_API_KEY'];
   const prevBearer = process.env['AWS_BEARER_TOKEN_BEDROCK'];
   const prevRoot = process.env['SUPERPOWERS_ROOT'];
+  const prevPath = process.env['PATH'];
   process.env['ANTHROPIC_API_KEY'] = 'sk-test';
   process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
+  if (args.noPath === true) {
+    // The agent binary is unresolvable, but the system bin dirs stay so
+    // setup.sh still runs — the preflight is what must fire, not a
+    // setup-script spawn failure (same construction as the preflight test).
+    process.env['PATH'] =
+      `${mkdtempSync(join(tmpdir(), 'emptybin-'))}:/usr/bin:/bin`;
+  }
   try {
     return await runScenario({
       scenarioDir: args.scenarioDir,
@@ -74,6 +88,8 @@ async function runGuard(args: {
     else process.env['AWS_BEARER_TOKEN_BEDROCK'] = prevBearer;
     if (prevRoot === undefined) delete process.env['SUPERPOWERS_ROOT'];
     else process.env['SUPERPOWERS_ROOT'] = prevRoot;
+    if (prevPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = prevPath;
   }
 }
 
@@ -106,13 +122,24 @@ test('A-coding-agents-directive: excluded agent -> immediate indeterminate', asy
 
 test('A-coding-agents-directive: included agent passes the gate (reaches preflight)', async () => {
   // claude is in the allowlist; the directive gate must NOT short-circuit. The
-  // next guard (binary preflight) will fire because PATH lacks claude here, but
-  // crucially the final_reason is NOT the directive message.
+  // next guard (binary preflight) fires because PATH is empty — pinned by
+  // `noPath` rather than assumed of the host, or a host that does resolve
+  // `claude` runs a real scenario here instead of hitting the guard.
   const scenarioDir = makeScenarioDir({
     checksContent: '# coding-agents: claude\npre() { :; }\npost() { :; }\n',
   });
-  const { verdict } = await runGuard({ scenarioDir, codingAgent: 'claude' });
+  const { verdict } = await runGuard({
+    scenarioDir,
+    codingAgent: 'claude',
+    noPath: true,
+  });
   expect(verdict.final_reason).not.toBe('requires coding-agents: claude');
+  // …and the guard that DID stop it is the binary preflight, before any
+  // agent ran — named exactly, so a future short-circuit cannot pass here.
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('setup');
+  expect(verdict.final_reason).toContain('not on PATH');
+  expect(verdict.gauntlet).toBe(null);
 });
 
 test('A-story-md-missing: missing story.md -> clean runner error, not raw ENOENT', async () => {
