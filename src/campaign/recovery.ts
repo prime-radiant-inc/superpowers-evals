@@ -22,12 +22,12 @@ import {
   resolveCrashWindows,
 } from '../contracts/campaign/crash-windows.ts';
 import {
-  attemptOfSpendRecovered,
+  attemptOfRationale,
+  attemptScopedRationale,
   type JournalEvent,
   JournalEventSchema,
   normalizeBlockReplaced,
   SPEND_RECOVERED,
-  spendRecoveredRationale,
   UNPRICED_TERMINAL,
 } from '../contracts/campaign/journal-events.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
@@ -678,25 +678,86 @@ function synthesizeEnvelopes(
  *  records. A receipt with nothing after it (a crash between the two
  *  appends) recorded no money, so it does not count and the repair simply
  *  runs again — repair is idempotent without ever paying twice. */
-export function completedSpendRecoveries(
-  events: readonly JournalEvent[],
-): Set<string> {
+export function completedSpendRecoveries(args: {
+  events: readonly JournalEvent[];
+  /** attempt -> sample, from the instance chain: a receipt naming an attempt
+   *  this campaign never created is corruption, not a no-op. */
+  sampleOfAttempt: ReadonlyMap<string, string>;
+  cellOfSample: (sampleId: string) => string;
+}): Set<string> {
   const done = new Set<string>();
-  for (let i = 0; i < events.length; i += 1) {
-    const event = events[i];
+  for (let i = 0; i < args.events.length; i += 1) {
+    const event = args.events[i];
     if (
       event?.type !== 'adjudication' ||
       event.payload.disposition !== SPEND_RECOVERED
     ) {
       continue;
     }
-    const next = events[i + 1];
+    // Fail-closed identity: a receipt is a claim that an attempt was PAID,
+    // so an unreadable or cross-named one must never be silently trusted or
+    // silently ignored — either way the budget position would be wrong.
+    const attemptId = attemptOfRationale(event.payload.rationale);
+    if (attemptId === null) {
+      throw corruptReceipt(
+        event.seq,
+        `its rationale does not name an attempt (${event.payload.rationale})`,
+      );
+    }
+    const sampleId = args.sampleOfAttempt.get(attemptId);
+    if (sampleId === undefined) {
+      throw corruptReceipt(
+        event.seq,
+        `it names attempt ${attemptId}, which this campaign never created`,
+      );
+    }
+    const cell = args.cellOfSample(sampleId);
+    if (event.payload.cell !== cell) {
+      throw corruptReceipt(
+        event.seq,
+        `it names attempt ${attemptId} (sample ${sampleId}, cell ${cell}) but is filed under cell ${event.payload.cell}`,
+      );
+    }
+    const next = args.events[i + 1];
     if (next?.type !== 'budget_event' || next.payload.kind !== 'spend')
       continue;
-    const attemptId = attemptOfSpendRecovered(event.payload.rationale);
-    if (attemptId !== null) done.add(attemptId);
+    done.add(attemptId);
   }
   return done;
+}
+
+function corruptReceipt(seq: number, detail: string): RecoveryError {
+  return new RecoveryError(
+    `spend_recovered receipt at seq ${seq} is corrupt: ${detail} — a receipt asserts that an attempt's actual spend was journaled, so it is never trusted or skipped on a guess; ${AUDIT}`,
+  );
+}
+
+/** Every unresolved accounting gap, by attempt. Gaps are read from the
+ *  adjudication itself, NOT from an adjacent terminal: the live path emits a
+ *  FREE-STANDING gap whenever the terminal was withheld too (a gating child
+ *  with neither exposure nor a composed verdict), and a scan that only walks
+ *  terminals would miss exactly those and let a paid rerun through. */
+export function unresolvedAccountingGaps(args: {
+  events: readonly JournalEvent[];
+  recovered: ReadonlySet<string>;
+}): Set<string> {
+  const gaps = new Set<string>();
+  for (const event of args.events) {
+    if (
+      event.type !== 'adjudication' ||
+      event.payload.disposition !== UNPRICED_TERMINAL
+    ) {
+      continue;
+    }
+    const attemptId = attemptOfRationale(event.payload.rationale);
+    if (attemptId === null) {
+      throw new RecoveryError(
+        `unpriced_terminal adjudication at seq ${event.seq} does not name an attempt (${event.payload.rationale}) — the accounting gap cannot be attributed, so nothing may be admitted; ${AUDIT}`,
+      );
+    }
+    if (!args.recovered.has(attemptId)) gaps.add(attemptId);
+  }
+  return gaps;
 }
 
 /** One spend-recovery pair, receipt FIRST. The pair is emitted contiguously
@@ -714,7 +775,7 @@ function spendRecovery(args: {
       payload: {
         cell: args.cell,
         disposition: SPEND_RECOVERED,
-        rationale: spendRecoveredRationale(args.attemptId, args.detail),
+        rationale: attemptScopedRationale(args.attemptId, args.detail),
       },
     },
     {
@@ -852,58 +913,47 @@ export function terminalEvidenceActions(args: {
   rerunBlockIds: string[];
 } {
   const stream = args.stream ?? { write: () => {} };
-  // R-JRN-4 pins ONE TRANSACTION PER EVENT, so a terminal bundle is not
-  // crash-atomic: a death inside it leaves a durable prefix (the terminal
-  // committed, its accounting tail lost). The spec's crash model for a
+  // R-JRN-4 pins ONE TRANSACTION PER EVENT, so a bundle is not crash-atomic:
+  // a death inside one leaves a durable prefix. The spec's crash model for a
   // batched writer critical section is that recovery appends the missing
-  // suffix, so recovery must be able to SEE a truncated bundle.
+  // suffix, so recovery must be able to SEE what already landed.
   //
-  // The LIVE path's own bundle is adjacent: one writer, one serialized
-  // section, so a terminal it completed is immediately followed — by seq —
-  // by its accounting tail (`budget_event`, or the unpriced-gap
-  // adjudication), with only `storage_paused` able to interleave (the pause
-  // lands the durable prefix, journals the pause, then retries the
-  // remainder).
-  //
-  // Adjacency alone is NOT a completeness test, though: recovery's own
-  // reconstruction for a DIFFERENT attempt lands after a truncated terminal
-  // and destroys its adjacency forever, so a positional recognizer would
-  // re-repair it on every later resume and pay it twice (spends are
-  // additive). Completeness is therefore judged PER ATTEMPT: a repaired
-  // attempt carries a completed `spend_recovered` receipt naming it.
-  const recovered = completedSpendRecoveries(args.events);
-  const accountedTerminals = new Set<string>();
-  const truncatedTerminals = new Set<string>();
-  /** Terminals whose tail is the unpriced-gap adjudication: the live path
-   *  fail-stopped on them, and the operator was told to restore the run
-   *  dir's economics and re-run. Re-reading the artifacts is how that
-   *  instruction is honoured. */
-  const unpricedTerminals = new Set<string>();
-  for (let i = 0; i < args.events.length; i += 1) {
-    const event = args.events[i];
-    if (
-      event === undefined ||
-      (event.type !== 'run_completed' && event.type !== 'instrument_failure')
-    ) {
-      continue;
-    }
-    const attemptId = event.payload.attempt_id;
-    let j = i + 1;
-    while (args.events[j]?.type === 'storage_paused') j += 1;
-    const tail = args.events[j];
-    if (recovered.has(attemptId) || tail?.type === 'budget_event') {
-      accountedTerminals.add(attemptId);
-    } else if (
-      tail?.type === 'adjudication' &&
-      tail.payload.disposition === UNPRICED_TERMINAL
-    ) {
-      unpricedTerminals.add(attemptId);
-    } else {
-      truncatedTerminals.add(attemptId);
+  // It reads that PER ATTEMPT, never positionally. Every journaled spend —
+  // live or recovery — is immediately preceded by a `spend_recovered`
+  // receipt naming its attempt, so "already paid" is a property of the
+  // attempt rather than of an adjacency that a later, unrelated append can
+  // destroy. (budget_event cannot carry the identity itself: E7.7 pins "no
+  // additive field … per-sample spend attribution still derives at seal from
+  // run-dir evidence, not the journal", so the receipt carries it on the
+  // existing adjudication event under the pinned machine-disposition
+  // convention.) A receipt with no spend after it recorded no money, so an
+  // interrupted repair simply runs again — exactly once, never twice.
+  const chain0 = admittedInstanceChain(args.events, args.universe);
+  const cellOfSample = (sampleId: string): string =>
+    args.universe.samples.find((s) => s.sample_id === sampleId)?.cell ??
+    'control-plane';
+  const recovered = completedSpendRecoveries({
+    events: args.events,
+    sampleOfAttempt: chain0.sampleOfAttempt,
+    cellOfSample,
+  });
+  // Gaps are attempt-scoped and read from the adjudication itself, so a
+  // FREE-STANDING gap (the live path withheld the terminal too) is seen.
+  const unpricedGaps = unresolvedAccountingGaps({
+    events: args.events,
+    recovered,
+  });
+  const terminaled = new Set<string>();
+  const allocatedAttempts = new Set<string>();
+  for (const event of args.events) {
+    if (event.type === 'run_completed' || event.type === 'instrument_failure') {
+      terminaled.add(event.payload.attempt_id);
+    } else if (event.type === 'run_allocated') {
+      allocatedAttempts.add(event.payload.attempt_id);
     }
   }
 
-  const chain = admittedInstanceChain(args.events, args.universe);
+  const chain = chain0;
   // Folded LAZILY: an attempt the instance chain cannot explain must refuse
   // through blockOfAttempt (C11) rather than through the reducer's
   // corruption error, and a resume with no reconstructable evidence never
@@ -913,9 +963,7 @@ export function terminalEvidenceActions(args: {
     foldedStates ??= replayEvents(args.universe, args.events).sampleStates;
     return foldedStates.get(sampleId) ?? 'planned';
   };
-  const cellOf = (sampleId: string): string =>
-    args.universe.samples.find((s) => s.sample_id === sampleId)?.cell ??
-    'control-plane';
+  const cellOf = cellOfSample;
   const terminals: EventInput[] = [];
   const terminalAttemptIds: string[] = [];
   const rerunBlockIds: string[] = [];
@@ -926,7 +974,7 @@ export function terminalEvidenceActions(args: {
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
-    if (accountedTerminals.has(attemptId)) continue;
+    if (recovered.has(attemptId)) continue; // already paid, per attempt
     const sampleId = chain.sampleOfAttempt.get(attemptId);
     if (sampleId === undefined) {
       throw new RecoveryError(
@@ -934,7 +982,7 @@ export function terminalEvidenceActions(args: {
       );
     }
     const evidence = args.evidenceOf(event.payload.run_id, sampleId);
-    if (unpricedTerminals.has(attemptId)) {
+    if (unpricedGaps.has(attemptId)) {
       // The gap's remediation loop: the operator was told to restore the run
       // dir's economics, so the artifacts are re-read HERE rather than
       // refused sight-unseen. Still unreadable -> the refusal stands (the
@@ -958,7 +1006,7 @@ export function terminalEvidenceActions(args: {
       terminalAttemptIds.push(attemptId);
       continue;
     }
-    if (truncatedTerminals.has(attemptId)) {
+    if (terminaled.has(attemptId)) {
       // The terminal is durable; only its accounting tail was lost. Append
       // exactly the missing suffix — never a second terminal, never a rerun
       // of paid work whose evidence is already journaled.
@@ -1060,13 +1108,17 @@ export function terminalEvidenceActions(args: {
       rerun(attemptId);
       continue;
     }
-    // The ACTUAL spend follows the terminal IMMEDIATELY — that adjacency is
-    // what lets a later resume tell a complete bundle from a truncated one.
-    // The cooldowns the sensor evidence declares ride after it.
-    bundle.push({
-      type: 'budget_event',
-      payload: { kind: 'spend', amount_usd: evidence.costUsd },
-    });
+    // The ACTUAL spend, with its receipt — the universal shape, so a later
+    // resume reads "already paid" off the attempt rather than off a
+    // position in the stream. The cooldowns ride after it.
+    bundle.push(
+      ...spendRecovery({
+        attemptId,
+        cell: cellOf(sampleId),
+        amountUsd: evidence.costUsd,
+        detail: `reconstructed terminal evidence from run ${event.payload.run_id}`,
+      }),
+    );
     for (const block of evidence.poolBlocks) {
       bundle.push({
         type: 'pool_blocked',
@@ -1078,6 +1130,16 @@ export function terminalEvidenceActions(args: {
     }
     terminals.push(...bundle);
     terminalAttemptIds.push(attemptId);
+  }
+  // A gap whose attempt never reached the run_allocated walk (no allocation
+  // journaled at all) cannot be priced from a run dir — but it still records
+  // money the position cannot account for, so it blocks just as loudly.
+  for (const attemptId of unpricedGaps) {
+    if (terminalAttemptIds.includes(attemptId)) continue;
+    if (allocatedAttempts.has(attemptId)) continue;
+    throw new RecoveryError(
+      `attempt ${attemptId} carries an unresolved ${UNPRICED_TERMINAL} accounting gap and journaled no run allocation to price it from — the budget position cannot account for it, so nothing may be admitted; adjudicate the accounting at seal before resuming; ${AUDIT}`,
+    );
   }
   return { terminals, terminalAttemptIds, rerunBlockIds };
 }
@@ -1892,7 +1954,14 @@ export async function resumeCampaign(
       // position before anything evaluates the budget. Its value is the
       // total remaining exposure of the post-bundle state, computed the way
       // the dispatcher's own startup fold computes it.
-      if (bundle.length > 0) {
+      // …and it is emitted whenever the reconciled position DIFFERS from
+      // the journal's latest, not merely when the bundle happens to be
+      // non-empty. A crash after the last repaired spend but before its
+      // snapshot leaves an otherwise-empty bundle on the next resume, and
+      // "no bundle, no snapshot" would strand that stale figure forever.
+      // Comparing values makes the emission idempotent by construction:
+      // once it lands, the two agree and nothing more is appended.
+      {
         const reconciled = replayEvents(universe, [
           ...events,
           ...synthesizeEnvelopes(bundle, events, clockNowMs(clock)),
@@ -1906,17 +1975,26 @@ export async function resumeCampaign(
           )
             stillExposed.push(sampleId);
         }
-        bundle.push({
-          type: 'budget_event',
-          payload: {
-            kind: 'estimate_inflight',
-            amount_usd: estimateInflightTotal({
-              exposureSamples: stillExposed.map((sampleId) => ({ sampleId })),
-              estimateCostUsd: (sampleId) =>
-                frozenSampleEstimate(campaign, sampleId),
-            }),
-          },
+        const amount_usd = estimateInflightTotal({
+          exposureSamples: stillExposed.map((sampleId) => ({ sampleId })),
+          estimateCostUsd: (sampleId) =>
+            frozenSampleEstimate(campaign, sampleId),
         });
+        // E7.7: absent reads as 0.
+        let latest = 0;
+        for (const e of events) {
+          if (
+            e.type === 'budget_event' &&
+            e.payload.kind === 'estimate_inflight'
+          )
+            latest = e.payload.amount_usd;
+        }
+        if (bundle.length > 0 || amount_usd !== latest) {
+          bundle.push({
+            type: 'budget_event',
+            payload: { kind: 'estimate_inflight', amount_usd },
+          });
+        }
       }
       let committed = false;
       if (bundle.length > 0) {

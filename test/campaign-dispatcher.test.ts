@@ -2154,7 +2154,7 @@ test('performStoragePause: the .storage-paused marker is fsynced with its direct
   // concurrent writer cannot be overwritten.
   const durable = calls.filter((c) => !c.startsWith('exists:'));
   const staged = durable[0]!.replace('open-wx:', '');
-  expect(staged).toMatch(/^\.storage\-paused\.stage\./);
+  expect(staged).toMatch(/^\.storage-paused\.stage\./);
   expect(durable).toEqual([
     `open-wx:${staged}`,
     // The pause marker's body is empty, so there are no bytes to write —
@@ -2342,7 +2342,14 @@ test('the terminal bundle is atomic: run_completed and its spend + snapshot land
   const terminalBundles = bundles.filter((b) => b.includes('run_completed'));
   expect(terminalBundles.length).toBe(2);
   for (const bundle of terminalBundles) {
-    expect(bundle).toEqual(['run_completed', 'budget_event', 'budget_event']);
+    // terminal, the receipt naming the attempt, its spend, the superseding
+    // snapshot — one critical section.
+    expect(bundle).toEqual([
+      'run_completed',
+      'adjudication',
+      'budget_event',
+      'budget_event',
+    ]);
   }
 });
 
@@ -3116,7 +3123,11 @@ test('replacement path: a settle snapshot that cannot land after the storage pau
   expect(types).toContain('storage_paused');
   expect(types).not.toContain('block_replaced');
   expect(types).not.toContain('sample_disposition');
-  expect(types).not.toContain('adjudication');
+  // No RESOLUTION adjudication: the only one present is the spend receipt
+  // that rides the terminal bundle itself.
+  expect(
+    eventsOf(h.campaignDir, 'adjudication').map((e) => e.payload.disposition),
+  ).toEqual(['spend_recovered']);
   expect(types).not.toContain('budget_stopped');
   const text = written.join('');
   expect(text).toMatch(/storage pause/);

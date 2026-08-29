@@ -190,7 +190,7 @@ test('cancel: the cancel-request marker is fsynced with its directory before cam
   // concurrent writer cannot be overwritten.
   const durable = calls.filter((c) => !c.startsWith('exists:'));
   const staged = durable[0]!.replace('open-wx:', '');
-  expect(staged).toMatch(/^cancel\-request\.stage\./);
+  expect(staged).toMatch(/^cancel-request\.stage\./);
   expect(durable).toEqual([
     `open-wx:${staged}`,
     `write:${staged}`,

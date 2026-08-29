@@ -384,11 +384,22 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
   // The FULL fate-table bundle, in replay-legal order: exposure lifts the
   // sample out of `spawned` (a bare run_completed from there is illegal),
   // then the terminal, then the ACTUAL spend.
-  expect(withEvidence.terminals).toEqual([
-    { type: 'exposure_started', payload: { sample_id: 's1', ts: 1_000 } },
-    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
-    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.5 } },
+  expect(withEvidence.terminals.map((e) => e.type)).toEqual([
+    'exposure_started',
+    'run_completed',
+    // Every spend carries the receipt naming its attempt — the universal
+    // shape, so "already paid" is readable per attempt on a later resume.
+    'adjudication',
+    'budget_event',
   ]);
+  expect(withEvidence.terminals[2]?.payload).toMatchObject({
+    disposition: 'spend_recovered',
+    rationale: expect.stringContaining('attempt=a1;'),
+  });
+  expect(withEvidence.terminals[3]?.payload).toEqual({
+    kind: 'spend',
+    amount_usd: 0.5,
+  });
   const withoutRunDir = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
@@ -474,10 +485,11 @@ test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown 
   expect(actions.terminals.map((e) => e.type)).toEqual([
     'exposure_started',
     'instrument_failure',
+    'adjudication', // the spend receipt naming the attempt
     'budget_event',
     'pool_blocked',
   ]);
-  expect(actions.terminals[3]?.payload).toEqual({
+  expect(actions.terminals[4]?.payload).toEqual({
     pool_key: 'cred|anthropic|m',
     until_ts_ms: 70_000,
   });
@@ -544,7 +556,13 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN �
     }),
     ev('instrument_failure', { attempt_id: 'a0', cause: 'grader_crashed' }),
     // …with the accounting tail the writer appends in the same critical
-    // section: a terminal without one reads as a crash-truncated bundle.
+    // section: the receipt naming the attempt, then its spend. Without the
+    // receipt the attempt reads as never paid.
+    ev('adjudication', {
+      cell: 'c2:scn',
+      disposition: 'spend_recovered',
+      rationale: 'attempt=a0; actual cost of run r0 at terminal',
+    }),
     ev('budget_event', { kind: 'spend', amount_usd: 0.5 }),
     ev('budget_event', { kind: 'estimate_inflight', amount_usd: 0 }),
     // The complete E7.1 mint bundle: s3 keeps instrument_failed, s4 (admitted)

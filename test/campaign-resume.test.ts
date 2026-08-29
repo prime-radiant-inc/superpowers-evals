@@ -639,6 +639,205 @@ test('priced evidence with no legal terminal is ACCOUNTED before the instance re
   expect(journalEvents(fx.dir).length).toBe(afterFirst);
 });
 
+test('a terminal-less live spend already in the journal is never charged twice', async () => {
+  // The exposure-absent gating path withholds run_completed but journals the
+  // actual spend. After a later crash recovery finds neither terminal nor
+  // receipt for that attempt — and, without a receipt on the live spend,
+  // accounts it a second time.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  // a1's live terminal-less spend, in the shape the live path writes it.
+  w.appendEvents([
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; terminal withheld (exposure unestablished)',
+      },
+    },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
+  ]);
+  w.release();
+  await reconcileOnly(fx, 'terminalless-1.lock.d');
+  // a1 was already paid; only a2 is accounted now.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'terminalless-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test('a repair whose ONLY missing piece is the superseding snapshot still lands it (E7.7)', async () => {
+  // Receipt + spend are durable; the crash took the snapshot. Nothing else
+  // is left to do, so an "only act when the bundle is non-empty" rule leaves
+  // the stale estimate_inflight in place forever.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  const paid = (attemptId: string, amount: number) => [
+    {
+      type: 'adjudication' as const,
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: `attempt=${attemptId}; already repaired`,
+      },
+    },
+    {
+      type: 'budget_event' as const,
+      payload: { kind: 'spend', amount_usd: amount },
+    },
+  ];
+  w.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
+    ...paid('a1', 0.25),
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_B, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a2', outcome: 'pass' } },
+    ...paid('a2', 0.75),
+    // The stale snapshot: both samples are terminal, so the remaining
+    // exposure is 0, but the last snapshot still claims 3.
+    {
+      type: 'budget_event',
+      payload: { kind: 'estimate_inflight', amount_usd: 3 },
+    },
+    // Already noted, so reconciliation has NOTHING else to append — the
+    // snapshot is the only remaining gap.
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'control-plane',
+        disposition: 'ballast_spent',
+        rationale: 'noted by an earlier resume',
+      },
+    },
+  ]);
+  w.release();
+  await reconcileOnly(fx, 'snapshot-only-1.lock.d');
+  const snapshots = journalEvents(fx.dir).filter(
+    (e) => e.type === 'budget_event' && e.payload.kind === 'estimate_inflight',
+  );
+  const last = snapshots[snapshots.length - 1];
+  expect(last?.type === 'budget_event' ? last.payload.amount_usd : -1).toBe(0);
+  // No money moved, and the repair is idempotent.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'snapshot-only-2.lock.d');
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test('a spend_recovered receipt naming an attempt the campaign does not know is loud corruption', async () => {
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a-not-in-this-campaign; forged',
+      },
+    },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 9 } },
+  ]);
+  w.release();
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner: new FakeSpawner(),
+      lockPath: lockDir('forged-receipt.lock.d'),
+      stream: { write: () => {} },
+    }),
+  ).rejects.toThrow(/a-not-in-this-campaign/);
+});
+
+test('a FREE-STANDING unpriced gap blocks the resume, and resolves when the economics are restored', async () => {
+  // A gating child with no exposure AND no composed verdict gets an
+  // unpriced_terminal with NO terminal at all. A gap scan that only walks
+  // terminal events misses it and lets an ordinary paid rerun through.
+  const fx = crashedCampaign({ driftEvals: true });
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'unpriced_terminal',
+        rationale: 'attempt=a1; run r1 has no readable actual cost',
+      },
+    },
+    {
+      type: 'budget_event',
+      payload: { kind: 'estimate_inflight', amount_usd: 2 },
+    },
+  ]);
+  w.release();
+  const before = journalEvents(fx.dir).length;
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner: new FakeSpawner(),
+      lockPath: lockDir('freestanding-1.lock.d'),
+      stream: { write: () => {} },
+    }),
+  ).rejects.toThrow(/a1/);
+  expect(journalEvents(fx.dir).length).toBe(before); // no rerun admitted
+
+  // The operator restores the economics; the same gap now resolves.
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  await reconcileOnly(fx, 'freestanding-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+});
+
 test("a resolved accounting gap lets the resume proceed: restoring the run dir's economics is the advertised action and it WORKS", async () => {
   // The live fail-stop tells the operator to restore the verdict economics
   // and re-run. Refusing on any historical unpriced_terminal before
@@ -659,7 +858,7 @@ test("a resolved accounting gap lets the resume proceed: restoring the run dir's
         cell: 'c1:scn',
         disposition: 'unpriced_terminal',
         rationale:
-          'attempt a1 (run r1) terminaled with no readable actual cost in its run artifacts',
+          'attempt=a1; run r1 terminaled with no readable actual cost in its run artifacts',
       },
     },
     {
@@ -750,8 +949,7 @@ test('resume REFUSES while an accounting gap is STILL unpriced — re-reading th
       payload: {
         cell: 'c1:scn',
         disposition: 'unpriced_terminal',
-        rationale:
-          'attempt a1 (run r1) terminaled with no readable actual cost',
+        rationale: 'attempt=a1; run r1 terminaled with no readable actual cost',
       },
     },
     {

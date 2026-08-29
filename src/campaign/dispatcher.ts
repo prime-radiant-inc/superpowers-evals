@@ -22,11 +22,13 @@ import type {
   ExecutionSurfaceArm,
 } from '../contracts/campaign/campaign.ts';
 import {
+  attemptScopedRationale,
   type BlockReplacedRecord,
   type BlockRosterEntry,
   type JournalEvent,
   JournalEventSchema,
   normalizeBlockReplaced,
+  SPEND_RECOVERED,
   UNPRICED_TERMINAL,
 } from '../contracts/campaign/journal-events.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
@@ -2801,10 +2803,30 @@ export async function runCampaignDispatch(
           const cell = cellOfSample(sample.sampleId);
           if (spendAmount !== null) {
             spendUsd += spendAmount;
-            terminalEvents.push({
-              type: 'budget_event',
-              payload: { kind: 'spend', amount_usd: spendAmount },
-            });
+            // EVERY journaled spend — live or recovery — is immediately
+            // preceded by the receipt naming its attempt. That is what lets
+            // a later resume tell "already paid" per attempt instead of
+            // positionally: without it, a terminal-less live spend (the
+            // exposure-absent gating path below withholds run_completed)
+            // leaves recovery no way to know the attempt was charged, and
+            // it charges again.
+            terminalEvents.push(
+              {
+                type: 'adjudication',
+                payload: {
+                  cell: `${cell.comparison_id}:${cell.scenario}`,
+                  disposition: SPEND_RECOVERED,
+                  rationale: attemptScopedRationale(
+                    sample.attemptId,
+                    `actual cost of run ${sample.runId ?? '<unallocated>'} at terminal`,
+                  ),
+                },
+              },
+              {
+                type: 'budget_event',
+                payload: { kind: 'spend', amount_usd: spendAmount },
+              },
+            );
           } else {
             // Fail-closed accounting gap. No spend row may be invented, but
             // continuing would admit further work against a position that
@@ -2817,7 +2839,10 @@ export async function runCampaignDispatch(
               payload: {
                 cell: `${cell.comparison_id}:${cell.scenario}`,
                 disposition: UNPRICED_TERMINAL,
-                rationale: `attempt ${sample.attemptId} (run ${sample.runId ?? '<unallocated>'}) terminaled with no readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
+                rationale: attemptScopedRationale(
+                  sample.attemptId,
+                  `run ${sample.runId ?? '<unallocated>'} terminaled with no readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
+                ),
               },
             });
           }

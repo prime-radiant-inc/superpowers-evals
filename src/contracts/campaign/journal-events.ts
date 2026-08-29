@@ -430,16 +430,19 @@ export const UNPRICED_TERMINAL = 'unpriced_terminal';
 export const SPEND_RECOVERED = 'spend_recovered';
 
 /** `attempt=<id>; <detail>` — the attempt identity encoded into the only
- *  free field the event has. */
-export function spendRecoveredRationale(
+ *  free field the event has. Shared by every attempt-scoped machine
+ *  disposition (`spend_recovered`, `unpriced_terminal`) so a reader never
+ *  has to guess which attempt a resolution belongs to, and never has to
+ *  infer it from an adjacent event that may not exist. */
+export function attemptScopedRationale(
   attemptId: string,
   detail: string,
 ): string {
   return `attempt=${attemptId}; ${detail}`;
 }
 
-/** The attempt a `spend_recovered` rationale names, or null if unparseable. */
-export function attemptOfSpendRecovered(rationale: string): string | null {
+/** The attempt an attempt-scoped rationale names, or null if unparseable. */
+export function attemptOfRationale(rationale: string): string | null {
   return /^attempt=([^;]+);/.exec(rationale)?.[1] ?? null;
 }
 
