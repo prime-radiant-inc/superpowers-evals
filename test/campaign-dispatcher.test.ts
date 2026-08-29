@@ -259,12 +259,18 @@ afterAll(() => {
 class FakeChild {
   readonly pid: number;
   /** The `--out-root` the dispatcher gave this child. A real campaign child
-   *  ALLOCATES its run dir before its first provider token and leaves priced
-   *  economics in the composed verdict, so the fake does too — an allocated
-   *  run whose dir never appears is corruption in production, and the
-   *  dispatcher now fail-stops on it (the accounting gap). Tests that need a
-   *  different shape seed the dir themselves first; this never overwrites. */
+   *  ALLOCATES its run dir before its first provider token — empty, unpriced
+   *  — and only writes the composed verdict, with its economics, at
+   *  composition. The fake follows that order: allocation creates the dir,
+   *  exit composes. An allocated run whose dir never appears is corruption
+   *  in production and the dispatcher fail-stops on it; a run dir with no
+   *  composed verdict is the ordinary "child died before composing" case the
+   *  terminal classifier documents, which `composes = false` models. */
   readonly outRoot: string | null;
+  /** false = this child dies before composing: the run dir stays unpriced
+   *  and the verdict read at terminal returns null. */
+  composes = true;
+  private allocatedRunId: string | null = null;
   stdout: string[] = [];
   stderr: string[] = [];
   get stdoutLines(): readonly string[] {
@@ -284,10 +290,8 @@ class FakeChild {
   emitLine(line: string): void {
     const allocated = /^run_allocated:\s*(\S+)$/.exec(line);
     if (allocated?.[1] !== undefined && this.outRoot !== null) {
-      const dir = join(this.outRoot, allocated[1]);
-      if (!existsSync(dir)) {
-        seedCompletedRunDir(this.outRoot, allocated[1], { costUsd: 0.25 });
-      }
+      this.allocatedRunId = allocated[1];
+      mkdirSync(join(this.outRoot, allocated[1]), { recursive: true });
     }
     this.stdout.push(line);
     for (const cb of this.stdoutCbs) cb(line);
@@ -297,6 +301,16 @@ class FakeChild {
     for (const cb of this.stderrCbs) cb(line);
   }
   exit(info: ChildExitInfo): void {
+    // Composition: the verdict and its economics appear now, not at
+    // allocation. A test that seeded its own verdict keeps it.
+    if (
+      this.composes &&
+      this.outRoot !== null &&
+      this.allocatedRunId !== null &&
+      !existsSync(join(this.outRoot, this.allocatedRunId, 'verdict.json'))
+    ) {
+      seedCompletedRunDir(this.outRoot, this.allocatedRunId, { costUsd: 0.25 });
+    }
     this.exitInfo = info;
     for (const cb of this.exitCbs) cb(info);
   }
@@ -982,16 +996,55 @@ test("429 role attribution: a gauntlet-result 429 is the GRADER's evidence — i
   expect(
     eventsOf(h.campaignDir, 'instrument_failure').map((e) => e.payload.cause),
   ).toEqual(['grader_rate_limited']);
+  // The clamped retry-after is journaled as the grader pool's cooldown.
+  expect(blocked[0]!.payload.until_ts_ms).toBe(blocked[0]!.ts_ms + 30_000);
   for (const { child } of h.spawner.spawned.slice(1)) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
   }
-  await tick(h.clock, 31);
+  await tick(h.clock, 31); // past the cooldown: the replacement admits
   for (const { child } of h.spawner.spawned.slice(2)) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });
   }
-  await run;
+  const outcome = await run;
+  expect(outcome.status).toBe('completed');
+});
+
+test('an allocated child that dies BEFORE composing has no verdict: the exit-code heuristic classifies it and its cost is unknowable', async () => {
+  // The production condition the terminal path documents — a child that
+  // died before composing has no verdict, so classification falls to the
+  // exit-code heuristic and there is no actual cost to journal.
+  const h = harness();
+  const written: string[] = [];
+  const run = runCampaignDispatch({
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+  });
+  await tick(h.clock, 1);
+  const [first] = h.spawner.spawned;
+  first!.child.composes = false; // dies before composition
+  first!.child.emitLine(`run_allocated: run-${first!.child.pid}`);
+  first!.child.exit({ code: 137, signal: 'SIGKILL' });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned.slice(1)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  const outcome = await run;
+  // The run dir exists (it was allocated) but holds no composed verdict, so
+  // the cost is unknowable and the campaign fail-stops rather than
+  // continuing on a budget position that dropped it.
+  expect(existsSync(join(h.args.resultsRoot!, `run-${first!.child.pid}`))).toBe(
+    true,
+  );
+  expect(outcome.status).toBe('halted');
+  expect(outcome.reason).toMatch(/accounting gap/);
+  // Classified by the exit-code heuristic, not by a verdict.
+  expect(
+    eventsOf(h.campaignDir, 'instrument_failure').map((e) => e.payload.cause),
+  ).toEqual(['subject_crashed']);
 });
 
 test('instrument replacement: typed failure mints the reserve (block_replaced FIRST, then dispositions), conservation intact', async () => {
