@@ -1,0 +1,11 @@
+{
+  "load1": 0.1,
+  "mem_available_bytes": 8589934592,
+  "mem_total_bytes": 17179869184,
+  "swap_used_bytes": 0,
+  "swap_total_bytes": 4294967296,
+  "process_count": 200,
+  "pid_max": 1000000,
+  "disk_free_bytes": 53687091200,
+  "disk_total_bytes": 107374182400
+}

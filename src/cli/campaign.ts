@@ -741,7 +741,7 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
-import { linuxHostStatsProbe } from '../campaign/host-stats.ts';
+import { hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { realProcessIdentityProbe } from '../campaign/locks.ts';
 import { cancelCampaign, resumeCampaign } from '../campaign/recovery.ts';
 import { registerCampaign } from '../campaign/registration.ts';
@@ -844,7 +844,7 @@ export function campaignRegister(
       runner: defaultCommandRunner,
       clock: new RealClock(),
       identity: realProcessIdentityProbe,
-      probe: linuxHostStatsProbe(repoRoot()),
+      probe: hostStatsProbeForCli(repoRoot()),
       env: (key) => getEnv(key),
       registeredBy: getEnv('USER') ?? 'unknown',
       nowMs: Date.now(),
@@ -855,11 +855,40 @@ export function campaignRegister(
   }
 }
 
-export function campaignRun(campaignDir: string): void {
-  try {
-    if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
-      cliError(`campaign directory does not exist: ${campaignDir}`);
+export async function campaignRun(campaignDir: string): Promise<number> {
+  if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
+    cliError(`campaign directory does not exist: ${campaignDir}`);
+  }
+  // R-RCV-7: cancel-request FIRST — before checkout-env resolution or
+  // snapshot-credential parsing. A missing $GAUNTLET_ROOT or a damaged
+  // credentials.yaml must never block completing a cancellation the
+  // operator already requested; nothing on that path reads either. This
+  // mirrors resumeCampaign's own precedence and strings (recovery.ts).
+  if (existsSync(join(campaignDir, 'cancel-request'))) {
+    process.stdout.write(
+      'cancel-request present — completing cancellation instead of resuming\n',
+    );
+    const result = await cancelCampaign({
+      campaignDir,
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+    });
+    if (!result.cancelled) {
+      process.stderr.write(
+        'cancel incomplete — campaign_cancelled NOT journaled; complete the operator action above, then re-run `quorum campaign cancel`\n',
+      );
+      return 1;
     }
+    process.stdout.write(
+      `campaign run finished: cancelled (${
+        result.postCrash
+          ? 'post-crash cancel completed'
+          : 'live cancel completed'
+      })\n`,
+    );
+    return 0;
+  }
+  try {
     // The checkouts are the SOURCE repos the drift repair drives
     // `git worktree remove/prune` against (their .git/worktrees hold the
     // registrations) — never the campaign dir itself (that is the worktree
@@ -870,21 +899,19 @@ export function campaignRun(campaignDir: string): void {
         readFileSync(join(campaignDir, 'evals', 'credentials.yaml'), 'utf8'),
       ),
     );
-    resumeCampaign({
+    const outcome = await resumeCampaign({
       campaignDir,
       credentials,
       evalsCheckout: checkouts.evalsCheckout,
       gauntletCheckout: checkouts.gauntletCheckout,
       superpowersCheckout: checkouts.superpowersCheckout,
-    })
-      .then((outcome) => {
-        process.stdout.write(
-          `campaign run finished: ${outcome.status}${
-            outcome.reason !== undefined ? ` (${outcome.reason})` : ''
-          }\n`,
-        );
-      })
-      .catch((err: unknown) => catchCliError(err));
+    });
+    process.stdout.write(
+      `campaign run finished: ${outcome.status}${
+        outcome.reason !== undefined ? ` (${outcome.reason})` : ''
+      }\n`,
+    );
+    return 0;
   } catch (err) {
     catchCliError(err);
   }
@@ -893,7 +920,7 @@ export function campaignRun(campaignDir: string): void {
 export async function campaignCancel(
   campaignDir: string,
   opts: { reason?: string },
-): Promise<void> {
+): Promise<number> {
   try {
     if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
       cliError(`campaign directory does not exist: ${campaignDir}`);
@@ -906,18 +933,20 @@ export async function campaignCancel(
     });
     if (!result.cancelled) {
       // The pinned sequence did NOT complete (a group survived TERM+KILL):
-      // cancelCampaign already streamed the operator action; the verb exits
-      // nonzero so scripts never read an incomplete cancel as done.
+      // cancelCampaign already streamed the operator action; the verb
+      // returns nonzero so scripts never read an incomplete cancel as done
+      // (only the CLI entrypoint exits on it).
       process.stderr.write(
         'campaign cancel incomplete — campaign_cancelled NOT journaled; complete the operator action above, then re-run the cancel\n',
       );
-      process.exit(1);
+      return 1;
     }
     process.stdout.write(
       `campaign cancelled (${
         result.postCrash ? 'post-crash path' : 'live dispatcher'
       })\n`,
     );
+    return 0;
   } catch (err) {
     catchCliError(err);
   }

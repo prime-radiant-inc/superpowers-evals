@@ -23,6 +23,7 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { checkCredentials } from '../credentials/check.ts';
 import { getEnv } from '../env.ts';
 import { exportRuns } from '../export-runs/index.ts';
+import { repoRoot } from '../paths.ts';
 import { runBatch } from '../run-all/index.ts';
 import {
   configureRunAllOptions,
@@ -121,7 +122,19 @@ interface ShowOptions {
 }
 
 const program = new Command();
-program.name('quorum').description('Behavioral eval runner (TypeScript)');
+program
+  .name('quorum')
+  .description('Behavioral eval runner (TypeScript)')
+  // The registration child-contract probe runs `quorum --version` against
+  // the snapshot CLI and requires exit 0 (REV fable I-12); the version is
+  // the package's own.
+  .version(
+    (
+      JSON.parse(readFileSync(join(repoRoot(), 'package.json'), 'utf8')) as {
+        version: string;
+      }
+    ).version,
+  );
 
 program
   .command('run')
@@ -584,7 +597,9 @@ campaign
   .command('run')
   .description('start/resume a registered campaign (idempotent resume verb)')
   .argument('<campaign-dir>', 'campaign directory')
-  .action((dir: string) => campaignRun(dir));
+  .action(async (dir: string) => {
+    process.exit(await campaignRun(dir));
+  });
 campaign
   .command('cancel')
   .description('cancel a campaign (marker + pinned kill/journal order)')
@@ -593,9 +608,9 @@ campaign
     '--reason <text>',
     'cancellation reason recorded in campaign_cancelled',
   )
-  .action((dir: string, opts: { reason?: string }) =>
-    campaignCancel(dir, opts),
-  );
+  .action(async (dir: string, opts: { reason?: string }) => {
+    process.exit(await campaignCancel(dir, opts));
+  });
 
 program
   .command('show')

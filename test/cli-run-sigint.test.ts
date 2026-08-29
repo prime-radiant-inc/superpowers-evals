@@ -27,6 +27,14 @@ const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 // lock to a per-file tmp path so parallel test processes never contend for
 // the $HOME default and tests never touch $HOME.
 const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
+// The CLI spender verbs run the floors preflight unconditionally through the
+// injectable probe (R-LCK-2): portable tests inject a passing host-stats
+// fixture through the seam instead of skipping the gate.
+const HOST_STATS_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures',
+  'host-stats.json',
+);
 // The REAL coding-agents/ dir (same rationale as cli-run.test.ts): a claude run
 // requires claude-context/ + claude.project-prompt.md, which only live here.
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
@@ -124,6 +132,8 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
       env: {
         ...process.env,
         QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+
         // The `hang` selection rides in the generated gauntlet shim (the
         // runner's gauntlet-env projection strips a host-exported
         // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
@@ -259,6 +269,8 @@ test('quorum run stopped during agent phase keeps parsed credential labels', asy
       env: {
         ...process.env,
         QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+
         PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',

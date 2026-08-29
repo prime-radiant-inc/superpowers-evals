@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
 import {
   DEFAULT_RESOURCE_FLOORS,
-  linuxHostStatsProbe,
+  hostStatsProbeForCli,
   preflightResourceFloors,
 } from '../campaign/host-stats.ts';
 import {
@@ -468,20 +468,18 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     clock,
     identity: realProcessIdentityProbe,
   });
-  // R-LCK-2 floors preflight — standalone AFTER acquisition (the pinned
-  // acquire -> preflight -> admit order; 2b's layering keeps it out of the
-  // lock claim). The production probe reads /proc and refuses non-Linux
-  // hosts by design; the floors gate runs exactly where that probe exists,
-  // so the portable local workflow keeps its documented break-glass surface
-  // instead of being Linux-gated by side effect.
-  if (process.platform === 'linux') {
-    preflightResourceFloors(
-      linuxHostStatsProbe(resolve(outRoot)).sample(Date.now()),
-      DEFAULT_RESOURCE_FLOORS,
-    );
-  }
   stream.write('live-spend lock acquired (run-all)\n');
   try {
+    // R-LCK-2 floors preflight — unconditional (no platform bypass), inside
+    // the release envelope, immediately after acquisition (acquire ->
+    // preflight -> admit): a floor refusal must release the lock, never
+    // strand it. The injectable probe resolves through the fixture seam;
+    // production gets the real Linux probe whose non-Linux refusal IS the
+    // designated-host discipline.
+    preflightResourceFloors(
+      hostStatsProbeForCli(resolve(outRoot)).sample(Date.now()),
+      DEFAULT_RESOURCE_FLOORS,
+    );
     // Validate the selected campaign before matrix construction or batch
     // allocation, so a bad explicit file cannot create a half-batch or launch a
     // paid child.

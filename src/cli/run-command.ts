@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
+
 import {
   DEFAULT_RESOURCE_FLOORS,
-  linuxHostStatsProbe,
+  hostStatsProbeForCli,
   preflightResourceFloors,
 } from '../campaign/host-stats.ts';
 import {
@@ -131,10 +132,13 @@ export async function executeRunCommand(
   let labelsForStop: CredentialLabels | undefined;
   // R-LCK-2 surface (a): direct `quorum run` is a top-level spender. The
   // lock handle is captured here so the SIGINT stop path can release it —
-  // process.exit inside onSigint would otherwise bypass the finally below
-  // and leave the host-wide lock held until heartbeat staleness.
+  // its exit would otherwise bypass the release `finally` below and leave
+  // the host-wide lock held until heartbeat staleness.
   let spendLock: LiveSpendLock | null = null;
-  const onSigint = (): void => {
+  // The stop path RETURNS its exit code; only the signal listener (the one
+  // place an exit is possible — a handler cannot unwind the caller) exits
+  // on it, after the stopped verdict is written and the lock released.
+  const stopCode = (): number => {
     currentGauntletChild()?.kill('SIGINT');
     if (runDirForStop !== null) {
       writeStoppedVerdict(runDirForStop, {
@@ -149,9 +153,11 @@ export async function executeRunCommand(
       });
     }
     spendLock?.release();
-    process.exit(2);
+    return 2;
   };
-  process.once('SIGINT', onSigint);
+  process.once('SIGINT', () => {
+    process.exit(stopCode());
+  });
   // Explicit superpowers mode from the CLI projection. Resolved paths only —
   // materialization/verification belongs to the spawning campaign.
   const superpowers: SuperpowersSpec | undefined =
@@ -182,20 +188,20 @@ export async function executeRunCommand(
       clock: new RealClock(),
       identity: realProcessIdentityProbe,
     });
-    // R-LCK-2 floors preflight — standalone AFTER acquisition (the pinned
-    // acquire -> preflight -> run order; 2b's layering keeps it out of the
-    // lock claim). The production probe reads /proc and refuses non-Linux
-    // hosts by design; the floors gate runs exactly where that probe
-    // exists, so the portable local workflow keeps its documented
-    // break-glass surface instead of being Linux-gated by side effect.
-    if (process.platform === 'linux') {
+  }
+  try {
+    // R-LCK-2 floors preflight — unconditional (no platform bypass): the
+    // injectable probe resolves through the fixture seam; production gets the
+    // real Linux probe whose non-Linux refusal IS the designated-host
+    // discipline. It sits INSIDE the release envelope, immediately after
+    // acquisition (acquire -> preflight -> run): a floor refusal must release
+    // the lock, never strand it until heartbeat staleness.
+    if (spendLock !== null) {
       preflightResourceFloors(
-        linuxHostStatsProbe(resolve(opts.outRoot)).sample(Date.now()),
+        hostStatsProbeForCli(resolve(opts.outRoot)).sample(Date.now()),
         DEFAULT_RESOURCE_FLOORS,
       );
     }
-  }
-  try {
     const { runDir, verdict } = await runScenario({
       scenarioDir: resolve(scn),
       codingAgent: opts.codingAgent,

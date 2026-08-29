@@ -12,6 +12,7 @@
 // unavailable CPU identity refuses, never degrades to a plausible value.
 import { readdirSync, readFileSync, statfsSync } from 'node:fs';
 import { cpus, freemem, loadavg, totalmem } from 'node:os';
+import { getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 
 export interface HostStats {
@@ -239,6 +240,79 @@ export function preflightResourceFloors(
       `resource-floor preflight failed: ${violations.join('; ')} — refuse launch (fail-closed)`,
     );
   }
+}
+
+/** The CLI-boundary probe resolver — R-LCK-2's "injectable host-stats
+ * probe" at the acquisition site. Production reads the real Linux host
+ * (whose non-Linux refusal IS the designated-host discipline, R-LCK-3); a
+ * portable test checkout points QUORUM_HOST_STATS_PROBE_FIXTURE at a JSON
+ * file of the HostStats shape and the boundary reads that instead. The
+ * PREFLIGHT itself is never skipped or platform-gated: an unset variable
+ * means the real probe, and an unreadable or malformed fixture refuses
+ * loudly exactly like an unreadable /proc (fail-closed). */
+const HOST_STATS_PROBE_FIXTURE_ENV = 'QUORUM_HOST_STATS_PROBE_FIXTURE';
+
+export function hostStatsProbeForCli(diskPath: string): HostStatsProbe {
+  const fixture = getEnv(HOST_STATS_PROBE_FIXTURE_ENV);
+  if (fixture === undefined || fixture === '') {
+    return linuxHostStatsProbe(diskPath);
+  }
+  return fixtureHostStatsProbe(fixture);
+}
+
+/** A probe over a JSON file of the HostStats numeric shape (ts_ms is
+ * injected at sample time — the fixture pins the host, not the moment). */
+export function fixtureHostStatsProbe(path: string): HostStatsProbe {
+  const required: ReadonlyArray<[keyof HostStats, boolean]> = [
+    ['load1', false],
+    ['mem_available_bytes', true],
+    ['mem_total_bytes', true],
+    ['swap_used_bytes', true],
+    ['swap_total_bytes', true],
+    ['process_count', true],
+    ['pid_max', true],
+    ['disk_free_bytes', true],
+    ['disk_total_bytes', true],
+  ];
+  return {
+    sample(nowMs: number): HostStats {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(readFileSync(path, 'utf8'));
+      } catch (err) {
+        throw new PreflightError(
+          `host-stats fixture at ${path} could not be read as JSON (${(err as Error).message}) — refusing to judge floors on an unreadable sample (fail-closed)`,
+        );
+      }
+      if (raw === null || typeof raw !== 'object') {
+        throw new PreflightError(
+          `host-stats fixture at ${path} is not a JSON object — refusing (fail-closed)`,
+        );
+      }
+      const record = raw as Record<string, unknown>;
+      const stats: Record<string, number> = {};
+      for (const [field, integer] of required) {
+        const value = record[field];
+        if (
+          typeof value !== 'number' ||
+          !Number.isFinite(value) ||
+          value < 0 ||
+          (integer && !Number.isInteger(value))
+        ) {
+          throw new PreflightError(
+            `host-stats fixture at ${path} field '${field}' is not a usable ${integer ? 'non-negative integer' : 'non-negative finite number'} (got ${JSON.stringify(value)}) — refusing (fail-closed)`,
+          );
+        }
+        stats[field] = value;
+      }
+      if (stats['pid_max'] === 0) {
+        throw new PreflightError(
+          `host-stats fixture at ${path} has pid_max 0 — not a usable PID ceiling (fail-closed)`,
+        );
+      }
+      return { ...(stats as unknown as HostStats), ts_ms: nowMs };
+    },
+  };
 }
 
 // The fingerprint shape is the contract's (campaign.ts HostFingerprintSchema,

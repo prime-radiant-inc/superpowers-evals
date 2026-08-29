@@ -137,18 +137,53 @@ const GAUNTLET_ROOT = gauntletRepo();
 const SUPERPOWERS_ROOT = mkdtempSync(join(tmpdir(), 'sproot-'));
 
 /** The spender env: hermetic lock path, resolved checkout seams, mock
- * gauntlet on PATH, fixture keys (the mock never makes a real call). */
-function spenderEnv(lock: string): Record<string, string | undefined> {
+ * gauntlet on PATH, fixture keys (the mock never makes a real call), and
+ * the passing host-stats fixture — the preflight itself is never skipped
+ * (R-LCK-2: production uses the real Linux probe; portable tests inject a
+ * passing probe through the fixture seam). */
+const HOST_STATS_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures',
+  'host-stats.json',
+);
+
+function spenderEnv(
+  lock: string,
+  opts: { hostStatsFixture?: string } = {},
+): Record<string, string | undefined> {
   const snapshot = envSnapshot();
   return {
     ...snapshot,
     QUORUM_LIVE_SPEND_LOCK: lock,
+    QUORUM_HOST_STATS_PROBE_FIXTURE:
+      opts.hostStatsFixture ?? HOST_STATS_FIXTURE,
     GAUNTLET_ROOT,
     SUPERPOWERS_ROOT,
     PATH: `${mockGauntletDir('pass')}:${MOCK}:${snapshot['PATH'] ?? ''}`,
     ANTHROPIC_API_KEY: 'sk-test',
     AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
   };
+}
+
+/** A below-floors host-stats fixture (disk free 1 byte): acquisition
+ * succeeds, the floors preflight must refuse. */
+function belowFloorsFixture(): string {
+  const path = join(mkdtempSync(join(tmpdir(), 'hs-')), 'below.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      load1: 0.1,
+      mem_available_bytes: 8589934592,
+      mem_total_bytes: 17179869184,
+      swap_used_bytes: 0,
+      swap_total_bytes: 4294967296,
+      process_count: 200,
+      pid_max: 1000000,
+      disk_free_bytes: 1,
+      disk_total_bytes: 107374182400,
+    }),
+  );
+  return path;
 }
 
 interface BatchRow {
@@ -274,3 +309,62 @@ test('run-all drives a full batch whose children are covered by its lock (childr
   ) as { final?: string };
   expect(verdict.final).toBe('pass');
 }, 150_000);
+
+test('a floors refusal refuses the direct-run launch AND releases the acquired lock (R-LCK-2)', () => {
+  // The acquire -> preflight -> run order with release in the finally: a
+  // below-floors host must never launch a paid run, and the refusal must
+  // not strand the host-wide lock until heartbeat staleness.
+  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+  const direct = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run',
+      scenario(),
+      '--coding-agent',
+      'claude',
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      mkdtempSync(join(tmpdir(), 'out-')),
+      '--credentials-file',
+      REPO_CREDENTIALS,
+    ],
+    {
+      encoding: 'utf8',
+      env: spenderEnv(lock, { hostStatsFixture: belowFloorsFixture() }),
+      timeout: 60_000,
+    },
+  );
+  expect(direct.status).not.toBe(0);
+  expect(direct.stderr).toContain('resource-floor preflight failed');
+  expect(readLiveSpendHolder(lock)).toBeNull();
+}, 120_000);
+
+test('a floors refusal refuses the run-all launch AND releases the acquired lock (R-LCK-2)', () => {
+  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+  const emptyRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
+  const batch = spawnSync(
+    'bun',
+    [
+      CLI,
+      'run-all',
+      '--scenarios-root',
+      emptyRoot,
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      mkdtempSync(join(tmpdir(), 'out-')),
+      '--jobs',
+      '1',
+    ],
+    {
+      encoding: 'utf8',
+      env: spenderEnv(lock, { hostStatsFixture: belowFloorsFixture() }),
+      timeout: 60_000,
+    },
+  );
+  expect(batch.status).toBe(1);
+  expect(batch.stderr).toContain('resource-floor preflight failed');
+  expect(readLiveSpendHolder(lock)).toBeNull();
+}, 120_000);

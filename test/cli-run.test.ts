@@ -17,6 +17,14 @@ const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 // lock to a per-file tmp path so parallel test processes never contend for
 // the $HOME default and tests never touch $HOME.
 const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
+// The CLI spender verbs run the floors preflight unconditionally through the
+// injectable probe (R-LCK-2): portable tests inject a passing host-stats
+// fixture through the seam instead of skipping the gate.
+const HOST_STATS_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures',
+  'host-stats.json',
+);
 const CAMPAIGN_CREDENTIALS = resolve(
   import.meta.dir,
   'fixtures',
@@ -62,6 +70,8 @@ function runCli(
       env: {
         ...process.env,
         QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+
         // The fixture selection rides in the generated gauntlet shim (the
         // runner's gauntlet-env projection strips a host-exported
         // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
@@ -218,6 +228,8 @@ test('direct run validates an arbitrary external credentials file before allocat
       env: {
         ...process.env,
         QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+
         QUORUM_INTERNAL_CREDENTIALS_SNAPSHOT_PATH: credentials,
       },
     },

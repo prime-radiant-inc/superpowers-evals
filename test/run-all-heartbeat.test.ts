@@ -1,9 +1,16 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { ChildResult } from '../src/contracts/batch.ts';
 import { setProcessEnv } from '../src/env.ts';
+
+const HOST_STATS_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures',
+  'host-stats.json',
+);
+
 import type { InvokeFn } from '../src/run-all/index.ts';
 import { runBatch } from '../src/run-all/index.ts';
 
@@ -15,6 +22,9 @@ setProcessEnv(
   'QUORUM_LIVE_SPEND_LOCK',
   join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d'),
 );
+// The floors preflight runs on every runBatch acquisition (R-LCK-2): inject
+// the passing host-stats fixture through the seam — never a skipped gate.
+setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', HOST_STATS_FIXTURE);
 
 function fixture(names: readonly string[]): {
   scenariosRoot: string;
