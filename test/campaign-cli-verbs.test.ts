@@ -583,6 +583,29 @@ test('register --confirm publishes: campaign.json + journal + snapshot, digest p
   expect(doc.contention?.global_run_cap).toBe(8);
 }, 300_000);
 
+test('the campaign-dir argument is canonicalized at the CLI boundary — a relative path never reaches the engine', async () => {
+  // The engine hands the campaign dir to detached children that run with a
+  // DIFFERENT working directory, so a relative argument would name a
+  // different directory there. Canonicalizing at the boundary is also what
+  // lets the operator-facing refusal name the directory actually checked.
+  const captured: string[] = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string) => {
+    captured.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    expect(await campaignRun('quorum-no-such-campaign-rel')).toBe(1);
+    expect(await campaignCancel('quorum-no-such-campaign-rel', {})).toBe(1);
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  const absolute = resolve('quorum-no-such-campaign-rel');
+  expect(captured.join('')).toBe(
+    `error: campaign directory does not exist: ${absolute}\n`.repeat(2),
+  );
+}, 30_000);
+
 test('the D3 verbs resolve exit codes in-process (only the Commander action exits)', async () => {
   // C8 boundary: a fail-closed verb error must RETURN a code, never
   // process.exit inside the helper — an in-process caller (this test) would

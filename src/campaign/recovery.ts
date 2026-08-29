@@ -76,6 +76,7 @@ import {
   readLiveSpendHolder,
   realProcessIdentityProbe,
 } from './locks.ts';
+import { resolveCampaignResultsRoot } from './results-root.ts';
 import {
   reconstructCampaignSnapshot,
   repairDriftedTrees,
@@ -1205,7 +1206,7 @@ export async function resumeCampaign(
     // 3. Kill/reconcile FIRST — an orphaned child keeps spending while the
     //    floor is debated, so cleanup precedes the preflight gate.
     const universe = universeOf(campaign);
-    const resultsRoot = args.resultsRoot ?? 'results';
+    const resultsRoot = resolveCampaignResultsRoot(args.resultsRoot);
     const writer = electWriter({
       campaignDir: args.campaignDir,
       clock,

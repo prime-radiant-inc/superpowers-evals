@@ -11,7 +11,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   ALLOCATION_WAIT_BUDGET_SECONDS,
   assertInstanceGraph,
@@ -789,6 +789,37 @@ test('429 cooldown: classified stderr pools the block, waits the clamped cooldow
   // The crash-classified first child minted the reserve; its block waits out
   // the pool cooldown, then admits and spawns.
   await tick(h.clock, 31); // past the cooldown
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await run;
+});
+
+test('results root: controller and child resolve ONE absolute path, even when the operator names a relative one', async () => {
+  const relativeResults = relative(
+    process.cwd(),
+    mkdtempSync(join(tmpdir(), 'rel-results-')),
+  );
+  const h = harness();
+  const run = runCampaignDispatch({
+    ...h.args,
+    resultsRoot: relativeResults,
+    // The child runs with cwd = the campaign's evals worktree, so a relative
+    // --out-root would land its run dirs somewhere the controller never
+    // looks. Absolute is the only path both sides agree on.
+  });
+  await tick(h.clock, 1);
+  const [first] = h.spawner.spawned;
+  const argv = first!.spec.args;
+  const outRoot = argv[argv.indexOf('--out-root') + 1];
+  expect(isAbsolute(outRoot!)).toBe(true);
+  expect(outRoot).toBe(resolve(relativeResults));
+  for (const { child } of h.spawner.spawned) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
     child.emitLine(`run_allocated: run-${child.pid}`);
     child.exit({ code: 0, signal: null });

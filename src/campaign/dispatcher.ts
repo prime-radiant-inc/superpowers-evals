@@ -70,6 +70,7 @@ import {
   realProcessIdentityProbe,
 } from './locks.ts';
 import { attemptIdOf, rerunInstanceId } from './registration.ts';
+import { resolveCampaignResultsRoot } from './results-root.ts';
 import {
   auditExposure,
   type CredentialShape,
@@ -1071,11 +1072,14 @@ export async function runCampaignDispatch(
       'no SnapshotHandle and no snapshotVerify seam — the R-DSP-11 admission gate cannot run; `campaign run` passes the reconstructed handle',
     );
   }
+  // ONE absolute results root for the whole run: the controller's run-dir
+  // reads and the child's --out-root must name the same directory, and they
+  // do not share a working directory (the child's cwd is the evals worktree).
+  const resultsRoot = resolveCampaignResultsRoot(args.resultsRoot);
   /** Run-dir path for a protocol-line run id (the runner's allocation names
    *  the run dir after the run id under outRoot — Decision D-8 correlation;
    *  the identity file task 6c persists lives in the same dir). */
-  const runDirOf = (runId: string): string =>
-    join(args.resultsRoot ?? 'results', runId);
+  const runDirOf = (runId: string): string => join(resultsRoot, runId);
 
   // The writer carries the frozen membership so its incremental projections
   // resolve attempt->block identically to a rebuild. It is held for the
@@ -2866,7 +2870,7 @@ export async function runCampaignDispatch(
           ),
           codingAgent: surfaceOfArm(sample.arm)?.agent ?? '',
           codingAgentsDir: join(evalsRoot, 'coding-agents'),
-          outRoot: args.resultsRoot ?? 'results',
+          outRoot: resultsRoot,
           os: 'linux',
           credentialName: subjectName,
           credentialsFile: join(evalsRoot, 'credentials.yaml'),

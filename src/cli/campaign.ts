@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { currentCheckoutSha } from '../appliance/git.ts';
 import { acquireCorpus } from '../campaign/acquire.ts';
 import {
@@ -879,7 +879,11 @@ export function campaignRegister(
   }
 }
 
-export async function campaignRun(campaignDir: string): Promise<number> {
+export async function campaignRun(rawCampaignDir: string): Promise<number> {
+  // Canonicalized at the boundary: the engine hands this path to detached
+  // children that run with a different working directory, so a relative
+  // argument would name a different directory there.
+  const campaignDir = resolve(rawCampaignDir);
   if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
     return verbFailure(
       new CampaignVerbError(
@@ -946,9 +950,10 @@ export async function campaignRun(campaignDir: string): Promise<number> {
 }
 
 export async function campaignCancel(
-  campaignDir: string,
+  rawCampaignDir: string,
   opts: { reason?: string },
 ): Promise<number> {
+  const campaignDir = resolve(rawCampaignDir);
   try {
     if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
       throw new CampaignVerbError(
