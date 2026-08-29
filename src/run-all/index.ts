@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
 import {
+  clockNowMs,
   DEFAULT_RESOURCE_FLOORS,
+  type HostStatsProbe,
   hostStatsProbeForCli,
   preflightResourceFloors,
 } from '../campaign/host-stats.ts';
@@ -279,8 +281,12 @@ export interface RunBatchArgs {
   readonly writeGridManifest?: typeof writeGridManifestFile;
   // The scheduler clock; defaults to RealClock. Tests inject a FakeClock to
   // drive spacing deterministically — but run-all's own behavior tests use the
-  // real clock with instant fake invokes (no spacing configured).
+  // real clock with instant fake invokes (no spacing configured). It is the
+  // ONE time source: the R-LCK-2 floors preflight samples it too.
   readonly clock?: Clock;
+  // R-LCK-2 floors-preflight probe; defaults to the real CLI probe (the
+  // Linux probe, or the host-stats fixture when the seam env names one).
+  readonly probe?: HostStatsProbe;
   // Process-signal seam. The default installs SIGINT/SIGTERM/SIGHUP handlers that
   // run the graceful stop; it returns an uninstaller. Tests inject a fake to
   // capture and drive the handler synchronously without real signals.
@@ -445,6 +451,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     invoke = invokeChild,
     stream = process.stdout,
     clock = new RealClock(),
+    probe = hostStatsProbeForCli(resolve(args.outRoot)),
     installSignals = installStopSignals,
     kill,
     hardExit = hardExitProcess,
@@ -480,7 +487,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     // production gets the real Linux probe whose non-Linux refusal IS the
     // designated-host discipline.
     preflightResourceFloors(
-      hostStatsProbeForCli(resolve(outRoot)).sample(Date.now()),
+      probe.sample(clockNowMs(clock)),
       DEFAULT_RESOURCE_FLOORS,
     );
     // Validate the selected campaign before matrix construction or batch

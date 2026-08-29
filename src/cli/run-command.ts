@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
 
 import {
+  clockNowMs,
   DEFAULT_RESOURCE_FLOORS,
   hostStatsProbeForCli,
   preflightResourceFloors,
@@ -130,6 +131,9 @@ export async function executeRunCommand(
     opts.codingAgent,
     opts.credential,
   );
+  // ONE seconds-based Clock for this boundary: the live-spend lock's
+  // heartbeat and the R-LCK-2 floors preflight read the same source.
+  const clock = new RealClock();
   const startedAt = new Date().toISOString();
   const scenarioId = scenarioName(scn);
   let runDirForStop: string | null = null;
@@ -184,7 +188,7 @@ export async function executeRunCommand(
   // Only an uncovered process is a top-level spender.
   if (getEnv(COVERED_BY_LOCK_ENV) === undefined) {
     spendLock = acquireLiveSpendLock({
-      clock: new RealClock(),
+      clock,
       identity: realProcessIdentityProbe,
     });
   }
@@ -197,7 +201,7 @@ export async function executeRunCommand(
     // the lock, never strand it until heartbeat staleness.
     if (spendLock !== null) {
       preflightResourceFloors(
-        hostStatsProbeForCli(resolve(opts.outRoot)).sample(Date.now()),
+        hostStatsProbeForCli(resolve(opts.outRoot)).sample(clockNowMs(clock)),
         DEFAULT_RESOURCE_FLOORS,
       );
     }

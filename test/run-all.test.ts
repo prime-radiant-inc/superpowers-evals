@@ -22,8 +22,10 @@ const HOST_STATS_FIXTURE = resolve(
   'host-stats.json',
 );
 
+import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
 import type { InvokeChildArgs, InvokeFn } from '../src/run-all/index.ts';
 import { runBatch } from '../src/run-all/index.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
 
 // runBatch now acquires the host-wide live-spend lock (R-LCK-2, task 9c):
 // pin it to a per-file tmp path through the env seam — parallel test
@@ -590,4 +592,35 @@ test('runBatch leaves an inspectable empty batch when manifest writing fails', a
   expect(existsSync(join(batchDir, 'batch.json'))).toBe(true);
   expect(existsSync(join(batchDir, 'credentials.snapshot.yaml'))).toBe(true);
   expect(existsSync(join(batchDir, 'results.jsonl'))).toBe(false);
+});
+
+test('the floors preflight samples the INJECTED clock, not wall time (one seconds-based Clock seam)', async () => {
+  const { scenariosRoot, codingAgentsDir, outRoot } = fixture(
+    [{ name: 'alpha' }],
+    ['claude'],
+  );
+  const sampledAt: number[] = [];
+  const probe: HostStatsProbe = {
+    sample: (nowMs: number) => {
+      sampledAt.push(nowMs);
+      return {
+        ...(JSON.parse(readFileSync(HOST_STATS_FIXTURE, 'utf8')) as Omit<
+          HostStats,
+          'ts_ms'
+        >),
+        ts_ms: nowMs,
+      };
+    },
+  };
+  await runBatch({
+    scenariosRoot,
+    codingAgentsDir,
+    outRoot,
+    jobs: 1,
+    invoke: async () => ({ run_id: null, exit_code: 0, error: null }),
+    clock: new FakeClock(1234.5),
+    probe,
+    heartbeatSeconds: 0,
+  });
+  expect(sampledAt).toEqual([1_234_500]);
 });

@@ -741,7 +741,7 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
-import { hostStatsProbeForCli } from '../campaign/host-stats.ts';
+import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { realProcessIdentityProbe } from '../campaign/locks.ts';
 import { cancelCampaign, resumeCampaign } from '../campaign/recovery.ts';
 import { registerCampaign } from '../campaign/registration.ts';
@@ -848,6 +848,9 @@ export function campaignRegister(
       'gauntlet checkout',
       defaultCommandRunner,
     );
+    // ONE seconds-based Clock for this boundary: the registration lease and
+    // the estimate-staleness cutoff read the same source.
+    const clock = new RealClock();
     const estimatesRaw = JSON.parse(readFileSync(opts.estimates, 'utf8'));
     const estimates = EstimatesArtifactSchema.parse(estimatesRaw);
     const suiteRaw = readFileSync(suitePath, 'utf8');
@@ -865,12 +868,12 @@ export function campaignRegister(
       evalsRef,
       gauntletRef,
       runner: defaultCommandRunner,
-      clock: new RealClock(),
+      clock,
       identity: realProcessIdentityProbe,
       probe: hostStatsProbeForCli(repoRoot()),
       env: (key) => getEnv(key),
       registeredBy: getEnv('USER') ?? 'unknown',
-      nowMs: Date.now(),
+      nowMs: clockNowMs(clock),
     });
     process.stdout.write(`${result.printed}\n`);
     return 0;
