@@ -6,7 +6,9 @@ import {
   fsyncSync,
   mkdtempSync,
   openSync,
+  renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -140,22 +142,27 @@ function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
       },
       write: (fd, data) => {
         calls.push(`write:${label(fd)}`);
-        writeSync(fd, data as string);
+        return writeSync(fd, data as string);
       },
       fsync: (fd) => {
         calls.push(`fsync:${label(fd)}`);
         fsyncSync(fd);
       },
-      rename: () => {
-        throw new Error('unexpected rename');
+      rename: (from, to) => {
+        calls.push(`rename:${basename(from)}->${basename(to)}`);
+        renameSync(from, to);
       },
-      unlink: () => {
-        throw new Error('unexpected unlink');
+      unlink: (path) => {
+        calls.push(`unlink:${basename(path)}`);
+        unlinkSync(path);
       },
       stat: () => {
         throw new Error('unexpected stat');
       },
-      exists: existsSync,
+      exists: (path) => {
+        calls.push(`exists:${basename(path)}`);
+        return existsSync(path);
+      },
     },
   };
 }
@@ -173,11 +180,18 @@ test('cancel: the cancel-request marker is fsynced with its directory before cam
     fsOps: ops,
   });
   expect(result.cancelled).toBe(true);
-  expect(calls).toEqual([
-    'open-wx:cancel-request',
-    'write:cancel-request',
-    'fsync:cancel-request',
-    'close:cancel-request',
+  // The marker is STAGED, fsynced, then renamed onto the final name, so the
+  // final name only ever appears complete; the EEXIST guard's existence
+  // probe is not part of the durable order.
+  const durable = calls.filter((c) => !c.startsWith('exists:'));
+  const staged = durable[0]!.replace('open-wx:', '');
+  expect(staged).toMatch(/^cancel\-request\.stage\./);
+  expect(durable).toEqual([
+    `open-wx:${staged}`,
+    `write:${staged}`,
+    `fsync:${staged}`,
+    `close:${staged}`,
+    `rename:${staged}->cancel-request`,
     `open-r:${basename(dir)}`,
     `fsync:${basename(dir)}`,
     `close:${basename(dir)}`,

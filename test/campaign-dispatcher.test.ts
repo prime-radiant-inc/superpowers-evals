@@ -8,6 +8,8 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -2053,22 +2055,27 @@ function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
       },
       write: (fd, data) => {
         calls.push(`write:${label(fd)}`);
-        writeSync(fd, data as string);
+        return writeSync(fd, data as string);
       },
       fsync: (fd) => {
         calls.push(`fsync:${label(fd)}`);
         fsyncSync(fd);
       },
-      rename: () => {
-        throw new Error('unexpected rename');
+      rename: (from, to) => {
+        calls.push(`rename:${basename(from)}->${basename(to)}`);
+        renameSync(from, to);
       },
-      unlink: () => {
-        throw new Error('unexpected unlink');
+      unlink: (path) => {
+        calls.push(`unlink:${basename(path)}`);
+        unlinkSync(path);
       },
       stat: () => {
         throw new Error('unexpected stat');
       },
-      exists: existsSync,
+      exists: (path) => {
+        calls.push(`exists:${basename(path)}`);
+        return existsSync(path);
+      },
     },
   };
 }
@@ -2084,11 +2091,19 @@ test('performStoragePause: the .storage-paused marker is fsynced with its direct
     fsOps: ops,
   });
   expect(existsSync(join(campaignDir, '.storage-paused'))).toBe(true);
-  expect(calls).toEqual([
-    'open-wx:.storage-paused',
-    'write:.storage-paused',
-    'fsync:.storage-paused',
-    'close:.storage-paused',
+  // The marker is STAGED, fsynced, then renamed onto the final name, so the
+  // final name only ever appears complete; the EEXIST guard's existence
+  // probe is not part of the durable order.
+  const durable = calls.filter((c) => !c.startsWith('exists:'));
+  const staged = durable[0]!.replace('open-wx:', '');
+  expect(staged).toMatch(/^\.storage\-paused\.stage\./);
+  expect(durable).toEqual([
+    `open-wx:${staged}`,
+    // The pause marker's body is empty, so there are no bytes to write —
+    // the fsync and the rename are what make it durable.
+    `fsync:${staged}`,
+    `close:${staged}`,
+    `rename:${staged}->.storage-paused`,
     `open-r:${basename(campaignDir)}`,
     `fsync:${basename(campaignDir)}`,
     `close:${basename(campaignDir)}`,

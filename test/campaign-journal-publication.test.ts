@@ -66,20 +66,97 @@ function tmpCampaign(): string {
 
 /** Real-fs ops that record the durable operation ORDER (the seam carries the
  *  fiction; every call still hits the real filesystem). */
-test('createDurableMarker: body, file fsync, then directory fsync — the marker is durable before the call returns', () => {
+
+test('createDurableMarker: the final name only ever appears complete — it is staged, fsynced, THEN renamed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'marker-'));
   const { ops, calls } = recordedOps();
   createDurableMarker(join(dir, '.storage-paused'), 'why\n', ops);
-  expect(calls).toEqual([
-    'open-wx:.storage-paused',
-    'write:.storage-paused',
-    'fsync:.storage-paused',
-    'close:.storage-paused',
+  // The EEXIST guard's existence probe is not part of the durable order.
+  const durable = calls.filter((c) => !c.startsWith('exists:'));
+  const staged = durable[0]!.replace('open-wx:', '');
+  expect(staged).toMatch(/^\.storage-paused\.stage\./);
+  expect(durable).toEqual([
+    `open-wx:${staged}`,
+    `write:${staged}`,
+    `fsync:${staged}`,
+    `close:${staged}`,
+    `rename:${staged}->.storage-paused`,
     `open-r:${basename(dir)}`,
     `fsync:${basename(dir)}`,
     `close:${basename(dir)}`,
   ]);
   expect(readFileSync(join(dir, '.storage-paused'), 'utf8')).toBe('why\n');
+  // No stage debris survives a successful create.
+  expect(readdirSync(dir)).toEqual(['.storage-paused']);
+});
+
+test('createDurableMarker: process death mid-create leaves only a STAGE name, which never blesses anything', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, 'cancel-request');
+  const { ops } = recordedOps();
+  // Death after the staged bytes are fsynced but before the rename: the
+  // final name must not exist, and the stage debris must not be mistaken
+  // for it.
+  expect(() =>
+    createDurableMarker(marker, 'why\n', {
+      ...ops,
+      rename: () => {
+        throw new Error('process died before the rename');
+      },
+    }),
+  ).toThrow();
+  expect(existsSync(marker)).toBe(false);
+  // A later create still succeeds and is the one that counts.
+  createDurableMarker(marker, 'real\n');
+  expect(readFileSync(marker, 'utf8')).toBe('real\n');
+});
+
+test('createDurableMarker: a short write is never fsynced as success', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, '.storage-paused');
+  const { ops } = recordedOps();
+  let fsynced = 0;
+  let accepted = 0;
+  expect(() =>
+    createDurableMarker(marker, 'a much longer body than lands\n', {
+      ...ops,
+      write: (fd, data) => {
+        // The volume takes one byte, then stops accepting: forward progress
+        // ends and the remaining bytes never land.
+        if (accepted > 0) return 0;
+        accepted = ops.write(
+          fd,
+          typeof data === 'string' ? data.slice(0, 1) : data,
+        );
+        return accepted;
+      },
+      fsync: (fd) => {
+        fsynced += 1;
+        ops.fsync(fd);
+      },
+    }),
+  ).toThrow(/short write|no forward progress/);
+  expect(fsynced).toBe(0); // a torn record is never made durable
+  expect(existsSync(marker)).toBe(false);
+});
+
+test('createDurableMarker: cleanup failure still refuses, and still leaves no final name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, '.storage-paused');
+  const { ops } = recordedOps();
+  expect(() =>
+    createDurableMarker(marker, 'why\n', {
+      ...ops,
+      fsync: () => {
+        throw new Error('fsync failed');
+      },
+      unlink: () => {
+        throw new Error('cannot remove the stage file either');
+      },
+    }),
+  ).toThrow(/cannot remove the stage file either/);
+  // Whatever debris remains, it is NOT the final name.
+  expect(existsSync(marker)).toBe(false);
 });
 
 test('createDurableMarker: a creation that fails mid-way leaves NO final name — the next attempt is not handed a blessed residue', () => {
@@ -91,7 +168,7 @@ test('createDurableMarker: a creation that fails mid-way leaves NO final name �
       ...ops,
       write: (fd, data) => {
         if (stage === 'write') throw new Error('volume went read-only');
-        ops.write(fd, data);
+        return ops.write(fd, data);
       },
       fsync: (fd) => {
         if (stage === 'fsync') throw new Error('fsync failed');
@@ -147,8 +224,9 @@ function recordedOps(): { ops: JournalFsOps; calls: string[] } {
     },
     write: (fd, data) => {
       calls.push(`write:${name(fd)}`);
-      if (typeof data === 'string') writeSync(fd, data);
-      else writeSync(fd, data);
+      return typeof data === 'string'
+        ? writeSync(fd, data)
+        : writeSync(fd, data);
     },
     fsync: (fd) => {
       calls.push(`fsync:${name(fd)}`);

@@ -1695,10 +1695,8 @@ function passthroughFsOps(): JournalFsOps {
     openExclusive: (path) => openSync(path, 'wx'),
     openRead: (path) => openSync(path, 'r'),
     close: closeSync,
-    write: (fd, data) => {
-      if (typeof data === 'string') writeSync(fd, data);
-      else writeSync(fd, data);
-    },
+    write: (fd, data) =>
+      typeof data === 'string' ? writeSync(fd, data) : writeSync(fd, data),
     fsync: fsyncSync,
     rename: renameSync,
     unlink: unlinkSync,
