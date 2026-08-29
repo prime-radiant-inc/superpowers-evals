@@ -18,6 +18,8 @@ import {
   CampaignSchema,
 } from '../contracts/campaign/campaign.ts';
 import { campaignDigest } from '../contracts/campaign/digest.ts';
+import type { JournalEvent } from '../contracts/campaign/journal-events.ts';
+import { openJournalRead } from './journal.ts';
 
 export class CampaignDocumentError extends Error {
   constructor(message: string) {
@@ -120,7 +122,54 @@ export function parseFrozenCampaign(raw: unknown, source: string): Campaign {
   return authenticate(parsed.data, source);
 }
 
-/** Read + authenticate `<campaignDir>/campaign.json`. */
+/** The identity registration froze OUTSIDE the document: `campaign_opened`
+ *  is the journal's first event and it is append-only, so it is the anchor a
+ *  hand-edited campaign.json cannot restamp along with itself. Comparing the
+ *  document's fields only against each other proves internal consistency,
+ *  never that this is still the campaign that opened here. */
+function assertAnchoredToJournal(
+  campaign: Campaign,
+  campaignDir: string,
+): void {
+  const source = `campaign.json at ${join(campaignDir, 'campaign.json')}`;
+  let opened: JournalEvent | undefined;
+  let reader: { readEvents(afterSeq?: number): JournalEvent[]; close(): void };
+  try {
+    reader = openJournalRead(campaignDir);
+  } catch (err) {
+    throw new CampaignDocumentError(
+      `${source} cannot be anchored: its campaign journal is unreadable (${
+        err instanceof Error ? err.message : String(err)
+      }) — the frozen identity is only trustworthy against the campaign_opened event registration committed; ${AUDIT}`,
+    );
+  }
+  try {
+    opened = reader.readEvents(0)[0];
+  } finally {
+    reader.close();
+  }
+  if (opened === undefined || opened.type !== 'campaign_opened') {
+    refuse(
+      source,
+      `its journal carries no campaign_opened event (found ${opened?.type ?? '<empty journal>'}), so the published identity has no external anchor`,
+    );
+  }
+  if (opened.payload.digest !== campaign.digest) {
+    refuse(
+      source,
+      `its digest ${campaign.digest} does not match the journal's campaign_opened digest ${opened.payload.digest}; the document was re-stamped after registration`,
+    );
+  }
+  if (opened.payload.campaign_id !== campaign.campaign_id) {
+    refuse(
+      source,
+      `its campaign_id ${campaign.campaign_id} does not match the journal's campaign_opened campaign_id ${opened.payload.campaign_id}`,
+    );
+  }
+}
+
+/** Read + authenticate `<campaignDir>/campaign.json`, then anchor its
+ *  identity against the journal registration froze it in. */
 export function loadFrozenCampaign(campaignDir: string): Campaign {
   const path = join(campaignDir, 'campaign.json');
   let raw: unknown;
@@ -133,5 +182,7 @@ export function loadFrozenCampaign(campaignDir: string): Campaign {
       }) — refusing to derive campaign identity or membership from an unreadable document; ${AUDIT}`,
     );
   }
-  return parseFrozenCampaign(raw, `campaign.json at ${path}`);
+  const campaign = parseFrozenCampaign(raw, `campaign.json at ${path}`);
+  assertAnchoredToJournal(campaign, campaignDir);
+  return campaign;
 }

@@ -722,8 +722,13 @@ test('the .storage-paused marker survives a resume whose reconciliation committe
   // No in-flight work, an already-landed storage_paused, and a ballast note
   // already journaled: the reconciliation bundle is empty, so nothing proves
   // storage accepted a write and the durable marker must stay.
-  const seed = publishedCampaign({ inFlight: false, doc: campaignDoc() });
-  const refs = seedRealSnapshot(seed.dir);
+  // Identity is anchored to campaign_opened, so the document must be FINAL
+  // before publication: seed the snapshot (it supplies the real refs), build
+  // the document from them, THEN open the journal against it. Overwriting a
+  // published document with a differently-stamped one is now a refusal case,
+  // not a fixture shortcut.
+  const dir = mkdtempSync(join(tmpdir(), 'resume-pause-'));
+  const refs = seedRealSnapshot(dir);
   const doc = campaignDoc({
     refs: { ...refs, evals: 'f'.repeat(40) }, // refuse before admission
     contention: {
@@ -731,7 +736,7 @@ test('the .storage-paused marker survives a resume whose reconciliation committe
       host_fingerprint: liveFingerprint(),
     },
   });
-  writeFileSync(join(seed.dir, 'campaign.json'), JSON.stringify(doc));
+  const seed = publishedCampaign({ inFlight: false, doc, dir });
   const w = electWriter({
     campaignDir: seed.dir,
     clock: new FakeClock(0),
@@ -767,7 +772,7 @@ test('the .storage-paused marker survives a resume whose reconciliation committe
       lockPath: lockDir('resume-pause.lock.d'),
       stream: { write: () => {} },
     }),
-  ).rejects.toThrow();
+  ).rejects.toThrow(/Campaign.refs cross-check/); // the intended refusal, not an earlier one
   expect(journalEvents(seed.dir).length).toBe(before); // nothing committed
   const { existsSync } = await import('node:fs');
   expect(existsSync(join(seed.dir, '.storage-paused'))).toBe(true);
