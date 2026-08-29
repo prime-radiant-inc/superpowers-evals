@@ -791,11 +791,19 @@ function spendRecovery(args: {
   ];
 }
 
-/** The sensor attribution a run dir still carries: the strongest signal, and
- *  the pool cooldowns its rate-limit evidence declares. Read WITHOUT the
- *  verdict/cost gate: the repair legs need the cooldowns whether or not the
- *  run's economics are still readable, and an attempt whose accounting is
- *  already settled must not make the resume refuse over them. */
+/** The sensor attribution a run dir carries: the strongest signal, and the
+ *  pool cooldowns its rate-limit evidence declares.
+ *
+ *  Split out of `readTerminalRunEvidence` so the two share one
+ *  implementation of source-provenance role attribution, credential context
+ *  and pool keying, and so a caller that wants only the cooldowns need not
+ *  repeat the verdict and economics read its evidence lookup already did.
+ *
+ *  It is NOT a way past that read. Every caller reaches this only after
+ *  `readTerminalRunEvidence` has accepted the run — an unreadable actual
+ *  cost refuses there, before this is called — and a settled
+ *  (recovered + terminal) attempt reaches neither reader, because it skips
+ *  before the evidence lookup. */
 export function readRunSensorEvidence(args: {
   runDir: string;
   runId: string;
@@ -938,8 +946,9 @@ export function terminalEvidenceActions(args: {
   events: readonly JournalEvent[];
   universe: CampaignUniverse;
   evidenceOf: (runId: string, sampleId: string) => TerminalRunEvidence | null;
-  /** Pool cooldowns a run dir still declares, read WITHOUT the verdict/cost
-   *  gate — a repair leg owes them even when the run's economics are gone. */
+  /** Pool cooldowns a run dir declares. Reached only for an attempt whose
+   *  `evidenceOf` lookup has already succeeded, so it re-reads the sensor
+   *  artifacts rather than the verdict and economics that lookup consumed. */
   cooldownsOf: (
     runId: string,
     sampleId: string,
