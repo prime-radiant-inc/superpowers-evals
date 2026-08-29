@@ -750,6 +750,25 @@ import { getEnv } from '../env.ts';
 import { repoRoot } from '../paths.ts';
 import { RealClock } from '../scheduler/clock.ts';
 
+/** Usage/fail-closed error for the D3 operator verbs. These verbs RESOLVE
+ * exit codes — only the Commander action performs the process exit (the C8
+ * boundary rule; the Phase-0 verbs acquire/estimates/simulate keep the
+ * module's older exit-on-error pattern). */
+export class CampaignVerbError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CampaignVerbError';
+  }
+}
+
+/** The verbs' uniform failure exit: message to stderr, code 1 resolved. */
+function verbFailure(err: unknown): number {
+  process.stderr.write(
+    `error: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+  return 1;
+}
+
 /** C12(b): the authoritative NON-CLI source-checkout discovery. No flags
  * exist on `campaign register|run` (the pinned table has none in v1), so the
  * three checkouts the drift repair and snapshot materialization drive come
@@ -770,15 +789,19 @@ export function resolveSourceCheckouts(): SourceCheckouts {
   const checkoutFromEnv = (name: string): string => {
     const value = getEnv(name);
     if (value === undefined || value === '') {
-      cliError(
+      throw new CampaignVerbError(
         `${name} is not set — the campaign verbs resolve their source checkouts from the environment (evals = this checkout, gauntlet = $GAUNTLET_ROOT, superpowers = $SUPERPOWERS_ROOT); no CLI flag exists in v1`,
       );
     }
     if (!isAbsolute(value)) {
-      cliError(`${name} must be an absolute path (got '${value}')`);
+      throw new CampaignVerbError(
+        `${name} must be an absolute path (got '${value}')`,
+      );
     }
     if (!existsSync(value) || !statSync(value).isDirectory()) {
-      cliError(`${name} does not exist or is not a directory: ${value}`);
+      throw new CampaignVerbError(
+        `${name} does not exist or is not a directory: ${value}`,
+      );
     }
     return value;
   };
@@ -799,13 +822,13 @@ export interface CampaignRegisterOptions {
 export function campaignRegister(
   suitePath: string,
   opts: CampaignRegisterOptions,
-): void {
+): number {
   try {
     const globalCap = /^-?\d+$/.test(opts.globalCap)
       ? Number(opts.globalCap)
       : Number.NaN;
     if (!Number.isInteger(globalCap) || globalCap < 1) {
-      cliError(
+      throw new CampaignVerbError(
         `--global-cap must be an integer >= 1 (got '${opts.globalCap}')`,
       );
     }
@@ -850,14 +873,19 @@ export function campaignRegister(
       nowMs: Date.now(),
     });
     process.stdout.write(`${result.printed}\n`);
+    return 0;
   } catch (err) {
-    catchCliError(err);
+    return verbFailure(err);
   }
 }
 
 export async function campaignRun(campaignDir: string): Promise<number> {
   if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
-    cliError(`campaign directory does not exist: ${campaignDir}`);
+    return verbFailure(
+      new CampaignVerbError(
+        `campaign directory does not exist: ${campaignDir}`,
+      ),
+    );
   }
   // R-RCV-7: cancel-request FIRST — before checkout-env resolution or
   // snapshot-credential parsing. A missing $GAUNTLET_ROOT or a damaged
@@ -913,7 +941,7 @@ export async function campaignRun(campaignDir: string): Promise<number> {
     );
     return 0;
   } catch (err) {
-    catchCliError(err);
+    return verbFailure(err);
   }
 }
 
@@ -923,7 +951,9 @@ export async function campaignCancel(
 ): Promise<number> {
   try {
     if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
-      cliError(`campaign directory does not exist: ${campaignDir}`);
+      throw new CampaignVerbError(
+        `campaign directory does not exist: ${campaignDir}`,
+      );
     }
     const result = await cancelCampaign({
       campaignDir,
@@ -948,6 +978,6 @@ export async function campaignCancel(
     );
     return 0;
   } catch (err) {
-    catchCliError(err);
+    return verbFailure(err);
   }
 }

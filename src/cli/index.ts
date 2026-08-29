@@ -587,9 +587,9 @@ campaign
     'required to publish; without it the verb prints grid + digest and exits 0',
   )
   .option('--dry-run', 'grid + exclusions + digest only, never writes')
-  .action((suite: string, opts: CampaignRegisterOptions) =>
-    campaignRegister(suite, opts),
-  );
+  .action((suite: string, opts: CampaignRegisterOptions) => {
+    process.exit(campaignRegister(suite, opts));
+  });
 // NO options in v1 (the pinned CLI table): the source checkouts come from
 // the environment — $GAUNTLET_ROOT / $SUPERPOWERS_ROOT; evals = this
 // checkout (C12).

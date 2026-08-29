@@ -21,8 +21,13 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { openJournalRead } from '../src/campaign/journal.ts';
+import {
+  campaignCancel,
+  campaignRegister,
+  campaignRun,
+} from '../src/cli/campaign.ts';
 import { envSnapshot } from '../src/env.ts';
 import { publishedCampaign } from './campaign-recovery-fixtures.ts';
 
@@ -47,6 +52,18 @@ function gauntletRepo(): string {
   git(dir, ['config', 'user.email', 't@t']);
   git(dir, ['config', 'user.name', 't']);
   writeFileSync(join(dir, 'README.md'), 'gauntlet fixture\n');
+  // The snapshot's bun install --frozen-lockfile runs inside EVERY
+  // checked-out tree, so the fixture needs a committed lockfile.
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'gauntlet-fixture', version: '0.0.0' }),
+  );
+  const install = spawnSync('bun', ['install'], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  if (install.status !== 0)
+    throw new Error(`gauntlet fixture bun install failed: ${install.stderr}`);
   git(dir, ['add', '.']);
   git(dir, ['commit', '-qm', 'fixture']);
   return dir;
@@ -414,6 +431,28 @@ function evalsCheckout(): string {
 
 const EVALS_CHECKOUT = evalsCheckout();
 
+/** The child-contract seam: a `git` PATH shim answering exactly the pinned
+ * merge-base --is-ancestor question (the commit exists in no reachable
+ * store) and delegating everything else to the real git. */
+const GIT_SHIM_DIR = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'git-shim-'));
+  writeFileSync(
+    join(dir, 'git'),
+    `#!/bin/sh
+# Test seam (registration child-contract probe): answer the one
+# merge-base --is-ancestor question for D2's pinned implementation merge,
+# which exists in no reachable object store; delegate all else to real git.
+if [ "$1" = "-C" ] && [ "$3" = "merge-base" ] && [ "$4" = "--is-ancestor" ] \
+   && [ "$5" = "${CHILD_CONTRACT_SHA}" ]; then
+  exit 0
+fi
+exec /usr/bin/git "$@"
+`,
+    { mode: 0o755 },
+  );
+  return dir;
+})();
+
 /** Register invocations run from the clone (cwd inside it so the relative
  * --estimates default and campaigns/ root land there) with the passing
  * host-stats fixture injected through the seam. */
@@ -495,41 +534,65 @@ test('register --global-cap forwards the flag into the frozen cap reading', () =
   expect(res.stdout).toContain('max contemporaneous two-arm blocks = 2');
 }, 120_000);
 
-test('register --confirm drives publication: full artifacts where the checkout carries the child contract, fail-closed at the contract gate where it does not', () => {
-  const res = registerCli([
-    'campaign',
-    'register',
-    fixtureSuite(),
-    '--estimates',
-    fixtureEstimates(),
-    '--confirm',
-  ]);
-  // Whether this environment's evals history contains D2's pinned
-  // implementation-merge commit decides which side is reachable — both
-  // prove --confirm entered the publication flow.
-  const has = spawnSync(
-    'git',
-    ['-C', EVALS_CHECKOUT, 'cat-file', '-e', CHILD_CONTRACT_SHA],
-    { encoding: 'utf8' },
-  ).status;
-  if (has === 0) {
-    expect(res.status).toBe(0);
-    const campaigns = join(EVALS_CHECKOUT, 'campaigns');
-    const dir = readdirSync(campaigns)
-      .filter((d) => d.endsWith('-testsuite'))
-      .map((d) => join(campaigns, d))[0];
-    expect(dir).toBeDefined();
-    for (const f of ['campaign.json', 'journal.db', '.quorum-snapshot-ok']) {
-      expect(existsSync(join(dir!, f))).toBe(true);
-    }
-    const doc: { contention?: { global_run_cap?: number } } = JSON.parse(
-      readFileSync(join(dir!, 'campaign.json'), 'utf8'),
-    ) as { contention?: { global_run_cap?: number } };
-    expect(doc.contention?.global_run_cap).toBe(8);
-  } else {
-    // Fail-closed at the child-contract gate, naming the pinned minimum —
-    // publication was attempted and refused, never silently skipped.
-    expect(res.status).toBe(1);
-    expect(res.stderr).toContain(CHILD_CONTRACT_SHA);
+test('register --confirm publishes: campaign.json + journal + snapshot, digest printed, exit 0', () => {
+  // The child-contract probe's prerequisites come through the seams: D2's
+  // pinned implementation-merge commit exists in no reachable object store
+  // (cat-file misses locally AND on origin), so the fixture PATH carries a
+  // git shim that answers exactly that merge-base --is-ancestor question
+  // and delegates everything else to the real git — the same PATH-shim
+  // mechanism the mock-gauntlet harness uses. Everything else is real:
+  // worktree materialization, bun installs, publication order.
+  const res = registerCli(
+    [
+      'campaign',
+      'register',
+      fixtureSuite(),
+      '--estimates',
+      fixtureEstimates(),
+      '--confirm',
+    ],
+    { env: { PATH: `${GIT_SHIM_DIR}:${envSnapshot()['PATH'] ?? ''}` } },
+  );
+  expect(res.stderr).toBe('');
+  expect(res.status).toBe(0);
+  const digest = /[0-9a-f]{64}/.exec(
+    /digest: ([0-9a-f]{64})/.exec(res.stdout)?.[1] ?? '',
+  )?.[0];
+  expect(digest).toBeDefined();
+  const campaigns = join(EVALS_CHECKOUT, 'campaigns');
+  const dir = readdirSync(campaigns)
+    .filter((d) => d.endsWith('-testsuite'))
+    .map((d) => join(campaigns, d))[0];
+  expect(dir).toBeDefined();
+  expect(basename(dir!)).toBe(`${digest!.slice(0, 8)}-testsuite`);
+  for (const f of [
+    'campaign.json',
+    'journal.db',
+    '.quorum-snapshot-ok',
+    'evals/credentials.yaml',
+    'gauntlet/README.md',
+  ]) {
+    expect(existsSync(join(dir!, f))).toBe(true);
   }
+  const doc: { digest?: string; contention?: { global_run_cap?: number } } =
+    JSON.parse(readFileSync(join(dir!, 'campaign.json'), 'utf8')) as {
+      digest?: string;
+      contention?: { global_run_cap?: number };
+    };
+  expect(doc.digest).toBe(digest);
+  expect(doc.contention?.global_run_cap).toBe(8);
 }, 300_000);
+
+test('the D3 verbs resolve exit codes in-process (only the Commander action exits)', async () => {
+  // C8 boundary: a fail-closed verb error must RETURN a code, never
+  // process.exit inside the helper — an in-process caller (this test) would
+  // otherwise die with it.
+  expect(await campaignRun('/tmp/quorum-no-such-campaign-xyz')).toBe(1);
+  expect(await campaignCancel('/tmp/quorum-no-such-campaign-xyz', {})).toBe(1);
+  expect(
+    campaignRegister('/tmp/no-such-suite.yaml', {
+      estimates: '/tmp/no-such-estimates.json',
+      globalCap: '8',
+    }),
+  ).toBe(1);
+}, 30_000);

@@ -21,7 +21,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readLiveSpendHolder } from '../src/campaign/locks.ts';
-import { envSnapshot } from '../src/env.ts';
+import { deleteProcessEnv, envSnapshot, setProcessEnv } from '../src/env.ts';
+import { runBatch } from '../src/run-all/index.ts';
 import { publishedCampaign } from './campaign-recovery-fixtures.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
@@ -368,3 +369,44 @@ test('a floors refusal refuses the run-all launch AND releases the acquired lock
   expect(batch.stderr).toContain('resource-floor preflight failed');
   expect(readLiveSpendHolder(lock)).toBeNull();
 }, 120_000);
+
+test('a throwing run-all stream releases the acquired lock (nothing throws between acquire and the envelope)', async () => {
+  // In-process runBatch with a stream that throws on every write: the
+  // acquisition notice itself must sit INSIDE the release envelope — a
+  // write failure between acquire and try would strand the host-wide token.
+  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+  const prevLock = envSnapshot()['QUORUM_LIVE_SPEND_LOCK'];
+  const prevFixture = envSnapshot()['QUORUM_HOST_STATS_PROBE_FIXTURE'];
+  setProcessEnv('QUORUM_LIVE_SPEND_LOCK', lock);
+  setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', HOST_STATS_FIXTURE);
+  try {
+    const scenariosRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
+    const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
+    const boom: { write(_s: string): void } = {
+      write() {
+        throw new Error('stream exploded');
+      },
+    };
+    await runBatch({
+      scenariosRoot,
+      codingAgentsDir: REAL_CODING_AGENTS,
+      outRoot,
+      jobs: 1,
+      stream: boom,
+    }).then(
+      () => {
+        throw new Error('runBatch resolved despite the throwing stream');
+      },
+      (err: unknown) => {
+        expect((err as Error).message).toBe('stream exploded');
+      },
+    );
+    expect(readLiveSpendHolder(lock)).toBeNull();
+  } finally {
+    if (prevLock === undefined) deleteProcessEnv('QUORUM_LIVE_SPEND_LOCK');
+    else setProcessEnv('QUORUM_LIVE_SPEND_LOCK', prevLock);
+    if (prevFixture === undefined)
+      deleteProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE');
+    else setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', prevFixture);
+  }
+}, 60_000);

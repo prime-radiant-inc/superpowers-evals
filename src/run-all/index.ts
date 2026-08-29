@@ -468,8 +468,11 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     clock,
     identity: realProcessIdentityProbe,
   });
-  stream.write('live-spend lock acquired (run-all)\n');
   try {
+    // Nothing may throw between acquisition and this envelope's release —
+    // including the acquisition notice itself (a throwing stream must
+    // release, not strand the token).
+    stream.write('live-spend lock acquired (run-all)\n');
     // R-LCK-2 floors preflight — unconditional (no platform bypass), inside
     // the release envelope, immediately after acquisition (acquire ->
     // preflight -> admit): a floor refusal must release the lock, never

@@ -135,29 +135,24 @@ export async function executeRunCommand(
   // its exit would otherwise bypass the release `finally` below and leave
   // the host-wide lock held until heartbeat staleness.
   let spendLock: LiveSpendLock | null = null;
-  // The stop path RETURNS its exit code; only the signal listener (the one
-  // place an exit is possible — a handler cannot unwind the caller) exits
-  // on it, after the stopped verdict is written and the lock released.
-  const stopCode = (): number => {
-    currentGauntletChild()?.kill('SIGINT');
-    if (runDirForStop !== null) {
-      writeStoppedVerdict(runDirForStop, {
-        scenario: scenarioId,
-        codingAgent: opts.codingAgent,
-        startedAt,
-        ...(credentialName !== undefined ? { credential: credentialName } : {}),
-        ...(labelsForStop !== undefined ? { labels: labelsForStop } : {}),
-        ...(campaignIdentity !== undefined
-          ? { campaign: campaignIdentity }
-          : {}),
-      });
-    }
-    spendLock?.release();
-    return 2;
-  };
-  process.once('SIGINT', () => {
-    process.exit(stopCode());
+  // The stop path RECORDS its exit code (a signal handler cannot unwind its
+  // caller): the listener kills the gauntlet child so the awaited run
+  // settles, and the resolved code — with the stopped verdict written and
+  // the lock released below — reaches the CLI entrypoint, which exits.
+  let stopExitCode: number | null = null;
+  const stoppedIdentity = () => ({
+    scenario: scenarioId,
+    codingAgent: opts.codingAgent,
+    startedAt,
+    ...(credentialName !== undefined ? { credential: credentialName } : {}),
+    ...(labelsForStop !== undefined ? { labels: labelsForStop } : {}),
+    ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
   });
+  const onSigint = (): void => {
+    currentGauntletChild()?.kill('SIGINT');
+    stopExitCode = 2;
+  };
+  process.once('SIGINT', onSigint);
   // Explicit superpowers mode from the CLI projection. Resolved paths only —
   // materialization/verification belongs to the spawning campaign.
   const superpowers: SuperpowersSpec | undefined =
@@ -230,6 +225,14 @@ export async function executeRunCommand(
         labelsForStop = labels;
       },
     });
+    if (stopExitCode !== null) {
+      // The stop is terminal and LAST: the runner may have written its own
+      // error verdict while settling — the stopped verdict overwrites it.
+      if (runDirForStop !== null) {
+        writeStoppedVerdict(runDirForStop, stoppedIdentity());
+      }
+      return stopExitCode;
+    }
     process.stdout.write(`run-id: ${runId(runDir)}\n`);
     process.stdout.write(
       render(verdict, runDir, {
@@ -238,7 +241,18 @@ export async function executeRunCommand(
       }),
     );
     return exitCodeFor(verdict.final);
+  } catch (err) {
+    if (stopExitCode !== null) {
+      // The run settled by REJECTING (the killed child propagated): the
+      // stop verdict and its code still win.
+      if (runDirForStop !== null) {
+        writeStoppedVerdict(runDirForStop, stoppedIdentity());
+      }
+      return stopExitCode;
+    }
+    throw err;
   } finally {
+    process.off('SIGINT', onSigint);
     spendLock?.release();
   }
 }
