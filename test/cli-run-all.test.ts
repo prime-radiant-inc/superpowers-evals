@@ -3,9 +3,15 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { envSnapshot } from '../src/env.ts';
 import { buildChildRunArgs } from '../src/run-all/index.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
+
+// runBatch acquires the host-wide live-spend lock (R-LCK-2): pin it per-file
+// through the env seam so parallel test processes never contend for the $HOME
+// default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
 const CAMPAIGN_CREDENTIALS = resolve(
   import.meta.dir,
   'fixtures',
@@ -131,7 +137,10 @@ test('run-all accepts --heartbeat-seconds 0 (heartbeat disabled)', () => {
       '--out-root',
       out,
     ],
-    { encoding: 'utf8' },
+    {
+      encoding: 'utf8',
+      env: { ...envSnapshot(), QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK },
+    },
   );
   expect(proc.status).toBe(0);
 });
@@ -200,7 +209,10 @@ test('run-all accepts --credentials-file while --credentials remains a CSV filte
       '--heartbeat-seconds',
       '0',
     ],
-    { encoding: 'utf8' },
+    {
+      encoding: 'utf8',
+      env: { ...envSnapshot(), QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK },
+    },
   );
 
   expect(proc.status).toBe(0);
@@ -269,7 +281,10 @@ test('internal run-all child consumes an unlabeled canonical snapshot', () => {
       '--credentials-file',
       credentials,
     ],
-    { encoding: 'utf8' },
+    {
+      encoding: 'utf8',
+      env: { ...envSnapshot(), QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK },
+    },
   );
 
   expect(proc.status).toBe(2);

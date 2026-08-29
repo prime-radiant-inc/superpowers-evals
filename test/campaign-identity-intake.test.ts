@@ -24,6 +24,12 @@ const REPO_CREDENTIALS = resolve(import.meta.dir, '..', 'credentials.yaml');
 // provisioning) while the generated hang shim provides `gauntlet`.
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 
+// run-child enters the shared run entry uncovered unless a test sets the
+// covered marker, so it acquires the live-spend lock (R-LCK-2): pin it to a
+// per-file tmp path so parallel test processes never contend for the $HOME
+// default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
+
 const IDENTITY = {
   campaign_id: 'c'.repeat(64),
   comparison_id: 'c1',
@@ -81,6 +87,7 @@ function runChild(
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         PATH: `${mockGauntletDir(fixture)}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
@@ -285,6 +292,7 @@ test('stopped path: SIGINT writes the stopped verdict stamped with the identity'
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',

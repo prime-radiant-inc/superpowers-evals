@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
 import { checkArmSuiteFiles } from '../campaign/arm-suite-check.ts';
+import { DEFAULT_GLOBAL_CAP } from '../campaign/registration.ts';
 import { checkScenarioMeta } from '../campaign/scenario-meta-check.ts';
 import {
   extractManifest,
@@ -37,9 +38,13 @@ import {
 import {
   type CampaignAcquireOptions,
   type CampaignEstimatesOptions,
+  type CampaignRegisterOptions,
   type CampaignSimulateOptions,
   campaignAcquire,
+  campaignCancel,
   campaignEstimates,
+  campaignRegister,
+  campaignRun,
   campaignSimulate,
 } from './campaign.ts';
 import { costsJson, loadCostRows, renderCosts } from './costs.ts';
@@ -161,12 +166,18 @@ program
   )
   .option('--no-superpowers', 'run stock — suppress all superpowers staging')
   .action(
-    (scenario: string, opts: RunCommandOptions & { superpowers?: boolean }) =>
-      executeRunCommand(
-        scenario,
-        normalizeRunCommandOptions(opts),
-        opts.credentialsFile === undefined ? undefined : 'external-campaign',
-      ),
+    async (
+      scenario: string,
+      opts: RunCommandOptions & { superpowers?: boolean },
+    ) => {
+      process.exit(
+        await executeRunCommand(
+          scenario,
+          normalizeRunCommandOptions(opts),
+          opts.credentialsFile === undefined ? undefined : 'external-campaign',
+        ),
+      );
+    },
   );
 
 program
@@ -498,7 +509,9 @@ program
 
 const campaign = program
   .command('campaign')
-  .description('campaign platform (Phase 0: corpus, estimates, simulation)');
+  .description(
+    'campaign platform (corpus, estimates, simulation; register/run/cancel)',
+  );
 campaign
   .command('acquire')
   .description('pull a run-ID-selected corpus (runs on the appliance)')
@@ -546,6 +559,43 @@ campaign
   .option('--seal-allowance-min <n>', 'seal/report allowance minutes', '15')
   .requiredOption('--out <dir>', 'output dir')
   .action((opts: CampaignSimulateOptions) => campaignSimulate(opts));
+campaign
+  .command('register')
+  .description('register a suite as a frozen campaign (snapshot-first)')
+  .argument('<suite>', 'suite YAML path')
+  .option('--estimates <path>', 'estimates artifact', 'estimates/v1.json')
+  .option(
+    '--global-cap <int>',
+    'per-sample global slot cap (historical --jobs)',
+    String(DEFAULT_GLOBAL_CAP),
+  )
+  .option(
+    '--confirm',
+    'required to publish; without it the verb prints grid + digest and exits 0',
+  )
+  .option('--dry-run', 'grid + exclusions + digest only, never writes')
+  .action((suite: string, opts: CampaignRegisterOptions) =>
+    campaignRegister(suite, opts),
+  );
+// NO options in v1 (the pinned CLI table): the source checkouts come from
+// the environment — $GAUNTLET_ROOT / $SUPERPOWERS_ROOT; evals = this
+// checkout (C12).
+campaign
+  .command('run')
+  .description('start/resume a registered campaign (idempotent resume verb)')
+  .argument('<campaign-dir>', 'campaign directory')
+  .action((dir: string) => campaignRun(dir));
+campaign
+  .command('cancel')
+  .description('cancel a campaign (marker + pinned kill/journal order)')
+  .argument('<campaign-dir>', 'campaign directory')
+  .option(
+    '--reason <text>',
+    'cancellation reason recorded in campaign_cancelled',
+  )
+  .action((dir: string, opts: { reason?: string }) =>
+    campaignCancel(dir, opts),
+  );
 
 program
   .command('show')

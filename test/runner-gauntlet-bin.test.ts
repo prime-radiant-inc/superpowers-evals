@@ -13,6 +13,10 @@ import { join, resolve } from 'node:path';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const RUN_CHILD = resolve(import.meta.dir, '..', 'src', 'cli', 'run-child.ts');
+// Direct `quorum run` is a top-level live-spend spender (R-LCK-2): pin the
+// lock to a per-file tmp path so parallel test processes never contend for
+// the $HOME default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
 test('gauntletBin wins over a decoy gauntlet earlier on PATH', () => {
@@ -59,6 +63,7 @@ test('gauntletBin wins over a decoy gauntlet earlier on PATH', () => {
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         PATH: `${decoyDir}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',

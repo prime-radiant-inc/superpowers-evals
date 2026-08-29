@@ -1,4 +1,5 @@
 // src/cli/campaign.ts
+
 import {
   existsSync,
   mkdirSync,
@@ -9,6 +10,7 @@ import {
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
+import { currentCheckoutSha } from '../appliance/git.ts';
 import { acquireCorpus } from '../campaign/acquire.ts';
 import {
   buildEstimates,
@@ -724,6 +726,199 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
       `sweep: ${results.length} runs → ${opts.out}/sweep-results.jsonl, sweep-table.md\n`,
     );
   } catch (err: unknown) {
+    catchCliError(err);
+  }
+}
+
+// ── D3 operator verbs: register | run | cancel (task 9c) ──────────────────
+// The pinned CLI option/default table (spec §registration, R-RCV-7):
+//   register: <suite> --estimates <path> (default estimates/v1.json)
+//             --global-cap <int> (default DEFAULT_GLOBAL_CAP) --confirm
+//            --dry-run; noninteractive — absent --confirm prints and exits 0.
+//   run:      <campaign-dir> — NO options in v1.
+//   cancel:   <campaign-dir> --reason <text>.
+
+import { isAbsolute } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { defaultCommandRunner } from '../agents/command-runner.ts';
+import { linuxHostStatsProbe } from '../campaign/host-stats.ts';
+import { realProcessIdentityProbe } from '../campaign/locks.ts';
+import { cancelCampaign, resumeCampaign } from '../campaign/recovery.ts';
+import { registerCampaign } from '../campaign/registration.ts';
+import { parseCredentialsFile } from '../contracts/credential.ts';
+import { getEnv } from '../env.ts';
+import { repoRoot } from '../paths.ts';
+import { RealClock } from '../scheduler/clock.ts';
+
+/** C12(b): the authoritative NON-CLI source-checkout discovery. No flags
+ * exist on `campaign register|run` (the pinned table has none in v1), so the
+ * three checkouts the drift repair and snapshot materialization drive come
+ * from the seams the repo already owns: evals = the running checkout
+ * (`repoRoot()` — run-from-source), gauntlet = `$GAUNTLET_ROOT` (the same
+ * channel scripts/evals-container resolves the gauntlet checkout through),
+ * superpowers = `$SUPERPOWERS_ROOT` (the standing host-env export every
+ * needsSuperpowersRoot helper fail-fasts on). Fail-closed: an unset,
+ * non-absolute, or missing directory refuses loudly — never a silent default
+ * to the evals root, which would snapshot the wrong repository. */
+export interface SourceCheckouts {
+  readonly evalsCheckout: string;
+  readonly gauntletCheckout: string;
+  readonly superpowersCheckout: string;
+}
+
+export function resolveSourceCheckouts(): SourceCheckouts {
+  const checkoutFromEnv = (name: string): string => {
+    const value = getEnv(name);
+    if (value === undefined || value === '') {
+      cliError(
+        `${name} is not set — the campaign verbs resolve their source checkouts from the environment (evals = this checkout, gauntlet = $GAUNTLET_ROOT, superpowers = $SUPERPOWERS_ROOT); no CLI flag exists in v1`,
+      );
+    }
+    if (!isAbsolute(value)) {
+      cliError(`${name} must be an absolute path (got '${value}')`);
+    }
+    if (!existsSync(value) || !statSync(value).isDirectory()) {
+      cliError(`${name} does not exist or is not a directory: ${value}`);
+    }
+    return value;
+  };
+  return {
+    evalsCheckout: repoRoot(),
+    gauntletCheckout: checkoutFromEnv('GAUNTLET_ROOT'),
+    superpowersCheckout: checkoutFromEnv('SUPERPOWERS_ROOT'),
+  };
+}
+
+export interface CampaignRegisterOptions {
+  estimates: string;
+  globalCap: string;
+  confirm?: boolean;
+  dryRun?: boolean;
+}
+
+export function campaignRegister(
+  suitePath: string,
+  opts: CampaignRegisterOptions,
+): void {
+  try {
+    const globalCap = /^-?\d+$/.test(opts.globalCap)
+      ? Number(opts.globalCap)
+      : Number.NaN;
+    if (!Number.isInteger(globalCap) || globalCap < 1) {
+      cliError(
+        `--global-cap must be an integer >= 1 (got '${opts.globalCap}')`,
+      );
+    }
+    const checkouts = resolveSourceCheckouts();
+    // No --ref flags exist in v1 (the pinned table), so the verb freezes
+    // what the source checkouts currently ARE: each checkout's HEAD as a
+    // full SHA (R-REG-8's 40-hex-at-the-campaign-layer rule). This is the
+    // appliance seam's currentCheckoutSha — no fetch, no fast-forward, the
+    // tree registration actually reads.
+    const evalsRef = currentCheckoutSha(
+      checkouts.evalsCheckout,
+      'evals checkout',
+      defaultCommandRunner,
+    );
+    const gauntletRef = currentCheckoutSha(
+      checkouts.gauntletCheckout,
+      'gauntlet checkout',
+      defaultCommandRunner,
+    );
+    const estimatesRaw = JSON.parse(readFileSync(opts.estimates, 'utf8'));
+    const estimates = EstimatesArtifactSchema.parse(estimatesRaw);
+    const suiteRaw = readFileSync(suitePath, 'utf8');
+    const result = registerCampaign({
+      suitePath,
+      suiteRaw,
+      campaignsRoot: join(repoRoot(), 'campaigns'),
+      estimates,
+      globalCap,
+      confirm: opts.confirm === true,
+      dryRun: opts.dryRun === true,
+      evalsCheckout: checkouts.evalsCheckout,
+      gauntletCheckout: checkouts.gauntletCheckout,
+      superpowersCheckout: checkouts.superpowersCheckout,
+      evalsRef,
+      gauntletRef,
+      runner: defaultCommandRunner,
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+      probe: linuxHostStatsProbe(repoRoot()),
+      env: (key) => getEnv(key),
+      registeredBy: getEnv('USER') ?? 'unknown',
+      nowMs: Date.now(),
+    });
+    process.stdout.write(`${result.printed}\n`);
+  } catch (err) {
+    catchCliError(err);
+  }
+}
+
+export function campaignRun(campaignDir: string): void {
+  try {
+    if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
+      cliError(`campaign directory does not exist: ${campaignDir}`);
+    }
+    // The checkouts are the SOURCE repos the drift repair drives
+    // `git worktree remove/prune` against (their .git/worktrees hold the
+    // registrations) — never the campaign dir itself (that is the worktree
+    // DEST). Same non-CLI discovery as `campaign register` (C12b).
+    const checkouts = resolveSourceCheckouts();
+    const credentials = parseCredentialsFile(
+      parseYaml(
+        readFileSync(join(campaignDir, 'evals', 'credentials.yaml'), 'utf8'),
+      ),
+    );
+    resumeCampaign({
+      campaignDir,
+      credentials,
+      evalsCheckout: checkouts.evalsCheckout,
+      gauntletCheckout: checkouts.gauntletCheckout,
+      superpowersCheckout: checkouts.superpowersCheckout,
+    })
+      .then((outcome) => {
+        process.stdout.write(
+          `campaign run finished: ${outcome.status}${
+            outcome.reason !== undefined ? ` (${outcome.reason})` : ''
+          }\n`,
+        );
+      })
+      .catch((err: unknown) => catchCliError(err));
+  } catch (err) {
+    catchCliError(err);
+  }
+}
+
+export async function campaignCancel(
+  campaignDir: string,
+  opts: { reason?: string },
+): Promise<void> {
+  try {
+    if (!existsSync(campaignDir) || !statSync(campaignDir).isDirectory()) {
+      cliError(`campaign directory does not exist: ${campaignDir}`);
+    }
+    const result = await cancelCampaign({
+      campaignDir,
+      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+    });
+    if (!result.cancelled) {
+      // The pinned sequence did NOT complete (a group survived TERM+KILL):
+      // cancelCampaign already streamed the operator action; the verb exits
+      // nonzero so scripts never read an incomplete cancel as done.
+      process.stderr.write(
+        'campaign cancel incomplete — campaign_cancelled NOT journaled; complete the operator action above, then re-run the cancel\n',
+      );
+      process.exit(1);
+    }
+    process.stdout.write(
+      `campaign cancelled (${
+        result.postCrash ? 'post-crash path' : 'live dispatcher'
+      })\n`,
+    );
+  } catch (err) {
     catchCliError(err);
   }
 }

@@ -35,12 +35,18 @@ program
   )
   .option('--no-superpowers', 'run stock — suppress all superpowers staging')
   .action(
-    (scenario: string, opts: RunCommandOptions & { superpowers?: boolean }) =>
-      executeRunCommand(
-        scenario,
-        normalizeRunCommandOptions(opts),
-        'canonical-snapshot',
-      ),
+    async (
+      scenario: string,
+      opts: RunCommandOptions & { superpowers?: boolean },
+    ) => {
+      process.exit(
+        await executeRunCommand(
+          scenario,
+          normalizeRunCommandOptions(opts),
+          'canonical-snapshot',
+        ),
+      );
+    },
   );
 
 await program.parseAsync(process.argv);

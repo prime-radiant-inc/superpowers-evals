@@ -19,6 +19,10 @@ const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const RUN_CHILD = resolve(import.meta.dir, '..', 'src', 'cli', 'run-child.ts');
 const REPO_CREDENTIALS = resolve(import.meta.dir, '..', 'credentials.yaml');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
+// Direct `quorum run` is a top-level live-spend spender (R-LCK-2): pin the
+// lock to a per-file tmp path so parallel test processes never contend for
+// the $HOME default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
 
 function scenario(): string {
@@ -83,6 +87,7 @@ function spawnQuorumRun(
     {
       env: {
         ...childEnv,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         PATH: `${mockGauntletDir('pass')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',

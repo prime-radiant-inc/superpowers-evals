@@ -13,6 +13,10 @@ import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
+// Direct `quorum run` is a top-level live-spend spender (R-LCK-2): pin the
+// lock to a per-file tmp path so parallel test processes never contend for
+// the $HOME default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
 const CAMPAIGN_CREDENTIALS = resolve(
   import.meta.dir,
   'fixtures',
@@ -57,6 +61,7 @@ function runCli(
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         // The fixture selection rides in the generated gauntlet shim (the
         // runner's gauntlet-env projection strips a host-exported
         // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
@@ -212,6 +217,7 @@ test('direct run validates an arbitrary external credentials file before allocat
       encoding: 'utf8',
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         QUORUM_INTERNAL_CREDENTIALS_SNAPSHOT_PATH: credentials,
       },
     },

@@ -4,6 +4,16 @@ import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
+import {
+  DEFAULT_RESOURCE_FLOORS,
+  linuxHostStatsProbe,
+  preflightResourceFloors,
+} from '../campaign/host-stats.ts';
+import {
+  acquireLiveSpendLock,
+  COVERED_BY_LOCK_ENV,
+  realProcessIdentityProbe,
+} from '../campaign/locks.ts';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import { runnable } from '../contracts/batch.ts';
@@ -220,8 +230,14 @@ export function buildChildRunArgs(args: InvokeChildArgs): string[] {
 }
 
 export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
+  // Children never acquire (R-LCK-2): runBatch holds the host-wide
+  // live-spend lock for the whole drive, so its children ride the holder's
+  // accounting via the same explicit marker channel the campaign spawner
+  // uses (src/campaign/spawn.ts). Without it the child's shared run entry
+  // would refuse against its own parent's lock.
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
+    [COVERED_BY_LOCK_ENV]: '1',
     ...(args.extraEnv ?? {}),
   };
   return spawnCollectRunId({
@@ -442,226 +458,257 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     throw new Error(`jobs must be >= 1, got ${jobs}`);
   }
 
-  // Validate the selected campaign before matrix construction or batch
-  // allocation, so a bad explicit file cannot create a half-batch or launch a
-  // paid child.
-  const credentials = loadBatchCredentials(credentialsPath);
-  if (credentialsPath !== undefined) {
-    assertCampaignCredentials(credentials);
+  // R-LCK-2 surface (a): run-all is a top-level spender — acquire the
+  // host-wide live-spend lock before any scheduling and hold it for the
+  // whole drive. A LockError propagates to run-all's existing error
+  // surface: refusal names the live holder (pid, heartbeat age, campaign
+  // id). The children this batch spawns never acquire — invokeChild marks
+  // them covered by this holder's accounting.
+  const spendLock = acquireLiveSpendLock({
+    clock,
+    identity: realProcessIdentityProbe,
+  });
+  // R-LCK-2 floors preflight — standalone AFTER acquisition (the pinned
+  // acquire -> preflight -> admit order; 2b's layering keeps it out of the
+  // lock claim). The production probe reads /proc and refuses non-Linux
+  // hosts by design; the floors gate runs exactly where that probe exists,
+  // so the portable local workflow keeps its documented break-glass surface
+  // instead of being Linux-gated by side effect.
+  if (process.platform === 'linux') {
+    preflightResourceFloors(
+      linuxHostStatsProbe(resolve(outRoot)).sample(Date.now()),
+      DEFAULT_RESOURCE_FLOORS,
+    );
   }
+  stream.write('live-spend lock acquired (run-all)\n');
+  try {
+    // Validate the selected campaign before matrix construction or batch
+    // allocation, so a bad explicit file cannot create a half-batch or launch a
+    // paid child.
+    const credentials = loadBatchCredentials(credentialsPath);
+    if (credentialsPath !== undefined) {
+      assertCampaignCredentials(credentials);
+    }
 
-  const entries = buildMatrix({
-    scenariosRoot,
-    codingAgentsDir,
-    ...(agentFilter !== undefined ? { agentFilter } : {}),
-    ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
-    ...(credentialFilter !== undefined ? { credentialFilter } : {}),
-    tierFilter: tier,
-    includeDrafts,
-    credentials,
-  });
-
-  const batchDir = allocateBatchDir({ outRoot });
-  const startedAt = new Date();
-  const total = entries.length;
-  const indexed = entries.map((e, i): readonly [number, MatrixEntry] => [
-    i + 1,
-    e,
-  ]);
-  const runnableIndexed = indexed.filter(([, e]) => runnable(e));
-  const skippedIndexed = indexed.filter(([, e]) => !runnable(e));
-  const agentsInBatch = [...new Set(entries.map((e) => e.codingAgent))].sort();
-
-  writeBatchHeader({
-    batchDir,
-    codingAgents: agentsInBatch,
-    jobs,
-    startedAt: startedAt.toISOString(),
-  });
-  const snapshotPath = writeCredentialsSnapshot({
-    credentials,
-    destination: batchCredentialsSnapshotPath(batchDir),
-  });
-  writeGridManifest({
-    scenariosRoot,
-    codingAgentsDir,
-    outPath: join(resolve(outRoot), 'grid-manifest.json'),
-    now: new Date().toISOString(),
-  });
-
-  const counts = {
-    pass: 0,
-    fail: 0,
-    indeterminate: 0,
-    unknown: 0,
-    skipped: skippedIndexed.length,
-    rate_limited: 0,
-    stopped: 0,
-  };
-  let batchCostTotal = 0;
-
-  const println = (s: string): void => {
-    stream.write(`${s}\n`);
-  };
-
-  // Header banner (run_batch console.print).
-  println(
-    `batch ${basename(batchDir)} · ${total} pairs ` +
-      `(${runnableIndexed.length} runnable, ${skippedIndexed.length} skipped) ` +
-      `· --jobs ${jobs}`,
-  );
-
-  // Skips render first, synchronously, with their reason label.
-  for (const [idx, entry] of skippedIndexed) {
-    println(skipLine(idx, total, entry));
-    appendResultRecord({
-      batchDir,
-      entry,
-      runId: null,
-      skipped: entry.skippedReason,
-    });
-  }
-
-  // The cell's 1-based idx in the scheduler's view is its position among the
-  // RUNNABLE cells. run-all's display labels are the matrix's global 1..total
-  // indices, so map the scheduler idx back to the matrix idx via this array.
-  const runnableEntries = runnableIndexed.map(([, entry]) => entry);
-  const matrixIdxForRunnable = runnableIndexed.map(([idx]) => idx);
-  const matrixIdxFor = (schedulerIdx: number): number =>
-    matrixIdxForRunnable[schedulerIdx - 1] ?? schedulerIdx;
-
-  // Track in-flight child pids so a signal can SIGINT them. The registry wraps
-  // invoke; its pid set stays honest (added on spawn, dropped on settle).
-  const pidRegistry = createChildPidRegistry();
-  const trackedInvoke = pidRegistry.track(invoke);
-
-  // The scheduler invokes a cell; adapt the MatrixEntry to invoke_child's args.
-  const invokeCell = (entry: MatrixEntry): Promise<ChildResult> =>
-    trackedInvoke({
-      scenarioDir: entry.scenarioDir,
-      codingAgent: entry.codingAgent,
+    const entries = buildMatrix({
+      scenariosRoot,
       codingAgentsDir,
-      outRoot,
-      ...(entry.credential !== '' ? { credential: entry.credential } : {}),
-      credentialsPath: snapshotPath,
-      ...(graderModel !== undefined ? { graderModel } : {}),
+      ...(agentFilter !== undefined ? { agentFilter } : {}),
+      ...(scenarioFilter !== undefined ? { scenarioFilter } : {}),
+      ...(credentialFilter !== undefined ? { credentialFilter } : {}),
+      tierFilter: tier,
+      includeDrafts,
+      credentials,
     });
 
-  // The rate-limit latch hook: a finished child whose verdict.json carries the
-  // Code Assist marker latches its harness.
-  const isRateLimited = (result: ChildResult): boolean =>
-    result.run_id !== null &&
-    isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)));
+    const batchDir = allocateBatchDir({ outRoot });
+    const startedAt = new Date();
+    const total = entries.length;
+    const indexed = entries.map((e, i): readonly [number, MatrixEntry] => [
+      i + 1,
+      e,
+    ]);
+    const runnableIndexed = indexed.filter(([, e]) => runnable(e));
+    const skippedIndexed = indexed.filter(([, e]) => !runnable(e));
+    const agentsInBatch = [
+      ...new Set(entries.map((e) => e.codingAgent)),
+    ].sort();
 
-  // Liveness: a tracker fed every scheduler event, read by the heartbeat timer.
-  const heartbeat = new HeartbeatTracker(runnableEntries.length);
+    writeBatchHeader({
+      batchDir,
+      codingAgents: agentsInBatch,
+      jobs,
+      startedAt: startedAt.toISOString(),
+    });
+    const snapshotPath = writeCredentialsSnapshot({
+      credentials,
+      destination: batchCredentialsSnapshotPath(batchDir),
+    });
+    writeGridManifest({
+      scenariosRoot,
+      codingAgentsDir,
+      outPath: join(resolve(outRoot), 'grid-manifest.json'),
+      now: new Date().toISOString(),
+    });
 
-  // run-all consumes the scheduler's event stream: render the completion / skip
-  // line, append the results.jsonl record, and tally cost. Scheduler lifecycle
-  // events feed dashboard state, not the plain CLI output; batch_done's summary
-  // is printed after the drive resolves.
-  const onEvent = (event: SchedulerEvent): void => {
-    heartbeat.onEvent(event);
-    if (event.kind === 'cell_finished') {
-      const idx = matrixIdxFor(event.idx);
-      const final = finalStatusForResult(event.result, outRoot);
-      counts[final] += 1;
-      const cost =
-        event.run_id !== null ? runCost(join(outRoot, event.run_id)) : null;
-      if (cost !== null) {
-        batchCostTotal += cost;
-      }
-      println(doneLine(idx, total, event.entry, final, event.elapsed_s, cost));
+    const counts = {
+      pass: 0,
+      fail: 0,
+      indeterminate: 0,
+      unknown: 0,
+      skipped: skippedIndexed.length,
+      rate_limited: 0,
+      stopped: 0,
+    };
+    let batchCostTotal = 0;
+
+    const println = (s: string): void => {
+      stream.write(`${s}\n`);
+    };
+
+    // Header banner (run_batch console.print).
+    println(
+      `batch ${basename(batchDir)} · ${total} pairs ` +
+        `(${runnableIndexed.length} runnable, ${skippedIndexed.length} skipped) ` +
+        `· --jobs ${jobs}`,
+    );
+
+    // Skips render first, synchronously, with their reason label.
+    for (const [idx, entry] of skippedIndexed) {
+      println(skipLine(idx, total, entry));
       appendResultRecord({
         batchDir,
-        entry: event.entry,
-        runId: event.run_id,
-        skipped: null,
+        entry,
+        runId: null,
+        skipped: entry.skippedReason,
       });
-      return;
     }
-    if (event.kind === 'cell_skipped') {
-      const idx = matrixIdxFor(event.idx);
-      if (event.skipped_reason === 'rate-limited') {
-        counts.rate_limited += 1;
-        println(rateLimitLine(idx, total, event.entry));
+
+    // The cell's 1-based idx in the scheduler's view is its position among the
+    // RUNNABLE cells. run-all's display labels are the matrix's global 1..total
+    // indices, so map the scheduler idx back to the matrix idx via this array.
+    const runnableEntries = runnableIndexed.map(([, entry]) => entry);
+    const matrixIdxForRunnable = runnableIndexed.map(([idx]) => idx);
+    const matrixIdxFor = (schedulerIdx: number): number =>
+      matrixIdxForRunnable[schedulerIdx - 1] ?? schedulerIdx;
+
+    // Track in-flight child pids so a signal can SIGINT them. The registry wraps
+    // invoke; its pid set stays honest (added on spawn, dropped on settle).
+    const pidRegistry = createChildPidRegistry();
+    const trackedInvoke = pidRegistry.track(invoke);
+
+    // The scheduler invokes a cell; adapt the MatrixEntry to invoke_child's args.
+    const invokeCell = (entry: MatrixEntry): Promise<ChildResult> =>
+      trackedInvoke({
+        scenarioDir: entry.scenarioDir,
+        codingAgent: entry.codingAgent,
+        codingAgentsDir,
+        outRoot,
+        ...(entry.credential !== '' ? { credential: entry.credential } : {}),
+        credentialsPath: snapshotPath,
+        ...(graderModel !== undefined ? { graderModel } : {}),
+      });
+
+    // The rate-limit latch hook: a finished child whose verdict.json carries the
+    // Code Assist marker latches its harness.
+    const isRateLimited = (result: ChildResult): boolean =>
+      result.run_id !== null &&
+      isRateLimitedVerdict(readVerdict(join(outRoot, result.run_id)));
+
+    // Liveness: a tracker fed every scheduler event, read by the heartbeat timer.
+    const heartbeat = new HeartbeatTracker(runnableEntries.length);
+
+    // run-all consumes the scheduler's event stream: render the completion / skip
+    // line, append the results.jsonl record, and tally cost. Scheduler lifecycle
+    // events feed dashboard state, not the plain CLI output; batch_done's summary
+    // is printed after the drive resolves.
+    const onEvent = (event: SchedulerEvent): void => {
+      heartbeat.onEvent(event);
+      if (event.kind === 'cell_finished') {
+        const idx = matrixIdxFor(event.idx);
+        const final = finalStatusForResult(event.result, outRoot);
+        counts[final] += 1;
+        const cost =
+          event.run_id !== null ? runCost(join(outRoot, event.run_id)) : null;
+        if (cost !== null) {
+          batchCostTotal += cost;
+        }
+        println(
+          doneLine(idx, total, event.entry, final, event.elapsed_s, cost),
+        );
         appendResultRecord({
           batchDir,
           entry: event.entry,
-          runId: null,
-          skipped: 'rate-limited',
+          runId: event.run_id,
+          skipped: null,
         });
-      } else {
-        counts.stopped += 1;
-        println(stoppedLine(idx, total, event.entry));
-        appendResultRecord({
-          batchDir,
-          entry: event.entry,
-          runId: null,
-          skipped: 'stopped',
-        });
+        return;
       }
+      if (event.kind === 'cell_skipped') {
+        const idx = matrixIdxFor(event.idx);
+        if (event.skipped_reason === 'rate-limited') {
+          counts.rate_limited += 1;
+          println(rateLimitLine(idx, total, event.entry));
+          appendResultRecord({
+            batchDir,
+            entry: event.entry,
+            runId: null,
+            skipped: 'rate-limited',
+          });
+        } else {
+          counts.stopped += 1;
+          println(stoppedLine(idx, total, event.entry));
+          appendResultRecord({
+            batchDir,
+            entry: event.entry,
+            runId: null,
+            skipped: 'stopped',
+          });
+        }
+      }
+    };
+
+    // Build a limiterKey -> cap/spacing map from the credentials referenced by
+    // the runnable entries. Credential-less entries (limiterKey = agent name)
+    // carry no credential, so they get cap=null / spacing=0 (unbounded, no gap).
+    const capMap = buildCapMap(runnableEntries, credentials);
+
+    const handle = runSchedule({
+      cells: runnableEntries,
+      jobs,
+      capFor: (lk) => capMap.get(lk)?.maxConcurrency ?? null,
+      spacingFor: (lk) => capMap.get(lk)?.spacingSeconds ?? 0,
+      clock,
+      invoke: invokeCell,
+      isRateLimited,
+      onEvent,
+    });
+
+    // On the first signal, drive the graceful stop: cancel the queue and SIGINT
+    // in-flight children, then let `done` resolve normally so the footer below
+    // still runs (the bug that produced finished_at: null was no handler at all). A
+    // second signal hard-exits past any wedged child. Handlers are uninstalled in
+    // the finally so they never leak past the drive.
+    let stopping = false;
+    const onSignal = (signal: NodeJS.Signals = 'SIGINT'): void => {
+      if (stopping) {
+        hardExit();
+        return;
+      }
+      stopping = true;
+      println(`batch stopping · received ${signal}`);
+      stopBatch(handle, pidRegistry.pids, kill);
+    };
+    const uninstallSignals = installSignals(onSignal, stopSignals);
+    const stopHeartbeat = startHeartbeat(() => {
+      println(heartbeatLine(heartbeat.snapshot(new Date(), jobs)));
+    }, heartbeatSeconds);
+    try {
+      await handle.done;
+    } finally {
+      uninstallSignals();
+      stopHeartbeat();
     }
-  };
 
-  // Build a limiterKey -> cap/spacing map from the credentials referenced by
-  // the runnable entries. Credential-less entries (limiterKey = agent name)
-  // carry no credential, so they get cap=null / spacing=0 (unbounded, no gap).
-  const capMap = buildCapMap(runnableEntries, credentials);
+    const finishedAt = new Date();
+    writeBatchFooter({ batchDir, finishedAt: finishedAt.toISOString() });
 
-  const handle = runSchedule({
-    cells: runnableEntries,
-    jobs,
-    capFor: (lk) => capMap.get(lk)?.maxConcurrency ?? null,
-    spacingFor: (lk) => capMap.get(lk)?.spacingSeconds ?? 0,
-    clock,
-    invoke: invokeCell,
-    isRateLimited,
-    onEvent,
-  });
-
-  // On the first signal, drive the graceful stop: cancel the queue and SIGINT
-  // in-flight children, then let `done` resolve normally so the footer below
-  // still runs (the bug that produced finished_at: null was no handler at all). A
-  // second signal hard-exits past any wedged child. Handlers are uninstalled in
-  // the finally so they never leak past the drive.
-  let stopping = false;
-  const onSignal = (signal: NodeJS.Signals = 'SIGINT'): void => {
-    if (stopping) {
-      hardExit();
-      return;
-    }
-    stopping = true;
-    println(`batch stopping · received ${signal}`);
-    stopBatch(handle, pidRegistry.pids, kill);
-  };
-  const uninstallSignals = installSignals(onSignal, stopSignals);
-  const stopHeartbeat = startHeartbeat(() => {
-    println(heartbeatLine(heartbeat.snapshot(new Date(), jobs)));
-  }, heartbeatSeconds);
-  try {
-    await handle.done;
+    let summary =
+      `batch done · ${counts.pass} ✓ · ${counts.fail} ✗ · ` +
+      `${counts.indeterminate} ⊘ · ${counts.skipped} —`;
+    if (counts.rate_limited) summary += ` · ${counts.rate_limited} ⏸`;
+    if (counts.stopped) summary += ` · ${counts.stopped} ⏹`;
+    if (counts.unknown) summary += ` · ${counts.unknown} ?`;
+    summary += ` · wall ${fmtDuration(
+      (finishedAt.getTime() - startedAt.getTime()) / 1000,
+    )}`;
+    if (batchCostTotal > 0) summary += ` · cost $${batchCostTotal.toFixed(2)}`;
+    println(summary);
+    println(`artifacts: ${relativeToCwd(batchDir)}`);
+    return batchDir;
   } finally {
-    uninstallSignals();
-    stopHeartbeat();
+    spendLock.release();
   }
-
-  const finishedAt = new Date();
-  writeBatchFooter({ batchDir, finishedAt: finishedAt.toISOString() });
-
-  let summary =
-    `batch done · ${counts.pass} ✓ · ${counts.fail} ✗ · ` +
-    `${counts.indeterminate} ⊘ · ${counts.skipped} —`;
-  if (counts.rate_limited) summary += ` · ${counts.rate_limited} ⏸`;
-  if (counts.stopped) summary += ` · ${counts.stopped} ⏹`;
-  if (counts.unknown) summary += ` · ${counts.unknown} ?`;
-  summary += ` · wall ${fmtDuration(
-    (finishedAt.getTime() - startedAt.getTime()) / 1000,
-  )}`;
-  if (batchCostTotal > 0) summary += ` · cost $${batchCostTotal.toFixed(2)}`;
-  println(summary);
-  println(`artifacts: ${relativeToCwd(batchDir)}`);
-  return batchDir;
 }
 
 // One skip line for an upfront-skipped cell, with its reason label.

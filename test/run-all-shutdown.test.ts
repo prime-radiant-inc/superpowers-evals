@@ -7,9 +7,19 @@ import {
   type ChildResult,
   ResultRecordSchema,
 } from '../src/contracts/batch.ts';
+import { setProcessEnv } from '../src/env.ts';
 import type { KillFn } from '../src/run-all/child-stop.ts';
 import type { InvokeFn } from '../src/run-all/index.ts';
 import { runAllStopSignalsForEnv, runBatch } from '../src/run-all/index.ts';
+
+// runBatch now acquires the host-wide live-spend lock (R-LCK-2, task 9c):
+// pin it to a per-file tmp path through the env seam — parallel test
+// processes must never contend for the $HOME default, and tests never
+// touch $HOME.
+setProcessEnv(
+  'QUORUM_LIVE_SPEND_LOCK',
+  join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d'),
+);
 
 // A scenarios-root + coding-agents dir + empty out-root, one agent.
 function fixture(names: readonly string[]): {

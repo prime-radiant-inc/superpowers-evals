@@ -23,6 +23,10 @@ import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
+// Direct `quorum run` is a top-level live-spend spender (R-LCK-2): pin the
+// lock to a per-file tmp path so parallel test processes never contend for
+// the $HOME default and tests never touch $HOME.
+const SPEND_LOCK = join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d');
 // The REAL coding-agents/ dir (same rationale as cli-run.test.ts): a claude run
 // requires claude-context/ + claude.project-prompt.md, which only live here.
 const REAL_CODING_AGENTS = resolve(import.meta.dir, '..', 'coding-agents');
@@ -119,6 +123,7 @@ test('quorum run forwards SIGINT and writes a stopped verdict (exit 2)', async (
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         // The `hang` selection rides in the generated gauntlet shim (the
         // runner's gauntlet-env projection strips a host-exported
         // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
@@ -253,6 +258,7 @@ test('quorum run stopped during agent phase keeps parsed credential labels', asy
     {
       env: {
         ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         PATH: `${mockGauntletDir('hang')}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',

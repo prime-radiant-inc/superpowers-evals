@@ -2,16 +2,29 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
 import {
+  DEFAULT_RESOURCE_FLOORS,
+  linuxHostStatsProbe,
+  preflightResourceFloors,
+} from '../campaign/host-stats.ts';
+import {
+  acquireLiveSpendLock,
+  COVERED_BY_LOCK_ENV,
+  type LiveSpendLock,
+  realProcessIdentityProbe,
+} from '../campaign/locks.ts';
+import {
   type CampaignIdentity,
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
 import type { FinalStatus } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
+import { getEnv } from '../env.ts';
 import { assertNever } from '../invariant.ts';
 import { RunnerError } from '../runner/errors.ts';
 import { currentGauntletChild, runScenario } from '../runner/index.ts';
 import { writeStoppedVerdict } from '../runner/stopped.ts';
+import { RealClock } from '../scheduler/clock.ts';
 import { render } from './render.ts';
 import { resolveScenarioDir, scenarioName } from './scenario.ts';
 
@@ -92,17 +105,20 @@ export function runAllocatedLine(runDir: string): string {
 
 // Shared by the public `quorum run` command and run-all's narrow internal child
 // entrypoint. The caller fixes credential origin; no user input selects it.
+// Returns the process exit code (never process.exit inside — C8: an exit
+// here would bypass the live-spend lock's release `finally`); the CLI
+// boundaries (src/cli/index.ts, src/cli/run-child.ts) perform the exit.
 export async function executeRunCommand(
   scenario: string,
   opts: RunCommandOptions,
   credentialsOrigin: RunCredentialsOrigin,
-): Promise<void> {
+): Promise<number> {
   const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
   if (scn === undefined) {
     process.stderr.write(
       `scenario not found: ${scenario} (looked at the path and under ${opts.scenariosRoot}/)\n`,
     );
-    process.exit(2);
+    return 2;
   }
   const credentialName = resolveCredentialNameForAgent(
     resolve(opts.codingAgentsDir),
@@ -113,6 +129,11 @@ export async function executeRunCommand(
   const scenarioId = scenarioName(scn);
   let runDirForStop: string | null = null;
   let labelsForStop: CredentialLabels | undefined;
+  // R-LCK-2 surface (a): direct `quorum run` is a top-level spender. The
+  // lock handle is captured here so the SIGINT stop path can release it —
+  // process.exit inside onSigint would otherwise bypass the finally below
+  // and leave the host-wide lock held until heartbeat staleness.
+  let spendLock: LiveSpendLock | null = null;
   const onSigint = (): void => {
     currentGauntletChild()?.kill('SIGINT');
     if (runDirForStop !== null) {
@@ -127,6 +148,7 @@ export async function executeRunCommand(
           : {}),
       });
     }
+    spendLock?.release();
     process.exit(2);
   };
   process.once('SIGINT', onSigint);
@@ -150,40 +172,67 @@ export async function executeRunCommand(
     opts.campaignIdentityJson === undefined
       ? undefined
       : CampaignIdentitySchema.parse(JSON.parse(opts.campaignIdentityJson));
-  const { runDir, verdict } = await runScenario({
-    scenarioDir: resolve(scn),
-    codingAgent: opts.codingAgent,
-    os: opts.os,
-    codingAgentsDir: resolve(opts.codingAgentsDir),
-    outRoot: resolve(opts.outRoot),
-    startedAt,
-    credential: opts.credential,
-    ...(opts.credentialsFile !== undefined
-      ? {
-          credentialsPath: resolve(opts.credentialsFile),
-          ...(credentialsOrigin !== undefined ? { credentialsOrigin } : {}),
-        }
-      : {}),
-    graderModel: opts.graderModel,
-    ...(opts.gauntletBin !== undefined
-      ? { gauntletBin: resolve(opts.gauntletBin) }
-      : {}),
-    ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
-    ...(superpowers !== undefined ? { superpowers } : {}),
-    onRunDir: (dir) => {
-      runDirForStop = dir;
-      process.stdout.write(runAllocatedLine(dir));
-    },
-    onCredentialLabels: (labels) => {
-      labelsForStop = labels;
-    },
-  });
-  process.stdout.write(`run-id: ${runId(runDir)}\n`);
-  process.stdout.write(
-    render(verdict, runDir, {
-      color: process.stdout.isTTY ?? false,
-      mode: 'full',
-    }),
-  );
-  process.exit(exitCodeFor(verdict.final));
+  // Children never acquire (R-LCK-2 explicit channel): a process marked
+  // covered — by the campaign spawner (src/campaign/spawn.ts) or run-all's
+  // invokeChild — rides its holder's accounting and bypasses acquisition
+  // entirely (C4: the marker means never acquire, not acquire-and-fail).
+  // Only an uncovered process is a top-level spender.
+  if (getEnv(COVERED_BY_LOCK_ENV) === undefined) {
+    spendLock = acquireLiveSpendLock({
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+    });
+    // R-LCK-2 floors preflight — standalone AFTER acquisition (the pinned
+    // acquire -> preflight -> run order; 2b's layering keeps it out of the
+    // lock claim). The production probe reads /proc and refuses non-Linux
+    // hosts by design; the floors gate runs exactly where that probe
+    // exists, so the portable local workflow keeps its documented
+    // break-glass surface instead of being Linux-gated by side effect.
+    if (process.platform === 'linux') {
+      preflightResourceFloors(
+        linuxHostStatsProbe(resolve(opts.outRoot)).sample(Date.now()),
+        DEFAULT_RESOURCE_FLOORS,
+      );
+    }
+  }
+  try {
+    const { runDir, verdict } = await runScenario({
+      scenarioDir: resolve(scn),
+      codingAgent: opts.codingAgent,
+      os: opts.os,
+      codingAgentsDir: resolve(opts.codingAgentsDir),
+      outRoot: resolve(opts.outRoot),
+      startedAt,
+      credential: opts.credential,
+      ...(opts.credentialsFile !== undefined
+        ? {
+            credentialsPath: resolve(opts.credentialsFile),
+            ...(credentialsOrigin !== undefined ? { credentialsOrigin } : {}),
+          }
+        : {}),
+      graderModel: opts.graderModel,
+      ...(opts.gauntletBin !== undefined
+        ? { gauntletBin: resolve(opts.gauntletBin) }
+        : {}),
+      ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
+      ...(superpowers !== undefined ? { superpowers } : {}),
+      onRunDir: (dir) => {
+        runDirForStop = dir;
+        process.stdout.write(runAllocatedLine(dir));
+      },
+      onCredentialLabels: (labels) => {
+        labelsForStop = labels;
+      },
+    });
+    process.stdout.write(`run-id: ${runId(runDir)}\n`);
+    process.stdout.write(
+      render(verdict, runDir, {
+        color: process.stdout.isTTY ?? false,
+        mode: 'full',
+      }),
+    );
+    return exitCodeFor(verdict.final);
+  } finally {
+    spendLock?.release();
+  }
 }

@@ -3,8 +3,18 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildResult } from '../src/contracts/batch.ts';
+import { setProcessEnv } from '../src/env.ts';
 import type { InvokeFn } from '../src/run-all/index.ts';
 import { runBatch } from '../src/run-all/index.ts';
+
+// runBatch now acquires the host-wide live-spend lock (R-LCK-2, task 9c):
+// pin it to a per-file tmp path through the env seam — parallel test
+// processes must never contend for the $HOME default, and tests never
+// touch $HOME.
+setProcessEnv(
+  'QUORUM_LIVE_SPEND_LOCK',
+  join(mkdtempSync(join(tmpdir(), 'qlock-')), 'live.lock.d'),
+);
 
 function fixture(names: readonly string[]): {
   scenariosRoot: string;
