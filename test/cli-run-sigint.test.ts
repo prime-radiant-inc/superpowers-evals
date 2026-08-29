@@ -103,6 +103,35 @@ function hangRunDir(outRoot: string): string | undefined {
   return undefined;
 }
 
+// The run dir whose phase.json reports the `checks` phase. That flip is
+// written only AFTER the runner's final stop boundary has passed, so a
+// SIGINT gated on it is late by construction (it cannot reach any boundary).
+function checksPhaseRunDir(outRoot: string): string | undefined {
+  if (!existsSync(outRoot)) {
+    return undefined;
+  }
+  for (const name of readdirSync(outRoot)) {
+    if (name.startsWith('.')) {
+      continue;
+    }
+    const phaseFile = join(outRoot, name, 'phase.json');
+    if (!existsSync(phaseFile)) {
+      continue;
+    }
+    try {
+      const raw = JSON.parse(readFileSync(phaseFile, 'utf8')) as {
+        phase?: string;
+      };
+      if (raw.phase === 'checks') {
+        return join(outRoot, name);
+      }
+    } catch {
+      // Mid-write read; pollFor retries on the next tick.
+    }
+  }
+  return undefined;
+}
+
 // True once the OS reports no process for `pid` (kill(pid, 0) -> ESRCH).
 function pidGone(pid: number): boolean {
   try {
@@ -393,6 +422,88 @@ test('SIGINT during setup stops the run before the gauntlet launch (no child eve
     expect(verdict.error?.stage).toBe('stopped');
     // The load-bearing assertion: NO gauntlet child ever spawned.
     expect(existsSync(gauntletRan)).toBe(false);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    await exited;
+  }
+}, 90_000);
+
+// Terminal window (review round 4): a SIGINT that lands AFTER the final
+// phase boundary — the runner has passed its last shouldStop check and is
+// executing post-checks — must NOT rewrite the run's genuine verdict as
+// stopped. The stop is late; the real outcome is authoritative.
+test('a late SIGINT (after the final phase boundary) leaves the genuine verdict standing', async () => {
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-sigint3-'));
+  // post() parks in a sleep: after the final boundary the runner blocks in
+  // post-checks' spawnSync for the full 2s, so the CLI is alive mid-run when
+  // the late signal lands (spawnSync defers handler delivery to the next
+  // loop turn; the run then completes normally through compose).
+  const scn = mkdtempSync(join(tmpdir(), 'scn-sigint3-'));
+  writeFileSync(
+    join(scn, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nDo the thing.',
+  );
+  writeFileSync(join(scn, 'setup.sh'), '#!/usr/bin/env bash\n:\n');
+  chmodSync(join(scn, 'setup.sh'), 0o755);
+  writeFileSync(join(scn, 'checks.sh'), 'pre() { :; }\npost() { sleep 2; }\n');
+  const child = spawn(
+    'bun',
+    [
+      CLI,
+      'run',
+      scn,
+      '--coding-agent',
+      'claude',
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      outRoot,
+    ],
+    {
+      env: {
+        ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+        PATH: `${mockGauntletDir('pass')}:${MOCK}:${process.env['PATH'] ?? ''}`,
+        ANTHROPIC_API_KEY: 'sk-test',
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.on('exit', (code) => resolveExit(code));
+  });
+  // NOTE: the late-log stderr line ("late SIGINT after run completion") is
+  // deliberately NOT asserted. In this Bun the deferred handler fires only
+  // after process.exit — the post-boundary tail is microtask-only — so the
+  // handler-before-check interleaving cannot be forced from outside. What
+  // this test pins end-to-end: a post-boundary SIGINT leaves the genuine
+  // verdict and exit 0 standing, and the pending signal never falls back to
+  // the default disposition (which would kill the exiting process and flip
+  // the observed exit code).
+  try {
+    // Race-free placement of the late signal: phase.json flips to `checks`
+    // only AFTER the runner's final stop boundary has read the flag, so
+    // gating the SIGINT on that flip makes it late by construction — it can
+    // reach no boundary, only the CLI's post-settle check.
+    const runDir = await pollFor(() => checksPhaseRunDir(outRoot), 30_000);
+    expect(runDir).toBeDefined();
+    if (runDir === undefined) {
+      throw new Error('run never reached the checks phase');
+    }
+    child.kill('SIGINT');
+    const code = await exited;
+    // The run genuinely passed: its verdict and exit code stand.
+    expect(code).toBe(0);
+    const verdict = FinalVerdictSchema.parse(
+      JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8')),
+    );
+    expect(verdict.final).toBe('pass');
+    expect(verdict.error).toBeNull();
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL');

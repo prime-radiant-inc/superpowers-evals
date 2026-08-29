@@ -320,12 +320,26 @@ export function currentGauntletChild(): ChildProcess | null {
   return activeGauntletChild;
 }
 
-// Settled exit of the gauntlet child: the exit code (null on signal-kill) plus
-// the collected stderr (for the error message). A typed value, not a string
-// match on stderr inline.
+// Settled exit of the gauntlet child: the exit code (null on signal-kill),
+// the terminating signal (null on a clean exit), plus the collected stderr
+// (for the error message). A typed value, not a string match on stderr
+// inline.
 interface GauntletExit {
   readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
   readonly stderr: string;
+}
+
+// The runner-authoritative stop fact: true when a phase boundary observed
+// the graceful-stop flag OR the gauntlet child exited BY SIGINT. The CLI
+// consumes exactly this (never a bare signal-handler flag read) to decide
+// whether a recorded stop may stamp the stopped verdict — a stop recorded
+// after the run's genuine completion is late and the real verdict stands.
+// One run per process, like activeGauntletChild below; reset at runScenario
+// entry.
+let runStopped = false;
+export function runWasStopped(): boolean {
+  return runStopped;
 }
 
 // Spawn the gauntlet CLI and await its exit, collecting stdout/stderr. async
@@ -356,9 +370,16 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
       activeGauntletChild = null;
       rejectPromise(err);
     });
-    child.on('close', (code: number | null) => {
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       activeGauntletChild = null;
-      resolvePromise({ status: code, stderr });
+      // The graceful-stop evidence: death BY the signal, or the 128+SIGINT
+      // convention a well-behaved child uses when it handles SIGINT and
+      // exits itself (the mock's hang receiver does exactly this to prove
+      // the forward landed).
+      if (signal === 'SIGINT' || code === 130) {
+        runStopped = true;
+      }
+      resolvePromise({ status: code, signal, stderr });
     });
   });
 }
@@ -1030,6 +1051,7 @@ export async function runScenario(
       'setup',
     );
   }
+  runStopped = false;
   const campaignCredentials =
     a.credentialsOrigin === 'external-campaign'
       ? loadRunCredentials(a.credentialsPath)
@@ -1104,6 +1126,7 @@ export async function runScenario(
     if (err instanceof RunStoppedError) {
       // A phase boundary observed the stop: the run actually stopped —
       // stopped verdict with the full run identity, like the CLI handler's.
+      runStopped = true;
       verdict = buildStoppedVerdict({
         scenario,
         codingAgent: a.codingAgent,

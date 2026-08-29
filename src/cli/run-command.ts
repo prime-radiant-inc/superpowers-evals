@@ -23,7 +23,11 @@ import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import { assertNever } from '../invariant.ts';
 import { RunnerError } from '../runner/errors.ts';
-import { currentGauntletChild, runScenario } from '../runner/index.ts';
+import {
+  currentGauntletChild,
+  runScenario,
+  runWasStopped,
+} from '../runner/index.ts';
 import { writeStoppedVerdict } from '../runner/stopped.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import { render } from './render.ts';
@@ -229,13 +233,23 @@ export async function executeRunCommand(
       // still stops the run (no child, no spend, stopped verdict).
       shouldStop: () => stopExitCode !== null,
     });
-    if (stopExitCode !== null) {
+    // The run's genuine outcome is authoritative: the stopped verdict is
+    // written only when the run ACTUALLY stopped, per the runner's own
+    // report (runWasStopped — a phase-boundary stop or a gauntlet child
+    // that exited BY SIGINT), never a bare flag read. A stop recorded after
+    // genuine completion is late; it is logged and the real verdict stands.
+    if (stopExitCode !== null && runWasStopped()) {
       // The stop is terminal and LAST: the runner may have written its own
       // error verdict while settling — the stopped verdict overwrites it.
       if (runDirForStop !== null) {
         writeStoppedVerdict(runDirForStop, stoppedIdentity());
       }
       return stopExitCode;
+    }
+    if (stopExitCode !== null) {
+      process.stderr.write(
+        "late SIGINT after run completion — the run's verdict stands\n",
+      );
     }
     process.stdout.write(`run-id: ${runId(runDir)}\n`);
     process.stdout.write(
@@ -246,9 +260,9 @@ export async function executeRunCommand(
     );
     return exitCodeFor(verdict.final);
   } catch (err) {
-    if (stopExitCode !== null) {
-      // The run settled by REJECTING (the killed child propagated): the
-      // stop verdict and its code still win.
+    if (stopExitCode !== null && runWasStopped()) {
+      // The run settled by REJECTING after the runner observed the stop:
+      // the stop verdict and its code still win.
       if (runDirForStop !== null) {
         writeStoppedVerdict(runDirForStop, stoppedIdentity());
       }
