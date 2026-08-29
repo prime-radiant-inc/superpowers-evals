@@ -161,6 +161,46 @@ test('killJournaledPgids: a group surviving TERM+KILL is reported survived (neve
   ).rejects.toThrow(/EPERM/);
 });
 
+test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless group with live descendants is never reported dead (R-RCV-1)', async () => {
+  const leaderGone: ProcessIdentityProbe = {
+    exists: () => 'esrch',
+    startTimeMs: () => null,
+  };
+  // The leader exited; grandchildren in the group are still running (and
+  // still spending), so the group answers the 0-probe.
+  const signalled: [number, NodeJS.Signals | 0][] = [];
+  const loud: string[] = [];
+  const live = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: leaderGone,
+    child: { commandLine: () => null }, // no leader to inspect
+    signal: (pgid, sig) => {
+      signalled.push([pgid, sig]);
+      return 'ok';
+    },
+    clock: new FakeClock(),
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(live.alreadyDead).toEqual([]);
+  expect(live.killed).toEqual([]);
+  expect(live.reclaimedWithoutKill).toEqual([111]);
+  expect(signalled).toEqual([[111, 0]]); // probed, never signaled blind
+  expect(loud.join('')).toMatch(/without its leader/);
+
+  // Only an ESRCH on the GROUP is evidence of death.
+  const gone = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: leaderGone,
+    child: { commandLine: () => null },
+    signal: () => 'esrch',
+    clock: new FakeClock(),
+  });
+  expect(gone.alreadyDead).toEqual([111]);
+  expect(gone.reclaimedWithoutKill).toEqual([]);
+});
+
 // ---------------------------------------------------------------------------
 // R-RCV-2 / R-RCV-5: the crash-window plan
 // ---------------------------------------------------------------------------
@@ -488,11 +528,23 @@ test('readRunDirIdentities: absent identity files are skipped; a MALFORMED one i
   mkdirSync(join(root, 'run-b'), { recursive: true }); // no identity file: not campaign evidence
   mkdirSync(join(root, 'run-c'), { recursive: true });
   writeFileSync(join(root, 'run-c', 'campaign-identity.json'), '{not json');
+  // A PARTIAL identity (sample_id missing) is not an identity: an incomplete
+  // shape cannot be correlated against the journal, so it is malformed too.
+  mkdirSync(join(root, 'run-d'), { recursive: true });
+  writeFileSync(
+    join(root, 'run-d', 'campaign-identity.json'),
+    JSON.stringify({
+      campaign_id: CAMPAIGN_ID,
+      comparison_id: 'c1',
+      block_id: 'b1',
+      execution_attempt_id: 'a1',
+    }),
+  );
   const scan = readRunDirIdentities(root);
   expect(scan.identities).toHaveLength(1);
   expect(scan.identities[0]!.runId).toBe('run-a');
   expect(scan.identities[0]!.identity.execution_attempt_id).toBe('a1');
-  expect(scan.malformed.map((m) => m.runId)).toEqual(['run-c']);
+  expect(scan.malformed.map((m) => m.runId)).toEqual(['run-c', 'run-d']);
   const missing = readRunDirIdentities(join(root, 'missing'));
   expect(missing.identities).toEqual([]);
   expect(missing.malformed).toEqual([]);

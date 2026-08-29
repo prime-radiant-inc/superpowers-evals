@@ -11,9 +11,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type {
-  Campaign,
-  CampaignIdentity,
+import {
+  type Campaign,
+  type CampaignIdentity,
+  CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
 import {
   type CampaignUniverse,
@@ -267,6 +268,26 @@ export async function killJournaledPgids(args: {
       `reclaimed-without-kill: pgid ${pgid} (attempt ${attemptId}) ${why} — recorded, never signaled blind (R-RCV-1)\n`,
     );
   };
+  /** R-RCV-1: the LEADER's death is not the GROUP's death — a leaderless
+   *  group can still hold live descendants that keep spending, and a
+   *  leaderless group has no inspectable campaign-child shape. Only an
+   *  ESRCH on the group is evidence of death; a group that still answers
+   *  takes the reclaim path (identity unknown, never signaled blind). */
+  const groupDisposition = (
+    pgid: number,
+    attemptId: string,
+    why: string,
+  ): void => {
+    if (signal(pgid, 0) === 'esrch') {
+      alreadyDead.push(pgid);
+      return;
+    }
+    reclaim(
+      pgid,
+      attemptId,
+      `${why} but the process group still answers — live descendants without its leader, identity unknown`,
+    );
+  };
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
@@ -274,7 +295,7 @@ export async function killJournaledPgids(args: {
     const pgid = event.payload.pgid;
     const exists = identity.exists(pgid);
     if (exists === 'esrch') {
-      alreadyDead.push(pgid);
+      groupDisposition(pgid, attemptId, 'the recorded leader is gone (ESRCH)');
       continue;
     }
     if (exists === 'unknown') {
@@ -318,7 +339,9 @@ export async function killJournaledPgids(args: {
         killed.push(pgid);
         break;
       case 'stale':
-        alreadyDead.push(pgid); // reused pid: the recorded child is gone
+        // The recorded leader is provably gone (reused pid, never signaled);
+        // the group still needs the same death evidence.
+        groupDisposition(pgid, attemptId, 'the leader pid was reused');
         break;
       case 'unknown':
         reclaim(pgid, attemptId, 'OS start time unreadable at kill time');
@@ -544,21 +567,21 @@ export function readRunDirIdentities(resultsRoot: string): RunDirScan {
       malformed.push({ runId: entry, detail: `invalid JSON: ${String(err)}` });
       continue;
     }
-    const identity = parsed as Partial<CampaignIdentity> | null;
-    if (
-      identity === null ||
-      typeof identity !== 'object' ||
-      typeof identity.campaign_id !== 'string' ||
-      typeof identity.execution_attempt_id !== 'string'
-    ) {
+    // The WHOLE Decision D-8 shape or nothing: an identity missing any
+    // member cannot be correlated against the journal (block/sample/
+    // comparison included), so a partial file is malformed evidence, never
+    // a usable identity.
+    const identity = CampaignIdentitySchema.safeParse(parsed);
+    if (!identity.success) {
       malformed.push({
         runId: entry,
-        detail:
-          'not a campaign identity (campaign_id/execution_attempt_id missing)',
+        detail: `not a campaign identity: ${identity.error.issues
+          .map((i) => `${i.path.join('.')} ${i.message}`)
+          .join('; ')}`,
       });
       continue;
     }
-    identities.push({ runId: entry, identity: identity as CampaignIdentity });
+    identities.push({ runId: entry, identity: identity.data });
   }
   return { identities, malformed };
 }
