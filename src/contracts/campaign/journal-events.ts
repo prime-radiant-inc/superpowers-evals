@@ -412,6 +412,37 @@ export const CampaignCancelledEvent = envelope(
  *  vocabulary change. */
 export const UNPRICED_TERMINAL = 'unpriced_terminal';
 
+/** The machine disposition recovery stamps when it journals an attempt's
+ *  ACTUAL spend from the run artifacts — a suffix a crash truncated, a
+ *  withheld-terminal run whose spend never landed, or a resolved
+ *  `unpriced_terminal` gap.
+ *
+ *  It exists because `budget_event` carries no attempt identity and E7.7
+ *  pins that it never will ("Deterministic over the event stream with the
+ *  shipped payload; no additive field. Per-sample spend attribution still
+ *  derives at seal from run-dir evidence … not the journal"). Repair must
+ *  nevertheless be judged PER ATTEMPT and be idempotent, so the receipt
+ *  carries the identity the spend row cannot, on the existing `adjudication`
+ *  event under the same pinned machine-disposition convention. The receipt
+ *  is appended IMMEDIATELY BEFORE the spend it records: a receipt with no
+ *  spend after it recorded nothing, so an interrupted repair simply runs
+ *  again. */
+export const SPEND_RECOVERED = 'spend_recovered';
+
+/** `attempt=<id>; <detail>` — the attempt identity encoded into the only
+ *  free field the event has. */
+export function spendRecoveredRationale(
+  attemptId: string,
+  detail: string,
+): string {
+  return `attempt=${attemptId}; ${detail}`;
+}
+
+/** The attempt a `spend_recovered` rationale names, or null if unparseable. */
+export function attemptOfSpendRecovered(rationale: string): string | null {
+  return /^attempt=([^;]+);/.exec(rationale)?.[1] ?? null;
+}
+
 export const QUARANTINE_REASONS = [
   'attempt_mismatch',
   'late_terminal',

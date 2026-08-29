@@ -425,7 +425,22 @@ test('terminal-evidence rule: a gating sample whose exposure never established g
       poolBlocks: [],
     }),
   });
-  expect(actions.terminals).toEqual([]);
+  // No terminal — there is no legal edge — but the run RAN and SPENT, so its
+  // actual cost is ACCOUNTED (receipt first, then the spend it records)
+  // before the instance re-enters. Blind-rerunning would drop that money and
+  // pay for the same work twice.
+  expect(actions.terminals.map((e) => e.type)).toEqual([
+    'adjudication',
+    'budget_event',
+  ]);
+  expect(actions.terminals[0]?.payload).toMatchObject({
+    disposition: 'spend_recovered',
+    rationale: expect.stringContaining('attempt=a1;'),
+  });
+  expect(actions.terminals[1]?.payload).toEqual({
+    kind: 'spend',
+    amount_usd: 0.5,
+  });
   expect(actions.rerunBlockIds).toEqual(['b1']);
 });
 

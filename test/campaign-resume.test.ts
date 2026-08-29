@@ -113,7 +113,14 @@ class FakeSpawner implements ChildSpawner {
 /** A real completed run dir: the verdict the composer would have written and
  *  the trajectory the exposure sensor reads (same timestamp on every sample
  *  -> zero skew). */
-function seedRunDir(resultsRoot: string, runId: string, final: string): void {
+function seedRunDir(
+  resultsRoot: string,
+  runId: string,
+  final: string,
+  // DISTINCT per run: identical costs make "one duplicated, one omitted"
+  // indistinguishable from correct attribution.
+  costUsd = 0.25,
+): void {
   const dir = join(resultsRoot, runId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -121,7 +128,7 @@ function seedRunDir(resultsRoot: string, runId: string, final: string): void {
     JSON.stringify({
       final,
       final_reason: 'fixture',
-      economics: { total_est_cost_usd: 0.25 },
+      economics: { total_est_cost_usd: costUsd },
     }),
   );
   writeFileSync(
@@ -382,8 +389,8 @@ test('reconstructed terminal evidence is the FULL fate-table bundle and the jour
   // (exposure) + priced economics. The reconstruction owes exposure_started
   // before the terminal (a bare run_completed from `spawned` is illegal),
   // the ACTUAL spend from the artifacts, and a superseding snapshot.
-  seedRunDir(fx.resultsRoot, 'r1', 'pass');
-  seedRunDir(fx.resultsRoot, 'r2', 'fail');
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'fail', 0.75);
   await expect(
     resumeCampaign({
       campaignDir: fx.dir,
@@ -420,12 +427,12 @@ test('reconstructed terminal evidence is the FULL fate-table bundle and the jour
       .map((e) => e.payload.attempt_id)
       .sort(),
   ).toEqual(['a1', 'a2']);
-  // Actual spend from the run artifacts (seedRunDir prices each at 0.25),
-  // never the registration estimate (1 and 2).
+  // Actual spend from the run artifacts, DISTINCT per run so attribution is
+  // visible — never the registration estimate (1 and 2).
   const spends = events
     .filter((e) => e.type === 'budget_event' && e.payload.kind === 'spend')
     .map((e) => (e.type === 'budget_event' ? e.payload.amount_usd : 0));
-  expect(spends).toEqual([0.25, 0.25]);
+  expect(spends.slice().sort()).toEqual([0.25, 0.75]);
   // The superseding absolute snapshot rides the same critical section, last.
   const snapshots = events.filter(
     (e) => e.type === 'budget_event' && e.payload.kind === 'estimate_inflight',
@@ -443,8 +450,8 @@ test('a terminal bundle truncated by a crash is COMPLETED at resume: the lost sp
   // crash model for a batched critical section); skipping the attempt
   // because it "already has a terminal" would lose the spend permanently.
   const fx = crashedCampaign({ driftEvals: true });
-  seedRunDir(fx.resultsRoot, 'r1', 'pass');
-  seedRunDir(fx.resultsRoot, 'r2', 'pass');
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
   // The crash cut: a1's exposure + terminal landed, its accounting tail did
   // not. a2 never terminaled at all.
   const w = electWriter({
@@ -484,14 +491,198 @@ test('a terminal bundle truncated by a crash is COMPLETED at resume: the lost sp
   const spends = events
     .filter((e) => e.type === 'budget_event' && e.payload.kind === 'spend')
     .map((e) => (e.type === 'budget_event' ? e.payload.amount_usd : 0));
-  // a1's lost spend completed + a2's reconstructed one. Exactly one each —
-  // never a second spend for the terminal that already landed.
-  expect(spends).toEqual([0.25, 0.25]);
+  // a1's lost spend completed (0.25) + a2's reconstructed one (0.75).
+  // Exactly one each — distinct costs make a duplicate or an omission
+  // impossible to mistake for correct attribution.
+  expect(spends.slice().sort()).toEqual([0.25, 0.75]);
   expect(
     events
       .filter((e) => e.type === 'run_completed')
       .map((e) => e.payload.attempt_id),
   ).toEqual(['a1', 'a2']);
+});
+
+/** Resume the crashed fixture, stopping at the refs cross-check so the test
+ *  sees exactly what reconciliation wrote. */
+async function reconcileOnly(fx: CrashedFixture, lock: string): Promise<void> {
+  await expect(
+    resumeCampaign({
+      campaignDir: fx.dir,
+      credentials: fixtureCredentials(),
+      evalsCheckout: fx.dir,
+      gauntletCheckout: fx.dir,
+      superpowersCheckout: fx.dir,
+      resultsRoot: fx.resultsRoot,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: fixtureChild(fx),
+      signal: mortalGroup(),
+      graceSeconds: 0,
+      probe: PROBE,
+      spawner: new FakeSpawner(),
+      lockPath: lockDir(lock),
+      stream: { write: () => {} },
+    }),
+  ).rejects.toThrow(/Campaign.refs cross-check/);
+}
+
+function spendsOf(dir: string): number[] {
+  return journalEvents(dir)
+    .filter((e) => e.type === 'budget_event' && e.payload.kind === 'spend')
+    .map((e) => (e.type === 'budget_event' ? e.payload.amount_usd : 0));
+}
+
+test('suffix repair is attempt-correlated, not positional: a repaired terminal is never repaired twice even when a later reconstruction lands between it and its spend', async () => {
+  // The attack: b's live terminal is the crash prefix and a was allocated
+  // FIRST, so recovery's own reconstruction for a lands between terminal(b)
+  // and the spend it appends for b. A positional recognizer re-reads
+  // terminal(b) as truncated on the next resume and pays b twice — and
+  // spends are additive, so the budget position overstates forever.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25); // attempt a1 (allocated first)
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75); // attempt a2
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  // a2 terminaled live; its accounting tail never landed. a1 never terminaled.
+  w.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_B, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a2', outcome: 'pass' } },
+  ]);
+  w.release();
+
+  await reconcileOnly(fx, 'attack-1.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  const afterFirst = journalEvents(fx.dir).length;
+
+  // The SECOND resume over the repaired journal is a strict no-op.
+  await reconcileOnly(fx, 'attack-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+  expect(() =>
+    replayEvents(universeOf(fx.doc), journalEvents(fx.dir)),
+  ).not.toThrow();
+});
+
+test("a crash DURING recovery's own suffix append is completed exactly once by the next resume", async () => {
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  // a1 terminaled live, tail lost; then recovery began repairing it and died
+  // after its receipt but BEFORE the spend it records.
+  w.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; interrupted repair',
+      },
+    },
+  ]);
+  w.release();
+  await reconcileOnly(fx, 'interrupted-1.lock.d');
+  // The interrupted receipt records nothing; the repair runs again and lands
+  // ONE spend for a1 (plus a2's reconstruction). Never two.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'interrupted-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test('priced evidence with no legal terminal is ACCOUNTED before the instance reruns — the live withheld-terminal spend is never lost', async () => {
+  // The live gating path withholds a terminal when exposure is absent but
+  // still appends the actual spend. If the process dies before that spend
+  // lands, recovery sees complete priced evidence with no legal terminal:
+  // blind-rerunning pays twice and drops the money already spent.
+  const fx = crashedCampaign({ driftEvals: true });
+  for (const [runId, cost] of [
+    ['r1', 0.25],
+    ['r2', 0.75],
+  ] as const) {
+    const dir = join(fx.resultsRoot, runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'verdict.json'),
+      JSON.stringify({
+        final: 'pass',
+        final_reason: 'fixture',
+        economics: { total_est_cost_usd: cost },
+      }),
+    );
+    // No trajectory.json: exposure was never established, and the suite is
+    // gating — so there is no legal terminal edge.
+  }
+  await reconcileOnly(fx, 'unterminated-1.lock.d');
+  const events = journalEvents(fx.dir);
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  // No fabricated terminal, and the instance still re-enters.
+  expect(events.map((e) => e.type)).not.toContain('run_completed');
+  expect(events.map((e) => e.type)).toContain('block_replaced');
+  expect(() => replayEvents(universeOf(fx.doc), events)).not.toThrow();
+  // Idempotent: the second resume accounts nothing further.
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'unterminated-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test("a resolved accounting gap lets the resume proceed: restoring the run dir's economics is the advertised action and it WORKS", async () => {
+  // The live fail-stop tells the operator to restore the verdict economics
+  // and re-run. Refusing on any historical unpriced_terminal before
+  // re-reading the artifacts makes that instruction impossible to follow.
+  const fx = crashedCampaign({ driftEvals: true });
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'unpriced_terminal',
+        rationale:
+          'attempt a1 (run r1) terminaled with no readable actual cost in its run artifacts',
+      },
+    },
+    {
+      type: 'budget_event',
+      payload: { kind: 'estimate_inflight', amount_usd: 2 },
+    },
+  ]);
+  w.release();
+  // The operator did what the message said: r1 now carries economics.
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+
+  await reconcileOnly(fx, 'gap-resolved-1.lock.d');
+  // a1's gap is resolved with its ACTUAL cost; a2 is reconstructed.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(() =>
+    replayEvents(universeOf(fx.doc), journalEvents(fx.dir)),
+  ).not.toThrow();
+  // …and resolving is idempotent.
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'gap-resolved-2.lock.d');
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
 });
 
 test('a run dir whose actual cost is unreadable REFUSES the resume — a composed verdict is not rerun fodder (D-13 fail-closed)', async () => {
@@ -541,7 +732,7 @@ test('a run dir whose actual cost is unreadable REFUSES the resume — a compose
   expect(types).not.toContain('block_replaced');
 });
 
-test('resume REFUSES while a durable accounting gap is unresolved (the live fail-stop is not resumable by machine)', async () => {
+test('resume REFUSES while an accounting gap is STILL unpriced — re-reading the artifacts is what decides it', async () => {
   const fx = crashedCampaign({ driftEvals: true });
   const w = electWriter({
     campaignDir: fx.dir,
@@ -549,15 +740,27 @@ test('resume REFUSES while a durable accounting gap is unresolved (the live fail
     identity: WRITER_IDENTITY,
     campaign: fx.doc,
   });
-  w.appendEvent({
-    type: 'adjudication',
-    payload: {
-      cell: 'c1:scn',
-      disposition: 'unpriced_terminal',
-      rationale: 'attempt a1 (run r1) terminaled with no readable actual cost',
+  // The live fail-stop's shape: terminal, then the gap adjudication that
+  // names it, then the superseding snapshot.
+  w.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'unpriced_terminal',
+        rationale:
+          'attempt a1 (run r1) terminaled with no readable actual cost',
+      },
     },
-  });
+    {
+      type: 'budget_event',
+      payload: { kind: 'estimate_inflight', amount_usd: 2 },
+    },
+  ]);
   w.release();
+  // r1 still carries nothing to price it with, so the refusal stands.
   const before = journalEvents(fx.dir).length;
   await expect(
     resumeCampaign({
@@ -577,7 +780,7 @@ test('resume REFUSES while a durable accounting gap is unresolved (the live fail
       lockPath: lockDir('resume-gap.lock.d'),
       stream: { write: () => {} },
     }),
-  ).rejects.toThrow(/unpriced_terminal/);
+  ).rejects.toThrow(/still supplies no composed verdict to price it/);
   expect(journalEvents(fx.dir).length).toBe(before); // nothing journaled
 });
 

@@ -2839,7 +2839,7 @@ export async function runCampaignDispatch(
               `accounting gap: attempt ${sample.attemptId} terminaled with no readable actual cost (run ${runName})`,
             );
             stream.write(
-              `operator action: the budget position cannot account for run ${runName}. Inspect ${runDirOf(runName)} and restore its verdict economics, then re-run \`quorum campaign run\`; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
+              `operator action: the budget position cannot account for run ${runName}. Restore its verdict economics at ${runDirOf(runName)}, then re-run \`quorum campaign run\` — the resume re-reads that run dir, journals the restored actual spend, and continues. While it stays unpriced every resume refuses; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
             );
             return;
           }
