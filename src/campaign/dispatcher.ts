@@ -869,6 +869,10 @@ export async function performStoragePause(
  *  A readable marker file supplies the durable record (null = carrier
  *  satisfied); any other error, or a present-but-unreadable path, is the
  *  carrier's failure text. */
+/** null = the pause HAS a durable record after all (the O_EXCL create hit
+ *  EEXIST and the marker already at that path is readable). Safe to bless
+ *  because a FAILED durable creation removes the final name — an existing
+ *  marker is one whose write completed, never a half-written residue. */
 function markerCarrierFailure(marker: string, err: unknown): string | null {
   const code =
     typeof err === 'object' && err !== null && 'code' in err

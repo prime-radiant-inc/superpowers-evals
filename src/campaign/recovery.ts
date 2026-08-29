@@ -1973,7 +1973,9 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
   if (!existsSync(marker)) {
     // Durable before campaign_cancelled is journaled: a crash between the
     // two must still leave the operator's cancellation on disk, so the
-    // marker is fsynced along with its directory entry.
+    // marker is fsynced along with its directory entry. Skipping on presence
+    // is safe because a failed durable creation removes the final name — a
+    // marker that exists is one whose write completed.
     createDurableMarker(
       marker,
       `${clockNowMs(args.clock)}\n${args.reason ?? ''}\n`,

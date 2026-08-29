@@ -1598,7 +1598,14 @@ export function releaseBallast(
  *  power loss too. The D-13 storage-paused marker and the D-12 cancel-request
  *  marker are both the ONLY durable record of a decision at the moment they
  *  are written — a marker that is merely in the page cache is not a record.
- *  EEXIST propagates: presence-is-the-record is the caller's arm to take. */
+ *  EEXIST propagates: presence-is-the-record is the caller's arm to take.
+ *
+ *  Because every caller's EEXIST arm blesses whatever it finds at the final
+ *  path, a creation that FAILS must leave nothing there: a half-written
+ *  marker would be read back as a durable record on the next attempt. The
+ *  final name is therefore removed on any failure after the exclusive
+ *  create, and a cleanup that itself fails is reported in the refusal rather
+ *  than swallowed. */
 export function createDurableMarker(
   path: string,
   body: string,
@@ -1606,12 +1613,22 @@ export function createDurableMarker(
 ): void {
   const fd = fsOps.openExclusive(path);
   try {
-    fsOps.write(fd, body);
-    fsOps.fsync(fd);
-  } finally {
-    fsOps.close(fd);
+    try {
+      fsOps.write(fd, body);
+      fsOps.fsync(fd);
+    } finally {
+      fsOps.close(fd);
+    }
+    fsyncDir(dirname(path), fsOps);
+  } catch (err) {
+    const cleanup = cleanupUnlink(fsOps, path);
+    throw new JournalError(
+      `durable marker ${path} could not be written (${errorMessage(err)})` +
+        (cleanup === null
+          ? ' — the incomplete marker was removed, so nothing reads it back as a durable record'
+          : `; removing the incomplete marker ALSO failed (${cleanup}) — delete ${path} by hand before retrying, or it will be mistaken for a durable record`),
+    );
   }
-  fsyncDir(dirname(path), fsOps);
 }
 
 /** D-13 step-1 detection predicate: a storage-full failure from either

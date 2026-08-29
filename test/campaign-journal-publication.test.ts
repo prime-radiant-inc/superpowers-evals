@@ -82,6 +82,39 @@ test('createDurableMarker: body, file fsync, then directory fsync — the marker
   expect(readFileSync(join(dir, '.storage-paused'), 'utf8')).toBe('why\n');
 });
 
+test('createDurableMarker: a creation that fails mid-way leaves NO final name — the next attempt is not handed a blessed residue', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const marker = join(dir, '.storage-paused');
+  const failAt = (stage: 'write' | 'fsync' | 'dir'): JournalFsOps => {
+    const { ops } = recordedOps();
+    return {
+      ...ops,
+      write: (fd, data) => {
+        if (stage === 'write') throw new Error('volume went read-only');
+        ops.write(fd, data);
+      },
+      fsync: (fd) => {
+        if (stage === 'fsync') throw new Error('fsync failed');
+        ops.fsync(fd);
+      },
+      openRead: (p) => {
+        if (stage === 'dir') throw new Error('cannot open the directory');
+        return ops.openRead(p);
+      },
+    };
+  };
+  // A marker is the ONLY durable record of its decision, and every caller's
+  // EEXIST arm blesses whatever it finds at the final path. A half-written
+  // one must therefore never appear there.
+  for (const stage of ['write', 'fsync', 'dir'] as const) {
+    expect(() => createDurableMarker(marker, 'why\n', failAt(stage))).toThrow();
+    expect(existsSync(marker)).toBe(false);
+  }
+  // …and a clean creation afterwards still works.
+  createDurableMarker(marker, 'why\n');
+  expect(readFileSync(marker, 'utf8')).toBe('why\n');
+});
+
 test('createDurableMarker: an existing marker refuses (O_EXCL) — callers own the EEXIST arm', () => {
   const dir = mkdtempSync(join(tmpdir(), 'marker-'));
   createDurableMarker(join(dir, 'cancel-request'), 'first\n');
