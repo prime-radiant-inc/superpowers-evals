@@ -29,7 +29,7 @@ import {
   normalizeBlockReplaced,
 } from '../src/contracts/campaign/journal-events.ts';
 import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
-import { FakeClock } from '../src/scheduler/clock.ts';
+import { type Clock, FakeClock } from '../src/scheduler/clock.ts';
 import {
   ALIVE_AT_5,
   BLOCK_A,
@@ -504,7 +504,28 @@ test('a terminal bundle truncated by a crash is COMPLETED at resume: the lost sp
 
 /** Resume the crashed fixture, stopping at the refs cross-check so the test
  *  sees exactly what reconciliation wrote. */
-async function reconcileOnly(fx: CrashedFixture, lock: string): Promise<void> {
+/** A clock that ADVANCES on every read, as a real one does — the resume's
+ *  `nowMs` and the timestamp the writer stamps on an appended event are two
+ *  distinct readings, and a fixed FakeClock hides any dependence on their
+ *  being equal. */
+class TickingClock extends FakeClock {
+  private readonly tickSeconds: number;
+  constructor(startSeconds: number, tickSeconds = 0.005) {
+    super(startSeconds);
+    this.tickSeconds = tickSeconds;
+  }
+  override now(): number {
+    const reading = super.now();
+    this.setTo(reading + this.tickSeconds);
+    return reading;
+  }
+}
+
+async function reconcileOnly(
+  fx: CrashedFixture,
+  lock: string,
+  clock: Clock = new FakeClock(1),
+): Promise<void> {
   await expect(
     resumeCampaign({
       campaignDir: fx.dir,
@@ -513,7 +534,7 @@ async function reconcileOnly(fx: CrashedFixture, lock: string): Promise<void> {
       gauntletCheckout: fx.dir,
       superpowersCheckout: fx.dir,
       resultsRoot: fx.resultsRoot,
-      clock: new FakeClock(1),
+      clock,
       identity: ALIVE_AT_5,
       child: fixtureChild(fx),
       signal: mortalGroup(),
@@ -709,10 +730,12 @@ test('a terminal bundle truncated AFTER its spend still restores the lost cooldo
   expect(journalEvents(fx.dir).length).toBe(afterFirst);
 });
 
-test('a reconstruction crash between the cooldown and the receipt re-repairs without duplicating the cooldown', async () => {
-  // The window the reordering creates: pool_blocked landed, the receipt did
-  // not, so the attempt is NOT recovered and the repair runs again. The
-  // cooldown must coalesce rather than be declared a second time.
+test('a reconstruction crash between the receipt and its spend re-repairs without duplicating the cooldown', async () => {
+  // A PRODUCTION prefix: the bundle is terminal -> receipt -> spend, with
+  // the coalesced pool_blocked emitted after the loop, so the reachable cut
+  // here is an orphan receipt. It records no money, so the attempt is NOT
+  // recovered and the repair runs again — landing exactly one spend and one
+  // cooldown, never a second of either.
   const fx = crashedCampaign({ driftEvals: true });
   seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
@@ -725,19 +748,130 @@ test('a reconstruction crash between the cooldown and the receipt re-repairs wit
   });
   w.appendEvents([
     { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
-    { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
     {
-      type: 'pool_blocked',
-      payload: { pool_key: 'grader_cred|anthropic|m', until_ts_ms: 60_000 },
+      type: 'instrument_failure',
+      payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
     },
-    // …crash: no receipt, no spend.
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; interrupted repair',
+      },
+    },
+    // …crash: the spend never landed, so the receipt records nothing.
   ]);
   w.release();
+  const terminalTs = journalEvents(fx.dir).find(
+    (e) => e.type === 'instrument_failure',
+  )!.ts_ms;
   await reconcileOnly(fx, 'cooldown-dup-1.lock.d');
-  // One cooldown, unextended — the durable one — and one spend for a1.
+  // One spend for a1 (plus a2's), and one cooldown anchored on the DURABLE
+  // terminal — not on this resume's clock.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
   expect(cooldownsOf(fx.dir)).toEqual([
-    { pool: 'grader_cred|anthropic|m', until: 60_000 },
+    { pool: 'grader_cred|anthropic|m', until: terminalTs + 30_000 },
   ]);
+  // …and it stays exactly that on the next resume.
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'cooldown-dup-2.lock.d');
+  expect(cooldownsOf(fx.dir)).toEqual([
+    { pool: 'grader_cred|anthropic|m', until: terminalTs + 30_000 },
+  ]);
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test('a FRESH reconstruction anchors its cooldown on the timestamp the terminal actually lands with — a later resume appends no extension', async () => {
+  // The resume reads `now` once for its own bookkeeping and the writer reads
+  // it again when it stamps each event. With a real advancing clock those are
+  // different numbers, so a cooldown anchored on the first one is not the
+  // value `terminal.ts_ms + cooldownMs` a later resume recomputes — and the
+  // next resume appends an extension. A fixed FakeClock hides this entirely.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+  await reconcileOnly(fx, 'anchor-1.lock.d', new TickingClock(1));
+  const first = cooldownsOf(fx.dir);
+  expect(first).toHaveLength(1);
+  // The anchor IS the durable terminal's own timestamp.
+  // a1's grader 429 classifies it as an instrument failure, so match either
+  // terminal shape.
+  const terminalTs = journalEvents(fx.dir).find(
+    (e) =>
+      (e.type === 'run_completed' || e.type === 'instrument_failure') &&
+      e.payload.attempt_id === 'a1',
+  )?.ts_ms;
+  expect(terminalTs).toBeDefined();
+  expect(first[0]?.until).toBe(terminalTs! + 30_000);
+
+  const afterFirst = journalEvents(fx.dir).length;
+  await reconcileOnly(fx, 'anchor-2.lock.d', new TickingClock(500));
+  expect(cooldownsOf(fx.dir)).toEqual(first); // no extension, no duplicate
+  expect(journalEvents(fx.dir).length).toBe(afterFirst);
+});
+
+test('the free-standing gap leg: a crash after its spend still restores the cooldown, and the block still reruns', async () => {
+  // The gap resolution queues receipt+spend and registers a cooldown
+  // candidate that is only emitted after the whole attempt loop, so a crash
+  // in between is a legal durable prefix. On the next resume the completed
+  // receipt removes the gap, and the attempt is recovered-but-terminal-less
+  // — the rerun path — which is the one path that never restored cooldowns.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    // The live free-standing gap: no terminal at all.
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'unpriced_terminal',
+        rationale: 'attempt=a1; run r1 had no readable actual cost',
+      },
+    },
+    // …then a resume resolved it: receipt + spend landed, and the crash took
+    // the cooldown that the loop emits afterwards.
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; resolves the unpriced_terminal gap',
+      },
+    },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
+  ]);
+  w.release();
+
+  await reconcileOnly(fx, 'gap-leg-1.lock.d');
+  // The cooldown is restored…
+  expect(cooldownsOf(fx.dir).map((c) => c.pool)).toEqual([
+    'grader_cred|anthropic|m',
+  ]);
+  // …a1 is not charged again…
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+  // …and the terminal-less attempt still takes its block back through rerun.
+  const mints = journalEvents(fx.dir)
+    .filter((e) => e.type === 'block_replaced')
+    .map((e) =>
+      e.type === 'block_replaced' ? normalizeBlockReplaced(e.payload) : null,
+    );
+  expect(mints.map((m) => m?.block_id)).toEqual([BLOCK_A]);
+  expect(mints[0]?.kind).toBe('rerun');
+
+  // Idempotent: nothing further on the next resume.
+  const before = cooldownsOf(fx.dir);
+  await reconcileOnly(fx, 'gap-leg-2.lock.d');
+  expect(cooldownsOf(fx.dir)).toEqual(before);
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
 });
 

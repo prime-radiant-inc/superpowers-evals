@@ -768,10 +768,15 @@ function spendRecovery(args: {
   cell: string;
   amountUsd: number;
   detail: string;
+  /** Stamped explicitly so the receipt's DURABLE timestamp is a figure this
+   *  resume already knows — a cooldown anchored on it then recomputes to the
+   *  same value on every later resume. */
+  tsMs: number;
 }): EventInput[] {
   return [
     {
       type: 'adjudication',
+      ts_ms: args.tsMs,
       payload: {
         cell: args.cell,
         disposition: SPEND_RECOVERED,
@@ -780,6 +785,7 @@ function spendRecovery(args: {
     },
     {
       type: 'budget_event',
+      ts_ms: args.tsMs,
       payload: { kind: 'spend', amount_usd: args.amountUsd },
     },
   ];
@@ -1005,13 +1011,31 @@ export function terminalEvidenceActions(args: {
     const blockId = blockOfAttempt(chain, attemptId);
     if (!rerunBlockIds.includes(blockId)) rerunBlockIds.push(blockId);
   };
-  /** When each attempt's terminal landed — the anchor a restored cooldown is
-   *  measured from, so the restored value is the SAME on every resume. */
-  const terminalTsOf = new Map<string, number>();
+  /** The timestamp a restored cooldown is measured from: the EARLIEST
+   *  durable record of this attempt's fate, in a fixed precedence, so the
+   *  anchor cannot move as later repairs append and every resume recomputes
+   *  the identical `until`.
+   *
+   *  terminal → the gap that fail-stopped it → the receipt that paid it →
+   *  this resume's own reading (a fresh reconstruction, whose terminal and
+   *  receipt are stamped with exactly that reading below, so the next resume
+   *  reads the same number back out of the journal). */
+  const anchorTsOf = new Map<string, number>();
+  const remember = (attemptId: string, tsMs: number): void => {
+    if (!anchorTsOf.has(attemptId)) anchorTsOf.set(attemptId, tsMs);
+  };
   for (const event of args.events) {
-    if (event.type === 'run_completed' || event.type === 'instrument_failure') {
-      terminalTsOf.set(event.payload.attempt_id, event.ts_ms);
-    }
+    if (event.type !== 'run_completed' && event.type !== 'instrument_failure')
+      continue;
+    remember(event.payload.attempt_id, event.ts_ms);
+  }
+  for (const event of args.events) {
+    if (event.type !== 'adjudication') continue;
+    const { disposition, rationale } = event.payload;
+    if (disposition !== UNPRICED_TERMINAL && disposition !== SPEND_RECOVERED)
+      continue;
+    const attemptId = attemptOfRationale(rationale);
+    if (attemptId !== null) remember(attemptId, event.ts_ms);
   }
   /** The effective cooldown a pool already carries: D-10 coalesces repeated
    *  matches into ONE pool_blocked whose until is the MAX, so the journal's
@@ -1049,10 +1073,10 @@ export function terminalEvidenceActions(args: {
     attemptId: string;
     sampleId: string;
     runId: string;
-    anchorTsMs: number;
   }): void => {
+    const anchorTsMs = anchorTsOf.get(args2.attemptId) ?? args.nowMs;
     for (const block of args.cooldownsOf(args2.runId, args2.sampleId)) {
-      const until = args2.anchorTsMs + block.cooldownMs;
+      const until = anchorTsMs + block.cooldownMs;
       const best = candidateUntil.get(block.poolKey);
       if (best === undefined || until > best.until) {
         candidateUntil.set(block.poolKey, { until, by: args2.attemptId });
@@ -1097,7 +1121,6 @@ export function terminalEvidenceActions(args: {
             attemptId,
             sampleId: sampleOfThis,
             runId: event.payload.run_id,
-            anchorTsMs: terminalTsOf.get(attemptId) ?? event.ts_ms,
           });
         }
         continue;
@@ -1105,6 +1128,18 @@ export function terminalEvidenceActions(args: {
       stream.write(
         `attempt ${attemptId} is already accounted but has no legal terminal — its block re-enters via rerun (the receipt keeps the spend from being charged twice)\n`,
       );
+      // This path owes the cooldown suffix too: the gap-resolution leg
+      // queues receipt+spend and emits its coalesced pool_blocked only after
+      // the whole attempt loop, so a crash between them lands here on the
+      // next resume — recovered, terminal-less, and the last chance to
+      // restore the cooldown.
+      if (sampleOfThis !== undefined) {
+        restoreCooldowns({
+          attemptId,
+          sampleId: sampleOfThis,
+          runId: event.payload.run_id,
+        });
+      }
       rerun(attemptId);
       continue;
     }
@@ -1134,13 +1169,13 @@ export function terminalEvidenceActions(args: {
           cell: cellOf(sampleId),
           amountUsd: evidence.costUsd,
           detail: `resolves the ${UNPRICED_TERMINAL} gap; actual cost restored in run ${event.payload.run_id}`,
+          tsMs: args.nowMs,
         }),
       );
       restoreCooldowns({
         attemptId,
         sampleId,
         runId: event.payload.run_id,
-        anchorTsMs: terminalTsOf.get(attemptId) ?? args.nowMs,
       });
       terminalAttemptIds.push(attemptId);
       // The live fail-stop promises the resume journals the spend and
@@ -1173,13 +1208,13 @@ export function terminalEvidenceActions(args: {
           cell: cellOf(sampleId),
           amountUsd: evidence.costUsd,
           detail: `terminal bundle truncated by a crash; actual cost read from run ${event.payload.run_id}`,
+          tsMs: args.nowMs,
         }),
       );
       restoreCooldowns({
         attemptId,
         sampleId,
         runId: event.payload.run_id,
-        anchorTsMs: terminalTsOf.get(attemptId) ?? event.ts_ms,
       });
       terminalAttemptIds.push(attemptId);
       continue;
@@ -1225,11 +1260,13 @@ export function terminalEvidenceActions(args: {
     ) {
       bundle.push({
         type: 'instrument_failure',
+        ts_ms: args.nowMs,
         payload: { attempt_id: attemptId, cause: classification.cause },
       });
     } else if (state === 'exposed' || exposureCaveat) {
       bundle.push({
         type: 'run_completed',
+        ts_ms: args.nowMs,
         payload: {
           attempt_id: attemptId,
           outcome: evidence.outcome,
@@ -1256,6 +1293,7 @@ export function terminalEvidenceActions(args: {
             cell: cellOf(sampleId),
             amountUsd: evidence.costUsd,
             detail: `run ${event.payload.run_id} is priced but has no legal terminal edge (exposure unestablished, ${args.suiteKind} suite); the instance re-enters via rerun`,
+            tsMs: args.nowMs,
           }),
         );
         terminalAttemptIds.push(attemptId);
@@ -1272,6 +1310,7 @@ export function terminalEvidenceActions(args: {
         cell: cellOf(sampleId),
         amountUsd: evidence.costUsd,
         detail: `reconstructed terminal evidence from run ${event.payload.run_id}`,
+        tsMs: args.nowMs,
       }),
     );
     // The cooldown rides the same coalescing restore as every other path,
@@ -1281,7 +1320,6 @@ export function terminalEvidenceActions(args: {
       attemptId,
       sampleId,
       runId: event.payload.run_id,
-      anchorTsMs: args.nowMs,
     });
     terminalAttemptIds.push(attemptId);
   }
