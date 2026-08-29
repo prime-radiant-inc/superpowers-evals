@@ -875,6 +875,135 @@ test('the free-standing gap leg: a crash after its spend still restores the cool
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
 });
 
+test('a COMPLETE live bundle resumes as a no-op — the sensor-anchored cooldown is not extended to the terminal', async () => {
+  // Live dispatch anchors the cooldown when the 429 is OBSERVED; the terminal
+  // and its receipt land in separate, later-stamped critical sections. A
+  // restoration that anchors on the terminal therefore computes a LATER
+  // until than the complete live row already carries and appends a false
+  // extension — mistaking an ordinary healthy bundle for a missing suffix.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+
+  // The observation section: the 429 is seen at t=0 and blocks the pool for
+  // the clamped 30s the marker asks for.
+  const observed = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  observed.appendEvent({
+    type: 'pool_blocked',
+    payload: { pool_key: 'grader_cred|anthropic|m', until_ts_ms: 30_000 },
+  });
+  observed.release();
+
+  // The terminal sections: later stamps, as production produces.
+  const terminaled = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(10),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  const paid = (attemptId: string, amount: number) => [
+    {
+      type: 'adjudication' as const,
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: `attempt=${attemptId}; actual cost at terminal`,
+      },
+    },
+    {
+      type: 'budget_event' as const,
+      payload: { kind: 'spend', amount_usd: amount },
+    },
+  ];
+  terminaled.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    {
+      type: 'instrument_failure',
+      payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
+    },
+    ...paid('a1', 0.25),
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_B, ts: 1_000 } },
+    { type: 'run_completed', payload: { attempt_id: 'a2', outcome: 'pass' } },
+    ...paid('a2', 0.75),
+    // Both samples are terminal, so the remaining exposure is 0…
+    {
+      type: 'budget_event',
+      payload: { kind: 'estimate_inflight', amount_usd: 0 },
+    },
+    // …and the ballast note is already recorded, so reconciliation has
+    // nothing at all left to do.
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'control-plane',
+        disposition: 'ballast_spent',
+        rationale: 'noted by an earlier resume',
+      },
+    },
+  ]);
+  terminaled.release();
+
+  const before = journalEvents(fx.dir);
+  // Resumed while the live cooldown is still in force (it runs to 30s).
+  await reconcileOnly(fx, 'live-complete.lock.d', new TickingClock(11));
+  // Nothing appended: no extension, no spend, no rerun.
+  expect(journalEvents(fx.dir)).toEqual(before);
+});
+
+test("a landed cooldown that does NOT cover what this run's evidence justifies is still restored", async () => {
+  // The pool is shared: an earlier sample's 429 left a window that closed
+  // before this run even started, so this run's own evidence justifies a
+  // later block and the strict guard must still fire.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    // An older, shorter window for the same pool — nothing to do with r1.
+    {
+      type: 'pool_blocked',
+      payload: { pool_key: 'grader_cred|anthropic|m', until_ts_ms: 5_000 },
+    },
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    {
+      type: 'instrument_failure',
+      payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
+    },
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; actual cost at terminal',
+      },
+    },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
+    // …and the crash took r1's own cooldown.
+  ]);
+  w.release();
+  const terminalTs = journalEvents(fx.dir).find(
+    (e) => e.type === 'instrument_failure',
+  )!.ts_ms;
+  await reconcileOnly(fx, 'short-cooldown.lock.d');
+  expect(cooldownsOf(fx.dir)).toEqual([
+    { pool: 'grader_cred|anthropic|m', until: 5_000 },
+    { pool: 'grader_cred|anthropic|m', until: terminalTs + 30_000 },
+  ]);
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+});
+
 test('a terminal-less live spend already in the journal is never charged twice', async () => {
   // The exposure-absent gating path withholds run_completed but journals the
   // actual spend. After a later crash recovery finds neither terminal nor

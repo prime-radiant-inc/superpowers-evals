@@ -1029,6 +1029,14 @@ export function terminalEvidenceActions(args: {
       continue;
     remember(event.payload.attempt_id, event.ts_ms);
   }
+  /** When each attempt's run was allocated — the earliest moment its own
+   *  sensor evidence could have been observed. */
+  const allocatedTsOf = new Map<string, number>();
+  for (const event of args.events) {
+    if (event.type === 'run_allocated') {
+      allocatedTsOf.set(event.payload.attempt_id, event.ts_ms);
+    }
+  }
   for (const event of args.events) {
     if (event.type !== 'adjudication') continue;
     const { disposition, rationale } = event.payload;
@@ -1068,19 +1076,36 @@ export function terminalEvidenceActions(args: {
    *    already carries, so a cooldown that did land restores nothing;
    *  - a candidate already in the past restores nothing — an expired
    *    cooldown blocks no admission and is not resurrected. */
-  const candidateUntil = new Map<string, { until: number; by: string }>();
+  const candidateUntil = new Map<
+    string,
+    { until: number; minJustified: number; by: string }
+  >();
   const restoreCooldowns = (args2: {
     attemptId: string;
     sampleId: string;
     runId: string;
   }): void => {
     const anchorTsMs = anchorTsOf.get(args2.attemptId) ?? args.nowMs;
+    // The EARLIEST until this evidence could possibly justify. The live path
+    // anchors a cooldown when the 429 is OBSERVED, which is somewhere inside
+    // the run — so any genuine live row for this evidence already reaches at
+    // least `run_allocated.ts_ms + cooldownMs`. A journaled row that reaches
+    // that floor therefore already accounts for this evidence, however much
+    // earlier its own anchor was; restoration must not "top it up" to the
+    // terminal's later stamp.
+    const observedFloorTsMs = allocatedTsOf.get(args2.attemptId) ?? anchorTsMs;
     for (const block of args.cooldownsOf(args2.runId, args2.sampleId)) {
       const until = anchorTsMs + block.cooldownMs;
+      const minJustified = observedFloorTsMs + block.cooldownMs;
       const best = candidateUntil.get(block.poolKey);
-      if (best === undefined || until > best.until) {
-        candidateUntil.set(block.poolKey, { until, by: args2.attemptId });
-      }
+      candidateUntil.set(block.poolKey, {
+        until: Math.max(until, best?.until ?? 0),
+        // The most demanding justification across the attempts sharing this
+        // pool: a landed row must cover ALL of them to count as complete.
+        minJustified: Math.max(minJustified, best?.minJustified ?? 0),
+        by:
+          best !== undefined && best.until >= until ? best.by : args2.attemptId,
+      });
     }
   };
   /** Emit the coalesced cooldowns ONCE, after every attempt has been
@@ -1089,7 +1114,13 @@ export function terminalEvidenceActions(args: {
   const emitRestoredCooldowns = (): void => {
     for (const [pool, candidate] of candidateUntil) {
       if (candidate.until <= args.nowMs) continue; // expired: nothing to block
-      if (candidate.until <= (journaledUntil.get(pool) ?? 0)) continue;
+      // Already accounted for: some journaled row for this pool reaches the
+      // floor this evidence justifies, so the suffix is not missing — it is
+      // simply anchored earlier than the terminal, as the live path anchors
+      // it. Only a pool whose journaled cooldown falls SHORT of that floor
+      // (none at all, or an older window that closed before this run began)
+      // is genuinely owed one.
+      if ((journaledUntil.get(pool) ?? 0) >= candidate.minJustified) continue;
       journaledUntil.set(pool, candidate.until);
       terminals.push({
         type: 'pool_blocked',
