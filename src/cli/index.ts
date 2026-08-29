@@ -586,6 +586,10 @@ campaign
     '--confirm',
     'required to publish; without it the verb prints grid + digest and exits 0',
   )
+  .option(
+    '--pricing-overrides <path>',
+    'JSON/YAML file of operator-declared per-token pricing overrides (R-REG-3 grader attestation, R-REG-11 unpriced-model escape)',
+  )
   .option('--dry-run', 'grid + exclusions + digest only, never writes')
   .action((suite: string, opts: CampaignRegisterOptions) => {
     process.exit(campaignRegister(suite, opts));

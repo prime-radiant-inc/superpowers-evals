@@ -534,6 +534,86 @@ test('register --global-cap forwards the flag into the frozen cap reading', () =
   expect(res.stdout).toContain('max contemporaneous two-arm blocks = 2');
 }, 120_000);
 
+test('register: the operator supplies pricing overrides through a file — the grader attestation lands (C3 operator path)', () => {
+  // Without an override the exploratory registration caveats the grader as
+  // unattested; a GATING registration refuses outright on the same
+  // predicate, so this file is the only operator-reachable path to a
+  // registrable gating campaign (R-REG-3 / R-REG-11: the declared per-token
+  // override is the only escape).
+  const bare = registerCli([
+    'campaign',
+    'register',
+    fixtureSuite(),
+    '--estimates',
+    fixtureEstimates(),
+  ]);
+  expect(bare.status).toBe(0);
+  expect(bare.stdout).toContain('unattested');
+
+  const overridesPath = join(EVALS_CHECKOUT, 'pricing-overrides.json');
+  writeFileSync(
+    overridesPath,
+    JSON.stringify([
+      {
+        applies_to_grader: true,
+        per_token_usd: 0.000002,
+        rationale: 'operator attestation: grader priced per-token',
+      },
+    ]),
+  );
+  const attested = registerCli([
+    'campaign',
+    'register',
+    fixtureSuite(),
+    '--estimates',
+    fixtureEstimates(),
+    '--pricing-overrides',
+    overridesPath,
+  ]);
+  expect(attested.stderr).toBe('');
+  expect(attested.status).toBe(0);
+  expect(attested.stdout).not.toContain('unattested');
+}, 240_000);
+
+test('register: a pricing-overrides file that is not a valid override list refuses loudly (fail-closed)', () => {
+  const badPath = join(EVALS_CHECKOUT, 'bad-overrides.json');
+  // Targets BOTH arm and applies_to_grader — the schema pins exactly one.
+  writeFileSync(
+    badPath,
+    JSON.stringify([
+      {
+        arm: 'arm_a',
+        applies_to_grader: true,
+        per_token_usd: 0.000002,
+        rationale: 'ambiguous target',
+      },
+    ]),
+  );
+  const res = registerCli([
+    'campaign',
+    'register',
+    fixtureSuite(),
+    '--estimates',
+    fixtureEstimates(),
+    '--pricing-overrides',
+    badPath,
+  ]);
+  expect(res.status).toBe(1);
+  expect(res.stderr).toContain('pricing override');
+  expect(res.stdout).not.toMatch(/digest: [0-9a-f]{64}/);
+
+  const missing = registerCli([
+    'campaign',
+    'register',
+    fixtureSuite(),
+    '--estimates',
+    fixtureEstimates(),
+    '--pricing-overrides',
+    join(EVALS_CHECKOUT, 'no-such-overrides.json'),
+  ]);
+  expect(missing.status).toBe(1);
+}, 240_000);
+
 test('register --confirm publishes: campaign.json + journal + snapshot, digest printed, exit 0', () => {
   // The child-contract probe's prerequisites come through the seams: D2's
   // pinned implementation-merge commit exists in no reachable object store

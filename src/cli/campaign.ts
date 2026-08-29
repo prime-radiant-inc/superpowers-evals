@@ -740,11 +740,16 @@ export function campaignSimulate(opts: CampaignSimulateOptions): void {
 
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { z } from 'zod';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { realProcessIdentityProbe } from '../campaign/locks.ts';
 import { cancelCampaign, resumeCampaign } from '../campaign/recovery.ts';
 import { registerCampaign } from '../campaign/registration.ts';
+import {
+  type PricingOverride,
+  PricingOverrideSchema,
+} from '../contracts/campaign/campaign.ts';
 import { parseCredentialsFile } from '../contracts/credential.ts';
 import { getEnv } from '../env.ts';
 import { repoRoot } from '../paths.ts';
@@ -815,8 +820,38 @@ export function resolveSourceCheckouts(): SourceCheckouts {
 export interface CampaignRegisterOptions {
   estimates: string;
   globalCap: string;
+  pricingOverrides?: string;
   confirm?: boolean;
   dryRun?: boolean;
+}
+
+/** The operator's declared per-token pricing overrides (R-REG-3 grader
+ *  attestation, R-REG-11 unpriced-model escape). They are operator rulings,
+ *  not values a shell line should carry: each entry pairs a per-token price
+ *  with a written rationale that ends up in the frozen, digested document.
+ *  So the verb takes a FILE (JSON, or YAML — the same parser the suite
+ *  uses), validated against the shipped schema. Fail-closed: unreadable,
+ *  non-list, or invalid refuses before any grid work. */
+function readPricingOverrides(path: string): PricingOverride[] {
+  let raw: unknown;
+  try {
+    raw = parseYaml(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new CampaignVerbError(
+      `--pricing-overrides ${path} is unreadable or not parseable as JSON/YAML: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  const parsed = z.array(PricingOverrideSchema).safeParse(raw);
+  if (!parsed.success) {
+    throw new CampaignVerbError(
+      `--pricing-overrides ${path} is not a list of pricing override entries: ${parsed.error.issues
+        .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+        .join('; ')}`,
+    );
+  }
+  return parsed.data;
 }
 
 export function campaignRegister(
@@ -832,6 +867,12 @@ export function campaignRegister(
         `--global-cap must be an integer >= 1 (got '${opts.globalCap}')`,
       );
     }
+    // Operator input is validated before any checkout or git work: a
+    // malformed override file must refuse before the verb touches a repo.
+    const pricingOverrides =
+      opts.pricingOverrides === undefined
+        ? undefined
+        : readPricingOverrides(opts.pricingOverrides);
     const checkouts = resolveSourceCheckouts();
     // No --ref flags exist in v1 (the pinned table), so the verb freezes
     // what the source checkouts currently ARE: each checkout's HEAD as a
@@ -857,6 +898,7 @@ export function campaignRegister(
     const result = registerCampaign({
       suitePath,
       suiteRaw,
+      ...(pricingOverrides !== undefined ? { pricingOverrides } : {}),
       campaignsRoot: join(repoRoot(), 'campaigns'),
       estimates,
       globalCap,
