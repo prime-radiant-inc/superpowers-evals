@@ -224,6 +224,10 @@ export async function executeRunCommand(
       onCredentialLabels: (labels) => {
         labelsForStop = labels;
       },
+      // The graceful-stop seam: the recorded stop is honored at every
+      // runner phase boundary — a SIGINT before the gauntlet child exists
+      // still stops the run (no child, no spend, stopped verdict).
+      shouldStop: () => stopExitCode !== null,
     });
     if (stopExitCode !== null) {
       // The stop is terminal and LAST: the runner may have written its own

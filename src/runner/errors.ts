@@ -15,3 +15,15 @@ export class RunnerError extends Error {
     this.stage = stage;
   }
 }
+
+/** Control-flow signal for the graceful-stop seam (RunScenarioArgs.
+ * shouldStop): thrown at phase boundaries when the caller recorded a stop,
+ * so runScenario composes the STOPPED verdict (indeterminate, stage
+ * 'stopped') with the run's full identity — the run genuinely stopped
+ * before the next phase, never silently continuing. */
+export class RunStoppedError extends Error {
+  constructor() {
+    super('run interrupted by SIGINT');
+    this.name = 'RunStoppedError';
+  }
+}

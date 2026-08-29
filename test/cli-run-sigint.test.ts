@@ -309,3 +309,94 @@ test('quorum run stopped during agent phase keeps parsed credential labels', asy
     await exited;
   }
 }, 60_000);
+
+// Pre-launch graceful stop (review round 3): a SIGINT during setup.sh must
+// stop the run AT the phase boundary — the gauntlet child (and any provider
+// spend behind it) never launches, and the run reports stopped. The post-
+// launch path is covered above; this pins the early window.
+test('SIGINT during setup stops the run before the gauntlet launch (no child ever spawns)', async () => {
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-sigint2-'));
+  const hold = mkdtempSync(join(tmpdir(), 'sigint2-'));
+  const setupStarted = join(hold, 'setup-started');
+  const gauntletRan = join(hold, 'gauntlet-ran');
+  // A gauntlet PATH wrapper that records its own execution before delegating
+  // to the generated mock shim: the marker proves whether ANY gauntlet child
+  // ever spawned.
+  const wrapDir = mkdtempSync(join(tmpdir(), 'gwrap-'));
+  const mockDir = mockGauntletDir('pass');
+  // argv-aware: the runner's post-verdict provenance stamp probes
+  // `gauntlet --version` through the same PATH — that is not a gauntlet run.
+  // Only a non---version invocation (the real spawn) marks.
+  writeFileSync(
+    join(wrapDir, 'gauntlet'),
+    `#!/bin/sh\nif [ "$1" != "--version" ]; then touch '${gauntletRan}'; fi\nexec '${join(mockDir, 'gauntlet')}' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const scn = mkdtempSync(join(tmpdir(), 'scn-sigint2-'));
+  writeFileSync(
+    join(scn, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nDo the thing.',
+  );
+  writeFileSync(
+    join(scn, 'setup.sh'),
+    `#!/usr/bin/env bash\ntouch '${setupStarted}'\nsleep 5\n`,
+  );
+  chmodSync(join(scn, 'setup.sh'), 0o755);
+  writeFileSync(join(scn, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
+  const child = spawn(
+    'bun',
+    [
+      CLI,
+      'run',
+      scn,
+      '--coding-agent',
+      'claude',
+      '--coding-agents-dir',
+      REAL_CODING_AGENTS,
+      '--out-root',
+      outRoot,
+    ],
+    {
+      env: {
+        ...process.env,
+        QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
+        QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
+        PATH: `${wrapDir}:${MOCK}:${process.env['PATH'] ?? ''}`,
+        ANTHROPIC_API_KEY: 'sk-test',
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.on('exit', (code) => resolveExit(code));
+  });
+  try {
+    // Race-free readiness: setup.sh has STARTED (its marker exists) and is
+    // parked in its sleep — the SIGINT lands squarely in the pre-gauntlet
+    // window.
+    const started = await pollFor(
+      () => (existsSync(setupStarted) ? true : undefined),
+      30_000,
+    );
+    expect(started).toBe(true);
+    child.kill('SIGINT');
+    const code = await exited;
+    expect(code).toBe(2);
+    const runs = readdirSync(outRoot).filter((d) => !d.startsWith('.'));
+    expect(runs).toHaveLength(1);
+    const verdict = FinalVerdictSchema.parse(
+      JSON.parse(readFileSync(join(outRoot, runs[0]!, 'verdict.json'), 'utf8')),
+    );
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('stopped');
+    // The load-bearing assertion: NO gauntlet child ever spawned.
+    expect(existsSync(gauntletRan)).toBe(false);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    await exited;
+  }
+}, 90_000);

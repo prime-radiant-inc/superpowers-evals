@@ -110,10 +110,11 @@ import { hexNonce, nowStampUtc, repoRoot } from '../paths.ts';
 import { runSetup, SetupError } from '../setup-step.ts';
 import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
-import { RunnerError } from './errors.ts';
+import { RunnerError, RunStoppedError } from './errors.ts';
 import { gauntletEnvBase } from './gauntlet-env.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
+import { buildStoppedVerdict } from './stopped.ts';
 
 // RunnerError lives in ./errors.ts so context.ts can throw it without a
 // runner<->context import cycle. Re-exported here so it is part of this module's
@@ -441,6 +442,12 @@ export interface RunScenarioArgs {
   // the spawner supplies at launch. Persisted at run-dir allocation and
   // stamped on every verdict/error/stopped path — before the first provider
   // token. Legacy runs leave it undefined.
+  // Graceful-stop seam: checked at every phase boundary (before setup.sh,
+  // before pre-checks, before the gauntlet launch, before post-checks). A
+  // true return stops the run THERE — the next phase (and any provider
+  // spend behind it) never runs, and the verdict is the runner's stopped
+  // verdict. Undefined = no stop channel (library callers, tests).
+  readonly shouldStop?: (() => boolean) | undefined;
   readonly campaign?: CampaignIdentity | undefined;
 }
 
@@ -1094,18 +1101,33 @@ export async function runScenario(
       runAgentCache,
     );
   } catch (err: unknown) {
-    const stage = errorStage(err);
-    const message = err instanceof Error ? err.message : String(err);
-    verdict = compose({
-      gauntlet: null,
-      checks: [],
-      captureEmpty: false,
-      error: { stage, message },
-      // The cached outcome of the run's single manifest load — reused, never
-      // re-read (the load's own failure is the error being composed here).
-      // Inert anyway: compose short-circuits on `error` before `expected`.
-      expected: expectedChecksCache.manifest,
-    });
+    if (err instanceof RunStoppedError) {
+      // A phase boundary observed the stop: the run actually stopped —
+      // stopped verdict with the full run identity, like the CLI handler's.
+      verdict = buildStoppedVerdict({
+        scenario,
+        codingAgent: a.codingAgent,
+        startedAt,
+        ...(credentialName !== undefined ? { credential: credentialName } : {}),
+        ...(selectedCredentialLabels !== undefined
+          ? { labels: selectedCredentialLabels }
+          : {}),
+        ...(a.campaign !== undefined ? { campaign: a.campaign } : {}),
+      });
+    } else {
+      const stage = errorStage(err);
+      const message = err instanceof Error ? err.message : String(err);
+      verdict = compose({
+        gauntlet: null,
+        checks: [],
+        captureEmpty: false,
+        error: { stage, message },
+        // The cached outcome of the run's single manifest load — reused, never
+        // re-read (the load's own failure is the error being composed here).
+        // Inert anyway: compose short-circuits on `error` before `expected`.
+        expected: expectedChecksCache.manifest,
+      });
+    }
   }
   // Best-effort provenance stamp (PRI-2494). F13 micro corrective round 2:
   // compute the runnability decision FIRST, and NEVER reload the agent
@@ -1276,6 +1298,18 @@ function resolveLaunchCwd(workdir: string): string {
 // run body — normal return, early indeterminate return, or throw. cleanupDirs
 // starts empty and is populated by the body right after provisioning, so a crash
 // before provisioning reaps nothing and a crash after still reaps the secret dir.
+/** Phase-boundary stop check: the flag first; then ONE true event-loop turn
+ * (setImmediate) so a SIGINT that arrived while the loop was blocked —
+ * setup.sh and the check phases run through spawnSync — is delivered to the
+ * caller's handler BEFORE the next phase proceeds. The run stops on the
+ * flag, never on a race with signal delivery. */
+async function stopRequested(a: RunScenarioArgs): Promise<boolean> {
+  if (a.shouldStop === undefined) return false;
+  if (a.shouldStop() === true) return true;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  return a.shouldStop() === true;
+}
+
 async function runInner(
   a: RunScenarioArgs,
   runDir: string,
@@ -1510,6 +1544,9 @@ async function runInnerBody(
   // provision that THROWS after writing the secret file is the one window not
   // covered here.
   cleanupDirs.push(...runtimeCleanupDirs(provisionEnv));
+  // Graceful stop, setup boundary: a stop recorded before setup.sh runs
+  // means the run (and any spend behind it) never starts.
+  if (await stopRequested(a)) throw new RunStoppedError();
   // setup.sh needs QUORUM_REPO_ROOT (some fixtures resolve repo-relative paths /
   // setup-helpers against it). QUORUM_CODING_AGENT lets agent-aware setup steps
   // (e.g. inject-user-preference) target the ambient instructions file THIS agent
@@ -1534,6 +1571,9 @@ async function runInnerBody(
 
   const checksRepoRoot = repoRoot();
 
+  // Graceful stop, pre-checks boundary: a stop recorded during setup.sh
+  // (or provisioning) stops the run before checks and the gauntlet launch.
+  if (await stopRequested(a)) throw new RunStoppedError();
   // pre-checks: a crash is an error stage; a failed assertion is a verdict.
   // checks.sh is guaranteed present (the missing-checks guard returned early).
   const pre = await runPhase({
@@ -1798,6 +1838,10 @@ async function runInnerBody(
     watcher.start();
   }
 
+  // Graceful stop, gauntlet-launch boundary: the last gate before provider
+  // spend — a stop recorded during pre-checks or agent provisioning means
+  // no gauntlet child ever spawns.
+  if (await stopRequested(a)) throw new RunStoppedError();
   let gauntlet: GauntletLayer;
   try {
     ({ gauntlet } = await invokeGauntlet({
@@ -2126,6 +2170,9 @@ async function runInnerBody(
   }
 
   // post-checks: again a crash is an error stage, a failure flows to compose.
+  // Graceful stop, post-checks boundary: the spend completed, but a stop
+  // recorded during capture stops the run before checks compose.
+  if (await stopRequested(a)) throw new RunStoppedError();
   writePhase(runDir, 'checks', identity);
   const post = await runPhase({
     checksSh,
