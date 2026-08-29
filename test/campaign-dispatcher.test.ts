@@ -796,6 +796,80 @@ test('429 cooldown: classified stderr pools the block, waits the clamped cooldow
   await run;
 });
 
+test('429 role attribution: an untagged child-stderr 429 cools the SUBJECT pool only, even when subject and grader share a provider', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  await tick(h.clock, 1);
+  const [first] = h.spawner.spawned;
+  // Same-provider subject and grader (the harness credentials are all
+  // anthropic): the text is the subject child's own stderr, so nothing about
+  // it is grader evidence.
+  first!.child.emitStderr('{"type":"rate_limit_error"} retry-after: 30');
+  first!.child.emitLine(`run_allocated: run-${first!.child.pid}`);
+  first!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  const blocked = eventsOf(h.campaignDir, 'pool_blocked');
+  expect(blocked.map((e) => e.payload.pool_key)).toEqual([
+    'cred_a|anthropic|m',
+  ]);
+  expect(
+    eventsOf(h.campaignDir, 'instrument_failure').map((e) => e.payload.cause),
+  ).toEqual(['subject_rate_limited']);
+  for (const { child } of h.spawner.spawned.slice(1)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 31);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await run;
+});
+
+test("429 role attribution: a gauntlet-result 429 is the GRADER's evidence — it cools the grader pool and classifies grader_rate_limited", async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  await tick(h.clock, 1);
+  const [first] = h.spawner.spawned;
+  const runId = `run-${first!.child.pid}`;
+  // The Gauntlet-Agent's own composed result carries the 429 body: grader
+  // evidence by provenance, whatever the subject credential looks like.
+  const resultDir = join(
+    h.campaignDir,
+    'results',
+    runId,
+    'gauntlet-agent',
+    'results',
+    'g1',
+  );
+  mkdirSync(resultDir, { recursive: true });
+  writeFileSync(
+    join(resultDir, 'result.json'),
+    JSON.stringify({ summary: '{"type":"rate_limit_error"} retry-after: 30' }),
+  );
+  first!.child.emitLine(`run_allocated: ${runId}`);
+  first!.child.exit({ code: 1, signal: null });
+  await tick(h.clock, 1);
+  const blocked = eventsOf(h.campaignDir, 'pool_blocked');
+  expect(blocked.map((e) => e.payload.pool_key)).toEqual([
+    'grader_cred|anthropic|m',
+  ]);
+  expect(
+    eventsOf(h.campaignDir, 'instrument_failure').map((e) => e.payload.cause),
+  ).toEqual(['grader_rate_limited']);
+  for (const { child } of h.spawner.spawned.slice(1)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 31);
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await run;
+});
+
 test('instrument replacement: typed failure mints the reserve (block_replaced FIRST, then dispositions), conservation intact', async () => {
   const h = harness();
   const run = runCampaignDispatch(h.args);

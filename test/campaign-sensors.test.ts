@@ -17,6 +17,7 @@ import {
   parseRetryAfterMs,
   RATE_LIMIT_MARKERS,
   RETRY_AFTER_MIN_MS,
+  roleOfEvidenceSource,
   senseEvidence,
   terminalEvidenceTexts,
   trajectoryExposureMs,
@@ -759,4 +760,12 @@ test('C7 terminal sources: verdict reason + gauntlet result texts are collected,
     source: 'gauntlet_result',
     role: 'grader',
   });
+});
+
+test('evidence source names its producer: the child channels are the subject, the Gauntlet-Agent artifacts are the grader', () => {
+  expect(roleOfEvidenceSource('child_stderr')).toBe('subject');
+  expect(roleOfEvidenceSource('verdict_reason')).toBe('subject');
+  expect(roleOfEvidenceSource('agy_log_tail')).toBe('subject');
+  expect(roleOfEvidenceSource('gauntlet_result')).toBe('grader');
+  expect(roleOfEvidenceSource('event_stream')).toBe('grader');
 });

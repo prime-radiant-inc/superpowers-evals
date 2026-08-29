@@ -76,6 +76,7 @@ import {
   decideExposureAtTerminal,
   ExposureTracker,
   gauntletEventStreamTexts,
+  roleOfEvidenceSource,
   type SensorEvidenceSource,
   type SensorRole,
   senseEvidence,
@@ -2436,68 +2437,63 @@ export async function runCampaignDispatch(
       source: SensorEvidenceSource,
       text: string,
     ): Promise<void> => {
+      // ONE campaign child carries both parties' traffic, but a single TEXT
+      // belongs to exactly one of them: its source names the producer
+      // (roleOfEvidenceSource). Classifying one text against both credential
+      // contexts is what let a subject 429 attribute to the grader whenever
+      // the two credentials share a provider.
+      const role = roleOfEvidenceSource(source);
       const subjectCred = credentialOfArm(sample.arm);
       const runtimeFamily = surfaceOfArm(sample.arm)?.agent;
-      const contexts: {
-        role: SensorRole;
-        credential: CredentialShape;
-        pool: string;
-      }[] = [
-        // ONE campaign child carries BOTH parties' traffic: EVERY context is
-        // evaluated for every piece of evidence and the classifier-rank
-        // arbitration above picks the stored attribution.
-        {
-          role: 'subject',
-          credential: {
-            api: subjectCred.api,
-            ...(subjectCred.base_url !== undefined
-              ? { base_url: subjectCred.base_url }
-              : {}),
-            ...(runtimeFamily !== undefined ? { runtimeFamily } : {}),
-          },
-          pool: sample.subjectPool,
-        },
-        {
-          role: 'grader',
-          credential: {
-            api: graderCred.api,
-            ...(graderCred.base_url !== undefined
-              ? { base_url: graderCred.base_url }
-              : {}),
-          },
-          pool: graderPool,
-        },
-      ];
-      for (const ctx of contexts) {
-        const signal = senseEvidence({
-          source,
-          role: ctx.role,
-          credential: ctx.credential,
-          text,
-        });
-        if (signal === null) continue;
-        const candidate = { evidence: signal.evidence, role: signal.role };
-        const existingEv = sensorEvidenceBySample.get(sample.sampleId);
-        if (
-          existingEv === undefined ||
-          evidenceRank(candidate) < evidenceRank(existingEv)
-        ) {
-          sensorEvidenceBySample.set(sample.sampleId, candidate);
-        }
-        if (signal.evidence === '429-match') {
-          // R-DSP-3: journaled cooldown, D-10 clamped retry-after; duplicate
-          // arbitration coalesces into one pool_blocked with the max until.
-          const until = clockNowMs(clock) + signal.cooldownMs;
-          const existing = poolBlockedUntil.get(ctx.pool);
-          if (existing === undefined || until > existing) {
-            poolBlockedUntil.set(ctx.pool, until);
-            await appendCritical([
-              {
-                type: 'pool_blocked',
-                payload: { pool_key: ctx.pool, until_ts_ms: until },
+      const ctx: { credential: CredentialShape; pool: string } =
+        role === 'subject'
+          ? {
+              credential: {
+                api: subjectCred.api,
+                ...(subjectCred.base_url !== undefined
+                  ? { base_url: subjectCred.base_url }
+                  : {}),
+                ...(runtimeFamily !== undefined ? { runtimeFamily } : {}),
               },
-            ]);
-          }
+              pool: sample.subjectPool,
+            }
+          : {
+              credential: {
+                api: graderCred.api,
+                ...(graderCred.base_url !== undefined
+                  ? { base_url: graderCred.base_url }
+                  : {}),
+              },
+              pool: graderPool,
+            };
+      const signal = senseEvidence({
+        source,
+        role,
+        credential: ctx.credential,
+        text,
+      });
+      if (signal === null) return;
+      const candidate = { evidence: signal.evidence, role: signal.role };
+      const existingEv = sensorEvidenceBySample.get(sample.sampleId);
+      if (
+        existingEv === undefined ||
+        evidenceRank(candidate) < evidenceRank(existingEv)
+      ) {
+        sensorEvidenceBySample.set(sample.sampleId, candidate);
+      }
+      if (signal.evidence === '429-match') {
+        // R-DSP-3: journaled cooldown, D-10 clamped retry-after; duplicate
+        // arbitration coalesces into one pool_blocked with the max until.
+        const until = clockNowMs(clock) + signal.cooldownMs;
+        const existing = poolBlockedUntil.get(ctx.pool);
+        if (existing === undefined || until > existing) {
+          poolBlockedUntil.set(ctx.pool, until);
+          await appendCritical([
+            {
+              type: 'pool_blocked',
+              payload: { pool_key: ctx.pool, until_ts_ms: until },
+            },
+          ]);
         }
       }
     };

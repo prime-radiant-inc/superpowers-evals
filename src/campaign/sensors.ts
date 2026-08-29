@@ -196,6 +196,28 @@ export function classifyRateLimit(args: {
 
 export type SensorRole = 'subject' | 'grader';
 
+/** Which party PRODUCED a piece of evidence, by source provenance. One
+ *  campaign child carries both parties' traffic, so a single text must be
+ *  classified against exactly one role: classifying it against both lets a
+ *  subject 429 win a grader row whenever the two credentials share a
+ *  provider, cooling the wrong pool (D-10: attribution is by child role, and
+ *  the marker rows carry no role override).
+ *
+ *  The child's own channels — its stderr, its agy.log, the verdict quorum
+ *  composes for its run — are the SUBJECT's. The Gauntlet-Agent's composed
+ *  result and its event stream are the GRADER's. */
+export function roleOfEvidenceSource(source: SensorEvidenceSource): SensorRole {
+  switch (source) {
+    case 'gauntlet_result':
+    case 'event_stream':
+      return 'grader';
+    case 'child_stderr':
+    case 'verdict_reason':
+    case 'agy_log_tail':
+      return 'subject';
+  }
+}
+
 /** The credential shape a marker predicate ranks against. */
 export interface CredentialShape {
   readonly api?: string;
