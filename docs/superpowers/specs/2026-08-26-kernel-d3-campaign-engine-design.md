@@ -2,15 +2,10 @@
 
 **Date:** 2026-08-26 (revision 4, post revision-3 verify round; amended after
 the OQ-11 second-round ratification)
-**Status:** implemented (branch `kernel-d3-sdd` @ `4a7ac3a` — merge commit
-pending; portable exit criteria green. The Linux-gated integration matrix and
-the three trusted-maintainer live campaigns are separately recorded per the
-exit-criteria section — the status stamp follows the D2 convention and is
-updated to the main merge commit at merge time.) Previous: fully ratified —
-revision 4 + editorial minors + ratified OQ-11 timing amendment (2026-08-26;
-user ratification covers proposed D1 erratum E7, the ENOSPC fail-stop of
-Decision D-13, the contract-additions list, and OQ-11 option (b); no open
-facets).
+**Status:** fully ratified — revision 4 + editorial minors + ratified OQ-11
+timing amendment (2026-08-26; user ratification covers proposed D1 erratum
+E7, the ENOSPC fail-stop of Decision D-13, the contract-additions list, and
+OQ-11 option (b); no open facets).
 **Ratified amendment to revision 4 (not a revision bump):** the user ratified
 OQ-11 option (b): dispatch-time invalidation + reserve refill when a breach
 window closes, with seal-time handling only as the backstop for breaches
