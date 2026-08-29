@@ -487,24 +487,27 @@ test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown 
   });
   // The spend follows the terminal IMMEDIATELY: that adjacency is what lets
   // a later resume tell a complete bundle from a crash-truncated one.
+  // The cooldown precedes the receipt: a lost cooldown then implies a lost
+  // receipt, which is what makes "did THIS attempt's row land?" decidable at
+  // all once a sibling row exists for the same pool.
   expect(actions.terminals.map((e) => e.type)).toEqual([
     'exposure_started',
     'instrument_failure',
+    'pool_blocked',
     'adjudication', // the spend receipt naming the attempt
     'budget_event',
-    'pool_blocked',
   ]);
-  expect(actions.terminals[4]?.payload).toEqual({
+  expect(actions.terminals[2]?.payload).toEqual({
     pool_key: 'cred|anthropic|m',
     until_ts_ms: 70_000,
   });
 });
 
-test('the cooldown is the LAST leg of the bundle, so a crash after the spend loses it — the next resume restores it exactly once', () => {
+test('a crash before the cooldown also loses the receipt, and the repair re-runs whole — exactly once', () => {
   SEQ = 0;
-  // The durable prefix the reviewer's cut leaves: terminal + receipt + spend
-  // landed, pool_blocked did not. The attempt is paid AND resolved, so the
-  // skip path is the only thing that can still restore the cooldown.
+  // Under the pinned ordering the reachable cut is HERE: the terminal
+  // landed, and the cooldown + receipt + spend that follow it did not. The
+  // attempt is therefore not `recovered`, so the repair re-runs in full.
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -516,12 +519,6 @@ test('the cooldown is the LAST leg of the bundle, so a crash after the spend los
     }),
     ev('exposure_started', { sample_id: 's1', ts: 1_000 }),
     ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
-    ev('adjudication', {
-      cell: 'c1:scn',
-      disposition: 'spend_recovered',
-      rationale: 'attempt=a1; actual cost of run r1 at terminal',
-    }),
-    ev('budget_event', { kind: 'spend', amount_usd: 0.25 }),
   ];
   const terminalTs = events[4]!.ts_ms;
   const call = (extra: JournalEvent[] = []) =>
@@ -530,22 +527,29 @@ test('the cooldown is the LAST leg of the bundle, so a crash after the spend los
       universe: UNIVERSE,
       cooldownsOf: () => [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
       suiteKind: 'gating',
-      nowMs: terminalTs + 1_000, // still inside the window
-      evidenceOf: () => {
-        throw new Error('the skip path must not need the verdict/cost gate');
-      },
+      nowMs: terminalTs + 1_000,
+      evidenceOf: () => ({
+        outcome: 'pass' as const,
+        costUsd: 0.25,
+        exposureTsMs: 1_000,
+        sensor: null,
+        poolBlocks: [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
+      }),
     });
-  const restored = call();
-  // Exactly the missing leg — no second spend, no second terminal.
-  expect(restored.terminals.map((e) => e.type)).toEqual(['pool_blocked']);
-  expect(restored.terminals[0]?.payload).toEqual({
+  const repaired = call();
+  expect(repaired.terminals.map((e) => e.type)).toEqual([
+    'pool_blocked',
+    'adjudication',
+    'budget_event',
+  ]);
+  expect(repaired.terminals[0]?.payload).toEqual({
     pool_key: 'cred|anthropic|m',
-    // Anchored on the TERMINAL's own ts, so every resume computes the same
-    // figure and a re-repair can never extend the cooldown.
     until_ts_ms: terminalTs + 60_000,
   });
 
-  // Idempotent: with the cooldown durable, the next resume appends nothing.
+  // A crash between the cooldown and the receipt re-runs too — and the
+  // deterministic candidate no longer exceeds what it just wrote, so the
+  // cooldown is suppressed while the spend still lands exactly once.
   SEQ = events.length;
   const again = call([
     ev('pool_blocked', {
@@ -553,7 +557,10 @@ test('the cooldown is the LAST leg of the bundle, so a crash after the spend los
       until_ts_ms: terminalTs + 60_000,
     }),
   ]);
-  expect(again.terminals).toEqual([]);
+  expect(again.terminals.map((e) => e.type)).toEqual([
+    'adjudication',
+    'budget_event',
+  ]);
 });
 
 test('a cooldown whose window has already passed is not resurrected', () => {
@@ -588,7 +595,7 @@ test('a cooldown whose window has already passed is not resurrected', () => {
   expect(actions.terminals).toEqual([]);
 });
 
-test('two attempts crash-cut in the SAME pool restore ONE coalesced cooldown, never two', () => {
+test('two attempts crash-cut in the SAME pool: the later window is appended, the covered one is suppressed (D-10 max)', () => {
   SEQ = 0;
   const universe: CampaignUniverse = {
     samples: [
@@ -597,14 +604,6 @@ test('two attempts crash-cut in the SAME pool restore ONE coalesced cooldown, ne
     ],
     blocks: [{ block_id: 'b1', sample_ids: ['s1', 's2'] }],
   };
-  const paid = (attemptId: string) => [
-    ev('adjudication', {
-      cell: 'c1:scn',
-      disposition: 'spend_recovered',
-      rationale: `attempt=${attemptId}; actual cost at terminal`,
-    }),
-    ev('budget_event', { kind: 'spend', amount_usd: 0.25 }),
-  ];
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -623,10 +622,8 @@ test('two attempts crash-cut in the SAME pool restore ONE coalesced cooldown, ne
     }),
     ev('exposure_started', { sample_id: 's1', ts: 1_000 }),
     ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
-    ...paid('a1'),
     ev('exposure_started', { sample_id: 's2', ts: 1_000 }),
     ev('run_completed', { attempt_id: 'a2', outcome: 'pass' }),
-    ...paid('a2'),
   ];
   const actions = terminalEvidenceActions({
     events,
@@ -635,18 +632,25 @@ test('two attempts crash-cut in the SAME pool restore ONE coalesced cooldown, ne
     cooldownsOf: () => [{ poolKey: 'shared|anthropic|m', cooldownMs: 60_000 }],
     suiteKind: 'gating',
     nowMs: 2_000,
-    evidenceOf: () => null,
+    evidenceOf: () => ({
+      outcome: 'pass' as const,
+      costUsd: 0.25,
+      exposureTsMs: 1_000,
+      sensor: null,
+      poolBlocks: [{ poolKey: 'shared|anthropic|m', cooldownMs: 60_000 }],
+    }),
   });
-  // D-10 coalescing: one row for the pool, carrying the MAX until — the
-  // later terminal's. Two rows would double-declare the same block.
-  expect(actions.terminals.map((e) => e.type)).toEqual(['pool_blocked']);
-  const laterTerminalTs = Math.max(
-    ...events.filter((e) => e.type === 'run_completed').map((e) => e.ts_ms),
-  );
-  expect(actions.terminals[0]?.payload).toEqual({
-    pool_key: 'shared|anthropic|m',
-    until_ts_ms: laterTerminalTs + 60_000,
-  });
+  // a1 declares its window; a2's terminal is later, so its window strictly
+  // exceeds a1's and is appended too — D-10's max, applied on append. A
+  // sibling's row never stands in for an attempt whose own window is later.
+  const cooldowns = actions.terminals.filter((e) => e.type === 'pool_blocked');
+  const terminalTs = events
+    .filter((e) => e.type === 'run_completed')
+    .map((e) => e.ts_ms);
+  expect(cooldowns.map((e) => e.payload)).toEqual([
+    { pool_key: 'shared|anthropic|m', until_ts_ms: terminalTs[0]! + 60_000 },
+    { pool_key: 'shared|anthropic|m', until_ts_ms: terminalTs[1]! + 60_000 },
+  ]);
 });
 
 test('an attempt with no admitted instance REFUSES recovery loudly — an unattributable in-flight run is never silently dropped (C11)', () => {

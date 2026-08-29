@@ -682,12 +682,11 @@ function cooldownsOf(dir: string): { pool: string; until: number }[] {
     );
 }
 
-test('a terminal bundle truncated AFTER its spend still restores the lost cooldown, exactly once', async () => {
-  // The reviewer's cut: terminal + receipt + spend are durable, the D-13
-  // pool_blocked suffix is not. Accounting is complete and the lifecycle is
-  // resolved, so a recovered+terminaled skip exits without ever re-reading
-  // the evidence — and admission proceeds against a pool that R-DSP-3 says
-  // must stay blocked.
+test('a terminal bundle truncated after the TERMINAL restores the cooldown, and pays exactly once', async () => {
+  // The reachable cut under the pinned ordering: the terminal landed, and
+  // the cooldown + receipt + spend that follow it did not. A lost cooldown
+  // always implies a lost receipt, so the attempt is not `recovered` and the
+  // repair re-runs whole.
   const fx = crashedCampaign({ driftEvals: true });
   seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
@@ -701,16 +700,8 @@ test('a terminal bundle truncated AFTER its spend still restores the lost cooldo
   w.appendEvents([
     { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
     { type: 'run_completed', payload: { attempt_id: 'a1', outcome: 'pass' } },
-    {
-      type: 'adjudication',
-      payload: {
-        cell: 'c1:scn',
-        disposition: 'spend_recovered',
-        rationale: 'attempt=a1; actual cost of run r1 at terminal',
-      },
-    },
-    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
-    // …and the crash took the pool_blocked that should follow.
+    // …and the crash took everything after it: the cooldown FIRST, then the
+    // receipt and its spend.
   ]);
   w.release();
 
@@ -812,12 +803,11 @@ test('a FRESH reconstruction anchors its cooldown on the timestamp the terminal 
   expect(journalEvents(fx.dir).length).toBe(afterFirst);
 });
 
-test('the free-standing gap leg: a crash after its spend still restores the cooldown, and the block still reruns', async () => {
-  // The gap resolution queues receipt+spend and registers a cooldown
-  // candidate that is only emitted after the whole attempt loop, so a crash
-  // in between is a legal durable prefix. On the next resume the completed
-  // receipt removes the gap, and the attempt is recovered-but-terminal-less
-  // — the rerun path — which is the one path that never restored cooldowns.
+test('the free-standing gap leg: a crash after its cooldown re-runs the resolution, and the block still reruns', async () => {
+  // The gap resolution emits its cooldown, then the receipt and spend. A
+  // crash after the cooldown leaves the gap UNRESOLVED (no completed
+  // receipt), so the resolution re-runs — the cooldown is suppressed as
+  // already covered, and the spend lands exactly once.
   const fx = crashedCampaign({ driftEvals: true });
   seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
@@ -838,24 +828,19 @@ test('the free-standing gap leg: a crash after its spend still restores the cool
         rationale: 'attempt=a1; run r1 had no readable actual cost',
       },
     },
-    // …then a resume resolved it: receipt + spend landed, and the crash took
-    // the cooldown that the loop emits afterwards.
+    // …then a resume began resolving it: the cooldown landed and the crash
+    // took the receipt and spend that follow.
     {
-      type: 'adjudication',
-      payload: {
-        cell: 'c1:scn',
-        disposition: 'spend_recovered',
-        rationale: 'attempt=a1; resolves the unpriced_terminal gap',
-      },
+      type: 'pool_blocked',
+      payload: { pool_key: 'grader_cred|anthropic|m', until_ts_ms: 30_000 },
     },
-    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
   ]);
   w.release();
 
   await reconcileOnly(fx, 'gap-leg-1.lock.d');
-  // The cooldown is restored…
-  expect(cooldownsOf(fx.dir).map((c) => c.pool)).toEqual([
-    'grader_cred|anthropic|m',
+  // The durable cooldown stands, unduplicated…
+  expect(cooldownsOf(fx.dir)).toEqual([
+    { pool: 'grader_cred|anthropic|m', until: 30_000 },
   ]);
   // …a1 is not charged again…
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
@@ -981,16 +966,7 @@ test("a landed cooldown that does NOT cover what this run's evidence justifies i
       type: 'instrument_failure',
       payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
     },
-    {
-      type: 'adjudication',
-      payload: {
-        cell: 'c1:scn',
-        disposition: 'spend_recovered',
-        rationale: 'attempt=a1; actual cost at terminal',
-      },
-    },
-    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
-    // …and the crash took r1's own cooldown.
+    // …and the crash took r1's own cooldown, and the receipt after it.
   ]);
   w.release();
   const terminalTs = journalEvents(fx.dir).find(
@@ -1002,6 +978,108 @@ test("a landed cooldown that does NOT cover what this run's evidence justifies i
     { pool: 'grader_cred|anthropic|m', until: terminalTs + 30_000 },
   ]);
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+});
+
+test("shared pool: a crash-cut attempt restores its OWN later cooldown even though a sibling's row already covers the allocation window", async () => {
+  // Both arms grade against one pool. A observes its 429 and lands a row;
+  // B observes later and its row is lost to a crash. Judging completeness
+  // from a shared value floor lets A\'s row stand in for B\'s, and B\'s later
+  // extension is suppressed on every resume forever. The disambiguator has
+  // to be ORDER, not value: B\'s cooldown is emitted BEFORE its receipt, so
+  // a lost cooldown implies a lost receipt and the repair re-runs whole.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+  seedGraderRateLimit(fx.resultsRoot, 'r2');
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvents([
+    // A: its live cooldown landed, then its whole terminal bundle.
+    {
+      type: 'pool_blocked',
+      payload: { pool_key: 'grader_cred|anthropic|m', until_ts_ms: 30_100 },
+    },
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_A, ts: 1_000 } },
+    {
+      type: 'instrument_failure',
+      payload: { attempt_id: 'a1', cause: 'grader_rate_limited' },
+    },
+    {
+      type: 'adjudication',
+      payload: {
+        cell: 'c1:scn',
+        disposition: 'spend_recovered',
+        rationale: 'attempt=a1; actual cost at terminal',
+      },
+    },
+    { type: 'budget_event', payload: { kind: 'spend', amount_usd: 0.25 } },
+  ]);
+  w.release();
+  // B terminaled LATER — its 429 was observed after A's, so the window it
+  // justifies closes after A's row does. The crash then took everything
+  // after its terminal: its cooldown AND its receipt.
+  const later = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0.12), // t = 120ms, as the counterexample has it
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  later.appendEvents([
+    { type: 'exposure_started', payload: { sample_id: SAMPLE_B, ts: 1_000 } },
+    {
+      type: 'instrument_failure',
+      payload: { attempt_id: 'a2', cause: 'grader_rate_limited' },
+    },
+  ]);
+  later.release();
+  const bTerminalTs = journalEvents(fx.dir)
+    .filter((e) => e.type === 'instrument_failure')
+    .map((e) => e.ts_ms)
+    .at(-1)!;
+
+  await reconcileOnly(fx, 'shared-pool-1.lock.d');
+  // A's row is untouched and B's OWN later window is restored — not
+  // suppressed by A's, which covers a strictly earlier deadline.
+  expect(cooldownsOf(fx.dir)).toEqual([
+    { pool: 'grader_cred|anthropic|m', until: 30_100 },
+    { pool: 'grader_cred|anthropic|m', until: bTerminalTs + 30_000 },
+  ]);
+  expect(bTerminalTs + 30_000).toBeGreaterThan(30_100);
+  // B is paid exactly once; A is not paid again.
+  expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
+
+  // …and the whole thing is a strict no-op on the next resume.
+  const before = journalEvents(fx.dir);
+  await reconcileOnly(fx, 'shared-pool-2.lock.d');
+  expect(journalEvents(fx.dir)).toEqual(before);
+});
+
+test('the reconstructed cooldown is emitted BEFORE the receipt, so a lost cooldown always implies a lost receipt', async () => {
+  // The ordering IS the invariant that makes the shared-pool case decidable:
+  // pool_blocked carries no attempt identity, so "did THIS attempt's row
+  // land?" is undecidable by value once a sibling row exists for the pool.
+  // Putting the cooldown before the receipt makes the receipt answer it.
+  const fx = crashedCampaign({ driftEvals: true });
+  seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
+  seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);
+  seedGraderRateLimit(fx.resultsRoot, 'r1');
+  await reconcileOnly(fx, 'cooldown-order.lock.d');
+  const types = journalEvents(fx.dir).map((e) => e.type);
+  const cooldownAt = types.indexOf('pool_blocked');
+  const receiptAt = journalEvents(fx.dir).findIndex(
+    (e) =>
+      e.type === 'adjudication' &&
+      e.payload.disposition === 'spend_recovered' &&
+      e.payload.rationale.startsWith('attempt=a1;'),
+  );
+  expect(cooldownAt).toBeGreaterThan(-1);
+  expect(receiptAt).toBeGreaterThan(-1);
+  expect(cooldownAt).toBeLessThan(receiptAt);
 });
 
 test('a terminal-less live spend already in the journal is never charged twice', async () => {

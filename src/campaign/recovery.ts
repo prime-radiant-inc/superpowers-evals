@@ -1076,60 +1076,50 @@ export function terminalEvidenceActions(args: {
    *    already carries, so a cooldown that did land restores nothing;
    *  - a candidate already in the past restores nothing — an expired
    *    cooldown blocks no admission and is not resurrected. */
-  const candidateUntil = new Map<
-    string,
-    { until: number; minJustified: number; by: string }
-  >();
-  const restoreCooldowns = (args2: {
+  /** The cooldown legs this attempt's evidence declares, emitted BEFORE its
+   *  receipt.
+   *
+   *  `pool_blocked` carries no attempt identity, so once a sibling row
+   *  exists for the same pool, "did THIS attempt's row land?" is undecidable
+   *  by value — a sibling's row can sit anywhere inside the window this
+   *  attempt's would occupy. ORDER decides it instead: the cooldown precedes
+   *  the receipt, so a lost cooldown implies a lost receipt, the attempt is
+   *  not `recovered`, and the repair re-runs whole.
+   *
+   *  Re-running is safe because the candidate is DETERMINISTIC (the anchor
+   *  precedence over durable records) and the guard is strict-exceeds
+   *  against the pool's journaled maximum: a re-run recomputes the identical
+   *  value, which no longer exceeds what it just wrote, so it is suppressed.
+   *  That is D-10's own rule — repeats inside an active cooldown coalesce to
+   *  the max — applied on append rather than on read. */
+  const cooldownLegs = (args2: {
     attemptId: string;
     sampleId: string;
     runId: string;
-  }): void => {
+  }): EventInput[] => {
     const anchorTsMs = anchorTsOf.get(args2.attemptId) ?? args.nowMs;
-    // The EARLIEST until this evidence could possibly justify. The live path
-    // anchors a cooldown when the 429 is OBSERVED, which is somewhere inside
-    // the run — so any genuine live row for this evidence already reaches at
-    // least `run_allocated.ts_ms + cooldownMs`. A journaled row that reaches
-    // that floor therefore already accounts for this evidence, however much
-    // earlier its own anchor was; restoration must not "top it up" to the
-    // terminal's later stamp.
-    const observedFloorTsMs = allocatedTsOf.get(args2.attemptId) ?? anchorTsMs;
+    const byPool = new Map<string, number>();
     for (const block of args.cooldownsOf(args2.runId, args2.sampleId)) {
       const until = anchorTsMs + block.cooldownMs;
-      const minJustified = observedFloorTsMs + block.cooldownMs;
-      const best = candidateUntil.get(block.poolKey);
-      candidateUntil.set(block.poolKey, {
-        until: Math.max(until, best?.until ?? 0),
-        // The most demanding justification across the attempts sharing this
-        // pool: a landed row must cover ALL of them to count as complete.
-        minJustified: Math.max(minJustified, best?.minJustified ?? 0),
-        by:
-          best !== undefined && best.until >= until ? best.by : args2.attemptId,
-      });
-    }
-  };
-  /** Emit the coalesced cooldowns ONCE, after every attempt has been
-   *  considered — so two attempts in the same pool produce one row carrying
-   *  the max (D-10), never one each. */
-  const emitRestoredCooldowns = (): void => {
-    for (const [pool, candidate] of candidateUntil) {
-      if (candidate.until <= args.nowMs) continue; // expired: nothing to block
-      // Already accounted for: some journaled row for this pool reaches the
-      // floor this evidence justifies, so the suffix is not missing — it is
-      // simply anchored earlier than the terminal, as the live path anchors
-      // it. Only a pool whose journaled cooldown falls SHORT of that floor
-      // (none at all, or an older window that closed before this run began)
-      // is genuinely owed one.
-      if ((journaledUntil.get(pool) ?? 0) >= candidate.minJustified) continue;
-      journaledUntil.set(pool, candidate.until);
-      terminals.push({
-        type: 'pool_blocked',
-        payload: { pool_key: pool, until_ts_ms: candidate.until },
-      });
-      stream.write(
-        `restored the D-13 cooldown attempt ${candidate.by} declared for pool ${pool} (blocked until ${candidate.until}) — R-DSP-3\n`,
+      byPool.set(
+        block.poolKey,
+        Math.max(byPool.get(block.poolKey) ?? 0, until),
       );
     }
+    const legs: EventInput[] = [];
+    for (const [pool, until] of byPool) {
+      if (until <= args.nowMs) continue; // expired: nothing left to block
+      if (until <= (journaledUntil.get(pool) ?? 0)) continue; // already covered
+      journaledUntil.set(pool, until);
+      legs.push({
+        type: 'pool_blocked',
+        payload: { pool_key: pool, until_ts_ms: until },
+      });
+      stream.write(
+        `restored the D-13 cooldown attempt ${args2.attemptId} declared for pool ${pool} (blocked until ${until}) — R-DSP-3\n`,
+      );
+    }
+    return legs;
   };
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
@@ -1141,36 +1131,19 @@ export function terminalEvidenceActions(args: {
     // in `spawned` — and nothing downstream rescues it: the dispatcher never
     // re-queues an already-admitted original block, so the sample would stay
     // spawned forever and its block would never re-enter.
-    const sampleOfThis = chain.sampleOfAttempt.get(attemptId);
     if (recovered.has(attemptId)) {
       if (terminaled.has(attemptId)) {
-        // Paid AND resolved — but the cooldown is the LAST leg of the
-        // bundle, so it can still be missing. Restoring it is the only
-        // repair this attempt can still owe.
-        if (sampleOfThis !== undefined) {
-          restoreCooldowns({
-            attemptId,
-            sampleId: sampleOfThis,
-            runId: event.payload.run_id,
-          });
-        }
+        // Paid AND resolved, and its cooldown is durable BY CONSTRUCTION:
+        // every leg emits the cooldown before the receipt, so a receipt that
+        // landed proves the cooldown did too. Nothing is owed, and nothing
+        // is re-derived — which is what keeps a complete live bundle (whose
+        // row is anchored at OBSERVATION, earlier than any terminal) from
+        // being topped up to a terminal-anchored value.
         continue;
       }
       stream.write(
         `attempt ${attemptId} is already accounted but has no legal terminal — its block re-enters via rerun (the receipt keeps the spend from being charged twice)\n`,
       );
-      // This path owes the cooldown suffix too: the gap-resolution leg
-      // queues receipt+spend and emits its coalesced pool_blocked only after
-      // the whole attempt loop, so a crash between them lands here on the
-      // next resume — recovered, terminal-less, and the last chance to
-      // restore the cooldown.
-      if (sampleOfThis !== undefined) {
-        restoreCooldowns({
-          attemptId,
-          sampleId: sampleOfThis,
-          runId: event.payload.run_id,
-        });
-      }
       rerun(attemptId);
       continue;
     }
@@ -1195,6 +1168,7 @@ export function terminalEvidenceActions(args: {
         `accounting gap for ${attemptId} RESOLVED: run ${event.payload.run_id} now prices at ${evidence.costUsd} — journaling the actual spend and resuming\n`,
       );
       terminals.push(
+        ...cooldownLegs({ attemptId, sampleId, runId: event.payload.run_id }),
         ...spendRecovery({
           attemptId,
           cell: cellOf(sampleId),
@@ -1203,11 +1177,6 @@ export function terminalEvidenceActions(args: {
           tsMs: args.nowMs,
         }),
       );
-      restoreCooldowns({
-        attemptId,
-        sampleId,
-        runId: event.payload.run_id,
-      });
       terminalAttemptIds.push(attemptId);
       // The live fail-stop promises the resume journals the spend and
       // CONTINUES. For a free-standing gap (the terminal was withheld too)
@@ -1234,6 +1203,7 @@ export function terminalEvidenceActions(args: {
         `terminal bundle for ${attemptId} was truncated by a crash — completing its missing spend (${evidence.costUsd}) from the run artifacts\n`,
       );
       terminals.push(
+        ...cooldownLegs({ attemptId, sampleId, runId: event.payload.run_id }),
         ...spendRecovery({
           attemptId,
           cell: cellOf(sampleId),
@@ -1242,11 +1212,6 @@ export function terminalEvidenceActions(args: {
           tsMs: args.nowMs,
         }),
       );
-      restoreCooldowns({
-        attemptId,
-        sampleId,
-        runId: event.payload.run_id,
-      });
       terminalAttemptIds.push(attemptId);
       continue;
     }
@@ -1319,6 +1284,7 @@ export function terminalEvidenceActions(args: {
           `terminal evidence for ${attemptId} withheld: exposure was never established and the suite is ${args.suiteKind} — accounting its actual spend (${evidence.costUsd}) before the instance re-enters via rerun (D-13, fail-closed)\n`,
         );
         terminals.push(
+          ...cooldownLegs({ attemptId, sampleId, runId: event.payload.run_id }),
           ...spendRecovery({
             attemptId,
             cell: cellOf(sampleId),
@@ -1336,6 +1302,7 @@ export function terminalEvidenceActions(args: {
     // resume reads "already paid" off the attempt rather than off a
     // position in the stream. The cooldowns ride after it.
     bundle.push(
+      ...cooldownLegs({ attemptId, sampleId, runId: event.payload.run_id }),
       ...spendRecovery({
         attemptId,
         cell: cellOf(sampleId),
@@ -1344,17 +1311,9 @@ export function terminalEvidenceActions(args: {
         tsMs: args.nowMs,
       }),
     );
-    // The cooldown rides the same coalescing restore as every other path,
-    // so a re-repair after a mid-bundle crash cannot double-declare it.
     terminals.push(...bundle);
-    restoreCooldowns({
-      attemptId,
-      sampleId,
-      runId: event.payload.run_id,
-    });
     terminalAttemptIds.push(attemptId);
   }
-  emitRestoredCooldowns();
   // A gap whose attempt never reached the run_allocated walk (no allocation
   // journaled at all) cannot be priced from a run dir — but it still records
   // money the position cannot account for, so it blocks just as loudly.
