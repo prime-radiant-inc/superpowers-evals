@@ -101,8 +101,8 @@ export interface ResolveKeyWithWaitArgs {
   readonly pollSeconds?: number;
 }
 
-/** The converged wait guard (review round 1, Finding 1): the ONLY selection
- *  path is the pinned selector above (resolveKeyForSpawn -> selectKey:
+/** The converged wait guard: the ONLY selection path is the pinned
+ *  selector above (resolveKeyForSpawn -> selectKey:
  *  least-loaded, ceil(cap/pool-length) threshold, pool-order ties). When it
  *  answers `wait`, this loop emits the D-2 entry warning, parks on the
  *  injected Clock, re-samples the persistent counter map each wake, and on
@@ -153,7 +153,7 @@ export async function resolveKeyForSpawnWithWait(
  *  been measured yet); resolution MUST carry the measured wait — a finite,
  *  nonnegative number of milliseconds read off the injected Clock. Any
  *  other shape is a fabricated measurement and refuses to report
- *  (fail-closed, review round 1 Finding 2). */
+ *  (fail-closed: an unmeasured wait is never reported as a measured one). */
 export type KeyWaitNotice =
   | { phase: 'entry'; credentialName: string }
   | { phase: 'resolution'; credentialName: string; waitMs: number };

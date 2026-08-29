@@ -985,7 +985,15 @@ export function openJournalRead(campaignDir: string): {
   const db = new Database(join(campaignDir, JOURNAL_DB_FILENAME), {
     readonly: true,
   });
-  checkSchemaVersion(db);
+  // A refusal owns the handle it opened: schema validation runs after the
+  // open, so a version mismatch must close the database before it throws or
+  // every poll against a foreign journal strands a descriptor.
+  try {
+    checkSchemaVersion(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   return {
     readEvents(afterSeq = 0): JournalEvent[] {
       const rows = db
@@ -1089,8 +1097,7 @@ export function replayEvents(
     );
   }
   // F1 membership gate: the sample IDs an event may name are exactly the
-  // frozen universe's ∪ those mint rosters introduce (membership derives
-  // from events, Decision D-7). An unknown sample is corruption — never a
+  // frozen universe's. An unknown sample is corruption — never a
   // fabricated 'planned' row the reducer could then legally advance.
   // The sample universe is FROZEN (E7.0): reserve blocks are pre-registered
   // with their own frozen samples and reruns reuse predecessor samples, so

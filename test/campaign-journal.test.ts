@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -656,4 +656,27 @@ test('a failed reseed poisons the writer — every later mutation throws WriterP
     4,
   );
   fresh.release();
+});
+
+// The read-only view opens a SQLite handle BEFORE it validates the schema
+// version. A refusal must not strand that handle: the process's open
+// descriptors are the observable, counted through /dev/fd (the same set on
+// Darwin and Linux).
+function openDescriptorCount(): number {
+  return readdirSync('/dev/fd').length;
+}
+
+test('openJournalRead closes its handle when schema validation refuses', () => {
+  const dir = camp();
+  new Database(join(dir, JOURNAL_DB_FILENAME))
+    .query('UPDATE meta SET value = ? WHERE key = ?')
+    .run('999', 'schema_version');
+  // Warm-up refusal: the first open pays any one-off descriptor cost (lazy
+  // module state), so the measured window sees only the handle under test.
+  expect(() => openJournalRead(dir)).toThrow(JournalError);
+  const before = openDescriptorCount();
+  for (let i = 0; i < 8; i++) {
+    expect(() => openJournalRead(dir)).toThrow(JournalError);
+  }
+  expect(openDescriptorCount()).toBe(before);
 });

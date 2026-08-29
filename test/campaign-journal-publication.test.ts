@@ -177,12 +177,15 @@ test('publication: gate refuses without journal + ballast readiness; valid path 
     initJournalDb(dir);
     expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
     expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
+    // Valid path: initialized journal (campaign_opened committed) + ballast.
+    openJournal(dir);
     // A ballast of the wrong size is not the reserve the publisher expects.
+    // Asserted only once every OTHER readiness precondition holds, so the
+    // refusal can come from the ballast gate and nothing earlier.
     expect(() => stageAndPublishCampaignJson(dir, doc, 64 * 1024)).toThrow(
       JournalError,
     );
-    // Valid path: initialized journal (campaign_opened committed) + ballast.
-    openJournal(dir);
+    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
     stageAndPublishCampaignJson(dir, doc);
     expect(existsSync(join(dir, 'campaign.json'))).toBe(true);
     expect(
