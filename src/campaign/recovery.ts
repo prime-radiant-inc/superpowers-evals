@@ -785,31 +785,24 @@ function spendRecovery(args: {
   ];
 }
 
-/** Read one crashed attempt's run dir as D-13 terminal evidence. `null`
- *  means the run dir supplies NO evidence — no composed verdict — which is
- *  the D-13 rule's rerun branch.
- *
- *  A composed verdict whose ACTUAL cost is unreadable is a different thing
- *  entirely: the run RAN and spent, so it is not rerun fodder (a rerun pays
- *  twice for evidence already held) and it is not journalable either
- *  (R-JRN-12 forbids an estimate in a spend row). It REFUSES, naming the run
- *  dir and the operator action. */
-export function readTerminalRunEvidence(args: {
+/** The sensor attribution a run dir still carries: the strongest signal, and
+ *  the pool cooldowns its rate-limit evidence declares. Read WITHOUT the
+ *  verdict/cost gate, so an attempt that is already paid and resolved can
+ *  still have its D-13 cooldown suffix restored without the resume refusing
+ *  over economics it no longer needs. */
+export function readRunSensorEvidence(args: {
   runDir: string;
   runId: string;
   sampleId: string;
   campaign: Campaign;
   credentials: Readonly<Record<string, Credential>>;
-  stream: { write(s: string): void };
-}): TerminalRunEvidence | null {
-  const verdict = readVerdictSummary(args.runDir);
-  if (verdict === null) return null; // no run dir / no composed verdict
-  const costUsd = runCostFromArtifacts(args.runDir);
-  if (costUsd === null) {
-    throw new RecoveryError(
-      `run ${args.runId} composed a verdict but its artifacts carry no readable actual cost — refusing to resume: journaling an estimate as spend is forbidden (R-JRN-12) and rerunning a run that already spent would pay twice. Inspect ${args.runDir} and restore its verdict economics, then re-run \`quorum campaign run\`; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing was journaled; ${AUDIT}`,
-    );
-  }
+}): {
+  sensor: {
+    role: SensorRole;
+    evidence: '429-match' | 'billing-exhaustion';
+  } | null;
+  poolBlocks: { poolKey: string; cooldownMs: number }[];
+} {
   const sample = args.campaign.samples.find(
     (s) => s.sample_id === args.sampleId,
   );
@@ -874,12 +867,47 @@ export function readTerminalRunEvidence(args: {
       }
     }
   }
+  return { sensor: best, poolBlocks };
+}
+
+/** Read one crashed attempt's run dir as D-13 terminal evidence. `null`
+ *  means the run dir supplies NO evidence — no composed verdict — which is
+ *  the D-13 rule's rerun branch.
+ *
+ *  A composed verdict whose ACTUAL cost is unreadable is a different thing
+ *  entirely: the run RAN and spent, so it is not rerun fodder (a rerun pays
+ *  twice for evidence already held) and it is not journalable either
+ *  (R-JRN-12 forbids an estimate in a spend row). It REFUSES, naming the run
+ *  dir and the operator action. */
+export function readTerminalRunEvidence(args: {
+  runDir: string;
+  runId: string;
+  sampleId: string;
+  campaign: Campaign;
+  credentials: Readonly<Record<string, Credential>>;
+  stream: { write(s: string): void };
+}): TerminalRunEvidence | null {
+  const verdict = readVerdictSummary(args.runDir);
+  if (verdict === null) return null; // no run dir / no composed verdict
+  const costUsd = runCostFromArtifacts(args.runDir);
+  if (costUsd === null) {
+    throw new RecoveryError(
+      `run ${args.runId} composed a verdict but its artifacts carry no readable actual cost — refusing to resume: journaling an estimate as spend is forbidden (R-JRN-12) and rerunning a run that already spent would pay twice. Inspect ${args.runDir} and restore its verdict economics, then re-run \`quorum campaign run\`; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing was journaled; ${AUDIT}`,
+    );
+  }
+  const { sensor, poolBlocks } = readRunSensorEvidence({
+    runDir: args.runDir,
+    runId: args.runId,
+    sampleId: args.sampleId,
+    campaign: args.campaign,
+    credentials: args.credentials,
+  });
   return {
     outcome: verdict.outcome,
     ...(verdict.stage !== undefined ? { stage: verdict.stage } : {}),
     costUsd,
     exposureTsMs: trajectoryExposureMs(args.runDir),
-    sensor: best,
+    sensor,
     poolBlocks,
   };
 }
@@ -903,6 +931,12 @@ export function terminalEvidenceActions(args: {
   events: readonly JournalEvent[];
   universe: CampaignUniverse;
   evidenceOf: (runId: string, sampleId: string) => TerminalRunEvidence | null;
+  /** Pool cooldowns a run dir still declares, read WITHOUT the verdict/cost
+   *  gate so an already-paid attempt's lost D-13 suffix can be restored. */
+  cooldownsOf: (
+    runId: string,
+    sampleId: string,
+  ) => readonly { poolKey: string; cooldownMs: number }[];
   suiteKind: SuiteKind;
   /** Resume-time clock reading for the re-declared cooldown windows. */
   nowMs: number;
@@ -971,6 +1005,77 @@ export function terminalEvidenceActions(args: {
     const blockId = blockOfAttempt(chain, attemptId);
     if (!rerunBlockIds.includes(blockId)) rerunBlockIds.push(blockId);
   };
+  /** When each attempt's terminal landed — the anchor a restored cooldown is
+   *  measured from, so the restored value is the SAME on every resume. */
+  const terminalTsOf = new Map<string, number>();
+  for (const event of args.events) {
+    if (event.type === 'run_completed' || event.type === 'instrument_failure') {
+      terminalTsOf.set(event.payload.attempt_id, event.ts_ms);
+    }
+  }
+  /** The effective cooldown a pool already carries: D-10 coalesces repeated
+   *  matches into ONE pool_blocked whose until is the MAX, so the journal's
+   *  (and this bundle's) maximum is what a candidate must beat. */
+  const journaledUntil = new Map<string, number>();
+  for (const event of args.events) {
+    if (event.type !== 'pool_blocked') continue;
+    const pool = event.payload.pool_key;
+    journaledUntil.set(
+      pool,
+      Math.max(journaledUntil.get(pool) ?? 0, event.payload.until_ts_ms),
+    );
+  }
+  /** Restore the D-13 cooldown suffix for one attempt.
+   *
+   *  `pool_blocked` carries no attempt identity (E7.7), and it is the LAST
+   *  leg of a reconstruction bundle — so a crash after the spend leaves a
+   *  legal durable prefix whose cooldown is simply gone, and the attempt
+   *  still reads as paid and resolved. Repair-on-resume is the legal
+   *  mechanism (R-JRN-4 forbids widening the transaction), and correlation
+   *  is by VALUE rather than position:
+   *
+   *  - the restored `until` is `terminal.ts_ms + cooldownMs`, a figure
+   *    derived entirely from durable evidence, so every resume computes the
+   *    same number and a re-repair can never EXTEND a cooldown;
+   *  - candidates are coalesced per pool to their max (D-10) before any
+   *    append, so two attempts in the same pool crash-cutting together
+   *    produce ONE row, never two;
+   *  - a candidate is appended only if it strictly exceeds what the pool
+   *    already carries, so a cooldown that did land restores nothing;
+   *  - a candidate already in the past restores nothing — an expired
+   *    cooldown blocks no admission and is not resurrected. */
+  const candidateUntil = new Map<string, { until: number; by: string }>();
+  const restoreCooldowns = (args2: {
+    attemptId: string;
+    sampleId: string;
+    runId: string;
+    anchorTsMs: number;
+  }): void => {
+    for (const block of args.cooldownsOf(args2.runId, args2.sampleId)) {
+      const until = args2.anchorTsMs + block.cooldownMs;
+      const best = candidateUntil.get(block.poolKey);
+      if (best === undefined || until > best.until) {
+        candidateUntil.set(block.poolKey, { until, by: args2.attemptId });
+      }
+    }
+  };
+  /** Emit the coalesced cooldowns ONCE, after every attempt has been
+   *  considered — so two attempts in the same pool produce one row carrying
+   *  the max (D-10), never one each. */
+  const emitRestoredCooldowns = (): void => {
+    for (const [pool, candidate] of candidateUntil) {
+      if (candidate.until <= args.nowMs) continue; // expired: nothing to block
+      if (candidate.until <= (journaledUntil.get(pool) ?? 0)) continue;
+      journaledUntil.set(pool, candidate.until);
+      terminals.push({
+        type: 'pool_blocked',
+        payload: { pool_key: pool, until_ts_ms: candidate.until },
+      });
+      stream.write(
+        `restored the D-13 cooldown attempt ${candidate.by} declared for pool ${pool} (blocked until ${candidate.until}) — R-DSP-3\n`,
+      );
+    }
+  };
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
@@ -981,8 +1086,22 @@ export function terminalEvidenceActions(args: {
     // in `spawned` — and nothing downstream rescues it: the dispatcher never
     // re-queues an already-admitted original block, so the sample would stay
     // spawned forever and its block would never re-enter.
+    const sampleOfThis = chain.sampleOfAttempt.get(attemptId);
     if (recovered.has(attemptId)) {
-      if (terminaled.has(attemptId)) continue; // paid AND resolved
+      if (terminaled.has(attemptId)) {
+        // Paid AND resolved — but the cooldown is the LAST leg of the
+        // bundle, so it can still be missing. Restoring it is the only
+        // repair this attempt can still owe.
+        if (sampleOfThis !== undefined) {
+          restoreCooldowns({
+            attemptId,
+            sampleId: sampleOfThis,
+            runId: event.payload.run_id,
+            anchorTsMs: terminalTsOf.get(attemptId) ?? event.ts_ms,
+          });
+        }
+        continue;
+      }
       stream.write(
         `attempt ${attemptId} is already accounted but has no legal terminal — its block re-enters via rerun (the receipt keeps the spend from being charged twice)\n`,
       );
@@ -1017,6 +1136,12 @@ export function terminalEvidenceActions(args: {
           detail: `resolves the ${UNPRICED_TERMINAL} gap; actual cost restored in run ${event.payload.run_id}`,
         }),
       );
+      restoreCooldowns({
+        attemptId,
+        sampleId,
+        runId: event.payload.run_id,
+        anchorTsMs: terminalTsOf.get(attemptId) ?? args.nowMs,
+      });
       terminalAttemptIds.push(attemptId);
       // The live fail-stop promises the resume journals the spend and
       // CONTINUES. For a free-standing gap (the terminal was withheld too)
@@ -1050,6 +1175,12 @@ export function terminalEvidenceActions(args: {
           detail: `terminal bundle truncated by a crash; actual cost read from run ${event.payload.run_id}`,
         }),
       );
+      restoreCooldowns({
+        attemptId,
+        sampleId,
+        runId: event.payload.run_id,
+        anchorTsMs: terminalTsOf.get(attemptId) ?? event.ts_ms,
+      });
       terminalAttemptIds.push(attemptId);
       continue;
     }
@@ -1143,18 +1274,18 @@ export function terminalEvidenceActions(args: {
         detail: `reconstructed terminal evidence from run ${event.payload.run_id}`,
       }),
     );
-    for (const block of evidence.poolBlocks) {
-      bundle.push({
-        type: 'pool_blocked',
-        payload: {
-          pool_key: block.poolKey,
-          until_ts_ms: args.nowMs + block.cooldownMs,
-        },
-      });
-    }
+    // The cooldown rides the same coalescing restore as every other path,
+    // so a re-repair after a mid-bundle crash cannot double-declare it.
     terminals.push(...bundle);
+    restoreCooldowns({
+      attemptId,
+      sampleId,
+      runId: event.payload.run_id,
+      anchorTsMs: args.nowMs,
+    });
     terminalAttemptIds.push(attemptId);
   }
+  emitRestoredCooldowns();
   // A gap whose attempt never reached the run_allocated walk (no allocation
   // journaled at all) cannot be priced from a run dir — but it still records
   // money the position cannot account for, so it blocks just as loudly.
@@ -1826,6 +1957,14 @@ export async function resumeCampaign(
             credentials: args.credentials,
             stream,
           }),
+        cooldownsOf: (runId, sampleId) =>
+          readRunSensorEvidence({
+            runDir: join(resultsRoot, runId),
+            runId,
+            sampleId,
+            campaign,
+            credentials: args.credentials,
+          }).poolBlocks,
       });
       bundle.push(...evidence.terminals);
       // Storage-pause reconciliation (R-JRN-11 + D-13 step 7): retroactive

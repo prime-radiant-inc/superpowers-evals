@@ -368,6 +368,7 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
   const withEvidence = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
+    cooldownsOf: () => [],
     suiteKind: 'gating',
     nowMs: 10_000,
     evidenceOf: (runId) =>
@@ -403,6 +404,7 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
   const withoutRunDir = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
+    cooldownsOf: () => [],
     suiteKind: 'gating',
     nowMs: 10_000,
     evidenceOf: () => null,
@@ -426,6 +428,7 @@ test('terminal-evidence rule: a gating sample whose exposure never established g
   const actions = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
+    cooldownsOf: () => [],
     suiteKind: 'gating',
     nowMs: 10_000,
     evidenceOf: () => ({
@@ -467,18 +470,20 @@ test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown 
       key_grants: [],
     }),
   ];
+  const rateLimited = {
+    outcome: 'indeterminate' as const,
+    costUsd: 0.25,
+    exposureTsMs: 1_000,
+    sensor: { role: 'subject' as const, evidence: '429-match' as const },
+    poolBlocks: [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
+  };
   const actions = terminalEvidenceActions({
     events,
     universe: UNIVERSE,
+    cooldownsOf: () => rateLimited.poolBlocks,
     suiteKind: 'gating',
     nowMs: 10_000,
-    evidenceOf: () => ({
-      outcome: 'indeterminate' as const,
-      costUsd: 0.25,
-      exposureTsMs: 1_000,
-      sensor: { role: 'subject' as const, evidence: '429-match' as const },
-      poolBlocks: [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
-    }),
+    evidenceOf: () => rateLimited,
   });
   // The spend follows the terminal IMMEDIATELY: that adjacency is what lets
   // a later resume tell a complete bundle from a crash-truncated one.
@@ -492,6 +497,155 @@ test('terminal-evidence rule: rate-limit evidence re-declares its pool cooldown 
   expect(actions.terminals[4]?.payload).toEqual({
     pool_key: 'cred|anthropic|m',
     until_ts_ms: 70_000,
+  });
+});
+
+test('the cooldown is the LAST leg of the bundle, so a crash after the spend loses it — the next resume restores it exactly once', () => {
+  SEQ = 0;
+  // The durable prefix the reviewer's cut leaves: terminal + receipt + spend
+  // landed, pool_blocked did not. The attempt is paid AND resolved, so the
+  // skip path is the only thing that can still restore the cooldown.
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+    ev('exposure_started', { sample_id: 's1', ts: 1_000 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('adjudication', {
+      cell: 'c1:scn',
+      disposition: 'spend_recovered',
+      rationale: 'attempt=a1; actual cost of run r1 at terminal',
+    }),
+    ev('budget_event', { kind: 'spend', amount_usd: 0.25 }),
+  ];
+  const terminalTs = events[4]!.ts_ms;
+  const call = (extra: JournalEvent[] = []) =>
+    terminalEvidenceActions({
+      events: [...events, ...extra],
+      universe: UNIVERSE,
+      cooldownsOf: () => [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
+      suiteKind: 'gating',
+      nowMs: terminalTs + 1_000, // still inside the window
+      evidenceOf: () => {
+        throw new Error('the skip path must not need the verdict/cost gate');
+      },
+    });
+  const restored = call();
+  // Exactly the missing leg — no second spend, no second terminal.
+  expect(restored.terminals.map((e) => e.type)).toEqual(['pool_blocked']);
+  expect(restored.terminals[0]?.payload).toEqual({
+    pool_key: 'cred|anthropic|m',
+    // Anchored on the TERMINAL's own ts, so every resume computes the same
+    // figure and a re-repair can never extend the cooldown.
+    until_ts_ms: terminalTs + 60_000,
+  });
+
+  // Idempotent: with the cooldown durable, the next resume appends nothing.
+  SEQ = events.length;
+  const again = call([
+    ev('pool_blocked', {
+      pool_key: 'cred|anthropic|m',
+      until_ts_ms: terminalTs + 60_000,
+    }),
+  ]);
+  expect(again.terminals).toEqual([]);
+});
+
+test('a cooldown whose window has already passed is not resurrected', () => {
+  SEQ = 0;
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('adjudication', {
+      cell: 'c1:scn',
+      disposition: 'spend_recovered',
+      rationale: 'attempt=a1; actual cost of run r1 at terminal',
+    }),
+    ev('budget_event', { kind: 'spend', amount_usd: 0.25 }),
+  ];
+  const actions = terminalEvidenceActions({
+    events,
+    universe: UNIVERSE,
+    cooldownsOf: () => [{ poolKey: 'cred|anthropic|m', cooldownMs: 60_000 }],
+    suiteKind: 'gating',
+    // Long past the window: an expired cooldown blocks no admission, so
+    // restoring one would be a fabricated block, not a repair.
+    nowMs: events[3]!.ts_ms + 10 * 60_000,
+    evidenceOf: () => null,
+  });
+  expect(actions.terminals).toEqual([]);
+});
+
+test('two attempts crash-cut in the SAME pool restore ONE coalesced cooldown, never two', () => {
+  SEQ = 0;
+  const universe: CampaignUniverse = {
+    samples: [
+      { sample_id: 's1', arm: 'base', cell: 'c1:scn' },
+      { sample_id: 's2', arm: 'treat', cell: 'c1:scn' },
+    ],
+    blocks: [{ block_id: 'b1', sample_ids: ['s1', 's2'] }],
+  };
+  const paid = (attemptId: string) => [
+    ev('adjudication', {
+      cell: 'c1:scn',
+      disposition: 'spend_recovered',
+      rationale: `attempt=${attemptId}; actual cost at terminal`,
+    }),
+    ev('budget_event', { kind: 'spend', amount_usd: 0.25 }),
+  ];
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', {
+      attempt_id: 'a2',
+      run_id: 'r2',
+      pgid: 222,
+      key_grants: [],
+    }),
+    ev('exposure_started', { sample_id: 's1', ts: 1_000 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ...paid('a1'),
+    ev('exposure_started', { sample_id: 's2', ts: 1_000 }),
+    ev('run_completed', { attempt_id: 'a2', outcome: 'pass' }),
+    ...paid('a2'),
+  ];
+  const actions = terminalEvidenceActions({
+    events,
+    universe,
+    // Both runs' evidence names the SAME pool.
+    cooldownsOf: () => [{ poolKey: 'shared|anthropic|m', cooldownMs: 60_000 }],
+    suiteKind: 'gating',
+    nowMs: 2_000,
+    evidenceOf: () => null,
+  });
+  // D-10 coalescing: one row for the pool, carrying the MAX until — the
+  // later terminal's. Two rows would double-declare the same block.
+  expect(actions.terminals.map((e) => e.type)).toEqual(['pool_blocked']);
+  const laterTerminalTs = Math.max(
+    ...events.filter((e) => e.type === 'run_completed').map((e) => e.ts_ms),
+  );
+  expect(actions.terminals[0]?.payload).toEqual({
+    pool_key: 'shared|anthropic|m',
+    until_ts_ms: laterTerminalTs + 60_000,
   });
 });
 
@@ -511,6 +665,7 @@ test('an attempt with no admitted instance REFUSES recovery loudly — an unattr
     terminalEvidenceActions({
       events,
       universe: UNIVERSE,
+      cooldownsOf: () => [],
       suiteKind: 'gating',
       nowMs: 0,
       evidenceOf: () => null,
@@ -626,6 +781,7 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN �
   const actions = terminalEvidenceActions({
     events,
     universe,
+    cooldownsOf: () => [],
     suiteKind: 'gating',
     nowMs: 0,
     evidenceOf: () => null, // no run dirs survived the crash
