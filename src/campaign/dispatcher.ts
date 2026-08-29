@@ -458,7 +458,9 @@ export interface KillGroupArgs {
  *  Clock -> escalate KILL after the grace -> verify again. Verified death
  *  is a HARD precondition for every caller's release/journal/mint: 'dead'
  *  (or 'stale' — the pid was reused, so the original process is provably
- *  gone; a reused pid is never signaled) are the only permitting results;
+ *  gone; a reused pid is never signaled) are the only permitting results,
+ *  and BOTH require the process GROUP to answer ESRCH — a dead leader whose
+ *  group still holds live descendants is never permitting;
  *  'unknown' means the identity could not be established and NOTHING was
  *  signaled (fail-closed, never signal blind); 'alive' means the group
  *  survived TERM+KILL — the caller must abort its enclosing operation
@@ -466,7 +468,24 @@ export interface KillGroupArgs {
 export async function killGroupVerified(
   args: KillGroupArgs,
 ): Promise<'dead' | 'stale' | 'alive' | 'unknown'> {
-  if (args.identity.exists(args.pgid) === 'esrch') return 'dead';
+  /** Death is judged on the GROUP, never on the leader alone: a leaderless
+   *  group can still hold live descendants that keep spending. For a leader
+   *  that is provably gone (ESRCH outright, or a reused pid), only an ESRCH
+   *  on the group permits; a group that still answers has no identifiable
+   *  leader — identity UNKNOWN, nothing signaled (R-RCV-1 fail-closed). */
+  const groupGoneWith = (
+    permitting: 'dead' | 'stale',
+    why: string,
+  ): 'dead' | 'stale' | 'unknown' => {
+    if (args.signal(args.pgid, 0) === 'esrch') return permitting;
+    args.stream.write(
+      `kill: pid ${args.pgid} ${why}, but its process group still answers — live descendants without an identifiable leader; identity UNKNOWN, nothing signaled (R-RCV-1 fail-closed)\n`,
+    );
+    return 'unknown';
+  };
+  if (args.identity.exists(args.pgid) === 'esrch') {
+    return groupGoneWith('dead', 'leader is gone (ESRCH)');
+  }
   const current = args.identity.startTimeMs(args.pgid);
   if (args.birthTsMs === null || current === null) {
     args.stream.write(
@@ -478,7 +497,7 @@ export async function killGroupVerified(
     args.stream.write(
       `kill: pid ${args.pgid} start time ${current} != recorded ${args.birthTsMs} — reused pid, never signaled (R-RCV-1)\n`,
     );
-    return 'stale';
+    return groupGoneWith('stale', 'leader pid was reused');
   }
   const pollSeconds = 0.05;
   const waitForDeath = async (deadline: number): Promise<boolean> => {

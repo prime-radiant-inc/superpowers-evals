@@ -1594,6 +1594,42 @@ test('killGroupVerified refuses identity-unknown without signaling, and reports 
   ).toBe('alive');
 });
 
+test('killGroupVerified: a leaderless group is NOT a dead group — a gone or reused leader must be confirmed by an ESRCH on the GROUP (R-RCV-1)', async () => {
+  const silent = { write: () => {} };
+  const leaderGone: ProcessIdentityProbe = {
+    exists: () => 'esrch',
+    startTimeMs: () => null,
+  };
+  const reusedLeader: ProcessIdentityProbe = {
+    exists: () => 'alive',
+    startTimeMs: () => 99, // != the recorded birth below
+  };
+  const probes: (NodeJS.Signals | 0)[] = [];
+  const liveGroup: GroupSignaler = (_pgid, sig) => {
+    probes.push(sig);
+    return 'ok';
+  };
+  const goneGroup: GroupSignaler = () => 'esrch';
+  const call = (identity: ProcessIdentityProbe, signal: GroupSignaler) =>
+    killGroupVerified({
+      pgid: 424242,
+      birthTsMs: 1,
+      identity,
+      signal,
+      clock: new FakeClock(0),
+      stream: silent,
+      graceSeconds: 5,
+    });
+  // Leader ESRCH, group still answering: live descendants, identity unknown.
+  expect(await call(leaderGone, liveGroup)).toBe('unknown');
+  // Reused leader pid, group still answering: likewise never permitting.
+  expect(await call(reusedLeader, liveGroup)).toBe('unknown');
+  expect(probes).toEqual([0, 0]); // probed only; never signaled blind
+  // Group ESRCH too: THEN the permitting results hold.
+  expect(await call(leaderGone, goneGroup)).toBe('dead');
+  expect(await call(reusedLeader, goneGroup)).toBe('stale');
+});
+
 test('killGroupVerified escalates TERM->KILL on a REAL TERM-ignoring group (C10 uncooperative child)', async () => {
   // bash traps TERM and respawns its sleep children forever; only the KILL
   // escalation can end the group.

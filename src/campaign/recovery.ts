@@ -215,8 +215,10 @@ function isCampaignChild(
 export interface KillJournaledPgidsReport {
   /** Signaled and VERIFIED dead. */
   readonly killed: number[];
-  /** Provably gone before we signaled (ESRCH, or a reused pid — the
-   *  recorded process is dead either way). */
+  /** Provably gone before we signaled: the process GROUP answered ESRCH,
+   *  with its leader dead outright or its leader pid reused. A dead leader
+   *  alone never qualifies — a group that still answers holds live
+   *  descendants and takes the reclaim path instead. */
   readonly alreadyDead: number[];
   /** Identity could not be established: recorded loudly, NEVER signaled. */
   readonly reclaimedWithoutKill: number[];
@@ -339,9 +341,10 @@ export async function killJournaledPgids(args: {
         killed.push(pgid);
         break;
       case 'stale':
-        // The recorded leader is provably gone (reused pid, never signaled);
-        // the group still needs the same death evidence.
-        groupDisposition(pgid, attemptId, 'the leader pid was reused');
+        // The leader pid was reused AND the group answered ESRCH (the
+        // helper's own group-level evidence) — nothing was signaled and
+        // nothing survives.
+        alreadyDead.push(pgid);
         break;
       case 'unknown':
         reclaim(pgid, attemptId, 'OS start time unreadable at kill time');

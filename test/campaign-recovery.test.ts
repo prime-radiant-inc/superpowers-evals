@@ -201,6 +201,35 @@ test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless gro
   expect(gone.reclaimedWithoutKill).toEqual([]);
 });
 
+test('killJournaledPgids: a leader that dies between the identity check and the kill is never recorded killed — the group proves its own death (R-RCV-1 race)', async () => {
+  let probeCount = 0;
+  const dyingLeader: ProcessIdentityProbe = {
+    // Alive for the outer campaign-child check, gone by the time the
+    // verified kill re-checks it.
+    exists: () => (probeCount++ === 0 ? 'alive' : 'esrch'),
+    startTimeMs: () => 5,
+  };
+  const signalled: (NodeJS.Signals | 0)[] = [];
+  const loud: string[] = [];
+  const report = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: dyingLeader,
+    child: { commandLine: () => childCommandLine('a1') },
+    signal: (_pgid, sig) => {
+      signalled.push(sig);
+      return 'ok'; // the group still answers: descendants outlived the leader
+    },
+    clock: new FakeClock(),
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(report.killed).toEqual([]);
+  expect(report.alreadyDead).toEqual([]);
+  expect(report.reclaimedWithoutKill).toEqual([111]);
+  expect(signalled).toEqual([0]); // group probe only — no TERM, no KILL
+  expect(loud.join('')).toMatch(/still answers/);
+});
+
 // ---------------------------------------------------------------------------
 // R-RCV-2 / R-RCV-5: the crash-window plan
 // ---------------------------------------------------------------------------
