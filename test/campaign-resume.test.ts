@@ -709,7 +709,7 @@ test('a terminal bundle truncated after the TERMINAL restores the cooldown, and 
   expect(cooldownsOf(fx.dir).map((c) => c.pool)).toEqual([
     'grader_cred|anthropic|m',
   ]);
-  // a1 was already paid: restoring its cooldown must not charge it again.
+  // a1's receipt went with its cooldown, so the repair pays it — once.
   expect(spendsOf(fx.dir).slice().sort()).toEqual([0.25, 0.75]);
 
   // …and the restoration is idempotent: no second cooldown, no extension.
@@ -865,11 +865,11 @@ test('the free-standing gap leg: a crash after its cooldown re-runs the resoluti
 });
 
 test('a COMPLETE live bundle resumes as a no-op — the sensor-anchored cooldown is not extended to the terminal', async () => {
-  // Live dispatch anchors the cooldown when the 429 is OBSERVED; the terminal
-  // and its receipt land in separate, later-stamped critical sections. A
-  // restoration that anchors on the terminal therefore computes a LATER
-  // until than the complete live row already carries and appends a false
-  // extension — mistaking an ordinary healthy bundle for a missing suffix.
+  // Live dispatch anchors the cooldown when the 429 is OBSERVED, while the
+  // terminal and its receipt land in separate, later-stamped critical
+  // sections — so the live row's until is EARLIER than any terminal-anchored
+  // figure. Nothing may top it up to one: the receipt proves the cooldown
+  // landed, so a recovered attempt re-derives nothing at all.
   const fx = crashedCampaign({ driftEvals: true });
   seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);

@@ -2501,8 +2501,12 @@ export async function runCampaignDispatch(
         sensorEvidenceBySample.set(sample.sampleId, candidate);
       }
       if (signal.evidence === '429-match') {
-        // R-DSP-3: journaled cooldown, D-10 clamped retry-after; duplicate
-        // arbitration coalesces into one pool_blocked with the max until.
+        // R-DSP-3: journaled cooldown, D-10 clamped retry-after. Duplicate
+        // arbitration resolves to the MAX on read (design.md:979): a repeat
+        // that would not extend the pool's current window appends nothing,
+        // and one that would appends a new row carrying the later until —
+        // so a pool legitimately carries several rows and the highest is the
+        // block. Recovery's restoration follows the same rule.
         const until = clockNowMs(clock) + signal.cooldownMs;
         const existing = poolBlockedUntil.get(ctx.pool);
         if (existing === undefined || until > existing) {

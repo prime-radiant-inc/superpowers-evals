@@ -793,9 +793,9 @@ function spendRecovery(args: {
 
 /** The sensor attribution a run dir still carries: the strongest signal, and
  *  the pool cooldowns its rate-limit evidence declares. Read WITHOUT the
- *  verdict/cost gate, so an attempt that is already paid and resolved can
- *  still have its D-13 cooldown suffix restored without the resume refusing
- *  over economics it no longer needs. */
+ *  verdict/cost gate: the repair legs need the cooldowns whether or not the
+ *  run's economics are still readable, and an attempt whose accounting is
+ *  already settled must not make the resume refuse over them. */
 export function readRunSensorEvidence(args: {
   runDir: string;
   runId: string;
@@ -928,23 +928,27 @@ export function readTerminalRunEvidence(args: {
  *
  *  The reconstruction emits the WHOLE fate-table bundle per attempt, in
  *  replay-legal order: exposure_started (spawned -> exposed, so the terminal
- *  has a legal edge — a bare run_completed from `spawned` is illegal),
- *  the terminal itself (run_completed or instrument_failure), the pool
- *  cooldowns the sensor evidence declares, and the actual spend. The caller
- *  appends the one superseding estimate_inflight snapshot last, in the same
- *  critical section (E7.7). */
+ *  has a legal edge — a bare run_completed from `spawned` is illegal), the
+ *  terminal itself (run_completed or instrument_failure), the pool cooldowns
+ *  the sensor evidence declares, then the spend_recovered receipt and the
+ *  actual spend it records. The cooldowns precede the receipt deliberately —
+ *  see `cooldownLegs`. The caller appends the one superseding
+ *  estimate_inflight snapshot last, in the same critical section (E7.7). */
 export function terminalEvidenceActions(args: {
   events: readonly JournalEvent[];
   universe: CampaignUniverse;
   evidenceOf: (runId: string, sampleId: string) => TerminalRunEvidence | null;
   /** Pool cooldowns a run dir still declares, read WITHOUT the verdict/cost
-   *  gate so an already-paid attempt's lost D-13 suffix can be restored. */
+   *  gate — a repair leg owes them even when the run's economics are gone. */
   cooldownsOf: (
     runId: string,
     sampleId: string,
   ) => readonly { poolKey: string; cooldownMs: number }[];
   suiteKind: SuiteKind;
-  /** Resume-time clock reading for the re-declared cooldown windows. */
+  /** This resume's clock reading. Cooldown windows anchor on durable
+   *  records, not on this (see `cooldownLegs`); it is the expiry cutoff, the
+   *  stamp for events this resume writes, and the anchor of last resort for
+   *  an attempt with no durable fate record yet. */
   nowMs: number;
   stream?: { write(s: string): void };
 }): {
