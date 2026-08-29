@@ -721,12 +721,16 @@ test('a terminal bundle truncated after the TERMINAL restores the cooldown, and 
   expect(journalEvents(fx.dir).length).toBe(afterFirst);
 });
 
-test('a reconstruction crash between the receipt and its spend re-repairs without duplicating the cooldown', async () => {
-  // A PRODUCTION prefix: the bundle is terminal -> receipt -> spend, with
-  // the coalesced pool_blocked emitted after the loop, so the reachable cut
-  // here is an orphan receipt. It records no money, so the attempt is NOT
-  // recovered and the repair runs again — landing exactly one spend and one
-  // cooldown, never a second of either.
+test('an orphan receipt records nothing: the repair re-runs whole and lands each leg exactly once', async () => {
+  // A receipt with no spend after it records no money, so the attempt is not
+  // `recovered` and the repair re-runs — landing the cooldown, one receipt
+  // and one spend, never a second of any.
+  //
+  // The fixture is deliberately HARSHER than the pinned ordering permits: it
+  // seeds the orphan receipt with no cooldown before it, which production
+  // cannot produce for rate-limited evidence (the cooldown is emitted first).
+  // So this doubles as corruption tolerance — a journal in a shape the
+  // ordering forbids is still repaired to a correct one, not compounded.
   const fx = crashedCampaign({ driftEvals: true });
   seedRunDir(fx.resultsRoot, 'r1', 'pass', 0.25);
   seedRunDir(fx.resultsRoot, 'r2', 'pass', 0.75);

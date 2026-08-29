@@ -1029,14 +1029,6 @@ export function terminalEvidenceActions(args: {
       continue;
     remember(event.payload.attempt_id, event.ts_ms);
   }
-  /** When each attempt's run was allocated — the earliest moment its own
-   *  sensor evidence could have been observed. */
-  const allocatedTsOf = new Map<string, number>();
-  for (const event of args.events) {
-    if (event.type === 'run_allocated') {
-      allocatedTsOf.set(event.payload.attempt_id, event.ts_ms);
-    }
-  }
   for (const event of args.events) {
     if (event.type !== 'adjudication') continue;
     const { disposition, rationale } = event.payload;
@@ -1045,9 +1037,10 @@ export function terminalEvidenceActions(args: {
     const attemptId = attemptOfRationale(rationale);
     if (attemptId !== null) remember(attemptId, event.ts_ms);
   }
-  /** The effective cooldown a pool already carries: D-10 coalesces repeated
-   *  matches into ONE pool_blocked whose until is the MAX, so the journal's
-   *  (and this bundle's) maximum is what a candidate must beat. */
+  /** The effective cooldown a pool already carries: D-10 resolves repeated
+   *  matches to the MAX of the computed untils (design.md:979), so the
+   *  journal's — and this bundle's — running maximum is what a candidate
+   *  must beat to be worth appending. */
   const journaledUntil = new Map<string, number>();
   for (const event of args.events) {
     if (event.type !== 'pool_blocked') continue;
@@ -1057,25 +1050,6 @@ export function terminalEvidenceActions(args: {
       Math.max(journaledUntil.get(pool) ?? 0, event.payload.until_ts_ms),
     );
   }
-  /** Restore the D-13 cooldown suffix for one attempt.
-   *
-   *  `pool_blocked` carries no attempt identity (E7.7), and it is the LAST
-   *  leg of a reconstruction bundle — so a crash after the spend leaves a
-   *  legal durable prefix whose cooldown is simply gone, and the attempt
-   *  still reads as paid and resolved. Repair-on-resume is the legal
-   *  mechanism (R-JRN-4 forbids widening the transaction), and correlation
-   *  is by VALUE rather than position:
-   *
-   *  - the restored `until` is `terminal.ts_ms + cooldownMs`, a figure
-   *    derived entirely from durable evidence, so every resume computes the
-   *    same number and a re-repair can never EXTEND a cooldown;
-   *  - candidates are coalesced per pool to their max (D-10) before any
-   *    append, so two attempts in the same pool crash-cutting together
-   *    produce ONE row, never two;
-   *  - a candidate is appended only if it strictly exceeds what the pool
-   *    already carries, so a cooldown that did land restores nothing;
-   *  - a candidate already in the past restores nothing — an expired
-   *    cooldown blocks no admission and is not resurrected. */
   /** The cooldown legs this attempt's evidence declares, emitted BEFORE its
    *  receipt.
    *
@@ -1086,12 +1060,20 @@ export function terminalEvidenceActions(args: {
    *  the receipt, so a lost cooldown implies a lost receipt, the attempt is
    *  not `recovered`, and the repair re-runs whole.
    *
+   *  The converse is what makes the recovered paths cheap: a landed receipt
+   *  PROVES its cooldown landed, so an attempt that is already accounted
+   *  owes nothing here and nothing re-derives its window. (That is also what
+   *  keeps a complete live bundle — whose row is anchored when the 429 was
+   *  OBSERVED, earlier than any terminal — from being topped up to a
+   *  terminal-anchored value.)
+   *
    *  Re-running is safe because the candidate is DETERMINISTIC (the anchor
    *  precedence over durable records) and the guard is strict-exceeds
    *  against the pool's journaled maximum: a re-run recomputes the identical
    *  value, which no longer exceeds what it just wrote, so it is suppressed.
-   *  That is D-10's own rule — repeats inside an active cooldown coalesce to
-   *  the max — applied on append rather than on read. */
+   *  That is D-10's own rule (design.md:979) — repeats inside an active
+   *  cooldown coalesce to the max — applied on append rather than on read,
+   *  so a pool may carry several rows and the latest/highest is the block. */
   const cooldownLegs = (args2: {
     attemptId: string;
     sampleId: string;
@@ -1298,9 +1280,9 @@ export function terminalEvidenceActions(args: {
       rerun(attemptId);
       continue;
     }
-    // The ACTUAL spend, with its receipt — the universal shape, so a later
-    // resume reads "already paid" off the attempt rather than off a
-    // position in the stream. The cooldowns ride after it.
+    // The cooldown legs FIRST, then the actual spend with its receipt — the
+    // universal shape, so a later resume reads "already paid" off the
+    // attempt, and a receipt that landed proves its cooldown did too.
     bundle.push(
       ...cooldownLegs({ attemptId, sampleId, runId: event.payload.run_id }),
       ...spendRecovery({
