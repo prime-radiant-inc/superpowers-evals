@@ -19,7 +19,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Campaign } from '../contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../contracts/campaign/crash-windows.ts';
 import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
@@ -1590,6 +1590,28 @@ export function releaseBallast(
       `ballast unlinked at ${path} but the directory fsync failed: ${errorMessage(err)} — fsync the campaign directory before writing pause evidence (D-13 step 3 is not durable yet)`,
     );
   }
+}
+
+/** Create a crash-consistency marker durably: O_EXCL create (never
+ *  overwrite an existing operator record), write the body, fsync the file,
+ *  then fsync the containing directory so the new directory entry survives a
+ *  power loss too. The D-13 storage-paused marker and the D-12 cancel-request
+ *  marker are both the ONLY durable record of a decision at the moment they
+ *  are written — a marker that is merely in the page cache is not a record.
+ *  EEXIST propagates: presence-is-the-record is the caller's arm to take. */
+export function createDurableMarker(
+  path: string,
+  body: string,
+  fsOps: JournalFsOps = realFsOps,
+): void {
+  const fd = fsOps.openExclusive(path);
+  try {
+    fsOps.write(fd, body);
+    fsOps.fsync(fd);
+  } finally {
+    fsOps.close(fd);
+  }
+  fsyncDir(dirname(path), fsOps);
 }
 
 /** D-13 step-1 detection predicate: a storage-full failure from either

@@ -9,13 +9,7 @@
 // resume and cancel verbs drive them in the pinned order. Fail-closed
 // throughout: unattributable evidence refuses loudly, it is never dropped.
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
@@ -65,10 +59,12 @@ import {
   probeFingerprint,
 } from './host-stats.ts';
 import {
+  createDurableMarker,
   DEFAULT_BALLAST_BYTES,
   type EventInput,
   electWriter,
   isStorageFullError,
+  type JournalFsOps,
   openJournalRead,
   replayEvents,
   verifyBallast,
@@ -1553,6 +1549,8 @@ export interface CancelArgs {
   readonly child?: CampaignChildProbe;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
+  /** Durability seam for the cancel-request marker (see StoragePauseArgs). */
+  readonly fsOps?: JournalFsOps;
 }
 
 export interface CancelResult {
@@ -1604,9 +1602,14 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
   // campaign_cancelled { reason } itself.
   const marker = join(args.campaignDir, 'cancel-request');
   if (!existsSync(marker)) {
-    writeFileSync(marker, `${clockNowMs(args.clock)}\n${args.reason ?? ''}\n`, {
-      flag: 'wx',
-    });
+    // Durable before campaign_cancelled is journaled: a crash between the
+    // two must still leave the operator's cancellation on disk, so the
+    // marker is fsynced along with its directory entry.
+    createDurableMarker(
+      marker,
+      `${clockNowMs(args.clock)}\n${args.reason ?? ''}\n`,
+      args.fsOps,
+    );
   }
   const reason = markerReason(marker, args.reason);
   // Only now the fail-closed parse: everything below derives campaign

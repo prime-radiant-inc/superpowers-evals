@@ -9,7 +9,7 @@
 // drift response; D-13 storage-pause detection; halts; and D-12 signal
 // handling in the pinned order. The pure cores sit first; the orchestrator
 // (runCampaignDispatch and its seams) completes the module.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type CommandRunner,
@@ -57,9 +57,11 @@ import {
   type SnapshotHandle,
 } from './instrument-snapshot.ts';
 import {
+  createDurableMarker,
   type EventInput,
   electWriter,
   isStorageFullError,
+  type JournalFsOps,
   releaseBallast,
 } from './journal.ts';
 import { resolveKeyForSpawnWithWait } from './key-select.ts';
@@ -768,6 +770,10 @@ export interface StoragePauseArgs {
    *  UNVERIFIED groups (empty = all verified dead). */
   readonly killAll: () => Promise<readonly string[]>;
   readonly stream: { write(s: string): void };
+  /** Durability seam for the step-6 marker (the publication primitives'
+   *  JournalFsOps): production always writes through the real fs; a test
+   *  recorder observes the fsync ORDER without mocking the write away. */
+  readonly fsOps?: JournalFsOps;
 }
 
 /** D-13 pinned pause sequence, steps 2-6 (detection is the dispatcher's two
@@ -825,7 +831,9 @@ export async function performStoragePause(
   if (journalFailure !== null) {
     const marker = join(args.campaignDir, '.storage-paused');
     try {
-      writeFileSync(marker, '', { flag: 'wx' });
+      // The marker is the ONLY durable record of this pause once the journal
+      // append failed: file fsync + directory fsync, or a crash loses it.
+      createDurableMarker(marker, '', args.fsOps);
     } catch (err) {
       markerFailure = markerCarrierFailure(marker, err);
       if (markerFailure === null) {

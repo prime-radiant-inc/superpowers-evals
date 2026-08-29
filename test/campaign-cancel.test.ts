@@ -1,15 +1,23 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdtempSync,
+  openSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
-import { electWriter, openJournalRead } from '../src/campaign/journal.ts';
+import {
+  electWriter,
+  type JournalFsOps,
+  openJournalRead,
+} from '../src/campaign/journal.ts';
 import {
   readLiveSpendHolder,
   realProcessIdentityProbe,
@@ -103,6 +111,77 @@ test('post-crash cancel: marker first, a REAL kill, aborted, campaign_cancelled 
   expect(types.indexOf('aborted')).toBeLessThan(
     types.indexOf('campaign_cancelled'),
   );
+});
+
+/** Pass-through JournalFsOps naming every durable operation, so the marker
+ *  write's fsync order is observable without mocking the write away. */
+function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
+  const calls: string[] = [];
+  const names = new Map<number, string>();
+  const label = (fd: number) => names.get(fd) ?? String(fd);
+  return {
+    calls,
+    ops: {
+      openExclusive: (path) => {
+        const fd = openSync(path, 'wx');
+        names.set(fd, basename(path));
+        calls.push(`open-wx:${basename(path)}`);
+        return fd;
+      },
+      openRead: (path) => {
+        const fd = openSync(path, 'r');
+        names.set(fd, basename(path));
+        calls.push(`open-r:${basename(path)}`);
+        return fd;
+      },
+      close: (fd) => {
+        calls.push(`close:${label(fd)}`);
+        closeSync(fd);
+      },
+      write: (fd, data) => {
+        calls.push(`write:${label(fd)}`);
+        writeSync(fd, data as string);
+      },
+      fsync: (fd) => {
+        calls.push(`fsync:${label(fd)}`);
+        fsyncSync(fd);
+      },
+      rename: () => {
+        throw new Error('unexpected rename');
+      },
+      unlink: () => {
+        throw new Error('unexpected unlink');
+      },
+      stat: () => {
+        throw new Error('unexpected stat');
+      },
+      exists: existsSync,
+    },
+  };
+}
+
+test('cancel: the cancel-request marker is fsynced with its directory before campaign_cancelled is journaled (D-12 marker-first)', async () => {
+  const { dir } = publishedCampaign();
+  const { ops, calls } = markerFsRecorder();
+  const result = await cancelCampaign({
+    campaignDir: dir,
+    reason: 'durability',
+    clock: new FakeClock(1),
+    identity: NO_LIVE_CHILD,
+    lockPath: lockDir('durable-marker.d'),
+    stream: { write: () => {} },
+    fsOps: ops,
+  });
+  expect(result.cancelled).toBe(true);
+  expect(calls).toEqual([
+    'open-wx:cancel-request',
+    'write:cancel-request',
+    'fsync:cancel-request',
+    'close:cancel-request',
+    `open-r:${basename(dir)}`,
+    `fsync:${basename(dir)}`,
+    `close:${basename(dir)}`,
+  ]);
 });
 
 test('post-crash cancel is idempotent against a partial live sequence: an already-aborted block is never re-aborted', async () => {

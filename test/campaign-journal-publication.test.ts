@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
   createBallast,
+  createDurableMarker,
   DEFAULT_BALLAST_BYTES,
   electWriter,
   initJournalDb,
@@ -65,6 +66,31 @@ function tmpCampaign(): string {
 
 /** Real-fs ops that record the durable operation ORDER (the seam carries the
  *  fiction; every call still hits the real filesystem). */
+test('createDurableMarker: body, file fsync, then directory fsync — the marker is durable before the call returns', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  const { ops, calls } = recordedOps();
+  createDurableMarker(join(dir, '.storage-paused'), 'why\n', ops);
+  expect(calls).toEqual([
+    'open-wx:.storage-paused',
+    'write:.storage-paused',
+    'fsync:.storage-paused',
+    'close:.storage-paused',
+    `open-r:${basename(dir)}`,
+    `fsync:${basename(dir)}`,
+    `close:${basename(dir)}`,
+  ]);
+  expect(readFileSync(join(dir, '.storage-paused'), 'utf8')).toBe('why\n');
+});
+
+test('createDurableMarker: an existing marker refuses (O_EXCL) — callers own the EEXIST arm', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'marker-'));
+  createDurableMarker(join(dir, 'cancel-request'), 'first\n');
+  expect(() =>
+    createDurableMarker(join(dir, 'cancel-request'), 'second\n'),
+  ).toThrow();
+  expect(readFileSync(join(dir, 'cancel-request'), 'utf8')).toBe('first\n');
+});
+
 function recordedOps(): { ops: JournalFsOps; calls: string[] } {
   const calls: string[] = [];
   const fdNames = new Map<number, string>();

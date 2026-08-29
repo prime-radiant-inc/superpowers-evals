@@ -1,8 +1,17 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawn as spawnProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   ALLOCATION_WAIT_BUDGET_SECONDS,
   assertInstanceGraph,
@@ -28,6 +37,7 @@ import {
   type EventInput,
   electWriter,
   initJournalDb,
+  type JournalFsOps,
   type JournalWriter,
   openJournalRead,
   replayEvents,
@@ -1807,6 +1817,75 @@ function deposedPauseFixture(): { campaignDir: string; writer: JournalWriter } {
   successor.release();
   return { campaignDir, writer };
 }
+
+/** A pass-through JournalFsOps that names every durable operation it
+ *  performs, so a test can pin the fsync ORDER a marker write must follow. */
+function markerFsRecorder(): { ops: JournalFsOps; calls: string[] } {
+  const calls: string[] = [];
+  const names = new Map<number, string>();
+  const label = (fd: number) => names.get(fd) ?? String(fd);
+  return {
+    calls,
+    ops: {
+      openExclusive: (path) => {
+        const fd = openSync(path, 'wx');
+        names.set(fd, basename(path));
+        calls.push(`open-wx:${basename(path)}`);
+        return fd;
+      },
+      openRead: (path) => {
+        const fd = openSync(path, 'r');
+        names.set(fd, basename(path));
+        calls.push(`open-r:${basename(path)}`);
+        return fd;
+      },
+      close: (fd) => {
+        calls.push(`close:${label(fd)}`);
+        closeSync(fd);
+      },
+      write: (fd, data) => {
+        calls.push(`write:${label(fd)}`);
+        writeSync(fd, data as string);
+      },
+      fsync: (fd) => {
+        calls.push(`fsync:${label(fd)}`);
+        fsyncSync(fd);
+      },
+      rename: () => {
+        throw new Error('unexpected rename');
+      },
+      unlink: () => {
+        throw new Error('unexpected unlink');
+      },
+      stat: () => {
+        throw new Error('unexpected stat');
+      },
+      exists: existsSync,
+    },
+  };
+}
+
+test('performStoragePause: the .storage-paused marker is fsynced with its directory — a crash cannot lose the pause record (D-13 step 6)', async () => {
+  const { campaignDir, writer } = deposedPauseFixture();
+  const { ops, calls } = markerFsRecorder();
+  await performStoragePause({
+    campaignDir,
+    writer,
+    killAll: async () => [],
+    stream: { write: () => {} },
+    fsOps: ops,
+  });
+  expect(existsSync(join(campaignDir, '.storage-paused'))).toBe(true);
+  expect(calls).toEqual([
+    'open-wx:.storage-paused',
+    'write:.storage-paused',
+    'fsync:.storage-paused',
+    'close:.storage-paused',
+    `open-r:${basename(campaignDir)}`,
+    `fsync:${basename(campaignDir)}`,
+    `close:${basename(campaignDir)}`,
+  ]);
+});
 
 test('performStoragePause: a marker ALREADY present is the durable record — EEXIST is a success arm, never a fatal (D-13 step 6)', async () => {
   const { campaignDir, writer } = deposedPauseFixture();
