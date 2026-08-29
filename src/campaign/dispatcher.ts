@@ -221,6 +221,163 @@ export function estimateInflightTotal(args: {
   return total;
 }
 
+export interface ContentionResolutionResult {
+  readonly batch: EventInput[];
+  /** Predecessor -> the reserve it activated, with the mint record the
+   *  instance-graph validator and the caller's bookkeeping consume, in
+   *  obligation order. */
+  readonly activated: readonly {
+    predecessor: string;
+    reserve: string;
+    record: BlockReplacedRecord;
+  }[];
+  readonly suppressedCells: readonly string[];
+  readonly exhaustedCells: readonly string[];
+}
+
+/** The closed-window resolution batch (dispatch and recovery share this —
+ *  one obligation order, one per-obligation resolution). Emits, in the given
+ *  obligation order: replacement_suppressed (durable budget stop wins), else
+ *  a reason=contention replacement mint + roster dispositions, else
+ *  reserve_exhausted. Skips obligations whose cell already carries a
+ *  resolution (idempotent re-entry). Returns the batch plus the summary the
+ *  dispatcher's bookkeeping and resolution line consume. */
+export function contentionResolutionBatch(args: {
+  obligations: readonly string[];
+  budgetStopped: boolean;
+  cellOf: (blockId: string) => string;
+  /** Lowest still-unactivated reserve ordinal of the cell (R-DSP-5).
+   *  `activatedInBatch` is the C6 batch-local activation set — two
+   *  obligations in one cell can never select the same reserve. */
+  reserveFor: (
+    cellKey: string,
+    activatedInBatch: ReadonlySet<string>,
+  ) => string | undefined;
+  resolvedCells: ReadonlySet<string>;
+  armBySample: ReadonlyMap<string, string>;
+  blockSamples: ReadonlyMap<string, readonly string[]>;
+  /** R-DSP-6 pass-through for resolution-time mints (live dispatch only):
+   *  called with the reserve about to activate; a non-null return is the
+   *  durable-stop bundle (budget_stopped + superseding snapshot) — it is
+   *  appended and this and every later obligation suppresses. Recovery
+   *  passes undefined: the durable stop state is already in the journal it
+   *  read, and a would-be new stop fires at the first post-resume admission
+   *  through the same predicate. */
+  budgetGate?: (reserveBlockId: string) => EventInput[] | null;
+  /** E7.1 disposition-source filter: a predecessor already holding a
+   *  standing terminal fact (instrument_failed, skew_excluded, …) keeps it
+   *  and never receives excluded_block_replaced — replay rejects the
+   *  disposition from those states (R-JRN-7). Non-null names the standing
+   *  fact; null means a legal disposition source. The dispatcher passes its
+   *  live state mirror; recovery passes a journal-derived lookup. */
+  predecessorTerminalFact: (sampleId: string) => string | null;
+}): ContentionResolutionResult {
+  const batch: EventInput[] = [];
+  const activated: ContentionResolutionResult['activated'][number][] = [];
+  const suppressedCells: string[] = [];
+  const exhaustedCells: string[] = [];
+  const activatedInBatch = new Set<string>();
+  /** Roster construction refuses unknown samples loudly — a silent '' arm
+   *  would only surface later as a zod reject inside a mint critical
+   *  section (BlockRosterEntrySchema pins arm min(1)). */
+  const armOf = (sampleId: string): string => {
+    const arm = args.armBySample.get(sampleId);
+    if (arm === undefined) {
+      throw new DispatcherError(
+        `sample ${sampleId} is not in the frozen sample universe — roster construction refused`,
+      );
+    }
+    return arm;
+  };
+  let stopped = args.budgetStopped;
+  for (const blockId of args.obligations) {
+    const cellKey = args.cellOf(blockId);
+    if (args.resolvedCells.has(cellKey)) continue; // already resolved: skip
+    const reserve = stopped
+      ? undefined
+      : args.reserveFor(cellKey, activatedInBatch);
+    if (!stopped && reserve !== undefined && args.budgetGate !== undefined) {
+      const stopBundle = args.budgetGate(reserve);
+      if (stopBundle !== null) {
+        batch.push(...stopBundle);
+        stopped = true;
+      }
+    }
+    if (stopped) {
+      batch.push({
+        type: 'adjudication',
+        payload: {
+          cell: cellKey,
+          disposition: 'replacement_suppressed',
+          rationale: 'budget_stopped',
+        },
+      });
+      suppressedCells.push(cellKey);
+      continue;
+    }
+    if (reserve === undefined) {
+      batch.push({
+        type: 'adjudication',
+        payload: {
+          cell: cellKey,
+          disposition: 'reserve_exhausted',
+          rationale: 'reserve_exhausted',
+        },
+      });
+      exhaustedCells.push(cellKey);
+      continue;
+    }
+    activatedInBatch.add(reserve);
+    const predSamples = args.blockSamples.get(blockId) ?? [];
+    const resSamples = args.blockSamples.get(reserve) ?? [];
+    const roster: BlockRosterEntry[] = resSamples.map((sampleId) => {
+      const arm = armOf(sampleId);
+      const supersedes = predSamples.find((s) => armOf(s) === arm);
+      return {
+        sample_id: sampleId,
+        arm,
+        ...(supersedes !== undefined ? { supersedes } : {}),
+      };
+    });
+    const record: BlockReplacedRecord = {
+      block_id: blockId,
+      replacement_block_id: reserve,
+      reason: 'contention',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster,
+    };
+    // E7.1 mint bundle: block_replaced FIRST (durable successor + seal
+    // obligation), then exactly the required predecessor dispositions in
+    // roster order.
+    batch.push({
+      type: 'block_replaced',
+      payload: {
+        block_id: record.block_id,
+        replacement_block_id: record.replacement_block_id,
+        reason: record.reason,
+        kind: record.kind,
+        reserve_activation: record.reserve_activation,
+        roster,
+      },
+    });
+    for (const entry of roster) {
+      if (entry.supersedes === undefined) continue;
+      if (args.predecessorTerminalFact(entry.supersedes) !== null) continue;
+      batch.push({
+        type: 'sample_disposition',
+        payload: {
+          sample_id: entry.supersedes,
+          disposition: 'excluded_block_replaced',
+          superseded_by: entry.sample_id,
+        },
+      });
+    }
+    activated.push({ predecessor: blockId, reserve, record });
+  }
+  return { batch, activated, suppressedCells, exhaustedCells };
+}
+
 // ---------------------------------------------------------------------------
 // The orchestrator (task 8b): seams, kill primitive, instance-graph
 // validator, and runCampaignDispatch.
@@ -1585,6 +1742,35 @@ export async function runCampaignDispatch(
      *  failure fires the durable stop and suppresses this and every later
      *  obligation). The mint bundle is E7.1's: block_replaced FIRST, then
      *  exactly the required predecessor dispositions in roster order. */
+    /** R-DSP-6 pass-through: a resolution-time mint must clear the dollar
+     *  predicate against the reserve's priced exposure. Failure fires the
+     *  durable stop (selection: E3's admitted-unspawned — planned waiting
+     *  blocks stay unselected so a later raise admits them, E7.6) and
+     *  returns its bundle; null means the mint may proceed. Shared by the
+     *  single-obligation path and the closed-window batch's budgetGate. */
+    const resolutionBudgetStop = (
+      cellKey: string,
+      reserve: Block,
+    ): EventInput[] | null => {
+      const reserveExposure = reserve.sample_ids.reduce(
+        (sum, s) => sum + sampleEstimate(s),
+        0,
+      );
+      if (spendUsd + Math.max(estimateUsd, 0) + reserveExposure <= budgetUsd) {
+        return null;
+      }
+      stopInForce = true;
+      const selected = stoppableSelection(admittedUnspawnedSampleIds());
+      for (const s of selected) stoppedSamples.add(s);
+      stream.write(
+        `budget stop: replacement for ${cellKey} would exceed $${budgetUsd} — obligation suppressed; stopped samples never resurrect, a raise permits later work\n`,
+      );
+      return [
+        { type: 'budget_stopped', payload: { sample_ids: selected } },
+        snapshotEstimateInput(),
+      ];
+    };
+
     const resolveReplacementObligation = (params: {
       predecessorBlockId: string;
       predecessorSamples: readonly { sampleId: string; arm: string }[];
@@ -1595,30 +1781,8 @@ export async function runCampaignDispatch(
       const reserve = reserveForCell(cellKey, params.activatedInBatch);
       const eventInputs: EventInput[] = [];
       if (!stopInForce && reserve !== undefined) {
-        const reserveExposure = reserve.sample_ids.reduce(
-          (sum, s) => sum + sampleEstimate(s),
-          0,
-        );
-        if (spendUsd + Math.max(estimateUsd, 0) + reserveExposure > budgetUsd) {
-          // R-DSP-6 pass-through: a resolution-time mint must clear the
-          // dollar predicate against the reserve's priced exposure; failure
-          // fires the durable stop (selection: E3's admitted-unspawned —
-          // planned waiting blocks stay unselected so a later raise admits
-          // them, E7.6).
-          stopInForce = true;
-          const selected = stoppableSelection(admittedUnspawnedSampleIds());
-          for (const s of selected) stoppedSamples.add(s);
-          eventInputs.push(
-            {
-              type: 'budget_stopped',
-              payload: { sample_ids: selected },
-            },
-            snapshotEstimateInput(),
-          );
-          stream.write(
-            `budget stop: replacement for ${cellKey} would exceed $${budgetUsd} — obligation suppressed; stopped samples never resurrect, a raise permits later work\n`,
-          );
-        }
+        const stopBundle = resolutionBudgetStop(cellKey, reserve);
+        if (stopBundle !== null) eventInputs.push(...stopBundle);
       }
       if (stopInForce) {
         eventInputs.push({
@@ -3062,12 +3226,6 @@ export async function runCampaignDispatch(
       // can never select the same reserve) and applies the resolution-time
       // budget gate (R-DSP-6 pass-through — contention refill is NOT
       // reserve-neutral).
-      let refilled = 0;
-      let exhausted = 0;
-      let suppressed = 0;
-      const batch: EventInput[] = [];
-      const minted: { record: BlockReplacedRecord; reserve: Block }[] = [];
-      const activatedInBatch = new Set<string>();
       // Important 1 / R-JRN-8: every pending allocation settles (journaled,
       // or its child verified dead) before any disposition in the batch; a
       // child that would not die aborts the whole batch loudly (C10) — the
@@ -3109,49 +3267,75 @@ export async function runCampaignDispatch(
         for (const lb of terminalizedByKill) await onBlockTerminal(lb);
         return;
       }
-      for (const lb of invalid) {
-        const res = resolveReplacementObligation({
-          predecessorBlockId: lb.block.block_id,
-          predecessorSamples: lb.samples.map((s) => ({
-            sampleId: s.sampleId,
-            arm: s.arm,
-          })),
-          reason: 'contention', // kind 'replacement', never rerun (D-5)
-          activatedInBatch,
-        });
-        batch.push(...res.events);
-        if (res.outcome === 'minted') {
-          activatedInBatch.add(res.reserve.block_id);
-          minted.push({ record: res.record, reserve: res.reserve });
-          refilled += 1;
-        } else if (res.outcome === 'exhausted') {
-          exhausted += 1;
-        } else {
-          suppressed += 1;
-        }
-      }
+      // One implementation, one obligation order (shared with recovery's
+      // rederiveContentionSuffix): the R-DSP-6 gate rides budgetGate, and
+      // the C6 batch-local reserve set rides reserveFor. Membership comes
+      // from the LIVE blocks as well as the frozen document, so a rerun
+      // instance resolves under its own roster.
+      const result = contentionResolutionBatch({
+        obligations: invalid.map((lb) => lb.block.block_id),
+        budgetStopped: stopInForce,
+        cellOf: cellKeyOfBlockId,
+        reserveFor: (cellKey, activatedInBatch) =>
+          reserveForCell(cellKey, activatedInBatch)?.block_id,
+        resolvedCells: new Set<string>(),
+        armBySample,
+        blockSamples: new Map<string, readonly string[]>([
+          ...campaign.blocks.map(
+            (b) => [b.block_id, b.sample_ids] as [string, readonly string[]],
+          ),
+          ...[...liveBlocks.values()].map(
+            (lb) =>
+              [lb.block.block_id, lb.samples.map((s) => s.sampleId)] as [
+                string,
+                readonly string[],
+              ],
+          ),
+        ]),
+        predecessorTerminalFact: (sampleId) => {
+          const state = mirrorStateOf(sampleId);
+          // The disposition's legal sources (R-JRN-7 / E7.3a); every other
+          // state is a standing fact the predecessor keeps.
+          return state === 'admitted' ||
+            state === 'spawned' ||
+            state === 'exposed' ||
+            state === 'completed'
+            ? null
+            : state;
+        },
+        budgetGate: (reserveBlockId) => {
+          const reserve = reserveBlocks.find(
+            (b) => b.block_id === reserveBlockId,
+          );
+          return reserve === undefined
+            ? null
+            : resolutionBudgetStop(cellKeyOfBlockId(reserveBlockId), reserve);
+        },
+      });
       assertInstanceGraph({
         campaign,
-        mints: [...mintRecords, ...minted.map((m) => m.record)],
+        mints: [...mintRecords, ...result.activated.map((a) => a.record)],
       });
-      const appended = await appendCritical(batch);
+      const appended = await appendCritical(result.batch);
       if (appended === null) {
         // Nothing durable landed: announce NOTHING — no planned counts, no
         // resumed receipt; the storage-pause path is the only announcement
         // and recovery re-derives the batch (Important 3).
         return;
       }
-      for (const m of minted) {
-        mintRecords.push(m.record);
-        reserveActivated.add(m.reserve.block_id);
-        supersededBlockIds.add(m.record.block_id);
-        waiting.push(m.reserve);
+      for (const { reserve, record } of result.activated) {
+        const reserveBlock = reserveBlocks.find((b) => b.block_id === reserve);
+        if (reserveBlock === undefined) continue;
+        mintRecords.push(record);
+        reserveActivated.add(reserveBlock.block_id);
+        supersededBlockIds.add(record.block_id);
+        waiting.push(reserveBlock);
       }
       for (const lb of invalid) resolvedObligations.add(lb.block.block_id);
       // Resolution counts BEFORE the separate admission-resumed line (D-3),
       // and only once the batch is durable.
       stream.write(
-        `contention resolution: affected=${invalid.length} refilled=${refilled} exhausted=${exhausted} suppressed=${suppressed}\n`,
+        `contention resolution: affected=${invalid.length} refilled=${result.activated.length} exhausted=${result.exhaustedCells.length} suppressed=${result.suppressedCells.length}\n`,
       );
       clearBreach(generation);
       wakeLoop(); // minted reserves are admission candidates now
