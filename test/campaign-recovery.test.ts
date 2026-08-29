@@ -94,7 +94,8 @@ test('killJournaledPgids: every journaled pgid without a terminal is TERMed and 
   });
   expect(report.killed).toEqual([111]); // only the non-terminal attempt
   expect(report.survived).toEqual([]);
-  expect(report.reclaimedWithoutKill).toEqual([]);
+  expect(report.reclaimedUnsafe).toEqual([]);
+  expect(report.reclaimedBenign).toEqual([]);
   // Verified death, not fire-and-forget: TERM then a 0-probe that proved it.
   expect(signalled).toEqual([
     [111, 'SIGTERM'],
@@ -103,33 +104,46 @@ test('killJournaledPgids: every journaled pgid without a terminal is TERMed and 
 });
 
 test('killJournaledPgids: a recycled pgid and an uninspectable group are reclaimed-without-kill — never signaled blind (R-RCV-1)', async () => {
-  const run = async (commandLine: (pgid: number) => string | null) => {
-    const signalled: number[] = [];
+  const run = async (
+    commandLine: (pgid: number) => string | null,
+    groupAnswer: 'ok' | 'esrch' = 'ok',
+  ) => {
+    const signalled: [number, NodeJS.Signals | 0][] = [];
     const loud: string[] = [];
     const report = await killJournaledPgids({
       events: inFlightEvents(),
       campaignId: CAMPAIGN_ID,
       identity: ALIVE_AT_5,
       child: { commandLine },
-      signal: (pgid) => {
-        signalled.push(pgid);
-        return 'ok';
+      signal: (pgid, sig) => {
+        signalled.push([pgid, sig]);
+        return groupAnswer;
       },
       clock: new FakeClock(),
       stream: { write: (s) => loud.push(s) },
     });
     return { report, signalled, loud: loud.join('') };
   };
-  // A different process now owns the pgid: the campaign-child shape is absent.
+  // A different process now owns the pgid, but the GROUP still answers: a
+  // reused leader is not proof our child is gone (the same group-level
+  // evidence killGroupVerified demands for its 'stale' arm).
   const recycled = await run(() => 'ps aux');
-  expect(recycled.report.reclaimedWithoutKill).toEqual([111]);
-  expect(recycled.signalled).toEqual([]);
-  expect(recycled.loud).toMatch(/reclaimed-without-kill/);
-  // Command line unreadable: identity UNKNOWN, still never signaled.
+  expect(recycled.report.reclaimedUnsafe).toEqual([111]);
+  expect(recycled.report.reclaimedBenign).toEqual([]);
+  expect(recycled.signalled).toEqual([[111, 0]]); // group probe only
+  expect(recycled.loud).toMatch(/reclaimed-without-kill \(unsafe\)/);
+  // Reused leader AND a group that is provably gone: BENIGN — no campaign
+  // child can still be spending under this pgid, so callers may proceed.
+  const reused = await run(() => 'ps aux', 'esrch');
+  expect(reused.report.reclaimedBenign).toEqual([111]);
+  expect(reused.report.reclaimedUnsafe).toEqual([]);
+  expect(reused.loud).toMatch(/reclaimed-without-kill \(benign\)/);
+  // Command line unreadable: identity UNKNOWN, still never signaled, and
+  // never assumed dead.
   const opaque = await run(() => null);
-  expect(opaque.report.reclaimedWithoutKill).toEqual([111]);
+  expect(opaque.report.reclaimedUnsafe).toEqual([111]);
   expect(opaque.signalled).toEqual([]);
-  expect(opaque.loud).toMatch(/reclaimed-without-kill/);
+  expect(opaque.loud).toMatch(/reclaimed-without-kill \(unsafe\)/);
 });
 
 test('killJournaledPgids: a group surviving TERM+KILL is reported survived (never "killed"), and signal errors are never swallowed', async () => {
@@ -184,7 +198,7 @@ test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless gro
   });
   expect(live.alreadyDead).toEqual([]);
   expect(live.killed).toEqual([]);
-  expect(live.reclaimedWithoutKill).toEqual([111]);
+  expect(live.reclaimedUnsafe).toEqual([111]);
   expect(signalled).toEqual([[111, 0]]); // probed, never signaled blind
   expect(loud.join('')).toMatch(/without its leader/);
 
@@ -198,7 +212,8 @@ test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless gro
     clock: new FakeClock(),
   });
   expect(gone.alreadyDead).toEqual([111]);
-  expect(gone.reclaimedWithoutKill).toEqual([]);
+  expect(gone.reclaimedUnsafe).toEqual([]);
+  expect(gone.reclaimedBenign).toEqual([]);
 });
 
 test('killJournaledPgids: a leader that dies between the identity check and the kill is never recorded killed — the group proves its own death (R-RCV-1 race)', async () => {
@@ -225,7 +240,7 @@ test('killJournaledPgids: a leader that dies between the identity check and the 
   });
   expect(report.killed).toEqual([]);
   expect(report.alreadyDead).toEqual([]);
-  expect(report.reclaimedWithoutKill).toEqual([111]);
+  expect(report.reclaimedUnsafe).toEqual([111]);
   expect(signalled).toEqual([0]); // group probe only — no TERM, no KILL
   expect(loud.join('')).toMatch(/still answers/);
 });

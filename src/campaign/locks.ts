@@ -59,7 +59,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { getEnv } from '../env.ts';
+import { envSnapshot, getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import { clockNowMs } from './host-stats.ts';
 
@@ -91,12 +91,18 @@ export const realProcessIdentityProbe: ProcessIdentityProbe = {
     }
   },
   startTimeMs(pid: number): number | null {
-    // `ps -o lstart=` prints a parseable start time on Linux + Darwin.
+    // `ps -o lstart=` prints a parseable start time on Linux + Darwin, but
+    // WITHOUT a zone designator — Date.parse would then read it in the
+    // reader's local zone. Two processes with different TZ settings would
+    // compute different births for the same pid and read each other as pid
+    // reuse (a cancel would take the post-crash path against a LIVE
+    // dispatcher). Pin both ends: ask ps for UTC, and parse it as UTC.
     const res = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
+      env: { ...envSnapshot(), TZ: 'UTC' },
     });
     if (res.status !== 0) return null;
-    const ms = Date.parse(res.stdout.trim());
+    const ms = Date.parse(`${res.stdout.trim()} UTC`);
     return Number.isFinite(ms) ? ms : null;
   },
 };

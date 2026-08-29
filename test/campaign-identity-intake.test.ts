@@ -49,6 +49,13 @@ function scenario(setupFails = false): string {
   return scn;
 }
 
+/** Every runChild test spawns a FULL `quorum run` in a child process (bun
+ *  startup + module graph + a mock gauntlet). The 5s default is not a
+ *  meaningful bound for that — it makes these tests flake on a loaded
+ *  machine — so they carry the same explicit budget the SIGINT test below
+ *  already declares. */
+const CHILD_RUN_TIMEOUT_MS = 60_000;
+
 function runChild(
   extraArgs: string[],
   envExtra: Record<string, string> = {},
@@ -132,100 +139,126 @@ function hangRunDir(outRoot: string): string | undefined {
   return undefined;
 }
 
-test('campaign identity: persisted at run-dir allocation and stamped on the verdict', () => {
-  const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)]);
-  expect(r.status).toBe(0);
-  expect(r.runDir).not.toBeNull();
-  // Persisted at allocation — what makes R-RCV-3 quarantine possible.
-  const persisted = JSON.parse(
-    readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8'),
-  );
-  expect(persisted).toEqual(IDENTITY);
-  // Stamped on the verdict (every verdict path).
-  const verdict = JSON.parse(
-    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-  );
-  expect(verdict.campaign).toEqual(IDENTITY);
-});
+test(
+  'campaign identity: persisted at run-dir allocation and stamped on the verdict',
+  () => {
+    const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)]);
+    expect(r.status).toBe(0);
+    expect(r.runDir).not.toBeNull();
+    // Persisted at allocation — what makes R-RCV-3 quarantine possible.
+    const persisted = JSON.parse(
+      readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8'),
+    );
+    expect(persisted).toEqual(IDENTITY);
+    // Stamped on the verdict (every verdict path).
+    const verdict = JSON.parse(
+      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+    );
+    expect(verdict.campaign).toEqual(IDENTITY);
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);
 
-test('legacy runs carry no campaign block (byte-identical intake absence)', () => {
-  const r = runChild([]);
-  expect(r.status).toBe(0);
-  expect(existsSync(join(r.runDir!, 'campaign-identity.json'))).toBe(false);
-  const verdict = JSON.parse(
-    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-  );
-  expect(verdict.campaign).toBeUndefined();
-});
+test(
+  'legacy runs carry no campaign block (byte-identical intake absence)',
+  () => {
+    const r = runChild([]);
+    expect(r.status).toBe(0);
+    expect(existsSync(join(r.runDir!, 'campaign-identity.json'))).toBe(false);
+    const verdict = JSON.parse(
+      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+    );
+    expect(verdict.campaign).toBeUndefined();
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);
 
-test('malformed campaign identity fails loud at the CLI boundary', () => {
-  const r = runChild(['--campaign-identity', '{"campaign_id": "x"}']);
-  expect(r.status).not.toBe(0);
-  // The SPECIFIC rejection: the zod issues dump names the first missing
-  // required field (comparison_id) — not just any stderr noise.
-  expect(r.stderr).toMatch(/ZodError/);
-  expect(r.stderr).toMatch(/"comparison_id"/);
-  // The boundary is BEFORE run-dir allocation: a malformed block must never
-  // leave a run dir behind.
-  expect(r.runDir).toBeNull();
-  expect(readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))).toEqual([]);
-});
+test(
+  'malformed campaign identity fails loud at the CLI boundary',
+  () => {
+    const r = runChild(['--campaign-identity', '{"campaign_id": "x"}']);
+    expect(r.status).not.toBe(0);
+    // The SPECIFIC rejection: the zod issues dump names the first missing
+    // required field (comparison_id) — not just any stderr noise.
+    expect(r.stderr).toMatch(/ZodError/);
+    expect(r.stderr).toMatch(/"comparison_id"/);
+    // The boundary is BEFORE run-dir allocation: a malformed block must never
+    // leave a run dir behind.
+    expect(r.runDir).toBeNull();
+    expect(readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))).toEqual(
+      [],
+    );
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);
 
-test('setup-error path: identity persisted at allocation and stamped on a setup-error verdict', () => {
-  // R-SPN-4: the stamp must land on EVERY exit path. A failing setup.sh
-  // forces the OUTER error route — a thrown RunnerError caught by
-  // runScenario and composed into an indeterminate verdict (stage 'setup').
-  // The run-error route (error AFTER gauntlet started) is covered by the
-  // post-gauntlet capture test below.
-  const r = runChild(
-    ['--campaign-identity', JSON.stringify(IDENTITY)],
-    {},
-    scenario(true),
-  );
-  expect(r.status).toBe(2); // exitCodeFor(indeterminate)
-  expect(r.runDir).not.toBeNull();
-  const verdict = JSON.parse(
-    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-  );
-  expect(verdict.final).toBe('indeterminate');
-  expect(verdict.error?.stage).toBe('setup');
-  // Both halves: persisted at allocation, stamped on the error verdict.
-  expect(
-    JSON.parse(readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8')),
-  ).toEqual(IDENTITY);
-  expect(verdict.campaign).toEqual(IDENTITY);
-});
+test(
+  'setup-error path: identity persisted at allocation and stamped on a setup-error verdict',
+  () => {
+    // R-SPN-4: the stamp must land on EVERY exit path. A failing setup.sh
+    // forces the OUTER error route — a thrown RunnerError caught by
+    // runScenario and composed into an indeterminate verdict (stage 'setup').
+    // The run-error route (error AFTER gauntlet started) is covered by the
+    // post-gauntlet capture test below.
+    const r = runChild(
+      ['--campaign-identity', JSON.stringify(IDENTITY)],
+      {},
+      scenario(true),
+    );
+    expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+    expect(r.runDir).not.toBeNull();
+    const verdict = JSON.parse(
+      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+    );
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('setup');
+    // Both halves: persisted at allocation, stamped on the error verdict.
+    expect(
+      JSON.parse(
+        readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8'),
+      ),
+    ).toEqual(IDENTITY);
+    expect(verdict.campaign).toEqual(IDENTITY);
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);
 
-test('run-error path: identity stamped on a post-gauntlet error verdict', () => {
-  // The genuine run-error route (distinct from setup): Gauntlet STARTED and
-  // COMPLETED (the pass-no-transcript fixture drops a passing result.json but
-  // no canned claude session log), then the run errored in the capture
-  // cascade — no Claude transcript appeared — composing an indeterminate
-  // verdict with an error block (stage 'capture') via the runner's error
-  // composition, not an early guard. The gauntlet layer's presence is what
-  // proves this errored AFTER Gauntlet ran.
-  const r = runChild(
-    ['--campaign-identity', JSON.stringify(IDENTITY)],
-    {},
-    scenario(),
-    'pass-no-transcript',
-  );
-  expect(r.status).toBe(2); // exitCodeFor(indeterminate)
-  expect(r.runDir).not.toBeNull();
-  const verdict = JSON.parse(
-    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-  );
-  // Gauntlet ran and passed; the run itself errored afterward.
-  expect(verdict.gauntlet?.status).toBe('pass');
-  expect(verdict.gauntlet?.run_id).toBe('mock_pass-no-transcript_0000');
-  expect(verdict.final).toBe('indeterminate');
-  expect(verdict.error?.stage).toBe('capture');
-  // Both halves: persisted at allocation, stamped on the run-error verdict.
-  expect(
-    JSON.parse(readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8')),
-  ).toEqual(IDENTITY);
-  expect(verdict.campaign).toEqual(IDENTITY);
-});
+test(
+  'run-error path: identity stamped on a post-gauntlet error verdict',
+  () => {
+    // The genuine run-error route (distinct from setup): Gauntlet STARTED and
+    // COMPLETED (the pass-no-transcript fixture drops a passing result.json but
+    // no canned claude session log), then the run errored in the capture
+    // cascade — no Claude transcript appeared — composing an indeterminate
+    // verdict with an error block (stage 'capture') via the runner's error
+    // composition, not an early guard. The gauntlet layer's presence is what
+    // proves this errored AFTER Gauntlet ran.
+    const r = runChild(
+      ['--campaign-identity', JSON.stringify(IDENTITY)],
+      {},
+      scenario(),
+      'pass-no-transcript',
+    );
+    expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+    expect(r.runDir).not.toBeNull();
+    const verdict = JSON.parse(
+      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+    );
+    // Gauntlet ran and passed; the run itself errored afterward.
+    expect(verdict.gauntlet?.status).toBe('pass');
+    expect(verdict.gauntlet?.run_id).toBe('mock_pass-no-transcript_0000');
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('capture');
+    // Both halves: persisted at allocation, stamped on the run-error verdict.
+    expect(
+      JSON.parse(
+        readFileSync(join(r.runDir!, 'campaign-identity.json'), 'utf8'),
+      ),
+    ).toEqual(IDENTITY);
+    expect(verdict.campaign).toEqual(IDENTITY);
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);
 
 test('stopped path: SIGINT writes the stopped verdict stamped with the identity', async () => {
   // The stopped path is the CLI's SIGINT handler (writeStoppedVerdict), not
@@ -293,20 +326,24 @@ test('stopped path: SIGINT writes the stopped verdict stamped with the identity'
   }
 }, 60_000);
 
-test('covered child marker: the child entry never attempts lock acquisition', () => {
-  // C4 defect-addendum: campaign children enter covered by the holder's
-  // live-spend lock (QUORUM_COVERED_BY_LIVE_SPEND_LOCK=1, set by the spawner
-  // in src/campaign/spawn.ts). The marker means NEVER acquire — acquisition
-  // under it refuses loudly (acquireLease in src/campaign/locks.ts) — so a
-  // full pass through the shared child entry (executeRunCommand) proves no
-  // exit path attempts acquisition, before and after task 9c wires the
-  // top-level spender verbs.
-  const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)], {
-    QUORUM_COVERED_BY_LIVE_SPEND_LOCK: '1',
-  });
-  expect(r.status).toBe(0);
-  const verdict = JSON.parse(
-    readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-  );
-  expect(verdict.campaign).toEqual(IDENTITY);
-});
+test(
+  'covered child marker: the child entry never attempts lock acquisition',
+  () => {
+    // C4 defect-addendum: campaign children enter covered by the holder's
+    // live-spend lock (QUORUM_COVERED_BY_LIVE_SPEND_LOCK=1, set by the spawner
+    // in src/campaign/spawn.ts). The marker means NEVER acquire — acquisition
+    // under it refuses loudly (acquireLease in src/campaign/locks.ts) — so a
+    // full pass through the shared child entry (executeRunCommand) proves no
+    // exit path attempts acquisition, before and after task 9c wires the
+    // top-level spender verbs.
+    const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)], {
+      QUORUM_COVERED_BY_LIVE_SPEND_LOCK: '1',
+    });
+    expect(r.status).toBe(0);
+    const verdict = JSON.parse(
+      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
+    );
+    expect(verdict.campaign).toEqual(IDENTITY);
+  },
+  CHILD_RUN_TIMEOUT_MS,
+);

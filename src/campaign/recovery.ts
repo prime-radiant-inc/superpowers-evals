@@ -22,6 +22,7 @@ import {
   type Campaign,
   type CampaignIdentity,
   CampaignIdentitySchema,
+  CampaignSchema,
 } from '../contracts/campaign/campaign.ts';
 import {
   type CampaignUniverse,
@@ -260,10 +261,25 @@ export interface KillJournaledPgidsReport {
    *  alone never qualifies — a group that still answers holds live
    *  descendants and takes the reclaim path instead. */
   readonly alreadyDead: number[];
-  /** Identity could not be established: recorded loudly, NEVER signaled. */
-  readonly reclaimedWithoutKill: number[];
+  /** Reclaimed WITHOUT a kill, with no live campaign child left behind: the
+   *  recorded leader pid was reused by an unrelated process AND the process
+   *  group answered ESRCH. Recorded loudly (nothing was signaled), but it
+   *  holds no unrecorded spend, so callers may proceed past it. */
+  readonly reclaimedBenign: number[];
+  /** Reclaimed WITHOUT a kill and NOT provably dead: the process group still
+   *  answers (live descendants without an inspectable leader), or identity
+   *  could not be established at all. Nothing was signaled, so the group may
+   *  still be spending — callers must REFUSE to proceed, exactly as for
+   *  `survived` (R-RCV-1 no-double-spend; Decision D-12 verified death). */
+  readonly reclaimedUnsafe: number[];
   /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
   readonly survived: number[];
+}
+
+/** Every group the report could not prove dead. Both verbs gate on this:
+ *  resume refuses to re-admit, cancel refuses to journal a terminal. */
+export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
+  return [...report.survived, ...report.reclaimedUnsafe];
 }
 
 /** R-RCV-1: on crash restart, kill every journaled pgid of an attempt
@@ -302,32 +318,57 @@ export async function killJournaledPgids(args: {
   }
   const killed: number[] = [];
   const alreadyDead: number[] = [];
-  const reclaimedWithoutKill: number[] = [];
+  const reclaimedBenign: number[] = [];
+  const reclaimedUnsafe: number[] = [];
   const survived: number[] = [];
-  const reclaim = (pgid: number, attemptId: string, why: string): void => {
-    reclaimedWithoutKill.push(pgid);
+  /** A reclamation is BENIGN only when no campaign child can still be
+   *  running under this pgid; every other reclamation leaves live spend on
+   *  the table and blocks the caller. */
+  const reclaim = (
+    pgid: number,
+    attemptId: string,
+    why: string,
+    safety: 'benign' | 'unsafe',
+  ): void => {
+    (safety === 'benign' ? reclaimedBenign : reclaimedUnsafe).push(pgid);
     stream.write(
-      `reclaimed-without-kill: pgid ${pgid} (attempt ${attemptId}) ${why} — recorded, never signaled blind (R-RCV-1)\n`,
+      `reclaimed-without-kill (${safety}): pgid ${pgid} (attempt ${attemptId}) ${why} — recorded, never signaled blind (R-RCV-1)${
+        safety === 'unsafe'
+          ? '; live spend is NOT excluded — operator action: identify and kill this process group by hand'
+          : ''
+      }\n`,
     );
   };
   /** R-RCV-1: the LEADER's death is not the GROUP's death — a leaderless
    *  group can still hold live descendants that keep spending, and a
    *  leaderless group has no inspectable campaign-child shape. Only an
    *  ESRCH on the group is evidence of death; a group that still answers
-   *  takes the reclaim path (identity unknown, never signaled blind). */
+   *  takes the UNSAFE reclaim path (identity unknown, never signaled
+   *  blind). `permitting` is where a proven-dead group is recorded: outright
+   *  (alreadyDead) or as a benign reclamation of a reused pid. */
   const groupDisposition = (
     pgid: number,
     attemptId: string,
     why: string,
+    permitting: 'already-dead' | 'benign-reclaim',
   ): void => {
     if (signal(pgid, 0) === 'esrch') {
-      alreadyDead.push(pgid);
+      if (permitting === 'already-dead') alreadyDead.push(pgid);
+      else {
+        reclaim(
+          pgid,
+          attemptId,
+          `${why} and the process group is provably gone (ESRCH)`,
+          'benign',
+        );
+      }
       return;
     }
     reclaim(
       pgid,
       attemptId,
       `${why} but the process group still answers — live descendants without its leader, identity unknown`,
+      'unsafe',
     );
   };
   for (const event of args.events) {
@@ -337,7 +378,12 @@ export async function killJournaledPgids(args: {
     const pgid = event.payload.pgid;
     const exists = identity.exists(pgid);
     if (exists === 'esrch') {
-      groupDisposition(pgid, attemptId, 'the recorded leader is gone (ESRCH)');
+      groupDisposition(
+        pgid,
+        attemptId,
+        'the recorded leader is gone (ESRCH)',
+        'already-dead',
+      );
       continue;
     }
     if (exists === 'unknown') {
@@ -345,6 +391,7 @@ export async function killJournaledPgids(args: {
         pgid,
         attemptId,
         'process identity unknown (neither alive nor ESRCH)',
+        'unsafe',
       );
       continue;
     }
@@ -354,14 +401,20 @@ export async function killJournaledPgids(args: {
         pgid,
         attemptId,
         'command line unreadable — campaign-child shape uninspectable',
+        'unsafe',
       );
       continue;
     }
     if (!isCampaignChild(commandLine, args.campaignId, attemptId)) {
-      reclaim(
+      // Pid reuse is not, by itself, proof that OUR child is gone: the same
+      // group-level evidence killGroupVerified demands for its 'stale' arm
+      // decides. ESRCH on the group -> benign; a group that answers ->
+      // unsafe.
+      groupDisposition(
         pgid,
         attemptId,
         'group leader is not this campaign child (pid reuse)',
+        'benign-reclaim',
       );
       continue;
     }
@@ -387,7 +440,12 @@ export async function killJournaledPgids(args: {
         alreadyDead.push(pgid);
         break;
       case 'unknown':
-        reclaim(pgid, attemptId, 'OS start time unreadable at kill time');
+        reclaim(
+          pgid,
+          attemptId,
+          'OS start time unreadable at kill time',
+          'unsafe',
+        );
         break;
       case 'alive':
         survived.push(pgid);
@@ -397,7 +455,13 @@ export async function killJournaledPgids(args: {
         break;
     }
   }
-  return { killed, alreadyDead, reclaimedWithoutKill, survived };
+  return {
+    killed,
+    alreadyDead,
+    reclaimedBenign,
+    reclaimedUnsafe,
+    survived,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -990,22 +1054,42 @@ export interface ResumeArgs {
   readonly probe?: HostStatsProbe;
   readonly lockPath?: string;
   readonly spawner?: ChildSpawner;
-  /** R-RCV-1 kill seams (production defaults are the real probes/signaler);
-   *  tests drive a surviving group through them without real processes. */
+  /** THE group-signal seam for the whole verb (C10): the R-RCV-1 orphan kill
+   *  AND, once the dispatcher takes over, its own kills and R-SPN-5 pgid
+   *  probes. Production omits it (realGroupSignaler); tests drive surviving
+   *  or scripted groups through it without touching a real process. */
   readonly signal?: GroupSignaler;
+  /** R-RCV-1 campaign-child shape probe; production default is `ps`. */
   readonly child?: CampaignChildProbe;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
 }
 
-/** The frozen document as published. Registration schema-validates and
- *  digests it BEFORE the publication rename, and the R-RCV-6 refs
- *  cross-check re-verifies identity, so a second full parse here would only
- *  re-litigate the frozen document. */
+/** Fail-closed intake of the frozen document (C1: no production-path cast
+ *  bridges this read). Both verbs derive campaign identity, the block/sample
+ *  universe, and rerun rosters from it BEFORE anything re-validates, so a
+ *  corrupt document must refuse here rather than shape kills and journal
+ *  bundles. */
 function readPublishedCampaign(campaignDir: string): Campaign {
-  return JSON.parse(
-    readFileSync(join(campaignDir, 'campaign.json'), 'utf8'),
-  ) as Campaign;
+  const path = join(campaignDir, 'campaign.json');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new RecoveryError(
+      `campaign.json at ${path} could not be read as JSON (${(err as Error).message}) — refusing to derive campaign identity or membership from an unreadable document; ${AUDIT}`,
+    );
+  }
+  const parsed = CampaignSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new RecoveryError(
+      `campaign.json at ${path} is not a valid frozen campaign document: ${parsed.error.issues
+        .map((i) => `${i.path.join('.')} ${i.message}`)
+        .slice(0, 5)
+        .join('; ')} — refusing (fail-closed); ${AUDIT}`,
+    );
+  }
+  return parsed.data;
 }
 
 /** R-REG-19 (second occurrence, REV fable I-14): every api-key arm's
@@ -1031,8 +1115,15 @@ function assertKeyEnvsPresent(
     }
     require(arm.key_env_names);
   }
+  // The grader credential is MANDATORY: an incomplete registry must refuse
+  // here, not slip past the preflight and surface later as a dispatch error
+  // (R-REG-19 covers "every arm credential AND the grader credential").
   const grader = credentials[campaign.grader.credential];
-  if (grader !== undefined && grader.auth === 'api-key') {
+  if (grader === undefined) {
+    missing.push(
+      `${campaign.grader.credential}: the grader credential is not in the registry`,
+    );
+  } else if (grader.auth === 'api-key') {
     const names =
       grader.key_pool ??
       (grader.api_key_env !== undefined ? [grader.api_key_env] : []);
@@ -1141,14 +1232,18 @@ export async function resumeCampaign(
           ? { graceSeconds: args.graceSeconds }
           : {}),
       });
-      // A survivor is live spend: journaling a rerun re-entry now would race
-      // the orphan against its replacement (the no-double-spend invariant).
-      // Nothing is journaled and nothing is admitted (carry-forward, R-RCV-1).
-      if (killReport.survived.length > 0) {
+      // Live spend that was NOT excluded — a survivor of TERM+KILL, or a
+      // group we could never prove dead (still answering, or identity
+      // unknown, so nothing was ever signaled). Journaling a rerun re-entry
+      // now would race that group against its replacement (the
+      // no-double-spend invariant), so nothing is journaled and nothing is
+      // admitted (R-RCV-1).
+      const unverified = unverifiedGroups(killReport);
+      if (unverified.length > 0) {
         throw new RecoveryError(
-          `resume refused: process group(s) ${killReport.survived.join(
+          `resume refused: process group(s) ${unverified.join(
             ', ',
-          )} survived TERM+KILL and are still spending — kill them manually, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
+          )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — they may still be spending; identify and kill them by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
         );
       }
       plan = planRecovery({ universe, events });
@@ -1355,10 +1450,12 @@ export async function resumeCampaign(
         writer.appendEvents(bundle);
         committed = true;
       }
-      // D-13 step 7: the marker removes ONLY once the pause is durable in the
-      // journal — this resume's first successful commit, or a storage_paused
-      // that already landed.
-      if (markerPresent && (committed || lastPauseSeq >= 0)) {
+      // D-13 step 7: the marker removes ONLY after this resume's first
+      // SUCCESSFUL commit. An already-journaled storage_paused records that
+      // a pause happened; it proves nothing about storage accepting a write
+      // now, and an empty bundle proves nothing at all — so the durable
+      // marker stays until a recovery write has actually landed.
+      if (markerPresent && committed) {
         unlinkSync(pauseMarker);
       }
     } finally {
@@ -1395,7 +1492,7 @@ export async function resumeCampaign(
     verifyCampaignSnapshot(handle, defaultCommandRunner);
 
     stream.write(
-      `resume: reconcile complete — kills=${killReport.killed.length}, already-dead=${killReport.alreadyDead.length}, reclaimed-without-kill=${killReport.reclaimedWithoutKill.length}, dispositions=${plan.dispositionCompletions.length}, readmissions=${plan.successorReadmissions.length}, report=${plan.campaign}\n`,
+      `resume: reconcile complete — kills=${killReport.killed.length}, already-dead=${killReport.alreadyDead.length}, reclaimed-benign=${killReport.reclaimedBenign.length}, dispositions=${plan.dispositionCompletions.length}, readmissions=${plan.successorReadmissions.length}, report=${plan.campaign}\n`,
     );
 
     // 6. Admit (the idempotent resume verb drives the dispatcher). This is
@@ -1428,6 +1525,12 @@ export async function resumeCampaign(
         clock,
       }),
       ...(args.spawner !== undefined ? { spawner: args.spawner } : {}),
+      // One C10 seam for the verb: the dispatcher's kills and pgid probes
+      // ride the same signaler recovery just killed the orphans with.
+      ...(args.signal !== undefined ? { signalGroup: args.signal } : {}),
+      ...(args.graceSeconds !== undefined
+        ? { killGraceSeconds: args.graceSeconds }
+        : {}),
       stream,
     });
   } finally {
@@ -1468,14 +1571,20 @@ const LIVE_CANCEL_POLLS = 300;
 /** The operator's reason for THIS cancellation: the marker's line 2 is
  *  authoritative (C11 — a marker left by an interrupted cancel carries the
  *  original operator's words on BOTH paths), falling back to this
- *  invocation's argument. */
+ *  invocation's argument only when the marker carries none. A marker that
+ *  EXISTS but cannot be read REFUSES: silently substituting a later
+ *  --reason would destroy the original operator's attribution, and that
+ *  attribution is the whole point of the carrier. */
 function markerReason(markerPath: string, argReason?: string): string {
-  let fromMarker = '';
+  let body: string;
   try {
-    fromMarker = (readFileSync(markerPath, 'utf8').split('\n')[1] ?? '').trim();
-  } catch {
-    fromMarker = '';
+    body = readFileSync(markerPath, 'utf8');
+  } catch (err) {
+    throw new RecoveryError(
+      `cancel-request marker at ${markerPath} exists but cannot be read (${(err as Error).message}) — refusing rather than replacing the original operator's cancellation reason; fix the marker's permissions (or remove it if the campaign should keep running) and re-run the cancel`,
+    );
   }
+  const fromMarker = (body.split('\n')[1] ?? '').trim();
   return fromMarker !== '' ? fromMarker : (argReason ?? '').trim();
 }
 
@@ -1487,11 +1596,11 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
   const stream = args.stream ?? {
     write: (s: string) => process.stdout.write(s),
   };
-  const campaign = readPublishedCampaign(args.campaignDir);
   const lockPath = args.lockPath ?? defaultLiveSpendLockPath();
-  // 1. Marker first (O_EXCL). It IS the admission stop on the post-crash
-  // path (resume refuses while it is present) and line 2 carries the
-  // operator's reason so a live dispatcher can journal
+  // 1. Marker first (O_EXCL), BEFORE the document is read: marker-first is
+  // the D-12 intent, and admission must stop even when campaign.json is
+  // unusable — resume refuses while the marker is present. Line 2 carries
+  // the operator's reason so a live dispatcher can journal
   // campaign_cancelled { reason } itself.
   const marker = join(args.campaignDir, 'cancel-request');
   if (!existsSync(marker)) {
@@ -1500,6 +1609,9 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
     });
   }
   const reason = markerReason(marker, args.reason);
+  // Only now the fail-closed parse: everything below derives campaign
+  // identity, membership, and journal bundles from this document.
+  const campaign = readPublishedCampaign(args.campaignDir);
   // Is a dispatcher live? The live-spend lock's owner token names it.
   const holder = readLiveSpendHolder(lockPath);
   let liveDispatcherPid: number | null = null;
@@ -1528,17 +1640,36 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
     }
   }
   if (liveDispatcherPid !== null) {
-    // Signal the dispatcher; it performs the pinned sequence.
-    process.kill(liveDispatcherPid, 'SIGTERM');
-    stream.write(
-      `cancel: signalled live dispatcher pid ${liveDispatcherPid}\n`,
-    );
+    // Signal the dispatcher; it performs the pinned sequence. The identity
+    // probe above is not atomic with this signal: a dispatcher that exits in
+    // between raises ESRCH, which is proof it is gone — take the post-crash
+    // path rather than failing the cancel. Every other signal error stays a
+    // loud refusal (an unsignalable LIVE dispatcher is not a crash).
+    let signalled = true;
+    try {
+      process.kill(liveDispatcherPid, 'SIGTERM');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        throw new RecoveryError(
+          `cancel: signalling dispatcher pid ${liveDispatcherPid} failed (${(err as Error).message}) — refusing to continue against a dispatcher that may still be live`,
+        );
+      }
+      signalled = false;
+      stream.write(
+        `cancel: dispatcher pid ${liveDispatcherPid} exited before the signal (ESRCH) — taking the post-crash path\n`,
+      );
+    }
+    if (signalled) {
+      stream.write(
+        `cancel: signalled live dispatcher pid ${liveDispatcherPid}\n`,
+      );
+    }
     // Poll for campaign_cancelled to land — the signalled dispatcher sees
     // the marker and completes the FULL pinned sequence, journaling
     // campaign_cancelled LAST (task 8's signal handler). READ-ONLY poll:
     // the live dispatcher HOLDS the journal lease for its whole run, so a
     // writer election here would refuse against the live holder.
-    for (let i = 0; i < LIVE_CANCEL_POLLS; i += 1) {
+    for (let i = 0; signalled && i < LIVE_CANCEL_POLLS; i += 1) {
       const reader = openJournalRead(args.campaignDir);
       try {
         if (reader.readEvents().some((e) => e.type === 'campaign_cancelled')) {
@@ -1549,9 +1680,11 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
       }
       await args.clock.sleepUntil(args.clock.now() + LIVE_CANCEL_POLL_SECONDS);
     }
-    stream.write(
-      'cancel: dispatcher did not complete the sequence — taking the post-crash path\n',
-    );
+    if (signalled) {
+      stream.write(
+        'cancel: dispatcher did not complete the sequence — taking the post-crash path\n',
+      );
+    }
   }
   // Post-crash path: the command takes writer election itself and performs
   // the sequence, including the aborted journaling (I-10a).
@@ -1586,13 +1719,16 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
         : {}),
     });
     // Verified death is a HARD precondition, exactly as on the live path: a
-    // surviving group means NO aborted for its block, NO campaign_cancelled,
-    // a named operator action, and a marker that keeps the cancel pending.
-    if (killReport.survived.length > 0) {
+    // group that survived TERM+KILL — or one we could never prove dead, so
+    // nothing was signaled — means NO aborted for its block, NO
+    // campaign_cancelled, a named operator action, and a marker that keeps
+    // the cancel pending (admission stays stopped until it completes).
+    const unverified = unverifiedGroups(killReport);
+    if (unverified.length > 0) {
       stream.write(
-        `cancel: process group(s) ${killReport.survived.join(
+        `cancel: process group(s) ${unverified.join(
           ', ',
-        )} survived TERM+KILL — operator action: kill them manually, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled) and the campaign is still spending\n`,
+        )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — operator action: identify and kill them by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
       );
       return { cancelled: false, postCrash: true };
     }
