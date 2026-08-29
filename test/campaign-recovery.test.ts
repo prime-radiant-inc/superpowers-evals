@@ -3,10 +3,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SidecarLine } from '../src/campaign/contention.ts';
+import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
+import { type EventInput, replayEvents } from '../src/campaign/journal.ts';
+import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import {
   killJournaledPgids,
   planRecovery,
   quarantineActions,
+  RecoveryError,
   readRunDirIdentities,
   rederiveContentionSuffix,
   terminalEvidenceActions,
@@ -14,6 +18,9 @@ import {
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../src/contracts/campaign/crash-windows.ts';
 import type { JournalEvent } from '../src/contracts/campaign/journal-events.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
+
+const CAMPAIGN_ID = 'c'.repeat(64);
 
 const UNIVERSE: CampaignUniverse = {
   samples: [
@@ -29,8 +36,24 @@ function ev(type: JournalEvent['type'], payload: unknown): JournalEvent {
   return { seq: SEQ, ts_ms: SEQ * 1000, type, payload } as JournalEvent;
 }
 
-test('killJournaledPgids: kills every journaled pgid without a terminal; identity-guarded', () => {
-  const events = [
+// ---------------------------------------------------------------------------
+// R-RCV-1: identity-guarded kill with verified death
+// ---------------------------------------------------------------------------
+
+/** The campaign child's real argv shape (spawn.ts buildCampaignChildArgv):
+ *  the persisted identity travels on `--campaign-identity`. */
+function childCommandLine(attemptId: string): string {
+  return `bun /snap/src/cli/index.ts run /scn --coding-agent claude --campaign-identity {"campaign_id":"${CAMPAIGN_ID}","comparison_id":"c1","block_id":"b1","sample_id":"s1","execution_attempt_id":"${attemptId}"}`;
+}
+
+const ALIVE_AT_5: ProcessIdentityProbe = {
+  exists: () => 'alive',
+  startTimeMs: () => 5,
+};
+
+function inFlightEvents(): JournalEvent[] {
+  SEQ = 0;
+  return [
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
     ev('run_allocated', {
       attempt_id: 'a1',
@@ -47,27 +70,103 @@ test('killJournaledPgids: kills every journaled pgid without a terminal; identit
     }),
     ev('run_completed', { attempt_id: 'a2', outcome: 'pass' }), // a2 terminaled
   ];
-  const killed: number[] = [];
-  const report = killJournaledPgids({
-    events,
-    inspectGroup: () => 'ok',
-    kill: (pgid) => killed.push(pgid),
+}
+
+test('killJournaledPgids: every journaled pgid without a terminal is TERMed and VERIFIED dead, identity-guarded', async () => {
+  const signalled: [number, NodeJS.Signals | 0][] = [];
+  const dead = new Set<number>();
+  const signal: GroupSignaler = (pgid, sig) => {
+    signalled.push([pgid, sig]);
+    if (dead.has(pgid)) return 'esrch';
+    if (sig === 'SIGTERM') dead.add(pgid); // the child dies on TERM
+    return 'ok';
+  };
+  const report = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: ALIVE_AT_5,
+    child: {
+      commandLine: (pgid) => (pgid === 111 ? childCommandLine('a1') : null),
+    },
+    signal,
+    clock: new FakeClock(),
+    graceSeconds: 5,
   });
   expect(report.killed).toEqual([111]); // only the non-terminal attempt
-  expect(killed).toEqual([111]);
-  // A failed sanity check: recorded reclaimed-without-kill, never signaled.
-  const loud: string[] = [];
-  const guarded = killJournaledPgids({
-    events,
-    inspectGroup: (pgid) => (pgid === 111 ? 'failed' : 'ok'),
-    kill: (pgid) => killed.push(pgid),
-    stream: { write: (s) => loud.push(s) },
-  });
-  expect(guarded.reclaimedWithoutKill).toEqual([111]);
-  expect(loud.join('')).toMatch(/reclaimed-without-kill/);
+  expect(report.survived).toEqual([]);
+  expect(report.reclaimedWithoutKill).toEqual([]);
+  // Verified death, not fire-and-forget: TERM then a 0-probe that proved it.
+  expect(signalled).toEqual([
+    [111, 'SIGTERM'],
+    [111, 0],
+  ]);
 });
 
+test('killJournaledPgids: a recycled pgid and an uninspectable group are reclaimed-without-kill â€” never signaled blind (R-RCV-1)', async () => {
+  const run = async (commandLine: (pgid: number) => string | null) => {
+    const signalled: number[] = [];
+    const loud: string[] = [];
+    const report = await killJournaledPgids({
+      events: inFlightEvents(),
+      campaignId: CAMPAIGN_ID,
+      identity: ALIVE_AT_5,
+      child: { commandLine },
+      signal: (pgid) => {
+        signalled.push(pgid);
+        return 'ok';
+      },
+      clock: new FakeClock(),
+      stream: { write: (s) => loud.push(s) },
+    });
+    return { report, signalled, loud: loud.join('') };
+  };
+  // A different process now owns the pgid: the campaign-child shape is absent.
+  const recycled = await run(() => 'ps aux');
+  expect(recycled.report.reclaimedWithoutKill).toEqual([111]);
+  expect(recycled.signalled).toEqual([]);
+  expect(recycled.loud).toMatch(/reclaimed-without-kill/);
+  // Command line unreadable: identity UNKNOWN, still never signaled.
+  const opaque = await run(() => null);
+  expect(opaque.report.reclaimedWithoutKill).toEqual([111]);
+  expect(opaque.signalled).toEqual([]);
+  expect(opaque.loud).toMatch(/reclaimed-without-kill/);
+});
+
+test('killJournaledPgids: a group surviving TERM+KILL is reported survived (never "killed"), and signal errors are never swallowed', async () => {
+  const loud: string[] = [];
+  const survivor = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: ALIVE_AT_5,
+    child: { commandLine: () => childCommandLine('a1') },
+    signal: () => 'ok', // never dies
+    clock: new FakeClock(),
+    graceSeconds: 0,
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(survivor.survived).toEqual([111]);
+  expect(survivor.killed).toEqual([]);
+  expect(loud.join('')).toMatch(/survived TERM\+KILL/);
+  await expect(
+    killJournaledPgids({
+      events: inFlightEvents(),
+      campaignId: CAMPAIGN_ID,
+      identity: ALIVE_AT_5,
+      child: { commandLine: () => childCommandLine('a1') },
+      signal: () => {
+        throw new Error('EPERM');
+      },
+      clock: new FakeClock(),
+    }),
+  ).rejects.toThrow(/EPERM/);
+});
+
+// ---------------------------------------------------------------------------
+// R-RCV-2 / R-RCV-5: the crash-window plan
+// ---------------------------------------------------------------------------
+
 test('planRecovery: superseded predecessor gets no action; missing dispositions completed; minted successor re-admitted as itself', () => {
+  SEQ = 0;
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -112,9 +211,11 @@ test('planRecovery: superseded predecessor gets no action; missing dispositions 
   ]);
   // The minted-but-unadmitted successor admits as THAT successor.
   expect(plan.successorReadmissions).toEqual([{ block_id: 'x1' }]);
+  expect(plan.campaign).toBe('none');
 });
 
 test('planRecovery: a pre-run_allocated crash window voids the attempt and re-admits its block (R-RCV-5 second resolution)', () => {
+  SEQ = 0;
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -134,7 +235,42 @@ test('planRecovery: a pre-run_allocated crash window voids the attempt and re-ad
   ]);
 });
 
+test('planRecovery: the post-seal-predicate pre-report window is carried as the campaign action (R-RCV-5 third resolution)', () => {
+  SEQ = 0;
+  const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+    ev('exposure_started', { sample_id: 's1', ts: 4000 }),
+    ev('run_completed', { attempt_id: 'a1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a2' }),
+    ev('run_allocated', {
+      attempt_id: 'a2',
+      run_id: 'r2',
+      pgid: 222,
+      key_grants: [],
+    }),
+    ev('exposure_started', { sample_id: 's2', ts: 8000 }),
+    ev('run_completed', { attempt_id: 'a2', outcome: 'fail' }),
+  ];
+  expect(() => replayEvents(UNIVERSE, events)).not.toThrow();
+  const plan = planRecovery({ universe: UNIVERSE, events });
+  expect(plan.campaign).toBe('regenerate_report');
+  expect(plan.kills).toEqual([]);
+  expect(plan.voidReadmissions).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// Decision D-13 + C11: terminal evidence over the admitted instance chain
+// ---------------------------------------------------------------------------
+
 test('terminal-evidence rule: a complete verdict journals terminal; a missing run dir re-enters via rerun', () => {
+  SEQ = 0;
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -147,6 +283,7 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
   ];
   const withVerdict = terminalEvidenceActions({
     events,
+    universe: UNIVERSE,
     verdictOf: (runId) => (runId === 'r1' ? { final: 'pass' } : null),
   });
   expect(withVerdict.terminals).toEqual([
@@ -154,18 +291,40 @@ test('terminal-evidence rule: a complete verdict journals terminal; a missing ru
   ]);
   const withoutRunDir = terminalEvidenceActions({
     events,
+    universe: UNIVERSE,
     verdictOf: () => null,
   });
   expect(withoutRunDir.terminals).toEqual([]);
   expect(withoutRunDir.rerunBlockIds).toEqual(['b1']);
 });
 
+test('an attempt with no admitted instance REFUSES recovery loudly â€” an unattributable in-flight run is never silently dropped (C11)', () => {
+  SEQ = 0;
+  const events = [
+    // No block_admitted at all: membership for s1 is unknown at this seq.
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+  ];
+  expect(() =>
+    terminalEvidenceActions({
+      events,
+      universe: UNIVERSE,
+      verdictOf: () => null,
+    }),
+  ).toThrow(RecoveryError);
+});
+
 test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â€” primary, reserve, and rerun instances each rerun under their own id (C11)', () => {
   // The cut: three instances are admitted BEFORE their in-flight attempts are
   // created, so "the most recently admitted block" attributes every attempt to
-  // the last instance admitted. Only lineage-aware attribution (universe
-  // blocks UNION mint rosters, latest admission at or before the attempt)
-  // reruns each instance under its own id.
+  // the last instance admitted (b3:i1). Only lineage-aware attribution
+  // (universe blocks UNION mint rosters, latest admission at or before the
+  // attempt) reruns each instance under its own id.
   const universe: CampaignUniverse = {
     samples: [
       { sample_id: 's1', arm: 'base', cell: 'c1:scn' },
@@ -184,6 +343,7 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
       { block_id: 'x2', sample_ids: ['x2s1', 'x2s2'], slot: 'reserve' },
     ],
   };
+  SEQ = 0;
   const events = [
     ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
     ev('block_admitted', { block_id: 'b2', pools: ['p'] }),
@@ -196,6 +356,8 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
       key_grants: [],
     }),
     ev('instrument_failure', { attempt_id: 'a0', cause: 'grader_crashed' }),
+    // The complete E7.1 mint bundle: s3 keeps instrument_failed, s4 (admitted)
+    // takes its disposition, THEN the successor is admitted.
     ev('block_replaced', {
       block_id: 'b2',
       replacement_block_id: 'x2',
@@ -207,7 +369,14 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
         { sample_id: 'x2s2', arm: 'treat', supersedes: 's4' },
       ],
     }),
+    ev('sample_disposition', {
+      sample_id: 's4',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x2s2',
+    }),
     ev('block_admitted', { block_id: 'x2', pools: ['p'] }),
+    // E7.1 rerun re-entry: the block is aborted FIRST, then re-entered.
+    ev('aborted', { block_id: 'b3' }),
     ev('block_replaced', {
       block_id: 'b3',
       replacement_block_id: 'b3:i1',
@@ -243,6 +412,8 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
       key_grants: [],
     }),
   ];
+  // The prefix is a LEGAL journal: replay accepts every edge in this order.
+  expect(() => replayEvents(universe, events)).not.toThrow();
   const actions = terminalEvidenceActions({
     events,
     universe,
@@ -251,7 +422,12 @@ test('crash-cut in-flight mapping resolves against the ADMITTED INSTANCE CHAIN â
   expect(actions.rerunBlockIds).toEqual(['b1', 'x2', 'b3:i1']);
 });
 
+// ---------------------------------------------------------------------------
+// R-RCV-3 / R-RCV-4: the run-dir identity sweep
+// ---------------------------------------------------------------------------
+
 test('quarantine by attempt-id / campaign mismatch from the persisted identity', () => {
+  SEQ = 0;
   const events = [
     ev('run_allocated', {
       attempt_id: 'a1',
@@ -275,7 +451,7 @@ test('quarantine by attempt-id / campaign mismatch from the persisted identity',
       {
         runId: 'r2',
         identity: {
-          campaign_id: 'c'.repeat(64),
+          campaign_id: CAMPAIGN_ID,
           comparison_id: 'c1',
           block_id: 'b',
           sample_id: 's',
@@ -284,23 +460,25 @@ test('quarantine by attempt-id / campaign mismatch from the persisted identity',
       },
     ],
     events,
-    campaignId: 'c'.repeat(64),
+    campaignId: CAMPAIGN_ID,
   });
   expect(actions).toEqual([
     {
       type: 'quarantined',
       payload: { run_id: 'r1', attempt_id: 'a1', reason: 'campaign_mismatch' },
     },
+    // aX is no journaled attempt of this campaign: nothing to attribute it to.
     { type: 'quarantined', payload: { run_id: 'r2', reason: 'late_terminal' } },
   ]);
 });
-test('readRunDirIdentities: scans run dirs for persisted identities; non-campaign dirs are skipped', () => {
+
+test('readRunDirIdentities: absent identity files are skipped; a MALFORMED one is loud, never silently dropped', () => {
   const root = mkdtempSync(join(tmpdir(), 'results-'));
   mkdirSync(join(root, 'run-a'), { recursive: true });
   writeFileSync(
     join(root, 'run-a', 'campaign-identity.json'),
     JSON.stringify({
-      campaign_id: 'c'.repeat(64),
+      campaign_id: CAMPAIGN_ID,
       comparison_id: 'c1',
       block_id: 'b1',
       sample_id: 's1',
@@ -308,15 +486,35 @@ test('readRunDirIdentities: scans run dirs for persisted identities; non-campaig
     }),
   );
   mkdirSync(join(root, 'run-b'), { recursive: true }); // no identity file: not campaign evidence
-  const found = readRunDirIdentities(root);
-  expect(found).toHaveLength(1);
-  expect(found[0]!.runId).toBe('run-a');
-  expect(found[0]!.identity.execution_attempt_id).toBe('a1');
-  expect(readRunDirIdentities(join(root, 'missing'))).toEqual([]);
+  mkdirSync(join(root, 'run-c'), { recursive: true });
+  writeFileSync(join(root, 'run-c', 'campaign-identity.json'), '{not json');
+  const scan = readRunDirIdentities(root);
+  expect(scan.identities).toHaveLength(1);
+  expect(scan.identities[0]!.runId).toBe('run-a');
+  expect(scan.identities[0]!.identity.execution_attempt_id).toBe('a1');
+  expect(scan.malformed.map((m) => m.runId)).toEqual(['run-c']);
+  const missing = readRunDirIdentities(join(root, 'missing'));
+  expect(missing.identities).toEqual([]);
+  expect(missing.malformed).toEqual([]);
+
+  // Loud: unclassifiable evidence is quarantined, never dropped.
+  const loud: string[] = [];
+  const actions = quarantineActions({
+    runDirIdentities: scan.identities,
+    malformed: scan.malformed,
+    events: [],
+    campaignId: CAMPAIGN_ID,
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(actions).toContainEqual({
+    type: 'quarantined',
+    payload: { run_id: 'run-c', reason: 'campaign_mismatch' },
+  });
+  expect(loud.join('')).toMatch(/run-c/);
 });
 
-test('the run-dir identity sweep is the residual evidence a pgid list cannot hold: a run allocated but never journaled quarantines by attempt-id mismatch (R-RCV-3/R-RCV-4)', () => {
-  const campaignId = 'c'.repeat(64);
+test('the spawn-to-run_allocated orphan window resolves by attempt-id correlation against the journal chain (R-RCV-4)', () => {
+  const campaignId = CAMPAIGN_ID;
   const root = mkdtempSync(join(tmpdir(), 'results-'));
   const identity = (runId: string, attemptId: string) => {
     mkdirSync(join(root, runId), { recursive: true });
@@ -331,9 +529,13 @@ test('the run-dir identity sweep is the residual evidence a pgid list cannot hol
       }),
     );
   };
-  identity('run-mismatch', 'a-old'); // the run dir names a SUPERSEDED attempt
-  identity('run-unjournaled', 'a2'); // 8b suppressed its run_allocated
+  identity('run-orphan', 'a2'); // journaled attempt, allocation never landed
+  identity('run-mismatch', 'a-old'); // the journal binds this run to another attempt
+  SEQ = 0;
   const events = [
+    ev('block_admitted', { block_id: 'b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a2' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'a-new' }),
     ev('run_allocated', {
       attempt_id: 'a-new',
       run_id: 'run-mismatch',
@@ -342,10 +544,11 @@ test('the run-dir identity sweep is the residual evidence a pgid list cannot hol
     }),
   ];
   const actions = quarantineActions({
-    runDirIdentities: readRunDirIdentities(root),
+    runDirIdentities: readRunDirIdentities(root).identities,
     events,
     campaignId,
   });
+  // Scan order is the results root's directory order.
   expect(actions).toEqual([
     {
       type: 'quarantined',
@@ -355,9 +558,77 @@ test('the run-dir identity sweep is the residual evidence a pgid list cannot hol
         reason: 'attempt_mismatch',
       },
     },
+    // The residual R-RCV-4 window: attempt journaled, run dir written, the
+    // dispatcher died before run_allocated.
     {
       type: 'quarantined',
-      payload: { run_id: 'run-unjournaled', reason: 'late_terminal' },
+      payload: {
+        run_id: 'run-orphan',
+        attempt_id: 'a2',
+        reason: 'attempt_mismatch',
+      },
+    },
+  ]);
+});
+
+test('a superseded-era run dir is a LATE terminal: its evidence never retires the re-entered attempt (R-RCV-3)', () => {
+  const universe: CampaignUniverse = {
+    samples: [
+      { sample_id: 's1', arm: 'base', cell: 'c1:scn' },
+      { sample_id: 's2', arm: 'treat', cell: 'c1:scn' },
+    ],
+    blocks: [{ block_id: 'c1:scn:b1', sample_ids: ['s1', 's2'] }],
+  };
+  SEQ = 0;
+  const events = [
+    ev('block_admitted', { block_id: 'c1:scn:b1', pools: ['p'] }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', {
+      attempt_id: 'a1',
+      run_id: 'r1',
+      pgid: 111,
+      key_grants: [],
+    }),
+    ev('aborted', { block_id: 'c1:scn:b1' }),
+    ev('block_replaced', {
+      block_id: 'c1:scn:b1',
+      replacement_block_id: 'c1:scn:b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', {
+      block_id: 'c1:scn:b1:i1',
+      pools: ['p'],
+      rerun_of: 'c1:scn:b1',
+    }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a2' }), // the current attempt
+  ];
+  expect(() => replayEvents(universe, events)).not.toThrow();
+  const actions = quarantineActions({
+    runDirIdentities: [
+      {
+        runId: 'r1',
+        identity: {
+          campaign_id: CAMPAIGN_ID,
+          comparison_id: 'c1',
+          block_id: 'c1:scn:b1',
+          sample_id: 's1',
+          execution_attempt_id: 'a1',
+        },
+      },
+    ],
+    events,
+    campaignId: CAMPAIGN_ID,
+  });
+  expect(actions).toEqual([
+    {
+      type: 'quarantined',
+      payload: { run_id: 'r1', attempt_id: 'a1', reason: 'late_terminal' },
     },
   ]);
 });
@@ -369,7 +640,7 @@ test('the run-dir identity sweep is the residual evidence a pgid list cannot hol
 function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
   return {
     schema_version: 1,
-    campaign_id: 'c'.repeat(64),
+    campaign_id: CAMPAIGN_ID,
     suite: {
       schema_version: 1,
       name: 'testsuite',
@@ -504,30 +775,48 @@ function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
   } as unknown as Campaign;
 }
 
-/** Every sample breaches (load1 9 over 4 cores > 2), so one window opens at
- *  the third crossing and stays open to the horizon. */
-function breachingSidecar(tsList: readonly number[]): SidecarLine[] {
-  return tsList.map((ts_ms) => ({
+function sample(ts_ms: number, load1: number): SidecarLine {
+  return {
     ts_ms,
-    load1: 9,
+    load1,
     mem_available_bytes: 8 * 2 ** 30,
     swap_used_bytes: 0,
     process_count: 100,
     disk_free_bytes: 90 * 2 ** 30,
     breach: [],
-  }));
+  };
 }
+function everyHalfSecond(from: number, to: number): number[] {
+  const out: number[] = [];
+  for (let t = from; t <= to; t += 500) out.push(t);
+  return out;
+}
+/** load1 9 over 4 cores breaches `load1_per_core > 2`; sustain_k = 3, so the
+ *  window opens at the third crossing (2500) and CLOSES at 17500 (three
+ *  consecutive in-bounds samples). Every executed block below sits inside
+ *  it. */
+const CLOSED_WINDOW_SIDECAR: SidecarLine[] = [
+  ...everyHalfSecond(1500, 16_000).map((t) => sample(t, 9)),
+  ...everyHalfSecond(16_500, 18_000).map((t) => sample(t, 0)),
+];
+/** The same breach still OPEN at the crash: no closure, so no resolution. */
+const OPEN_WINDOW_SIDECAR: SidecarLine[] = [
+  ...[1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000].map((t) => sample(t, 9)),
+];
 
 function contentionEvents(): JournalEvent[] {
   SEQ = 0; // ts_ms = seq * 1000: the block interval lands inside the breach
   return [
-    ev('campaign_opened', {
-      campaign_id: 'c'.repeat(64),
-      digest: 'c'.repeat(64),
-    }),
+    ev('campaign_opened', { campaign_id: CAMPAIGN_ID, digest: 'c'.repeat(64) }),
     ev('block_admitted', { block_id: 'c1:scn:b1', pools: ['p'] }),
-    ev('attempt_created', { sample_id: 'c1:scn:arm_a:r1', attempt_id: 'a1' }),
-    ev('attempt_created', { sample_id: 'c1:scn:arm_b:r1', attempt_id: 'a2' }),
+    ev('attempt_created', {
+      sample_id: 'c1:scn:arm_a:r1',
+      attempt_id: 'a1',
+    }),
+    ev('attempt_created', {
+      sample_id: 'c1:scn:arm_b:r1',
+      attempt_id: 'a2',
+    }),
     ev('run_allocated', {
       attempt_id: 'a1',
       run_id: 'r1',
@@ -547,40 +836,40 @@ function contentionEvents(): JournalEvent[] {
   ];
 }
 
-const CONTENTION_SIDECAR = breachingSidecar([
-  1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500,
-]);
+const CONTENTION_MINT: EventInput = {
+  type: 'block_replaced',
+  payload: {
+    block_id: 'c1:scn:b1',
+    replacement_block_id: 'c1:scn:x1',
+    reason: 'contention',
+    kind: 'replacement',
+    reserve_activation: true,
+    roster: [
+      {
+        sample_id: 'c1:scn:arm_a:x1',
+        arm: 'arm_a',
+        supersedes: 'c1:scn:arm_a:r1',
+      },
+      {
+        sample_id: 'c1:scn:arm_b:x1',
+        arm: 'arm_b',
+        supersedes: 'c1:scn:arm_b:r1',
+      },
+    ],
+  },
+};
 
-test('rederiveContentionSuffix: the missing suffix is re-derived from the durable sidecar in the frozen obligation order', () => {
+test('rederiveContentionSuffix: the missing suffix of a CLOSED window is re-derived from the durable sidecar in the frozen obligation order', () => {
+  const events = contentionEvents();
+  expect(() => replayEvents(universeOfDoc(), events)).not.toThrow();
   const batch = rederiveContentionSuffix({
-    events: contentionEvents(),
-    sidecarLines: CONTENTION_SIDECAR,
+    events,
+    sidecarLines: CLOSED_WINDOW_SIDECAR,
     truncatedTail: false,
     campaign: campaignDoc(),
   });
   expect(batch).toEqual([
-    {
-      type: 'block_replaced',
-      payload: {
-        block_id: 'c1:scn:b1',
-        replacement_block_id: 'c1:scn:x1',
-        reason: 'contention',
-        kind: 'replacement',
-        reserve_activation: true,
-        roster: [
-          {
-            sample_id: 'c1:scn:arm_a:x1',
-            arm: 'arm_a',
-            supersedes: 'c1:scn:arm_a:r1',
-          },
-          {
-            sample_id: 'c1:scn:arm_b:x1',
-            arm: 'arm_b',
-            supersedes: 'c1:scn:arm_b:r1',
-          },
-        ],
-      },
-    },
+    CONTENTION_MINT,
     {
       type: 'sample_disposition',
       payload: {
@@ -600,33 +889,42 @@ test('rederiveContentionSuffix: the missing suffix is re-derived from the durabl
   ]);
 });
 
+function universeOfDoc(): CampaignUniverse {
+  const doc = campaignDoc();
+  return {
+    samples: doc.samples.map((s) => ({
+      sample_id: s.sample_id,
+      arm: s.arm,
+      cell: s.cell,
+    })),
+    blocks: doc.blocks.map((b) => ({
+      block_id: b.block_id,
+      sample_ids: b.sample_ids,
+      ...(b.slot !== undefined ? { slot: b.slot } : {}),
+    })),
+  };
+}
+
+test('rederiveContentionSuffix: a breach still OPEN at the crash mints nothing â€” an unclosed window is D4 backstop work, never an immediate reserve activation', () => {
+  expect(
+    rederiveContentionSuffix({
+      events: contentionEvents(),
+      sidecarLines: OPEN_WINDOW_SIDECAR,
+      truncatedTail: false,
+      campaign: campaignDoc(),
+    }),
+  ).toEqual([]);
+});
+
 test('rederiveContentionSuffix: a landed contention mint is authoritative (never re-minted); a durable budget stop suppresses the obligation instead', () => {
   const landed = [
     ...contentionEvents(),
-    ev('block_replaced', {
-      block_id: 'c1:scn:b1',
-      replacement_block_id: 'c1:scn:x1',
-      reason: 'contention',
-      kind: 'replacement',
-      reserve_activation: true,
-      roster: [
-        {
-          sample_id: 'c1:scn:arm_a:x1',
-          arm: 'arm_a',
-          supersedes: 'c1:scn:arm_a:r1',
-        },
-        {
-          sample_id: 'c1:scn:arm_b:x1',
-          arm: 'arm_b',
-          supersedes: 'c1:scn:arm_b:r1',
-        },
-      ],
-    }),
+    ev('block_replaced', CONTENTION_MINT.payload),
   ];
   expect(
     rederiveContentionSuffix({
       events: landed,
-      sidecarLines: CONTENTION_SIDECAR,
+      sidecarLines: CLOSED_WINDOW_SIDECAR,
       truncatedTail: false,
       campaign: campaignDoc(),
     }),
@@ -639,7 +937,7 @@ test('rederiveContentionSuffix: a landed contention mint is authoritative (never
   expect(
     rederiveContentionSuffix({
       events: stopped,
-      sidecarLines: CONTENTION_SIDECAR,
+      sidecarLines: CLOSED_WINDOW_SIDECAR,
       truncatedTail: false,
       campaign: campaignDoc(),
     }),
@@ -653,4 +951,94 @@ test('rederiveContentionSuffix: a landed contention mint is authoritative (never
       },
     },
   ]);
+});
+
+test('rederiveContentionSuffix: a budget raise after the stop lifts the durable suppression â€” only the stopped samples are permanent (E7.6/R-DSP-6)', () => {
+  const raised = [
+    ...contentionEvents(),
+    ev('budget_stopped', { sample_ids: [] }),
+    ev('amendment', { kind: 'budget_raise', amount_usd: 100, ts: 1 }),
+  ];
+  expect(
+    rederiveContentionSuffix({
+      events: raised,
+      sidecarLines: CLOSED_WINDOW_SIDECAR,
+      truncatedTail: false,
+      campaign: campaignDoc(),
+    })[0],
+  ).toEqual(CONTENTION_MINT);
+});
+
+test('rederiveContentionSuffix: landed resolutions that are not a PREFIX of the obligation order refuse â€” recovery never fills an interior hole', () => {
+  // Two invalid blocks in the cell; only the SECOND carries a landed mint.
+  const twoBlocks = campaignDoc({
+    samples: [
+      ...campaignDoc().samples,
+      {
+        sample_id: 'c1:scn:arm_a:r2',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 2,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r2',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 2,
+      },
+    ],
+    blocks: [
+      ...campaignDoc().blocks,
+      {
+        block_id: 'c1:scn:b2',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r2', 'c1:scn:arm_b:r2'],
+      },
+    ],
+  });
+  const events = [
+    ...contentionEvents(),
+    ev('block_admitted', { block_id: 'c1:scn:b2', pools: ['p'] }),
+    ev('attempt_created', {
+      sample_id: 'c1:scn:arm_a:r2',
+      attempt_id: 'a3',
+    }),
+    ev('run_allocated', {
+      attempt_id: 'a3',
+      run_id: 'r3',
+      pgid: 33,
+      key_grants: [],
+    }),
+    ev('exposure_started', { sample_id: 'c1:scn:arm_a:r2', ts: 12_000 }),
+    ev('run_completed', { attempt_id: 'a3', outcome: 'pass' }),
+    // The LATER obligation resolved while the earlier one did not: no append
+    // order produces this, so the journal is not a batch prefix.
+    ev('block_replaced', {
+      block_id: 'c1:scn:b2',
+      replacement_block_id: 'c1:scn:x1',
+      reason: 'contention',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        {
+          sample_id: 'c1:scn:arm_a:x1',
+          arm: 'arm_a',
+          supersedes: 'c1:scn:arm_a:r2',
+        },
+        {
+          sample_id: 'c1:scn:arm_b:x1',
+          arm: 'arm_b',
+          supersedes: 'c1:scn:arm_b:r2',
+        },
+      ],
+    }),
+  ];
+  expect(() =>
+    rederiveContentionSuffix({
+      events,
+      sidecarLines: CLOSED_WINDOW_SIDECAR,
+      truncatedTail: false,
+      campaign: twoBlocks,
+    }),
+  ).toThrow(RecoveryError);
 });

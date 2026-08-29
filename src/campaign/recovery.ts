@@ -1,12 +1,14 @@
 // Recovery cores (kernel D3, R-RCV-1..5; the ratified OQ-11 contention-mint
-// amendment): kill journaled pgids FIRST (identity-guarded), reconcile the
-// journal against run dirs, complete partial mint bundles BEFORE the
-// crash-window resolver actions, execute BOTH resolutions (void+re-admit and
-// kill+rerun), quarantine by attempt-id mismatch against the run dir's
-// persisted campaign identity, and re-derive an interrupted closed-window
-// contention batch from the durable sidecar. Every core here is pure over a
-// journal prefix plus injected seams; the resume and cancel verbs drive them
-// in the pinned order.
+// amendment): kill journaled pgids FIRST (identity-guarded, verified dead),
+// reconcile the journal against run dirs, complete partial mint bundles
+// BEFORE the crash-window resolver actions, execute ALL THREE resolutions
+// (void+re-admit, kill+rerun, regenerate report), quarantine by attempt-id
+// correlation against the run dir's persisted campaign identity, and
+// re-derive an interrupted CLOSED-window contention batch from the durable
+// sidecar. Every core is pure over a journal prefix plus injected seams; the
+// resume and cancel verbs drive them in the pinned order. Fail-closed
+// throughout: unattributable evidence refuses loudly, it is never dropped.
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -21,8 +23,10 @@ import {
   type JournalEvent,
   normalizeBlockReplaced,
 } from '../contracts/campaign/journal-events.ts';
+import { type Clock, RealClock } from '../scheduler/clock.ts';
 import {
   type BlockInterval,
+  breachWindows,
   evaluateContention,
   type ResolvedThreshold,
   type SidecarLine,
@@ -31,8 +35,15 @@ import {
   cellKeyOfBlockId,
   compareAdmissionOrder,
   contentionResolutionBatch,
+  type GroupSignaler,
+  killGroupVerified,
+  realGroupSignaler,
 } from './dispatcher.ts';
 import { type EventInput, replayEvents } from './journal.ts';
+import {
+  type ProcessIdentityProbe,
+  realProcessIdentityProbe,
+} from './locks.ts';
 
 export class RecoveryError extends Error {
   constructor(message: string) {
@@ -40,6 +51,14 @@ export class RecoveryError extends Error {
     this.name = 'RecoveryError';
   }
 }
+
+/** The standing tail of every fail-closed recovery refusal. */
+const AUDIT =
+  'quarantine the campaign directory for manual audit before any rebuild or resume';
+
+/** TERM->KILL escalation grace per phase, matching the dispatcher's own
+ *  kill order (Decision D-12). */
+const KILL_GRACE_SECONDS = 5;
 
 /** The frozen document's replay/resolver view: samples with their arm+cell,
  *  blocks with their roster and slot. */
@@ -68,35 +87,38 @@ function universeOf(campaign: Campaign): CampaignUniverse {
  *  needs. A post-crash in-flight attempt maps to the instance whose roster
  *  holds its sample and whose admission most recently precedes it; "the
  *  most recently admitted block" would abort a reserve or rerun instance
- *  under the wrong id. */
+ *  under the wrong id. The frozen universe is REQUIRED: primary rosters are
+ *  not journaled, so without it membership is not derivable and recovery
+ *  must not guess. */
 interface InstanceChain {
   readonly rosterByBlock: Map<string, readonly string[]>;
   readonly admittedSeq: Map<string, number>;
   readonly sampleOfAttempt: Map<string, string>;
   readonly createdSeq: Map<string, number>;
-  readonly admissions: { blockId: string; seq: number }[];
+  /** Latest attempt created per sample — the sample's CURRENT attempt. */
+  readonly currentAttempt: Map<string, string>;
 }
 
 function admittedInstanceChain(
   events: readonly JournalEvent[],
-  universe?: CampaignUniverse,
+  universe: CampaignUniverse,
 ): InstanceChain {
   const rosterByBlock = new Map<string, readonly string[]>(
-    (universe?.blocks ?? []).map((b) => [b.block_id, b.sample_ids]),
+    universe.blocks.map((b) => [b.block_id, b.sample_ids]),
   );
   const admittedSeq = new Map<string, number>();
   const sampleOfAttempt = new Map<string, string>();
   const createdSeq = new Map<string, number>();
-  const admissions: { blockId: string; seq: number }[] = [];
+  const currentAttempt = new Map<string, string>();
   for (const event of events) {
     switch (event.type) {
       case 'block_admitted':
         admittedSeq.set(event.payload.block_id, event.seq);
-        admissions.push({ blockId: event.payload.block_id, seq: event.seq });
         break;
       case 'attempt_created':
         sampleOfAttempt.set(event.payload.attempt_id, event.payload.sample_id);
         createdSeq.set(event.payload.attempt_id, event.seq);
+        currentAttempt.set(event.payload.sample_id, event.payload.attempt_id);
         break;
       case 'block_replaced': {
         const rec = normalizeBlockReplaced(event.payload);
@@ -117,21 +139,23 @@ function admittedInstanceChain(
     admittedSeq,
     sampleOfAttempt,
     createdSeq,
-    admissions,
+    currentAttempt,
   };
 }
 
 /** The instance an attempt belongs to: the latest-admitted instance whose
- *  roster holds the attempt's sample at creation time. Falls back to the
- *  most recent admission when membership is unknown (a caller without the
- *  frozen universe cannot see primary rosters — they are not journaled). */
-function blockOfAttempt(
-  chain: InstanceChain,
-  attemptId: string,
-): string | undefined {
+ *  roster holds the attempt's sample at creation time. An attempt whose
+ *  membership cannot be established REFUSES recovery — a fallback guess
+ *  would rerun or abort the wrong instance, and silently dropping the
+ *  attempt would strand a live child (C11, fail-closed). */
+function blockOfAttempt(chain: InstanceChain, attemptId: string): string {
   const sampleId = chain.sampleOfAttempt.get(attemptId);
-  const createdAt = chain.createdSeq.get(attemptId);
-  if (sampleId === undefined || createdAt === undefined) return undefined;
+  if (sampleId === undefined) {
+    throw new RecoveryError(
+      `attempt ${attemptId} has no attempt_created in the journal — its sample binding is unknown, so it cannot be attributed to an instance; ${AUDIT}`,
+    );
+  }
+  const createdAt = chain.createdSeq.get(attemptId) ?? 0;
   let best: { blockId: string; seq: number } | undefined;
   for (const [blockId, roster] of chain.rosterByBlock) {
     if (!roster.includes(sampleId)) continue;
@@ -141,51 +165,92 @@ function blockOfAttempt(
       best = { blockId, seq: admitted };
     }
   }
-  if (best !== undefined) return best.blockId;
-  let fallback: string | undefined;
-  for (const admission of chain.admissions) {
-    if (admission.seq <= createdAt) fallback = admission.blockId;
+  if (best === undefined) {
+    throw new RecoveryError(
+      `attempt ${attemptId} (sample ${sampleId}) belongs to no instance admitted at or before its creation — the journal's admitted instance chain does not explain it; ${AUDIT}`,
+    );
   }
-  return fallback;
+  return best.blockId;
 }
 
 // ---------------------------------------------------------------------------
 // R-RCV-1: kill journaled pgids first
 // ---------------------------------------------------------------------------
 
+/** The campaign-child sanity probe (R-RCV-1's "its leader matches the
+ *  campaign-child shape where inspectable"): the process group leader's
+ *  command line, or null when it cannot be read — identity is then UNKNOWN
+ *  and the group is never signaled. */
+export interface CampaignChildProbe {
+  commandLine(pgid: number): string | null;
+}
+
+export const realCampaignChildProbe: CampaignChildProbe = {
+  commandLine(pgid: number): string | null {
+    const res = spawnSync('ps', ['-o', 'command=', '-p', String(pgid)], {
+      encoding: 'utf8',
+    });
+    if (res.status !== 0) return null;
+    const line = res.stdout.trim();
+    return line === '' ? null : line;
+  },
+};
+
+/** The campaign child carries its identity on argv (`--campaign-identity`,
+ *  spawn.ts): a group whose leader shows this campaign's id AND this
+ *  attempt's id is provably our child, not a recycled pgid. */
+function isCampaignChild(
+  commandLine: string,
+  campaignId: string,
+  attemptId: string,
+): boolean {
+  return (
+    commandLine.includes('--campaign-identity') &&
+    commandLine.includes(campaignId) &&
+    commandLine.includes(attemptId)
+  );
+}
+
+export interface KillJournaledPgidsReport {
+  /** Signaled and VERIFIED dead. */
+  readonly killed: number[];
+  /** Provably gone before we signaled (ESRCH, or a reused pid — the
+   *  recorded process is dead either way). */
+  readonly alreadyDead: number[];
+  /** Identity could not be established: recorded loudly, NEVER signaled. */
+  readonly reclaimedWithoutKill: number[];
+  /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
+  readonly survived: number[];
+}
+
 /** R-RCV-1: on crash restart, kill every journaled pgid of an attempt
  *  WITHOUT a journaled terminal before any re-admission — an orphaned child
- *  keeps spending and races its replacement (no double spend). Guard: kill
- *  only groups whose sanity check passes; a failed check is recorded
- *  reclaimed-without-kill (loud), never signaled blind. */
-export function killJournaledPgids(args: {
+ *  keeps spending and races its replacement (no double spend). The guard is
+ *  NOT optional: the group must exist AND its leader must match the
+ *  campaign-child shape, and the kill is the ONE verified
+ *  TERM->wait->KILL->verify primitive (killGroupVerified, C10) — a group
+ *  that fails the guard is recorded reclaimed-without-kill (loud), never
+ *  signaled blind, and a group that survives is reported, never counted
+ *  killed. Signal errors propagate; nothing is swallowed. */
+export async function killJournaledPgids(args: {
   events: readonly JournalEvent[];
-  inspectGroup?: (pgid: number) => 'ok' | 'failed';
-  kill?: (pgid: number, signal: NodeJS.Signals) => void;
+  campaignId: string;
+  identity?: ProcessIdentityProbe;
+  child?: CampaignChildProbe;
+  signal?: GroupSignaler;
+  clock?: Clock;
   stream?: { write(s: string): void };
-}): { killed: number[]; reclaimedWithoutKill: number[] } {
+  graceSeconds?: number;
+}): Promise<KillJournaledPgidsReport> {
   const stream = args.stream ?? {
     write: (s: string) => process.stderr.write(s),
   };
-  const inspect =
-    args.inspectGroup ??
-    ((pgid: number) => {
-      try {
-        process.kill(-pgid, 0);
-        return 'ok' as const;
-      } catch {
-        return 'failed' as const;
-      }
-    });
-  const kill =
-    args.kill ??
-    ((pgid: number, signal: NodeJS.Signals) => {
-      try {
-        process.kill(-pgid, signal);
-      } catch {
-        // already gone
-      }
-    });
+  const identity = args.identity ?? realProcessIdentityProbe;
+  const child = args.child ?? realCampaignChildProbe;
+  const signal = args.signal ?? realGroupSignaler;
+  const clock = args.clock ?? new RealClock();
+  const graceSeconds = args.graceSeconds ?? KILL_GRACE_SECONDS;
+
   const terminalAttempts = new Set<string>();
   for (const event of args.events) {
     if (event.type === 'run_completed' || event.type === 'instrument_failure') {
@@ -193,22 +258,80 @@ export function killJournaledPgids(args: {
     }
   }
   const killed: number[] = [];
+  const alreadyDead: number[] = [];
   const reclaimedWithoutKill: number[] = [];
+  const survived: number[] = [];
+  const reclaim = (pgid: number, attemptId: string, why: string): void => {
+    reclaimedWithoutKill.push(pgid);
+    stream.write(
+      `reclaimed-without-kill: pgid ${pgid} (attempt ${attemptId}) ${why} — recorded, never signaled blind (R-RCV-1)\n`,
+    );
+  };
   for (const event of args.events) {
     if (event.type !== 'run_allocated') continue;
-    if (terminalAttempts.has(event.payload.attempt_id)) continue;
+    const attemptId = event.payload.attempt_id;
+    if (terminalAttempts.has(attemptId)) continue;
     const pgid = event.payload.pgid;
-    if (inspect(pgid) === 'ok') {
-      kill(pgid, 'SIGTERM');
-      killed.push(pgid);
-    } else {
-      reclaimedWithoutKill.push(pgid);
-      stream.write(
-        `reclaimed-without-kill: pgid ${pgid} (attempt ${event.payload.attempt_id}) failed the sanity check — recorded, never signaled blind\n`,
+    const exists = identity.exists(pgid);
+    if (exists === 'esrch') {
+      alreadyDead.push(pgid);
+      continue;
+    }
+    if (exists === 'unknown') {
+      reclaim(
+        pgid,
+        attemptId,
+        'process identity unknown (neither alive nor ESRCH)',
       );
+      continue;
+    }
+    const commandLine = child.commandLine(pgid);
+    if (commandLine === null) {
+      reclaim(
+        pgid,
+        attemptId,
+        'command line unreadable — campaign-child shape uninspectable',
+      );
+      continue;
+    }
+    if (!isCampaignChild(commandLine, args.campaignId, attemptId)) {
+      reclaim(
+        pgid,
+        attemptId,
+        'group leader is not this campaign child (pid reuse)',
+      );
+      continue;
+    }
+    // Identity established: the verified kill re-reads the OS start time and
+    // refuses on any drift between this check and the signal.
+    const outcome = await killGroupVerified({
+      pgid,
+      birthTsMs: identity.startTimeMs(pgid),
+      identity,
+      signal,
+      clock,
+      stream,
+      graceSeconds,
+    });
+    switch (outcome) {
+      case 'dead':
+        killed.push(pgid);
+        break;
+      case 'stale':
+        alreadyDead.push(pgid); // reused pid: the recorded child is gone
+        break;
+      case 'unknown':
+        reclaim(pgid, attemptId, 'OS start time unreadable at kill time');
+        break;
+      case 'alive':
+        survived.push(pgid);
+        stream.write(
+          `orphan pgid ${pgid} (attempt ${attemptId}) survived TERM+KILL — operator action: kill this process group manually before resuming; it is still spending\n`,
+        );
+        break;
     }
   }
-  return { killed, reclaimedWithoutKill };
+  return { killed, alreadyDead, reclaimedWithoutKill, survived };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,13 +342,19 @@ export interface RecoveryPlan {
   /** Post-run_allocated without a terminal: kill the pgid, rerun the block. */
   readonly kills: { attempt_id: string; pgid: number }[];
   /** Pre-run_allocated: void the attempt and re-admit its instance. Both
-   *  resolutions are EXECUTED — dropping this one leaves a sample whose
-   *  attempt is bound but never spawned stuck for the rest of the run. */
+   *  attempt resolutions are EXECUTED — dropping this one leaves a sample
+   *  whose attempt is bound but never spawned stuck for the rest of the
+   *  run. */
   readonly voidReadmissions: {
     attempt_id: string;
     sample_id: string;
     block_id: string;
   }[];
+  /** The campaign-level window: 'regenerate_report' when the E7.3
+   *  instance-complete seal predicate holds but no `sealed` event exists
+   *  (the process died post-predicate, pre-report). D4 owns the act; this
+   *  is the resolver's hand-off. */
+  readonly campaign: 'regenerate_report' | 'none';
   readonly dispositionCompletions: {
     block_id: string;
     sample_id: string;
@@ -249,27 +378,23 @@ export function planRecovery(args: {
   const { universe, events } = args;
   const report = resolveCrashWindows(universe, events); // override baked in (task 1)
   const chain = admittedInstanceChain(events, universe);
-  const kills = report.attempts
-    .filter(
-      (a) => a.resolution === 'kill_pgid_rerun_block' && a.pgid !== undefined,
-    )
-    .map((a) => ({ attempt_id: a.attempt_id, pgid: a.pgid as number }));
+  const kills: RecoveryPlan['kills'] = [];
   const voidReadmissions: RecoveryPlan['voidReadmissions'] = [];
   for (const attempt of report.attempts) {
-    if (attempt.resolution !== 'void_attempt_readmit') continue;
-    const sampleId = chain.sampleOfAttempt.get(attempt.attempt_id);
-    const blockId = blockOfAttempt(chain, attempt.attempt_id);
-    if (sampleId === undefined || blockId === undefined) {
-      // Fail-closed: an unattributable crash window is never dropped
-      // silently — the whole point of executing this resolution.
-      throw new RecoveryError(
-        `attempt ${attempt.attempt_id} has no admitted instance in the journal — its pre-allocation crash window cannot be resolved; ${AUDIT}`,
-      );
+    if (attempt.resolution === 'kill_pgid_rerun_block') {
+      if (attempt.pgid === undefined) {
+        throw new RecoveryError(
+          `attempt ${attempt.attempt_id} resolved to kill_pgid_rerun_block without a journaled pgid — the crash window cannot be executed; ${AUDIT}`,
+        );
+      }
+      kills.push({ attempt_id: attempt.attempt_id, pgid: attempt.pgid });
+      continue;
     }
+    const sampleId = chain.sampleOfAttempt.get(attempt.attempt_id) ?? '';
     voidReadmissions.push({
       attempt_id: attempt.attempt_id,
       sample_id: sampleId,
-      block_id: blockId,
+      block_id: blockOfAttempt(chain, attempt.attempt_id),
     });
   }
 
@@ -325,14 +450,11 @@ export function planRecovery(args: {
   return {
     kills,
     voidReadmissions,
+    campaign: report.campaign,
     dispositionCompletions,
     successorReadmissions,
   };
 }
-
-/** The standing tail of every fail-closed recovery refusal. */
-const AUDIT =
-  'quarantine the campaign directory for manual audit before any rebuild or resume';
 
 // ---------------------------------------------------------------------------
 // Decision D-13: terminal evidence without a journaled terminal
@@ -342,14 +464,12 @@ const AUDIT =
  *  attempt whose run dir holds a complete verdict is journaled terminal from
  *  the evidence (outcome-derived, loud); every journaled attempt with no run
  *  dir at all re-enters via E7 rerun — under the id of the instance that
- *  ADMITTED it (primary, reserve, or rerun), never the last block admitted. */
+ *  ADMITTED it (primary, reserve, or rerun), never the last block admitted.
+ *  An attempt the instance chain cannot explain refuses (blockOfAttempt). */
 export function terminalEvidenceActions(args: {
   events: readonly JournalEvent[];
+  universe: CampaignUniverse;
   verdictOf: (runId: string) => { final: string } | null;
-  /** The frozen universe when the caller holds it (resume always does):
-   *  primary rosters are not journaled, so without it a primary attempt
-   *  falls back to the most recent admission. */
-  universe?: CampaignUniverse;
 }): {
   terminals: EventInput[];
   terminalAttemptIds: string[];
@@ -378,12 +498,10 @@ export function terminalEvidenceActions(args: {
         },
       });
       terminalAttemptIds.push(event.payload.attempt_id);
-    } else {
-      const blockId = blockOfAttempt(chain, event.payload.attempt_id);
-      if (blockId !== undefined && !rerunBlockIds.includes(blockId)) {
-        rerunBlockIds.push(blockId);
-      }
+      continue;
     }
+    const blockId = blockOfAttempt(chain, event.payload.attempt_id);
+    if (!rerunBlockIds.includes(blockId)) rerunBlockIds.push(blockId);
   }
   return { terminals, terminalAttemptIds, rerunBlockIds };
 }
@@ -392,51 +510,164 @@ export function terminalEvidenceActions(args: {
 // R-RCV-3 / R-RCV-4: the run-dir identity sweep
 // ---------------------------------------------------------------------------
 
-/** R-RCV-3: quarantine by identity mismatch against the run dir's persisted
- *  campaign identity (Decision D-8) — never a filesystem move. */
+export interface RunDirScan {
+  readonly identities: { runId: string; identity: CampaignIdentity }[];
+  /** Run dirs whose identity file EXISTS but cannot be read as an identity —
+   *  evidence that cannot be attributed to any campaign. Never dropped:
+   *  quarantined campaign_mismatch, loudly. */
+  readonly malformed: { runId: string; detail: string }[];
+}
+
+/** Scan a results root for run dirs carrying a persisted campaign identity
+ *  (`<runDir>/campaign-identity.json`, written at run-dir allocation — task
+ *  6c; it is what makes R-RCV-3's mismatch detectable at all). An ABSENT
+ *  identity file means the dir is not campaign evidence and is skipped; an
+ *  unreadable or non-identity-shaped file is reported as malformed. */
+export function readRunDirIdentities(resultsRoot: string): RunDirScan {
+  const identities: RunDirScan['identities'] = [];
+  const malformed: RunDirScan['malformed'] = [];
+  if (!existsSync(resultsRoot)) return { identities, malformed };
+  for (const entry of readdirSync(resultsRoot)) {
+    const path = join(resultsRoot, entry, 'campaign-identity.json');
+    if (!existsSync(path)) continue; // not campaign evidence
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (err) {
+      malformed.push({ runId: entry, detail: `unreadable: ${String(err)}` });
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      malformed.push({ runId: entry, detail: `invalid JSON: ${String(err)}` });
+      continue;
+    }
+    const identity = parsed as Partial<CampaignIdentity> | null;
+    if (
+      identity === null ||
+      typeof identity !== 'object' ||
+      typeof identity.campaign_id !== 'string' ||
+      typeof identity.execution_attempt_id !== 'string'
+    ) {
+      malformed.push({
+        runId: entry,
+        detail:
+          'not a campaign identity (campaign_id/execution_attempt_id missing)',
+      });
+      continue;
+    }
+    identities.push({ runId: entry, identity: identity as CampaignIdentity });
+  }
+  return { identities, malformed };
+}
+
+/** R-RCV-3 / R-RCV-4: classify late or orphaned run dirs against the
+ *  journal — never a filesystem move, always the binding-only `quarantined`
+ *  event. The precedence ladder, in order:
+ *
+ *  1. `campaign_mismatch` — the identity names another campaign, or could
+ *     not be read at all (unclassifiable evidence is never OURS by default).
+ *  2. `attempt_mismatch` — the journal binds this run id to a DIFFERENT
+ *     attempt, or (R-RCV-4's residual spawn-to-`run_allocated` window) the
+ *     run dir names a journaled attempt whose `run_allocated` never landed.
+ *  3. `late_terminal` — the run dir's attempt is not the sample's current
+ *     attempt (predecessor-era evidence that must never retire the
+ *     re-entered attempt), or names no journaled attempt at all.
+ *
+ *  A run dir matching its journaled binding on the sample's current attempt
+ *  is legitimate evidence and is not quarantined. */
 export function quarantineActions(args: {
   runDirIdentities: { runId: string; identity: CampaignIdentity }[];
+  malformed?: { runId: string; detail: string }[];
   events: readonly JournalEvent[];
   campaignId: string;
+  stream?: { write(s: string): void };
 }): EventInput[] {
+  const stream = args.stream ?? {
+    write: (s: string) => process.stderr.write(s),
+  };
   const allocatedByRun = new Map<string, string>(); // run_id -> attempt_id
+  const createdAttempts = new Set<string>();
+  const sampleOfAttempt = new Map<string, string>();
+  const currentAttempt = new Map<string, string>();
   for (const event of args.events) {
     if (event.type === 'run_allocated') {
       allocatedByRun.set(event.payload.run_id, event.payload.attempt_id);
+    } else if (event.type === 'attempt_created') {
+      createdAttempts.add(event.payload.attempt_id);
+      sampleOfAttempt.set(event.payload.attempt_id, event.payload.sample_id);
+      currentAttempt.set(event.payload.sample_id, event.payload.attempt_id);
     }
   }
   const actions: EventInput[] = [];
+  for (const { runId, detail } of args.malformed ?? []) {
+    stream.write(
+      `run dir ${runId} carries an unreadable campaign identity (${detail}) — quarantined campaign_mismatch: it cannot be attributed to this campaign\n`,
+    );
+    actions.push({
+      type: 'quarantined',
+      payload: { run_id: runId, reason: 'campaign_mismatch' },
+    });
+  }
   for (const { runId, identity } of args.runDirIdentities) {
+    const claimed = identity.execution_attempt_id;
+    const bound = allocatedByRun.get(runId);
     if (identity.campaign_id !== args.campaignId) {
-      const attemptId = allocatedByRun.get(runId);
       actions.push({
         type: 'quarantined',
         payload: {
           run_id: runId,
-          ...(attemptId !== undefined ? { attempt_id: attemptId } : {}),
+          ...(bound !== undefined ? { attempt_id: bound } : {}),
           reason: 'campaign_mismatch',
         },
       });
       continue;
     }
-    const attemptId = allocatedByRun.get(runId);
-    if (attemptId === undefined) {
-      // R-RCV-4's residual: the spawn-to-run_allocated window, and any run
-      // whose allocation could no longer be journaled. The identity file is
-      // the only surviving evidence — a journaled-pgid sweep cannot see it.
+    if (bound !== undefined && bound !== claimed) {
+      actions.push({
+        type: 'quarantined',
+        payload: {
+          run_id: runId,
+          attempt_id: bound,
+          reason: 'attempt_mismatch',
+        },
+      });
+      continue;
+    }
+    if (!createdAttempts.has(claimed)) {
+      // No journaled attempt to attribute this run dir to at all.
       actions.push({
         type: 'quarantined',
         payload: { run_id: runId, reason: 'late_terminal' },
       });
       continue;
     }
-    if (attemptId !== identity.execution_attempt_id) {
+    if (bound === undefined) {
+      // R-RCV-4: the attempt was journaled and the child allocated its run
+      // dir, but the dispatcher died before `run_allocated` — the bounded
+      // orphan window, reconciled by attempt-id correlation.
       actions.push({
         type: 'quarantined',
         payload: {
           run_id: runId,
-          attempt_id: attemptId,
+          attempt_id: claimed,
           reason: 'attempt_mismatch',
+        },
+      });
+      continue;
+    }
+    const sampleId = sampleOfAttempt.get(claimed);
+    if (sampleId !== undefined && currentAttempt.get(sampleId) !== claimed) {
+      // Predecessor-era evidence: a stale terminal never retires the
+      // sample's current attempt.
+      actions.push({
+        type: 'quarantined',
+        payload: {
+          run_id: runId,
+          attempt_id: claimed,
+          reason: 'late_terminal',
         },
       });
     }
@@ -444,41 +675,26 @@ export function quarantineActions(args: {
   return actions;
 }
 
-/** Scan a results root for run dirs carrying a persisted campaign identity
- *  (`<runDir>/campaign-identity.json`, written at run-dir allocation — task
- *  6c; it is what makes R-RCV-3's mismatch detectable at all). Dirs without
- *  a readable identity file are skipped: a non-campaign run dir is not
- *  campaign evidence. A malformed identity is NOT skipped — it is kept as
- *  the mismatch it is, so quarantine stays loud. */
-export function readRunDirIdentities(
-  resultsRoot: string,
-): { runId: string; identity: CampaignIdentity }[] {
-  if (!existsSync(resultsRoot)) return [];
-  const out: { runId: string; identity: CampaignIdentity }[] = [];
-  for (const entry of readdirSync(resultsRoot)) {
-    try {
-      const identity = JSON.parse(
-        readFileSync(
-          join(resultsRoot, entry, 'campaign-identity.json'),
-          'utf8',
-        ),
-      ) as CampaignIdentity;
-      out.push({ runId: entry, identity });
-    } catch {
-      // absent or unreadable identity: skip (not campaign evidence)
-    }
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // The interrupted closed-window contention batch (ratified OQ-11)
 // ---------------------------------------------------------------------------
 
-/** Interrupted closed-window contention batches (ratified OQ-11): landed
+/** Interrupted CLOSED-window contention batches (ratified OQ-11): landed
  *  reason=contention mints stay authoritative; re-derive ONLY the missing
  *  ordered suffix from the durable sidecar under one writer critical
- *  section. Sidecar loss never reverses the landed prefix. */
+ *  section. Restrictions the resolution depends on:
+ *
+ *  - only a genuinely CLOSED breach window resolves; a breach still open at
+ *    the crash is D4's `contention_invalidated` backstop, never an
+ *    immediate reserve activation;
+ *  - the evaluation is the one the closure would have made: the evidence up
+ *    to the closure instant, horizon at the closure (the same inputs the
+ *    live path passes at `onBreachExit`);
+ *  - the landed resolutions must form a PREFIX of the obligation order —
+ *    one critical section appends in order, so an interior hole is not a
+ *    crash cut and recovery refuses rather than filling it.
+ *
+ *  Sidecar loss never reverses the landed prefix. */
 export function rederiveContentionSuffix(args: {
   events: readonly JournalEvent[];
   sidecarLines: readonly SidecarLine[];
@@ -490,10 +706,9 @@ export function rederiveContentionSuffix(args: {
   const { events, sidecarLines, campaign } = args;
   const universe = universeOf(campaign);
   const chain = admittedInstanceChain(events, universe);
-  // Fold landed contention mints + cell resolutions: authoritative, never
-  // re-derived or duplicated. A block superseded for ANY reason is no
-  // longer a live obligation.
+  // Fold landed mints + cell resolutions + the CURRENT budget stop state.
   const supersededBlocks = new Set<string>();
+  const contentionSuperseded = new Set<string>();
   const resolvedCells = new Set<string>();
   const reserveActivated = new Set<string>();
   const stoppedSamples = new Set<string>();
@@ -507,6 +722,7 @@ export function rederiveContentionSuffix(args: {
       case 'block_replaced': {
         const rec = normalizeBlockReplaced(event.payload);
         supersededBlocks.add(rec.block_id);
+        if (rec.reason === 'contention') contentionSuperseded.add(rec.block_id);
         if (rec.reserve_activation)
           reserveActivated.add(rec.replacement_block_id);
         break;
@@ -527,6 +743,13 @@ export function rederiveContentionSuffix(args: {
           stoppedSamples.add(sampleId); // E7.6: never resurrects
         }
         break;
+      case 'amendment':
+        // R-DSP-10/E7.6: a raise widens the ceiling for LATER work, so the
+        // durable stop is no longer in force; the SELECTED samples stay
+        // terminal forever. A fresh stop fires at the first post-resume
+        // admission through the live predicate (R-DSP-6).
+        if (event.payload.kind === 'budget_raise') budgetStopped = false;
+        break;
       default:
         break;
     }
@@ -539,10 +762,30 @@ export function rederiveContentionSuffix(args: {
       `journal holds no campaign_opened event — the contention evaluation window has no anchor; ${AUDIT}`,
     );
   }
+  const thresholds: ResolvedThreshold[] = campaign.contention.thresholds.map(
+    (t) => ({ metric: t.metric, op: t.op, value: t.value }),
+  );
+  const cpuCores = campaign.contention.host_fingerprint.cpu_cores;
+  // The resolution instant: the LAST closed breach closure. No closure means
+  // no closed-window batch was ever owed (an open breach is D4's backstop).
+  let closureTsMs: number | null = null;
+  for (const window of breachWindows(
+    sidecarLines,
+    thresholds,
+    campaign.contention.sustain_k,
+    cpuCores,
+  )) {
+    if (window.endTsMs === null) continue;
+    closureTsMs =
+      closureTsMs === null
+        ? window.endTsMs
+        : Math.max(closureTsMs, window.endTsMs);
+  }
+  if (closureTsMs === null) return [];
   // Conservative block intervals, lineage-attributed: earliest roster
   // attempt_created -> latest service-end terminal; a block with an attempt
   // that never terminaled stays OPEN (the evaluator clips it to the
-  // horizon), so a breach after a sibling's completion still counts.
+  // closure), so a breach after a sibling's completion still counts.
   const startTs = new Map<string, number>();
   const endTs = new Map<string, number>();
   const openBlocks = new Set<string>();
@@ -555,7 +798,6 @@ export function rederiveContentionSuffix(args: {
   for (const event of events) {
     if (event.type === 'attempt_created') {
       const blockId = blockOfAttempt(chain, event.payload.attempt_id);
-      if (blockId === undefined) continue;
       const prev = startTs.get(blockId);
       if (prev === undefined || event.ts_ms < prev)
         startTs.set(blockId, event.ts_ms);
@@ -567,7 +809,6 @@ export function rederiveContentionSuffix(args: {
       continue;
     }
     const blockId = blockOfAttempt(chain, event.payload.attempt_id);
-    if (blockId === undefined) continue;
     const prev = endTs.get(blockId);
     if (prev === undefined || event.ts_ms > prev)
       endTs.set(blockId, event.ts_ms);
@@ -579,33 +820,51 @@ export function rederiveContentionSuffix(args: {
       endTsMs: openBlocks.has(blockId) ? null : (endTs.get(blockId) ?? null),
     }),
   );
-  // One pure evaluator (task 7): tri-state over the durable sidecar.
-  const lastTerminal = events.reduce((m, e) => Math.max(m, e.ts_ms), 0);
-  const thresholds: ResolvedThreshold[] = campaign.contention.thresholds.map(
-    (t) => ({ metric: t.metric, op: t.op, value: t.value }),
-  );
+  // The evaluation the closure would have made: evidence up to the closure,
+  // horizon at the closure — the same shared evaluator, same inputs.
   const verdicts = evaluateContention({
-    lines: sidecarLines,
+    lines: sidecarLines.filter((l) => l.ts_ms <= closureTsMs),
     truncatedTail: args.truncatedTail,
     thresholds,
     sustainK: campaign.contention.sustain_k,
     cadenceMs: campaign.contention.cadence_ms,
     coverageN: campaign.contention.coverage_n,
-    cpuCores: campaign.contention.host_fingerprint.cpu_cores,
+    cpuCores,
     campaignOpenedTsMs: openedTsMs,
-    lastTerminalTsMs: lastTerminal,
+    lastTerminalTsMs: closureTsMs,
     blocks: intervals,
   });
   // Obligations = invalid EXECUTED instances (primary, reserve, or rerun)
-  // not already superseded or resolved, in the same frozen
-  // comparison/cell/replicate + lineage-mint order dispatch uses.
+  // that were live for this batch, in the same frozen
+  // comparison/cell/replicate + lineage-mint order dispatch uses. A block
+  // superseded for a NON-contention reason left the live set before the
+  // batch and was never an obligation of it.
   const obligations = intervals
     .map((i) => i.block_id)
     .filter(
       (blockId) =>
-        verdicts.get(blockId) === 'invalid' && !supersededBlocks.has(blockId),
+        verdicts.get(blockId) === 'invalid' &&
+        (!supersededBlocks.has(blockId) || contentionSuperseded.has(blockId)),
     )
     .sort((a, b) => compareAdmissionOrder({ block_id: a }, { block_id: b }));
+  // The landed resolutions must be a PREFIX: the batch appends in obligation
+  // order inside one critical section, so a resolved obligation after an
+  // unresolved one is not a crash cut — it is a corrupt or non-prefix
+  // journal, and recovery refuses instead of filling the hole.
+  const resolved = obligations.map(
+    (blockId) =>
+      contentionSuperseded.has(blockId) ||
+      resolvedCells.has(cellKeyOfBlockId(blockId)),
+  );
+  const lastResolved = resolved.lastIndexOf(true);
+  for (let i = 0; i < lastResolved; i += 1) {
+    if (!resolved[i]) {
+      throw new RecoveryError(
+        `contention resolution ${obligations[lastResolved]} landed while the earlier obligation ${obligations[i]} did not — the journal is not a batch prefix, so the missing suffix cannot be re-derived; ${AUDIT}`,
+      );
+    }
+  }
+  const suffix = obligations.slice(lastResolved + 1);
   const reserveBlocks = campaign.blocks.filter((b) => b.slot === 'reserve');
   const reserveFor = (
     cellKey: string,
@@ -628,7 +887,7 @@ export function rederiveContentionSuffix(args: {
   // No budgetGate: the durable stop state was read from the journal above;
   // a fresh stop fires at the first post-resume admission (R-DSP-6).
   return contentionResolutionBatch({
-    obligations,
+    obligations: suffix,
     budgetStopped,
     cellOf: cellKeyOfBlockId,
     reserveFor,
