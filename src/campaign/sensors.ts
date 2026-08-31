@@ -382,7 +382,10 @@ export function senseEvidence(ev: SensorEvidence): SensorSignal | null {
 /** Run-id subdirectories of `<runDir>/gauntlet-agent/results`, newest
  *  first — the same iteration order as the runner's
  *  gauntletLayerFromRunDir. Empty when the results root is absent. */
-function gauntletResultDirs(runDir: string): { root: string; dirs: string[] } {
+export function gauntletResultDirs(runDir: string): {
+  root: string;
+  dirs: string[];
+} {
   const root = join(runDir, 'gauntlet-agent', 'results');
   let dirs: string[] = [];
   try {
