@@ -95,8 +95,11 @@ function readTotalTokens(runDir: string): number | null {
 /** The gauntlet grader's result.json lives at
  *  `<runDir>/gauntlet-agent/results/<runId>/result.json` — the same
  *  production path sensors' gauntlet reads walk (gauntletResultDirs, newest
- *  run-id first; single-run-per-dir convention). The newest result that
- *  parses under GauntletResultSchema and names a model wins. */
+ *  run-id first; single-run-per-dir convention). The FIRST schema-valid
+ *  result determines the field — its config.model, or null when it names
+ *  none: an older directory's model is not evidence about the current
+ *  result. Unreadable, malformed-JSON, and schema-invalid candidates are
+ *  skipped; a schema-valid one terminates the walk. */
 function readGraderModel(runDir: string): string | null {
   const { root, dirs } = gauntletResultDirs(runDir);
   for (const id of dirs) {
@@ -116,10 +119,7 @@ function readGraderModel(runDir: string): string | null {
     if (!result.success) {
       continue;
     }
-    const model = result.data.config?.model;
-    if (model !== undefined) {
-      return model;
-    }
+    return result.data.config?.model ?? null;
   }
   return null;
 }

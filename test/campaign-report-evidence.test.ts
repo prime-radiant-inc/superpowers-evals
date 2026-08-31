@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readSampleEvidence } from '../src/campaign/report-evidence.ts';
+import { FinalVerdictSchema } from '../src/contracts/verdict.ts';
 
 function runDir(files: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), 'evidence-'));
@@ -14,20 +15,36 @@ function runDir(files: Record<string, unknown>): string {
   return dir;
 }
 
-// verdict.json per src/contracts/verdict.ts FinalVerdictSchema (the subset
-// readVerdictSummary/runCostFromArtifacts read: final/final_reason/error.stage
-// + economics.total_est_cost_usd per src/economics.ts RunEconomics).
+// verdict.json per src/contracts/verdict.ts FinalVerdictSchema — complete
+// (every schema-required field present: schema, final, final_reason,
+// gauntlet layer, checks, error, economics), mirroring the canonical fixture
+// test/fixtures/verdict-full.json; the readers consume final/final_reason/
+// error.stage + economics.total_est_cost_usd (src/economics.ts RunEconomics).
 const verdictPass = {
   schema: 1,
   final: 'pass',
   final_reason: 'Gauntlet-Agent passed; all deterministic checks green',
+  gauntlet: {
+    status: 'pass',
+    summary: 'All acceptance criteria met with evidence',
+    reasoning: 'The diff matches the requested change',
+    run_id: '20260831T100000Z-gr1',
+  },
+  checks: [
+    {
+      check: 'file-contains',
+      args: ['src/main.ts', 'export function run()'],
+      negated: false,
+      passed: true,
+      detail: 'pattern found at line 3',
+      phase: 'post',
+    },
+  ],
   error: null,
   economics: {
-    pricing_asof: '2026-08-31',
-    coding_agent: null,
-    gauntlet: null,
+    coding_agent: { duration_ms: 61000 },
+    gauntlet: { duration_ms: 45000 },
     total_est_cost_usd: 1.23,
-    partial: false,
   },
 };
 
@@ -128,7 +145,9 @@ describe('readSampleEvidence', () => {
     ]);
     expect(ev.totalTokens).toBe(48200);
     expect(ev.costUsd).toBeCloseTo(1.23);
-    expect(ev.graderModel).toBe('claude-sonnet-4-6');
+    // The fixture must remain an actually emitted-verdict shape, not a
+    // reader-satisfying subset.
+    expect(FinalVerdictSchema.safeParse(verdictPass).success).toBe(true);
   });
 
   test('absent run dir is all-null evidence, not a throw', () => {
@@ -207,6 +226,31 @@ describe('readSampleEvidence', () => {
     expect(ev.observedModels).toEqual(['claude-sonnet-4-6']);
     expect(ev.totalTokens).toBeNull();
     expect(ev.costUsd).toBe(1.23);
+    expect(ev.graderModel).toBeNull();
+  });
+
+  test('the newest schema-valid grader result decides the field, not a stale older one', () => {
+    const dir = runDir({
+      // Newest run-id walks first (gauntletResultDirs sorts descending); its
+      // result is schema-valid but legitimately omits optional config.model.
+      'gauntlet-agent/results/20260831T120000Z-newer/result.json': {
+        schemaVersion: 5,
+        runId: '20260831T120000Z-newer',
+        status: 'pass',
+        summary: 'Current run, model not recorded',
+        reasoning: 'Graded without a model stamp',
+      },
+      'gauntlet-agent/results/20260831T090000Z-older/result.json': {
+        schemaVersion: 5,
+        runId: '20260831T090000Z-older',
+        status: 'pass',
+        summary: 'Older run that did stamp a model',
+        reasoning: 'Superseded',
+        config: { model: 'claude-sonnet-4-6' },
+      },
+    });
+    const ev = readSampleEvidence({ runDir: dir, sampleId: 's' });
+    // The older directory's model is not evidence about the current result.
     expect(ev.graderModel).toBeNull();
   });
 });
