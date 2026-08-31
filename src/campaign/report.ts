@@ -132,8 +132,20 @@ export function foldDescriptiveReport(args: {
     evidence: evidenceBySample.get(sample.sampleId) ?? NO_EVIDENCE,
   }));
   const withDeterminate = classifyDeterminate(samples);
+  // ONE observed-grader set for the whole fold (finding Important #1,
+  // round 1): every non-null graderModel across ALL samples with evidence —
+  // graded or not, because an instrument-failed run still ran. It drives
+  // the rendered `grader.observed`, the empty-evidence caveat, and the
+  // mismatch reason's display; the mismatch CHECK itself keeps the spec's
+  // graded domain (§The report engine, item 4: "across graded samples").
+  const observedGraders = observedGraderModels(evidenceBySample);
 
-  const failedCells = deriveProvenanceFindings(args.campaign, withDeterminate); // rule 4 (findings half)
+  const failedCells = deriveProvenanceFindings(
+    args.campaign,
+    withDeterminate,
+    evidenceBySample,
+    observedGraders,
+  ); // rule 4 (findings half)
   const rates = computeRates(args.campaign, withDeterminate, failedCells); // rule 2
   const medians = computeMedians(
     args.campaign,
@@ -146,6 +158,7 @@ export function foldDescriptiveReport(args: {
     evidenceBySample,
     state,
     failedCells,
+    observedGraders,
   ); // rule 4 (render half)
   const accounting = computeAccounting(
     scan,
@@ -445,10 +458,17 @@ function classifyDeterminate(
 }
 
 /** Rule 4's findings: per-run arm-model validation over included samples,
- *  plus the campaign-global grader check over graded (determinate) samples. */
+ *  plus the campaign-global grader check. The grader half uses ONE
+ *  observed set (all evidence — see observedGraderModels): the empty-
+ *  evidence caveat keys off it, so the spec's canonical no-grader-at-all
+ *  campaign (every sample instrument-failed before grading: zero graded
+ *  samples) still renders its loud caveat; the mismatch trigger keeps the
+ *  spec's graded domain. */
 function deriveProvenanceFindings(
   campaign: Campaign,
   samples: readonly IncludedSample[],
+  evidenceBySample: ReadonlyMap<string, FoldEvidence>,
+  observedGraders: ReadonlySet<string>,
 ): Map<string, FailedCell> {
   const failed = new Map<string, FailedCell>();
   const cellById = new Map(
@@ -497,41 +517,63 @@ function deriveProvenanceFindings(
     }
   }
 
-  // Grader: registered model vs the observed gauntlet identity across
-  // graded samples (determinateness ⇔ a verdict exists ⇔ graded).
+  // Grader: registered model vs the observed gauntlet identity.
   const graded = samples.filter((sample) => sample.determinate !== null);
-  const observedGraders = new Set<string>();
-  for (const sample of graded) {
-    const model = sample.evidence.graderModel;
-    if (model !== null) observedGraders.add(model);
-  }
-  if (graded.length > 0) {
-    if (observedGraders.size === 0) {
-      // The pinned empty-evidence case: observed ABSENT + a loud caveat —
-      // never a terminus wedge (the descriptive quantities still render).
-      for (const cellId of new Set(graded.map((sample) => sample.cellId))) {
-        fail(
-          cellId,
-          'grader evidence empty: no gauntlet identity observed for any graded sample (empty-evidence case)',
-          false,
-        );
-      }
-    } else if (
-      [...observedGraders].some((model) => model !== campaign.grader.model)
-    ) {
-      // A grader identity is campaign-global: one mismatch fails every
-      // graded cell.
-      const observed = [...observedGraders].sort().join(', ');
-      for (const cellId of new Set(graded.map((sample) => sample.cellId))) {
-        fail(
-          cellId,
-          `grader mismatch: observed ${observed} vs registered ${campaign.grader.model}`,
-          true,
-        );
-      }
+  const cellOfSample = new Map(
+    campaign.samples.map((sample) => [sample.sample_id, sample.cell]),
+  );
+  if (evidenceBySample.size > 0 && observedGraders.size === 0) {
+    // The pinned empty-evidence case: some runs happened, yet NO gauntlet
+    // identity exists anywhere — observed ABSENT + a loud caveat naming it,
+    // so an operator can tell "no grader ever ran" from silent omission
+    // (graded or not: the spec's example is every sample instrument-failed
+    // BEFORE grading). Never a terminus wedge — the caveat does not exclude.
+    for (const cellId of new Set(
+      [...evidenceBySample.keys()].flatMap((sampleId) => {
+        const cellId = cellOfSample.get(sampleId);
+        return cellId === undefined ? [] : [cellId];
+      }),
+    )) {
+      fail(
+        cellId,
+        'grader evidence empty: no gauntlet identity observed for any run (empty-evidence case)',
+        false,
+      );
+    }
+  } else if (
+    graded.some(
+      (sample) =>
+        sample.evidence.graderModel !== null &&
+        sample.evidence.graderModel !== campaign.grader.model,
+    )
+  ) {
+    // A grader identity is campaign-global: one graded mismatch fails
+    // every graded cell (check domain per spec: graded samples).
+    const observed = [...observedGraders].sort().join(', ');
+    for (const cellId of new Set(graded.map((sample) => sample.cellId))) {
+      fail(
+        cellId,
+        `grader mismatch: observed ${observed} vs registered ${campaign.grader.model}`,
+        true,
+      );
     }
   }
   return failed;
+}
+
+/** The campaign's observed grader identity, as one set: every non-null
+ *  graderModel across ALL samples with evidence (run-allocated), graded or
+ *  not. One computation for rendering, the empty-evidence trigger, and the
+ *  mismatch reason's display — never two notions of "observed grader" in
+ *  one fold. */
+function observedGraderModels(
+  evidenceBySample: ReadonlyMap<string, FoldEvidence>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const evidence of evidenceBySample.values()) {
+    if (evidence.graderModel !== null) out.add(evidence.graderModel);
+  }
+  return out;
 }
 
 /** Rule 2 — rates per cell. JUDGMENT PIN (spec §The report engine item 2 vs
@@ -722,6 +764,7 @@ function renderProvenance(
   evidenceBySample: ReadonlyMap<string, FoldEvidence>,
   state: ReplayState,
   failedCells: ReadonlyMap<string, FailedCell>,
+  observedGraders: ReadonlySet<string>,
 ): Report['provenance'] {
   const armOfSample = new Map(
     campaign.samples.map((sample) => [sample.sample_id, sample.arm]),
@@ -744,14 +787,10 @@ function renderProvenance(
       ...(observedByArm.get(surface.name) ?? new Set()),
     ].sort(),
   }));
-  // The observed grader identity: the distinct non-null gauntlet models
-  // across graded runs, rendered as one sorted display string (multiple
-  // identities is itself the grader-mismatch finding, named in failed_cells).
-  const observedGraders = new Set<string>();
-  for (const evidence of evidenceBySample.values()) {
-    if (evidence.graderModel !== null)
-      observedGraders.add(evidence.graderModel);
-  }
+  // The observed grader identity renders from the fold's ONE observed set
+  // (observedGraderModels): a sorted display string, absent in the
+  // empty-evidence case (multiple identities is itself the grader-mismatch
+  // finding, named in failed_cells).
   const failedCellEntries = [...failedCells.values()].flatMap((cell) =>
     [...cell.reasons].map((reason) => ({
       comparison_id: cell.comparisonId,

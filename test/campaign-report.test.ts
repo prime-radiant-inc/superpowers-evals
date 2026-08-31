@@ -549,6 +549,90 @@ describe('foldDescriptiveReport', () => {
     expect(report.comparisons[0]!.medians.tokens).toBe(250);
   });
 
+  test('all-instrument-failed campaign: empty-grader caveat fires with no graded samples', () => {
+    const campaign = reportCampaign();
+    // The spec's own canonical empty-evidence example (§The report engine,
+    // item 4): EVERY sample fails the instrument before grading — zero
+    // graded (determinate) samples, every run's gauntlet identity null.
+    const steps: ReportStep[] = [
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r1',
+          attemptId: 'att-1',
+          runId: 'run-1',
+          outcome: 'instrument_failure',
+        },
+      },
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_b:r1',
+          attemptId: 'att-2',
+          runId: 'run-2',
+          outcome: 'instrument_failure',
+        },
+      },
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r2',
+          attemptId: 'att-3',
+          runId: 'run-3',
+          outcome: 'instrument_failure',
+        },
+      },
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_b:r2',
+          attemptId: 'att-4',
+          runId: 'run-4',
+          outcome: 'instrument_failure',
+        },
+      },
+    ];
+    const events = reportEvents({ campaign, steps });
+    // The instrument runs still ran: trajectories prove the arms, but no
+    // gauntlet identity exists anywhere in the campaign.
+    const table = {
+      'run-1': evidence({ observedModels: ['model-a'] }),
+      'run-2': evidence({ observedModels: ['model-b'] }),
+      'run-3': evidence({ observedModels: ['model-a'] }),
+      'run-4': evidence({ observedModels: ['model-b'] }),
+    };
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(table),
+    });
+
+    // Zero graded samples, so the empty-grader case must key off the
+    // ALL-evidence grader set, not the graded-only one: observed is ABSENT
+    // and the loud caveat still names the empty-evidence case — an operator
+    // can tell "no grader ever ran" from silent omission.
+    expect(report.provenance.grader.observed).toBeUndefined();
+    expect(report.provenance.failed_cells).toHaveLength(1);
+    expect(report.provenance.failed_cells[0]!.reason).toMatch(/empty/);
+    expect(report.provenance.failed_cells[0]!.comparison_id).toBe('c1');
+
+    // The rest of the readout stays honest: 4 included instrument-classed
+    // samples (4 instrument_failure events, 0 indeterminates — the class is
+    // instrument, not indeterminate), no determinate outcome anywhere
+    // (pass 0, fail 0, coverage 0/4 = 0, no delta, no medians), and the
+    // arms are still proven by the trajectories that did run.
+    expect(report.accounting.instrument_errors).toBe(4);
+    expect(report.accounting.indeterminates).toBe(0);
+    expect(report.accounting.denominators['c1:scn']).toBe(4);
+    const cell = report.comparisons[0]!.cells[0]!;
+    expect(cell.pass).toBe(0);
+    expect(cell.fail).toBe(0);
+    expect(cell.coverage).toBe(0);
+    expect(cell.delta).toBeUndefined();
+    expect(report.comparisons[0]!.medians).toEqual({});
+    expect(report.provenance.arms[0]!.observed_model_set).toEqual(['model-a']);
+  });
+
   test('single-arm comparison renders rates without delta', () => {
     const campaign = reportCampaign({ singleArm: true });
     const steps: ReportStep[] = [
