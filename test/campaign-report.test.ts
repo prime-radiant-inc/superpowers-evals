@@ -5,9 +5,28 @@
 // seal act will wire to readSampleEvidence). Expected values are computed
 // by hand in each test body and commented.
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  canonicalReportBytes,
+  cleanupOrphanTemps,
+  digestReportBytes,
   foldDescriptiveReport,
+  publishReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
   ReportFoldError,
+  renderReportMd,
 } from '../src/campaign/report.ts';
 import type { SampleEvidence } from '../src/campaign/report-evidence.ts';
 import {
@@ -797,5 +816,299 @@ describe('foldDescriptiveReport', () => {
     });
     expect(reFolded.accounting.skew_exclusions).toBe(1);
     expect(reFolded.accounting.skew_caveats).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 4 — the render half: canonical bytes, digest, report.md, publication.
+// ---------------------------------------------------------------------------
+
+/** The happy-path fixture report every render-half test folds once: the same
+ *  campaign/steps/evidence as the fold-half happy path (n=2 cell, baseline
+ *  2/2 pass, treatment 1 pass 1 fail → pooled 3/1, coverage 1, delta −0.5,
+ *  medians tokens 250 / usd 2.5). */
+function goldenReport() {
+  const campaign = reportCampaign();
+  return foldDescriptiveReport({
+    campaign,
+    events: reportEvents({ campaign, steps: happySteps() }),
+    evidenceOf: evidenceOf(happyEvidence()),
+  });
+}
+
+/** FROZEN golden oracle: the canonical bytes of goldenReport(), captured ONCE
+ *  by hand from the implementation and committed inline. Any serializer change
+ *  — key order, number formatting, line ending, trailing newline — breaks this
+ *  loudly. Do NOT regenerate to make it pass. */
+const GOLDEN_REPORT_JSON =
+  '{"accounting":{"amendments":0,"budget_events":0,"contention_invalidated":0,"denominators":{"c1:scn":4},"indeterminates":0,"instrument_errors":0,"replacements":0,"reserve_draws":0,"skew_caveats":0,"skew_exclusions":0,"unknown_coverage":0},"campaign_id":"27e9b58a7a41794573b240289a4f6cf90eee1ee2ce354373c60b6ef6d6302a12","cannot_answer":[],"comparisons":[{"cells":[{"class":"descriptive","coverage":1,"delta":-0.5,"fail":1,"n":2,"pass":3,"scenario":"scn"}],"comparison_id":"c1","medians":{"tokens":250,"usd":2.5}}],"errata":[],"profile":"descriptive_v1","provenance":{"arms":[{"arm":"arm_a","observed_model_set":["model-a"],"registered_model":"model-a"},{"arm":"arm_b","observed_model_set":["model-b"],"registered_model":"model-b"}],"failed_cells":[],"grader":{"credential":"grader_cred","model":"grader-model","observed":"grader-model"}},"schema_version":1,"stamp":"DESCRIPTIVE"}\n';
+
+describe('canonicalReportBytes / digestReportBytes', () => {
+  test('canonical bytes: sorted keys, LF, trailing newline, stable across repeated renders', () => {
+    const report = goldenReport();
+    const a = canonicalReportBytes(report);
+    const b = canonicalReportBytes(report);
+    expect(a.equals(b)).toBe(true);
+    expect(a.toString('utf8').endsWith('\n')).toBe(true);
+    expect(a.toString('utf8').includes('\r')).toBe(false); // LF only
+    const parsed = JSON.parse(a.toString('utf8'));
+    expect(Object.keys(parsed)).toEqual(Object.keys(parsed).sort());
+    // sorted at EVERY depth, not just the top level
+    expect(Object.keys(parsed.comparisons[0])).toEqual(
+      Object.keys(parsed.comparisons[0]).sort(),
+    );
+    expect(Object.keys(parsed.comparisons[0].cells[0])).toEqual(
+      Object.keys(parsed.comparisons[0].cells[0]).sort(),
+    );
+    // round-trips: the bytes parse back to the report unchanged
+    expect(JSON.parse(a.toString('utf8'))).toEqual(report);
+  });
+
+  test('digest is the 64-hex sha256 of the canonical bytes', () => {
+    const bytes = canonicalReportBytes(goldenReport());
+    expect(digestReportBytes(bytes)).toMatch(/^[0-9a-f]{64}$/);
+    // cross-check against node:crypto directly in the test
+    expect(digestReportBytes(bytes)).toBe(
+      createHash('sha256').update(bytes).digest('hex'),
+    );
+    // and it is a digest OF the bytes: different bytes, different digest
+    const other = Buffer.concat([bytes, Buffer.from('x')]);
+    expect(digestReportBytes(other)).not.toBe(digestReportBytes(bytes));
+  });
+
+  test('golden oracle: the full fixture report renders byte-exact', () => {
+    const bytes = canonicalReportBytes(goldenReport());
+    expect(bytes.toString('utf8')).toBe(GOLDEN_REPORT_JSON);
+  });
+});
+
+describe('renderReportMd', () => {
+  test('DESCRIPTIVE stamp first; every rate carries n/denominator/coverage; medians; full accounting; provenance; D-9 deferral', () => {
+    const campaign = reportCampaign();
+    const report = goldenReport();
+    const md = renderReportMd({ report, campaign });
+
+    // the stamp renders FIRST, before any comparison content
+    expect(md).toContain('stamp: DESCRIPTIVE');
+    expect(md.indexOf('DESCRIPTIVE')).toBeLessThan(
+      md.indexOf('## Comparisons'),
+    );
+    expect(md).toContain(`# Campaign report — ${report.campaign_id}`);
+
+    // pooled rates with n (per arm), denominator, and coverage on every
+    // number; the signed delta names its two arms
+    expect(md).toContain(
+      '| scn | descriptive | 3 | 1 | 2 | 4 | 1 (4/4 determinate) | -0.5 (arm_b - arm_a) |',
+    );
+    // the pooled basis is stated, not implied
+    expect(md).toContain('pool');
+
+    expect(md).toContain('- c1: tokens 250; usd 2.5');
+
+    // the accounting block renders in full
+    expect(md).toContain('- instrument_errors: 0');
+    expect(md).toContain('- indeterminates: 0');
+    expect(md).toContain('- replacements: 0');
+    expect(md).toContain('- reserve_draws: 0');
+    expect(md).toContain('- skew_exclusions: 0');
+    expect(md).toContain('- skew_caveats: 0');
+    expect(md).toContain('- budget_events: 0');
+    expect(md).toContain('- amendments: 0');
+    expect(md).toContain('- contention_invalidated: 0');
+    expect(md).toContain('- unknown_coverage: 0');
+    expect(md).toContain('- c1:scn: 4');
+
+    // provenance: arms, grader identity, no failures
+    expect(md).toContain('- arm arm_a: registered model-a; observed [model-a]');
+    expect(md).toContain('- arm arm_b: registered model-b; observed [model-b]');
+    expect(md).toContain(
+      '- grader: credential grader_cred, model grader-model, observed grader-model',
+    );
+    expect(md).toContain('- failed_cells:');
+    expect(md).toContain('  - (none)');
+
+    // Decision D-9's named empty section, verbatim
+    expect(md).toContain(
+      '## tags/declared metrics — deferred to D4b (no aggregation registry pinned)',
+    );
+
+    // deterministic for identical inputs
+    expect(renderReportMd({ report, campaign })).toBe(md);
+  });
+
+  test('provenance failures render loud; absent grader observed is named, not silent', () => {
+    const campaign = reportCampaign();
+    const events = reportEvents({ campaign, steps: happySteps() });
+    const table = happyEvidence();
+    table['run-1'] = evidence({
+      outcome: 'pass',
+      observedModels: ['wrong-model'],
+      totalTokens: 100,
+      costUsd: 1,
+      graderModel: 'grader-model',
+    });
+    const mismatched = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(table),
+    });
+    const md = renderReportMd({ report: mismatched, campaign });
+    expect(md).toContain('arm model absent from observed set');
+    expect(md).not.toContain('  - (none)'); // a finding replaced the empty list
+
+    const nullGrader = { ...table };
+    for (const runId of ['run-1', 'run-2', 'run-3', 'run-4']) {
+      nullGrader[runId] = evidence({
+        ...nullGrader[runId]!,
+        graderModel: null,
+      });
+    }
+    const emptyEvidence = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(nullGrader),
+    });
+    const mdEmpty = renderReportMd({ report: emptyEvidence, campaign });
+    expect(mdEmpty).toContain('observed absent');
+    expect(mdEmpty).toContain('empty-evidence');
+  });
+
+  test('unpriced arms: tokens-only medians carry the named caveat', () => {
+    const campaign = reportCampaign();
+    const events = reportEvents({ campaign, steps: happySteps() });
+    const table = happyEvidence();
+    for (const runId of ['run-1', 'run-2', 'run-3', 'run-4']) {
+      table[runId] = evidence({ ...table[runId]!, costUsd: null });
+    }
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(table),
+    });
+    const md = renderReportMd({ report, campaign });
+    expect(report.comparisons[0]!.medians.tokens).toBe(250); // sanity
+    expect(report.comparisons[0]!.medians.usd).toBeUndefined(); // sanity
+    expect(md).toContain('- c1: tokens 250');
+    expect(md).toContain('unpriced arm');
+    expect(md).not.toContain('usd 2.5');
+  });
+
+  test('single-arm comparison renders rates without a delta', () => {
+    const campaign = reportCampaign({ singleArm: true });
+    const steps: ReportStep[] = [
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r1',
+          attemptId: 'att-1',
+          runId: 'run-1',
+          outcome: 'pass',
+        },
+      },
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r2',
+          attemptId: 'att-2',
+          runId: 'run-2',
+          outcome: 'fail',
+        },
+      },
+    ];
+    const events = reportEvents({ campaign, steps });
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf({
+        'run-1': evidence({
+          outcome: 'pass',
+          observedModels: ['model-a'],
+          totalTokens: 100,
+          costUsd: 1,
+          graderModel: 'grader-model',
+        }),
+        'run-2': evidence({
+          outcome: 'fail',
+          observedModels: ['model-a'],
+          totalTokens: 200,
+          costUsd: 2,
+          graderModel: 'grader-model',
+        }),
+      }),
+    });
+    const md = renderReportMd({ report, campaign });
+    expect(md).toContain(
+      '| scn | descriptive | 1 | 1 | 2 | 2 | 1 (2/2 determinate) | n/a |',
+    );
+    expect(md).toContain('- c1: tokens 150; usd 1.5');
+  });
+});
+
+describe('publishReport / cleanupOrphanTemps', () => {
+  test('publishReport writes md first, json last, both atomic; orphans cleaned', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'report-publish-'));
+    try {
+      // a crashed publication's leftovers, staged in exactly the shape
+      // publication itself produces (<name>.tmp.<pid>) — plus junk content
+      writeFileSync(join(dir, `${REPORT_MD_NAME}.tmp.999`), 'torn md');
+      writeFileSync(join(dir, `${REPORT_JSON_NAME}.tmp.999`), 'torn json');
+
+      const md = renderReportMd({
+        report: goldenReport(),
+        campaign: reportCampaign(),
+      });
+      const jsonBytes = canonicalReportBytes(goldenReport());
+      publishReport({ campaignDir: dir, md, jsonBytes });
+
+      // the orphans of the crashed publication are gone
+      expect(existsSync(join(dir, `${REPORT_MD_NAME}.tmp.999`))).toBe(false);
+      expect(existsSync(join(dir, `${REPORT_JSON_NAME}.tmp.999`))).toBe(false);
+
+      // both artifacts present, contents byte-exact
+      const mdPath = join(dir, REPORT_MD_NAME);
+      const jsonPath = join(dir, REPORT_JSON_NAME);
+      expect(existsSync(mdPath)).toBe(true);
+      expect(existsSync(jsonPath)).toBe(true);
+      expect(readFileSync(mdPath, 'utf8')).toBe(md);
+      expect(readFileSync(jsonPath).equals(jsonBytes)).toBe(true);
+
+      // md FIRST, json LAST (the completion marker): the md's timestamps can
+      // never post-date the json's
+      const mdStat = statSync(mdPath);
+      const jsonStat = statSync(jsonPath);
+      expect(mdStat.mtimeMs).toBeLessThanOrEqual(jsonStat.mtimeMs);
+      expect(mdStat.birthtimeMs).toBeLessThanOrEqual(jsonStat.birthtimeMs);
+
+      // atomic: no staged temp survives a completed publication
+      const leftovers = readdirSync(dir).filter((name) =>
+        name.includes('.tmp.'),
+      );
+      expect(leftovers).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('cleanupOrphanTemps removes exactly the publication temp shape', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'report-orphans-'));
+    try {
+      const orphanMd = join(dir, `${REPORT_MD_NAME}.tmp.123`);
+      const orphanJson = join(dir, `${REPORT_JSON_NAME}.tmp.999`);
+      const keepJson = join(dir, 'campaign.json');
+      const keepStage = join(dir, `${REPORT_MD_NAME}.stage.7`); // NOT ours
+      writeFileSync(orphanMd, 'torn');
+      writeFileSync(orphanJson, 'torn');
+      writeFileSync(keepJson, '{}');
+      writeFileSync(keepStage, 'torn');
+
+      cleanupOrphanTemps(dir);
+
+      expect(existsSync(orphanMd)).toBe(false);
+      expect(existsSync(orphanJson)).toBe(false);
+      expect(existsSync(keepJson)).toBe(true); // real artifacts untouched
+      expect(existsSync(keepStage)).toBe(true); // other writers' temps untouched
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

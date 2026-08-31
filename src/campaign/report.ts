@@ -15,21 +15,51 @@
 // quantity that is neither computable nor classifiable throws
 // ReportFoldError (spec §Refusal table), and schema-invalid output is
 // refused before it leaves the fold.
+
+import { createHash } from 'node:crypto';
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { join } from 'node:path';
 import type { Campaign } from '../contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../contracts/campaign/crash-windows.ts';
 import {
   type JournalEvent,
   normalizeBlockReplaced,
 } from '../contracts/campaign/journal-events.ts';
-import { type Report, ReportSchema } from '../contracts/campaign/report.ts';
+import {
+  REPORT_RENDERING,
+  type Report,
+  ReportSchema,
+} from '../contracts/campaign/report.ts';
 import type { SampleState } from '../contracts/campaign/state-machine.ts';
-import { type ReplayState, replayEvents } from './journal.ts';
+import { fsyncDir, type ReplayState, replayEvents } from './journal.ts';
 
 export class ReportFoldError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ReportFoldError';
   }
+}
+
+/** The render half's typed failure (mirrors the fold's ReportFoldError and
+ *  the journal's JournalError discipline: every refusal names the path, the
+ *  cause, and the operator's next move — nothing fails silently). */
+export class ReportPublishError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReportPublishError';
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** The fold's evidence demand — structurally task 2's `SampleEvidence`
@@ -850,4 +880,338 @@ function computeAccounting(
     unknown_coverage: scan.unknownCoverage,
     denominators,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The render half (kernel D4a, task 4): validated Report → canonical bytes →
+// sha256 digest, the human report.md rendering, and the atomic md-then-json
+// publication the seal act (task 5) invokes. Byte-stability is a ratified
+// per-host requirement: identical inputs produce identical bytes on every
+// render of the same host — the ONLY authority is REPORT_RENDERING
+// (src/contracts/campaign/report.ts): sorted keys (recursively),
+// shortest-round-trip doubles (JSON.stringify's native Number formatting is
+// exactly the shortest string that round-trips), LF, one trailing newline.
+// ---------------------------------------------------------------------------
+
+export const REPORT_MD_NAME = 'report.md';
+export const REPORT_JSON_NAME = 'report.json';
+
+/** Recursively order every object's keys (REPORT_RENDERING.key_order):
+ *  arrays keep their order (order is data), objects sort. */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
+      out[key] = canonicalize(source[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** The canonical report.json bytes: sorted keys, shortest-round-trip doubles,
+ *  LF, trailing newline. Schema-invalid input is refused before any byte is
+ *  produced — the digest anchors the sealed journal, so nothing unvalidated
+ *  may reach it (fail-closed, same gate the fold enforces on its output). */
+export function canonicalReportBytes(report: Report): Buffer {
+  const parsed = ReportSchema.safeParse(report);
+  if (!parsed.success) {
+    throw new ReportPublishError(
+      `refusing to serialize a schema-invalid report: ${parsed.error.issues
+        .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; ')} — fix the report at its producer; no bytes were produced`,
+    );
+  }
+  return Buffer.from(
+    `${JSON.stringify(canonicalize(parsed.data))}${REPORT_RENDERING.line_ending}`,
+    'utf8',
+  );
+}
+
+/** The sealed journal's report_digest: SHA-256 over the canonical bytes,
+ *  lowercase hex, 64 chars — exactly the shipped SealedEvent grammar. */
+export function digestReportBytes(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Number rendering for report.md: the shortest round-trip form
+ *  (REPORT_RENDERING.numbers) — the same digits the canonical bytes carry. */
+function num(value: number): string {
+  return String(value);
+}
+
+/** The human rendering (report.md): deterministic for identical inputs, LF
+ *  throughout (REPORT_RENDERING.line_ending), the DESCRIPTIVE stamp first.
+ *  PAR's "every number carries n, denominator, coverage" renders as the
+ *  rates table's own columns; the pooled basis of every count is stated, not
+ *  implied (task 3's judgment pin: the D-8 cell object pools its arms — the
+ *  per-arm split survives only as the signed delta, so the header says so). */
+export function renderReportMd(args: {
+  readonly report: Report;
+  readonly campaign: Campaign;
+}): string {
+  const { report, campaign } = args;
+  const lines: string[] = [];
+  const line = (s = ''): void => {
+    lines.push(s);
+  };
+
+  line(`# Campaign report — ${report.campaign_id}`);
+  line();
+  line(
+    report.stamp !== undefined
+      ? `stamp: ${report.stamp}`
+      : `verdict: ${report.verdict}`,
+  );
+  line(`profile: ${report.profile}`);
+  line(`suite: ${campaign.suite.name} (${campaign.suite.kind})`);
+  line();
+
+  line('## Comparisons');
+  line();
+  const comparisonById = new Map(
+    campaign.comparisons.map((comparison) => [
+      comparison.comparison_id,
+      comparison,
+    ]),
+  );
+  for (const comparison of report.comparisons) {
+    const declared = comparisonById.get(comparison.comparison_id);
+    if (declared === undefined) {
+      throw new ReportPublishError(
+        `comparison ${comparison.comparison_id} is absent from the frozen campaign — its arms cannot be named for rendering`,
+      );
+    }
+    const twoArm = 'treatment' in declared && 'baseline' in declared;
+    if (twoArm) {
+      line(
+        `### ${comparison.comparison_id} — baseline ${declared.baseline} vs treatment ${declared.treatment}`,
+      );
+    } else {
+      line(`### ${comparison.comparison_id} — arm ${declared.arm}`);
+    }
+    line();
+    line(
+      '| scenario | class | pass | fail | n (per arm) | denominator | coverage | delta |',
+    );
+    line('| --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const cell of comparison.cells) {
+      const denominator =
+        report.accounting.denominators[
+          `${comparison.comparison_id}:${cell.scenario}`
+        ] ?? 0;
+      const determinate = cell.pass + cell.fail;
+      const delta =
+        cell.delta !== undefined && twoArm
+          ? `${num(cell.delta)} (${declared.treatment} - ${declared.baseline})`
+          : 'n/a';
+      line(
+        `| ${cell.scenario} | ${cell.class} | ${cell.pass} | ${cell.fail} | ${cell.n} | ${num(denominator)} | ${num(cell.coverage)} (${determinate}/${num(denominator)} determinate) | ${delta} |`,
+      );
+    }
+    line();
+    line(
+      twoArm
+        ? `Counts pool both arms (n is per arm; the denominator is the cell total); delta is the signed per-arm rate difference (treatment - baseline).`
+        : `Counts are the arm's own (n per arm; the denominator is the cell total); no delta — a single-arm comparison has no pairing.`,
+    );
+    line();
+  }
+
+  line('## Medians');
+  line();
+  line('Per comparison, over matched determinate blocks:');
+  line();
+  for (const comparison of report.comparisons) {
+    const medians = comparison.medians;
+    if (medians.tokens !== undefined && medians.usd !== undefined) {
+      line(
+        `- ${comparison.comparison_id}: tokens ${num(medians.tokens)}; usd ${num(medians.usd)}`,
+      );
+    } else if (medians.tokens !== undefined) {
+      line(
+        `- ${comparison.comparison_id}: tokens ${num(medians.tokens)}; usd median absent — unpriced arms contribute tokens only to medians`,
+      );
+    } else if (medians.usd !== undefined) {
+      line(
+        `- ${comparison.comparison_id}: usd ${num(medians.usd)}; tokens median absent`,
+      );
+    } else {
+      line(
+        `- ${comparison.comparison_id}: no medians (no matched determinate blocks)`,
+      );
+    }
+  }
+  line();
+
+  line('## Accounting');
+  line();
+  for (const [name, value] of Object.entries(report.accounting)) {
+    if (name === 'denominators') continue;
+    line(`- ${name}: ${value}`);
+  }
+  line('- denominators:');
+  for (const cellId of Object.keys(report.accounting.denominators).sort()) {
+    line(`  - ${cellId}: ${num(report.accounting.denominators[cellId] ?? 0)}`);
+  }
+  line();
+
+  line('## Provenance');
+  line();
+  for (const arm of report.provenance.arms) {
+    line(
+      `- arm ${arm.arm}: registered ${arm.registered_model}; observed [${arm.observed_model_set.join(', ')}]`,
+    );
+  }
+  const grader = report.provenance.grader;
+  line(
+    grader.observed !== undefined
+      ? `- grader: credential ${grader.credential}, model ${grader.model}, observed ${grader.observed}`
+      : `- grader: credential ${grader.credential}, model ${grader.model}, observed absent — no gauntlet identity in any run (empty-evidence case)`,
+  );
+  line('- failed_cells:');
+  if (report.provenance.failed_cells.length === 0) {
+    line('  - (none)');
+  } else {
+    for (const finding of report.provenance.failed_cells) {
+      line(
+        `  - ${finding.comparison_id}/${finding.scenario}: ${finding.reason}`,
+      );
+    }
+  }
+  line();
+
+  line(
+    '## tags/declared metrics — deferred to D4b (no aggregation registry pinned)',
+  );
+  line();
+  line(
+    'None in D4a (Decision D-9); D4b lands this section with a pinned aggregator set.',
+  );
+  line();
+
+  return lines.join(REPORT_RENDERING.line_ending);
+}
+
+/** Remove a crashed publication's staged temps: exactly the names
+ *  publishReport itself stages (`<name>.tmp.<pid>`). Anything else in the
+ *  campaign dir — real artifacts, other writers' staging shapes — is
+ *  untouched. */
+export function cleanupOrphanTemps(campaignDir: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(campaignDir);
+  } catch (err) {
+    throw new ReportPublishError(
+      `cannot read campaign dir ${campaignDir} to clean orphan report temps: ${errorMessage(err)} — the publication cannot proceed over an unreadable directory`,
+    );
+  }
+  for (const entry of entries) {
+    if (
+      !entry.startsWith(`${REPORT_MD_NAME}.tmp.`) &&
+      !entry.startsWith(`${REPORT_JSON_NAME}.tmp.`)
+    ) {
+      continue;
+    }
+    try {
+      unlinkSync(join(campaignDir, entry));
+    } catch (err) {
+      throw new ReportPublishError(
+        `cannot remove orphan report temp ${join(campaignDir, entry)}: ${errorMessage(err)} — remove it by hand, then retry publication (a leftover stage file can collide with the next attempt)`,
+      );
+    }
+  }
+}
+
+/** Publish the report artifacts: report.md FIRST, report.json LAST — the
+ *  json landing is the completion marker (PAR §Execution → Sealing), so a
+ *  crash between the two leaves an explicitly incomplete publication the
+ *  resume path re-attempts. Each artifact goes through the house
+ *  stage-fsync-rename discipline (D-7, src/campaign/journal.ts's
+ *  stageAndPublishCampaignJson): stage as `<name>.tmp.<pid>` (O_EXCL), write
+ *  every byte, fsync the file, rename over the final name, fsync the
+ *  directory. Orphan temps of a crashed attempt are removed first so the
+ *  fresh stage can never collide with a dead one. */
+export function publishReport(args: {
+  readonly campaignDir: string;
+  readonly md: string;
+  readonly jsonBytes: Buffer;
+}): void {
+  cleanupOrphanTemps(args.campaignDir);
+  publishArtifact(
+    args.campaignDir,
+    REPORT_MD_NAME,
+    Buffer.from(args.md, 'utf8'),
+  );
+  publishArtifact(args.campaignDir, REPORT_JSON_NAME, args.jsonBytes);
+}
+
+function publishArtifact(
+  campaignDir: string,
+  name: string,
+  bytes: Buffer,
+): void {
+  const final = join(campaignDir, name);
+  const stage = join(campaignDir, `${name}.tmp.${process.pid}`);
+  let fd: number;
+  try {
+    fd = openSync(stage, 'wx'); // O_EXCL: never write through a stale stage
+  } catch (err) {
+    throw new ReportPublishError(
+      `cannot stage ${name} at ${stage}: ${errorMessage(err)} — remove the stale temp (a crashed publication attempt left it) and retry; ${name} was NOT published`,
+    );
+  }
+  try {
+    try {
+      writeAll(fd, bytes, stage);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(stage, final); // atomic: the final name only ever appears complete
+  } catch (err) {
+    const cleanup = tryUnlink(stage);
+    throw new ReportPublishError(
+      `${name} could not be published at ${final}: ${errorMessage(err)}` +
+        (cleanup === null
+          ? ''
+          : `; removing the stage ${stage} also failed (${cleanup}) — delete it by hand`) +
+        ` — nothing partial exists under the final name; retry the publication`,
+    );
+  }
+  try {
+    fsyncDir(campaignDir); // the rename is durable only once the directory is
+  } catch (err) {
+    throw new ReportPublishError(
+      `${name} was renamed into place at ${final} but the campaign-directory fsync failed: ${errorMessage(err)} — fsync ${campaignDir} by hand; the publication is not durable until then`,
+    );
+  }
+}
+
+/** Write every byte before anything fsyncs a short write as success (the
+ *  journal's writeFull discipline, byte-sliced not code-unit-sliced). */
+function writeAll(fd: number, bytes: Buffer, path: string): void {
+  let written = 0;
+  while (written < bytes.length) {
+    const n = writeSync(fd, bytes.subarray(written));
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new ReportPublishError(
+        `short write on ${path} (${written} of ${bytes.length} bytes, no forward progress) — refusing to fsync a torn artifact`,
+      );
+    }
+    written += n;
+  }
+}
+
+/** Best-effort failure-path cleanup whose own failure is REPORTED, never
+ *  swallowed (null on success, the underlying message on failure). */
+function tryUnlink(path: string): string | null {
+  try {
+    unlinkSync(path);
+    return null;
+  } catch {
+    return `unlink ${path} failed`;
+  }
 }
