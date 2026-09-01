@@ -224,7 +224,13 @@ export function foldDescriptiveReport(args: {
 
 /** The frozen document's replay view (recovery.ts's universeOf, restated
  *  fold-locally: report.ts must not depend on the recovery module that
- *  tasks 5–6 wire back against this fold). */
+ *  tasks 5–6 wire back against this fold).
+ *
+ *  CROSS-REFERENCE PAIR (task-3 deferred minor, wired by task 5's seal.ts):
+ *  this function and `universeOf` in src/campaign/recovery.ts are the same
+ *  derivation restated — they MUST change together. The restatement exists
+ *  only to keep report.ts free of the recovery import edge; seal.ts (the
+ *  terminus) consumes recovery's export as the single authority. */
 function universeForReport(campaign: Campaign): CampaignUniverse {
   return {
     samples: campaign.samples.map((sample) => ({

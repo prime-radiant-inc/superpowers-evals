@@ -123,7 +123,13 @@ const AUDIT =
 const KILL_GRACE_SECONDS = 5;
 
 /** The frozen document's replay/resolver view: samples with their arm+cell,
- *  blocks with their roster and slot. */
+ *  blocks with their roster and slot.
+ *
+ *  CROSS-REFERENCE PAIR (task-3 deferred minor, wired by task 5's seal.ts):
+ *  this function and `universeForReport` in src/campaign/report.ts are the
+ *  same derivation restated — they MUST change together. report.ts keeps its
+ *  local copy only to avoid importing this module; the seal act (seal.ts)
+ *  consumes THIS export as the single authority. */
 export function universeOf(campaign: Campaign): CampaignUniverse {
   return {
     samples: campaign.samples.map((s) => ({
