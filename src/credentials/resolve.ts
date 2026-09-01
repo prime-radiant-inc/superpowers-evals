@@ -74,3 +74,27 @@ export function resolveBedrockBearer(cred: Credential): string {
   }
   return value;
 }
+
+/** The Mantle endpoint URL for a region (the 2026-07-08 live probe pinned
+ *  the shape: bedrock-mantle.{region}.api.aws, In-Region-only). */
+export function mantleBaseUrl(region: string): string {
+  return `https://bedrock-mantle.${region}.api.aws`;
+}
+
+/** The canonical grader env for a Mantle credential: gauntlet authenticates
+ *  with the Anthropic SDK names (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL),
+ *  never the bearer's registry name. Campaign children project this overlay
+ *  alongside the key grants; non-Mantle credentials contribute nothing. */
+export function mantleGraderEnv(cred: Credential): Record<string, string> {
+  if (cred.api !== 'mantle') return {};
+  const region = cred.region;
+  if (region === undefined || region === '') {
+    throw new Error(
+      'mantle credential requires a region to derive the grader base URL',
+    );
+  }
+  return {
+    ANTHROPIC_AUTH_TOKEN: resolveBedrockBearer(cred),
+    ANTHROPIC_BASE_URL: mantleBaseUrl(region),
+  };
+}

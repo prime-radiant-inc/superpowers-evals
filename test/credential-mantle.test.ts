@@ -2,9 +2,14 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Credential } from '../src/contracts/credential.ts';
 import { CredentialSchema } from '../src/contracts/credential.ts';
 import { checkCredentials } from '../src/credentials/check.ts';
-import { resolveBedrockBearer } from '../src/credentials/resolve.ts';
+import {
+  mantleGraderEnv,
+  resolveBedrockBearer,
+} from '../src/credentials/resolve.ts';
+import { deleteProcessEnv, setProcessEnv } from '../src/env.ts';
 
 test('mantle credential parses with api=mantle, auth=bedrock-bearer, region', () => {
   const cred = CredentialSchema.parse({
@@ -46,6 +51,44 @@ test('quorum check accumulates the region error even when the coding-agents dir 
   expect(res.ok).toBe(false);
   expect(res.errors.join('\n')).toContain('region');
   expect(res.errors.join('\n')).toContain('cannot read coding-agents dir');
+});
+
+test('mantleGraderEnv derives the canonical grader names for a mantle credential', () => {
+  setProcessEnv('MANTLE_GRADER_TEST_BEARER', 'fixture-bearer');
+  try {
+    const cred = CredentialSchema.parse({
+      model: 'anthropic.claude-opus-4-8',
+      harnesses: ['claude'],
+      api: 'mantle',
+      auth: 'bedrock-bearer',
+      api_key_env: 'MANTLE_GRADER_TEST_BEARER',
+      region: 'us-east-1',
+    });
+    expect(mantleGraderEnv(cred)).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'fixture-bearer',
+      ANTHROPIC_BASE_URL: 'https://bedrock-mantle.us-east-1.api.aws',
+    });
+  } finally {
+    deleteProcessEnv('MANTLE_GRADER_TEST_BEARER');
+  }
+});
+
+test('mantleGraderEnv is empty for non-mantle credentials and loud on a missing region', () => {
+  const direct = CredentialSchema.parse({
+    model: 'm',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    api_key_env: 'X',
+  });
+  expect(mantleGraderEnv(direct)).toEqual({});
+  // quorum check enforces region at parse time; the helper still fails
+  // closed on a hand-built mantle credential that lacks it.
+  const noRegion = {
+    ...direct,
+    api: 'mantle',
+    region: undefined,
+  } as unknown as Credential;
+  expect(() => mantleGraderEnv(noRegion)).toThrow(/region/);
 });
 
 test('resolveBedrockBearer throws naming the env var when unset', () => {

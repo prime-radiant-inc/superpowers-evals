@@ -775,6 +775,41 @@ test('admission is atomic per block and capped by the per-sample global cap; rel
   ).toBe(true);
 });
 
+test('a mantle grader credential projects the canonical grader env into every campaign child', async () => {
+  const h = harness();
+  h.credentials['grader_cred'] = {
+    model: 'anthropic.claude-opus-4-8',
+    harnesses: ['claude'],
+    api: 'mantle',
+    auth: 'bedrock-bearer',
+    api_key_env: 'BEARER_G',
+    region: 'us-east-1',
+    compat: {},
+    max_concurrency: 2,
+  } as Credential;
+  setProcessEnv('BEARER_G', 'fixture-bearer-g');
+  try {
+    const run = runCampaignDispatch(h.args);
+    await tick(h.clock, 1);
+    expect(h.spawner.spawned.length).toBe(2);
+    for (const { spec } of h.spawner.spawned) {
+      expect(spec.env['ANTHROPIC_AUTH_TOKEN']).toBe('fixture-bearer-g');
+      expect(spec.env['ANTHROPIC_BASE_URL']).toBe(
+        'https://bedrock-mantle.us-east-1.api.aws',
+      );
+    }
+    for (const { child } of h.spawner.spawned) {
+      child.emitLine(`run_allocated: run-${child.pid}`);
+    }
+    await tick(h.clock, 1);
+    for (const { child } of h.spawner.spawned)
+      child.exit({ code: 0, signal: null });
+    await run;
+  } finally {
+    deleteProcessEnv('BEARER_G');
+  }
+});
+
 test('longest-expected-first ordering admits the longer block first when the cap forces a choice', async () => {
   // Two primary blocks; global cap 2 admits exactly one two-sample block.
   const h = harness({

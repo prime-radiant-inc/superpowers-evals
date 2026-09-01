@@ -97,6 +97,42 @@ test('resolveKeyForSpawn: singular api_key_env uses; non-api-key is native; miss
   ).toThrow(/fallback is forbidden/);
 });
 
+test('resolveKeyForSpawn: bedrock-bearer grants its bearer env name (campaign children seed Mantle auth from it)', () => {
+  const bearer = {
+    ...poolCredential(['x']),
+    key_pool: undefined,
+    api: 'mantle',
+    auth: 'bedrock-bearer',
+    api_key_env: 'AWS_BEARER_TOKEN_BEDROCK',
+  } as unknown as Credential;
+  expect(
+    resolveKeyForSpawn({
+      cred: bearer,
+      credentialName: 'opus_bedrock',
+      inFlight: {},
+    }),
+  ).toEqual({
+    kind: 'use',
+    grant: { envName: 'AWS_BEARER_TOKEN_BEDROCK' },
+  });
+  // Without an explicit api_key_env the bearer falls back to the
+  // registry-conventional name, matching resolveBedrockBearer.
+  const bareBearer = {
+    ...bearer,
+    api_key_env: undefined,
+  } as unknown as Credential;
+  expect(
+    resolveKeyForSpawn({
+      cred: bareBearer,
+      credentialName: 'opus_bedrock',
+      inFlight: {},
+    }),
+  ).toEqual({
+    kind: 'use',
+    grant: { envName: 'AWS_BEARER_TOKEN_BEDROCK' },
+  });
+});
+
 test('D-2 warnings: entry names the credential; resolution carries the MEASURED wait; invalid measurements fail closed', () => {
   const written: string[] = [];
   const stream = { write: (s: string) => written.push(s) };

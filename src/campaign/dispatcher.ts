@@ -39,6 +39,7 @@ import {
 import type { BlockReplacementReason } from '../contracts/campaign/typed-failures.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { RUN_ERROR_STAGES, type RunErrorStage } from '../contracts/verdict.ts';
+import { mantleGraderEnv } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import {
   type CancellableSleep,
@@ -2972,15 +2973,21 @@ export async function runCampaignDispatch(
           cwd: evalsRoot,
           // 6a composition: covered marker + the selected key VALUES resolve
           // through the env seam (fail-loud on unset, R-SPN-7); the parent
-          // env is never inherited wholesale (R-SPN-3).
-          env: composeCampaignChildEnv({
-            base: {
-              PATH: getEnv('PATH'),
-              HOME: getEnv('HOME'),
-              TMPDIR: getEnv('TMPDIR'),
-            },
-            grants,
-          }),
+          // env is never inherited wholesale (R-SPN-3). A Mantle grader
+          // additionally projects the canonical SDK names (bearer + regional
+          // base URL) — gauntlet reads ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL,
+          // never the bearer's registry name.
+          env: {
+            ...composeCampaignChildEnv({
+              base: {
+                PATH: getEnv('PATH'),
+                HOME: getEnv('HOME'),
+                TMPDIR: getEnv('TMPDIR'),
+              },
+              grants,
+            }),
+            ...mantleGraderEnv(graderCred),
+          },
         };
         const child = spawner.spawn(spec);
         sample.childBirthTsMs = identity.startTimeMs(child.pid);

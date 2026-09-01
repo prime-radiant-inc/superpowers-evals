@@ -298,8 +298,10 @@ export function buildCampaignChildArgv(args: CampaignChildArgvArgs): string[] {
 }
 
 /** E7.5 new emission arm: 0-2 role-tagged grant entries, names only, never
- *  values. Non-API-key roles contribute no entry (the dispatcher supplies
- *  role attribution, not key material). */
+ *  values. Grantable roles (api-key and bedrock-bearer credentials) each
+ *  contribute their env NAME; flow-based auth (oauth/subscription) resolves
+ *  native and contributes no entry (the dispatcher supplies role
+ *  attribution, not key material). */
 export function keyGrantsPayload(args: {
   subjectEnv?: string;
   graderEnv?: string;

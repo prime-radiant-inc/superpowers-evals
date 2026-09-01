@@ -64,6 +64,16 @@ export function resolveKeyForSpawn(args: {
   inFlight: Readonly<Record<string, number>>;
 }): SpawnKeyResolution {
   const { cred, credentialName, inFlight } = args;
+  // Bedrock-bearer credentials grant their single bearer env name: campaign
+  // children seed Mantle auth from it (seedClaudeMantle for the subject,
+  // the dispatcher's mantle grader projection for gauntlet). The fallback
+  // name matches resolveBedrockBearer's convention.
+  if (cred.auth === 'bedrock-bearer') {
+    return {
+      kind: 'use',
+      grant: { envName: cred.api_key_env ?? 'AWS_BEARER_TOKEN_BEDROCK' },
+    };
+  }
   if (cred.auth !== 'api-key') return { kind: 'native' };
   if (cred.key_pool !== undefined) {
     return selectKey(cred, inFlight);
