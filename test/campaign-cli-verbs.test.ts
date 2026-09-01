@@ -885,6 +885,11 @@ function evalsCheckout(): string {
   );
   if (clone.status !== 0) throw new Error(clone.stderr);
   symlinkSync(join(WORKTREE, 'node_modules'), join(dir, 'node_modules'));
+  // Hermetic campaign intake: the clone may carry repo-level arms/suites
+  // documents; the frozen intake this fixture registers against must contain
+  // exactly the fixture arms written below.
+  rmSync(join(dir, 'arms'), { recursive: true, force: true });
+  rmSync(join(dir, 'suites'), { recursive: true, force: true });
   const gitOpts = ['-c', 'user.email=t@t', '-c', 'user.name=t'];
   const g = (args: string[]): string => {
     const r = spawnSync('git', ['-C', dir, ...gitOpts, ...args], {

@@ -344,11 +344,16 @@ program
       }
 
       // Validate arms/ and suites/ documents (parent Testing: "quorum check
-      // validates arm and suite files including profile parameters").
+      // validates arm and suite files including profile parameters"). Their
+      // agent/credential references resolve against THIS repo's canonical
+      // registries — the same documents registration freezes from the object
+      // store — never against operator-redirected roots: --credentials-file
+      // validates that external file above, it does not re-root the repo's
+      // own campaign documents.
       const armSuite = checkArmSuiteFiles({
         repoRoot: process.cwd(),
-        codingAgentsDir: resolve(opts.codingAgentsDir),
-        credentialsPath: resolve(opts.credentialsFile ?? 'credentials.yaml'),
+        codingAgentsDir: resolve('coding-agents'),
+        credentialsPath: resolve('credentials.yaml'),
       });
       for (const warning of armSuite.warnings) {
         process.stdout.write(`warn ${warning}\n`);

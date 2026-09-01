@@ -52,6 +52,9 @@ const SUITE = [
   'name: compare_fx',
   'kind: exploratory',
   'budget_usd: 50',
+  'grader:',
+  '  credential: opus_fx',
+  '  model: claude-opus-5',
   'comparisons:',
   '  - baseline: claude_fx',
   '    treatment: claude_fx',
@@ -160,6 +163,9 @@ test('gating suite profile params validate against the registry', () => {
     'profile: release_gate_v1',
     'reserve: 2',
     'max_exposure_skew: 600',
+    'grader:',
+    '  credential: opus_fx',
+    '  model: claude-opus-5',
     'profile_params:',
     '  alpha: 0.05',
     '  determinate_n_floor: 4',
@@ -210,6 +216,9 @@ test('profile without profile_params fails on required fields', () => {
     'profile: release_gate_v1',
     'reserve: 2',
     'max_exposure_skew: 600',
+    'grader:',
+    '  credential: opus_fx',
+    '  model: claude-opus-5',
     'comparisons:',
     '  - baseline: claude_fx',
     '    treatment: claude_fx2',
@@ -230,6 +239,9 @@ test('profile_params without profile fails with a clear error', () => {
     'name: compare_fx',
     'kind: exploratory',
     'budget_usd: 50',
+    'grader:',
+    '  credential: opus_fx',
+    '  model: claude-opus-5',
     'profile_params:',
     '  alpha: 0.05',
     'comparisons:',
@@ -244,4 +256,121 @@ test('profile_params without profile fails with a clear error', () => {
   expect(result.errors.join('\n')).toMatch(
     /profile_params set without a profile/,
   );
+});
+
+// Registration extracts the grader block BEFORE the strict SuiteSchema parse
+// (R-REG-20 singular grader), so the check must accept exactly what
+// registration accepts — a suite without grader is unregistrable, and a
+// suite with grader must not trip the strict-schema unrecognized-key rule.
+
+test('a missing grader block fails loud with the R-REG-20 rule', () => {
+  const noGrader = SUITE.split('\n')
+    .filter(
+      (line) =>
+        !line.startsWith('grader:') &&
+        !line.startsWith('  credential: opus_fx') &&
+        !line.startsWith('  model: claude-opus-5'),
+    )
+    .join('\n');
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': noGrader,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/must declare grader.*R-REG-20/);
+});
+
+test('a malformed grader block fails loud', () => {
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': SUITE.replace(
+      '  model: claude-opus-5',
+      '  model: 42',
+    ),
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/must declare grader/);
+});
+
+test('an unknown grader credential fails loud', () => {
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': SUITE.replace(
+      '  credential: opus_fx',
+      '  credential: ghost_cred',
+    ),
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(
+    /grader credential 'ghost_cred' not in credentials/,
+  );
+});
+
+test('a gating suite with a non-api-key grader credential fails loud (R-REG-15)', () => {
+  const gating = [
+    'schema_version: 1',
+    'name: gate_fx',
+    'kind: gating',
+    'budget_usd: 850',
+    'profile: release_gate_v1',
+    'reserve: 2',
+    'max_exposure_skew: 600',
+    'grader:',
+    '  credential: sub_fx',
+    '  model: some-model',
+    'profile_params:',
+    '  alpha: 0.05',
+    '  determinate_n_floor: 4',
+    '  completion_divergence_max: 0.2',
+    '  mde_by_scenario: { scn_a: 0.15 }',
+    'comparisons:',
+    '  - baseline: claude_fx',
+    '    treatment: claude_fx2',
+    '    scenarios: [scn_a]',
+    '    n: 1',
+  ].join('\n');
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
+    'suites/gate_fx.yaml': gating,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': [
+      CREDENTIALS,
+      'sub_fx:',
+      '  model: some-model',
+      '  api: anthropic',
+      '  auth: subscription',
+      '  harnesses: [claude]',
+    ].join('\n'),
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(
+    /grader credential 'sub_fx' auth=subscription in a gating suite.*R-REG-15/,
+  );
+});
+
+test('suite subdirectories are not parsed as suites', () => {
+  // Operator side-input (pricing overrides) rides beside the suite documents;
+  // registration validates it at verb time, so the check ignores it.
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': SUITE,
+    'suites/pricing-overrides/gate_fx.yaml':
+      '- applies_to_grader: true\n  per_token_usd: 0.000006\n  rationale: r',
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+  const result = check(root);
+  expect(result.errors).toEqual([]);
+  expect(result.ok).toBe(true);
 });

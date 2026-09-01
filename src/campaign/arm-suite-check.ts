@@ -117,7 +117,54 @@ export function checkArmSuiteFiles(
     const path = join(opts.repoRoot, 'suites', file);
     let suite: Suite;
     try {
-      suite = SuiteSchema.parse(parseYaml(readFileSync(path, 'utf8')));
+      const raw = parseYaml(readFileSync(path, 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      // Registration's grader intake, mirrored: the grader block is
+      // extracted BEFORE the strict SuiteSchema parse and cross-referenced
+      // below (R-REG-20 singular grader, R-REG-15 grader half). The check
+      // accepts exactly what registration accepts — a suite without grader
+      // is unregistrable, and a suite with grader must not trip the strict
+      // unrecognized-key rule.
+      const graderRaw =
+        raw !== null && typeof raw === 'object'
+          ? (raw['grader'] as
+              | { credential?: unknown; model?: unknown }
+              | undefined)
+          : undefined;
+      if (
+        graderRaw === undefined ||
+        typeof graderRaw !== 'object' ||
+        typeof graderRaw.credential !== 'string' ||
+        typeof graderRaw.model !== 'string'
+      ) {
+        errors.push(
+          `suites/${file}: suite must declare grader: { credential, model } — the campaign grader is registered singular (R-REG-20)`,
+        );
+      }
+      const { grader: _stripped, ...suiteFields } = raw ?? {};
+      suite = SuiteSchema.parse(suiteFields);
+      if (
+        credentials !== undefined &&
+        graderRaw !== undefined &&
+        typeof graderRaw === 'object' &&
+        typeof graderRaw.credential === 'string'
+      ) {
+        const graderCredential = credentials[graderRaw.credential];
+        if (graderCredential === undefined) {
+          errors.push(
+            `suites/${file}: grader credential '${graderRaw.credential}' not in credentials.yaml`,
+          );
+        } else if (
+          suite.kind === 'gating' &&
+          graderCredential.auth !== 'api-key'
+        ) {
+          errors.push(
+            `suites/${file}: grader credential '${graderRaw.credential}' auth=${graderCredential.auth} in a gating suite — api-key required, no operator override (R-REG-15)`,
+          );
+        }
+      }
     } catch (err) {
       errors.push(
         `suites/${file}: ${err instanceof Error ? err.message : String(err)}`,
