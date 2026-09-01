@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { composeCampaignChildEnv } from '../src/campaign/spawn.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { CredentialSchema } from '../src/contracts/credential.ts';
 import { checkCredentials } from '../src/credentials/check.ts';
@@ -10,6 +11,7 @@ import {
   resolveBedrockBearer,
 } from '../src/credentials/resolve.ts';
 import { deleteProcessEnv, setProcessEnv } from '../src/env.ts';
+import { gauntletEnvBase } from '../src/runner/gauntlet-env.ts';
 
 test('mantle credential parses with api=mantle, auth=bedrock-bearer, region', () => {
   const cred = CredentialSchema.parse({
@@ -53,7 +55,7 @@ test('quorum check accumulates the region error even when the coding-agents dir 
   expect(res.errors.join('\n')).toContain('cannot read coding-agents dir');
 });
 
-test('mantleGraderEnv derives the canonical grader names for a mantle credential', () => {
+test('mantleGraderEnv projects the bearer as the grader API key over the grader-only alias channel', () => {
   setProcessEnv('MANTLE_GRADER_TEST_BEARER', 'fixture-bearer');
   try {
     const cred = CredentialSchema.parse({
@@ -64,10 +66,54 @@ test('mantleGraderEnv derives the canonical grader names for a mantle credential
       api_key_env: 'MANTLE_GRADER_TEST_BEARER',
       region: 'us-east-1',
     });
+    // Mantle accepts x-api-key, so the bearer travels as an ordinary API
+    // key: gauntlet stays in plain api-key mode (an ANTHROPIC_AUTH_TOKEN
+    // would put it in OAuth mode — oauth beta header + Claude Code identity
+    // block). The alias names keep it off the canonical ANTHROPIC_API_KEY,
+    // which belongs to the agent under test in the same child env.
     expect(mantleGraderEnv(cred)).toEqual({
-      ANTHROPIC_AUTH_TOKEN: 'fixture-bearer',
-      ANTHROPIC_BASE_URL: 'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+      QUORUM_GRADER_SOURCE_MODE: 'appliance-scoped',
+      QUORUM_GRADER_ANTHROPIC_API_KEY: 'fixture-bearer',
+      QUORUM_GRADER_ANTHROPIC_BASE_URL:
+        'https://bedrock-mantle.us-east-1.api.aws/anthropic',
     });
+  } finally {
+    deleteProcessEnv('MANTLE_GRADER_TEST_BEARER');
+  }
+});
+
+test('a mantle grader reaches gauntlet as an API key without displacing a direct-API subject key', () => {
+  setProcessEnv('MANTLE_GRADER_TEST_BEARER', 'fixture-bearer');
+  try {
+    const grader = CredentialSchema.parse({
+      model: 'anthropic.claude-opus-4-8',
+      harnesses: ['claude'],
+      api: 'mantle',
+      auth: 'bedrock-bearer',
+      api_key_env: 'MANTLE_GRADER_TEST_BEARER',
+      region: 'us-east-1',
+    });
+    // The child env as the dispatcher composes it: the grants (a direct-API
+    // subject's key lands under the canonical ANTHROPIC_API_KEY — stated
+    // literally here rather than through the process env), then the grader
+    // overlay.
+    const childEnv = {
+      ...composeCampaignChildEnv({
+        base: { PATH: '/usr/bin' },
+        grants: { graderEnv: 'MANTLE_GRADER_TEST_BEARER' },
+      }),
+      ANTHROPIC_API_KEY: 'fixture-subject-key',
+      ...mantleGraderEnv(grader),
+    };
+    expect(childEnv['ANTHROPIC_API_KEY']).toBe('fixture-subject-key');
+    const gauntletEnv = gauntletEnvBase(childEnv);
+    expect(gauntletEnv['ANTHROPIC_API_KEY']).toBe('fixture-bearer');
+    expect(gauntletEnv['ANTHROPIC_BASE_URL']).toBe(
+      'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+    );
+    expect(gauntletEnv['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
+    expect(gauntletEnv['MANTLE_GRADER_TEST_BEARER']).toBeUndefined();
+    expect(gauntletEnv['QUORUM_GRADER_SOURCE_MODE']).toBeUndefined();
   } finally {
     deleteProcessEnv('MANTLE_GRADER_TEST_BEARER');
   }

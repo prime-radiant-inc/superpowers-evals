@@ -2974,8 +2974,9 @@ export async function runCampaignDispatch(
           // 6a composition: covered marker + the selected key VALUES resolve
           // through the env seam (fail-loud on unset, R-SPN-7); the parent
           // env is never inherited wholesale (R-SPN-3). A Mantle grader
-          // additionally projects the canonical SDK names (bearer + regional
-          // base URL) — gauntlet reads ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL,
+          // additionally projects its bearer as the grader API key plus the
+          // regional base URL over the grader-only QUORUM_GRADER_* aliases;
+          // the child's runner maps those onto the names gauntlet reads,
           // never the bearer's registry name.
           env: {
             ...composeCampaignChildEnv({

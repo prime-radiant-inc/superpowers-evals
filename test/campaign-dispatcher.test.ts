@@ -775,7 +775,7 @@ test('admission is atomic per block and capped by the per-sample global cap; rel
   ).toBe(true);
 });
 
-test('a mantle grader credential projects the canonical grader env into every campaign child', async () => {
+test('a mantle grader credential projects the grader-only alias env into every campaign child', async () => {
   const h = harness();
   h.credentials['grader_cred'] = {
     model: 'anthropic.claude-opus-4-8',
@@ -793,10 +793,19 @@ test('a mantle grader credential projects the canonical grader env into every ca
     await tick(h.clock, 1);
     expect(h.spawner.spawned.length).toBe(2);
     for (const { spec } of h.spawner.spawned) {
-      expect(spec.env['ANTHROPIC_AUTH_TOKEN']).toBe('fixture-bearer-g');
-      expect(spec.env['ANTHROPIC_BASE_URL']).toBe(
+      expect(spec.env['QUORUM_GRADER_SOURCE_MODE']).toBe('appliance-scoped');
+      expect(spec.env['QUORUM_GRADER_ANTHROPIC_API_KEY']).toBe(
+        'fixture-bearer-g',
+      );
+      expect(spec.env['QUORUM_GRADER_ANTHROPIC_BASE_URL']).toBe(
         'https://bedrock-mantle.us-east-1.api.aws/anthropic',
       );
+      // The canonical SDK names stay out of the child env: they belong to
+      // the agent under test there, and the bearer must not reach gauntlet
+      // as an OAuth token.
+      expect(spec.env['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
+      expect(spec.env['ANTHROPIC_API_KEY']).toBeUndefined();
+      expect(spec.env['ANTHROPIC_BASE_URL']).toBeUndefined();
     }
     for (const { child } of h.spawner.spawned) {
       child.emitLine(`run_allocated: run-${child.pid}`);

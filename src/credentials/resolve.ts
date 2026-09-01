@@ -3,6 +3,11 @@ import { join } from 'node:path';
 import { loadAgentConfigForValidation } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
 import { getEnv } from '../env.ts';
+import {
+  APPLIANCE_SCOPED_GRADER_MODE,
+  GRADER_SOURCE_ENV_BY_RUNTIME_NAME,
+  QUORUM_GRADER_SOURCE_MODE,
+} from './grader.ts';
 
 export function resolveCredentialName(opts: {
   explicit?: string;
@@ -83,10 +88,15 @@ export function mantleBaseUrl(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws/anthropic`;
 }
 
-/** The canonical grader env for a Mantle credential: gauntlet authenticates
- *  with the Anthropic SDK names (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL),
- *  never the bearer's registry name. Campaign children project this overlay
- *  alongside the key grants; non-Mantle credentials contribute nothing. */
+/** The grader env for a Mantle credential. Mantle accepts `x-api-key`, so
+ *  the bearer travels as the grader's ordinary API key and gauntlet stays in
+ *  plain api-key mode (as ANTHROPIC_AUTH_TOKEN it would run in OAuth mode:
+ *  oauth beta header + Claude Code identity block). It rides the grader-only
+ *  QUORUM_GRADER_* alias channel with the regional base URL: the campaign
+ *  child's runner maps the aliases onto the names gauntlet reads, while the
+ *  canonical ANTHROPIC_API_KEY in that same child env stays the agent under
+ *  test's. Campaign children project this overlay alongside the key grants;
+ *  non-Mantle credentials contribute nothing. */
 export function mantleGraderEnv(cred: Credential): Record<string, string> {
   if (cred.api !== 'mantle') return {};
   const region = cred.region;
@@ -96,7 +106,10 @@ export function mantleGraderEnv(cred: Credential): Record<string, string> {
     );
   }
   return {
-    ANTHROPIC_AUTH_TOKEN: resolveBedrockBearer(cred),
-    ANTHROPIC_BASE_URL: mantleBaseUrl(region),
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+    [GRADER_SOURCE_ENV_BY_RUNTIME_NAME.ANTHROPIC_API_KEY]:
+      resolveBedrockBearer(cred),
+    [GRADER_SOURCE_ENV_BY_RUNTIME_NAME.ANTHROPIC_BASE_URL]:
+      mantleBaseUrl(region),
   };
 }
