@@ -91,12 +91,12 @@ import {
 } from './locks.ts';
 import {
   canonicalReportBytes,
+  comparePresentReportArtifacts,
   digestReportBytes,
   foldDescriptiveReport,
   publishReport,
   REPORT_JSON_NAME,
   REPORT_MD_NAME,
-  renderReportMd,
 } from './report.ts';
 import { readSampleEvidence } from './report-evidence.ts';
 import { resolveCampaignResultsRoot } from './results-root.ts';
@@ -1888,11 +1888,18 @@ function resumeSealedTail(args: {
       `sealed campaign report digest divergence — journaled report_digest ${sealed.payload.report_digest}, refolded report digest ${digest}; refusing to overwrite report artifacts`,
     );
   }
-  publishReport({
+  const artifacts = comparePresentReportArtifacts({
     campaignDir: args.campaignDir,
-    md: renderReportMd({ report, campaign: args.campaign }),
-    jsonBytes,
+    report,
+    campaign: args.campaign,
   });
+  const mismatch = artifacts.mismatches[0];
+  if (mismatch !== undefined) {
+    throw new RecoveryError(
+      `sealed campaign report artifact divergence — ${mismatch} diverges from digest-verified report; refusing to overwrite report artifacts`,
+    );
+  }
+  publishReport({ campaignDir: args.campaignDir, ...artifacts });
   return {
     status: 'completed',
     reason: 'sealed campaign: report regenerated',

@@ -754,12 +754,12 @@ import {
 import { registerCampaign } from '../campaign/registration.ts';
 import {
   canonicalReportBytes,
+  comparePresentReportArtifacts,
   digestReportBytes,
   foldDescriptiveReport,
   publishReport,
   REPORT_JSON_NAME,
   REPORT_MD_NAME,
-  renderReportMd,
 } from '../campaign/report.ts';
 import { readSampleEvidence } from '../campaign/report-evidence.ts';
 import { resolveCampaignResultsRoot } from '../campaign/results-root.ts';
@@ -1143,31 +1143,23 @@ export async function campaignReport(rawCampaignDir: string): Promise<number> {
       );
     }
 
-    const md = renderReportMd({ report, campaign });
+    const artifacts = comparePresentReportArtifacts({
+      campaignDir,
+      report,
+      campaign,
+    });
     const mdPath = join(campaignDir, REPORT_MD_NAME);
     const jsonPath = join(campaignDir, REPORT_JSON_NAME);
-    const artifacts = [
-      {
-        name: REPORT_MD_NAME,
-        path: mdPath,
-        bytes: Buffer.from(md, 'utf8'),
-      },
-      { name: REPORT_JSON_NAME, path: jsonPath, bytes: jsonBytes },
-    ] as const;
-    for (const artifact of artifacts) {
-      if (
-        existsSync(artifact.path) &&
-        !readFileSync(artifact.path).equals(artifact.bytes)
-      ) {
-        throw new CampaignVerbError(
-          `evidence tampering: ${artifact.name} diverges from the digest-verified report; refusing to overwrite report artifacts`,
-        );
-      }
+    const mismatch = artifacts.mismatches[0];
+    if (mismatch !== undefined) {
+      throw new CampaignVerbError(
+        `evidence tampering: ${mismatch} diverges from the digest-verified report; refusing to overwrite report artifacts`,
+      );
     }
     if (!existsSync(mdPath) || !existsSync(jsonPath)) {
-      publishReport({ campaignDir, md, jsonBytes });
+      publishReport({ campaignDir, ...artifacts });
     }
-    process.stdout.write(md);
+    process.stdout.write(artifacts.md);
     return 0;
   } catch (err) {
     return verbFailure(err);

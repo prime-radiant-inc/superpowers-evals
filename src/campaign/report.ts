@@ -19,9 +19,11 @@
 import { createHash } from 'node:crypto';
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   openSync,
   readdirSync,
+  readFileSync,
   renameSync,
   unlinkSync,
   writeSync,
@@ -1145,6 +1147,44 @@ export function renderReportMd(args: {
   line();
 
   return lines.join(REPORT_RENDERING.line_ending);
+}
+
+/** Derive the expected final artifacts and compare every artifact that is
+ * already present. Missing artifacts are intentionally ignored: the caller
+ * may safely regenerate only those after this check passes. */
+export function comparePresentReportArtifacts(args: {
+  readonly campaignDir: string;
+  readonly report: Report;
+  readonly campaign: Campaign;
+}): {
+  readonly md: string;
+  readonly jsonBytes: Buffer;
+  readonly mismatches: readonly string[];
+} {
+  const md = renderReportMd({ report: args.report, campaign: args.campaign });
+  const jsonBytes = canonicalReportBytes(args.report);
+  const mismatches: string[] = [];
+  const artifacts = [
+    {
+      name: REPORT_MD_NAME,
+      path: join(args.campaignDir, REPORT_MD_NAME),
+      bytes: Buffer.from(md, 'utf8'),
+    },
+    {
+      name: REPORT_JSON_NAME,
+      path: join(args.campaignDir, REPORT_JSON_NAME),
+      bytes: jsonBytes,
+    },
+  ] as const;
+  for (const artifact of artifacts) {
+    if (
+      existsSync(artifact.path) &&
+      !readFileSync(artifact.path).equals(artifact.bytes)
+    ) {
+      mismatches.push(artifact.name);
+    }
+  }
+  return { md, jsonBytes, mismatches };
 }
 
 /** Remove a crashed publication's staged temps: exactly the names

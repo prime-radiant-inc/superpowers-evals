@@ -559,6 +559,17 @@ function reportBytes(fx: TerminusFixture): {
   };
 }
 
+function sealTerminusFixture(fx: TerminusFixture): void {
+  const sealed = runTerminusSeal({
+    campaignDir: fx.dir,
+    resultsRoot: fx.resultsRoot,
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    stream: { write: () => {} },
+  });
+  expect(sealed.outcome).toBe('sealed');
+}
+
 function runnerThatReportsTerminusDrift(
   fx: TerminusFixture,
   onTerminusVerify?: () => void,
@@ -647,6 +658,87 @@ test('resume at sealed-without-artifacts regenerates byte-identical publication'
   });
   expect(readFileSync(join(fx.dir, REPORT_JSON_NAME))).toEqual(expectedJson);
   expect(readFileSync(join(fx.dir, REPORT_MD_NAME), 'utf8')).toBe(expectedMd);
+});
+
+test('sealed-tail resume refuses a tampered report.json when report.md is missing', async () => {
+  const fx = terminusFixture();
+  sealTerminusFixture(fx);
+  const mdPath = join(fx.dir, REPORT_MD_NAME);
+  const jsonPath = join(fx.dir, REPORT_JSON_NAME);
+  const tamperedJson = Buffer.concat([
+    readFileSync(jsonPath),
+    Buffer.from('tampered'),
+  ]);
+  rmSync(mdPath);
+  writeFileSync(jsonPath, tamperedJson);
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-tampered-json.lock.d')),
+  ).rejects.toThrow(
+    `sealed campaign report artifact divergence — ${REPORT_JSON_NAME} diverges from digest-verified report; refusing to overwrite report artifacts`,
+  );
+  expect(existsSync(mdPath)).toBe(false);
+  expect(readFileSync(jsonPath)).toEqual(tamperedJson);
+});
+
+test('sealed-tail resume refuses a tampered report.md when report.json is missing', async () => {
+  const fx = terminusFixture();
+  sealTerminusFixture(fx);
+  const mdPath = join(fx.dir, REPORT_MD_NAME);
+  const jsonPath = join(fx.dir, REPORT_JSON_NAME);
+  const tamperedMd = 'tampered report\n';
+  rmSync(jsonPath);
+  writeFileSync(mdPath, tamperedMd);
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-tampered-md.lock.d')),
+  ).rejects.toThrow(
+    `sealed campaign report artifact divergence — ${REPORT_MD_NAME} diverges from digest-verified report; refusing to overwrite report artifacts`,
+  );
+  expect(existsSync(jsonPath)).toBe(false);
+  expect(readFileSync(mdPath, 'utf8')).toBe(tamperedMd);
+});
+
+test('sealed-tail resume regenerates a missing report.md from an untampered report.json', async () => {
+  const fx = terminusFixture();
+  sealTerminusFixture(fx);
+  const mdPath = join(fx.dir, REPORT_MD_NAME);
+  const jsonPath = join(fx.dir, REPORT_JSON_NAME);
+  const expectedMd = readFileSync(mdPath);
+  const expectedJson = readFileSync(jsonPath);
+  rmSync(mdPath);
+
+  const outcome = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-regenerate-md.lock.d'),
+  );
+
+  expect(outcome).toEqual({
+    status: 'completed',
+    reason: 'sealed campaign: report regenerated',
+  });
+  expect(readFileSync(mdPath)).toEqual(expectedMd);
+  expect(readFileSync(jsonPath)).toEqual(expectedJson);
+});
+
+test('sealed-tail resume regenerates a missing report.json from an untampered report.md', async () => {
+  const fx = terminusFixture();
+  sealTerminusFixture(fx);
+  const mdPath = join(fx.dir, REPORT_MD_NAME);
+  const jsonPath = join(fx.dir, REPORT_JSON_NAME);
+  const expectedMd = readFileSync(mdPath);
+  const expectedJson = readFileSync(jsonPath);
+  rmSync(jsonPath);
+
+  const outcome = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-regenerate-json.lock.d'),
+  );
+
+  expect(outcome).toEqual({
+    status: 'completed',
+    reason: 'sealed campaign: report regenerated',
+  });
+  expect(readFileSync(mdPath)).toEqual(expectedMd);
+  expect(readFileSync(jsonPath)).toEqual(expectedJson);
 });
 
 test('sealed-tail digest divergence refuses before overwriting artifacts', async () => {
