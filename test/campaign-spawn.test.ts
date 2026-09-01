@@ -64,6 +64,7 @@ test('campaign child argv addresses the snapshot entrypoint with identity + thre
     credentialName: 'cred_a',
     credentialsFile: '/camp/evals/credentials.yaml',
     gauntletBin: '/camp/bin/gauntlet',
+    graderModel: 'claude-sonnet-4-6',
     superpowers: { mode: 'root', root: '/camp/superpowers-abc' },
     identity: {
       campaign_id: 'c'.repeat(64),
@@ -79,6 +80,10 @@ test('campaign child argv addresses the snapshot entrypoint with identity + thre
   expect(argv).toContain('/camp/bin/gauntlet');
   expect(argv).toContain('--superpowers-root');
   expect(argv).toContain('/camp/superpowers-abc');
+  // The registered grader model is authoritative for campaign children —
+  // without it the child silently grades with the runner's pinned default.
+  expect(argv).toContain('--grader-model');
+  expect(argv[argv.indexOf('--grader-model') + 1]).toBe('claude-sonnet-4-6');
   expect(argv).toContain('--campaign-identity');
   const idx = argv.indexOf('--campaign-identity');
   expect(JSON.parse(argv[idx + 1]!)).toEqual({

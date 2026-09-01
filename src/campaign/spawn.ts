@@ -252,6 +252,10 @@ export interface CampaignChildArgvArgs {
   readonly credentialName: string;
   readonly credentialsFile: string;
   readonly gauntletBin: string;
+  /** The registered grader model (R-REG-20 singular grader). Authoritative
+   *  for campaign children: without it the child grades with the runner's
+   *  pinned default and the frozen campaign document lies about its grader. */
+  readonly graderModel: string;
   readonly superpowers: SuperpowersSpec;
   readonly identity: CampaignIdentity;
 }
@@ -281,6 +285,8 @@ export function buildCampaignChildArgv(args: CampaignChildArgvArgs): string[] {
     args.credentialsFile,
     '--gauntlet-bin',
     args.gauntletBin,
+    '--grader-model',
+    args.graderModel,
   ];
   if (args.superpowers.mode === 'root') {
     argv.push('--superpowers-root', args.superpowers.root);

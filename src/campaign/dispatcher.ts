@@ -2950,6 +2950,7 @@ export async function runCampaignDispatch(
           gauntletBin:
             currentSnapshot?.gauntletBin ??
             join(args.campaignDir, 'bin', 'gauntlet'),
+          graderModel: campaign.grader.model,
           superpowers:
             superpowersSha !== null && superpowersSha !== undefined
               ? {
