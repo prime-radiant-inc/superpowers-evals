@@ -20,7 +20,7 @@ import { parseCodingAgentsDirective } from '../checks/index.ts';
 import type { ChildResult, MatrixEntry } from '../contracts/batch.ts';
 import { runnable } from '../contracts/batch.ts';
 import type { Credential } from '../contracts/credential.ts';
-import { assertCampaignCredentials } from '../credentials/check.ts';
+import { assertCampaignRegistry } from '../credentials/check.ts';
 import {
   loadCredentialsFile,
   writeCredentialsSnapshot,
@@ -495,7 +495,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
     // paid child.
     const credentials = loadBatchCredentials(credentialsPath);
     if (credentialsPath !== undefined) {
-      assertCampaignCredentials(credentials);
+      assertCampaignRegistry(credentials);
     }
 
     const entries = buildMatrix({

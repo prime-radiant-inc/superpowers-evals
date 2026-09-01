@@ -27,7 +27,38 @@ export function campaignCredentialErrors(
   return errors;
 }
 
+/** The run-scoped assertion: a run resolves exactly ONE credential from an
+ *  external campaign file, so route-attestation compliance is enforced for
+ *  the selected credential — never for inert siblings. Campaign children
+ *  pass the frozen canonical registry as their external file; a non-serf
+ *  campaign must not be blocked by the registry's serf entries, while a
+ *  run that selects a serf credential keeps the full refusal. An unknown
+ *  selection asserts nothing here — credential lookup fails loud downstream. */
 export function assertCampaignCredentials(
+  credentials: Readonly<Record<string, Credential>>,
+  selectedCredential: string | undefined,
+): void {
+  const selected =
+    selectedCredential !== undefined
+      ? credentials[selectedCredential]
+      : undefined;
+  const scope =
+    selected !== undefined && selectedCredential !== undefined
+      ? { [selectedCredential]: selected }
+      : {};
+  const errors = campaignCredentialErrors(scope);
+  if (errors.length > 0) {
+    throw new Error(`invalid external campaign: ${errors.join('; ')}`);
+  }
+}
+
+/** The whole-registry assertion for an EXPLICIT external campaign file
+ *  (run-all's --credentials-file): any credential in the file can supply a
+ *  matrix cell, so every serf entry must be campaign-attestable before a
+ *  batch exists. The canonical repo registry is not such a file — it holds
+ *  non-campaign defaults too, and campaign children read it through the
+ *  run-scoped assertion above. */
+export function assertCampaignRegistry(
   credentials: Readonly<Record<string, Credential>>,
 ): void {
   const errors = campaignCredentialErrors(credentials);

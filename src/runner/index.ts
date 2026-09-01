@@ -1052,20 +1052,22 @@ export async function runScenario(
     );
   }
   runStopped = false;
-  const campaignCredentials =
-    a.credentialsOrigin === 'external-campaign'
-      ? loadRunCredentials(a.credentialsPath)
-      : undefined;
-  if (campaignCredentials !== undefined) {
-    assertCampaignCredentials(campaignCredentials);
-  }
-  const scenario = scenarioName(a.scenarioDir);
-  // Resolve the credential name: explicit arg wins; else agent yaml default_credential.
+  // Resolve the credential name FIRST: explicit arg wins, else agent yaml
+  // default_credential. The external-campaign assertion scopes to this
+  // selection (a run resolves exactly one credential from the file).
   const credentialName = resolveCredentialNameForAgent(
     a.codingAgentsDir,
     a.codingAgent,
     a.credential,
   );
+  const campaignCredentials =
+    a.credentialsOrigin === 'external-campaign'
+      ? loadRunCredentials(a.credentialsPath)
+      : undefined;
+  if (campaignCredentials !== undefined) {
+    assertCampaignCredentials(campaignCredentials, credentialName);
+  }
+  const scenario = scenarioName(a.scenarioDir);
   const runDir = allocateRunDir(
     a.outRoot,
     scenario,

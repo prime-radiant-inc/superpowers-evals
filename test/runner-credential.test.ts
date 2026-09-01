@@ -13,6 +13,7 @@ import { basename, join, resolve } from 'node:path';
 import { shellSingleQuote } from '../src/agents/index.ts';
 import type { AtifTrajectory } from '../src/atif/types.ts';
 import type { Credential } from '../src/contracts/credential.ts';
+import { assertCampaignCredentials } from '../src/credentials/check.ts';
 import { resolveCredentialNameForAgent } from '../src/credentials/index.ts';
 import { allocateRunDir, runScenario } from '../src/runner/index.ts';
 
@@ -75,6 +76,37 @@ test('direct external Serf campaign rejects missing route labels before run allo
     }),
   ).rejects.toThrow(/route-attestation labels/);
   expect(readdirSync(outRoot)).toEqual([]);
+});
+
+test('external-campaign assertion scopes to the selected credential', () => {
+  // First-contact evidence (D4a live validation): campaign children pass the
+  // frozen canonical registry as their external file; a non-compliant serf
+  // entry must not block a run that selects a non-serf credential, while a
+  // selected serf credential keeps the full route-attestation refusal.
+  const nonCompliantSerf: Credential = {
+    model: 'claude-sonnet-4-6',
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: 'ANTHROPIC_API_KEY',
+    harnesses: ['serf'],
+    compat: {},
+  };
+  const claudeCred: Credential = {
+    model: 'claude-haiku-4-5-20251001',
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: 'ANTHROPIC_API_KEY',
+    harnesses: ['claude'],
+    compat: {},
+  };
+  const credentials = { serf_default: nonCompliantSerf, haiku: claudeCred };
+  expect(() => assertCampaignCredentials(credentials, 'haiku')).not.toThrow();
+  expect(() => assertCampaignCredentials(credentials, 'serf_default')).toThrow(
+    /route-attestation labels/,
+  );
+  expect(() =>
+    assertCampaignCredentials(credentials, 'missing_credential'),
+  ).not.toThrow();
 });
 
 // --- resolveCredentialNameForAgent ---
