@@ -6,12 +6,12 @@
 schema_version: 1
 name: d4a_live_crash
 kind: exploratory
-budget_usd: 5
+budget_usd: 10
 grader:
-  credential: sonnet46
-  model: claude-sonnet-4-6
+  credential: opus_bedrock
+  model: anthropic.claude-opus-4-8
 comparisons:
-  - arm: d4a_live_claude_haiku
+  - arm: d4a_live_claude_opus_bedrock
     scenarios:
       - 00-quorum-smoke-hello-world
     n: 1
