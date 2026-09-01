@@ -1471,10 +1471,16 @@ demand, spacing that cannot co-launch; refused pre-spend (PAR §"Concepts" →
 "Registered campaign"; P0 §"Simulation engine" → "Demand vector").
 **R-REG-14 — Reject arm `os` unsupported by the agent, credential, or
 scenario directives** (PAR §"Concepts" → "Registered campaign").
-**R-REG-15 — Reject seat/subscription-auth credentials in gating suites**,
-enforced mechanically — `CredentialSchema.auth ≠ api-key` in a gating suite
-is a registration error, no operator override (PAR §"Concepts" → "Registered
-campaign").
+**R-REG-15 — ~~Reject seat/subscription-auth credentials in gating
+suites~~ — RESCINDED** (owner ruling, 2026-09-01, during D4a live
+validation). The rule pinned api-key auth for every gating arm and grader
+as attestation formalism aimed at D4b-era release decisions; applied to
+D4a it blocked refusal-mechanics validation on credentials (notably
+bedrock-bearer, the appliance's primary funded claude route) the platform
+otherwise funds and serves. Registration and `quorum check` no longer gate
+on credential auth class — gating campaigns gate on completed runs. If
+D4b's release decisions need route attestation, that returns as a D4b
+requirement with its own mechanics, not this blanket registration ban.
 **R-REG-16 — Filter `requires_superpowers` conflicts with `superpowers:
 none` arms**: the scenario is dropped for that comparison, named in
 `excluded_cells` (PAR §"Concepts" → "Registered campaign"; D2 §"Runner

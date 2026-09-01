@@ -315,7 +315,11 @@ test('an unknown grader credential fails loud', () => {
   );
 });
 
-test('a gating suite with a non-api-key grader credential fails loud (R-REG-15)', () => {
+test('a gating suite with a bedrock-bearer grader credential passes (R-REG-15 rescinded)', () => {
+  // Owner ruling 2026-09-01: the api-key-only gating rule was attestation
+  // formalism for D4b-era release decisions; the check accepts whatever
+  // registered grader credential registration accepts — including the
+  // bedrock-bearer route the D4a live validation runs on.
   const gating = [
     'schema_version: 1',
     'name: gate_fx',
@@ -325,8 +329,8 @@ test('a gating suite with a non-api-key grader credential fails loud (R-REG-15)'
     'reserve: 2',
     'max_exposure_skew: 600',
     'grader:',
-    '  credential: sub_fx',
-    '  model: some-model',
+    '  credential: opus_bedrock_fx',
+    '  model: anthropic.claude-opus-4-8',
     'profile_params:',
     '  alpha: 0.05',
     '  determinate_n_floor: 4',
@@ -345,18 +349,18 @@ test('a gating suite with a non-api-key grader credential fails loud (R-REG-15)'
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': [
       CREDENTIALS,
-      'sub_fx:',
-      '  model: some-model',
-      '  api: anthropic',
-      '  auth: subscription',
+      'opus_bedrock_fx:',
+      '  model: anthropic.claude-opus-4-8',
+      '  api: mantle',
+      '  auth: bedrock-bearer',
+      '  api_key_env: AWS_BEARER_TOKEN_BEDROCK',
+      '  region: us-east-1',
       '  harnesses: [claude]',
     ].join('\n'),
   });
   const result = check(root);
-  expect(result.ok).toBe(false);
-  expect(result.errors.join('\n')).toMatch(
-    /grader credential 'sub_fx' auth=subscription in a gating suite.*R-REG-15/,
-  );
+  expect(result.errors).toEqual([]);
+  expect(result.ok).toBe(true);
 });
 
 test('suite subdirectories are not parsed as suites', () => {

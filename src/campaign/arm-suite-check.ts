@@ -123,10 +123,10 @@ export function checkArmSuiteFiles(
       >;
       // Registration's grader intake, mirrored: the grader block is
       // extracted BEFORE the strict SuiteSchema parse and cross-referenced
-      // below (R-REG-20 singular grader, R-REG-15 grader half). The check
-      // accepts exactly what registration accepts — a suite without grader
-      // is unregistrable, and a suite with grader must not trip the strict
-      // unrecognized-key rule.
+      // below (R-REG-20 singular grader). The check accepts exactly what
+      // registration accepts — a suite without grader is unregistrable,
+      // and a suite with grader must not trip the strict unrecognized-key
+      // rule.
       const graderRaw =
         raw !== null && typeof raw === 'object'
           ? (raw['grader'] as
@@ -156,14 +156,10 @@ export function checkArmSuiteFiles(
           errors.push(
             `suites/${file}: grader credential '${graderRaw.credential}' not in credentials.yaml`,
           );
-        } else if (
-          suite.kind === 'gating' &&
-          graderCredential.auth !== 'api-key'
-        ) {
-          errors.push(
-            `suites/${file}: grader credential '${graderRaw.credential}' auth=${graderCredential.auth} in a gating suite — api-key required, no operator override (R-REG-15)`,
-          );
         }
+        // R-REG-15 (api-key-only gating grader) was rescinded by owner
+        // ruling 2026-09-01 — registration accepts any registered grader
+        // credential, so the check does too.
       }
     } catch (err) {
       errors.push(

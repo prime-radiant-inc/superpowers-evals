@@ -389,7 +389,9 @@ test('rejection matrix: capability, windows os, unsupported os, requires_superpo
   expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(
     /requires_superpowers/,
   );
-  // R-REG-15: subscription auth in a gating suite rejects mechanically.
+  // R-REG-15 rescinded (owner ruling 2026-09-01): a subscription-auth arm
+  // in a gating suite is no longer excluded on auth class — gating gates on
+  // completed runs, not credential formalism.
   prep = prepareRegistration(
     input({
       suite: suite({
@@ -408,15 +410,16 @@ test('rejection matrix: capability, windows os, unsupported os, requires_superpo
         cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
         cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
       },
-      // Grader rides the api-key credential so this case isolates the
-      // ARM row of R-REG-15 (the grader row is registration-level now).
       grader: { credential: 'cred_b', model: 'grader-model' },
       pricingOverrides: [
         { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
       ],
     } as never),
   );
-  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).toMatch(/api-key/);
+  expect(prep.excluded_cells.map((e) => e.reason).join(' ')).not.toMatch(
+    /api-key/,
+  );
+  expect(prep.cells.length).toBeGreaterThan(0);
 });
 
 test('R-REG-13: cap-1 same-pool two-arm demand refuses pre-spend', () => {
@@ -802,27 +805,29 @@ test('R-REG-13: shared-pool feasibility is order-independent (constraints from e
   expect(prep.cells).toHaveLength(1);
 });
 
-test('grader eligibility: missing credential refuses; non-api-key grader refuses in gating, warns in exploratory (R-REG-15/19/20)', () => {
+test('grader eligibility: missing credential refuses (R-REG-20); auth class no longer gates (R-REG-15 rescinded)', () => {
   expect(() =>
     prepareRegistration(
       input({ grader: { credential: 'grader_cred', model: 'g' } }),
     ),
   ).toThrow(/grader_cred/);
-  expect(() =>
-    prepareRegistration(
-      input({
-        suite: gatingSuite(),
-        credentials: {
-          cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
-          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
-        },
-        grader: { credential: 'cred_a', model: 'g' },
-        pricingOverrides: [
-          { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
-        ],
-      } as never),
-    ),
-  ).toThrow(/grader.*api-key|api-key.*grader/);
+  // A subscription grader in a gating suite now registers (owner ruling
+  // 2026-09-01): gating gates on completed runs, not credential auth class.
+  const gatingPrep = prepareRegistration(
+    input({
+      suite: gatingSuite(),
+      credentials: {
+        cred_a: credential({ auth: 'subscription', api_key_env: undefined }),
+        cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
+      },
+      grader: { credential: 'cred_a', model: 'g' },
+      pricingOverrides: [
+        { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
+      ],
+    } as never),
+  );
+  expect(gatingPrep.cells.length).toBeGreaterThan(0);
+  // The exploratory seat-auth caveat warning went with the rule.
   const prep = prepareRegistration(
     input({
       credentials: {
@@ -831,7 +836,7 @@ test('grader eligibility: missing credential refuses; non-api-key grader refuses
       },
     }),
   );
-  expect(prep.warnings.join(' ')).toMatch(/api-key grader credential/);
+  expect(prep.warnings.join(' ')).not.toMatch(/api-key grader credential/);
 });
 
 test('R-REG-19: key-env preflight refuses naming every unset env (api_key_env and key_pool members)', () => {
@@ -1057,7 +1062,7 @@ test('rejection-matrix accept pairs: capability, arm os, requires_superpowers, g
     }),
   );
   expect(prep.cells).toHaveLength(1);
-  // R-REG-15 accept: api-key credentials in a gating suite.
+  // Gating accepts any registered credential auth class (R-REG-15 rescinded).
   prep = prepareRegistration(
     input({
       suite: gatingSuite(),
@@ -1154,20 +1159,6 @@ test('every exclusion reason names the operator next step', () => {
         suite: suite({ profile_params: { max_exposure_usd: 50 } }),
       },
       /R-REG-12/,
-    ],
-    [
-      {
-        suite: gatingSuite(),
-        credentials: {
-          cred_a: credential({ auth: 'subscription' }),
-          cred_b: credential({ api_key_env: 'TEST_KEY_B' }),
-        },
-        grader: { credential: 'cred_b', model: 'g' },
-        pricingOverrides: [
-          { applies_to_grader: true, per_token_usd: 0.00001, rationale: 'r' },
-        ],
-      },
-      /R-REG-15/,
     ],
     [
       {

@@ -565,7 +565,6 @@ function rejectCell(
   armNames: readonly string[],
 ): string | null {
   const { suite, arms, credentials, campaignOs } = input;
-  const gating = suite.kind === 'gating';
   // R-REG-16: requires_superpowers conflict drops the scenario for this
   // comparison (both arms), named in excluded_cells.
   if (
@@ -603,11 +602,11 @@ function rejectCell(
     if (armDef.superpowers === 'none' ? !cap.none : !cap.ref) {
       return `arm ${armName} superpowers mode ${JSON.stringify(armDef.superpowers)} lacks adapter capability (default-deny registry) (R-REG-9) — drop the arm, switch it to a proven superpowers mode, or extend the adapter capability registry`;
     }
-    // R-REG-15: seat/subscription auth in gating suites — mechanical, no
-    // operator override.
-    if (gating && cred.auth !== 'api-key') {
-      return `arm ${armName} credential ${armDef.credential} auth=${cred.auth} in a gating suite (R-REG-15, api-key required, no override) — switch the arm to an api-key credential`;
-    }
+    // R-REG-15 rescinded (owner ruling 2026-09-01, D4a live validation):
+    // the api-key-only gating rule was attestation formalism for D4b-era
+    // release decisions; it blocked refusal-mechanics validation on
+    // credentials (bedrock-bearer) the platform otherwise funds and serves.
+    // Gating suites now gate on completed runs, not credential auth class.
   }
   // R-REG-13: minimum-feasible-launch feasibility — cap-1 pools facing
   // two-arm same-pool demand, spacing that cannot co-launch, and demand
@@ -737,19 +736,14 @@ function checkCellOverrideCorrelation(suite: Suite): void {
   }
 }
 
-/** R-REG-20 grader singular + R-REG-15 grader half: the registered grader
- *  credential must exist, and in a gating suite it must be api-key auth —
- *  mechanical, before any expansion. */
+/** R-REG-20 grader singular: the registered grader credential must exist,
+ *  mechanical, before any expansion. (The R-REG-15 api-key half was
+ *  rescinded by owner ruling 2026-09-01 — see rejectCell.) */
 function checkGraderCredential(input: RegistrationInput): void {
   const cred = input.credentials[input.grader.credential];
   if (cred === undefined) {
     throw new RegistrationError(
       `grader credential ${input.grader.credential} not in credentials.yaml (R-REG-20 grader singular) — add the credential or re-register with a registered grader credential`,
-    );
-  }
-  if (input.suite.kind === 'gating' && cred.auth !== 'api-key') {
-    throw new RegistrationError(
-      `grader credential ${input.grader.credential} auth=${cred.auth} in a gating suite — api-key required, no operator override (R-REG-15) — use an api-key grader credential`,
     );
   }
 }
@@ -819,11 +813,6 @@ function graderAndPoolWarnings(input: RegistrationInput): string[] {
         `grader pool cap ${graderCap} < 15 in a gating suite — every 8h-clearing Phase 0 configuration had cap >= 15 (R-REG-20 warning)`,
       );
     }
-  }
-  if (!gating && graderCred !== undefined && graderCred.auth !== 'api-key') {
-    warnings.push(
-      `grader credential ${input.grader.credential} auth=${graderCred.auth} — seat-auth grading cannot be enforced mechanically outside gating suites; prefer an api-key grader credential (R-REG-15 exploratory caveat)`,
-    );
   }
   for (const [name, cred] of Object.entries(input.credentials)) {
     if (cred.key_pool !== undefined && cred.max_concurrency !== undefined) {
