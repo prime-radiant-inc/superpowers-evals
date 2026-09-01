@@ -6,9 +6,18 @@
 // and the children are the dispatcher suite's scripted-child seam — hermetic
 // throughout, no network and no real campaign process.
 import { afterAll, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { CommandRunner } from '../src/agents/command-runner.ts';
+import { defaultCommandRunner } from '../src/agents/command-runner.ts';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
 import {
@@ -17,6 +26,8 @@ import {
   replayEvents,
 } from '../src/campaign/journal.ts';
 import { resumeCampaign, universeOf } from '../src/campaign/recovery.ts';
+import { REPORT_JSON_NAME, REPORT_MD_NAME } from '../src/campaign/report.ts';
+import { runTerminusSeal } from '../src/campaign/seal.ts';
 import type {
   CampaignChildSpec,
   ChildExitInfo,
@@ -24,6 +35,8 @@ import type {
   SpawnedCampaignChild,
 } from '../src/campaign/spawn.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
+import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
+import { campaignDigest } from '../src/contracts/campaign/digest.ts';
 import {
   type JournalEvent,
   normalizeBlockReplaced,
@@ -38,6 +51,8 @@ import {
   fixtureCredentials,
   lockDir,
   publishedCampaign,
+  reportCampaign,
+  reportEvents,
   SAMPLE_A,
   SAMPLE_B,
   seedRealSnapshot,
@@ -271,7 +286,313 @@ async function tick(clock: FakeClock, seconds: number): Promise<void> {
   for (let i = 0; i < 128; i += 1) await Promise.resolve();
 }
 
+interface TerminusFixture {
+  readonly dir: string;
+  readonly doc: Campaign;
+  readonly resultsRoot: string;
+}
+
+function terminusFixture(
+  profile: 'descriptive' | 'gating' = 'descriptive',
+): TerminusFixture {
+  const dir = mkdtempSync(join(tmpdir(), 'resume-terminus-'));
+  const refs = seedRealSnapshot(dir);
+  const base =
+    profile === 'gating'
+      ? campaignDoc({
+          refs,
+          contention: {
+            ...campaignDoc().contention,
+            host_fingerprint: liveFingerprint(),
+            global_run_cap: 4,
+          },
+        })
+      : {
+          ...reportCampaign(),
+          refs,
+          campaign_id: 'd'.repeat(64),
+          digest: 'd'.repeat(64),
+          contention: {
+            ...reportCampaign().contention,
+            host_fingerprint: liveFingerprint(),
+            global_run_cap: 4,
+          },
+        };
+  const parsed = CampaignSchema.parse(base);
+  const digest = campaignDigest(parsed);
+  const doc = { ...parsed, campaign_id: digest, digest };
+  const published = publishedCampaign({ inFlight: false, doc, dir });
+  const primarySamples = doc.blocks
+    .filter((block) => block.slot !== 'reserve')
+    .flatMap((block) => block.sample_ids);
+  const events = reportEvents({
+    campaign: doc,
+    steps: primarySamples.map((sampleId, index) => ({
+      kind: 'run' as const,
+      run: {
+        sampleId,
+        attemptId: `terminus-att-${index + 1}`,
+        runId: `terminus-run-${index + 1}`,
+        outcome: index % 2 === 0 ? ('pass' as const) : ('fail' as const),
+      },
+    })),
+  });
+  for (const [index] of primarySamples.entries()) {
+    seedRunDir(
+      join(published.dir, 'results'),
+      `terminus-run-${index + 1}`,
+      index % 2 === 0 ? 'pass' : 'fail',
+      index + 1,
+    );
+  }
+  const writer = electWriter({
+    campaignDir: published.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: doc,
+  });
+  writer.appendEvents(
+    events.slice(1).map((event) => ({
+      type: event.type,
+      payload: event.payload,
+    })),
+  );
+  writer.release();
+  writeFileSync(
+    join(published.dir, 'contention-telemetry.jsonl'),
+    `${JSON.stringify({
+      ts_ms: 1,
+      load1: 1,
+      mem_available_bytes: STATS.mem_available_bytes,
+      swap_used_bytes: 0,
+      process_count: 100,
+      disk_free_bytes: STATS.disk_free_bytes,
+      breach: [],
+    })}\n`,
+  );
+  return {
+    dir: published.dir,
+    doc: published.doc,
+    resultsRoot: join(published.dir, 'results'),
+  };
+}
+
+function resumeTerminusArgs(
+  fx: TerminusFixture,
+  lock: string,
+  overrides: { runner?: CommandRunner } = {},
+) {
+  return {
+    campaignDir: fx.dir,
+    credentials: fixtureCredentials(),
+    evalsCheckout: fx.dir,
+    gauntletCheckout: fx.dir,
+    superpowersCheckout: fx.dir,
+    resultsRoot: fx.resultsRoot,
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    child: { commandLine: () => '' },
+    signal: mortalGroup(),
+    graceSeconds: 0,
+    probe: PROBE,
+    spawner: new FakeSpawner(),
+    lockPath: lockDir(lock),
+    stream: { write: () => {} },
+    ...(overrides.runner !== undefined ? { runner: overrides.runner } : {}),
+  };
+}
+
+function runnerThatReportsTerminusDrift(
+  fx: TerminusFixture,
+  onTerminusVerify?: () => void,
+): CommandRunner {
+  let statusCalls = 0;
+  return {
+    run(command, args, options) {
+      if (command === 'git' && args.includes('status')) {
+        statusCalls += 1;
+        if (statusCalls === 5) onTerminusVerify?.();
+        if (statusCalls >= 5 && args.includes(join(fx.dir, 'evals'))) {
+          return { status: 0, stdout: ' M README.md\n', stderr: '' };
+        }
+      }
+      return defaultCommandRunner.run(command, args, options);
+    },
+  };
+}
+
+function runnerThatCancelsDuringTerminus(fx: TerminusFixture): CommandRunner {
+  let statusCalls = 0;
+  return {
+    run(command, args, options) {
+      if (command === 'git' && args.includes('status')) {
+        statusCalls += 1;
+        if (statusCalls === 5) {
+          writeFileSync(
+            join(fx.dir, 'cancel-request'),
+            'operator\nmid-terminus\n',
+          );
+        }
+      }
+      return defaultCommandRunner.run(command, args, options);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
+
+test('resume at predicate-holds seals: sealed event + artifacts, second resume refuses citing sealed', async () => {
+  const fx = terminusFixture();
+
+  const outcome = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-happy.lock.d'),
+  );
+  expect(outcome).toEqual({
+    status: 'completed',
+    reason: expect.stringMatching(
+      /^sealed; report published \(digest [0-9a-f]{12}\)$/,
+    ),
+  });
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+  expect(existsSync(join(fx.dir, REPORT_MD_NAME))).toBe(true);
+  expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(true);
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-second.lock.d')),
+  ).rejects.toThrow(
+    'campaign already sealed — resume refused; `quorum campaign report` regenerates or verifies the readout',
+  );
+});
+
+test('resume at sealed-without-artifacts regenerates byte-identical publication', async () => {
+  const fx = terminusFixture();
+  const sealed = runTerminusSeal({
+    campaignDir: fx.dir,
+    resultsRoot: fx.resultsRoot,
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    stream: { write: () => {} },
+  });
+  expect(sealed.outcome).toBe('sealed');
+  const expectedJson = readFileSync(join(fx.dir, REPORT_JSON_NAME));
+  const expectedMd = readFileSync(join(fx.dir, REPORT_MD_NAME), 'utf8');
+  rmSync(join(fx.dir, REPORT_JSON_NAME));
+
+  const outcome = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-regenerate.lock.d'),
+  );
+
+  expect(outcome).toEqual({
+    status: 'completed',
+    reason: 'sealed campaign: report regenerated',
+  });
+  expect(readFileSync(join(fx.dir, REPORT_JSON_NAME))).toEqual(expectedJson);
+  expect(readFileSync(join(fx.dir, REPORT_MD_NAME), 'utf8')).toBe(expectedMd);
+});
+
+test('sealed-tail digest divergence refuses before overwriting artifacts', async () => {
+  const fx = terminusFixture();
+  const sentinel = 'operator-owned report bytes\n';
+  writeFileSync(join(fx.dir, REPORT_MD_NAME), sentinel);
+  const writer = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(1),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  writer.appendEvent({
+    type: 'sealed',
+    payload: { report_digest: 'f'.repeat(64) },
+  });
+  writer.release();
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-divergence.lock.d')),
+  ).rejects.toThrow(/digest divergence.*journaled.*refolded/);
+  expect(readFileSync(join(fx.dir, REPORT_MD_NAME), 'utf8')).toBe(sentinel);
+  expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(false);
+});
+
+test('resume at sealed-with-artifacts refuses with the report-verb guidance', async () => {
+  const fx = terminusFixture();
+  const sealed = runTerminusSeal({
+    campaignDir: fx.dir,
+    resultsRoot: fx.resultsRoot,
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    stream: { write: () => {} },
+  });
+  expect(sealed.outcome).toBe('sealed');
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-sealed.lock.d')),
+  ).rejects.toThrow(
+    'campaign already sealed — resume refused; `quorum campaign report` regenerates or verifies the readout',
+  );
+});
+
+test('resume of a completed gating campaign refuses with the D4b-awaiting message and stays at predicate-holds', async () => {
+  const fx = terminusFixture('gating');
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-gating.lock.d')),
+  ).rejects.toThrow(
+    'campaign complete to the seal predicate; sealing gating campaigns awaits D4b — the campaign stays at predicate-holds (D3 exit criteria item 1 closes here)',
+  );
+  const events = journalEvents(fx.dir);
+  expect(events.some((event) => event.type === 'sealed')).toBe(false);
+  expect(events.filter((event) => event.type === 'run_completed')).toHaveLength(
+    2,
+  );
+});
+
+test('drift at the terminus refuses naming trees; repair then resume seals', async () => {
+  const fx = terminusFixture();
+  const runner = runnerThatReportsTerminusDrift(fx);
+
+  await expect(
+    resumeCampaign(resumeTerminusArgs(fx, 'terminus-drift.lock.d', { runner })),
+  ).rejects.toThrow(/evals.*resolve.*re-run/);
+  expect(
+    journalEvents(fx.dir).some(
+      (event) =>
+        event.type === 'adjudication' &&
+        event.payload.disposition === 'snapshot_drift_refused',
+    ),
+  ).toBe(true);
+  expect(journalEvents(fx.dir).some((event) => event.type === 'sealed')).toBe(
+    false,
+  );
+
+  const repaired = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-drift-repaired.lock.d'),
+  );
+  expect(repaired.status).toBe('completed');
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+});
+
+test('cancel marker landing mid-terminus wins: no sealed event', async () => {
+  const fx = terminusFixture();
+  const runner = runnerThatCancelsDuringTerminus(fx);
+
+  const outcome = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-cancel.lock.d', { runner }),
+  );
+
+  expect(outcome).toEqual({
+    status: 'cancelled',
+    reason: 'cancel won at the terminus; campaign never sealed',
+  });
+  expect(journalEvents(fx.dir).some((event) => event.type === 'sealed')).toBe(
+    false,
+  );
+  expect(existsSync(join(fx.dir, REPORT_MD_NAME))).toBe(false);
+  expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(false);
+});
 
 test('resume authenticates the frozen document: a tampered budget refuses before any kill or admission', async () => {
   const fx = crashedCampaign();
@@ -342,8 +663,9 @@ test('resume drives the whole pinned order: kill/reconcile -> rerun re-entry -> 
   await tick(clock, 1);
   for (const { child } of spawner.spawned)
     child.exit({ code: 0, signal: null });
-  const outcome = await run;
-  expect(outcome.status).toBe('completed');
+  await expect(run).rejects.toThrow(
+    'campaign complete to the seal predicate; sealing gating campaigns awaits D4b — the campaign stays at predicate-holds (D3 exit criteria item 1 closes here)',
+  );
 
   const events = journalEvents(fx.dir);
   const types = events.map((e) => e.type);

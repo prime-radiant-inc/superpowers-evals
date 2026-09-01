@@ -11,6 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CommandRunner } from '../agents/command-runner.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
   type Campaign,
@@ -88,7 +89,18 @@ import {
   readLiveSpendHolder,
   realProcessIdentityProbe,
 } from './locks.ts';
+import {
+  canonicalReportBytes,
+  digestReportBytes,
+  foldDescriptiveReport,
+  publishReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+  renderReportMd,
+} from './report.ts';
+import { readSampleEvidence } from './report-evidence.ts';
 import { resolveCampaignResultsRoot } from './results-root.ts';
+import { runTerminusSeal } from './seal.ts';
 import {
   decideExposureAtTerminal,
   gauntletEventStreamTexts,
@@ -1743,6 +1755,8 @@ export interface ResumeArgs {
   readonly resultsRoot?: string;
   readonly clock?: Clock;
   readonly identity?: ProcessIdentityProbe;
+  /** Snapshot subprocess seam; production uses the real command runner. */
+  readonly runner?: CommandRunner;
   readonly probe?: HostStatsProbe;
   readonly lockPath?: string;
   readonly spawner?: ChildSpawner;
@@ -1830,6 +1844,61 @@ function assertKeyEnvsPresent(
   }
 }
 
+/** R-RCV-5's sealed-tail recovery: a sealed journal is authoritative, but a
+ *  publication can still be incomplete because report.json is the completion
+ *  marker. Refold only the prefix before `sealed`, verify its digest before
+ *  touching either artifact, then publish the pair atomically. */
+function resumeSealedTail(args: {
+  readonly campaign: Campaign;
+  readonly campaignDir: string;
+  readonly resultsRoot: string;
+}): DispatchOutcome | null {
+  const reader = openJournalRead(args.campaignDir);
+  let events: JournalEvent[];
+  try {
+    events = reader.readEvents();
+  } finally {
+    reader.close();
+  }
+  const sealedIndex = events.findIndex((event) => event.type === 'sealed');
+  if (sealedIndex < 0) return null;
+  if (
+    existsSync(join(args.campaignDir, REPORT_MD_NAME)) &&
+    existsSync(join(args.campaignDir, REPORT_JSON_NAME))
+  ) {
+    throw new RecoveryError(
+      'campaign already sealed — resume refused; `quorum campaign report` regenerates or verifies the readout',
+    );
+  }
+  const sealed = events[sealedIndex];
+  if (sealed?.type !== 'sealed') return null;
+  const report = foldDescriptiveReport({
+    campaign: args.campaign,
+    events: events.slice(0, sealedIndex),
+    evidenceOf: (runId, sampleId) =>
+      readSampleEvidence({
+        runDir: join(args.resultsRoot, runId),
+        sampleId,
+      }),
+  });
+  const jsonBytes = canonicalReportBytes(report);
+  const digest = digestReportBytes(jsonBytes);
+  if (digest !== sealed.payload.report_digest) {
+    throw new RecoveryError(
+      `sealed campaign report digest divergence — journaled report_digest ${sealed.payload.report_digest}, refolded report digest ${digest}; refusing to overwrite report artifacts`,
+    );
+  }
+  publishReport({
+    campaignDir: args.campaignDir,
+    md: renderReportMd({ report, campaign: args.campaign }),
+    jsonBytes,
+  });
+  return {
+    status: 'completed',
+    reason: 'sealed campaign: report regenerated',
+  };
+}
+
 /** R-RCV-7 pinned resume order: cancel-request FIRST -> live-spend lock ->
  *  kill/reconcile (identity-guarded; complete partial mint bundles before
  *  resolver actions; fold authoritative contention mints; re-derive
@@ -1841,6 +1910,7 @@ export async function resumeCampaign(
 ): Promise<DispatchOutcome> {
   const clock = args.clock ?? new RealClock();
   const identity = args.identity ?? realProcessIdentityProbe;
+  const runner = args.runner ?? defaultCommandRunner;
   const stream = args.stream ?? {
     write: (s: string) => process.stdout.write(s),
   };
@@ -1876,6 +1946,13 @@ export async function resumeCampaign(
         : 'live cancel completed',
     };
   }
+
+  const sealedTail = resumeSealedTail({
+    campaign,
+    campaignDir: args.campaignDir,
+    resultsRoot: resolveCampaignResultsRoot(args.resultsRoot),
+  });
+  if (sealedTail !== null) return sealedTail;
 
   // 2. Acquire the live-spend lock (recovery ordering: acquire ->
   //    kill/reconcile -> preflight -> admit; preflight deliberately does NOT
@@ -2230,9 +2307,9 @@ export async function resumeCampaign(
     const handle = reconstructCampaignSnapshot({
       campaignDir: args.campaignDir,
       refs: campaign.refs,
-      runner: defaultCommandRunner,
+      runner,
     });
-    verifyCampaignSnapshot(handle, defaultCommandRunner);
+    verifyCampaignSnapshot(handle, runner);
 
     stream.write(
       `resume: reconcile complete — kills=${killReport.killed.length}, already-dead=${killReport.alreadyDead.length}, reclaimed-benign=${killReport.reclaimedBenign.length}, dispositions=${plan.dispositionCompletions.length}, readmissions=${plan.successorReadmissions.length}, report=${plan.campaign}\n`,
@@ -2244,14 +2321,14 @@ export async function resumeCampaign(
     // from them — no injectable no-op), repairDriftedTrees over the source
     // checkouts (Decision D-11 authorized repair), and the real timer-driven
     // sampler (Decision D-3).
-    return await runCampaignDispatch({
+    const outcome = await runCampaignDispatch({
       campaignDir: args.campaignDir,
       clock,
       identity,
       credentials: args.credentials,
       resultsRoot,
       snapshot: handle,
-      runner: defaultCommandRunner,
+      runner,
       repairSnapshot: () =>
         repairDriftedTrees({
           campaignDir: args.campaignDir,
@@ -2259,7 +2336,7 @@ export async function resumeCampaign(
           evalsCheckout: args.evalsCheckout,
           gauntletCheckout: args.gauntletCheckout,
           superpowersCheckout: args.superpowersCheckout,
-          runner: defaultCommandRunner,
+          runner,
         }),
       sampler: realSamplerSeam({
         campaignDir: args.campaignDir,
@@ -2276,6 +2353,38 @@ export async function resumeCampaign(
         : {}),
       stream,
     });
+    if (outcome.status !== 'completed') return outcome;
+
+    const terminus = runTerminusSeal({
+      campaignDir: args.campaignDir,
+      clock,
+      identity,
+      resultsRoot,
+      runner,
+      stream,
+    });
+    switch (terminus.outcome) {
+      case 'sealed':
+        return {
+          status: 'completed',
+          reason: `sealed; report published (digest ${terminus.digest.slice(0, 12)})`,
+        };
+      case 'refused_gating':
+        throw new RecoveryError(
+          'campaign complete to the seal predicate; sealing gating campaigns awaits D4b — the campaign stays at predicate-holds (D3 exit criteria item 1 closes here)',
+        );
+      case 'refused_drift':
+        throw new RecoveryError(
+          `campaign complete to the seal predicate; terminus refused to seal because snapshot drifted in ${terminus.trees.join(', ')} — resolve source drift, then re-run \`quorum campaign run\`; the campaign remains at predicate-holds`,
+        );
+      case 'cancel_in_force':
+        return {
+          status: 'cancelled',
+          reason: 'cancel won at the terminus; campaign never sealed',
+        };
+      case 'storage_failed':
+        return { status: 'storage_paused', reason: terminus.reason };
+    }
   } finally {
     lock.release();
   }
