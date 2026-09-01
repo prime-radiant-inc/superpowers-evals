@@ -45,6 +45,7 @@ import {
   campaignCancel,
   campaignEstimates,
   campaignRegister,
+  campaignReport,
   campaignRun,
   campaignSimulate,
 } from './campaign.ts';
@@ -614,6 +615,15 @@ campaign
   )
   .action(async (dir: string, opts: { reason?: string }) => {
     process.exit(await campaignCancel(dir, opts));
+  });
+campaign
+  .command('report')
+  .description(
+    'render/verify the sealed campaign report (digest-checked regeneration)',
+  )
+  .argument('<campaign-dir>', 'campaign directory')
+  .action(async (dir: string) => {
+    process.exit(await campaignReport(dir));
   });
 
 program

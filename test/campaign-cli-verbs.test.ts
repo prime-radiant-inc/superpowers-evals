@@ -17,19 +17,41 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { openJournalRead } from '../src/campaign/journal.ts';
+import {
+  electWriter,
+  initJournalDb,
+  openJournalRead,
+} from '../src/campaign/journal.ts';
+import {
+  canonicalReportBytes,
+  digestReportBytes,
+  foldDescriptiveReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+  renderReportMd,
+} from '../src/campaign/report.ts';
+import { readSampleEvidence } from '../src/campaign/report-evidence.ts';
 import {
   campaignCancel,
   campaignRegister,
   campaignRun,
 } from '../src/cli/campaign.ts';
 import { envSnapshot } from '../src/env.ts';
-import { publishedCampaign } from './campaign-recovery-fixtures.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
+import {
+  CRASHED_PGID,
+  campaignDoc,
+  publishedCampaign,
+  reportCampaign,
+  reportEvents,
+  WRITER_IDENTITY,
+} from './campaign-recovery-fixtures.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
 // Per-file live-spend lock path: the cancel verb reads the holder from
@@ -158,6 +180,367 @@ function runCli(
   });
   return { status: p.status ?? 1, stdout: p.stdout, stderr: p.stderr };
 }
+
+const REPORT_RESULTS_ROOT = resolve(import.meta.dir, '..', 'results');
+
+interface ReportCliFixture {
+  readonly dir: string;
+  readonly runDirs: readonly string[];
+  readonly jsonBytes: Buffer;
+  readonly md: string;
+}
+
+function writeReportRun(
+  runDir: string,
+  runId: string,
+  outcome: 'pass' | 'fail',
+  model: 'model-a' | 'model-b',
+): void {
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', runId), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(runDir, 'verdict.json'),
+    JSON.stringify({
+      schema: 1,
+      final: outcome,
+      final_reason: 'fixture verdict',
+      gauntlet: {
+        status: outcome,
+        summary: 's',
+        reasoning: 'r',
+        run_id: runId,
+      },
+      checks: [],
+      error: null,
+      economics: {
+        coding_agent: { duration_ms: 61_000 },
+        gauntlet: { duration_ms: 45_000 },
+        total_est_cost_usd: outcome === 'pass' ? 1 : 2,
+      },
+    }),
+  );
+  writeFileSync(
+    join(runDir, 'trajectory.json'),
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'claude', version: '1.0.34' },
+      steps: [
+        {
+          step_id: 1,
+          timestamp: '2026-08-31T10:00:00Z',
+          source: 'agent',
+          model_name: model,
+          message: 'did the work',
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(runDir, 'coding-agent-token-usage.json'),
+    JSON.stringify({
+      total_input: 40,
+      total_cache_create: 0,
+      total_cache_read: 0,
+      total_output: 60,
+      total_tokens: 100,
+      model,
+      models: {
+        [model]: {
+          total_input: 40,
+          total_cache_create: 0,
+          total_cache_read: 0,
+          total_output: 60,
+          total_tokens: 100,
+          provider: 'anthropic',
+          est_cost_usd: outcome === 'pass' ? 1 : 2,
+        },
+      },
+      est_cost_usd: outcome === 'pass' ? 1 : 2,
+      unpriced_models: [],
+      approximations: [],
+      pricing_as_of: '2026-08-31',
+      duration_ms: 61_000,
+    }),
+  );
+  writeFileSync(
+    join(runDir, 'gauntlet-agent', 'results', runId, 'result.json'),
+    JSON.stringify({
+      schemaVersion: 5,
+      runId,
+      status: outcome,
+      summary: 's',
+      reasoning: 'r',
+      duration_ms: 45_000,
+      config: { model: 'grader-model' },
+      usage: {},
+    }),
+  );
+}
+
+function reportFixture(args: { sealed: boolean }): ReportCliFixture {
+  mkdirSync(REPORT_RESULTS_ROOT, { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'campaign-report-cli-'));
+  const doc = reportCampaign();
+  writeFileSync(join(dir, 'campaign.json'), JSON.stringify(doc));
+  initJournalDb(dir);
+
+  const runSpecs = [
+    {
+      sampleId: 'c1:scn:arm_a:r1',
+      attemptId: 'report-a1',
+      outcome: 'pass' as const,
+      model: 'model-a' as const,
+    },
+    {
+      sampleId: 'c1:scn:arm_b:r1',
+      attemptId: 'report-b1',
+      outcome: 'fail' as const,
+      model: 'model-b' as const,
+    },
+    {
+      sampleId: 'c1:scn:arm_a:r2',
+      attemptId: 'report-a2',
+      outcome: 'pass' as const,
+      model: 'model-a' as const,
+    },
+    {
+      sampleId: 'c1:scn:arm_b:r2',
+      attemptId: 'report-b2',
+      outcome: 'pass' as const,
+      model: 'model-b' as const,
+    },
+  ];
+  const runDirs: string[] = [];
+  const steps = runSpecs.map((spec) => {
+    const runDir = mkdtempSync(
+      join(REPORT_RESULTS_ROOT, 'campaign-report-run-'),
+    );
+    const runId = basename(runDir);
+    runDirs.push(runDir);
+    writeReportRun(runDir, runId, spec.outcome, spec.model);
+    return {
+      kind: 'run' as const,
+      run: { ...spec, runId },
+    };
+  });
+  const events = reportEvents({ campaign: doc, steps });
+  const writer = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: doc,
+  });
+  try {
+    for (const event of events) {
+      writer.appendEvent({
+        type: event.type,
+        payload: event.payload,
+        ts_ms: event.ts_ms,
+      });
+    }
+  } finally {
+    writer.release();
+  }
+
+  const reportReader = openJournalRead(dir);
+  let journalEvents: ReturnType<typeof reportEvents>;
+  try {
+    journalEvents = reportReader.readEvents();
+  } finally {
+    reportReader.close();
+  }
+  const report = foldDescriptiveReport({
+    campaign: doc,
+    events: journalEvents,
+    evidenceOf: (runId, sampleId) =>
+      readSampleEvidence({
+        runDir: join(REPORT_RESULTS_ROOT, runId),
+        sampleId,
+      }),
+  });
+  const jsonBytes = canonicalReportBytes(report);
+  const md = renderReportMd({ report, campaign: doc });
+  if (args.sealed) {
+    const sealer = electWriter({
+      campaignDir: dir,
+      clock: new FakeClock(1),
+      identity: WRITER_IDENTITY,
+      campaign: doc,
+    });
+    try {
+      sealer.appendEvent({
+        type: 'sealed',
+        payload: { report_digest: digestReportBytes(jsonBytes) },
+      });
+    } finally {
+      sealer.release();
+    }
+    writeFileSync(join(dir, REPORT_MD_NAME), md);
+    writeFileSync(join(dir, REPORT_JSON_NAME), jsonBytes);
+  }
+  return { dir, runDirs, jsonBytes, md };
+}
+
+function cleanupReportFixture(fixture: ReportCliFixture): void {
+  rmSync(fixture.dir, { recursive: true, force: true });
+  for (const runDir of fixture.runDirs) {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+}
+
+function unsealedReportFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'campaign-unsealed-cli-'));
+  const doc = reportCampaign();
+  writeFileSync(join(dir, 'campaign.json'), JSON.stringify(doc));
+  initJournalDb(dir);
+  const events = reportEvents({
+    campaign: doc,
+    steps: [
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r1',
+          attemptId: 'unsealed-a1',
+          runId: 'unsealed-a1-run',
+          outcome: 'pass',
+        },
+      },
+      {
+        kind: 'raw',
+        event: {
+          type: 'attempt_created',
+          payload: {
+            sample_id: 'c1:scn:arm_b:r1',
+            attempt_id: 'unsealed-b1',
+          },
+        },
+      },
+      {
+        kind: 'raw',
+        event: {
+          type: 'run_allocated',
+          payload: {
+            attempt_id: 'unsealed-b1',
+            run_id: 'unsealed-b1-run',
+            pgid: CRASHED_PGID,
+            key_grants: [],
+          },
+        },
+      },
+    ],
+  });
+  const writer = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: doc,
+  });
+  try {
+    for (const event of events) {
+      writer.appendEvent({
+        type: event.type,
+        payload: event.payload,
+        ts_ms: event.ts_ms,
+      });
+    }
+  } finally {
+    writer.release();
+  }
+  return dir;
+}
+
+test('report on unsealed campaign prints the blocking samples and exits 1', () => {
+  const dir = unsealedReportFixture();
+  try {
+    const result = runCli(['campaign', 'report', dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('attempt unsealed-b1');
+    expect(result.stderr).toContain('kill_pgid_rerun_block');
+    expect(result.stderr).toContain('c1:scn:arm_b:r1');
+    expect(result.stderr).toContain('samples lacking terminals');
+    expect(result.stderr).toContain('seal first via `quorum campaign run`');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test('report on sealed campaign regenerates digest-equal and prints the md', () => {
+  const fixture = reportFixture({ sealed: true });
+  try {
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe(fixture.md);
+    expect(
+      readFileSync(join(fixture.dir, REPORT_JSON_NAME)).toString('hex'),
+    ).toBe(fixture.jsonBytes.toString('hex'));
+    expect(readFileSync(join(fixture.dir, REPORT_MD_NAME), 'utf8')).toBe(
+      fixture.md,
+    );
+  } finally {
+    cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
+test('report republishes missing artifacts', () => {
+  const fixture = reportFixture({ sealed: true });
+  try {
+    rmSync(join(fixture.dir, REPORT_MD_NAME));
+    rmSync(join(fixture.dir, REPORT_JSON_NAME));
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(fixture.md);
+    expect(
+      readFileSync(join(fixture.dir, REPORT_JSON_NAME)).toString('hex'),
+    ).toBe(fixture.jsonBytes.toString('hex'));
+    expect(readFileSync(join(fixture.dir, REPORT_MD_NAME), 'utf8')).toBe(
+      fixture.md,
+    );
+  } finally {
+    cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
+test('report on a tampered run dir exits 1 naming the divergence, never overwriting', () => {
+  const fixture = reportFixture({ sealed: true });
+  const beforeJson = readFileSync(join(fixture.dir, REPORT_JSON_NAME));
+  const beforeMd = readFileSync(join(fixture.dir, REPORT_MD_NAME), 'utf8');
+  try {
+    const trajectoryPath = join(fixture.runDirs[0]!, 'trajectory.json');
+    const trajectory = JSON.parse(readFileSync(trajectoryPath, 'utf8')) as {
+      steps: Array<Record<string, unknown>>;
+    };
+    trajectory.steps[0]!['model_name'] = 'tampered-model';
+    writeFileSync(trajectoryPath, JSON.stringify(trajectory));
+
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('evidence tampering');
+    expect(result.stderr).toContain('journaled report_digest');
+    expect(
+      readFileSync(join(fixture.dir, REPORT_JSON_NAME)).toString('hex'),
+    ).toBe(beforeJson.toString('hex'));
+    expect(readFileSync(join(fixture.dir, REPORT_MD_NAME), 'utf8')).toBe(
+      beforeMd,
+    );
+  } finally {
+    cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
+test('report on a gating campaign refuses with the D4b message', () => {
+  const fixture = publishedCampaign({ inFlight: false, doc: campaignDoc() });
+  try {
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'sealing/reporting gating campaigns awaits D4b',
+    );
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+}, 30_000);
 
 // ── register ───────────────────────────────────────────────────────────────
 
