@@ -108,10 +108,15 @@ class Prefix {
     readonly attemptId: string;
     readonly runId: string;
     readonly outcome: 'pass' | 'fail';
+    readonly rerunOf?: string;
   }): void {
     if (!this.admitted.has(spec.blockId)) {
       this.admitted.add(spec.blockId);
-      this.emit('block_admitted', { block_id: spec.blockId, pools: ['p'] });
+      this.emit('block_admitted', {
+        block_id: spec.blockId,
+        pools: ['p'],
+        ...(spec.rerunOf !== undefined ? { rerun_of: spec.rerunOf } : {}),
+      });
     }
     this.emit('attempt_created', {
       sample_id: spec.sampleId,
@@ -134,6 +139,35 @@ class Prefix {
       attempt_id: spec.attemptId,
       outcome: spec.outcome,
     });
+  }
+
+  /** The recovery/rerun path aborts an exposed predecessor before its
+   * successor is admitted. */
+  abort(spec: {
+    readonly blockId: string;
+    readonly sampleId: string;
+    readonly attemptId: string;
+    readonly runId: string;
+  }): void {
+    if (!this.admitted.has(spec.blockId)) {
+      this.admitted.add(spec.blockId);
+      this.emit('block_admitted', { block_id: spec.blockId, pools: ['p'] });
+    }
+    this.emit('attempt_created', {
+      sample_id: spec.sampleId,
+      attempt_id: spec.attemptId,
+    });
+    this.emit('run_allocated', {
+      attempt_id: spec.attemptId,
+      run_id: spec.runId,
+      pgid: CRASHED_PGID,
+      key_grants: [],
+    });
+    this.emit('exposure_started', {
+      sample_id: spec.sampleId,
+      ts: this.tsMs,
+    });
+    this.raw('aborted', { block_id: spec.blockId });
   }
 
   raw(type: JournalEventType, payload: unknown): void {
@@ -273,6 +307,61 @@ function contentionMintPrefix(doc: Campaign): Prefix {
     sampleId: B_R2,
     attemptId: 'att-4',
     runId: 'run-4',
+    outcome: 'fail',
+  });
+  return p;
+}
+
+/** A rerun reuses the predecessor sample IDs but has a distinct admitted
+ * instance. The breach is confined to the predecessor interval; a sample-wide
+ * clock incorrectly attributes it to the successor too. */
+function rerunPrefix(doc: Campaign): Prefix {
+  const p = new Prefix(doc);
+  p.abort({
+    blockId: REPORT_BLOCK_1,
+    sampleId: A_R1,
+    attemptId: 'att-r1-a0',
+    runId: 'run-r1-a0',
+  });
+  p.raw('block_replaced', {
+    block_id: REPORT_BLOCK_1,
+    replacement_block_id: 'c1:scn:b1:rerun:1',
+    reason: 'snapshot_drift',
+    kind: 'rerun',
+    reserve_activation: false,
+    roster: [
+      { sample_id: A_R1, arm: 'arm_a' },
+      { sample_id: B_R1, arm: 'arm_b' },
+    ],
+  });
+  p.run({
+    blockId: 'c1:scn:b1:rerun:1',
+    sampleId: A_R1,
+    attemptId: 'att-r1-a1',
+    runId: 'run-r1-a1',
+    outcome: 'pass',
+    rerunOf: REPORT_BLOCK_1,
+  });
+  p.run({
+    blockId: 'c1:scn:b1:rerun:1',
+    sampleId: B_R1,
+    attemptId: 'att-r1-b1',
+    runId: 'run-r1-b1',
+    outcome: 'pass',
+    rerunOf: REPORT_BLOCK_1,
+  });
+  p.run({
+    blockId: REPORT_BLOCK_2,
+    sampleId: A_R2,
+    attemptId: 'att-r2-a',
+    runId: 'run-r2-a',
+    outcome: 'pass',
+  });
+  p.run({
+    blockId: REPORT_BLOCK_2,
+    sampleId: B_R2,
+    attemptId: 'att-r2-b',
+    runId: 'run-r2-b',
     outcome: 'fail',
   });
   return p;
@@ -446,6 +535,53 @@ function mintRuns(): RunSpec[] {
       usd: 7,
     },
     ...happyRuns().slice(2),
+  ];
+}
+
+function rerunRuns(): RunSpec[] {
+  return [
+    {
+      runId: 'run-r1-a0',
+      outcome: 'pass',
+      model: 'model-a',
+      tokens: 100,
+      usd: 1,
+    },
+    {
+      runId: 'run-r1-b0',
+      outcome: 'pass',
+      model: 'model-b',
+      tokens: 300,
+      usd: 3,
+    },
+    {
+      runId: 'run-r1-a1',
+      outcome: 'pass',
+      model: 'model-a',
+      tokens: 200,
+      usd: 2,
+    },
+    {
+      runId: 'run-r1-b1',
+      outcome: 'pass',
+      model: 'model-b',
+      tokens: 400,
+      usd: 4,
+    },
+    {
+      runId: 'run-r2-a',
+      outcome: 'pass',
+      model: 'model-a',
+      tokens: 500,
+      usd: 5,
+    },
+    {
+      runId: 'run-r2-b',
+      outcome: 'fail',
+      model: 'model-b',
+      tokens: 600,
+      usd: 6,
+    },
   ];
 }
 
@@ -842,6 +978,19 @@ describe('runTerminusSeal', () => {
     ).toBe(true);
   });
 
+  test('rerun intervals use the admitted instance, not reused sample clocks', () => {
+    const fixture = sealFixture({
+      prefix: rerunPrefix(reportCampaign()),
+      sidecar: cadence(1000, 34000, (ts) => (ts >= 3000 && ts <= 5000 ? 9 : 1)),
+      runs: rerunRuns(),
+    });
+
+    const { result } = terminus(fixture);
+
+    expect(result.outcome).toBe('sealed');
+    expect(adjudications(fixture.dir)).toEqual([]);
+  });
+
   test('backstop dedupe: re-running the terminus appends no duplicate adjudications', () => {
     // A crash after a backstop adjudication landed (but before `sealed`)
     // resumes into the same terminus: the re-run must skip the block whose
@@ -866,7 +1015,7 @@ describe('runTerminusSeal', () => {
         type: 'adjudication',
         payload: {
           cell: 'c1:scn',
-          disposition: 'unknown_coverage',
+          disposition: 'contention_invalidated',
           rationale: `block=${REPORT_BLOCK_1}; fixture-prior adjudication with a different detail text`,
         },
       });
@@ -877,11 +1026,11 @@ describe('runTerminusSeal', () => {
     const { result } = terminus(fixture);
     expect(result.outcome).toBe('sealed');
 
-    const unknown = adjudications(fixture.dir).filter(
-      (event) => event.payload.disposition === 'unknown_coverage',
+    const priorBlock = adjudications(fixture.dir).filter((event) =>
+      event.payload.rationale.startsWith(`block=${REPORT_BLOCK_1};`),
     );
-    expect(unknown).toHaveLength(1);
-    expect(unknown[0]?.payload.rationale).toContain('fixture-prior');
+    expect(priorBlock).toHaveLength(1);
+    expect(priorBlock[0]?.payload.rationale).toContain('fixture-prior');
     expect(sealedEvents(fixture.dir)).toHaveLength(1);
   });
 

@@ -372,6 +372,66 @@ describe('foldDescriptiveReport', () => {
     expect(report.provenance.failed_cells).toEqual([]);
   });
 
+  test('integrity adjudications are carried into distinct report classes', () => {
+    const campaign = reportCampaign();
+    const events = reportEvents({
+      campaign,
+      steps: [
+        ...happySteps(),
+        {
+          kind: 'raw',
+          event: {
+            type: 'adjudication',
+            payload: {
+              cell: 'c1:scn',
+              disposition: 'integrity_finding',
+              rationale: 'block=c1:scn:b1; recompute mismatch',
+            },
+          },
+        },
+        {
+          kind: 'raw',
+          event: {
+            type: 'adjudication',
+            payload: {
+              cell: 'c1:scn',
+              disposition: 'integrity_caveat',
+              rationale: 'block=c1:scn:b2; sidecar evidence lost',
+            },
+          },
+        },
+      ],
+    });
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(happyEvidence()),
+    });
+
+    expect(report.integrity).toEqual({
+      findings: [
+        {
+          block_id: 'c1:scn:b1',
+          rationale: 'block=c1:scn:b1; recompute mismatch',
+        },
+      ],
+      caveats: [
+        {
+          block_id: 'c1:scn:b2',
+          rationale: 'block=c1:scn:b2; sidecar evidence lost',
+        },
+      ],
+    });
+    expect(report.accounting.integrity_findings).toBe(1);
+    expect(report.accounting.integrity_caveats).toBe(1);
+    const md = renderReportMd({ report, campaign });
+    expect(md).toContain('## Integrity');
+    expect(md).toContain('integrity findings: 1');
+    expect(md).toContain('integrity caveats: 1');
+    expect(md).toContain('recompute mismatch');
+    expect(md).toContain('sidecar evidence lost');
+  });
+
   test('instrument-failed sample: counted in accounting, never in rates', () => {
     const campaign = reportCampaign();
     // arm_a:r1 fails the instrument and is NOT replaced: it keeps its
@@ -841,7 +901,7 @@ function goldenReport() {
  *  — key order, number formatting, line ending, trailing newline — breaks this
  *  loudly. Do NOT regenerate to make it pass. */
 const GOLDEN_REPORT_JSON =
-  '{"accounting":{"amendments":0,"budget_events":0,"contention_invalidated":0,"denominators":{"c1:scn":4},"indeterminates":0,"instrument_errors":0,"replacements":0,"reserve_draws":0,"skew_caveats":0,"skew_exclusions":0,"unknown_coverage":0},"campaign_id":"27e9b58a7a41794573b240289a4f6cf90eee1ee2ce354373c60b6ef6d6302a12","cannot_answer":[],"comparisons":[{"cells":[{"class":"descriptive","coverage":1,"delta":-0.5,"fail":1,"n":2,"pass":3,"scenario":"scn"}],"comparison_id":"c1","medians":{"tokens":250,"usd":2.5}}],"errata":[],"profile":"descriptive_v1","provenance":{"arms":[{"arm":"arm_a","observed_model_set":["model-a"],"registered_model":"model-a"},{"arm":"arm_b","observed_model_set":["model-b"],"registered_model":"model-b"}],"failed_cells":[],"grader":{"credential":"grader_cred","model":"grader-model","observed":"grader-model"}},"schema_version":1,"stamp":"DESCRIPTIVE"}\n';
+  '{"accounting":{"amendments":0,"budget_events":0,"contention_invalidated":0,"denominators":{"c1:scn":4},"indeterminates":0,"instrument_errors":0,"integrity_caveats":0,"integrity_findings":0,"replacements":0,"reserve_draws":0,"skew_caveats":0,"skew_exclusions":0,"unknown_coverage":0},"campaign_id":"27e9b58a7a41794573b240289a4f6cf90eee1ee2ce354373c60b6ef6d6302a12","cannot_answer":[],"comparisons":[{"cells":[{"class":"descriptive","coverage":1,"delta":-0.5,"fail":1,"n":2,"pass":3,"scenario":"scn"}],"comparison_id":"c1","medians":{"tokens":250,"usd":2.5}}],"errata":[],"integrity":{"caveats":[],"findings":[]},"profile":"descriptive_v1","provenance":{"arms":[{"arm":"arm_a","observed_model_set":["model-a"],"registered_model":"model-a"},{"arm":"arm_b","observed_model_set":["model-b"],"registered_model":"model-b"}],"failed_cells":[],"grader":{"credential":"grader_cred","model":"grader-model","observed":"grader-model"}},"schema_version":1,"stamp":"DESCRIPTIVE"}\n';
 
 describe('canonicalReportBytes / digestReportBytes', () => {
   test('canonical bytes: sorted keys, LF, trailing newline, stable across repeated renders', () => {
@@ -954,7 +1014,9 @@ describe('renderReportMd', () => {
     });
     const md = renderReportMd({ report: mismatched, campaign });
     expect(md).toContain('arm model absent from observed set');
-    expect(md).not.toContain('  - (none)'); // a finding replaced the empty list
+    expect(md).toContain(
+      '  - c1/scn: arm model absent from observed set: arm arm_a registered model-a, observed [wrong-model]',
+    );
 
     const nullGrader = { ...table };
     for (const runId of ['run-1', 'run-2', 'run-3', 'run-4']) {

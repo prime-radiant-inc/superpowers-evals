@@ -42,6 +42,8 @@ function gatingReport(overrides: Record<string, unknown> = {}) {
       amendments: 0,
       contention_invalidated: 0,
       unknown_coverage: 0,
+      integrity_findings: 0,
+      integrity_caveats: 0,
       denominators: { scored: 386, planned: 388 },
     },
     provenance: {
@@ -55,6 +57,7 @@ function gatingReport(overrides: Record<string, unknown> = {}) {
       },
       failed_cells: [],
     },
+    integrity: { findings: [], caveats: [] },
     errata: [],
     ...overrides,
   };
@@ -123,6 +126,8 @@ function descriptiveReport(overrides: Record<string, unknown> = {}) {
       amendments: 0,
       contention_invalidated: 0,
       unknown_coverage: 0,
+      integrity_findings: 0,
+      integrity_caveats: 0,
       denominators: { scored: 5, planned: 5 },
       ...accounting,
     },
@@ -134,6 +139,7 @@ function descriptiveReport(overrides: Record<string, unknown> = {}) {
       grader,
       ...provenanceRest,
     },
+    integrity: { findings: [], caveats: [] },
     errata: [],
     ...topLevel,
   };
@@ -259,6 +265,22 @@ test('D-8: accounting names both contention dispositions', () => {
   );
   expect(parsed.accounting.contention_invalidated).toBe(2);
   expect(parsed.accounting.unknown_coverage).toBe(1);
+});
+
+test('D4a: integrity findings and caveats have distinct typed report carriers', () => {
+  const parsed = ReportSchema.parse(
+    descriptiveReport({
+      integrity: {
+        findings: [{ block_id: 'c1:scn:b1', rationale: 'recompute mismatch' }],
+        caveats: [{ block_id: 'c1:scn:b2', rationale: 'sidecar lost' }],
+      },
+      accounting: { integrity_findings: 1, integrity_caveats: 1 },
+    }),
+  );
+  expect(parsed.integrity.findings).toHaveLength(1);
+  expect(parsed.integrity.caveats).toHaveLength(1);
+  expect(parsed.accounting.integrity_findings).toBe(1);
+  expect(parsed.accounting.integrity_caveats).toBe(1);
 });
 
 test('D-8: provenance carries failed_cells; grader.observed is nullable', () => {

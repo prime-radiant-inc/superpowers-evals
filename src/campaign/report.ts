@@ -128,6 +128,8 @@ interface JournalScan {
   readonly amendments: number;
   readonly contentionInvalidated: number;
   readonly unknownCoverage: number;
+  readonly integrityFindings: Report['integrity']['findings'];
+  readonly integrityCaveats: Report['integrity']['caveats'];
   readonly contentionBlocks: ReadonlyMap<string, string>;
   /** The run a sample's evidence lives in: its last TERMINAL attempt's run,
    *  else its last allocated run (rerun instances re-run the same samples,
@@ -209,6 +211,10 @@ export function foldDescriptiveReport(args: {
     })),
     accounting,
     provenance,
+    integrity: {
+      findings: scan.integrityFindings,
+      caveats: scan.integrityCaveats,
+    },
     errata: [] as Report['errata'],
   };
   const parsed = ReportSchema.safeParse(report);
@@ -261,6 +267,8 @@ function scanJournal(events: readonly JournalEvent[]): JournalScan {
   let amendments = 0;
   let contentionInvalidated = 0;
   let unknownCoverage = 0;
+  const integrityFindings: Report['integrity']['findings'] = [];
+  const integrityCaveats: Report['integrity']['caveats'] = [];
   for (const event of events) {
     switch (event.type) {
       case 'attempt_created':
@@ -310,15 +318,31 @@ function scanJournal(events: readonly JournalEvent[]): JournalScan {
         amendments += 1;
         break;
       case 'adjudication': {
-        // D-4's two ratified dispositions; every other adjudication
-        // vocabulary (spend_recovered, integrity findings, …) is not the
-        // contention backstop's and is not counted here.
         const disposition = event.payload.disposition;
         if (
           disposition !== 'contention_invalidated' &&
           disposition !== 'unknown_coverage'
-        )
+        ) {
+          if (
+            disposition !== 'integrity_finding' &&
+            disposition !== 'integrity_caveat'
+          )
+            break;
+          const blockId = /^block=([^;]+);/.exec(event.payload.rationale)?.[1];
+          if (blockId === undefined) {
+            throw new ReportFoldError(
+              `adjudication (disposition ${disposition}) does not carry the pinned block identity encoding 'block=<block_id>; <detail>' in its rationale — cannot classify the integrity record: ${event.payload.rationale}`,
+            );
+          }
+          const record = {
+            block_id: blockId,
+            rationale: event.payload.rationale,
+          };
+          if (disposition === 'integrity_finding')
+            integrityFindings.push(record);
+          else integrityCaveats.push(record);
           break;
+        }
         if (disposition === 'contention_invalidated')
           contentionInvalidated += 1;
         else unknownCoverage += 1;
@@ -355,6 +379,8 @@ function scanJournal(events: readonly JournalEvent[]): JournalScan {
     amendments,
     contentionInvalidated,
     unknownCoverage,
+    integrityFindings,
+    integrityCaveats,
     contentionBlocks,
     evidenceRunBySample,
   };
@@ -884,6 +910,8 @@ function computeAccounting(
     amendments: scan.amendments,
     contention_invalidated: scan.contentionInvalidated,
     unknown_coverage: scan.unknownCoverage,
+    integrity_findings: scan.integrityFindings.length,
+    integrity_caveats: scan.integrityCaveats.length,
     denominators,
   };
 }
@@ -1061,6 +1089,24 @@ export function renderReportMd(args: {
   line('- denominators:');
   for (const cellId of Object.keys(report.accounting.denominators).sort()) {
     line(`  - ${cellId}: ${num(report.accounting.denominators[cellId] ?? 0)}`);
+  }
+  line();
+
+  line('## Integrity');
+  line();
+  line(`- integrity findings: ${report.accounting.integrity_findings}`);
+  line(`- integrity caveats: ${report.accounting.integrity_caveats}`);
+  line('- findings:');
+  if (report.integrity.findings.length === 0) line('  - (none)');
+  else {
+    for (const finding of report.integrity.findings)
+      line(`  - ${finding.block_id}: ${finding.rationale}`);
+  }
+  line('- caveats:');
+  if (report.integrity.caveats.length === 0) line('  - (none)');
+  else {
+    for (const caveat of report.integrity.caveats)
+      line(`  - ${caveat.block_id}: ${caveat.rationale}`);
   }
   line();
 

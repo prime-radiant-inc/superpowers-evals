@@ -170,48 +170,127 @@ function journalMembership(
     // (E7.2: same-arm pairing is derivable from membership).
   }
 
-  // Per-sample clocks: first attempt (interval start) and latest terminal
-  // (interval end). Terminals are every event class that ends a sample's or
-  // block's service — attempt-scoped run_completed/instrument_failure,
-  // sample-scoped slot_exhausted/budget_stopped, block-scoped
-  // aborted/skew_excluded (fanned out over the roster).
-  const sampleOfAttempt = new Map<string, string>();
-  const firstAttemptTs = new Map<string, number>();
-  const lastTerminalTs = new Map<string, number>();
-  const noteMin = (key: string, ts: number): void => {
-    const prev = firstAttemptTs.get(key);
-    if (prev === undefined || ts < prev) firstAttemptTs.set(key, ts);
-  };
-  const noteMax = (key: string, ts: number): void => {
-    const prev = lastTerminalTs.get(key);
-    if (prev === undefined || ts > prev) lastTerminalTs.set(key, ts);
-  };
+  // Attribute every attempt to the most recently admitted instance whose
+  // roster contains its sample, matching recovery.ts's instance-chain rule.
+  // This is essential for reruns: their successor deliberately reuses the
+  // predecessor sample IDs, so sample-wide clocks merge two instances.
+  const admittedSeq = new Map<string, number>();
+  const attempts: Array<{
+    readonly attemptId: string;
+    readonly sampleId: string;
+    readonly createdSeq: number;
+    readonly startTsMs: number;
+  }> = [];
+  const attemptsBySample = new Map<string, Array<(typeof attempts)[number]>>();
   for (const event of events) {
     switch (event.type) {
-      case 'attempt_created':
-        sampleOfAttempt.set(event.payload.attempt_id, event.payload.sample_id);
-        noteMin(event.payload.sample_id, event.ts_ms);
+      case 'block_admitted':
+        admittedSeq.set(event.payload.block_id, event.seq);
         break;
+      case 'attempt_created':
+        {
+          const attempt = {
+            attemptId: event.payload.attempt_id,
+            sampleId: event.payload.sample_id,
+            createdSeq: event.seq,
+            startTsMs: event.ts_ms,
+          };
+          attempts.push(attempt);
+          const sampleAttempts = attemptsBySample.get(attempt.sampleId) ?? [];
+          sampleAttempts.push(attempt);
+          attemptsBySample.set(attempt.sampleId, sampleAttempts);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const blockOfAttempt = new Map<string, string>();
+  for (const attempt of attempts) {
+    let best: { blockId: string; seq: number } | undefined;
+    for (const [blockId, members] of rosterByBlock) {
+      if (!members.includes(attempt.sampleId)) continue;
+      const seq = admittedSeq.get(blockId);
+      if (seq === undefined || seq > attempt.createdSeq) continue;
+      if (best === undefined || seq > best.seq) best = { blockId, seq };
+    }
+    if (best === undefined) {
+      throw new SealError(
+        `attempt ${attempt.attemptId} (sample ${attempt.sampleId}) belongs to no instance admitted at or before its creation — the journal's admitted instance chain does not explain it`,
+      );
+    }
+    blockOfAttempt.set(attempt.attemptId, best.blockId);
+  }
+
+  const firstAttemptTs = new Map<string, number>();
+  const lastTerminalTs = new Map<string, number>();
+  const terminalSamples = new Map<string, Set<string>>();
+  const noteStart = (blockId: string, ts: number): void => {
+    const prev = firstAttemptTs.get(blockId);
+    if (prev === undefined || ts < prev) firstAttemptTs.set(blockId, ts);
+  };
+  const noteTerminal = (
+    blockId: string,
+    sampleId: string,
+    ts: number,
+  ): void => {
+    const prev = lastTerminalTs.get(blockId);
+    if (prev === undefined || ts > prev) lastTerminalTs.set(blockId, ts);
+    const samples = terminalSamples.get(blockId) ?? new Set<string>();
+    samples.add(sampleId);
+    terminalSamples.set(blockId, samples);
+  };
+  const attemptForSampleAt = (
+    sampleId: string,
+    seq: number,
+  ): string | undefined => {
+    const sampleAttempts = attemptsBySample.get(sampleId) ?? [];
+    for (let i = sampleAttempts.length - 1; i >= 0; i -= 1) {
+      const attempt = sampleAttempts[i];
+      if (attempt !== undefined && attempt.createdSeq <= seq)
+        return blockOfAttempt.get(attempt.attemptId);
+    }
+    return undefined;
+  };
+  for (const attempt of attempts) {
+    const blockId = blockOfAttempt.get(attempt.attemptId);
+    if (blockId === undefined) {
+      throw new SealError(
+        `attempt ${attempt.attemptId} has no admitted instance association — the journal's attempt lineage is incomplete`,
+      );
+    }
+    noteStart(blockId, attempt.startTsMs);
+  }
+  for (const event of events) {
+    switch (event.type) {
       case 'run_completed':
       case 'instrument_failure': {
-        const sampleId = sampleOfAttempt.get(event.payload.attempt_id);
-        if (sampleId !== undefined) noteMax(sampleId, event.ts_ms);
+        const attempt = attempts.find(
+          (candidate) => candidate.attemptId === event.payload.attempt_id,
+        );
+        const blockId = blockOfAttempt.get(event.payload.attempt_id);
+        if (attempt !== undefined && blockId !== undefined)
+          noteTerminal(blockId, attempt.sampleId, event.ts_ms);
         break;
       }
-      case 'slot_exhausted':
-        noteMax(event.payload.sample_id, event.ts_ms);
+      case 'slot_exhausted': {
+        const blockId = attemptForSampleAt(event.payload.sample_id, event.seq);
+        if (blockId !== undefined)
+          noteTerminal(blockId, event.payload.sample_id, event.ts_ms);
         break;
+      }
       case 'budget_stopped':
         for (const sampleId of event.payload.sample_ids) {
-          noteMax(sampleId, event.ts_ms);
+          const blockId = attemptForSampleAt(sampleId, event.seq);
+          if (blockId !== undefined)
+            noteTerminal(blockId, sampleId, event.ts_ms);
         }
         break;
       case 'aborted':
       case 'skew_excluded':
-        for (const sampleId of rosterByBlock.get(event.payload.block_id) ??
-          []) {
-          noteMax(sampleId, event.ts_ms);
-        }
+        for (const sampleId of rosterByBlock.get(event.payload.block_id) ?? [])
+          noteTerminal(event.payload.block_id, sampleId, event.ts_ms);
         break;
       default:
         break;
@@ -220,23 +299,14 @@ function journalMembership(
 
   const intervals = new Map<string, ServiceInterval>();
   for (const [blockId, members] of rosterByBlock) {
-    const starts: number[] = [];
-    for (const sampleId of members) {
-      const ts = firstAttemptTs.get(sampleId);
-      if (ts !== undefined) starts.push(ts);
-    }
-    if (starts.length === 0) continue; // never attempted: no service interval
-    const startTsMs = Math.min(...starts);
-    const ends: number[] = [];
-    for (const sampleId of members) {
-      const ts = lastTerminalTs.get(sampleId);
-      if (ts !== undefined) ends.push(ts);
-    }
+    const startTsMs = firstAttemptTs.get(blockId);
+    if (startTsMs === undefined) continue; // never attempted: no service interval
+    const ended = terminalSamples.get(blockId)?.size === members.length;
     // A member without a terminal keeps the interval open (conservative):
     // the evaluator clips it to the evaluation horizon.
     intervals.set(blockId, {
       startTsMs,
-      endTsMs: ends.length === members.length ? Math.max(...ends) : null,
+      endTsMs: ended ? (lastTerminalTs.get(blockId) ?? null) : null,
     });
   }
   return {
@@ -248,20 +318,23 @@ function journalMembership(
   };
 }
 
-/** Dispositions already journaled, keyed by (disposition, block named in the
- *  encoded rationale) — the crash-resume dedupe set: a block whose
- *  adjudication already exists is skipped, so re-running the terminus never
- *  duplicates a disposition (the fold counts these events). */
+/** Backstop dispositions already journaled, keyed by the block named in the
+ *  encoded rationale — the crash-resume dedupe set. A prior backstop
+ *  disposition suppresses any second backstop disposition for that block,
+ *  regardless of which of the two verdicts it carried. */
 function existingBlockAdjudications(
   events: readonly JournalEvent[],
 ): ReadonlySet<string> {
   const out = new Set<string>();
   for (const event of events) {
     if (event.type !== 'adjudication') continue;
+    if (
+      event.payload.disposition !== 'contention_invalidated' &&
+      event.payload.disposition !== 'unknown_coverage'
+    )
+      continue;
     const blockId = BLOCK_RATIONALE.exec(event.payload.rationale)?.[1];
-    if (blockId !== undefined) {
-      out.add(`${event.payload.disposition}\0${blockId}`);
-    }
+    if (blockId !== undefined) out.add(blockId);
   }
   return out;
 }
@@ -580,7 +653,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
       if (verdict === undefined || verdict === 'clean') continue;
       const disposition =
         verdict === 'invalid' ? 'contention_invalidated' : 'unknown_coverage';
-      if (adjudicated.has(`${disposition}\0${blockId}`)) continue; // dedupe
+      if (adjudicated.has(blockId)) continue; // dedupe by block identity
       const interval = membership.intervals.get(blockId) as ServiceInterval;
       const detail =
         verdict === 'invalid'

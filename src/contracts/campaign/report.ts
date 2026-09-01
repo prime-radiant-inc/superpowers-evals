@@ -18,6 +18,13 @@ export const REPORT_RENDERING = {
   numbers: 'shortest-round-trip',
 } as const;
 
+const IntegrityEntrySchema = z
+  .object({
+    block_id: z.string().min(1),
+    rationale: z.string().min(1),
+  })
+  .strict();
+
 /** Decision D-8 amendment (D4a spec:
  * docs/superpowers/specs/2026-08-31-kernel-d4a-descriptive-readout-design.md):
  * cells carry pass/fail counts and coverage, comparisons carry medians,
@@ -77,6 +84,8 @@ export const ReportSchema = z
         amendments: z.number().int().nonnegative(),
         contention_invalidated: z.number().int().nonnegative(),
         unknown_coverage: z.number().int().nonnegative(),
+        integrity_findings: z.number().int().nonnegative(),
+        integrity_caveats: z.number().int().nonnegative(),
         denominators: z.record(z.string(), z.number().int().nonnegative()),
       })
       .strict(),
@@ -110,6 +119,12 @@ export const ReportSchema = z
       })
       .strict(),
     supersedes: z.string().min(1).optional(),
+    integrity: z
+      .object({
+        findings: z.array(IntegrityEntrySchema),
+        caveats: z.array(IntegrityEntrySchema),
+      })
+      .strict(),
     errata: z.array(z.object({ note: z.string().min(1) }).strict()),
   })
   .strict()
