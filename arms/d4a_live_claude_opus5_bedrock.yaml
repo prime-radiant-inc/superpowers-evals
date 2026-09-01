@@ -1,0 +1,9 @@
+# D4a live-validation arm — the gating suite's second seat. Gating
+# comparisons require two DISTINCT arms; opus5_bedrock keeps both seats on
+# the funded Mantle route while differing in model (Opus 5 vs Opus 4.8) and
+# quota pool (poolKey names the credential and model).
+schema_version: 1
+name: d4a_live_claude_opus5_bedrock
+agent: claude
+credential: opus5_bedrock
+superpowers: none
