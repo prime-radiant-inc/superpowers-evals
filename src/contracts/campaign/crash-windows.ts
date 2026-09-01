@@ -33,6 +33,8 @@ export interface AttemptCrashWindow {
 
 export interface CrashWindowReport {
   readonly attempts: AttemptCrashWindow[];
+  /** Active roster samples whose current attempt/fact has no terminal. */
+  readonly samplesLackingTerminals: string[];
   /** 'regenerate_report' when the instance-complete seal predicate holds
    *  but no sealed event exists (process died post-predicate pre-report). */
   readonly campaign: 'regenerate_report' | 'none';
@@ -440,6 +442,50 @@ function sampleTerminal(fold: PrefixFold, sampleId: string): boolean {
   return current !== undefined && fold.terminalAttempts.has(current);
 }
 
+/** Active roster samples with no current terminal fact. The resolver and the
+ * report diagnostic both use this derived set: frozen reserves stay inactive
+ * until their block is minted, while mint rosters add replacement/rerun
+ * instances that are absent from the frozen document's block list. */
+function samplesLackingTerminals(
+  fold: PrefixFold,
+  universe: CampaignUniverse,
+): string[] {
+  const slotByBlock = new Map(
+    universe.blocks.map((block) => [block.block_id, block.slot]),
+  );
+  const activeSamples = new Set<string>();
+
+  for (const sample of universe.samples) {
+    const homes = universe.blocks.filter((block) =>
+      block.sample_ids.includes(sample.sample_id),
+    );
+    if (
+      homes.length === 0 ||
+      homes.some(
+        (block) =>
+          block.slot !== 'reserve' || fold.mintBySuccessor.has(block.block_id),
+      )
+    ) {
+      activeSamples.add(sample.sample_id);
+    }
+  }
+
+  for (const [blockId, roster] of fold.rosterByBlock) {
+    if (
+      slotByBlock.get(blockId) === 'reserve' &&
+      !fold.mintBySuccessor.has(blockId)
+    ) {
+      continue;
+    }
+    for (const sampleId of roster) activeSamples.add(sampleId);
+  }
+
+  return [...activeSamples].filter(
+    (sampleId) =>
+      !sampleTerminal(fold, sampleId) && !fold.excludedSamples.has(sampleId),
+  );
+}
+
 /** Successor-local post-mint terminal witness (E7.1): the sample's CURRENT
  *  attempt — created after the mint AND after the successor's own
  *  block_admitted, and attributable to THIS successor instance (the latest
@@ -662,5 +708,9 @@ export function resolveCrashWindows(
     !fold.sealed && !fold.cancelled && sealPredicateHolds(universe, events)
       ? 'regenerate_report'
       : 'none';
-  return { attempts, campaign };
+  return {
+    attempts,
+    samplesLackingTerminals: samplesLackingTerminals(fold, universe),
+    campaign,
+  };
 }

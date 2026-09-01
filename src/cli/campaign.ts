@@ -793,78 +793,17 @@ function verbFailure(err: unknown): number {
   return 1;
 }
 
-function terminalSampleIds(
-  events: readonly JournalEvent[],
-  universe: ReturnType<typeof universeOf>,
-): ReadonlySet<string> {
-  const sampleOfAttempt = new Map<string, string>();
-  const terminalSamples = new Set<string>();
-  const disposedSamples = new Set<string>();
-  const blockSamples = new Map<string, readonly string[]>(
-    universe.blocks.map((block) => [block.block_id, block.sample_ids]),
-  );
-  const activatedReserveBlocks = new Set<string>();
-
-  for (const event of events) {
-    switch (event.type) {
-      case 'attempt_created':
-        sampleOfAttempt.set(event.payload.attempt_id, event.payload.sample_id);
-        break;
-      case 'run_completed':
-      case 'instrument_failure': {
-        const sampleId = sampleOfAttempt.get(event.payload.attempt_id);
-        if (sampleId !== undefined) terminalSamples.add(sampleId);
-        break;
-      }
-      case 'slot_exhausted':
-        terminalSamples.add(event.payload.sample_id);
-        break;
-      case 'budget_stopped':
-        for (const sampleId of event.payload.sample_ids)
-          terminalSamples.add(sampleId);
-        break;
-      case 'aborted':
-      case 'skew_excluded':
-        for (const sampleId of blockSamples.get(event.payload.block_id) ?? [])
-          terminalSamples.add(sampleId);
-        break;
-      case 'sample_disposition':
-        disposedSamples.add(event.payload.sample_id);
-        break;
-      case 'block_replaced':
-        activatedReserveBlocks.add(event.payload.replacement_block_id);
-        break;
-      default:
-        break;
-    }
-  }
-
-  return new Set(
-    universe.samples
-      .filter((sample) => {
-        const home = universe.blocks.find((block) =>
-          block.sample_ids.includes(sample.sample_id),
-        );
-        if (
-          home?.slot === 'reserve' &&
-          !activatedReserveBlocks.has(home.block_id)
-        )
-          return false;
-        return (
-          !terminalSamples.has(sample.sample_id) &&
-          !disposedSamples.has(sample.sample_id)
-        );
-      })
-      .map((sample) => sample.sample_id),
-  );
-}
-
 function unsealedCampaignDiagnostic(
   events: readonly JournalEvent[],
   universe: ReturnType<typeof universeOf>,
 ): string {
   const crashWindows = resolveCrashWindows(universe, events);
-  const missing = terminalSampleIds(events, universe);
+  if (crashWindows.campaign === 'regenerate_report') {
+    return [
+      'campaign is complete but unsealed; the seal predicate holds',
+      'seal first via `quorum campaign run`',
+    ].join('\n');
+  }
   const lines = [
     'campaign is not sealed; the following samples or attempts block sealing:',
   ];
@@ -875,10 +814,15 @@ function unsealedCampaignDiagnostic(
       }`,
     );
   }
-  if (missing.size > 0) {
-    lines.push(`- samples lacking terminals: ${[...missing].join(', ')}`);
+  if (crashWindows.samplesLackingTerminals.length > 0) {
+    lines.push(
+      `- samples lacking terminals: ${crashWindows.samplesLackingTerminals.join(', ')}`,
+    );
   }
-  if (crashWindows.attempts.length === 0 && missing.size === 0) {
+  if (
+    crashWindows.attempts.length === 0 &&
+    crashWindows.samplesLackingTerminals.length === 0
+  ) {
     lines.push(
       '- seal predicate is not satisfied; inspect the campaign journal',
     );
@@ -1202,19 +1146,26 @@ export async function campaignReport(rawCampaignDir: string): Promise<number> {
     const md = renderReportMd({ report, campaign });
     const mdPath = join(campaignDir, REPORT_MD_NAME);
     const jsonPath = join(campaignDir, REPORT_JSON_NAME);
+    const artifacts = [
+      {
+        name: REPORT_MD_NAME,
+        path: mdPath,
+        bytes: Buffer.from(md, 'utf8'),
+      },
+      { name: REPORT_JSON_NAME, path: jsonPath, bytes: jsonBytes },
+    ] as const;
+    for (const artifact of artifacts) {
+      if (
+        existsSync(artifact.path) &&
+        !readFileSync(artifact.path).equals(artifact.bytes)
+      ) {
+        throw new CampaignVerbError(
+          `evidence tampering: ${artifact.name} diverges from the digest-verified report; refusing to overwrite report artifacts`,
+        );
+      }
+    }
     if (!existsSync(mdPath) || !existsSync(jsonPath)) {
       publishReport({ campaignDir, md, jsonBytes });
-    } else {
-      if (!readFileSync(mdPath).equals(Buffer.from(md, 'utf8'))) {
-        throw new CampaignVerbError(
-          `evidence tampering: ${REPORT_MD_NAME} diverges from the digest-verified report; refusing to overwrite report artifacts`,
-        );
-      }
-      if (!readFileSync(jsonPath).equals(jsonBytes)) {
-        throw new CampaignVerbError(
-          `evidence tampering: ${REPORT_JSON_NAME} diverges from the digest-verified report; refusing to overwrite report artifacts`,
-        );
-      }
     }
     process.stdout.write(md);
     return 0;

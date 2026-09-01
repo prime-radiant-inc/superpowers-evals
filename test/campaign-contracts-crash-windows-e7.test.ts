@@ -40,6 +40,9 @@ function openAndAdmit(): JournalEvent[] {
 test('instance-complete seal: unactivated reserve imposes nothing; primaries must terminal', () => {
   const events = openAndAdmit();
   expect(sealPredicateHolds(UNIVERSE, events)).toBe(false);
+  expect(resolveCrashWindows(UNIVERSE, events)).toMatchObject({
+    samplesLackingTerminals: ['s1', 's2'],
+  });
   // Terminal s1+s2 via attempts; reserve x1 stays unactivated.
   events.push(
     ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
@@ -263,6 +266,71 @@ test('rerun admission lifts the aborted fact: a live rerun attempt gets its kill
   expect(report.attempts).toEqual([
     { attempt_id: 'a3', resolution: 'kill_pgid_rerun_block', pgid: 3 },
   ]);
+});
+
+test('resolver missing samples follow the current rerun attempt, not predecessor-era terminals', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'old-s1' }),
+    ev('run_allocated', { attempt_id: 'old-s1', run_id: 'r1', pgid: 1 }),
+    ev('run_completed', { attempt_id: 'old-s1', outcome: 'pass' }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'old-s2' }),
+    ev('run_allocated', { attempt_id: 'old-s2', run_id: 'r2', pgid: 2 }),
+    ev('run_completed', { attempt_id: 'old-s2', outcome: 'pass' }),
+    ev('aborted', { block_id: 'b1' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'b1:i1',
+      reason: 'dispatcher_restart',
+      kind: 'rerun',
+      reserve_activation: false,
+      roster: [
+        { sample_id: 's1', arm: 'base' },
+        { sample_id: 's2', arm: 'treat' },
+      ],
+    }),
+    ev('block_admitted', { block_id: 'b1:i1', pools: ['p'], rerun_of: 'b1' }),
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'new-s1' }),
+    ev('run_allocated', { attempt_id: 'new-s1', run_id: 'r3', pgid: 3 }),
+    ev('attempt_created', { sample_id: 's2', attempt_id: 'new-s2' }),
+    ev('run_allocated', { attempt_id: 'new-s2', run_id: 'r4', pgid: 4 }),
+    ev('run_completed', { attempt_id: 'new-s2', outcome: 'pass' }),
+  );
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report).toMatchObject({ samplesLackingTerminals: ['s1'] });
+  expect(report.attempts).toEqual([
+    { attempt_id: 'new-s1', resolution: 'kill_pgid_rerun_block', pgid: 3 },
+  ]);
+});
+
+test('resolver missing samples follows an activated replacement roster and skips planned reserves', () => {
+  const events = openAndAdmit();
+  events.push(
+    ev('attempt_created', { sample_id: 's1', attempt_id: 'a1' }),
+    ev('run_allocated', { attempt_id: 'a1', run_id: 'r1', pgid: 1 }),
+    ev('instrument_failure', { attempt_id: 'a1', cause: 'grader_crashed' }),
+    ev('block_replaced', {
+      block_id: 'b1',
+      replacement_block_id: 'x1',
+      reason: 'grader_crashed',
+      kind: 'replacement',
+      reserve_activation: true,
+      roster: [
+        { sample_id: 'x1s1', arm: 'base', supersedes: 's1' },
+        { sample_id: 'x1s2', arm: 'treat', supersedes: 's2' },
+      ],
+    }),
+    ev('sample_disposition', {
+      sample_id: 's2',
+      disposition: 'excluded_block_replaced',
+      superseded_by: 'x1s2',
+    }),
+    ev('block_admitted', { block_id: 'x1', pools: ['p'] }),
+  );
+  const report = resolveCrashWindows(UNIVERSE, events);
+  expect(report).toMatchObject({
+    samplesLackingTerminals: ['x1s1', 'x1s2'],
+  });
 });
 
 test('an orphan excluded_block_replaced disposition (no matching mint) never seals', () => {

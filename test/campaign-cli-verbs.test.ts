@@ -48,6 +48,8 @@ import {
   CRASHED_PGID,
   campaignDoc,
   publishedCampaign,
+  REPORT_BLOCK_1,
+  REPORT_RESERVE,
   reportCampaign,
   reportEvents,
   WRITER_IDENTITY,
@@ -450,6 +452,88 @@ function unsealedReportFixture(): string {
   return dir;
 }
 
+function unsealedReplacementReportFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'campaign-replacement-cli-'));
+  const doc = reportCampaign();
+  writeFileSync(join(dir, 'campaign.json'), JSON.stringify(doc));
+  initJournalDb(dir);
+  const events = reportEvents({
+    campaign: doc,
+    steps: [
+      {
+        kind: 'run',
+        run: {
+          sampleId: 'c1:scn:arm_a:r1',
+          attemptId: 'replacement-a1',
+          runId: 'replacement-a1-run',
+          outcome: 'instrument_failure',
+        },
+      },
+      {
+        kind: 'raw',
+        event: {
+          type: 'block_replaced',
+          payload: {
+            block_id: REPORT_BLOCK_1,
+            replacement_block_id: REPORT_RESERVE,
+            reason: 'grader_crashed',
+            kind: 'replacement',
+            reserve_activation: true,
+            roster: [
+              {
+                sample_id: 'c1:scn:arm_a:x1',
+                arm: 'arm_a',
+                supersedes: 'c1:scn:arm_a:r1',
+              },
+              {
+                sample_id: 'c1:scn:arm_b:x1',
+                arm: 'arm_b',
+                supersedes: 'c1:scn:arm_b:r1',
+              },
+            ],
+          },
+        },
+      },
+      {
+        kind: 'raw',
+        event: {
+          type: 'sample_disposition',
+          payload: {
+            sample_id: 'c1:scn:arm_b:r1',
+            disposition: 'excluded_block_replaced',
+            superseded_by: 'c1:scn:arm_b:x1',
+          },
+        },
+      },
+      {
+        kind: 'raw',
+        event: {
+          type: 'block_admitted',
+          payload: { block_id: REPORT_RESERVE, pools: ['p'] },
+        },
+      },
+    ],
+  });
+  const writer = electWriter({
+    campaignDir: dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: doc,
+  });
+  try {
+    for (const event of events) {
+      writer.appendEvent({
+        type: event.type,
+        payload: event.payload,
+        ts_ms: event.ts_ms,
+      });
+    }
+  } finally {
+    writer.release();
+  }
+  return dir;
+}
+
 test('report on unsealed campaign prints the blocking samples and exits 1', () => {
   const dir = unsealedReportFixture();
   try {
@@ -483,6 +567,19 @@ test('report on sealed campaign regenerates digest-equal and prints the md', () 
   }
 }, 30_000);
 
+test('report on a complete but unsealed campaign gives seal-first guidance', () => {
+  const fixture = reportFixture({ sealed: false });
+  try {
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('campaign is complete but unsealed');
+    expect(result.stderr).not.toContain('seal predicate is not satisfied');
+    expect(result.stderr).toContain('seal first via `quorum campaign run`');
+  } finally {
+    cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
 test('report republishes missing artifacts', () => {
   const fixture = reportFixture({ sealed: true });
   try {
@@ -496,6 +593,31 @@ test('report republishes missing artifacts', () => {
     ).toBe(fixture.jsonBytes.toString('hex'));
     expect(readFileSync(join(fixture.dir, REPORT_MD_NAME), 'utf8')).toBe(
       fixture.md,
+    );
+  } finally {
+    cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
+test('report refuses a tampered present artifact before partial-artifact publication', () => {
+  const fixture = reportFixture({ sealed: true });
+  const jsonPath = join(fixture.dir, REPORT_JSON_NAME);
+  const mdPath = join(fixture.dir, REPORT_MD_NAME);
+  const tamperedJson = Buffer.concat([
+    readFileSync(jsonPath),
+    Buffer.from('tampered'),
+  ]);
+  try {
+    rmSync(mdPath);
+    writeFileSync(jsonPath, tamperedJson);
+
+    const result = runCli(['campaign', 'report', fixture.dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('evidence tampering');
+    expect(result.stderr).toContain(REPORT_JSON_NAME);
+    expect(existsSync(mdPath)).toBe(false);
+    expect(readFileSync(jsonPath).toString('hex')).toBe(
+      tamperedJson.toString('hex'),
     );
   } finally {
     cleanupReportFixture(fixture);
@@ -526,6 +648,21 @@ test('report on a tampered run dir exits 1 naming the divergence, never overwrit
     );
   } finally {
     cleanupReportFixture(fixture);
+  }
+}, 30_000);
+
+test('report lists active replacement-roster samples, not an inactive reserve', () => {
+  const dir = unsealedReplacementReportFixture();
+  try {
+    const result = runCli(['campaign', 'report', dir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('samples lacking terminals');
+    expect(result.stderr).toContain('c1:scn:arm_a:x1');
+    expect(result.stderr).toContain('c1:scn:arm_b:x1');
+    expect(result.stderr).not.toContain('c1:scn:arm_a:r1');
+    expect(result.stderr).not.toContain('c1:scn:arm_b:r1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }, 30_000);
 
