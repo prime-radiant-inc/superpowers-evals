@@ -48,10 +48,12 @@ dashboard workspace 144 pass / 0 fail; exit 0. `bun run quorum check` exit 0
 (scenarios + arms + suites). The earlier timeout flakes did not recur; the
 gate is green as written, with no timeout override.
 
-## Route history (why the arms are direct-API)
+## Route history (why the exit runs are direct-API)
 
 The exit runs were planned on the Bedrock/Mantle route (the live claude
-default since `a5f4e76`). Two things happened on the way:
+default since `a5f4e76`). Two things happened on the way (the bedrock defect
+is diagnosed and fixed in "Bedrock route inside campaign children" below; the
+suites are back on the bedrock route as of `5ed14e2`):
 
 - The direct Anthropic key in the blessed bundle was exhausted mid-session;
   Drew re-funded the org and rotated the bundle key, and the R-REG-15 gating
@@ -200,6 +202,85 @@ carrying to D4b: a mid-terminus crash will always blind the final block's
 tail unless the resume path can prove coverage some other way. No code
 change was made.
 
+## Bedrock route inside campaign children (2026-09-01, after the exit runs)
+
+Diagnosis of the `capture_failed` from campaign `3ee40518…` / run `…-1a2a`
+above, by reproducing the child's environment locally and by hand-running
+each layer (systematic-debugging; two root causes, the second only visible
+once the first was fixed).
+
+**Root cause 1 — the grader rejected its own model id.** A campaign
+registers a singular grader `{credential, model}` (R-REG-20) and projects it
+into every child as `--grader-model`; on the bedrock route that model is the
+vendor-prefixed request id `anthropic.claude-opus-4-8`. Gauntlet's
+`resolveProvider` only knew the `claude*` prefix, so the Gauntlet-Agent
+failed at client construction (`{"error":{"code":"unknown_model",…}}` on
+stderr, exit 1) before its state dir existed. Quorum's `invokeGauntlet`
+takes status only from `result.json`, discarded the exit facts, and the
+run surfaced as the *downstream* symptom: no Claude transcript, hence
+`capture_failed`. (The Mantle spec's Phase 2 gauntlet patch, PRI-2524, had
+never landed.) Regular appliance jobs never hit this because their grader is
+harness-pinned to `claude-sonnet-5` on the direct key.
+
+Fixes, all on `main` and pushed:
+
+- gauntlet `fb34bcd` — `nativeAnthropicModelId` strips the `anthropic.`
+  prefix; `resolveProvider` routes `anthropic.claude*` to Anthropic and
+  `maxOutputTokensForModel` keys on the native id (same output cap); the
+  unknown-model message lists the new prefix.
+- evals `aad0820` — `mantleGraderEnv(cred)` hands the campaign child the
+  bedrock bearer as an ordinary API key over the grader-only alias channel
+  (`QUORUM_GRADER_SOURCE_MODE=appliance-scoped`,
+  `QUORUM_GRADER_ANTHROPIC_API_KEY`, `QUORUM_GRADER_ANTHROPIC_BASE_URL` =
+  the Mantle `/anthropic` surface), so gauntlet's SDK constructor reads the
+  Mantle endpoint from env without any bedrock-specific code in gauntlet.
+- evals `c299b7a` — the synthesized `investigate` layer now names how
+  gauntlet died (`gauntlet exited 1 without writing a result` /
+  `was killed by SIGKILL …`) with gauntlet's error message as its reasoning,
+  so this class of failure reads as what it is instead of as a capture
+  failure (`test/runner-gauntlet-exit.test.ts`, mock-gauntlet
+  `startup-error` + `killed` fixtures).
+- evals `5ed14e2` — reverts `3cbb8d6`: the D4a live suites are back on the
+  bedrock route (`opus_bedrock` / `opus5_bedrock` arms, grader
+  `opus_bedrock` / `anthropic.claude-opus-4-8`).
+
+**Live re-test — PASS.** Campaign `f514c642-d4a_live_exploratory`
+(exploratory, `d4a_live_claude_opus_bedrock` × `00-quorum-smoke-hello-world`,
+n = 1) on evals `5ed14e2` + gauntlet `fb34bcd`, run
+`00-quorum-smoke-hello-world-claude-opus_bedrock-linux-20260901T230334Z-9357`:
+`run_completed outcome pass` after ~75 s, sealed, report published (digest
+`1c068992…`). `quorum show`: final `pass`, Gauntlet-Agent `pass`, all checks
+✓. Economics: Gauntlet-Agent 1m15s / 289K tokens / **$0.32**, Coding-Agent
+0m12s / 116K tokens / **$0.26**, total **$0.58** (quoted ~$0.50). The grader
+ran on Mantle under the prefixed id and priced — obol 0.9.0 already carries
+`anthropic.claude-*` rates. Both root-cause-1 layers are therefore confirmed
+live; the campaign platform's bedrock default is proven.
+
+**Root cause 2 — provenance Rule 4 compared model ids as exact strings.**
+The same run's `report.md` flagged
+`failed_cells: c1/00-quorum-smoke-hello-world: arm model absent from
+observed set: arm d4a_live_claude_opus_bedrock registered
+anthropic.claude-opus-4-8, observed [claude-opus-4-8]`, and the medians
+section was empty ("no matched determinate blocks") while the rates row
+still rendered `pass 1 / n 1`. Mantle answers with the native id and the
+session log / ATIF `model_name` records it; the registration carries the
+request id. Same model, flagged as a mismatch — a false provenance failure
+that would have silently emptied every bedrock campaign's medians.
+
+- evals `2132a26` — `nativeModelId` (`src/credentials/model-id.ts`) and both
+  Rule 4 comparisons (arm and grader) key on the native id; observed sets
+  still render verbatim. Spec Rule 4 amended to say so; two fold tests pin
+  that the prefix is the *only* thing provenance forgives (a registered
+  `anthropic.claude-opus-4-8` against an observed `claude-opus-5` still
+  fails). Pushed; **not yet confirmed live** — see remaining debt.
+
+Negative results worth keeping: the `unknown_model` exit is invisible under
+`--silent` unless stderr is read (gauntlet prints the startup error JSON and
+exits before any state dir exists); Bun auto-loads `.env` from the evals
+checkout, so key-less probes must run from another cwd; a sealed campaign
+cannot be re-rendered under changed fold code (the report verb refuses on
+digest mismatch, which is the pinned tamper guard doing its job).
+
 ## Exit-criteria status
 
 - `bun run check` + `bun run quorum check`: green on `3cbb8d6` (above).
@@ -218,10 +299,11 @@ change was made.
   (cancel-and-refuse-resume with the pinned cancel order), the Linux-gated
   integration matrix (`test/integration/`, 13 asserted-not-proven items), and
   the D3 spec status stamp.
-- **Bedrock/Mantle inside campaign children:** the `capture_failed` in
-  campaign `3ee40518…` / run `…-1a2a` above. Until it is fixed the D4a live
-  suites stay on the direct-API route on purpose (arm header comments say
-  so); the campaign platform's bedrock default is therefore unproven live.
+- **Bedrock provenance fix unconfirmed live:** `2132a26` (native-id
+  comparison) is covered by fold unit tests on the real shape, but the sealed
+  `f514c642…` cannot be re-rendered under new fold code (`campaign report`
+  refuses on digest mismatch, by design), so end-to-end confirmation needs a
+  fresh 1-cell bedrock exploratory campaign (~$0.60).
 - The exit runs depended on a fresh gauntlet clone at `/tmp/gauntlet-live`
   inside the container (`/opt/gauntlet` is not a git repo, and `prepare`
   recreates the container, wiping `/tmp`); the appliance helper has no
