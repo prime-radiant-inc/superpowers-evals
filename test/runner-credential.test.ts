@@ -697,7 +697,9 @@ writeFileSync(join(exportsDir, 'trajectory.json'), ${JSON.stringify(
       expect(result.verdict.final).toBe('pass');
     }
     expect(calls).toBe(0);
-  });
+    // Two full mock-gauntlet drives: twice the budget of the single-drive
+    // siblings above.
+  }, 20_000);
 
   const ATTESTATION_FAILURES: readonly [
     string,

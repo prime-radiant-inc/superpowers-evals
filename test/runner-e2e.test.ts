@@ -97,7 +97,9 @@ test('mock-gauntlet drives a full pass run to a parity verdict', async () => {
   expect(verdict.gauntlet?.status).toBe('pass');
   // No error stage on the happy path, and the gauntlet layer is composed in.
   expect(verdict.error).toBe(null);
-});
+  // One full mock-gauntlet drive: the same budget the single-drive runner
+  // integration tests carry (test/runner-credential.test.ts).
+}, 10_000);
 
 test('mock-gauntlet drives a fail fixture to a fail verdict', async () => {
   const { verdict } = await runWithFixture('fail-no-usage');
