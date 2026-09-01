@@ -1,0 +1,14 @@
+# D4a live-validation arm — trusted-maintainer exit runs (spec §Exit criteria).
+# Cheapest capable cell: claude is the only adapter family flipped in the
+# superpowers capability registry (both ref and none proven by the 2026-08-25
+# D2 two-mode live smoke on this appliance), and the smoke scenario carries no
+# superpowers directive, so none-mode keeps the lifecycle probe provisioning-free.
+# Direct-API credential on purpose: campaign children on the Bedrock/Mantle
+# route currently die before producing a transcript (capture_failed inside the
+# reconstructed child env; regular appliance opus_bedrock jobs are unaffected),
+# so the exit runs ride the route that sealed exit run 1.
+schema_version: 1
+name: d4a_live_claude_haiku
+agent: claude
+credential: haiku
+superpowers: none
