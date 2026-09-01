@@ -335,7 +335,11 @@ The fold, per comparison:
    must contain its arm's registered model; a sample whose observed set lacks
    it is a provenance failure of its cell — cells with failures are marked in
    `provenance.failed_cells`, excluded from rate/median aggregation, and
-   rendered loudly. The per-arm observed model **union** (a set, never a
+   rendered loudly. Model identities compare on the **native id**: a
+   Bedrock/Mantle credential registers the vendor-prefixed request id
+   (`anthropic.claude-opus-4-8`) while the transcript records the native id
+   the API answered with (`claude-opus-4-8`) — the same model, not a
+   mismatch; observed sets still render verbatim. The per-arm observed model **union** (a set, never a
    singular field — codex parents routinely invoke subagent models, PAR
    §"Report engine") is drawn from every sample with a trajectory, included
    or not (invalidated-but-ran samples still ran), and renders for display.

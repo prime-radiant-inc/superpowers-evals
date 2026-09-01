@@ -41,6 +41,7 @@ import {
   ReportSchema,
 } from '../contracts/campaign/report.ts';
 import type { SampleState } from '../contracts/campaign/state-machine.ts';
+import { nativeModelId } from '../credentials/model-id.ts';
 import { fsyncDir, type ReplayState, replayEvents } from './journal.ts';
 
 export class ReportFoldError extends Error {
@@ -522,7 +523,11 @@ function classifyDeterminate(
 }
 
 /** Rule 4's findings: per-run arm-model validation over included samples,
- *  plus the campaign-global grader check. The grader half uses ONE
+ *  plus the campaign-global grader check. Both compare identities on the
+ *  native model id (nativeModelId): a Bedrock/Mantle credential registers
+ *  the vendor-prefixed request id while the agent's transcript records the
+ *  native id the API answered with — the same model, not a provenance
+ *  failure. Observed sets still render verbatim. The grader half uses ONE
  *  observed set (all evidence — see observedGraderModels): the empty-
  *  evidence caveat keys off it, so the spec's canonical no-grader-at-all
  *  campaign (every sample instrument-failed before grading: zero graded
@@ -572,7 +577,7 @@ function deriveProvenanceFindings(
       );
     }
     const observed = sample.evidence.observedModels;
-    if (!observed.includes(registered)) {
+    if (!observed.map(nativeModelId).includes(nativeModelId(registered))) {
       fail(
         sample.cellId,
         `arm model absent from observed set: arm ${sample.arm} registered ${registered}, observed [${[...observed].sort().join(', ')}]`,
@@ -608,7 +613,8 @@ function deriveProvenanceFindings(
     graded.some(
       (sample) =>
         sample.evidence.graderModel !== null &&
-        sample.evidence.graderModel !== campaign.grader.model,
+        nativeModelId(sample.evidence.graderModel) !==
+          nativeModelId(campaign.grader.model),
     )
   ) {
     // A grader identity is campaign-global: one graded mismatch fails

@@ -313,6 +313,14 @@ export interface ReportCampaignOverrides {
   readonly profile?: 'descriptive_v1' | null;
   /** Single-arm comparison shape (one arm, one sample per block). */
   readonly singleArm?: boolean;
+  /** Registered model ids, for provenance tests that need a specific shape
+   *  (e.g. a Bedrock-prefixed `anthropic.claude-*` request id). Defaults:
+   *  arm_a model-a, arm_b model-b, grader grader-model. */
+  readonly models?: {
+    readonly arm_a?: string;
+    readonly arm_b?: string;
+    readonly grader?: string;
+  };
 }
 
 /** A small schema-valid exploratory campaign for the report fold: one
@@ -325,6 +333,9 @@ export function reportCampaign(
   overrides: ReportCampaignOverrides = {},
 ): Campaign {
   const single = overrides.singleArm === true;
+  const modelA = overrides.models?.arm_a ?? 'model-a';
+  const modelB = overrides.models?.arm_b ?? 'model-b';
+  const graderModel = overrides.models?.grader ?? 'grader-model';
   const profile =
     overrides.profile === null
       ? {}
@@ -356,7 +367,7 @@ export function reportCampaign(
       evals: 'e'.repeat(40),
       gauntlet: '9'.repeat(40),
     },
-    grader: { credential: 'grader_cred', model: 'grader-model' },
+    grader: { credential: 'grader_cred', model: graderModel },
     cells: [
       {
         scenario: 'scn',
@@ -506,7 +517,7 @@ export function reportCampaign(
             credential: 'cred_a',
             auth: 'api-key',
             api: 'anthropic',
-            model: 'model-a',
+            model: modelA,
             key_env_names: ['KEY_A'],
           },
         ]
@@ -517,7 +528,7 @@ export function reportCampaign(
             credential: 'cred_a',
             auth: 'api-key',
             api: 'anthropic',
-            model: 'model-a',
+            model: modelA,
             key_env_names: ['KEY_A'],
           },
           {
@@ -526,7 +537,7 @@ export function reportCampaign(
             credential: 'cred_b',
             auth: 'api-key',
             api: 'anthropic',
-            model: 'model-b',
+            model: modelB,
             key_env_names: ['KEY_B'],
           },
         ],

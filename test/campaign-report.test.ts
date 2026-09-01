@@ -572,6 +572,82 @@ describe('foldDescriptiveReport', () => {
     ]);
   });
 
+  test('a Bedrock-prefixed registration matches the native id the trajectory observes', () => {
+    // The Bedrock/Mantle route registers the vendor-prefixed request id
+    // (`anthropic.claude-opus-4-8`), but the agent's transcript records the
+    // model the API answered with — the native `claude-opus-4-8` — so
+    // provenance compares on the native id. The grader side sees the
+    // request id (gauntlet stamps its config model) and must match too.
+    const campaign = reportCampaign({
+      models: {
+        arm_a: 'anthropic.claude-opus-4-8',
+        arm_b: 'anthropic.claude-opus-5',
+        grader: 'anthropic.claude-opus-4-8',
+      },
+    });
+    const events = reportEvents({ campaign, steps: happySteps() });
+    const table = happyEvidence();
+    for (const runId of ['run-1', 'run-3']) {
+      table[runId] = evidence({
+        ...table[runId]!,
+        observedModels: ['claude-opus-4-8'],
+        graderModel: 'anthropic.claude-opus-4-8',
+      });
+    }
+    for (const runId of ['run-2', 'run-4']) {
+      table[runId] = evidence({
+        ...table[runId]!,
+        observedModels: ['claude-opus-5'],
+        graderModel: 'anthropic.claude-opus-4-8',
+      });
+    }
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(table),
+    });
+
+    expect(report.provenance.failed_cells).toEqual([]);
+    expect(report.comparisons[0]!.cells[0]!.delta).toBeDefined();
+    expect(report.comparisons[0]!.medians).not.toEqual({});
+    // The observed union still renders what the transcript actually said.
+    expect(report.provenance.arms[0]!.observed_model_set).toEqual([
+      'claude-opus-4-8',
+    ]);
+    expect(report.provenance.grader.observed).toBe('anthropic.claude-opus-4-8');
+  });
+
+  test('the vendor prefix is the only thing provenance forgives', () => {
+    // `anthropic.claude-opus-4-8` registered, `claude-opus-5` observed: still
+    // a mismatch — normalization strips the prefix, never the family.
+    const campaign = reportCampaign({
+      models: { arm_a: 'anthropic.claude-opus-4-8' },
+    });
+    const events = reportEvents({ campaign, steps: happySteps() });
+    const table = happyEvidence();
+    table['run-1'] = evidence({
+      ...table['run-1']!,
+      observedModels: ['claude-opus-5'],
+    });
+    table['run-3'] = evidence({
+      ...table['run-3']!,
+      observedModels: ['claude-opus-4-8'],
+    });
+    const report = foldDescriptiveReport({
+      campaign,
+      events,
+      evidenceOf: evidenceOf(table),
+    });
+
+    expect(report.provenance.failed_cells).toHaveLength(1);
+    expect(report.provenance.failed_cells[0]!.reason).toMatch(
+      /arm model absent from observed set/,
+    );
+    expect(report.provenance.failed_cells[0]!.reason).toContain(
+      'anthropic.claude-opus-4-8',
+    );
+  });
+
   test('grader mismatch fails every graded cell loudly', () => {
     const campaign = reportCampaign();
     const events = reportEvents({ campaign, steps: happySteps() });
