@@ -9,8 +9,10 @@
 // snapshot/diff sees it, then exits 0. It emulates:
 //   gauntlet run <story> --adapter tui --target <t> --project-dir <dir>
 //           --state-dir gauntlet-agent --silent [--max-time ...] [...]
-// The special `hang` fixture is the exception: it parks (see below) so the
-// graceful-SIGINT receiver test can interrupt the runner mid-flight.
+// The special fixtures are the exceptions: `hang` parks (see below) so the
+// graceful-SIGINT receiver test can interrupt the runner mid-flight;
+// `startup-error` and `killed` die before writing anything, the way the real
+// binary does when its grader cannot even be constructed or it is signalled.
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -21,6 +23,26 @@ const fixture = process.env['MOCK_GAUNTLET_FIXTURE'];
 if (projectDir === undefined || fixture === undefined) {
   console.error('mock-gauntlet: need --project-dir and MOCK_GAUNTLET_FIXTURE');
   process.exit(2);
+}
+
+// `startup-error` mode: the real gauntlet rejects an unroutable grader model
+// id at client construction — before its state dir exists — and, even under
+// --silent, prints its error JSON to stderr and exits 1. No result, no
+// results dir. `killed` mode: death by signal, likewise before any output.
+if (fixture === 'startup-error') {
+  console.error(
+    JSON.stringify({
+      error: {
+        message:
+          'Model not supported. Supported prefixes: claude*, gpt*, o1*, o3*',
+        code: 'unknown_model',
+      },
+    }),
+  );
+  process.exit(1);
+}
+if (fixture === 'killed') {
+  process.kill(process.pid, 'SIGKILL');
 }
 
 // `hang` mode: the graceful-SIGINT receiver test (test/cli-run-sigint.test.ts)

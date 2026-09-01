@@ -284,8 +284,8 @@ export function killGauntletTmuxForRun(
 }
 
 // Outcome of a gauntlet drive: always a layer, derived from the run dir's
-// result.json (synthesized 'investigate' when none parses). The exit code is
-// not surfaced as a verdict error — it is discarded. A spawn-level failure
+// result.json (synthesized 'investigate' naming the exit when none parses).
+// The exit code is not surfaced as a verdict error. A spawn-level failure
 // rejects from spawnGauntlet instead.
 export interface InvokeGauntletResult {
   readonly gauntlet: GauntletLayer;
@@ -384,26 +384,68 @@ function spawnGauntlet(a: InvokeGauntletArgs): Promise<GauntletExit> {
   });
 }
 
+// The synthesized layer for a gauntlet that left no parseable result: status
+// is always 'investigate' (-> composer indeterminate), and the layer records
+// how gauntlet died so the verdict names the cause. A grader that cannot even
+// start (an unroutable model id, a missing credential) exits before its
+// results dir exists; without these facts the run reads as an agent that ran
+// and left no transcript, when the agent was never launched.
+function synthesizedGauntletLayer(exit: GauntletExit): GauntletLayer {
+  const death =
+    exit.signal !== null
+      ? `was killed by ${exit.signal}`
+      : `exited ${exit.status ?? 'unknown'}`;
+  return {
+    status: 'investigate',
+    summary: `gauntlet ${death} without writing a result`,
+    reasoning: gauntletErrorLine(exit.stderr),
+    run_id: null,
+  };
+}
+
+// The first non-empty stderr line of a gauntlet that died, as its error
+// message. Gauntlet reports its own failures (even under --silent) as one
+// JSON line, {"error":{"message":…,"code":…}}: that yields the message
+// alone; anything else is the raw line, capped. Empty stderr yields ''.
+function gauntletErrorLine(stderr: string): string {
+  const line = firstStderrLine(stderr);
+  if (line === undefined) {
+    return '';
+  }
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) {
+      const error: unknown = (parsed as { error: unknown }).error;
+      if (typeof error === 'object' && error !== null && 'message' in error) {
+        const message: unknown = (error as { message: unknown }).message;
+        if (typeof message === 'string') {
+          return message;
+        }
+      }
+    }
+  } catch {
+    // Not gauntlet's error JSON: the raw line is the message.
+  }
+  return line.slice(0, 200);
+}
+
 // Spawn the gauntlet CLI, then derive the gauntlet layer from its run dir. The
-// exit code is DISCARDED — status always comes from result.json under
+// exit code never decides status — that always comes from result.json under
 // gauntlet-agent/results/, falling back to a synthesized 'investigate' layer
 // when no parseable result exists (a gauntlet that exited non-zero but wrote a
 // valid result still yields that pass/fail; a non-zero exit with no/garbled
 // result becomes investigate -> composer indeterminate, not a gauntlet-stage
-// error). The subprocess env is the caller's allowlist projection overlaid with
-// only the quorum-owned launch-cwd/agent-home names. A spawn-level failure
-// (gauntlet not on PATH) still rejects from spawnGauntlet and surfaces as an
-// 'unknown'-stage crash.
+// error). The synthesized layer carries the exit facts and gauntlet's error
+// line as its summary/reasoning. The subprocess env is the caller's allowlist
+// projection overlaid with only the quorum-owned launch-cwd/agent-home names.
+// A spawn-level failure (gauntlet not on PATH) still rejects from
+// spawnGauntlet and surfaces as an 'unknown'-stage crash.
 export async function invokeGauntlet(
   a: InvokeGauntletArgs,
 ): Promise<InvokeGauntletResult> {
-  await spawnGauntlet(a);
-  const gauntlet = gauntletLayerFromRunDir(a.runDir) ?? {
-    status: 'investigate' as const,
-    summary: '',
-    reasoning: '',
-    run_id: null,
-  };
+  const exit = await spawnGauntlet(a);
+  const gauntlet =
+    gauntletLayerFromRunDir(a.runDir) ?? synthesizedGauntletLayer(exit);
   return { gauntlet };
 }
 
@@ -1210,11 +1252,17 @@ function scenarioName(scenarioDir: string): string {
 // the final_reason (e.g. bash's "file-exsts: command not found"). Empty stderr
 // contributes nothing.
 function crashHint(stderr: string): string {
-  const line = stderr
+  const line = firstStderrLine(stderr);
+  return line ? `: ${line.slice(0, 200)}` : '';
+}
+
+// The first non-empty (trimmed) line of a subprocess's stderr, or undefined
+// when there is none.
+function firstStderrLine(stderr: string): string | undefined {
+  return stderr
     .split('\n')
     .map((l) => l.trim())
     .find((l) => l.length > 0);
-  return line ? `: ${line.slice(0, 200)}` : '';
 }
 
 // Map a caught value to its error stage without assertions or non-null: a staged
