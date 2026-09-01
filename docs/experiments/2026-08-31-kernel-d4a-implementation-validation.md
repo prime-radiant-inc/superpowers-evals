@@ -25,8 +25,8 @@ The Task 5–9 implementation reports provide the portable evidence currently av
 
 The controller freshly attempted `bun run check`; it ended exit 1: 3448 pass, 1 skip, 3 fail, and 1 error. The failures were the timeout-prone `test/write-grid-manifest.test.ts` case and these two Serf credential cases in `test/runner-credential.test.ts`:
 
-- `Serf context uses the named credential preset model and selected key name without its value`
-- `Serf context defaults its selected API-key environment name to ANTHROPIC_API_KEY`
+- `Serf credential runner integration > unlabeled and non-OpenRouter Serf credentials never call the attestation fetch seam`
+- `Serf credential runner integration > OpenRouter attestation wrong provider stops before post-checks as capture indeterminate`
 
 Focused probes then passed: `test/write-grid-manifest.test.ts` alone (2/2); the two named Serf cases with `bun test --timeout 20000 --test-name-pattern ...` (2/2); `bun run typecheck`; and `bun run lint`. `bun run quorum check` exited 0, and `git diff --check` was clean.
 
