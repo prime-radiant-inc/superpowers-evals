@@ -6,7 +6,7 @@
 ## Local implementation ref
 
 - **Worktree:** `/Users/drewritter/prime-rad/superpowers-evals/.qwen/worktrees/kernel-d4a`
-- **Ref:** `220e421c015457b753b904e689de2e884a68aad5`
+- **Ref:** `460483a18d9b9a894824166fb2f492778bd8ba9d`
 - **Branch:** `worktree-kernel-d4a`
 
 ## Portable evidence
@@ -21,7 +21,16 @@ The Task 5–9 implementation reports provide the portable evidence currently av
 | `.superpowers/sdd/2026-08-31-kernel-d4a-descriptive-readout/task-8-report.md` | Crash-window matrix implementation is recorded with successful full-gate and scenario-check receipts, and no live campaign. |
 | `.superpowers/sdd/2026-08-31-kernel-d4a-descriptive-readout/task-9-report.md` | Documentation implementation and the corrected D3/D4a operator-label evidence are recorded; the status stamp and live criteria remain pending. |
 
-The current final-gate claim is still a controller handoff item: the controller is to refresh the final gates before final handoff. Accordingly, the report receipts above are portable implementation evidence and historical gate claims, not a fresh final-gate assertion for this ref.
+## Controller portable-gate attempt (2026-09-01)
+
+The controller freshly attempted `bun run check`; it ended exit 1: 3448 pass, 1 skip, 3 fail, and 1 error. The failures were the timeout-prone `test/write-grid-manifest.test.ts` case and these two Serf credential cases in `test/runner-credential.test.ts`:
+
+- `Serf context uses the named credential preset model and selected key name without its value`
+- `Serf context defaults its selected API-key environment name to ANTHROPIC_API_KEY`
+
+Focused probes then passed: `test/write-grid-manifest.test.ts` alone (2/2); the two named Serf cases with `bun test --timeout 20000 --test-name-pattern ...` (2/2); `bun run typecheck`; and `bun run lint`. `bun run quorum check` exited 0, and `git diff --check` was clean.
+
+The standard `bun run check` is not green. Its default 5-second per-test timeout remains an environment/timing gate to rerun before integration.
 
 ## Appliance readiness only
 
@@ -37,11 +46,11 @@ No credential-bundle contents, credential values, or secrets are recorded here.
 | Live run 2 gating | **NOT RUN** |
 | Live run 3 terminus crash | **NOT RUN** |
 
-The requested implementation exists only in the local worktree at ref `220e421c015457b753b904e689de2e884a68aad5`. `git ls-remote origin` exposes only `origin/main` at `114f7258`, while the appliance is configured for `evals_ref=main`. Running now would execute the wrong evals ref. No live spend or transcripts were created.
+The requested implementation exists only in the local worktree at ref `460483a18d9b9a894824166fb2f492778bd8ba9d`. `git ls-remote origin` exposes only `origin/main` at `114f7258`, while the appliance is configured for `evals_ref=main`. Running now would execute the wrong evals ref. No live spend or transcripts were created.
 
 ## Exit-criteria debt
 
 - The D4a spec status remains `draft` (`revision 2 awaiting user review`); this document does not change the spec.
 - D3 item 1 is not closed because the live gating run did not occur.
 - D3 items 2 and 3, the Linux-gated integration matrix, and the D3 status stamp remain owed as specified.
-- The controller still needs to refresh the final portable gates before final handoff.
+- The standard `bun run check` timeout gate remains to be rerun before integration; this record does not mark it green.
