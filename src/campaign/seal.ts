@@ -318,23 +318,30 @@ function journalMembership(
   };
 }
 
-/** Backstop dispositions already journaled, keyed by the block named in the
- *  encoded rationale — the crash-resume dedupe set. A prior backstop
- *  disposition suppresses any second backstop disposition for that block,
- *  regardless of which of the two verdicts it carried. */
+/** Seal-time adjudications already journaled, keyed by the block named in the
+ *  encoded rationale. Backstop dispositions use the block identity alone so
+ *  either verdict suppresses a second backstop event; integrity dispositions
+ *  retain their disposition prefix so their distinct classes remain separate.
+ */
 function existingBlockAdjudications(
   events: readonly JournalEvent[],
 ): ReadonlySet<string> {
   const out = new Set<string>();
   for (const event of events) {
     if (event.type !== 'adjudication') continue;
-    if (
-      event.payload.disposition !== 'contention_invalidated' &&
-      event.payload.disposition !== 'unknown_coverage'
-    )
-      continue;
+    const isBackstop =
+      event.payload.disposition === 'contention_invalidated' ||
+      event.payload.disposition === 'unknown_coverage';
+    const isIntegrity =
+      event.payload.disposition === 'integrity_finding' ||
+      event.payload.disposition === 'integrity_caveat';
+    if (!isBackstop && !isIntegrity) continue;
     const blockId = BLOCK_RATIONALE.exec(event.payload.rationale)?.[1];
-    if (blockId !== undefined) out.add(blockId);
+    if (blockId !== undefined) {
+      out.add(
+        isBackstop ? blockId : `${event.payload.disposition}\0${blockId}`,
+      );
+    }
   }
   return out;
 }

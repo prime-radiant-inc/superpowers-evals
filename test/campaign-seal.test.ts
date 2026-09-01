@@ -1042,15 +1042,35 @@ describe('runTerminusSeal', () => {
       sidecar: cadence(1000, 31000),
       runs: mintRuns(),
     });
+    const interrupted = terminus(mismatch, {
+      electSealer: (args) =>
+        new SqliteFullAtSealed(
+          electWriter({
+            campaignDir: args.campaignDir,
+            clock: args.clock,
+            identity: args.identity,
+            ...(args.campaign !== undefined ? { campaign: args.campaign } : {}),
+            ...(args.restrict !== undefined ? { restrict: args.restrict } : {}),
+          }),
+        ),
+    });
+    expect(interrupted.result.outcome).toBe('storage_failed');
+    expect(
+      adjudications(mismatch.dir).filter(
+        (event) => event.payload.disposition === 'integrity_finding',
+      ),
+    ).toHaveLength(1);
+    expect(sealedEvents(mismatch.dir)).toHaveLength(0);
+
     const mismatchResult = terminus(mismatch);
     expect(mismatchResult.result.outcome).toBe('sealed');
-    expect(
-      adjudications(mismatch.dir).map(
-        (event) => `${event.payload.disposition}: ${event.payload.rationale}`,
-      ),
-    ).toEqual([
-      `integrity_finding: block=${REPORT_BLOCK_1}; integrity audit recompute mismatch: the landed contention mint has no corroborating breach window over the predecessor interval [3000, 10000] (evidence present)`,
-    ]);
+    const mismatchAdjudications = adjudications(mismatch.dir);
+    expect(mismatchAdjudications).toHaveLength(1);
+    expect(mismatchAdjudications[0]?.payload).toEqual({
+      cell: 'c1:scn',
+      disposition: 'integrity_finding',
+      rationale: `block=${REPORT_BLOCK_1}; integrity audit recompute mismatch: the landed contention mint has no corroborating breach window over the predecessor interval [3000, 10000] (evidence present)`,
+    });
     // Never a reversal: the replacement still stands and both successor and
     // b2 samples stay in the denominators.
     const mismatchJson = JSON.parse(
