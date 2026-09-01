@@ -1,7 +1,8 @@
 # Kernel Deliverable 4a — Descriptive Readout (seal act + report engine): Design
 
 **Date:** 2026-08-31 (revision 2, post round-1 four-seat review)
-**Status:** draft — revision 2 awaiting user review
+**Status:** implemented (main @ `3cbb8d6`; exit runs recorded in
+`docs/experiments/2026-08-31-kernel-d4a-implementation-validation.md`)
 **Review record:** `docs/experiments/2026-08-31-kernel-d4a-spec-review.md`
   (round 1: four-seat panel — sol, fable, glm, k3 — four of four NOT-READY on
   revision 1; five converged blockers + criticals bundle; adjudication incl.
