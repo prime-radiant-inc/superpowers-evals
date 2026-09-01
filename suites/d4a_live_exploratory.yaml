@@ -1,0 +1,16 @@
+# D4a exit run 1 — exploratory lifecycle (spec §Exit criteria item 1):
+# registration -> dispatch -> all-samples-terminal -> terminus -> sealed +
+# published report, then digest-verified regeneration via `campaign report`.
+# Minimal by design: one smoke sample through the cheapest capable arm.
+schema_version: 1
+name: d4a_live_exploratory
+kind: exploratory
+budget_usd: 5
+grader:
+  credential: sonnet46
+  model: claude-sonnet-4-6
+comparisons:
+  - arm: d4a_live_claude_haiku
+    scenarios:
+      - 00-quorum-smoke-hello-world
+    n: 1

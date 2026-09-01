@@ -1,0 +1,17 @@
+# D4a exit run 3 — terminus crash (spec §Exit criteria item 3): a second
+# exploratory campaign shaped exactly like d4a_live_exploratory, killed
+# mid-terminus (after adjudications, before publication) and resumed via
+# `campaign run` — same journal suffix, digest-equal artifacts. Registered
+# under its own suite name so the crash evidence is a separate campaign record.
+schema_version: 1
+name: d4a_live_crash
+kind: exploratory
+budget_usd: 5
+grader:
+  credential: sonnet46
+  model: claude-sonnet-4-6
+comparisons:
+  - arm: d4a_live_claude_haiku
+    scenarios:
+      - 00-quorum-smoke-hello-world
+    n: 1
