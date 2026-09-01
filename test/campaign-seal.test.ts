@@ -30,7 +30,9 @@ import {
   electWriter,
   initJournalDb,
   openJournalRead,
+  replayEvents,
 } from '../src/campaign/journal.ts';
+import { universeOf } from '../src/campaign/recovery.ts';
 import {
   canonicalReportBytes,
   digestReportBytes,
@@ -44,6 +46,7 @@ import {
   runTerminusSeal,
   SealError,
   type SealerWriter,
+  type TerminusBoundary,
   type TerminusResult,
 } from '../src/campaign/seal.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
@@ -706,6 +709,7 @@ function terminus(
   extra: {
     readonly runner?: CommandRunner;
     readonly electSealer?: (args: ElectWriterArgs) => SealerWriter;
+    readonly onBoundary?: (boundary: TerminusBoundary) => void;
   } = {},
 ): { result: TerminusResult; lines: string[] } {
   const { lines, stream } = capture();
@@ -719,6 +723,7 @@ function terminus(
     ...(extra.electSealer !== undefined
       ? { electSealer: extra.electSealer }
       : {}),
+    ...(extra.onBoundary !== undefined ? { onBoundary: extra.onBoundary } : {}),
   });
   return { result, lines };
 }
@@ -1216,5 +1221,72 @@ describe('runTerminusSeal', () => {
     expect(sealedEvents(fixture.dir)).toHaveLength(1);
     expect(existsSync(join(fixture.dir, REPORT_MD_NAME))).toBe(true);
     expect(existsSync(join(fixture.dir, REPORT_JSON_NAME))).toBe(true);
+  });
+
+  test('cancel at every semantic pre-seal boundary leaves zero sealed events', () => {
+    const boundaries: readonly TerminusBoundary[] = [
+      'before_snapshot_verify',
+      'before_integrity_audit',
+      'before_contention_backstop',
+      'before_report_fold',
+      'before_sealed_append',
+    ];
+
+    for (const boundary of boundaries) {
+      const fixture = sealFixture({
+        prefix: completePrefix(reportCampaign()),
+        sidecar: cadence(1000, 19000),
+      });
+      const before = readAllEvents(fixture.dir);
+      const { result } = terminus(fixture, {
+        onBoundary: (observed) => {
+          if (observed === boundary) {
+            writeFileSync(join(fixture.dir, 'cancel-request'), 'stop\n');
+          }
+        },
+      });
+
+      expect(result).toEqual({ outcome: 'cancel_in_force' });
+      expect(readAllEvents(fixture.dir)).toEqual(before);
+      expect(sealedEvents(fixture.dir)).toHaveLength(0);
+      expect(existsSync(join(fixture.dir, REPORT_MD_NAME))).toBe(false);
+      expect(existsSync(join(fixture.dir, REPORT_JSON_NAME))).toBe(false);
+    }
+  });
+
+  test('post-sealed dispatch append is rejected by replay state machine', () => {
+    const fixture = sealFixture({
+      prefix: completePrefix(reportCampaign()),
+      sidecar: cadence(1000, 19000),
+    });
+    const sealed = terminus(fixture).result;
+    expect(sealed.outcome).toBe('sealed');
+
+    const writer = electWriter({
+      campaignDir: fixture.dir,
+      clock: new FakeClock(31),
+      identity: WRITER_IDENTITY,
+      campaign: fixture.doc,
+    });
+    try {
+      writer.appendEvent({
+        type: 'run_allocated',
+        payload: {
+          attempt_id: 'att-1',
+          run_id: 'post-seal-run',
+          pgid: CRASHED_PGID,
+          key_grants: [],
+        },
+      });
+    } finally {
+      writer.release();
+    }
+
+    const afterDispatch = readAllEvents(fixture.dir);
+    expect(sealedEvents(fixture.dir)).toHaveLength(1);
+    expect(afterDispatch.at(-1)?.type).toBe('run_allocated');
+    expect(() => replayEvents(universeOf(fixture.doc), afterDispatch)).toThrow(
+      /rejected|state machine/i,
+    );
   });
 });

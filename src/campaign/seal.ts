@@ -90,6 +90,17 @@ export type TerminusResult =
   | { readonly outcome: 'cancel_in_force' }
   | { readonly outcome: 'storage_failed'; readonly reason: string };
 
+/** Semantic inter-step boundaries used by crash/cancel tests. The callback is
+ *  absent in production; when present it runs before the corresponding
+ *  cancel-marker check, so a marker created at a boundary is observed before
+ *  that step can begin. */
+export type TerminusBoundary =
+  | 'before_snapshot_verify'
+  | 'before_integrity_audit'
+  | 'before_contention_backstop'
+  | 'before_report_fold'
+  | 'before_sealed_append';
+
 /** The sealer surface the terminus needs — a declared subset of D3's
  *  JournalWriter, so the storage-failure crash window (SQLITE_FULL at the
  *  sealed append) is scriptable through an injected election without the
@@ -112,6 +123,8 @@ export interface TerminusArgs {
    *  Injectable so the SQLITE_FULL-at-the-sealed-append crash window is
    *  scriptable without mocking the journal away. */
   readonly electSealer?: (args: ElectWriterArgs) => SealerWriter;
+  /** Test-only semantic boundary seam; omitted by production callers. */
+  readonly onBoundary?: (boundary: TerminusBoundary) => void;
 }
 
 function errorMessage(err: unknown): string {
@@ -538,6 +551,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
     //  (the durable record — the re-run after repair is the operator's
     //  acknowledgement act, and the incident never vanishes from the sealed
     //  record), then refuse naming the drifted trees.
+    args.onBoundary?.('before_snapshot_verify');
     if (cancelInForce()) return { outcome: 'cancel_in_force' };
     try {
       const handle = reconstructCampaignSnapshot({
@@ -574,6 +588,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
     //  mint cannot be re-verified). Either record is an adjudication, NEVER
     //  a reversal: the mint, its dispositions, and the replacement's
     //  accounting all stand.
+    args.onBoundary?.('before_integrity_audit');
     if (cancelInForce()) return { outcome: 'cancel_in_force' };
     for (const predecessor of membership.contentionMintPredecessors) {
       const interval = membership.intervals.get(predecessor);
@@ -623,6 +638,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
     //  against what already sits in the journal (crash-resume idempotence).
     //  Superseded blocks (resolved mid-run) and never-activated frozen
     //  reserves are skipped: neither has exposure to re-judge.
+    args.onBoundary?.('before_contention_backstop');
     if (cancelInForce()) return { outcome: 'cancel_in_force' };
     const registeredBlock = new Map(
       campaign.blocks.map((block) => [block.block_id, block]),
@@ -680,6 +696,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
     //  `sealed` — which includes the adjudications just appended (the
     //  backstop's blocks must leave the denominators) and excludes the
     //  digest-bearing event (no cycle).
+    args.onBoundary?.('before_report_fold');
     if (cancelInForce()) return { outcome: 'cancel_in_force' };
     const foldReader = openJournalRead(campaignDir);
     let foldEvents: JournalEvent[];
@@ -702,6 +719,7 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
 
     // 7. THE sealed append — one journal append is the seal's atomicity
     //  boundary; any storage error before it leaves nothing sealed.
+    args.onBoundary?.('before_sealed_append');
     if (cancelInForce()) return { outcome: 'cancel_in_force' };
     appendThroughSealer({
       type: 'sealed',

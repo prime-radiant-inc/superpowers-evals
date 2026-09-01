@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -18,16 +19,19 @@ import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandRunner } from '../src/agents/command-runner.ts';
 import { defaultCommandRunner } from '../src/agents/command-runner.ts';
+import { SIDECAR_FILENAME } from '../src/campaign/contention.ts';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
 import {
+  type ElectWriterArgs,
+  type EventInput,
   electWriter,
   openJournalRead,
   replayEvents,
 } from '../src/campaign/journal.ts';
 import { resumeCampaign, universeOf } from '../src/campaign/recovery.ts';
 import { REPORT_JSON_NAME, REPORT_MD_NAME } from '../src/campaign/report.ts';
-import { runTerminusSeal } from '../src/campaign/seal.ts';
+import { runTerminusSeal, type SealerWriter } from '../src/campaign/seal.ts';
 import type {
   CampaignChildSpec,
   ChildExitInfo,
@@ -294,6 +298,7 @@ interface TerminusFixture {
 
 function terminusFixture(
   profile: 'descriptive' | 'gating' = 'descriptive',
+  options: { readonly preserveEventTimestamps?: boolean } = {},
 ): TerminusFixture {
   const dir = mkdtempSync(join(tmpdir(), 'resume-terminus-'));
   const refs = seedRealSnapshot(dir);
@@ -355,6 +360,9 @@ function terminusFixture(
     events.slice(1).map((event) => ({
       type: event.type,
       payload: event.payload,
+      ...(options.preserveEventTimestamps === true
+        ? { ts_ms: event.ts_ms }
+        : {}),
     })),
   );
   writer.release();
@@ -399,6 +407,155 @@ function resumeTerminusArgs(
     lockPath: lockDir(lock),
     stream: { write: () => {} },
     ...(overrides.runner !== undefined ? { runner: overrides.runner } : {}),
+  };
+}
+
+function journalRecord(fx: TerminusFixture): JournalEvent[] {
+  return journalEvents(fx.dir);
+}
+
+function sealAdjudicationRecords(events: readonly JournalEvent[]) {
+  return events.flatMap((event) => {
+    if (
+      event.type !== 'adjudication' ||
+      (event.payload.disposition !== 'unknown_coverage' &&
+        event.payload.disposition !== 'contention_invalidated')
+    ) {
+      return [];
+    }
+    return [
+      {
+        disposition: event.payload.disposition,
+        rationale: event.payload.rationale,
+      },
+    ];
+  });
+}
+
+function writeTwoBackstopVerdicts(fx: TerminusFixture): void {
+  const lines: string[] = [];
+  for (let ts = 1000; ts <= 19000; ts += 1000) {
+    if (ts === 6500) {
+      lines.push(`${JSON.stringify({ ts_ms: ts, missing: true })}\n`);
+      continue;
+    }
+    const load1 =
+      ts >= 11000 ? fx.doc.contention.host_fingerprint.cpu_cores * 3 : 1;
+    lines.push(
+      `${JSON.stringify({
+        ts_ms: ts,
+        load1,
+        mem_available_bytes: 8 * 2 ** 30,
+        swap_used_bytes: 0,
+        process_count: 100,
+        disk_free_bytes: 50 * 2 ** 30,
+        breach:
+          load1 > fx.doc.contention.host_fingerprint.cpu_cores * 2
+            ? ['load1_per_core']
+            : [],
+      })}\n`,
+    );
+    if (ts === 6000) {
+      lines.push(`${JSON.stringify({ ts_ms: 6500, missing: true })}\n`);
+    }
+  }
+  writeFileSync(join(fx.dir, SIDECAR_FILENAME), lines.join(''));
+}
+
+function terminusArgs(
+  fx: TerminusFixture,
+  overrides: {
+    readonly electSealer?: (args: ElectWriterArgs) => SealerWriter;
+    readonly onBoundary?: (boundary: string) => void;
+  } = {},
+) {
+  return {
+    campaignDir: fx.dir,
+    resultsRoot: fx.resultsRoot,
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    stream: { write: () => {} },
+    ...(overrides.electSealer !== undefined
+      ? { electSealer: overrides.electSealer }
+      : {}),
+    ...(overrides.onBoundary !== undefined
+      ? { onBoundary: overrides.onBoundary }
+      : {}),
+  };
+}
+
+function realSealer(args: ElectWriterArgs): SealerWriter {
+  return electWriter(args);
+}
+
+class CrashAfterSealedAppend implements SealerWriter {
+  private readonly real: SealerWriter;
+
+  constructor(real: SealerWriter) {
+    this.real = real;
+  }
+
+  appendEvent(input: EventInput) {
+    const event = this.real.appendEvent(input);
+    if (input.type === 'sealed') throw new Error('simulated post-seal crash');
+    return event;
+  }
+
+  release(): void {
+    this.real.release();
+  }
+}
+
+class CrashBeforeSecondAdjudication implements SealerWriter {
+  private readonly real: SealerWriter;
+  private adjudications = 0;
+
+  constructor(real: SealerWriter) {
+    this.real = real;
+  }
+
+  appendEvent(input: EventInput) {
+    if (input.type === 'adjudication') {
+      this.adjudications += 1;
+      if (this.adjudications === 2)
+        throw new Error('simulated mid-adjudication crash');
+    }
+    return this.real.appendEvent(input);
+  }
+
+  release(): void {
+    this.real.release();
+  }
+}
+
+class SqliteFullAtSealedAppend implements SealerWriter {
+  private readonly real: SealerWriter;
+
+  constructor(real: SealerWriter) {
+    this.real = real;
+  }
+
+  appendEvent(input: EventInput) {
+    if (input.type === 'sealed') {
+      throw Object.assign(new Error('database or disk is full'), {
+        code: 'SQLITE_FULL',
+      });
+    }
+    return this.real.appendEvent(input);
+  }
+
+  release(): void {
+    this.real.release();
+  }
+}
+
+function reportBytes(fx: TerminusFixture): {
+  readonly md: Buffer;
+  readonly json: Buffer;
+} {
+  return {
+    md: readFileSync(join(fx.dir, REPORT_MD_NAME)),
+    json: readFileSync(join(fx.dir, REPORT_JSON_NAME)),
   };
 }
 
@@ -592,6 +749,221 @@ test('cancel marker landing mid-terminus wins: no sealed event', async () => {
   );
   expect(existsSync(join(fx.dir, REPORT_MD_NAME))).toBe(false);
   expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(false);
+});
+
+test('crash after verify before adjudications: resume re-verifies and seals', async () => {
+  const fx = terminusFixture();
+  const before = journalRecord(fx);
+
+  expect(() =>
+    runTerminusSeal(
+      terminusArgs(fx, {
+        onBoundary: (boundary) => {
+          if (boundary === 'before_integrity_audit') {
+            throw new Error('simulated post-verify crash');
+          }
+        },
+      }),
+    ),
+  ).toThrow('simulated post-verify crash');
+  expect(journalRecord(fx)).toEqual(before);
+  expect(journalEvents(fx.dir).at(-1)?.type).not.toBe('sealed');
+
+  const control = terminusFixture();
+  const controlResult = await resumeCampaign(
+    resumeTerminusArgs(control, 'terminus-control-after-verify.lock.d'),
+  );
+  expect(controlResult.status).toBe('completed');
+
+  const resumed = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-crash-after-verify.lock.d'),
+  );
+  expect(resumed.status).toBe('completed');
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+  expect(journalRecord(fx)).toEqual(journalRecord(control));
+  const actual = reportBytes(fx);
+  const expected = reportBytes(control);
+  expect(actual.md.equals(expected.md)).toBe(true);
+  expect(actual.json.equals(expected.json)).toBe(true);
+});
+
+test('crash mid-adjudications: resume dedupes encoded rationales and seals', async () => {
+  const fx = terminusFixture('descriptive', {
+    preserveEventTimestamps: true,
+  });
+  writeTwoBackstopVerdicts(fx);
+  const before = journalRecord(fx);
+
+  expect(() =>
+    runTerminusSeal(
+      terminusArgs(fx, {
+        electSealer: (args) =>
+          new CrashBeforeSecondAdjudication(realSealer(args)),
+      }),
+    ),
+  ).toThrow('simulated mid-adjudication crash');
+  const cut = journalEvents(fx.dir);
+  expect(cut.slice(0, before.length).map((event) => event.type)).toEqual(
+    before.map((event) => event.type),
+  );
+  expect(cut.filter((event) => event.type === 'adjudication')).toHaveLength(1);
+  expect(cut.filter((event) => event.type === 'sealed')).toHaveLength(0);
+
+  const control = terminusFixture('descriptive', {
+    preserveEventTimestamps: true,
+  });
+  writeTwoBackstopVerdicts(control);
+  const controlResult = await resumeCampaign(
+    resumeTerminusArgs(control, 'terminus-control-mid-adjudications.lock.d'),
+  );
+  expect(controlResult.status).toBe('completed');
+
+  const resumed = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-crash-mid-adjudications.lock.d'),
+  );
+  expect(resumed.status).toBe('completed');
+  const finalEvents = journalEvents(fx.dir);
+  const rationaleCounts = new Map<string, number>();
+  for (const event of finalEvents) {
+    if (
+      event.type !== 'adjudication' ||
+      (event.payload.disposition !== 'unknown_coverage' &&
+        event.payload.disposition !== 'contention_invalidated')
+    )
+      continue;
+    rationaleCounts.set(
+      event.payload.rationale,
+      (rationaleCounts.get(event.payload.rationale) ?? 0) + 1,
+    );
+  }
+  expect([...rationaleCounts.values()]).toEqual([1, 1]);
+  expect(finalEvents.filter((event) => event.type === 'sealed')).toHaveLength(
+    1,
+  );
+  const sealAdjudications = sealAdjudicationRecords(finalEvents);
+  const controlSealAdjudications = sealAdjudicationRecords(
+    journalEvents(control.dir),
+  );
+  expect(sealAdjudications).toEqual(controlSealAdjudications);
+  expect(
+    finalEvents.at(-1)?.type === 'sealed' &&
+      journalEvents(control.dir).at(-1)?.type === 'sealed',
+  ).toBe(true);
+  const actual = reportBytes(fx);
+  const expected = reportBytes(control);
+  expect(actual.md.equals(expected.md)).toBe(true);
+  expect(actual.json.equals(expected.json)).toBe(true);
+});
+
+test('crash after sealed before publication: resume publishes the digest-equal report', async () => {
+  const fx = terminusFixture();
+  expect(() =>
+    runTerminusSeal(
+      terminusArgs(fx, {
+        electSealer: (args) => new CrashAfterSealedAppend(realSealer(args)),
+      }),
+    ),
+  ).toThrow('simulated post-seal crash');
+  const sealed = journalEvents(fx.dir).filter(
+    (event) => event.type === 'sealed',
+  );
+  expect(sealed).toHaveLength(1);
+  expect(existsSync(join(fx.dir, REPORT_MD_NAME))).toBe(false);
+  expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(false);
+
+  const control = terminusFixture();
+  const controlResult = runTerminusSeal(terminusArgs(control));
+  expect(controlResult.outcome).toBe('sealed');
+
+  const resumed = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-crash-after-sealed.lock.d'),
+  );
+  expect(resumed).toEqual({
+    status: 'completed',
+    reason: 'sealed campaign: report regenerated',
+  });
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+  expect(journalRecord(fx)).toEqual(journalRecord(control));
+  const actual = reportBytes(fx);
+  const expected = reportBytes(control);
+  expect(actual.md.equals(expected.md)).toBe(true);
+  expect(actual.json.equals(expected.json)).toBe(true);
+  expect(JSON.parse(actual.json.toString('utf8')).stamp).toBe('DESCRIPTIVE');
+});
+
+test('crash mid-publication: resume removes orphan temps and republishes byte-exact artifacts', async () => {
+  const fx = terminusFixture();
+  expect(() =>
+    runTerminusSeal(
+      terminusArgs(fx, {
+        electSealer: (args) => new CrashAfterSealedAppend(realSealer(args)),
+      }),
+    ),
+  ).toThrow('simulated post-seal crash');
+  const orphanMd = `${REPORT_MD_NAME}.tmp.orphan`;
+  const orphanJson = `${REPORT_JSON_NAME}.tmp.orphan`;
+  writeFileSync(join(fx.dir, orphanMd), 'partial markdown\n');
+  writeFileSync(join(fx.dir, orphanJson), '{"partial":');
+
+  const control = terminusFixture();
+  const controlResult = runTerminusSeal(terminusArgs(control));
+  expect(controlResult.outcome).toBe('sealed');
+
+  const resumed = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-crash-mid-publication.lock.d'),
+  );
+  expect(resumed.status).toBe('completed');
+  expect(
+    readdirSync(fx.dir).filter((entry) => entry.includes('.tmp.')),
+  ).toEqual([]);
+  expect(journalRecord(fx)).toEqual(journalRecord(control));
+  const actual = reportBytes(fx);
+  const expected = reportBytes(control);
+  expect(actual.md.equals(expected.md)).toBe(true);
+  expect(actual.json.equals(expected.json)).toBe(true);
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+});
+
+test('ENOSPC mid-terminus: storage_failed leaves no seal and healthy resume seals', async () => {
+  const fx = terminusFixture();
+  const failed = runTerminusSeal(
+    terminusArgs(fx, {
+      electSealer: (args) => new SqliteFullAtSealedAppend(realSealer(args)),
+    }),
+  );
+  expect(failed).toEqual({
+    outcome: 'storage_failed',
+    reason: expect.stringMatching(/SQLITE_FULL|database or disk is full/),
+  });
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(0);
+  expect(existsSync(join(fx.dir, REPORT_MD_NAME))).toBe(false);
+  expect(existsSync(join(fx.dir, REPORT_JSON_NAME))).toBe(false);
+
+  const control = terminusFixture();
+  const controlResult = await resumeCampaign(
+    resumeTerminusArgs(control, 'terminus-control-storage.lock.d'),
+  );
+  expect(controlResult.status).toBe('completed');
+  const resumed = await resumeCampaign(
+    resumeTerminusArgs(fx, 'terminus-storage-remediated.lock.d'),
+  );
+  expect(resumed.status).toBe('completed');
+  expect(
+    journalEvents(fx.dir).filter((event) => event.type === 'sealed'),
+  ).toHaveLength(1);
+  expect(journalRecord(fx)).toEqual(journalRecord(control));
+  const actual = reportBytes(fx);
+  const expected = reportBytes(control);
+  expect(actual.md.equals(expected.md)).toBe(true);
+  expect(actual.json.equals(expected.json)).toBe(true);
 });
 
 test('resume authenticates the frozen document: a tampered budget refuses before any kill or admission', async () => {
