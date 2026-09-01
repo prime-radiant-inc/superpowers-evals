@@ -1254,13 +1254,16 @@ describe('runTerminusSeal', () => {
     }
   });
 
-  test('post-sealed dispatch append is rejected by replay state machine', () => {
+  test('post-sealed budget event is rejected by writer and replay state boundaries', () => {
     const fixture = sealFixture({
       prefix: completePrefix(reportCampaign()),
       sidecar: cadence(1000, 19000),
     });
     const sealed = terminus(fixture).result;
     expect(sealed.outcome).toBe('sealed');
+    const before = readAllEvents(fixture.dir);
+    const sealedEvent = sealedEvents(fixture.dir)[0];
+    if (sealedEvent === undefined) throw new Error('expected sealed event');
 
     const writer = electWriter({
       campaignDir: fixture.dir,
@@ -1269,24 +1272,33 @@ describe('runTerminusSeal', () => {
       campaign: fixture.doc,
     });
     try {
-      writer.appendEvent({
-        type: 'run_allocated',
-        payload: {
-          attempt_id: 'att-1',
-          run_id: 'post-seal-run',
-          pgid: CRASHED_PGID,
-          key_grants: [],
-        },
-      });
+      expect(() =>
+        writer.appendEvent({
+          type: 'budget_event',
+          payload: { kind: 'spend', amount_usd: 0.25 },
+        }),
+      ).toThrow(/post-seal.*sealed|sealed.*post-seal/i);
     } finally {
       writer.release();
     }
 
-    const afterDispatch = readAllEvents(fixture.dir);
+    expect(readAllEvents(fixture.dir)).toEqual(before);
     expect(sealedEvents(fixture.dir)).toHaveLength(1);
-    expect(afterDispatch.at(-1)?.type).toBe('run_allocated');
-    expect(() => replayEvents(universeOf(fixture.doc), afterDispatch)).toThrow(
-      /rejected|state machine/i,
+    expect(sealedEvents(fixture.dir)[0]?.payload.report_digest).toBe(
+      sealedEvent.payload.report_digest,
     );
+
+    const directlyConstructedPostSeal: JournalEvent = {
+      seq: sealedEvent.seq + 1,
+      ts_ms: sealedEvent.ts_ms + 1,
+      type: 'budget_event',
+      payload: { kind: 'spend', amount_usd: 0.25 },
+    };
+    expect(() =>
+      replayEvents(universeOf(fixture.doc), [
+        ...before,
+        directlyConstructedPostSeal,
+      ]),
+    ).toThrow(/post-seal.*sealed|sealed.*post-seal/i);
   });
 });

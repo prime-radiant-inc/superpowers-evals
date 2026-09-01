@@ -245,6 +245,10 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function postSealEventClaim(eventType: JournalEventType, seq?: number): string {
+  return `post-seal event ${eventType}${seq === undefined ? '' : ` (seq ${seq})`} rejected — campaign is sealed`;
+}
+
 /** E7.2 legacy same-arm pairing (ONE implementation for the writer's
  *  incremental fold and for replay, so derived rosters can never diverge):
  *  the successor's OWN samples form the roster, each superseding the
@@ -435,6 +439,12 @@ export class JournalWriter {
     let envelope: JournalEvent;
     try {
       this.assertFenced();
+      const sealed = this.db
+        .query("SELECT 1 FROM events WHERE type = 'sealed' LIMIT 1")
+        .get() as { '1': number } | null;
+      if (sealed !== null) {
+        throw new JournalError(postSealEventClaim(input.type));
+      }
       const seqRow = this.db
         .query('SELECT COALESCE(MAX(seq), 0) AS seq FROM events')
         .get() as {
@@ -1151,6 +1161,12 @@ export function replayEvents(
   };
 
   for (const [index, event] of events.entries()) {
+    if (campaignState === 'sealed') {
+      throw corrupt(
+        postSealEventClaim(event.type, event.seq),
+        `the sealed event is the journal terminus — inspect the post-seal suffix, then ${AUDIT}`,
+      );
+    }
     const input: JournalEventInput = {
       type: event.type,
       payload: event.payload,
