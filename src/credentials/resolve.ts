@@ -75,10 +75,12 @@ export function resolveBedrockBearer(cred: Credential): string {
   return value;
 }
 
-/** The Mantle endpoint URL for a region (the 2026-07-08 live probe pinned
- *  the shape: bedrock-mantle.{region}.api.aws, In-Region-only). */
+/** The Mantle endpoint base URL for a region (the 2026-07-08 live probe
+ *  pinned the shape: bedrock-mantle.{region}.api.aws with the Anthropic
+ *  surface under /anthropic, In-Region-only — the SDK appends
+ *  /v1/messages). */
 export function mantleBaseUrl(region: string): string {
-  return `https://bedrock-mantle.${region}.api.aws`;
+  return `https://bedrock-mantle.${region}.api.aws/anthropic`;
 }
 
 /** The canonical grader env for a Mantle credential: gauntlet authenticates

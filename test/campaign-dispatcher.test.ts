@@ -795,7 +795,7 @@ test('a mantle grader credential projects the canonical grader env into every ca
     for (const { spec } of h.spawner.spawned) {
       expect(spec.env['ANTHROPIC_AUTH_TOKEN']).toBe('fixture-bearer-g');
       expect(spec.env['ANTHROPIC_BASE_URL']).toBe(
-        'https://bedrock-mantle.us-east-1.api.aws',
+        'https://bedrock-mantle.us-east-1.api.aws/anthropic',
       );
     }
     for (const { child } of h.spawner.spawned) {

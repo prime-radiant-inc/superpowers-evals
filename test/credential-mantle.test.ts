@@ -66,7 +66,7 @@ test('mantleGraderEnv derives the canonical grader names for a mantle credential
     });
     expect(mantleGraderEnv(cred)).toEqual({
       ANTHROPIC_AUTH_TOKEN: 'fixture-bearer',
-      ANTHROPIC_BASE_URL: 'https://bedrock-mantle.us-east-1.api.aws',
+      ANTHROPIC_BASE_URL: 'https://bedrock-mantle.us-east-1.api.aws/anthropic',
     });
   } finally {
     deleteProcessEnv('MANTLE_GRADER_TEST_BEARER');
