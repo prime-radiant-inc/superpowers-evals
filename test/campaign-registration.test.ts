@@ -1244,6 +1244,25 @@ test('the five pinned D-4 threshold defaults derive from the fingerprint', () =>
   ]);
 });
 
+test('a swapless host omits the swap threshold (0 would refuse the positive-value schema)', () => {
+  // First-contact evidence: containerized campaign hosts report
+  // swap_total_bytes 0; a 0.25 x 0 threshold value violates the
+  // ContentionThreshold positive-value schema, and a swapless host cannot
+  // experience swap contention — the evaluator judges only declared
+  // thresholds, so omission is the honest declaration.
+  const thresholds = defaultContentionThresholds({
+    mem_bytes: 16 * GiB,
+    swap_total_bytes: 0,
+    disk_total_bytes: 100 * GiB,
+  });
+  expect(thresholds.map((t) => t.metric)).toEqual([
+    'load1_per_core',
+    'mem_available_bytes',
+    'disk_free_bytes',
+    'process_count',
+  ]);
+});
+
 test('buildContentionBlock freezes G, thresholds, sampler parameters, tolerances (digest members)', () => {
   const block = buildContentionBlock({
     fingerprint: {

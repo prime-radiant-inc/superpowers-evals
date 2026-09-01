@@ -845,7 +845,7 @@ export function defaultContentionThresholds(args: {
   swap_total_bytes: number;
   disk_total_bytes: number;
 }): ContentionThreshold[] {
-  return [
+  const thresholds: ContentionThreshold[] = [
     { metric: 'load1_per_core', source: 'host', op: 'gt', value: 2.0 },
     {
       metric: 'mem_available_bytes',
@@ -854,13 +854,21 @@ export function defaultContentionThresholds(args: {
       value: Math.max(2 * 2 ** 30, 0.1 * args.mem_bytes),
       relative_of: 'mem_bytes',
     },
-    {
+  ];
+  // A swapless host (containerized campaign hosts report swap_total_bytes 0)
+  // cannot experience swap contention, and 0.25 x 0 would refuse the
+  // ContentionThreshold positive-value schema — omit the threshold; the
+  // evaluator judges only declared thresholds.
+  if (args.swap_total_bytes > 0) {
+    thresholds.push({
       metric: 'swap_used_bytes',
       source: 'host',
       op: 'gt',
       value: 0.25 * args.swap_total_bytes,
       relative_of: 'swap_total_bytes',
-    },
+    });
+  }
+  thresholds.push(
     {
       metric: 'disk_free_bytes',
       source: 'host',
@@ -875,7 +883,8 @@ export function defaultContentionThresholds(args: {
       value: 0.8 * PID_MAX_SLOTS,
       relative_of: 'pid_table',
     },
-  ];
+  );
+  return thresholds;
 }
 
 export function buildContentionBlock(args: {
