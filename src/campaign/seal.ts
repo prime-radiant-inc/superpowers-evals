@@ -724,7 +724,6 @@ export function runTerminusSeal(args: TerminusArgs): TerminusResult {
   //  marker) — publishReport performs exactly that staged sequence. Post-
   //  sealed failures propagate loudly: the campaign IS sealed, and the
   //  resume path completes publication digest-verified.
-  if (cancelInForce()) return { outcome: 'cancel_in_force' };
   const md = renderReportMd({ report, campaign });
   publishReport({ campaignDir, md, jsonBytes });
   stream.write(md); // the human rendering also goes to stdout

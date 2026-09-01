@@ -787,6 +787,30 @@ class SqliteFullAtSealed implements SealerWriter {
   }
 }
 
+/** Real writer wrapper that creates the cancel marker from inside the sealed
+ *  append, after the durable journal write has succeeded. */
+class CancelAfterSealedAppend implements SealerWriter {
+  private readonly real: SealerWriter;
+  private readonly campaignDir: string;
+
+  constructor(real: SealerWriter, campaignDir: string) {
+    this.real = real;
+    this.campaignDir = campaignDir;
+  }
+
+  appendEvent(input: EventInput) {
+    const event = this.real.appendEvent(input);
+    if (input.type === 'sealed') {
+      writeFileSync(join(this.campaignDir, 'cancel-request'), 'stop\n');
+    }
+    return event;
+  }
+
+  release(): void {
+    this.real.release();
+  }
+}
+
 describe('runTerminusSeal', () => {
   test('seals an exploratory campaign: adjudications, sealed(report_digest), md+json published', () => {
     const fixture = sealFixture({
@@ -1163,6 +1187,34 @@ describe('runTerminusSeal', () => {
     const retried = terminus(fixture);
     expect(retried.result.outcome).toBe('sealed');
     expect(sealedEvents(fixture.dir)).toHaveLength(1);
+    expect(existsSync(join(fixture.dir, REPORT_JSON_NAME))).toBe(true);
+  });
+
+  test('cancel marker created during sealed append cannot undo durable sealing', () => {
+    const fixture = sealFixture({
+      prefix: completePrefix(reportCampaign()),
+      sidecar: cadence(1000, 19000),
+    });
+    const raced = (args: ElectWriterArgs): SealerWriter =>
+      new CancelAfterSealedAppend(
+        electWriter({
+          campaignDir: args.campaignDir,
+          clock: args.clock,
+          identity: args.identity,
+          ...(args.campaign !== undefined ? { campaign: args.campaign } : {}),
+          ...(args.restrict !== undefined ? { restrict: args.restrict } : {}),
+        }),
+        args.campaignDir,
+      );
+
+    const result = terminus(fixture, { electSealer: raced });
+
+    expect(result.result).toEqual({
+      outcome: 'sealed',
+      digest: expect.any(String),
+    });
+    expect(sealedEvents(fixture.dir)).toHaveLength(1);
+    expect(existsSync(join(fixture.dir, REPORT_MD_NAME))).toBe(true);
     expect(existsSync(join(fixture.dir, REPORT_JSON_NAME))).toBe(true);
   });
 });
