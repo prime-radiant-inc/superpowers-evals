@@ -46,7 +46,7 @@
     },
     {
       "phase": "post",
-      "check": "skill-before-tool",
+      "check": "skill-before-implementation-tool",
       "args": [
         "superpowers:writing-plans",
         "Edit"
@@ -56,7 +56,7 @@
     },
     {
       "phase": "post",
-      "check": "skill-before-tool",
+      "check": "skill-before-implementation-tool",
       "args": [
         "superpowers:writing-plans",
         "Write"
