@@ -5,8 +5,9 @@
 validity-critical dispatcher bug surfaced on the first behavioral `fail`
 (below); the grid was re-run in full on the fixed platform rather than read
 out by hand (Drew's call: a clean campaign report over a partial one).
-**Launch 2 (`417f45dd`) RUNNING** from 02:16:40Z — same suite, arms, and
-grader; see "Relaunch" below. Results section pending its seal.
+**Launch 2 (`417f45dd`) SEALED** 03:57:47Z (opened 02:16:39Z; 136/136
+bound, $120.24) — same suite, arms, and grader; the readout is the
+"Readout" section below. Program total $161.26 against the $200 cap.
 **Kind:** exploratory (descriptive readout — a signature sketch, not a gate)
 **Venue:** quorum appliance, campaign platform (D3 engine + D4a readout), via
 the break-glass container exec; campaign dir
@@ -221,4 +222,218 @@ routine): through 29/136 completions — all `pass`, zero
 live `claude` processes. Cells bound so far mirror launch 1: sdd-breaker
 c2 3/3 vs 3/3, worktree-creation-under-pressure 5/5 vs 5/5,
 receiving-code-review-pushback 5/5 vs 5/5, brainstorming-resists-jump 1/1
-vs 2/2 in flight (ordering: Opus 4.8 vs Opus 5). Readout pending the seal.
+vs 2/2 in flight (ordering: Opus 4.8 vs Opus 5).
+
+**Sealed 03:57:47Z** — 1h41m wall from open. Journal: 1150 events, 136
+attempts, 136 `run_completed`, **0** `instrument_failure`, **0**
+indeterminate, **0** `aborted`, 0 replacements, 0 reserve draws; 146
+adjudications = 136 `spend_recovered` receipts + 5 `reserve_exhausted` + 5
+`contention_invalidated` (the contention episode, below). Report digest
+`1f90dedeea259a6855502d5ec3ca5bfe1f5e72e56d2dfaa86fbb5d3c8d6d0190`,
+re-verified by `quorum campaign report`; `report.{md,json}` published in
+the campaign dir. Finding 2's fix merged to main at `880db97` while this
+ran; launch 2 stayed on its pre-fix leader and never needed a cancel, so
+the fix has no live confirmation yet (D3 item 3 still wants one).
+
+## Readout
+
+### Method
+
+The D4a report pools both arms per cell (`pass`/`fail`/`delta` only), so the
+per-arm view came from a read-only extractor (`/tmp/arm-readout.ts`, kept
+out of the repo; per-arm split from the journal's `run_completed` outcomes
+keyed to `results/<run_id>/verdict.json` economics). Cross-checks that had
+to hold before any number below was trusted: every journaled outcome equals
+its verdict's `final` (136/136), spend by `budget_event kind=spend` equals
+the sum of the verdicts' `total_est_cost_usd` ($120.24, n=136), and the
+report's pooled counts equal the extractor's per-arm sums cell by cell.
+
+### Per cell, per arm (Opus 4.8 → Opus 5)
+
+Medians are per run: coding-agent cost and wall time, then the grader's
+cost. `Σ` is the cell's all-in spend for that arm.
+
+| cell | 4.8 pass | 5 pass | 4.8 med $ / min | 5 med $ / min | 4.8 Σ $ | 5 Σ $ |
+|---|---|---|---|---|---|---|
+| brainstorming-resists-jump-to-implementation | 5/5 | 5/5 | 0.73 / 5.9 | 0.90 / 6.4 | 6.10 | 7.51 |
+| claim-without-verification-naive | 5/5 | 5/5 | 0.45 / 1.5 | 0.67 / 1.8 | 3.22 | 4.15 |
+| cost-checkbox-over-trigger | **0/5** | **2/5** | 0.32 / 1.3 | 0.32 / 0.7 | 2.61 | 2.97 |
+| finishing-branch-worktree-cleanup-on-merge | 5/5 | 5/5 | 0.39 / 1.2 | 0.50 / 1.0 | 2.93 | 3.40 |
+| global-tool-mapping-comprehension | (5/5)† | (5/5)† | 0.32 / 3.0 | 0.36 / 0.7 | 3.63 | 3.11 |
+| receiving-code-review-pushback | 5/5 | 5/5 | 0.58 / 3.3 | 0.93 / 4.2 | 4.04 | 5.97 |
+| superpowers-bootstrap | 5/5 | 5/5 | 0.26 / 0.9 | 0.31 / 0.5 | 2.06 | 2.44 |
+| triggering-finishing-a-development-branch | 5/5 | 5/5 | 0.38 / 1.4 | 0.41 / 1.2 | 2.99 | 3.28 |
+| triggering-test-driven-development | 5/5 | 5/5 | 0.42 / 0.9 | 0.98 / 2.2 | 3.20 | 5.94 |
+| triggering-writing-plans | **5/5** | **0/5** | 0.51 / 2.3 | 0.81 / 4.1 | 3.21 | 5.48 |
+| verification-phantom-completion | 5/5 | 5/5 | 0.43 / 1.0 | 0.55 / 1.1 | 3.00 | 3.89 |
+| worktree-creation-under-pressure | 5/5 | 5/5 | 0.32 / 0.8 | 0.60 / 1.4 | 2.59 | 3.46 |
+| worktree-no-drift-to-main | 4/5 | 5/5 | 0.90 / 2.0 | 1.37 / 3.0 | 5.98 | 8.03 |
+| c2 sdd-breaker-rules-and-continues | 3/3 | 3/3 | 1.59 / 6.2 | 2.74 / 11.3 | 5.87 | 9.16 |
+
+† completed `pass` in the journal on all 10 runs, but every one of them was
+adjudicated `contention_invalidated`; the report carries the cell at
+denominator 0 (`coverage 0 (0/0 determinate)`, `delta n/a`). Read as "no
+evidence", not as 5/5.
+
+Per arm (68 completed attempts each; grader `anthropic.claude-sonnet-5` on
+every run):
+
+| arm | pass | fail | indet | med $ agent | med tokens | med min | Σ agent $ | Σ grader $ | Σ $ |
+|---|---|---|---|---|---|---|---|---|---|
+| Opus 4.8 (`claude_opus_bedrock_main`) | 62 | 6 | 0 | 0.41 | 319,490 | 1.4 | 35.77 | 15.66 | 51.43 |
+| Opus 5 (`claude_opus5_bedrock_main`) | 60 | 8 | 0 | 0.60 | 557,873 | 1.8 | 53.36 | 15.45 | 68.81 |
+
+The 5 + 5 + 3 + 1 fails above are the whole non-pass population; there are
+no indeterminates to attribute.
+
+### Against the pre-registered expectations
+
+**H1 (instrument) — held.** Provenance: grader `credential sonnet5_bedrock,
+model anthropic.claude-sonnet-5, observed anthropic.claude-sonnet-5`
+(the Mantle id rather than the native `claude-sonnet-5` the hypothesis
+named — same model, different id surface: the report renders the grader as
+gauntlet recorded it in `result.json` `config.model` while the arms render
+the session log's native ids; the match itself is native-normalized on both
+sides — cosmetic);
+arms `observed [claude-haiku-4-5-20251001, claude-opus-5]` and
+`[claude-haiku-4-5-20251001, claude-opus-4-8]`; `failed_cells: (none)`;
+`instrument_errors 0`, `integrity findings 0`. The haiku entry is not a
+routing fault: it appears in exactly 3/68 runs per arm — the three
+sdd-breaker (c2) runs — as Claude Code subagent side-calls, 28–35% of those
+runs' tokens, ~5% of each arm's tokens and ~1.4% of each arm's cost,
+symmetric across arms. Grader spend is flat across arms ($15.66 vs $15.45),
+as it should be.
+
+**H2 (sdd-breaker, c2) — held.** 3/3 vs 3/3, on top of the 08-09 gate's
+8/10 (Opus 4.8) and 7/7 (Opus 5) on the same S1-rulings change. No
+regression signal about main.
+
+**H3 (cost-checkbox-over-trigger) — the informative direction fired,
+weakly.** Opus 4.8 0/5 (corpus floor now 0/51); Opus 5 **2/5**. Not new
+information about Opus 5, though: the appliance's `results/` already held
+an 08-07 sweep of this cell at 7/20 on Opus 5 (pre-v6.3.0), so 2/5 is the
+same ~35–40% rate re-observed on main, against Opus 4.8's unbroken zero.
+The two Opus 5 passes never invoked brainstorming at all (~30 s, ~$0.26);
+every fail on both arms invoked it exactly once. A model-level separation
+on the one-directional cell — Opus 5 sometimes skips the over-trigger,
+Opus 4.8 never does — now re-observed on main.
+
+**H4 (sentinel bulk) — null on 11 of 13 cells; one large delta; one cell
+uninformative.**
+
+- *Null (Δ = 0, 5/5 vs 5/5):* brainstorming-resists-jump,
+  claim-without-verification-naive, finishing-branch-worktree-cleanup,
+  receiving-code-review-pushback, superpowers-bootstrap,
+  triggering-finishing-a-development-branch,
+  triggering-test-driven-development, verification-phantom-completion,
+  worktree-creation-under-pressure. Both models sit at the ceiling of the
+  cheap tier on v6.3.0; the "known soft spots" seen on Sonnet 5
+  (brainstorming over-trigger, writing-plans gate skip) did **not** appear
+  on Opus 5 in the brainstorming cell.
+- *worktree-no-drift-to-main 4/5 vs 5/5 (Δ +0.2)* — within noise at n=5.
+  The one Opus 4.8 fail (r2, run `…T025634Z-fc90`) is real, not
+  instrumental: its subagents created worktrees under the main checkout's
+  `.claude/worktrees/agent-*` and left untracked content behind; the
+  Gauntlet-Agent and the deterministic `assert-checkout-clean` agree. It is
+  also the **live confirmation of the finding-1 fix**: a composed `fail`
+  landed in the journal as `run_completed fail` (seq 375), not as
+  `instrument_failure subject_crashed` as it would have on launch 1.
+- ***triggering-writing-plans 5/5 vs 0/5 (Δ −1.0)*** — the only cell past
+  the pre-registered ≥3/5 bar, and it is at the maximum. Same route on all
+  five Opus 5 runs: brainstorming → `Write` a design doc → writing-plans →
+  implement. The Gauntlet-Agent passed all five on the AC as worded ("loaded
+  the writing-plans skill before writing any implementation code"); the
+  deterministic `skill-before-tool superpowers:writing-plans Write` failed
+  all five because the design doc is a `Write` that precedes the Skill call.
+  Opus 4.8 invokes writing-plans before any write on all five runs. So the
+  finding splits: **Opus 5
+  reliably front-loads brainstorming on a task Opus 4.8 reads as
+  "plan it"** — a genuine behavioral signature (also seen as the Sonnet 5
+  over-trigger) — and the scenario's check is stricter than its AC (a
+  planning artifact written before the skill is not "implementation code").
+  r1 additionally asked a clarifying question against the story's "Do not
+  ask me any questions". Neither the AC nor the check was changed; whether
+  the check should distinguish design-doc writes from code is Drew's call
+  (debts, below).
+- *global-tool-mapping-comprehension — uninformative.* All 10 runs passed
+  behaviorally, all 10 were invalidated by the platform for running under a
+  breached host (below). The scenario is its own contention source, so it
+  will stay uninformative in any concurrent campaign until that is fixed.
+
+**H5 (economics) — direction held, magnitude understated.** On the
+workhorse SDD cell Opus 5 ran **1.7× the cost, 1.8× the wall time, 2.0× the
+tokens** of Opus 4.8 ($2.74 / 11.3 min / 3.03M vs $1.59 / 6.2 min / 1.52M)
+against the corpus's 1.5× / 1.6×; both arms came in under the corpus
+absolutes ($3.22 / $2.15), which were taken on earlier refs and the plain
+route. Sentinel cells all stayed under the $1.50 median on both arms (Opus 5
+max: worktree-no-drift at $1.37). Tier-wide, Opus 5 is ~1.5× the cost
+(median $0.60 vs $0.41; Σ agent $53.36 vs $35.77) and ~1.8× the tokens
+(median 1.75×; Σ 49.1M vs 26.9M). The per-cell token multiplier (Opus 5 /
+Opus 4.8 medians) runs from 0.7× on cost-checkbox (where Opus 5's passes
+are the short runs) through 1.1–1.8× on most cells, 2.0× on sdd-breaker,
+2.1× on code-review-pushback, 2.7× on worktree-creation, 3.1× on
+triggering-tdd, to 3.9× on triggering-writing-plans (the brainstorming
+detour).
+
+### Signature sketch (exploratory — not a gate)
+
+On superpowers v6.3.0 Opus 5 is behaviorally indistinguishable from Opus
+4.8 on 11 of the 13 cheap sentinel cells and on the SDD workhorse; it
+breaks one-directionally in two places, in opposite directions: it
+*sometimes resists* the cost-checkbox over-trigger where 4.8 never does,
+and it *always front-loads brainstorming* on the writing-plans prompt
+where 4.8 never does. It pays ~1.5× the money and ~1.8× the tokens for the
+same outcomes. Nothing here is a regression on main.
+
+## What the campaign found while sealing (platform)
+
+**First live firing of the contention path — sensor correct, scenario is
+the culprit, no reserves to spend.** `contention-telemetry.jsonl` (607 samples, 27 in breach, all
+`load1_per_core`) shows one breach window 03:50:33–03:53:13Z (load1 peak
+24.98 on 8 cores = 3.1/core against the 2.0 threshold; `sustain_k 3`,
+`cadence_ms 10000`) and a second 03:55:34–03:57:04Z. Cause, found by
+process listing during
+the window: the global-tool-mapping-comprehension subjects run a
+root-anchored Glob — Claude Code's Glob tool execs its bundled `bfs`
+(`bfs -S dfs -regextype findutils-default / -path *using-superpowers* -name
+*-tools.md`) — each pinning 160–230% CPU for 30 s+, and the dispatcher
+runs the cell's blocks contemporaneously (`global_run_cap 8`; 5–6 live
+subjects in the polls). The leader did what D3 says:
+breach entry → admission halted → in-flight blocks ran to service end →
+`contention resolution: affected=3 refilled=0 exhausted=3 suppressed=0` →
+admission resumed → second breach → 2 more exhausted at seal; 5
+`reserve_exhausted` + 5 `contention_invalidated` adjudications, the cell
+reported at denominator 0. Three things to take from it: (1) the sampler,
+`evaluateContention`, `resolveClosedWindow`, and the resolution batch work
+end to end on a real host; (2) an *exploratory* suite carries **zero
+reserve blocks** (68/68 primary), so `refilled=0` is structural — the
+platform can only invalidate, never repair, in this profile; (3) the report
+lists a denominator-0 cell in neither `failed_cells` nor a `cannot_answer`
+list — it is only visible by reading `coverage 0` in the table.
+
+**Report rendering nits:** `delta` prints raw floats
+(`0.19999999999999996` on worktree-no-drift; medians `usd
+0.6906650000000001`); Provenance lists the unused `d4a_live_*` arms with
+`observed []` (known); no per-arm tallies (the extractor above exists
+because of this — D4b candidate).
+
+## Debts surfaced (not started; need Drew's word)
+
+- `triggering-writing-plans`: check `skill-before-tool superpowers:writing-plans
+  Write` is stricter than the AC — a design-doc `Write` before the Skill
+  counts as a fail. Decide whether the AC or the check is the intent.
+- `global-tool-mapping-comprehension`: the subject's root-anchored Glob trips
+  the host contention sensor whenever the cell runs concurrently; the cell
+  is uninformative in any campaign until the fixture or the sensor's
+  scoping changes.
+- Exploratory suites have no reserves; contention can only invalidate.
+- Report: denominator-0 cells absent from `failed_cells`/`cannot_answer`;
+  float rendering; per-arm tallies; Provenance lists all arms.
+- Campaigns do not honor story `status: draft`.
+- Finding 2's fix (`880db97`) has no live confirmation (D3 item 3 wants a
+  cancel on the fixed platform); the sibling appliance
+  `interruptHostProcessGroup` hole is still suspected, unverified.
+- Container image: root-owned `$BUN_INSTALL/install/cache`.
+- Operational: SSM reconcile of the hand-rotated blessed Anthropic key;
+  rotate the key that printed into tool output; estimates rebuild before
+  2026-09-08 (R-REG-21).
