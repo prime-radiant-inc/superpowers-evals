@@ -197,6 +197,7 @@ const DELIVERY_TABLE: readonly ExpectedDelivery[] = [
   envRow('claude', 'claude', 'haiku', 'ANTHROPIC_API_KEY'),
   envRow('claude', 'claude', 'opus_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
   envRow('claude', 'claude', 'opus5_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
+  envRow('claude', 'claude', 'sonnet5_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
   envRow('claude', 'claude', 'opus5_sub', 'CLAUDE_CODE_OAUTH_TOKEN'),
   // serf
   envRow('serf', 'serf', 'serf_default', 'ANTHROPIC_API_KEY'),
