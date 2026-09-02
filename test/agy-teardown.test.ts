@@ -8,7 +8,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { killRunTmuxServer } from '../src/agents/agy-teardown.ts';
+import {
+  findRunTmuxServer,
+  gauntletScratchDirForRun,
+  killRunTmuxServer,
+  killTmuxServer,
+} from '../src/agents/agy-teardown.ts';
 import type {
   CommandResult,
   CommandRunner,
@@ -160,6 +165,98 @@ describe('killRunTmuxServer', () => {
       expect(listPanesTargets).not.toContain('gauntlet-2-bbbbbb');
     } finally {
       cleanup();
+    }
+  });
+});
+
+// The probe-only half of the kill: the campaign's verified subject-host kill
+// needs to ask "which server hosts this run?" without signalling anything, so
+// it can verify death by re-probing after the kill.
+describe('findRunTmuxServer', () => {
+  test('names the server whose pane started in the scratch dir without killing it', () => {
+    const { home, cleanup } = makeTempHome();
+    try {
+      const scratch = join(home.workdir, 'gauntlet-agent', 'scratch');
+      mkdirSync(scratch, { recursive: true });
+      const { runner, calls } = makeRunner({
+        'gauntlet-1-aaaaaa': '/some/other/scratch\n',
+        'gauntlet-2-bbbbbb': `${scratch}\n`,
+      });
+      const found = findRunTmuxServer(scratch, {
+        runner,
+        listSockets: () => ['gauntlet-1-aaaaaa', 'gauntlet-2-bbbbbb'],
+      });
+      expect(found).toBe('gauntlet-2-bbbbbb');
+      expect(calls.some((c) => c.includes('kill-server'))).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('returns null when no gauntlet server hosts the scratch dir', () => {
+    const { home, cleanup } = makeTempHome();
+    try {
+      const scratch = join(home.workdir, 'gauntlet-agent', 'scratch');
+      mkdirSync(scratch, { recursive: true });
+      const { runner } = makeRunner({
+        'gauntlet-1-aaaaaa': '/some/other/scratch\n',
+      });
+      expect(
+        findRunTmuxServer(scratch, {
+          runner,
+          listSockets: () => ['gauntlet-1-aaaaaa'],
+        }),
+      ).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('killTmuxServer', () => {
+  test('dispatches kill-server against the named private server', () => {
+    const { runner, calls } = makeRunner({});
+    killTmuxServer('gauntlet-9-zzzzzz', { runner });
+    expect(calls).toEqual([['tmux', '-L', 'gauntlet-9-zzzzzz', 'kill-server']]);
+  });
+});
+
+// The run-dir -> scratch-dir locator: gauntlet mints its own run id under
+// <runDir>/gauntlet-agent/results/<runId>/scratch; quorum is single-run-per-dir
+// so the last such scratch dir is the run's.
+describe('gauntletScratchDirForRun', () => {
+  test('returns the run scratch dir', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+    try {
+      const scratch = join(runDir, 'gauntlet-agent', 'results', 'r1', 'scratch');
+      mkdirSync(scratch, { recursive: true });
+      expect(gauntletScratchDirForRun(runDir)).toBe(scratch);
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns null when gauntlet never started (no results dir, no scratch)', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+    try {
+      expect(gauntletScratchDirForRun(runDir)).toBeNull();
+      mkdirSync(join(runDir, 'gauntlet-agent', 'results'), { recursive: true });
+      expect(gauntletScratchDirForRun(runDir)).toBeNull();
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test('picks the last scratch dir when several exist', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+    try {
+      const a = join(runDir, 'gauntlet-agent', 'results', 'aaa', 'scratch');
+      const z = join(runDir, 'gauntlet-agent', 'results', 'zzz', 'scratch');
+      mkdirSync(a, { recursive: true });
+      mkdirSync(z, { recursive: true });
+      expect(gauntletScratchDirForRun(runDir)).toBe(z);
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
     }
   });
 });

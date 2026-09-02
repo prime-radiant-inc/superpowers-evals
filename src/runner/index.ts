@@ -12,7 +12,10 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { killRunTmuxServer } from '../agents/agy-teardown.ts';
+import {
+  gauntletScratchDirForRun,
+  killRunTmuxServer,
+} from '../agents/agy-teardown.ts';
 import { AgyRateLimitWatcher } from '../agents/agy-watch.ts';
 import {
   ANTIGRAVITY_RATE_LIMIT_MARKER,
@@ -253,34 +256,16 @@ export function gauntletLayerFromRunDir(runDir: string): GauntletLayer | null {
   return null;
 }
 
-// Kill the gauntlet tmux server driving agy for this run. Gauntlet runs agy in a
-// private tmux server whose pane cwd is
-// <runDir>/gauntlet-agent/results/<runId>/scratch; the runId is
-// minted inside gauntlet, but quorum is single-run-per-dir so exactly one such
-// scratch dir exists. Globs them, takes the last, and hands it to the killer
-// (which matches the server by strict pane-path equality). The killer is
-// injectable so the watcher's teardown and tests can stub the real tmux kill.
+// Kill the gauntlet tmux server driving agy for this run: locate the run's
+// scratch dir (gauntletScratchDirForRun) and hand it to the killer, which
+// matches the server by strict pane-path equality. The killer is injectable
+// so the watcher's teardown and tests can stub the real tmux kill.
 export function killGauntletTmuxForRun(
   runDir: string,
   kill: (scratchDir: string) => boolean,
 ): boolean {
-  const resultsRoot = join(runDir, 'gauntlet-agent', 'results');
-  if (!existsSync(resultsRoot)) {
-    return false;
-  }
-  const scratchDirs: string[] = [];
-  for (const name of readdirSync(resultsRoot)) {
-    const scratch = join(resultsRoot, name, 'scratch');
-    if (existsSync(scratch)) {
-      scratchDirs.push(scratch);
-    }
-  }
-  scratchDirs.sort();
-  const last = scratchDirs[scratchDirs.length - 1];
-  if (last === undefined) {
-    return false;
-  }
-  return kill(last);
+  const scratch = gauntletScratchDirForRun(runDir);
+  return scratch === null ? false : kill(scratch);
 }
 
 // Outcome of a gauntlet drive: always a layer, derived from the run dir's

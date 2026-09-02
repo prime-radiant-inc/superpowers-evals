@@ -1,4 +1,4 @@
-import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getEnv } from '../env.ts';
@@ -79,16 +79,14 @@ function panePath(name: string, runner: CommandRunner): string {
 }
 
 /**
- * Kill the gauntlet tmux server whose pane started in *scratchDir*.
- *
- * Returns true if a matching server was found and a `kill-server` was dispatched
- * (best-effort — not a guarantee the kill itself succeeded); false if no
- * gauntlet server's pane matched the run's scratch directory.
+ * The name of the gauntlet tmux server whose pane started in *scratchDir*, or
+ * null when no live gauntlet server hosts it. Probe only — nothing is
+ * signalled — so a caller can verify a kill by asking again afterwards.
  */
-export function killRunTmuxServer(
+export function findRunTmuxServer(
   scratchDir: string,
   opts: KillRunTmuxServerOptions = {},
-): boolean {
+): string | null {
   const runner = opts.runner ?? defaultCommandRunner;
   const listSockets = opts.listSockets ?? listGauntletSockets;
 
@@ -100,10 +98,64 @@ export function killRunTmuxServer(
         continue;
       }
       if (realpathSafe(trimmed) === target) {
-        runner.run('tmux', ['-L', name, 'kill-server']);
-        return true;
+        return name;
       }
     }
   }
-  return false;
+  return null;
+}
+
+/** Dispose the named private gauntlet server (`kill-server`, not
+ *  kill-session: the server holds only this run's session). */
+export function killTmuxServer(
+  name: string,
+  opts: Pick<KillRunTmuxServerOptions, 'runner'> = {},
+): void {
+  (opts.runner ?? defaultCommandRunner).run('tmux', [
+    '-L',
+    name,
+    'kill-server',
+  ]);
+}
+
+/**
+ * Kill the gauntlet tmux server whose pane started in *scratchDir*.
+ *
+ * Returns true if a matching server was found and a `kill-server` was dispatched
+ * (best-effort — not a guarantee the kill itself succeeded); false if no
+ * gauntlet server's pane matched the run's scratch directory.
+ */
+export function killRunTmuxServer(
+  scratchDir: string,
+  opts: KillRunTmuxServerOptions = {},
+): boolean {
+  const name = findRunTmuxServer(scratchDir, opts);
+  if (name === null) {
+    return false;
+  }
+  killTmuxServer(name, opts);
+  return true;
+}
+
+/**
+ * The scratch directory gauntlet's tmux pane started in for a quorum run:
+ * `<runDir>/gauntlet-agent/results/<runId>/scratch`. The runId is minted
+ * inside gauntlet, but quorum is single-run-per-dir so exactly one such
+ * scratch dir exists; globs them and takes the last. Null when gauntlet never
+ * got as far as creating one (no subject can be hosted for the run).
+ */
+export function gauntletScratchDirForRun(runDir: string): string | null {
+  const resultsRoot = join(runDir, 'gauntlet-agent', 'results');
+  if (!existsSync(resultsRoot)) {
+    return null;
+  }
+  const scratchDirs: string[] = [];
+  for (const name of readdirSync(resultsRoot)) {
+    const scratch = join(resultsRoot, name, 'scratch');
+    if (existsSync(scratch)) {
+      scratchDirs.push(scratch);
+    }
+  }
+  scratchDirs.sort();
+  return scratchDirs[scratchDirs.length - 1] ?? null;
 }
