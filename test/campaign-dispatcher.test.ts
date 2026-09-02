@@ -30,10 +30,12 @@ import {
   estimateInflightTotal,
   type GroupSignaler,
   killGroupVerified,
+  killSubjectHostVerified,
   performStoragePause,
   realGroupSignaler,
   runCampaignDispatch,
   SPAWN_FAILURE_HALT_N,
+  type SubjectHostProbe,
 } from '../src/campaign/dispatcher.ts';
 import type { SnapshotHandle } from '../src/campaign/instrument-snapshot.ts';
 import { SnapshotDriftError } from '../src/campaign/instrument-snapshot.ts';
@@ -356,6 +358,35 @@ function fakeGroupSignaler(): GroupSignaler {
   };
 }
 
+/** C10 subject-host seam fake: `hosted` names the tmux server hosting a run
+ *  dir (null = none); `kill` retires the named server unless `immortal`.
+ *  Fake servers must NEVER reach real tmux — the seam carries the fiction. */
+function fakeSubjectHost(
+  hosted: (runDir: string) => string | null,
+  opts: { immortal?: boolean } = {},
+): SubjectHostProbe & { kills: string[]; finds: string[] } {
+  const dead = new Set<string>();
+  const kills: string[] = [];
+  const finds: string[] = [];
+  return {
+    kills,
+    finds,
+    find: (runDir) => {
+      finds.push(runDir);
+      const name = hosted(runDir);
+      return name === null || dead.has(name) ? null : name;
+    },
+    kill: (server) => {
+      kills.push(server);
+      if (opts.immortal !== true) dead.add(server);
+    },
+  };
+}
+/** Every run dir is hosted by its own private gauntlet server — the process
+ *  the group kill can never reach. */
+const subjectServerFor = (runDir: string) =>
+  `gauntlet-${basename(runDir)}-subject`;
+
 // --- Campaign document fixture --------------------------------------------
 function campaignDoc(overrides: Record<string, unknown> = {}): Campaign {
   const doc = {
@@ -583,6 +614,7 @@ function harness(
     stream: { write: () => {} },
     installSignals: () => () => {}, // signal seam: no-op by default
     signalGroup: fakeGroupSignaler(), // C10 seam: fake pids never reach process.kill
+    subjectHost: fakeSubjectHost(() => null), // C10 seam: no real tmux probing
   };
   return { campaignDir, spawner, clock, credentials, args };
 }
@@ -2104,6 +2136,118 @@ test('an unkillable group aborts the cancel sequence: no aborted, no campaign_ca
   expect(types).not.toContain('aborted');
   expect(types).not.toContain('campaign_cancelled');
   expect(written.join('')).toMatch(/operator action/);
+});
+
+// --- C10 subject host: the tmux server outside the child's process group ---
+
+test("killSubjectHostVerified (C10): finds the run's tmux server, kills it, and verifies by re-probing — none / dead / alive", async () => {
+  const silent = { write: () => {} };
+  // No server hosts the run (gauntlet never started, or already gone):
+  // nothing to kill, nothing killed.
+  const none = fakeSubjectHost(() => null);
+  expect(
+    await killSubjectHostVerified({
+      runDir: '/r/run-1',
+      host: none,
+      clock: new FakeClock(0),
+      stream: silent,
+      graceSeconds: 5,
+    }),
+  ).toBe('none');
+  expect(none.kills).toEqual([]);
+  // A hosted run: kill-server once, then the re-probe proves it gone.
+  const hosted = fakeSubjectHost(subjectServerFor);
+  expect(
+    await killSubjectHostVerified({
+      runDir: '/r/run-1',
+      host: hosted,
+      clock: new FakeClock(0),
+      stream: silent,
+      graceSeconds: 5,
+    }),
+  ).toBe('dead');
+  expect(hosted.kills).toEqual(['gauntlet-run-1-subject']);
+  expect(hosted.finds.length).toBe(2); // the locate + the verifying re-probe
+  // A server that still hosts the run past the grace is reported alive —
+  // never assumed dead from the kill having been dispatched.
+  const written: string[] = [];
+  const immortal = fakeSubjectHost(subjectServerFor, { immortal: true });
+  expect(
+    await killSubjectHostVerified({
+      runDir: '/r/run-1',
+      host: immortal,
+      clock: new RealClock(),
+      stream: { write: (s) => written.push(s) },
+      graceSeconds: 0.05,
+    }),
+  ).toBe('alive');
+  expect(immortal.kills).toEqual(['gauntlet-run-1-subject']);
+  expect(written.join('')).toMatch(/gauntlet-run-1-subject/);
+  expect(written.join('')).toMatch(/verify-death FAILED/);
+});
+
+test("operator cancel kills each run's tmux subject host after its group and BEFORE journaling aborted (C10: verified death reaches the subject)", async () => {
+  const h = harness();
+  const host = fakeSubjectHost(subjectServerFor);
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const run = runCampaignDispatch({
+    ...h.args,
+    subjectHost: host,
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+  });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
+    flag: 'wx',
+  });
+  signalHandler!('SIGTERM');
+  const outcome = await run;
+  expect(outcome.status).toBe('cancelled');
+  expect(host.kills.sort()).toEqual(
+    h.spawner.spawned
+      .map(({ child }) => `gauntlet-run-${child.pid}-subject`)
+      .sort(),
+  );
+  const types = journalTypes(h.campaignDir);
+  expect(types).toContain('aborted');
+  expect(types[types.length - 1]).toBe('campaign_cancelled');
+});
+
+test('a tmux subject host that survives kill-server aborts the cancel sequence exactly like an unkillable group (C10 hard precondition)', async () => {
+  const h = harness();
+  const written: string[] = [];
+  let signalHandler: ((signal?: NodeJS.Signals) => void) | null = null;
+  const run = runCampaignDispatch({
+    ...h.args,
+    subjectHost: fakeSubjectHost(subjectServerFor, { immortal: true }),
+    stream: { write: (s: string) => written.push(s) },
+    installSignals: (handler) => {
+      signalHandler = handler;
+      return () => {};
+    },
+    killGraceSeconds: 0.05,
+  });
+  await tick(h.clock, 1);
+  for (const { child } of h.spawner.spawned)
+    child.emitLine(`run_allocated: run-${child.pid}`);
+  writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
+    flag: 'wx',
+  });
+  signalHandler!('SIGTERM');
+  for (let i = 0; i < 8; i += 1) await tick(h.clock, 1);
+  const outcome = await run;
+  // The groups died, but the subjects did not: cancel INCOMPLETE — no
+  // aborted, no campaign_cancelled, a named operator action, resumable.
+  expect(outcome.status).toBe('signalled');
+  const types = journalTypes(h.campaignDir);
+  expect(types).not.toContain('aborted');
+  expect(types).not.toContain('campaign_cancelled');
+  expect(written.join('')).toMatch(/operator action/);
+  expect(written.join('')).toMatch(/gauntlet-.*-subject/);
 });
 
 test('a latched sibling allocation is drained and journaled BEFORE the mint dispositions (Important 1, R-JRN-8)', async () => {

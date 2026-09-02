@@ -228,7 +228,13 @@ describe('gauntletScratchDirForRun', () => {
   test('returns the run scratch dir', () => {
     const runDir = mkdtempSync(join(tmpdir(), 'run-'));
     try {
-      const scratch = join(runDir, 'gauntlet-agent', 'results', 'r1', 'scratch');
+      const scratch = join(
+        runDir,
+        'gauntlet-agent',
+        'results',
+        'r1',
+        'scratch',
+      );
       mkdirSync(scratch, { recursive: true });
       expect(gauntletScratchDirForRun(runDir)).toBe(scratch);
     } finally {

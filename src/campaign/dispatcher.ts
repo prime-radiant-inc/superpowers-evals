@@ -12,6 +12,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  findRunTmuxServer,
+  gauntletScratchDirForRun,
+  killTmuxServer,
+} from '../agents/agy-teardown.ts';
+import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
@@ -533,6 +538,62 @@ export async function killGroupVerified(
   return 'alive';
 }
 
+/** The subject-host seam: gauntlet drives every Coding-Agent inside a
+ *  private tmux server (`gauntlet-<epoch>-<rand>`) whose processes
+ *  setsid() out of the child's process group, so the group answering ESRCH
+ *  never proves the SUBJECT is gone — it keeps spending under a dead
+ *  gauntlet. `find` names the server hosting a run dir (null = none);
+ *  `kill` disposes a named server. Tests inject a fake so no fake run dir
+ *  ever reaches real tmux. */
+export interface SubjectHostProbe {
+  find(runDir: string): string | null;
+  kill(server: string): void;
+}
+
+export const realSubjectHostProbe: SubjectHostProbe = {
+  find: (runDir) => {
+    const scratch = gauntletScratchDirForRun(runDir);
+    return scratch === null ? null : findRunTmuxServer(scratch);
+  },
+  kill: (server) => killTmuxServer(server),
+};
+
+export interface KillSubjectHostArgs {
+  readonly runDir: string;
+  readonly host: SubjectHostProbe;
+  readonly clock: Clock;
+  readonly stream: { write(s: string): void };
+  readonly graceSeconds: number;
+}
+
+/** The second half of verified death (C10): the run's tmux subject host.
+ *  Locate the server hosting the run dir -> kill-server -> re-probe on the
+ *  injected Clock until no server hosts the run (the pty hang-up reaps the
+ *  pane's subject) or the grace expires. 'none' (nothing hosted the run —
+ *  gauntlet never started, or its own teardown ran) and 'dead' are the only
+ *  permitting results; 'alive' means the server outlived kill-server and
+ *  the caller must abort its enclosing operation loudly. Independent of the
+ *  group kill so it also covers a group that was already gone. */
+export async function killSubjectHostVerified(
+  args: KillSubjectHostArgs,
+): Promise<'none' | 'dead' | 'alive'> {
+  const server = args.host.find(args.runDir);
+  if (server === null) return 'none';
+  args.host.kill(server);
+  const pollSeconds = 0.05;
+  const deadline = args.clock.now() + args.graceSeconds;
+  for (;;) {
+    if (args.host.find(args.runDir) === null) return 'dead';
+    const target = args.clock.now() + pollSeconds;
+    if (target > deadline) break;
+    await args.clock.sleepUntil(target);
+  }
+  args.stream.write(
+    `kill: tmux server ${server} still hosts ${args.runDir} past ${args.graceSeconds}s grace after kill-server — subject verify-death FAILED (operator: \`tmux -L ${server} kill-server\`, then confirm \`tmux -L ${server} list-panes -a\` fails)\n`,
+  );
+  return 'alive';
+}
+
 // --- C5: the shared instance-graph validator -------------------------------
 
 export interface InstanceGraphArgs {
@@ -994,6 +1055,8 @@ export interface DispatchRunArgs {
   ) => () => void;
   /** C10 kill seam; production default realGroupSignaler. */
   readonly signalGroup?: GroupSignaler;
+  /** C10 subject-host seam; production default realSubjectHostProbe. */
+  readonly subjectHost?: SubjectHostProbe;
   /** TERM->KILL escalation grace per phase; default KILL_GRACE_SECONDS.
    *  TEST seam (deterministic escalation under a FakeClock). */
   readonly killGraceSeconds?: number;
@@ -1073,6 +1136,7 @@ export async function runCampaignDispatch(
   const identity: ProcessIdentityProbe =
     args.identity ?? realProcessIdentityProbe;
   const signalGroup = args.signalGroup ?? realGroupSignaler;
+  const subjectHost = args.subjectHost ?? realSubjectHostProbe;
   const readVerdict = args.readVerdict ?? readVerdictSummary;
   const observeExposure = args.observeExposure ?? trajectoryExposureMs;
   const runner = args.runner ?? defaultCommandRunner;
@@ -1609,11 +1673,14 @@ export async function runCampaignDispatch(
 
     // --- Verified kill over the live child handles (C10) --------------------
     /** C10 HARD precondition: journaling/release/mint happen ONLY after a
-     *  group is verified dead through the one identity-guarded primitive.
-     *  Returns the failures (identity-unknown / alive-after-KILL); a failed
-     *  sample keeps its slots, its callbacks stay LIVE (its spend keeps
-     *  being recorded honestly), and the caller must abort its enclosing
-     *  operation loudly. Abandoned is set only AFTER verified death, so a
+     *  group is verified dead through the one identity-guarded primitive
+     *  AND the run's tmux subject host is verified gone (the group's death
+     *  never reaches the subject; a surviving host keeps spending under a
+     *  dead gauntlet). Returns the failures (identity-unknown /
+     *  alive-after-KILL / host alive); a failed sample keeps its slots and
+     *  the caller must abort its enclosing operation loudly. A group
+     *  failure keeps the callbacks LIVE (its spend keeps being recorded
+     *  honestly); abandoned is set only AFTER verified group death, so a
      *  surviving child's output is never suppressed. */
     const killBlockChildren = async (
       lb: LiveBlockState,
@@ -1648,8 +1715,24 @@ export async function runCampaignDispatch(
         }
         // Verified dead ('dead', or 'stale' — the pid was reused, so the
         // original child is provably gone): suppress the now-stale
-        // callbacks and release the slots.
+        // callbacks, then reach the subject the group never held. Only an
+        // allocated run can host one (gauntlet starts after allocation).
         sample.abandoned = true;
+        if (sample.runId !== undefined) {
+          const host = await killSubjectHostVerified({
+            runDir: runDirOf(sample.runId),
+            host: subjectHost,
+            clock,
+            stream,
+            graceSeconds: killGrace,
+          });
+          if (host === 'alive') {
+            failures.push(
+              `tmux subject host of ${sample.attemptId} (run ${sample.runId}: alive)`,
+            );
+            continue;
+          }
+        }
         releaseSample(sample);
         released += 1;
       }
