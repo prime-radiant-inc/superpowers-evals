@@ -19,10 +19,9 @@ import {
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
-import type { FinalStatus } from '../contracts/verdict.ts';
+import { EXIT_CODE_BY_FINAL } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
-import { assertNever } from '../invariant.ts';
 import { RunnerError } from '../runner/errors.ts';
 import {
   currentGauntletChild,
@@ -82,19 +81,6 @@ export type RunCredentialsOrigin =
   | 'external-campaign'
   | 'canonical-snapshot'
   | undefined;
-
-function exitCodeFor(final: FinalStatus): number {
-  switch (final) {
-    case 'pass':
-      return 0;
-    case 'fail':
-      return 1;
-    case 'indeterminate':
-      return 2;
-    default:
-      return assertNever(final);
-  }
-}
 
 function runId(path: string): string {
   const last = path.split('/').at(-1);
@@ -262,7 +248,7 @@ export async function executeRunCommand(
         mode: 'full',
       }),
     );
-    return exitCodeFor(verdict.final);
+    return EXIT_CODE_BY_FINAL[verdict.final];
   } catch (err) {
     if (stopExitCode !== null && runWasStopped()) {
       // The run settled by REJECTING after the runner observed the stop:

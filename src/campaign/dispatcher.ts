@@ -38,7 +38,11 @@ import {
 } from '../contracts/campaign/state-machine.ts';
 import type { BlockReplacementReason } from '../contracts/campaign/typed-failures.ts';
 import type { Credential } from '../contracts/credential.ts';
-import { RUN_ERROR_STAGES, type RunErrorStage } from '../contracts/verdict.ts';
+import {
+  EXIT_CODE_BY_FINAL,
+  RUN_ERROR_STAGES,
+  type RunErrorStage,
+} from '../contracts/verdict.ts';
 import { mantleGraderEnv } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import {
@@ -2680,19 +2684,24 @@ export async function runCampaignDispatch(
           }
           // Terminal classification (the R-JRN emitters contract: child exit
           // -> VERDICT READ -> run_completed | instrument_failure). A child
-          // that died before composing has no verdict and classifies through
-          // the exit-code heuristic (crash/signal rows).
+          // that composed a verdict exits with that verdict's encoding
+          // (EXIT_CODE_BY_FINAL: fail is exit 1, indeterminate exit 2), so a
+          // verdict-consistent exit is CLEAN — the crash/signal rows are for
+          // a child that died before composing (no verdict; its outcome is
+          // unknown, never a fabricated pass) or exited inconsistently with
+          // the verdict it wrote.
           const verdict = runDir !== null ? readVerdict(runDir) : null;
           const sensed = sensorEvidenceBySample.get(sample.sampleId);
-          const outcome =
-            verdict?.outcome ?? (info.code === 0 ? 'pass' : 'indeterminate');
+          const outcome = verdict?.outcome ?? 'indeterminate';
+          const cleanExitCode =
+            verdict !== null ? EXIT_CODE_BY_FINAL[verdict.outcome] : 0;
           const classification = classifyFailure({
             outcome,
             ...(verdict?.stage !== undefined ? { stage: verdict.stage } : {}),
             exitClass:
               info.signal !== null
                 ? 'signal'
-                : info.code === 0
+                : info.code === cleanExitCode
                   ? 'clean'
                   : 'crash',
             role: sensed?.role ?? 'subject',

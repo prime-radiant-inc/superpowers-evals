@@ -1092,6 +1092,106 @@ test('an allocated child that dies BEFORE composing has no verdict: the exit-cod
   ).toEqual(['subject_crashed']);
 });
 
+// --- Terminal classification: the child's exit code is its verdict's
+//     encoding (quorum run: pass 0 / fail 1 / indeterminate 2), never a
+//     crash signal on its own. Found live 2026-09-02: the first behavioral
+//     fail of a real campaign journaled as instrument subject_crashed. ---
+
+/** Drive the default two-sample block to terminal with arm_a composing the
+ *  given verdict and exiting with `exitCode`; arm_b passes cleanly. */
+async function terminalWithArmA(
+  h: ReturnType<typeof harness>,
+  armA: {
+    final?: 'pass' | 'fail' | 'indeterminate';
+    composes?: boolean;
+    exitCode: number;
+  },
+): Promise<Awaited<ReturnType<typeof runCampaignDispatch>>> {
+  const written: string[] = [];
+  const run = runCampaignDispatch({
+    ...h.args,
+    stream: { write: (s: string) => written.push(s) },
+  });
+  await tick(h.clock, 1);
+  const [childA, childB] = h.spawner.spawned;
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  if (armA.composes === false) {
+    childA!.child.composes = false;
+  } else if (armA.final !== undefined) {
+    seedCompletedRunDir(h.args.resultsRoot!, `run-${childA!.child.pid}`, {
+      costUsd: 0.25,
+      final: armA.final,
+    });
+  }
+  childA!.child.exit({ code: armA.exitCode, signal: null });
+  await tick(h.clock, 1);
+  childB!.child.exit({ code: 0, signal: null });
+  await tick(h.clock, 1);
+  // Any minted reserve admits once slots free; let its children pass so the
+  // dispatch settles either way.
+  for (const { child } of h.spawner.spawned.slice(2)) {
+    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.exit({ code: 0, signal: null });
+  }
+  await tick(h.clock, 1);
+  return run;
+}
+
+test('a composed FAIL verdict with the fail exit code (1) is determinate evidence: run_completed outcome=fail, no instrument_failure, no replacement mint', async () => {
+  const h = harness();
+  const outcome = await terminalWithArmA(h, { final: 'fail', exitCode: 1 });
+  expect(outcome.status).toBe('completed');
+  const completed = eventsOf(h.campaignDir, 'run_completed');
+  expect(
+    completed.map((e) => [e.payload.attempt_id, e.payload.outcome]).sort(),
+  ).toEqual([
+    ['c1:scn:arm_a:r1:a1', 'fail'],
+    ['c1:scn:arm_b:r1:a1', 'pass'],
+  ]);
+  expect(eventsOf(h.campaignDir, 'instrument_failure').length).toBe(0);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+});
+
+test('a composed INDETERMINATE verdict without a stage and the indeterminate exit code (2) is evidence, never instrument (R-CLS-4)', async () => {
+  const h = harness();
+  const outcome = await terminalWithArmA(h, {
+    final: 'indeterminate',
+    exitCode: 2,
+  });
+  expect(outcome.status).toBe('completed');
+  const armA = eventsOf(h.campaignDir, 'run_completed').find(
+    (e) => e.payload.attempt_id === 'c1:scn:arm_a:r1:a1',
+  );
+  expect(armA?.payload.outcome).toBe('indeterminate');
+  expect(eventsOf(h.campaignDir, 'instrument_failure').length).toBe(0);
+  expect(mintRecords(h.campaignDir).length).toBe(0);
+});
+
+test('an exit code inconsistent with the composed verdict is still a crash (pass verdict, exit 1 -> subject_crashed)', async () => {
+  const h = harness();
+  await terminalWithArmA(h, { final: 'pass', exitCode: 1 });
+  expect(
+    eventsOf(h.campaignDir, 'instrument_failure').map((e) => [
+      e.payload.attempt_id,
+      e.payload.cause,
+    ]),
+  ).toEqual([['c1:scn:arm_a:r1:a1', 'subject_crashed']]);
+});
+
+test('a child that exits 0 WITHOUT composing never fabricates a pass: the outcome is indeterminate', async () => {
+  const h = harness({ suite: EXPLORATORY_SUITE });
+  const outcome = await terminalWithArmA(h, { composes: false, exitCode: 0 });
+  // No verdict means no readable cost: the accounting gap halts the campaign
+  // (pinned elsewhere); what this test pins is the outcome it journaled.
+  expect(outcome.status).toBe('halted');
+  const armA = eventsOf(h.campaignDir, 'run_completed').find(
+    (e) => e.payload.attempt_id === 'c1:scn:arm_a:r1:a1',
+  );
+  expect(armA?.payload.outcome).toBe('indeterminate');
+  expect(eventsOf(h.campaignDir, 'instrument_failure').length).toBe(0);
+});
+
 test('instrument replacement: typed failure mints the reserve (block_replaced FIRST, then dispositions), conservation intact', async () => {
   const h = harness();
   const run = runCampaignDispatch(h.args);

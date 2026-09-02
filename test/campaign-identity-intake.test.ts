@@ -222,7 +222,7 @@ test(
       {},
       scenario(true),
     );
-    expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+    expect(r.status).toBe(2); // EXIT_CODE_BY_FINAL.indeterminate
     expect(r.runDir).not.toBeNull();
     const verdict = JSON.parse(
       readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
@@ -256,7 +256,7 @@ test(
       scenario(),
       'pass-no-transcript',
     );
-    expect(r.status).toBe(2); // exitCodeFor(indeterminate)
+    expect(r.status).toBe(2); // EXIT_CODE_BY_FINAL.indeterminate
     expect(r.runDir).not.toBeNull();
     const verdict = JSON.parse(
       readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),

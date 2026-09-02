@@ -1980,6 +1980,33 @@ the final default row makes exhaustiveness structural. **The v1 rows:**
 | 13 | outcome ∈ {pass, fail} ∧ no stage error | evidence | — (determinate, included) |
 | 14 | **default — every other combination** | evidence | — (indeterminate; **never** instrument, R-CLS-4) |
 
+**Exit-class derivation (amendment 2026-09-02, live-campaign finding):** the
+input product above names an exit class but the dispatcher's derivation of it
+from a child exit was unpinned, and the first live gating campaign
+(`85089661-opus5_signature`) filed a genuine behavioral `fail` — composed
+verdict, post-check failed — as `instrument_failure/subject_crashed` and
+minted its reserve: the dispatcher read the child's exit 1 as a crash, and
+row 8 precedes row 13. A `quorum run` child exits with its composed verdict's
+encoding (`EXIT_CODE_BY_FINAL` in `src/contracts/verdict.ts`: pass 0, fail 1,
+indeterminate 2; the CLI and the dispatcher share the one table). The
+dispatcher derives the class as: **`signal`** when the child died by signal;
+otherwise, with a composed verdict, **`clean`** iff the exit code equals that
+verdict's encoding, else **`crash`** (the child exited inconsistently with
+the verdict it wrote); with no verdict, **`clean`** iff exit 0, else
+**`crash`**. The crash/signal rows (7, 8) therefore fire only for a child
+that died before composing or exited inconsistently — a determinate `fail`
+reaches row 13 as evidence, exactly as the table intends. A child that exits
+0 without composing has an **unknown** outcome and classifies with outcome
+`indeterminate` (row 14, evidence); the dispatcher never fabricates a `pass`
+from a bare exit 0 (R-CLS-4's spirit: the run's outcome is the verdict's,
+never the exit code's). Corollary recorded, not yet acted on: a run whose
+composed verdict carries `stage=gauntlet` exits 2 (indeterminate) and is now
+`clean`, so row 7 (`grader_crashed`) has no live emitter — the run contract
+(`RunErrorSchema = {stage, message}`) carries no gauntlet exit signal, and a
+gauntlet-child crash surfaces today as a synthesized `investigate` layer then
+a `capture` stage (row 9). Row 7 needs a real signal source before it can be
+relied on; until then a grader crash replaces via row 9.
+
 **Final `InstrumentCause` set (pinned here so task 1 adds the vocabulary
 before task 7 builds the classifier):** D1's initial six
 (`grader_billing_exhausted | grader_rate_limited | subject_spawn_failed |

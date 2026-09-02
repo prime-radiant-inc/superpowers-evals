@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { GauntletResultSchema } from '../src/contracts/gauntlet.ts';
 import {
+  EXIT_CODE_BY_FINAL,
+  FINAL_STATUSES,
   type FinalVerdict,
   FinalVerdictSchema,
 } from '../src/contracts/verdict.ts';
@@ -30,6 +32,16 @@ test('a real verdict.json parses and round-trips', () => {
     economics: null,
   };
   expect(FinalVerdictSchema.parse(v)).toEqual(v);
+});
+
+test('the quorum run exit-code contract encodes every final status distinctly (pass 0, fail 1, indeterminate 2)', () => {
+  // Shared by the CLI (which exits with it) and the campaign dispatcher
+  // (which reads the child's code back through it): a verdict's exit code
+  // must be unique so the reader can tell a verdict-consistent exit from a
+  // crash.
+  expect(EXIT_CODE_BY_FINAL).toEqual({ pass: 0, fail: 1, indeterminate: 2 });
+  const codes = FINAL_STATUSES.map((s) => EXIT_CODE_BY_FINAL[s]);
+  expect(new Set(codes).size).toBe(FINAL_STATUSES.length);
 });
 
 test('gauntlet result.json validates status and reads run-relevant fields', () => {

@@ -23,6 +23,16 @@ export const CHECK_PHASES = ['pre', 'post'] as const;
 
 export type GauntletStatus = (typeof GAUNTLET_STATUSES)[number];
 export type FinalStatus = (typeof FINAL_STATUSES)[number];
+
+/** The `quorum run` exit-code contract: the process exits with its composed
+ *  verdict's encoding. The campaign dispatcher reads a child's code back
+ *  through this same table — a verdict-consistent exit is a clean exit,
+ *  never a crash. */
+export const EXIT_CODE_BY_FINAL: Readonly<Record<FinalStatus, number>> = {
+  pass: 0,
+  fail: 1,
+  indeterminate: 2,
+};
 export type RunErrorStage = (typeof RUN_ERROR_STAGES)[number];
 export type CheckPhase = (typeof CHECK_PHASES)[number];
 
