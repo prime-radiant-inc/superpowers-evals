@@ -153,10 +153,21 @@ three blocks `aborted`, `campaign_cancelled`, leader exit `cancelled`), but
 gauntlet hosts each subject in its own tmux server (daemonized, ppid 1, own
 session), so **six `claude` subjects kept working and spending** after the
 campaign was over. Killed by hand (`tmux -L <socket> kill-server` per run;
-live agent count 0 afterwards). The runner already has
-`killGauntletTmuxForRun`/`killRunTmuxServer` (the antigravity watcher uses
-them); the cancel path needs to reach them. Open debt, not fixed with
-finding 1.
+live agent count 0 afterwards). Root cause, traced rather than guessed:
+every campaign kill sends SIGTERM first, which neither `quorum run` (SIGINT
+only) nor gauntlet's CLI handles, so gauntlet dies without its adapter
+`close()` — the only `tmux kill-server` in the runner — and the tmux server
+`setsid()`s out of the child's process group, so the group-ESRCH the kill
+paths read as "verified dead" said nothing about the subject. Fixed on
+`fix/campaign-kill-reaches-tmux-subject` while launch 2 ran: verified death
+is now two-part on every path — process group AND the run's tmux subject
+host (found by run dir, `kill-server`, re-probed until gone) — with a
+surviving host the same loud C10 failure as a surviving group: the live
+dispatcher releases nothing and journals no `aborted`/`campaign_cancelled`
+(`b06afaf`), and recovery's post-crash cancel and resume refuse naming the
+server to kill (`e826a83`); the D3 spec's D-12/R-RCV-1 carry the amendment
+(`eae4eb5`). Launch 2 runs on the pre-fix platform (`7d2b9d8`), so its own
+cancel — if one is ever needed — still requires the manual tmux sweep.
 
 **Not a finding:** the nine `quarantined` events at open are the appliance's
 pre-existing smoke run dirs under `results/` (`campaign_mismatch`) — the
@@ -179,4 +190,35 @@ over 34 priced runs; first exposure 00:55:16Z):
 (sdd-breaker ≈ 8/10-class on both arms) and H4 (sentinel cells sit high on
 both arms; no delta in the three cells that completed) — but at n≤5 per
 arm with 10 of 14 cells untouched this is a smoke-level observation, not a
-readout. The relaunch entry carries the readout.
+readout. The relaunch below carries the readout.
+
+## Relaunch (launch 2, `417f45dd`)
+
+Same suite (`suites/opus5_signature.yaml`), arms, grader, budget, and
+n; re-registered on the finding-1 fix so a real `fail` lands as evidence.
+Campaign dir `campaigns/417f45dd-opus5_signature`, campaign id
+`417f45dd3654e586a90cc95b5a5943df8d6db0fb18288e757bee04fe59cb3575`;
+14 cells / 136 samples / 68 blocks as before.
+
+Appliance provenance: `evals-appliance prepare` job
+`job-20260902T021130Z-81e3`: evals **`7d2b9d8`** (main with the
+`EXIT_CODE_BY_FINAL` fix; finding 2 unfixed at launch), gauntlet `fb34bcd`,
+superpowers `b36e0829`, credential bundle `blessed-20260901T185556Z`,
+container `fe0b1f05da0f39df…`. Leader launched 02:16:40Z (`setsid nohup bun
+run quorum campaign run …`, log `/tmp/417f45dd-run.log`); first exposure
+shortly after. **49 `quarantined` at open** — launch 1's run dirs joined
+the appliance's smoke dirs under `results/` (`campaign_mismatch`), the
+open-time quarantine again working as designed.
+
+Setup footgun worth recording: after the `prepare` re-sync, `bun install`
+inside the container failed against a root-owned `$BUN_INSTALL` cache
+(image debt); `BUN_INSTALL_CACHE_DIR=$HOME/.bun/install/cache bun install`
+unblocked it without touching the image.
+
+Live watch (2-min journal polls, `spend_recovered` receipts filtered out as
+routine): through 29/136 completions — all `pass`, zero
+`instrument_failure`, no adjudication other than the spend receipts, 5–6
+live `claude` processes. Cells bound so far mirror launch 1: sdd-breaker
+c2 3/3 vs 3/3, worktree-creation-under-pressure 5/5 vs 5/5,
+receiving-code-review-pushback 5/5 vs 5/5, brainstorming-resists-jump 1/1
+vs 2/2 in flight (ordering: Opus 4.8 vs Opus 5). Readout pending the seal.
