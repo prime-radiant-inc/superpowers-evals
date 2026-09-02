@@ -13,14 +13,16 @@ shorten, and do NOT name a specific file or tool:
 
 "Superpowers skills are written in platform-neutral action language —
 for example, 'dispatch a subagent'. If YOUR platform has a Superpowers
-tool-mapping reference (a platform-specific *-tools.md file under the
-using-superpowers skill's references/ directory), find it and treat it
-as authoritative for translating an action into the concrete tool to
-call; if your platform has no such file, use your native equivalent for
-the action. Map the action 'dispatch a subagent' to the concrete tool
-and use it to dispatch exactly one subagent whose entire job is to reply
-with exactly the token GLOBALMAP_OK. Then report that token back to me.
-Do not edit files."
+tool-mapping reference (a platform-specific *-tools.md file named by the
+using-superpowers skill's Platform Adaptation section), find it within
+that skill's own directory and treat it as authoritative for translating
+an action into the concrete tool to call. Treat the using-superpowers
+skill directory as the only filesystem search root for this discovery;
+do not search from /, $HOME, or the repository root. If your platform
+has no such file, use your native equivalent for the action. Map the
+action 'dispatch a subagent' to the concrete tool and use it to dispatch
+exactly one subagent whose entire job is to reply with exactly the token
+GLOBALMAP_OK. Then report that token back to me. Do not edit files."
 
 If the agent asks a short clarifying question, answer briefly and tell
 it to follow its own platform's mapping file if it has one, otherwise
@@ -42,6 +44,10 @@ complete the step), you are done.
   criterion by recognizing that no mapping file applies and dispatching
   via its native subagent tool, not by inventing a file or some other
   mechanism.
+- Any filesystem search used to discover the mapping stayed within the
+  using-superpowers skill directory. A search rooted at `/`, `$HOME`, or
+  the repository root fails this criterion; mapping discovery must not
+  crawl unrelated host or checkout contents.
 - The agent dispatched a subagent using the tool its mapping resolves to
   for "dispatch a subagent" (the normalized tool is `Agent`), not some
   other mechanism — no shell loop, no doing the work inline, no asking
